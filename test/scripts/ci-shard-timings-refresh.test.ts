@@ -5,7 +5,6 @@ import { afterEach, expect, it } from "vitest";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { scriptFiles } from "./run-vitest.test-support.js";
-
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 const run = {
   id: 321,
