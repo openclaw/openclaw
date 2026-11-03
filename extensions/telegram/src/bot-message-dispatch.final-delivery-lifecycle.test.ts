@@ -1,11 +1,15 @@
+import assert from "node:assert/strict";
 import { Bot } from "grammy";
 import {
   createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { createStructuredOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
+import { onInternalDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher as dispatchThroughSharedOwner } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -21,6 +25,8 @@ import {
   dispatchWithContext,
   editMessageTelegram,
   emitToolStart,
+  loadSessionStore,
+  readLatestAssistantTextByIdentity,
   telegramDepsForTest,
   type DispatchReplyWithBufferedBlockDispatcherArgs as DispatchArgs,
   editMessageReplyMarkupTelegram,
@@ -163,20 +169,28 @@ function dispatchTurn(
   });
 }
 
-function createLoggedRuntime() {
-  const log = vi.fn<(...args: unknown[]) => void>();
+let stopLogCapture = () => {};
+
+// Reads outcome lines from the Gateway log records written at the given log level.
+function createLoggedRuntime(level: "info" | "debug" = "debug") {
+  vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+  setLoggerOverride({ level, consoleLevel: "silent" });
+  const lines: string[] = [];
+  stopLogCapture = onInternalDiagnosticEvent((event) => {
+    const line = event.type === "log.record" ? event.attributes?.message : undefined;
+    if (typeof line === "string" && line.startsWith("telegram final delivery outcome=")) {
+      lines.push(line);
+    }
+  });
   return {
     runtime: {
-      log,
+      log: vi.fn<(...args: unknown[]) => void>(),
       error: vi.fn(),
       exit: () => {
         throw new Error("exit");
       },
     },
-    outcomeLines: () =>
-      log.mock.calls
-        .map((args) => args.join(" "))
-        .filter((line) => line.startsWith("telegram final delivery outcome=")),
+    outcomeLines: () => lines,
   };
 }
 
@@ -187,6 +201,10 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+    stopLogCapture();
+    stopLogCapture = () => {};
+    resetLogger();
+    vi.unstubAllEnvs();
   });
 
   it.each([
@@ -302,31 +320,71 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     },
   );
 
-  it("logs a final answer finalized in the preview as one outcome line", async () => {
-    const { bot, messages, sendMessage, editMessageText } = await observeTransport();
-    const { runtime, outcomeLines } = createLoggedRuntime();
-    const preview = "Answer in progress while the model keeps writing";
-    const final = "Complete answer edited into the preview";
-    resolveReply(
-      async () => ({ text: final }),
-      async (params) => {
-        await params.replyOptions?.onAssistantMessageStart?.();
-        await params.replyOptions?.onPartialReply?.({ text: preview });
-        await createDraftStream.mock.results[0]?.value?.flush();
-        expect([...messages.values()]).toEqual([preview]);
-      },
-    );
+  it.each(["info", "debug"] as const)(
+    "logs a final answer finalized in the preview only at debug level (%s)",
+    async (level) => {
+      const { bot, messages, sendMessage, editMessageText } = await observeTransport();
+      const { runtime, outcomeLines } = createLoggedRuntime(level);
+      const preview = "Answer in progress while the model keeps writing";
+      const final = "Complete answer edited into the preview";
+      resolveReply(
+        async () => ({ text: final }),
+        async (params) => {
+          await params.replyOptions?.onAssistantMessageStart?.();
+          await params.replyOptions?.onPartialReply?.({ text: preview });
+          await createDraftStream.mock.results[0]?.value?.flush();
+          expect([...messages.values()]).toEqual([preview]);
+        },
+      );
 
-    const result = await dispatchTurn(bot, { runtime });
+      const result = await dispatchTurn(bot, { runtime });
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(result).toEqual({ kind: "completed" });
+      expect([...messages.values()]).toEqual([final]);
+      expect(sendMessage).toHaveBeenCalledOnce();
+      expect(editMessageText).toHaveBeenCalled();
+      expect(runtime.log).not.toHaveBeenCalledWith(
+        expect.stringContaining("telegram final delivery outcome="),
+      );
+      expect(outcomeLines()).toEqual(
+        level === "debug"
+          ? [
+              `telegram final delivery outcome=preview-finalized chat=123 message=${[...messages.keys()][0]}`,
+            ]
+          : [],
+      );
+    },
+  );
+
+  it("logs a final whose recovered transcript text has nothing to send as skipped", async () => {
+    const { bot, messages } = await observeTransport();
+    const { runtime, outcomeLines } = createLoggedRuntime();
+    // The final looks cut off, so the longer transcript text replaces it. That text is
+    // one complete reply directive, which leaves nothing to send.
+    const directive = `[[reply_to:${"1".repeat(75)}]]`;
+    const truncated = directive.slice(0, 61);
+    loadSessionStore.mockReturnValue({
+      "agent:test:telegram:direct:123": { sessionId: "s1", updatedAt: 1 },
+    });
+    readLatestAssistantTextByIdentity.mockResolvedValue({
+      text: directive,
+      timestamp: Date.now() + 1_000,
+    });
+    dispatchReplyMock.mockImplementationOnce(async ({ dispatcherOptions }) => {
+      const [plan] = createStructuredOutboundPayloadPlan([{ text: `${truncated}...` }]);
+      assert(plan && dispatcherOptions.deliverPrepared, "Prepared delivery missing");
+      await dispatcherOptions.deliverPrepared(plan, { kind: "final" });
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+    });
+
+    await dispatchTurn(bot, { runtime });
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(result).toEqual({ kind: "completed" });
-    expect([...messages.values()]).toEqual([final]);
-    expect(sendMessage).toHaveBeenCalledOnce();
-    expect(editMessageText).toHaveBeenCalled();
+    expect([...messages.values()]).toEqual([]);
     expect(outcomeLines()).toEqual([
-      `telegram final delivery outcome=preview-finalized chat=123 message=${[...messages.keys()][0]}`,
+      "telegram final delivery outcome=skipped chat=123 reason=channel_transform",
     ]);
   });
 

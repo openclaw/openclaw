@@ -451,12 +451,13 @@ export async function observeFinalDelivery(
   }
 }
 
-// A final finalized into the preview never reaches deliverReplies, which logs
-// new messages, so each final answer records how it settled here.
+// Each final answer records how it settled, including a final edited into the
+// preview, which sends no new message. Routine delivery success stays out of
+// default logs, so this is a verbose diagnostic.
 function logFinalDeliveryOutcome(turn: Turn, result: LaneDeliveryResult): void {
   const { receipt, messageIds, suppression } = result.deliveryResult;
   const ids = receipt?.platformMessageIds ?? messageIds ?? [];
-  turn.runtime.log?.(
+  logVerbose(
     [
       `telegram final delivery outcome=${result.kind}`,
       `chat=${turn.context.chatId}`,
