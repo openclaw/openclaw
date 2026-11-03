@@ -19,6 +19,10 @@ import {
 import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
 import { validateClawRouterDeepgramAudio } from "./audio-deepgram.js";
+import {
+  transcribeClawRouterOpenRouterAudio,
+  validateClawRouterOpenRouterAudio,
+} from "./audio-openrouter.js";
 import { normalizeClawRouterRootUrl } from "./base-url.js";
 import {
   fetchClawRouterCapabilityOffers,
@@ -27,6 +31,7 @@ import {
 
 const MODEL = "gpt-4o-transcribe";
 const SENSEAUDIO_MODEL = "senseaudio-asr-pro-1.5-260319";
+const OPENROUTER_MODEL = "openai/whisper-large-v3-turbo";
 const SENSEAUDIO_UPLOAD_MIMES: Record<string, readonly string[]> = {
   wav: ["audio/wav", "audio/wave", "audio/x-wav"],
   mp3: ["audio/mpeg", "audio/mp3"],
@@ -42,11 +47,24 @@ async function prepare(context: AudioTranscriptionConfigContext & { signal?: Abo
   const model = context.model ?? MODEL;
   const senseaudio = model === "senseaudio/" + SENSEAUDIO_MODEL;
   const deepgram = model === "deepgram/nova-3";
-  if (!senseaudio && !deepgram && model !== MODEL && model !== "openai/" + MODEL) {
+  const openrouter = model === "openrouter/" + OPENROUTER_MODEL;
+  if (!senseaudio && !deepgram && !openrouter && model !== MODEL && model !== "openai/" + MODEL) {
     throw new Error("ClawRouter transcription requires a qualified native model");
   }
-  const provider = senseaudio ? "senseaudio" : deepgram ? "deepgram" : "openai";
-  const upstreamModel = senseaudio ? SENSEAUDIO_MODEL : deepgram ? "nova-3" : MODEL;
+  const provider = senseaudio
+    ? "senseaudio"
+    : deepgram
+      ? "deepgram"
+      : openrouter
+        ? "openrouter"
+        : "openai";
+  const upstreamModel = senseaudio
+    ? SENSEAUDIO_MODEL
+    : deepgram
+      ? "nova-3"
+      : openrouter
+        ? OPENROUTER_MODEL
+        : MODEL;
   const configured = context.cfg.models?.providers?.clawrouter;
   // These overrides would replace the credential selected by the canonical auth owner.
   if (
@@ -73,18 +91,18 @@ async function prepare(context: AudioTranscriptionConfigContext & { signal?: Abo
       ].includes(name.toLowerCase())
     ) {
       throw new Error(
-        "ClawRouter transcription does not accept credential or multipart framing header overrides",
+        "ClawRouter transcription does not accept credential or payload framing header overrides",
       );
     }
   }
   const configuredBaseUrl = context.baseUrl ?? context.cfg.models?.providers?.clawrouter?.baseUrl;
   const normalized = normalizeClawRouterRootUrl(configuredBaseUrl);
-  const nativeSuffix = `/v1/native/${provider}`;
+  const nativeSuffix = `/v1/native/${provider}${openrouter ? "/api" : ""}`;
   const rootUrl = normalized.endsWith(nativeSuffix)
     ? normalized.slice(0, -nativeSuffix.length)
     : normalized;
   // Bare configured model identities belong to the native OpenAI route, not the unified route.
-  const baseUrl = `${rootUrl}/v1/native/${provider}/v1`;
+  const baseUrl = `${rootUrl}${nativeSuffix}/v1`;
   let store;
   if (context.profile) {
     store = await ensureAuthProfileStoreAsync(context.agentDir, {
@@ -164,19 +182,22 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
       const prepared = await prepare(context);
       const senseaudio = prepared.provider === "senseaudio";
       const deepgram = prepared.provider === "deepgram";
+      const openrouter = prepared.provider === "openrouter";
       if (deepgram) validateClawRouterDeepgramAudio(context);
-      if (!deepgram && context.query && Object.keys(context.query).length > 0) {
+      if (openrouter) validateClawRouterOpenRouterAudio(context);
+      if (!deepgram && !openrouter && context.query && Object.keys(context.query).length > 0) {
         throw new Error(
           "ClawRouter transcription does not support providerOptions; use language and prompt only",
         );
       }
-      const maxBytes = senseaudio ? 10_000_000 : 25_000_000;
+      const maxBytes = senseaudio ? 10_000_000 : openrouter ? 16 * 1024 * 1024 : 25_000_000;
       if (context.buffer.length === 0 || context.buffer.length > maxBytes) {
         throw new Error(`ClawRouter transcription requires 1-${maxBytes} file bytes`);
       }
       // The shared helper normalizes paths/AAC names; reject unsupported names rather than silently relabeling bytes.
       if (
         !deepgram &&
+        !openrouter &&
         (!/^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,126}$/.test(context.fileName) ||
           context.fileName.includes("..") ||
           context.fileName !== context.fileName.trim() ||
@@ -238,21 +259,25 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
         signal: context.signal,
         requireFreshProxyCatalog: true,
       });
+      const requestFormat = deepgram
+        ? "deepgram.prerecorded"
+        : openrouter
+          ? "openrouter.audio_transcription"
+          : "openai.audio_transcriptions";
+      const requestPath = deepgram
+        ? "/v1/listen"
+        : openrouter
+          ? "/api/v1/audio/transcriptions"
+          : "/v1/audio/transcriptions";
       const offer = offers.find(
         (candidate) =>
           candidate.providerId === prepared.provider &&
-          candidate.endpoint === (deepgram ? "listen" : "transcriptions") &&
-          candidate.path === (deepgram ? "/v1/listen" : "/v1/audio/transcriptions") &&
+          (openrouter || candidate.endpoint === (deepgram ? "listen" : "transcriptions")) &&
+          candidate.path === requestPath &&
           candidate.routeKind === "native" &&
           candidate.methods.includes("POST") &&
-          candidate.requestFormat ===
-            (deepgram ? "deepgram.prerecorded" : "openai.audio_transcriptions") &&
-          candidate.responseFormat ===
-            (senseaudio
-              ? "senseaudio.transcription"
-              : deepgram
-                ? "deepgram.prerecorded"
-                : "openai.audio_transcriptions") &&
+          candidate.requestFormat === requestFormat &&
+          candidate.responseFormat === (senseaudio ? "senseaudio.transcription" : requestFormat) &&
           candidate.model?.id === `${prepared.provider}/${prepared.upstreamModel}` &&
           candidate.model.upstream === prepared.upstreamModel &&
           Array.isArray(candidate.model.capabilities) &&
@@ -268,33 +293,40 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
           redirect: "error",
         });
       };
-      const value = deepgram
-        ? await transcribeDeepgramPrerecordedAudio({
+      const value = openrouter
+        ? await transcribeClawRouterOpenRouterAudio({
             request: { ...context, apiKey: prepared.apiKey, timeoutMs: remaining(), fetchFn },
             model: prepared.upstreamModel,
-            requestConfig: {
-              ...http,
-              baseUrl: offer.url.slice(0, -"/listen".length),
-              headers: new Headers({
-                ...Object.fromEntries(http.headers),
-                "content-type": context.mime?.trim().toLowerCase() || "application/octet-stream",
-              }),
-            },
+            http,
+            url: offer.url,
           })
-        : await transcribeOpenAiCompatibleAudio({
-            ...context,
-            ...prepared,
-            model: prepared.upstreamModel,
-            baseUrl: offer.url.slice(0, -"/audio/transcriptions".length),
-            timeoutMs: remaining(),
-            preserveAacFileName: senseaudio,
-            provider: "clawrouter",
-            defaultModel: prepared.upstreamModel,
-            defaultBaseUrl: prepared.baseUrl,
-            auth: { kind: "api-key", apiKey: prepared.apiKey, source: prepared.source },
-            // Keep the guard's dispatcher (native Bun fetch ignores it), but never replay this upload on redirect.
-            fetchFn,
-          });
+        : deepgram
+          ? await transcribeDeepgramPrerecordedAudio({
+              request: { ...context, apiKey: prepared.apiKey, timeoutMs: remaining(), fetchFn },
+              model: prepared.upstreamModel,
+              requestConfig: {
+                ...http,
+                baseUrl: offer.url.slice(0, -"/listen".length),
+                headers: new Headers({
+                  ...Object.fromEntries(http.headers),
+                  "content-type": context.mime?.trim().toLowerCase() || "application/octet-stream",
+                }),
+              },
+            })
+          : await transcribeOpenAiCompatibleAudio({
+              ...context,
+              ...prepared,
+              model: prepared.upstreamModel,
+              baseUrl: offer.url.slice(0, -"/audio/transcriptions".length),
+              timeoutMs: remaining(),
+              preserveAacFileName: senseaudio,
+              provider: "clawrouter",
+              defaultModel: prepared.upstreamModel,
+              defaultBaseUrl: prepared.baseUrl,
+              auth: { kind: "api-key", apiKey: prepared.apiKey, source: prepared.source },
+              // Keep the guard's dispatcher (native Bun fetch ignores it), but never replay this upload on redirect.
+              fetchFn,
+            });
       return { ok: true, value: { ...value, model: prepared.model } };
     } catch (error) {
       // The shared guard may reject configuration or network policy before calling fetchFn.

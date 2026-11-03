@@ -94,6 +94,7 @@ export {
   waitProviderOperationPollInterval,
 } from "../media-understanding/shared.js";
 export { postJsonResponse } from "../media-understanding/provider-json-post.js";
+export { buildOpenRouterAudioTranscriptionBody } from "../media-understanding/openrouter-audio.js";
 export { openProviderWebSocket } from "../infra/net/provider-websocket.js";
 export {
   runHttpTlsPreflight,
