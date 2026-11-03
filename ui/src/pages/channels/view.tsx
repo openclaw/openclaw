@@ -138,7 +138,6 @@ export function ChannelsView(props: ChannelsProps) {
         ) : undefined}
         <SettingsSection
           title={t("channels.hub.connectedTitle")}
-          count={connected().length > 0 ? connected().length : undefined}
           actions={
             <ChannelRefresh
               updatedAt={props.channels.channelsLastSuccess}

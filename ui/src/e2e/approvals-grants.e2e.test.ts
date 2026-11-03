@@ -24,6 +24,44 @@ const grant: ExecApprovalStandingGrant = {
   useCount: 3,
 };
 suite.define(() => {
+  it.each([320, 390, 820, 1100, 1440])("shows grants as rows at %ipx", async (width) => {
+    const command = `tar -czf /var/backups/${"workspace-".repeat(12)}.tgz ./workspace`;
+    await suite.withPage(
+      { viewport: { width, height: 900 }, locale: "en-US", reducedMotion: "reduce" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "approval.history": { items: [] },
+            "exec.approval.grants.list": {
+              grants: [
+                { ...grant, command },
+                { ...grant, grantId: "grant-revoked", revokedAtMs: 2_000, revokedBy: "operator" },
+                { ...grant, grantId: "grant-expired", expiresAtMs: 2_000 },
+              ],
+            },
+            "exec.approval.grants.revoke": { outcome: "revoked" },
+          },
+        });
+        await page.goto(new URL("settings/approvals", suite.server.baseUrl).href);
+        const grants = page.getByRole("list", { name: "Standing grants" });
+        for (const state of ["Until revoked", "Revoked", "Expired"]) {
+          await grants.getByText(state, { exact: true }).waitFor();
+        }
+        await grants.getByText(command, { exact: true }).waitFor();
+        expect(await grants.evaluate((list) => list.scrollWidth - list.clientWidth)).toBe(0);
+        const revoke = grants.getByRole("button", { name: /Revoke/ });
+        const [row, button] = await Promise.all([
+          grants.getByRole("listitem").first().boundingBox(),
+          revoke.boundingBox(),
+        ]);
+        expect(button!.x + button!.width).toBeGreaterThan(row!.x + row!.width - 24);
+        await revoke.click();
+        await expect.poll(() => gateway.getRequests("exec.approval.grants.revoke")).toHaveLength(1);
+        await expect.poll(() => grants.getByRole("button").count()).toBe(0);
+      },
+    );
+  });
+
   it.each([320, 390, 820, 1100, 1440])("keeps the history log even at %ipx", async (width) => {
     const sessionKey = `agent:main:telegram:group:${"release-coordination-".repeat(6)}review`;
     const commandText = `pnpm --filter ./packages/${"synthetic-long-package-".repeat(6)} run build`;
