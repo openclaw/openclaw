@@ -146,6 +146,16 @@ describe("runMessageAction core send routing", () => {
     { name: "the chat id with another topic id", params: { threadId: "99" }, denied: true },
     { name: "another topic target", params: { target: "-1001234567890:topic:99" }, denied: true },
     { name: "the top-level chat", params: { topLevel: true }, denied: true },
+    // Delivery lets an explicit thread id outrank the topic encoded in the target.
+    {
+      name: "the current topic target with another topic id",
+      params: { target: "-1001234567890:topic:42", threadId: "99" },
+      denied: true,
+    },
+    {
+      name: "another topic target with the current topic id",
+      params: { target: "-1001234567890:topic:99", threadId: "42" },
+    },
   ])("judges a restricted Telegram topic turn sending to $name by its topic", async (scenario) => {
     const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
       pluginId: "telegram",

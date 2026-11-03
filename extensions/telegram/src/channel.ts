@@ -108,7 +108,11 @@ import { createTelegramSetupPluginBase } from "./setup-plugin.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
-import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
+import {
+  normalizeTelegramChatId,
+  parseTelegramTarget,
+  resolveTelegramCurrentChannelId,
+} from "./targets.js";
 import { telegramThreadBindingSupport } from "./thread-bindings-channel.js";
 import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 import { resolveTelegramToken } from "./token.js";
@@ -935,15 +939,7 @@ export const telegramPlugin = createChatChannelPlugin({
       resolveTelegramConfigAccessorAccount({ cfg, accountId }).config.replyToMode ?? "off",
     buildToolContext: buildTelegramThreadingToolContext,
     resolveAutoThreadId: resolveTelegramAutoThreadId,
-    resolveCurrentChannelId: ({ to, threadId }) => {
-      if (threadId == null) {
-        return to;
-      }
-      const parsed = parseTelegramTarget(to);
-      return parsed.messageThreadId != null || parsed.directMessagesTopicId != null
-        ? to
-        : `${to}:topic:${threadId}`;
-    },
+    resolveCurrentChannelId: resolveTelegramCurrentChannelId,
   },
   outbound: telegramChannelOutbound,
 });

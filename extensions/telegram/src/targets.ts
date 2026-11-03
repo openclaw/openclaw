@@ -1,4 +1,5 @@
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { parseTelegramThreadId } from "./outbound-params.js";
 
 export type TelegramTarget = {
   chatId: string;
@@ -82,6 +83,38 @@ export function parseTelegramTarget(to: string): TelegramTarget {
     chatId: normalized,
     chatType: match ? "unknown" : resolveTelegramChatType(normalized),
   };
+}
+
+/** Names where a send lands: an explicit thread id outranks the target's own forum topic. */
+export function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {
+  const parsed = parseTelegramTarget(to);
+  const directTopicId = parsed.directMessagesTopicId;
+  if (directTopicId != null) {
+    return `${parsed.chatId}:direct-topic:${directTopicId}`;
+  }
+  const topicId = messageThreadId ?? parsed.messageThreadId;
+  if (topicId == null) {
+    return to;
+  }
+  return `${parsed.chatId}:topic:${topicId}`;
+}
+
+/** Names the conversation a send to `to` with `threadId` reaches, as delivery resolves it. */
+export function resolveTelegramCurrentChannelId(params: {
+  to: string;
+  threadId?: string | number | null;
+}): string {
+  const { to, threadId } = params;
+  if (threadId == null) {
+    return to;
+  }
+  const parsed = parseTelegramTarget(to);
+  if (parsed.messageThreadId == null && parsed.directMessagesTopicId == null) {
+    return `${to}:topic:${threadId}`;
+  }
+  const delivered = formatTelegramDeliveryTarget(to, parseTelegramThreadId(threadId));
+  // Keep the caller's spelling when the thread id does not move the send.
+  return delivered === formatTelegramDeliveryTarget(to) ? to : delivered;
 }
 
 /**

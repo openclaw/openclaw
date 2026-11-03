@@ -70,7 +70,7 @@ import {
 } from "./send.js";
 import { TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST } from "./status-reaction-variants.js";
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
-import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
+import { formatTelegramDeliveryTarget, normalizeTelegramOutboundTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
 import { resolveTelegramTopicNameCacheScope, updateTopicName } from "./topic-name-cache.js";
 
@@ -115,6 +115,13 @@ function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | nul
     return to;
   }
   return `${parsed.chatId}:topic:${topicId}`;
+}
+
+function resolveActionTopicNameCacheScope(cfg: OpenClawConfig, accountId?: string | null): string {
+  const resolvedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
+  return resolveStorePath(cfg.session?.store, {
+    agentId: resolveTelegramAccountOwnerAgentId({ cfg, accountId: resolvedAccountId }),
+  });
 }
 
 function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
