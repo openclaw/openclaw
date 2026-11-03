@@ -46,7 +46,6 @@ import {
   completeGatewayBootLifecycle,
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   formatGatewayCrashLoopManualChannelStartHint,
-  type GatewayCrashLoopBreakerDecision,
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
 import {
@@ -542,8 +541,8 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   }
   const bindExplicitRaw = bindExplicitRawStr as GatewayBindMode | undefined;
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
-    const { cleanStaleGatewayProcessesSync } = await import("../../infra/restart-stale-pids.js");
-    const stale = cleanStaleGatewayProcessesSync(port, {
+    const { cleanStaleGatewayProcesses } = await import("../../infra/restart-stale-pids.js");
+    const stale = await cleanStaleGatewayProcesses(port, {
       protectedPid: inheritedGatewayServicePid,
     });
     if (stale.length > 0) {
@@ -779,7 +778,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     | ReadConfigFileSnapshotWithPluginMetadataResult
     | undefined = startupConfigSnapshotRead;
   const envSidecarStartupMode = isChannelStartupSuppressedByEnvironment() ? "defer" : "start";
-  let crashLoopDecision: GatewayCrashLoopBreakerDecision | undefined;
+  let boot: Awaited<ReturnType<typeof beginGatewayBootLifecycle>> | undefined;
   let channelAutostartSuppression: { reason: "crash-loop-breaker"; message: string } | undefined;
   let tryRecoverChannelAutostartSuppression:
     | ((signal: AbortSignal) => Promise<number | undefined>)
@@ -808,7 +807,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     // Supervised retries reuse the persisted breaker transition to avoid agent storms.
     if (
       (supervisor || process.env.OPENCLAW_SERVICE_MARKER) &&
-      !crashLoopDecision?.shouldWriteStabilityBundle
+      !boot?.decision.shouldWriteStabilityBundle
     ) {
       return;
     }
@@ -818,8 +817,8 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const beginBoot = async (startedAtMs: number) => {
     // run-loop calls beginBoot before every startGatewayServer invocation, so
     // in-process restarts re-evaluate breaker state instead of reusing stale mode.
-    const boot = await beginGatewayBootLifecycle(process.env, startedAtMs);
-    crashLoopDecision = boot.decision;
+    boot = await beginGatewayBootLifecycle(process.env, startedAtMs);
+    const { decision: crashLoopDecision } = boot;
     activeBootId = boot.id;
     bootRecorded = activeBootId !== undefined;
     channelAutostartSuppression = undefined;
@@ -873,6 +872,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           bind,
           ...(opts.updateCanary ? { updateCanary: true } : {}),
           ...(activeBootId ? { bootId: activeBootId } : {}),
+          restartResumeWindow: boot?.restartResumeWindow,
           auth: authOverride,
           tailscale: tailscaleOverride,
           ...startupOptions,

@@ -114,7 +114,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await exactButton(page, "Stop generating").waitFor();
+      await exactButton(page, "Stop").waitFor();
       await gateway.emitGatewayEvent("chat", {
         errorDetail: {
           provider: "openai",

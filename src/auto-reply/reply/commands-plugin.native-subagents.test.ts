@@ -6,7 +6,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
-import { hasMainSessionRecoveryClaim } from "../../config/sessions/restart-recovery-state.js";
 import {
   listSessionChildEntriesReadOnly,
   loadSessionEntry,
@@ -14,10 +13,6 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  createRestartSafeChatRequest,
-  resolveRestartSafeChatAdmission,
-} from "../../gateway/server-methods/chat-restart-recovery.js";
 // This deprecated public entrypoint is the caller-controlled registrar under test.
 import { registerPluginCommand } from "../../plugin-sdk/plugin-runtime.js";
 import {
@@ -25,6 +20,10 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
 import {
@@ -86,7 +85,11 @@ async function withCommandPlugin(
   run: (fixture: Fixture) => Promise<void>,
   options: { commands?: CommandMetadata[]; manifestCapabilities?: unknown } = {},
 ) {
-  await withAdminIngress(async ({ cfg, state, admins, context, gateway }) => {
+  await withAdminIngress(async (ingress) => {
+    const { cfg, state, admins, context, gateway, resolveGatewayContext } = ingress;
+    const sdkResources = new LegacyPluginSdkResourceHost();
+    bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResources);
+    gateway.resolveGatewayContext = resolveGatewayContext;
     const bridge = Symbol.for(`openclaw.command-native-test.${randomUUID()}`);
     const handler = vi.fn<Handler>((ctx) => ({
       text: JSON.stringify({
@@ -177,7 +180,7 @@ async function withCommandPlugin(
       await withPluginRuntimeGatewayRequestScope(
         {
           context: gateway,
-          resolveGatewayContext: () => gateway,
+          resolveGatewayContext,
           pluginRegistry: registry,
           isWebchatConnect: () => false,
         },
@@ -201,6 +204,7 @@ async function withCommandPlugin(
         });
       }
       await expect(waitForPluginCacheRetirement()).resolves.toMatchObject({ failures: [] });
+      await sdkResources.close();
     }
   });
 }
@@ -649,7 +653,7 @@ describe("command-scoped native subagent boundary", () => {
     });
   });
 
-  it("does not arm an agent restart-recovery claim while a committed command handler awaits", async () => {
+  it("records an accepted command before its handler finishes", async () => {
     await withCommandPlugin(async (fixture) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -677,7 +681,6 @@ describe("command-scoped native subagent boundary", () => {
           }),
           "committed requester session",
         );
-        expect(hasMainSessionRecoveryClaim(persisted)).toBe(false);
         expect(invocation.recorder.getAdmissionReceipt()).toMatchObject({
           sessionId: persisted.sessionId,
         });
@@ -690,60 +693,6 @@ describe("command-scoped native subagent boundary", () => {
         release.resolve();
         await pending;
       }
-    });
-  });
-
-  it("keeps restart-safe normal and literal Goal requests admissible with the declaring plugin loaded", async () => {
-    await withCommandPlugin(async (fixture) => {
-      initializeGlobalHookRunner(fixture.registry);
-      const params = fixture.params();
-      const entry = expectDefined(params.sessionEntry, "direct parent session");
-      const identity = { operationId: "literal-goal", issuedAtMs: Date.now() };
-      for (const goalOperation of [
-        undefined,
-        {
-          ...identity,
-          action: "start",
-          requestFingerprint: "goal-start-receipt",
-          objective: "/review-panel is literal Goal objective text",
-        },
-        {
-          ...identity,
-          action: "resume",
-          requestFingerprint: "goal-resume-receipt",
-          goalId: "literal-goal",
-        },
-      ] as const) {
-        const request = await createRestartSafeChatRequest({
-          eligible: true,
-          senderIsOwner: true,
-          message: goalOperation
-            ? "/review-panel is literal Goal objective text"
-            : "Continue the review",
-          cfg: fixture.cfg,
-          goalOperation,
-        });
-        expect(request).toBeDefined();
-        expect(
-          resolveRestartSafeChatAdmission({
-            cfg: fixture.cfg,
-            agentId: "main",
-            sessionKey: params.sessionKey,
-            sessionId: entry.sessionId,
-            storePath: path.join(params.workspaceDir, "restart-sessions.json"),
-            clientRunId: "restart-safe-request",
-            context: {},
-            entry,
-            initialSessionEntry: entry,
-            acpMeta: null,
-            now: Date.now(),
-            placement: undefined,
-            request,
-          }),
-        ).toMatchObject({ requestFingerprint: request?.fingerprint });
-      }
-      expect(fixture.handler).not.toHaveBeenCalled();
-      expect(await fixture.userInputs()).toEqual([]);
     });
   });
 });

@@ -109,6 +109,27 @@ function configThatRejectsModelAccess(workerRuns: {
 }
 
 describe("node-host worker manifest", () => {
+  it.each([
+    { enabled: false, isolation: "none" as const },
+    { enabled: true, isolation: "container" as const },
+  ])("does not capture dedicated transport for %j", async (workerRuns) => {
+    const prepared = await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false }, workerRuns } },
+      ephemeral: true,
+      // Incomplete ambient transport must not be inspected outside dedicated native hosting.
+      env: { PATH: "/usr/bin", IDENTITY_HEADER: "synthetic-unadmitted-header" },
+    });
+    const runtime = prepared.start({ client });
+    try {
+      expect(prepared.workerHostingEnabled).toBe(workerRuns.enabled);
+      for (const [options] of vi.mocked(createNodeWorkerSupervisor).mock.calls) {
+        expect(options?.managedIdentityTransport).toBeUndefined();
+        expect(options?.platformTrust).toBeUndefined();
+      }
+    } finally {
+      await runtime.close();
+    }
+  });
   it("advertises native inference after unisolated worker hosting is admitted", async () => {
     const prepared = await prepareNodeHostRuntime({
       config: {

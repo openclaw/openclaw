@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   resolveHistoryAnchorPageRange,
@@ -173,7 +174,10 @@ export class ArchivedTranscriptReader {
       }
       try {
         return materializeSessionArchiveForRead(archivePath);
-      } catch {
+      } catch (error) {
+        if (hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
+          throw error;
+        }
         continue;
       }
     }
@@ -427,7 +431,10 @@ export class ArchivedTranscriptReader {
       let filePath: string;
       try {
         filePath = materializeSessionArchiveForRead(archivePath);
-      } catch {
+      } catch (error) {
+        if (hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
+          throw error;
+        }
         // Try the next valid retained generation.
         continue;
       }

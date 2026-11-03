@@ -223,26 +223,25 @@ describe("config raw editing and redaction", () => {
     },
   );
 
-  it("keeps sensitive raw config hidden until reveal before editing", () => {
-    const onRawChange = vi.fn();
-    const { container } = setup({
-      raw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      originalRaw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      formValue: { openai: { apiKey: "supersecret" } },
-      onRawChange,
+  it.each(["supersecret", "__OPENCLAW_REDACTED__"])("reveals raw %s accurately", (secret) => {
+    const raw = JSON.stringify({ openai: { apiKey: secret } }, null, 2);
+    const { container, props } = setup({
+      raw,
+      originalRaw: raw,
+      formValue: { openai: { apiKey: secret } },
     });
-
     expectHidden(container);
-
     const revealButton = element(container, ".config-raw-toggle", HTMLButtonElement);
     expect(revealButton.getAttribute("aria-pressed")).toBe("false");
     revealButton.click();
-
+    expect(text(container, ".config-raw-field .settings-count")).toBe(
+      secret === "__OPENCLAW_REDACTED__" ? "1 secret redacted" : "1 secret visible",
+    );
     const textarea = element(container, "textarea", HTMLTextAreaElement);
-    expect(textarea.value).toBe('{\n  "openai": { "apiKey": "supersecret" }\n}\n');
-    textarea.value = textarea.value.replace("supersecret", "updatedsecret");
+    expect(textarea.value).toBe(raw);
+    textarea.value = textarea.value.replace(secret, "updatedsecret");
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onRawChange).toHaveBeenCalledWith(textarea.value);
+    expect(props.onRawChange).toHaveBeenCalledWith(textarea.value);
   });
 
   it("opens raw pending changes without sending a fake raw edit", () => {

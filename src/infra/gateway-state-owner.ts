@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -19,6 +20,7 @@ import {
   removeCreatedProjectionDirectories,
   type StateOwnerDirectoryIdentity,
 } from "./gateway-state-owner-directory.js";
+import { createGatewayStateProcessOwnerRetiredError } from "./gateway-state-owner-errors.js";
 import { startGatewayStateOwnerHeartbeat } from "./gateway-state-owner-heartbeat.js";
 import {
   acquireGatewayStateOwnerFile,
@@ -161,7 +163,7 @@ const schemaOwners = resolveGlobalSingleton(
     >(),
 );
 
-/** The synchronous lexical owner is live authority, not the existence of its sidecar. */
+/** The active lexical owner is live authority, not the existence of its sidecar. */
 export function getStateDatabaseSchemaLease(
   databasePath: string,
 ): StateDatabaseSchemaLease | undefined {
@@ -218,6 +220,29 @@ function leaseForFile(
   let released = false;
   const holdsPhysicalLease = () =>
     verifyOwnerLock(owner, lock) && (!projection || projection.verifyStillHeld());
+  function run<T>(operation: () => T): T;
+  function run(operation: () => unknown): unknown {
+    lease.assertCurrent();
+    readOwnerPaths.clear();
+    const inherited = new Map(schemaOwners.getStore());
+    const entry = { lease, active: true };
+    inherited.set(owner.key, entry);
+    const leave = () => {
+      entry.active = false;
+      readOwnerPaths.clear();
+    };
+    try {
+      const result = schemaOwners.run(inherited, operation);
+      if (isPromiseLike(result)) {
+        return Promise.resolve(result).finally(leave);
+      }
+      leave();
+      return result;
+    } catch (error) {
+      leave();
+      throw error;
+    }
+  }
   const lease: StateDatabaseSchemaLease = {
     path: pathname,
     assertCurrent() {
@@ -235,19 +260,7 @@ function leaseForFile(
         throw new Error("OpenClaw state maintenance does not own this database");
       }
     },
-    run(operation) {
-      lease.assertCurrent();
-      readOwnerPaths.clear();
-      const inherited = new Map(schemaOwners.getStore());
-      const entry = { lease, active: true };
-      inherited.set(owner.key, entry);
-      try {
-        return schemaOwners.run(inherited, operation);
-      } finally {
-        entry.active = false;
-        readOwnerPaths.clear();
-      }
-    },
+    run,
     release() {
       readOwnerPaths.clear();
       if (!released) {
@@ -333,7 +346,7 @@ export function acquireGatewayStateOwner(params: {
     assertCurrent() {
       owner.lost.signal.throwIfAborted();
       if (!owner.accepting || owners.get(owner.key) !== owner) {
-        throw new Error("OpenClaw state process owner is no longer current");
+        throw createGatewayStateProcessOwnerRetiredError();
       }
       lease.assertCurrent();
     },
@@ -597,7 +610,7 @@ export async function captureStateDatabaseAccess(databasePath: string) {
             assertCurrent() {
               registered.lost.signal.throwIfAborted();
               if (!registered.accepting || owners.get(identity.key) !== registered) {
-                throw new Error("OpenClaw state process owner is no longer current");
+                throw createGatewayStateProcessOwnerRetiredError();
               }
             },
           }
@@ -615,7 +628,7 @@ export async function captureStateDatabaseAccess(databasePath: string) {
         assertStateDatabaseAccessAtOwnerPath(canonicalPath, identity, captured);
         return (current = captured) => {
           if (owner && owners.get(identity.key) !== owner) {
-            throw new Error("OpenClaw state process owner is no longer current");
+            throw createGatewayStateProcessOwnerRetiredError();
           }
           assertStateDatabaseReadAtOwnerPath(canonicalPath, current, identity);
         };
@@ -624,13 +637,13 @@ export async function captureStateDatabaseAccess(databasePath: string) {
       const root = owner.locks.values().next().value;
       const projection = owner.getProjection?.();
       if (!heartbeat || !root) {
-        throw new Error("OpenClaw state process owner is no longer current");
+        throw createGatewayStateProcessOwnerRetiredError();
       }
       const assertCurrent = (current = captured) => {
         owner.lost.signal.throwIfAborted();
         heartbeat.assertActive();
         if (owners.get(identity.key) !== owner || owner.heartbeat !== heartbeat) {
-          throw new Error("OpenClaw state process owner is no longer current");
+          throw createGatewayStateProcessOwnerRetiredError();
         }
         if (!owner.accepting) {
           // Accepted schema work retains its native lease after the root stops lending.
@@ -638,7 +651,7 @@ export async function captureStateDatabaseAccess(databasePath: string) {
           return;
         }
         if (!owner.locks.has(root) || owner.getProjection?.() !== projection) {
-          throw new Error("OpenClaw state process owner is no longer current");
+          throw createGatewayStateProcessOwnerRetiredError();
         }
       };
       assertCurrent();

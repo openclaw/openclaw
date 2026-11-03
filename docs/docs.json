@@ -3,6 +3,10 @@
   "description": "Self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI coding agents. Run one Gateway process on your own machine and message your AI assistant from anywhere.",
   "redirects": [
     {
+      "source": "/cli/claws",
+      "destination": "/cli/templates"
+    },
+    {
       "source": "/cli/commitments",
       "destination": "/automation#retired-inferred-commitments"
     },
@@ -1465,6 +1469,7 @@
                     "pages": [
                       "install/ansible",
                       "install/docker-vm-runtime",
+                      "install/jetson",
                       "install/kubernetes",
                       "install/macos-vm",
                       "install/raspberry-pi"
@@ -2241,6 +2246,7 @@
                       "providers/github-copilot",
                       "providers/gmi",
                       "providers/google",
+                      "providers/google-vertex",
                       "providers/groq",
                       "providers/huggingface",
                       "providers/levanto",
@@ -2269,6 +2275,7 @@
                       },
                       "providers/opencode",
                       "providers/opencode-go",
+                      "providers/particle",
                       "providers/perplexity-provider",
                       "providers/poolside",
                       "providers/qianfan",
@@ -2857,7 +2864,7 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
-                      "cli/claws",
+                      "cli/templates",
                       "cli/infer",
                       "cli/memory",
                       "cli/models",
@@ -3251,6 +3258,8 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.10.9",
+                  "releases/2026.10.8",
                   "releases/2026.10.7",
                   "releases/2026.10.6",
                   "releases/2026.10.5",

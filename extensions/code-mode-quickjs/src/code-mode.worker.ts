@@ -34,6 +34,10 @@ type CodeModeWorkerResult = CodeModeVmResult<Snapshot>;
 type CodeModeWorkerThreadResult = SharedWorkerThreadResult<Snapshot>;
 type CodeModeFailure = Extract<CodeModeWorkerResult, { status: "failed" }>;
 
+// This worker and its pinned WASM build share one trusted controller program.
+// Cache bytecode only: every fresh cell still initializes an independent guest heap.
+let controllerBytecode: Uint8Array | undefined;
+
 class CodeModeWorkerFailure extends Error {
   constructor(
     readonly code: CodeModeFailure["code"],
@@ -335,7 +339,11 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState) {
       ] as const) {
         vm.hostToHandle(value).consume((handle) => vm.global.setProp(name, handle));
       }
-      vm.evalCode(CODE_MODE_CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
+      controllerBytecode ??= vm.compile(
+        CODE_MODE_CONTROLLER_SOURCE,
+        "openclaw-code-mode:controller.js",
+      );
+      vm.evalBytecode(controllerBytecode).dispose();
     }
     return {
       vm,

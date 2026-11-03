@@ -1,8 +1,9 @@
 /**
- * Overlapping restarts on an existing synthetic teamBoot fixture (never production):
+ * Clean, crash, or overlapping restarts on a synthetic teamBoot fixture (never production):
  * node --import ./scripts/tsx.mjs scripts/perf/config-health-restart-measure.ts \
  *   --entry /built/revision/dist/entry.js --fixture-root .local/team-boot \
  *   --runs 5 --output .local/restarts.json
+ * Add --mode clean or --mode crash for a stopped predecessor (SIGTERM or SIGKILL).
  * Seed with bench-gateway-startup.ts --case teamBoot --fixture-root ... --seed-only.
  * Keep the predecessor serving until the successor completes environment selection,
  * then pause the successor itself until predecessor shutdown completes. Report both
@@ -18,6 +19,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { loadavg } from "node:os";
 import path from "node:path";
@@ -45,6 +47,7 @@ const { values } = parseArgs({
     "fixture-root": { type: "string" },
     output: { type: "string" },
     runs: { type: "string", default: "5" },
+    mode: { type: "string", default: "overlap" },
   },
 });
 assert(
@@ -52,6 +55,8 @@ assert(
   "Provide --entry, --fixture-root and --output",
 );
 const entry = path.resolve(values.entry);
+const mode = values.mode;
+assert(mode === "overlap" || mode === "clean" || mode === "crash", "Invalid --mode");
 const root = path.resolve(values["fixture-root"]);
 const configPath = path.join(root, "openclaw.json");
 const runs = parseStrictIntegerOption({ raw: values.runs, fallback: 5, min: 1, label: "runs" });
@@ -313,32 +318,50 @@ async function runIteration(index: number) {
       `Predecessor plugin-registry maintenance did not finish:\n${predecessor.outputTail.join("\n")}`,
     );
     const stateBefore = await stateFingerprint();
-    successor = launch(
-      await freePort(),
-      (line) => {
-        if (!handoff && line === pauseMarker) {
-          const pausedAt = performance.now();
-          handoffMs = performance.now() - successor!.startAt;
-          handoff = (async () => {
-            try {
-              const exit = await predecessor.stop();
-              predecessorShutdownMs = performance.now() - pausedAt;
-              return exit;
-            } finally {
-              imposedPauseMs = performance.now() - pausedAt;
-              successor!.child.kill("SIGCONT");
-            }
-          })();
-          void handoff.catch(() => {});
-        }
-      },
-      ["--import", preload],
-    );
+    if (mode !== "overlap") {
+      const stoppingAt = performance.now();
+      if (mode === "crash") {
+        // This exact child was spawned above; never discover or signal another process.
+        const exited = once(predecessor.child, "exit");
+        assert(predecessor.child.kill("SIGKILL"), "Could not kill the owned predecessor");
+        await exited;
+      }
+      handoff = predecessor.stop();
+      await handoff;
+      predecessorShutdownMs = performance.now() - stoppingAt;
+      successor = launch(await freePort());
+    } else {
+      successor = launch(
+        await freePort(),
+        (line) => {
+          if (!handoff && line === pauseMarker) {
+            const pausedAt = performance.now();
+            handoffMs = performance.now() - successor!.startAt;
+            handoff = (async () => {
+              try {
+                const exit = await predecessor.stop();
+                predecessorShutdownMs = performance.now() - pausedAt;
+                return exit;
+              } finally {
+                imposedPauseMs = performance.now() - pausedAt;
+                successor!.child.kill("SIGCONT");
+              }
+            })();
+            void handoff.catch(() => {});
+          }
+        },
+        ["--import", preload],
+      );
+    }
     const successorReady = await ready(successor);
     assert(handoff, "Successor did not emit environment-selection completion");
     const predecessorExit = await handoff;
     const successorExit = await successor.stop();
-    assert.equal(predecessorExit.exitCode, 0, "Predecessor shutdown was not clean");
+    if (mode === "crash") {
+      assert.equal(predecessor.child.signalCode, "SIGKILL", "Predecessor did not crash");
+    } else {
+      assert.equal(predecessorExit.exitCode, 0, "Predecessor shutdown was not clean");
+    }
     assert.equal(successorExit.exitCode, 0, "Successor shutdown was not clean");
     assert.equal(hash(configPath), configBefore, "Restart changed config bytes");
     assert.equal(hash(`${configPath}.bak`), backupBefore, "Restart changed backup bytes");
@@ -346,6 +369,8 @@ async function runIteration(index: number) {
     assert.deepEqual(stateAfter, stateBefore, "Restart changed semantic health or plugin facts");
     return {
       index,
+      predecessorPid: predecessor.child.pid,
+      successorPid: successor.child.pid,
       hostLoadBefore,
       hostLoadAfter: loadavg(),
       predecessorReady,
@@ -382,6 +407,7 @@ try {
     `${JSON.stringify(
       {
         entry,
+        mode,
         root,
         node: process.version,
         configBefore,

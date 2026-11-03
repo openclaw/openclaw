@@ -1,12 +1,14 @@
 // Measure an already-built worker, without a TypeScript loader:
 // node scripts/perf/model-catalog-read-startup-measure.mjs --entry <worker.js> \
-//   --fixture disk-budget|attachment|catalog --samples 5 --warm-samples 1000 --graph --output <json>
+//   --fixture disk-budget|attachment|catalog|code-mode-node --samples 5 --warm-samples 1000 --graph --output <json>
 // Fixtures are created under .local and removed afterward. Optional --input <json>
 // supplies an existing synthetic input instead (catalog expects 40 rows).
 // Omitting --fixture/--input preserves import-only measurements. Alternate base/candidate
 // runs; CPU/allocation cover import + first task, then warm tasks separately. RSS is the
 // whole-process delta, not worker-exclusive memory. --graph adds a separate fresh worker
 // after timing samples: inspector enumerates parsed file scripts after its first result.
+// Code Mode uses 40 synthetic plugin tools and checks fresh cell globals; its built
+// module-count regression uses --fixture code-mode-node --graph --max-modules 240.
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -109,6 +111,9 @@ function resultSummary(value, fixture) {
   } else if (fixture === "catalog") {
     assert(Array.isArray(value), "Catalog transfer did not return its rows");
     assert.equal(value.length, 40, "Catalog fixture must contain 40 catalogs");
+  } else if (fixture === "code-mode-node") {
+    assert.equal(value.status, "completed", JSON.stringify(value));
+    assert.equal(value.value.json, "8128");
   }
   return Array.isArray(value)
     ? {
@@ -147,10 +152,12 @@ async function sample(entry, input, warmSamples, fixture, graphOnly = false) {
   try {
     await wait(once(control.port1, "message"));
     let result;
+    let spawnToReadyMs;
     if (input !== undefined) {
       const ready = once(tasks.port1, "message");
       worker.postMessage({ type: "openclaw.worker-task-port", port: tasks.port2 }, [tasks.port2]);
       assert.equal((await wait(ready))[0].status, "ready");
+      spawnToReadyMs = performance.now() - started;
       result = resultSummary(await wait(runTask(tasks.port1, input, 1)), fixture);
     }
     const spawnToFirstResultMs = performance.now() - started;
@@ -169,6 +176,7 @@ async function sample(entry, input, warmSamples, fixture, graphOnly = false) {
     }
     return {
       ...cold,
+      spawnToReadyMs,
       spawnToFirstResultMs,
       ...(input === undefined
         ? { importMs: cold.elapsedMs, spawnToImportedMs: spawnToFirstResultMs }
@@ -212,7 +220,10 @@ if (isMainThread) {
       Number.isSafeInteger(Number(values["max-modules"])) && Number(values["max-modules"]) > 0,
     );
   }
-  assert(!values.fixture || ["disk-budget", "attachment", "catalog"].includes(values.fixture));
+  assert(
+    !values.fixture ||
+      ["disk-budget", "attachment", "catalog", "code-mode-node"].includes(values.fixture),
+  );
   const entry = pathToFileURL(path.resolve(values.entry)).href;
   let input = values.input ? JSON.parse(readFileSync(values.input, "utf8")) : undefined;
   let fixtureRoot;
@@ -234,6 +245,41 @@ if (isMainThread) {
         base64: Buffer.alloc(256 * 1024, "x").toString("base64"),
         label: "fixture.txt",
         mime: "text/plain",
+      };
+    } else if (!values.input && values.fixture === "code-mode-node") {
+      const bytes = Buffer.from(
+        JSON.stringify({
+          __openclawCatalog: Array.from({ length: 40 }, (_, index) => ({
+            callableName: `fixture_${index}`,
+            name: `fixture_${index}`,
+            description: `Synthetic tool from plugin ${index}`,
+            source: "native",
+          })),
+          __openclawNamespaces: [],
+          __openclawApiFiles: [],
+          __openclawSwarmEnabled: false,
+        }),
+      );
+      const initialization = new SharedArrayBuffer(bytes.length);
+      new Uint8Array(initialization).set(bytes);
+      input = {
+        kind: "exec",
+        source: `
+          if (globalThis.__startupFixture !== undefined) throw new Error("Cell globals leaked");
+          globalThis.__startupFixture = true;
+          if (catalog.all().length !== 40) throw new Error("Missing catalog tools");
+          return Array.from({length: 128}, (_, i) => i).reduce((a, b) => a + b, 0);
+        `,
+        initialization,
+        progress: new SharedArrayBuffer(64 + 16384),
+        inlineHost: false,
+        config: {
+          timeoutMs: 30000,
+          memoryLimitBytes: 64 * 1024 * 1024,
+          maxOutputBytes: 16384,
+          maxSnapshotBytes: 65536,
+          maxPendingToolCalls: 128,
+        },
       };
     } else if (!values.input && values.fixture === "catalog") {
       const { DatabaseSync } = await import("node:sqlite");

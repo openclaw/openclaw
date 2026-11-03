@@ -39,6 +39,11 @@ it.each([
     const { view, setRows, openChild, openCollection } = mountSubagents(initial, mobile);
     const buttons = view.getAllByRole("button");
     expect(buttons).toHaveLength(limit);
+    expect(buttons[0]!.getAttribute("aria-label")).toBe("Review Working");
+    expect(buttons[0]!.querySelector(".chat-details-subagents__status")?.classList).toContain(
+      "sr-only",
+    );
+    expect(buttons[0]!.querySelector(".chat-details-subagents__spinner")).not.toBeNull();
     buttons[0]!.click();
     expect(openChild).toHaveBeenLastCalledWith("child-1");
     buttons[1]!.click();
@@ -97,4 +102,25 @@ it("folds failed runs into Done without changing child outcomes", () => {
   flush();
   view.getByRole("button", { name: "E Failed" }).click();
   expect(openChild).toHaveBeenCalledExactlyOnceWith("e");
+});
+
+it("mutes finished list rows while working and queued rows keep full emphasis", () => {
+  const { view, setRows } = mountSubagents([
+    { key: "a", label: "A", status: "running" },
+    { key: "b", label: "B", status: "waiting" },
+    { key: "c", label: "C", status: "queued" },
+    { key: "d", label: "D", status: "done" },
+    { key: "e", label: "E", status: "failed" },
+  ]);
+  const muted = () =>
+    [...view.container.querySelectorAll(".chat-details-subagents__row--finished")].map((row) =>
+      row.getAttribute("data-subagent-session-key"),
+    );
+  expect(muted()).toEqual(["d", "e"]);
+  setRows([
+    { key: "a", label: "A", status: "stopped" },
+    { key: "d", label: "D", status: "running" },
+  ]);
+  flush();
+  expect(muted()).toEqual(["a"]);
 });

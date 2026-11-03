@@ -20,7 +20,6 @@ export type SessionRowAttention =
       /** The failed session's own unread marker and role, which its read acknowledgement needs. */
       sourceMarkedUnreadAt?: number;
       sourceSharingRole?: GatewaySessionRow["sharingRole"];
-      childLabel?: string;
     };
 
 export function activeSessionAgentStatus(

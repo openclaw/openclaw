@@ -2,6 +2,7 @@ import { connect, type Socket } from "node:net";
 import type { MessagePort } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { decodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import {
@@ -36,6 +37,7 @@ export function attachBrokerNativeResource(
       return;
     }
     const firstFailure = failure === undefined;
+    materializeErrorStack(error);
     failure ??= error;
     clearTimeout(retryTimer);
     clearTimeout(startupTimer);

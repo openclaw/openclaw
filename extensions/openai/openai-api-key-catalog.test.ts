@@ -91,9 +91,12 @@ it.each([
   ["an unauthorized key", 401, "sk-openai", "auth-rejected"],
   ["a forbidden key", 403, "sk-openai", "auth-rejected"],
   ["a temporary failure", 503, "sk-openai", "unavailable"],
+  ["a transport failure", undefined, "sk-openai", "unavailable"],
 ] as const)("scopes the selected profile for %s", async (_label, httpStatus, apiKey, status) => {
   const { provider, outcomes, requests } = await runCatalog(
-    Response.json({ data: modelRows(["text-embedding-3-small"]) }, { status: httpStatus }),
+    httpStatus === undefined
+      ? undefined
+      : Response.json({ data: modelRows(["text-embedding-3-small"]) }, { status: httpStatus }),
     { apiKey, profileId: "openai:api-key" },
   );
   expect(provider.models.map((model) => model.id)).toEqual(

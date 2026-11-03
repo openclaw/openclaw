@@ -142,6 +142,7 @@ export type RunCliAgentParams = Pick<
   /** Exact native plus canonical OpenClaw surface for a selectable CLI backend. */
   cliToolAvailability?: {
     native: string[];
+    discovery?: readonly string[];
     openClaw: string[];
   };
   /** Caller-owned authority for credential use; cancellation alone is not authorization. */

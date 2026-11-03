@@ -1,8 +1,30 @@
 import { expect, it, vi } from "vitest";
 import {
   nativeHistoryMessageIdentity,
+  nativeHistoryMessageSourceId,
+  nativeHistoryMessageSourceIdentity,
   prependUniqueNativeMessages,
 } from "./history-message-identity.ts";
+
+it("keeps roleless source boundaries and imported namespaces", () => {
+  const marker = { type: "compaction", __openclaw: { id: "boundary", seq: 7 } };
+  expect(nativeHistoryMessageSourceId(marker)).toBe("boundary");
+  expect(nativeHistoryMessageSourceIdentity(marker)).toBe("id:boundary");
+  const imported = (cliSessionId: string) => ({
+    role: "assistant",
+    content: "Same imported answer",
+    __openclaw: {
+      id: "boundary",
+      importedFrom: "claude-cli",
+      cliSessionId,
+      externalId: "boundary",
+    },
+  });
+  expect(nativeHistoryMessageSourceIdentity(imported("one"))).not.toBe(
+    nativeHistoryMessageSourceIdentity(imported("two")),
+  );
+  expectPrepend([imported("one")], [imported("two")], [imported("one"), imported("two")]);
+});
 
 function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
   return {

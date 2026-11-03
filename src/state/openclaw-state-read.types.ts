@@ -13,10 +13,7 @@ import type { CronRunReceiptCurrentReadCommand } from "../cron/store/run-receipt
 import type { PlacementGrantReadInput } from "../gateway/operator-approval-placement-grants.read.worker.js";
 import type { CronStandingGrantLookupInput } from "../gateway/operator-approval-standing-grants.types.js";
 import type { ListTerminalOperatorApprovalsInput } from "../gateway/operator-approval-store.types.js";
-import type {
-  LocalWorkspaceManifestInput,
-  LocalWorkspaceManifestValue,
-} from "../gateway/worker-environments/local-workspace-manifest-scan.js";
+import type { LocalWorkspaceManifestInput } from "../gateway/worker-environments/local-workspace-manifest-scan.js";
 import type { WorkerPlacementConflictBinding } from "../gateway/worker-environments/placement-read-projection.types.js";
 import type { WorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type { DevicePairingReadCommand } from "../infra/device-pairing-read.types.js";
@@ -25,8 +22,8 @@ import type { ConversationRef } from "../infra/outbound/session-binding.types.js
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import type { UpdateRunAdmissionReadCommand } from "../infra/update-run-admission.types.js";
 import type { UpdateRunListInput } from "../infra/update-run-read.kernel.js";
-import type { UpdateRunReconciliationInput } from "../infra/update-run-reconciliation.types.js";
 import type { PluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { PluginStateReadCommand } from "../plugin-state/plugin-state-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -82,7 +79,7 @@ export type OpenClawStateReadCommand =
   | { type: "capture.readOnlyBlob"; blobId: string }
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
-  | { type: "claws.inventory" }
+  | { type: "templates.inventory" }
   | { type: "gatewayOwnerLease.read"; schemaMaintenance: boolean }
   | AcpSessionReadCommand
   | SqliteWorkerCommand<McpOAuthReadOnlyOperations>
@@ -183,10 +180,11 @@ export type OpenClawStateReadCommand =
   | { type: "updateRuns.get"; runId: string }
   | { type: "updateRuns.list"; input: UpdateRunListInput }
   | { type: "updateRuns.interruptedCandidate" }
-  | { type: "updateRuns.reconciliationCandidates"; input: UpdateRunReconciliationInput }
-  | { type: "updateRuns.reconciliationCandidate"; runId: string }
+  | UpdateRunAdmissionReadCommand
   | { type: "updateRuns.status" }
   | { type: "updateRuns.historyStatus" }
+  | { type: "updateRuns.pluginCohortRecoveries" }
+  | { type: "updateRuns.pluginSnapshotCollection" }
   | { type: "worktrees.cleanupState" }
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "nodeHost.config" }
@@ -245,7 +243,7 @@ export type OpenClawStateReadResult =
     >
   | { type: "meetingTranscripts.export"; result: TranscriptExportResult }
   | RegisteredStateReadResult
-  | { type: "localWorkspace.manifest"; value: LocalWorkspaceManifestValue }
+  | { type: "localWorkspace.manifest"; snapshot: Uint8Array<ArrayBuffer> }
   | { type: "gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
   | {
       type: "subagents.sessionList";

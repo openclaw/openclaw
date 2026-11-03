@@ -57,7 +57,7 @@ it("keeps every navigation title and subtitle backed by an English translation",
   const routes: RouteId[] = [
     "chat",
     "custodian",
-    "claws",
+    "templates",
     ...SIDEBAR_NAV_ROUTES,
     "workboard",
     "skills",

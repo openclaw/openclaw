@@ -5,10 +5,17 @@ import { nativePane } from "../test-helpers/chat-layout-menu.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 
 function visibleDetails(pane: Locator): Locator {
-  return pane
-    .locator(".chat-details:not(.chat-mobile-host .chat-details)")
-    .or(pane.locator(".chat-mobile-host:has(.chat-mobile-host__details:not([hidden]))"))
-    .filter({ visible: true });
+  return (
+    pane
+      .locator(".chat-details:not(.chat-mobile-host .chat-details)")
+      // A closed sheet is hidden at once but stays displayed while it slides out.
+      .or(
+        pane.locator(
+          ".chat-mobile-host:not([hidden]):has(.chat-mobile-host__details:not([hidden]))",
+        ),
+      )
+      .filter({ visible: true })
+  );
 }
 
 /** Pass a pane locator when more than one chat is presented. */

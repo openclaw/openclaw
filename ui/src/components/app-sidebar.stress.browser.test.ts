@@ -101,9 +101,9 @@ describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", 
         .map((missing) => "Missing fixture row: " + missing);
       for (const row of before) {
         const glyphs = [
-          ...row.rings.map(({ rect, bare }) => ({ rect, width: bare ? 12 : 25, height: null })),
+          ...row.rings.map(({ rect, bare }) => ({ rect, width: bare ? 12 : 24, height: null })),
           ...row.traces.map((rect) => ({ rect, width: 32, height: 22 })),
-          ...row.stacks.map((rect) => ({ rect, width: 28, height: 20 })),
+          ...row.stacks.map((rect) => ({ rect, width: 26, height: 20 })),
         ];
         for (const { rect, width: expectedWidth, height } of glyphs) {
           expect(Math.abs(rect.width - expectedWidth), row.key).toBeLessThanOrEqual(0.1);
@@ -236,7 +236,7 @@ describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stre
     expect(rows.length).toBeGreaterThanOrEqual(6);
     for (const row of rows) {
       for (const ring of row.rings) {
-        expect(ring.rect.width).toBe(ring.bare ? 12 : 25);
+        expect(ring.rect.width).toBe(ring.bare ? 12 : 24);
         if (row.title) {
           expect(ring.rect.right).toBeLessThanOrEqual(row.title.left + 0.5);
         }
@@ -265,7 +265,7 @@ describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stre
     expect(row!.querySelector(".sidebar-session__archive-glyph")).not.toBeNull();
     for (const entry of geometry(sidebar)) {
       for (const ring of entry.rings) {
-        expect(ring.rect.width).toBe(ring.bare ? 12 : 25);
+        expect(ring.rect.width).toBe(ring.bare ? 12 : 24);
       }
     }
     const target = sidebar.querySelector<HTMLAnchorElement>(

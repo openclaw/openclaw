@@ -1,5 +1,24 @@
 import { createHash } from "node:crypto";
 
+export function ciTimingRunnerProfile(
+  labels: readonly string[],
+): "blacksmith" | "github" | undefined {
+  const blacksmith = new Set(
+    labels.filter((label) => /^blacksmith-\d+vcpu-ubuntu-2404$/u.test(label)),
+  );
+  if (blacksmith.size > 0) {
+    return blacksmith.size === 1 &&
+      labels.every(
+        (label) => blacksmith.has(label) || ["self-hosted", "Linux", "X64"].includes(label),
+      )
+      ? "blacksmith"
+      : undefined;
+  }
+  return labels.length > 0 && labels.every((label) => label === "ubuntu-24.04")
+    ? "github"
+    : undefined;
+}
+
 export type RuntimePlacementTiming = {
   configs: string[];
   env: Record<string, string>;

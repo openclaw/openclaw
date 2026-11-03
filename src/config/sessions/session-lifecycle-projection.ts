@@ -80,7 +80,7 @@ export async function projectSessionEntryLifecycleMutationInWorker(
     !params.input.allowCanonicalRepair &&
     params.input.removals.length === 0 &&
     params.upserts.length === 1 &&
-    !upsert?.relatedSessionKeys?.length
+    !upsert?.relatedSessionKeys?.some((key) => key !== sessionKey)
       ? readSessionActorEntryFacts({ database: identity, sessionKey })
       : undefined;
   const retained =
@@ -121,11 +121,23 @@ export async function projectSessionEntryLifecycleMutationInWorker(
       archiveRecovery: prepared.archiveRecovery,
     };
   }
-  return runSessionLifecyclePlanningInWorker(params, "finish", {
-    ...prepared,
+  // The former finish round trip detached caller-owned metadata at this boundary.
+  for (const preparedUpsert of upsertedEntries) {
+    if (preparedUpsert.routeContext) {
+      preparedUpsert.routeContext = structuredClone(preparedUpsert.routeContext);
+    }
+    if (preparedUpsert.resetBoundary) {
+      preparedUpsert.resetBoundary = structuredClone(preparedUpsert.resetBoundary);
+    }
+  }
+  return {
+    ...(await runSessionLifecyclePlanningInWorker(params, "finish", {
+      store: prepared.store,
+      selected: prepared.selected,
+      archiveDirectory: params.input.archiveDirectory,
+    })),
     upsertedEntries,
-    archiveDirectory: params.input.archiveDirectory,
-  });
+  };
 }
 
 export function commitSessionLifecycleProjectionInWorker(params: {

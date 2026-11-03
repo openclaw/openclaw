@@ -23,6 +23,7 @@ const enApprovals = {
     agentPending: en.execApproval.agentPending,
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    alwaysAllowHere: "Always allow here",
     alwaysAllowForDay: "Always allow ({days} day)",
     alwaysAllowForDays: "Always allow ({days} days)",
     reviewOnly: en.execApproval.reviewOnly,
@@ -33,6 +34,7 @@ const enApprovals = {
     details: "Details",
     requestDetails: "Request details",
     agentRunCommand: "{agent} wants to run a command",
+    inSession: "in “{session}”",
     agentStartWatcher: "{agent} wants to start “{name}”",
     agentChangeWatcher: "{agent} wants to change “{name}”",
     labels: {

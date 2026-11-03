@@ -104,6 +104,33 @@ it("keeps the recap duration when zero runtime cannot label completed work", asy
   expect(text(".chat-turn-recap")).toContain("42 output tokens");
 });
 
+it.each([
+  [false, "live"],
+  [false, "cached"],
+  [true, "live"],
+  [true, "cached"],
+] as const)(
+  "restores the visible answer's duration without a work rollup (bubble=%s, source=%s)",
+  async (bubbleMode, source) => {
+    const runId = "restored-duration";
+    const props = propsFor(runId, [
+      prompt(runId, 1_000),
+      ...(bubbleMode ? [work(runId, 2_000)] : []),
+      reply(runId, 14_000),
+    ]);
+    props.chatBubbleMode = bubbleMode;
+    const saved = session(runId, 13_000);
+    props.selectedSession =
+      source === "live" ? saved : { key: saved.key, kind: saved.kind, updatedAt: 1 };
+    props.transcriptMetadata =
+      source === "cached" ? projectChatTranscriptMetadata(saved) : undefined;
+    const { container, text } = mount(props);
+    await flushDeferredRowPrune();
+    expect(container.querySelector(".chat-work-group")).toBeNull();
+    expect(text(".chat-turn-recap")).toContain("Done in 13 seconds");
+  },
+);
+
 it("uses matching lifecycle duration, not final-message creation time", async () => {
   const status = "done";
   const runId = "duration-run";
@@ -126,16 +153,17 @@ it("uses matching lifecycle duration, not final-message creation time", async ()
     rerender();
     expect(duration()).toBe(expected);
   };
-  expect(duration()).toBe("Worked for 27 minutes, 35 seconds");
+  expect(duration()).toBe("Worked for 27m 35s");
   props.transcriptMetadata = undefined;
   props.selectedSession = liveSession;
   props.selectedSession.runtimeMs = 1_660_000;
-  expectDuration("Worked for 27 minutes, 40 seconds");
+  expectDuration("Worked for 27m 40s");
   props.messages = messages.slice(1);
-  expectDuration("Worked for 27 minutes, 40 seconds");
+  expectDuration("Worked for 27m 40s");
   props.messages = messages;
   props.selectedSession.lastRunId = "unrelated-run";
-  expectDuration("Worked");
+  // An advancing session row cannot erase timing already recorded for this answer.
+  expectDuration("Worked for 27m 40s");
   expect(container.querySelector(".chat-work-group")).not.toBeNull();
   props.selectedSession.lastRunId = runId;
   props.selectedSession.status = "running";
@@ -173,7 +201,7 @@ it.each([false, true])(
       summaries.map(
         (summary) => summary.querySelector(".chat-activity-group__label")?.textContent ?? null,
       ),
-    ).toEqual(steer ? ["Worked for 20 seconds"] : ["Worked", "Worked for 20 seconds"]);
+    ).toEqual(steer ? ["Worked for 20s"] : ["Worked", "Worked for 20s"]);
   },
 );
 it("keeps progress after accepted steers and before queued input", async () => {

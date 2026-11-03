@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
@@ -6,11 +7,12 @@ import {
   type AuthHealthSummary,
 } from "../agents/auth-health.js";
 import {
-  ensureAuthProfileStore,
-  findPersistedAuthProfileCredential,
-  hasAnyAuthProfileStoreSource,
-  hasLocalAuthProfileStoreSource,
-  loadAuthProfileStoreForRuntime,
+  ensureAuthProfileStoreAsync,
+  type AuthProfileStore,
+  findPersistedAuthProfileCredentialAsync,
+  hasAnyAuthProfileStoreSourceAsync,
+  hasLocalAuthProfileStoreSourceAsync,
+  loadAuthProfileStoreForRuntimeAsync,
   resolveApiKeyForProfile,
 } from "../agents/auth-profiles.js";
 import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
@@ -22,21 +24,23 @@ import {
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
 import { shouldUseMainOwnerForLocalOAuthCredential } from "../agents/auth-profiles/ownership.js";
 import {
-  prepareSharedAuthStoreOwnershipForNative as resolveSharedAuthStoreOwnership,
-  resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath,
-} from "../agents/auth-profiles/path-resolve.native.js";
+  prepareSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.js";
 import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
+import { withAuthProfileReaderCleanup } from "../agents/auth-profiles/reader-cleanup.js";
+import { prepareAgentAuthProfileRowsRead } from "../agents/auth-profiles/sqlite-read.js";
 import {
-  inspectPersistedSharedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
+  resolveAuthProfileDatabaseOwnerId,
 } from "../agents/auth-profiles/sqlite.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
+import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { listUnavailableAuthProfiles } from "./models/auth-unavailability.js";
@@ -52,10 +56,10 @@ const DOCTOR_REAUTH_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
 };
 
 /** Explain the retired ambient-token activation once per state directory. */
-export function collectCopilotAmbientTokenFindings(
+export async function collectCopilotAmbientTokenFindings(
   cfg: OpenClawConfig,
   env = process.env,
-): readonly HealthFinding[] {
+): Promise<readonly HealthFinding[]> {
   if (
     !(env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim()) ||
     env.COPILOT_GITHUB_TOKEN?.trim() ||
@@ -63,13 +67,13 @@ export function collectCopilotAmbientTokenFindings(
     Object.values(cfg.auth?.profiles ?? {}).some(
       (profile) => profile.provider === "github-copilot",
     ) ||
-    readConfigMachineState<boolean>(COPILOT_NOTICE_KEY, { env })
+    (await readConfigMachineStateAsync<boolean>(COPILOT_NOTICE_KEY, { env }))
   ) {
     return [];
   }
   const agentDirs = [undefined, ...listAgentIds(cfg).map((id) => resolveAgentDir(cfg, id, env))];
   for (const agentDir of agentDirs) {
-    const store = loadAuthProfileStoreForRuntime(
+    const store = await loadAuthProfileStoreForRuntimeAsync(
       agentDir,
       { readOnly: true, allowKeychainPrompt: false },
       env,
@@ -104,13 +108,28 @@ export function collectCopilotAmbientTokenFindings(
 }
 
 /** Surface the one-time relocation while the legacy shared owner is still active. */
-export function collectSharedAuthStoreFindings(
+export async function collectSharedAuthStoreFindings(
   env: NodeJS.ProcessEnv = process.env,
-): readonly HealthFinding[] {
-  if (
-    resolveSharedAuthStoreOwnership(env).location !== "legacy-main" ||
-    inspectPersistedSharedAuthProfileStoreRaw(env).status !== "readable"
-  ) {
+): Promise<readonly HealthFinding[]> {
+  if ((await prepareSharedAuthStoreOwnership(env)).location !== "legacy-main") {
+    return [];
+  }
+  const databasePath = resolveSharedAuthStorePath(env);
+  const source = prepareAgentAuthProfileRowsRead({
+    databasePath,
+    agentId: resolveAuthProfileDatabaseOwnerId(dirname(databasePath)),
+    env,
+  });
+  const readable = await withAuthProfileReaderCleanup(
+    async () => {
+      const rows = await source.read();
+      source.assertCurrent();
+      return rows.store.status === "readable";
+    },
+    [source],
+    { read: "Shared auth source read failed", cleanup: "Shared auth source cleanup failed" },
+  );
+  if (!readable) {
     return [];
   }
   return [
@@ -134,8 +153,11 @@ function hasConfiguredCodexOAuthProfile(cfg: OpenClawConfig): boolean {
   );
 }
 
-function hasStoredCodexOAuthProfile(): boolean {
-  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false, readOnly: true });
+async function hasStoredCodexOAuthProfile(): Promise<boolean> {
+  const store = await ensureAuthProfileStoreAsync(undefined, {
+    allowKeychainPrompt: false,
+    readOnly: true,
+  });
   return Object.values(store.profiles).some(
     (profile) =>
       (profile.provider === OPENAI_PROVIDER_ID || profile.provider === LEGACY_CODEX_PROVIDER_ID) &&
@@ -199,9 +221,9 @@ function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
   return lines.join("\n");
 }
 
-export function collectLegacyCodexProviderOverrideFindings(
+export async function collectLegacyCodexProviderOverrideFindings(
   cfg: OpenClawConfig,
-): readonly HealthFinding[] {
+): Promise<readonly HealthFinding[]> {
   const providerOverride = cfg.models?.providers?.[LEGACY_CODEX_PROVIDER_ID];
   if (!providerOverride) {
     return [];
@@ -209,7 +231,7 @@ export function collectLegacyCodexProviderOverrideFindings(
   if (!hasLegacyCodexTransportOverride(providerOverride)) {
     return [];
   }
-  if (!hasConfiguredCodexOAuthProfile(cfg) && !hasStoredCodexOAuthProfile()) {
+  if (!hasConfiguredCodexOAuthProfile(cfg) && !(await hasStoredCodexOAuthProfile())) {
     return [];
   }
   return [
@@ -234,15 +256,21 @@ type AuthProfileHealthTarget = {
   agentDir?: string;
 };
 
-function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTarget[] {
+async function listAuthProfileHealthTargets(
+  cfg: OpenClawConfig,
+): Promise<AuthProfileHealthTarget[]> {
+  await prepareSharedAuthStoreOwnership();
   const targets = new Map<string, AuthProfileHealthTarget>();
-  if (hasAnyAuthProfileStoreSource() || Object.keys(cfg.auth?.profiles ?? {}).length > 0) {
+  if (
+    (await hasAnyAuthProfileStoreSourceAsync()) ||
+    Object.keys(cfg.auth?.profiles ?? {}).length > 0
+  ) {
     targets.set(resolveSharedAuthStorePath(), { label: "Shared" });
   }
   for (const agentId of listAgentIds(cfg)) {
     const agentDir = resolveAgentDir(cfg, agentId);
     const databasePath = resolveAuthProfileDatabasePath(agentDir);
-    if (!targets.has(databasePath) && hasLocalAuthProfileStoreSource(agentDir)) {
+    if (!targets.has(databasePath) && (await hasLocalAuthProfileStoreSourceAsync(agentDir))) {
       targets.set(databasePath, { label: `Agent ${agentId}`, agentDir });
     }
   }
@@ -269,7 +297,7 @@ function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | nul
 async function resolveAuthIssueHint(
   issue: AuthIssue,
   cfg: OpenClawConfig,
-  store: ReturnType<typeof ensureAuthProfileStore>,
+  store: AuthProfileStore,
 ): Promise<string> {
   if (issue.reasonCode === "invalid_expires") {
     return "Invalid token expires metadata. Set a future Unix ms timestamp or remove expires.";
@@ -291,24 +319,28 @@ async function resolveAuthIssueHint(
   }).replace(/^Run /, "Re-auth via ");
 }
 
-function collectAuthProfileCooldowns(store: ReturnType<typeof ensureAuthProfileStore>) {
-  return listUnavailableAuthProfiles(store).map(
-    ({ profileId, provider, kind, reason, classification, remainingMs }) => {
-      const displayReason = classification ?? reason;
-      return {
-        profileId,
-        kind: `${kind}${displayReason ? `:${displayReason}` : ""}`,
-        remaining: formatRemainingShort(remainingMs),
-        hint: buildAuthProfileUnusableHint({
-          kind,
-          reason,
-          // Local cooldowns can refer to shared credentials, whose expiry is checked separately.
-          provider:
-            provider ?? findPersistedAuthProfileCredential({ profileId })?.provider ?? profileId,
+async function collectAuthProfileCooldowns(store: AuthProfileStore) {
+  return Promise.all(
+    listUnavailableAuthProfiles(store).map(
+      async ({ profileId, provider, kind, reason, classification, remainingMs }) => {
+        const displayReason = classification ?? reason;
+        return {
           profileId,
-        }),
-      };
-    },
+          kind: `${kind}${displayReason ? `:${displayReason}` : ""}`,
+          remaining: formatRemainingShort(remainingMs),
+          hint: buildAuthProfileUnusableHint({
+            kind,
+            reason,
+            // Local cooldowns can refer to shared credentials, whose expiry is checked separately.
+            provider:
+              provider ??
+              (await findPersistedAuthProfileCredentialAsync({ profileId }))?.provider ??
+              profileId,
+            profileId,
+          }),
+        };
+      },
+    ),
   );
 }
 
@@ -322,7 +354,7 @@ function isAuthProfileHealthIssue(profile: AuthHealthSummary["profiles"][number]
   );
 }
 
-function loadAuthProfileHealth(params: {
+async function loadAuthProfileHealth(params: {
   cfg: OpenClawConfig;
   target: AuthProfileHealthTarget;
   allowKeychainPrompt: boolean;
@@ -330,24 +362,26 @@ function loadAuthProfileHealth(params: {
 }) {
   // Same-store inheritance keeps local cooldowns and CLI overlays. Credential health follows
   // canonical OAuth ownership, so stale local copies cannot refresh shared credentials twice.
-  const store = loadAuthProfileStoreForRuntime(params.target.agentDir, {
+  const store = await loadAuthProfileStoreForRuntimeAsync(params.target.agentDir, {
     inheritedAuthDir: params.target.agentDir,
     allowKeychainPrompt: params.allowKeychainPrompt,
     readOnly: params.readOnly,
   });
-  const profiles = params.target.agentDir
-    ? Object.fromEntries(
-        Object.entries(store.profiles).filter(
-          ([profileId, local]) =>
-            local.type !== "oauth" ||
-            !shouldUseMainOwnerForLocalOAuthCredential({
-              profileId,
-              local,
-              main: findPersistedAuthProfileCredential({ profileId }),
-            }),
-        ),
-      )
-    : store.profiles;
+  const profiles: AuthProfileStore["profiles"] = {};
+  for (const [profileId, local] of Object.entries(store.profiles)) {
+    if (
+      params.target.agentDir &&
+      local.type === "oauth" &&
+      shouldUseMainOwnerForLocalOAuthCredential({
+        profileId,
+        local,
+        main: await findPersistedAuthProfileCredentialAsync({ profileId }),
+      })
+    ) {
+      continue;
+    }
+    profiles[profileId] = local;
+  }
   return {
     store,
     summary: buildAuthHealthSummary({
@@ -362,13 +396,13 @@ async function collectAuthProfileTargetFindings(params: {
   cfg: OpenClawConfig;
   target: AuthProfileHealthTarget;
   labelStores: boolean;
-  store: ReturnType<typeof ensureAuthProfileStore>;
+  store: AuthProfileStore;
   summary: AuthHealthSummary;
 }): Promise<HealthFinding[]> {
   const findings: HealthFinding[] = [];
   const owner = params.labelStores ? `${params.target.label} auth profile` : "Auth profile";
   const path = resolveAuthStorePathForDisplay(params.target.agentDir);
-  for (const cooldown of collectAuthProfileCooldowns(params.store)) {
+  for (const cooldown of await collectAuthProfileCooldowns(params.store)) {
     findings.push({
       checkId: AUTH_PROFILES_CHECK_ID,
       severity: "warning",
@@ -404,10 +438,10 @@ export async function collectAuthProfileHealthFindings(params: {
   cfg: OpenClawConfig;
   allowKeychainPrompt?: boolean;
 }): Promise<readonly HealthFinding[]> {
-  const targets = listAuthProfileHealthTargets(params.cfg);
+  const targets = await listAuthProfileHealthTargets(params.cfg);
   const findings: HealthFinding[] = [];
   for (const target of targets) {
-    const health = loadAuthProfileHealth({
+    const health = await loadAuthProfileHealth({
       cfg: params.cfg,
       target,
       allowKeychainPrompt: params.allowKeychainPrompt ?? false,
@@ -422,7 +456,7 @@ export async function collectAuthProfileHealthFindings(params: {
       })),
     );
   }
-  return [...findings, ...collectLegacyCodexProviderOverrideFindings(params.cfg)];
+  return [...findings, ...(await collectLegacyCodexProviderOverrideFindings(params.cfg))];
 }
 
 /** Aggregate normal Doctor output; lint retains each store's location and finding. */
@@ -431,11 +465,11 @@ export async function inspectAuthProfileHealth(params: {
   prompter: DoctorPrompter;
   allowKeychainPrompt: boolean;
 }): Promise<readonly HealthFinding[]> {
-  const targets = listAuthProfileHealthTargets(params.cfg);
+  const targets = await listAuthProfileHealthTargets(params.cfg);
   const grouped = new Map<string, { finding: HealthFinding; stores: Set<string> }>();
   for (const target of targets) {
     const { cfg, prompter, allowKeychainPrompt } = params;
-    let { store, summary } = loadAuthProfileHealth({ cfg, target, allowKeychainPrompt });
+    let { store, summary } = await loadAuthProfileHealth({ cfg, target, allowKeychainPrompt });
     const refreshTargets = summary.profiles
       .filter(isAuthProfileHealthIssue)
       .filter((issue) => issue.type === "oauth");
@@ -481,7 +515,11 @@ export async function inspectAuthProfileHealth(params: {
           );
         }
       }
-      ({ store, summary } = loadAuthProfileHealth({ cfg, target, allowKeychainPrompt: false }));
+      ({ store, summary } = await loadAuthProfileHealth({
+        cfg,
+        target,
+        allowKeychainPrompt: false,
+      }));
     }
     const findings = await collectAuthProfileTargetFindings({
       cfg,

@@ -57,6 +57,7 @@ const buildStep = findStep("Build iOS app");
 const configureStep = findStep("Configure iOS build and report simulator selection");
 const configuredSteps = [configureStep, prepareStep, buildStep];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let pythonExecutable: string | undefined;
 
 function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<string, string> = {}) {
   const root = tempDirs.make("openclaw-watch-workflow-");
@@ -134,10 +135,14 @@ if (tool === "installer") {
   }
   // The build runner also uses Python to execute its logged shell command. Only
   // intercept the restart helper; the inline build wrapper must still execute.
-  const python = spawnSync("python3", ["-c", "import sys; print(sys.executable)"], {
-    encoding: "utf8",
-  });
-  expect(python.status, python.stderr).toBe(0);
+  // Interpreter identity is stable across cases; wrappers and executions stay fixture-local.
+  if (pythonExecutable === undefined) {
+    const python = spawnSync("python3", ["-c", "import sys; print(sys.executable)"], {
+      encoding: "utf8",
+    });
+    expect(python.status, python.stderr).toBe(0);
+    pythonExecutable = python.stdout.trim();
+  }
   const pythonWrapper = path.join(bin, "python3");
   writeFileSync(
     pythonWrapper,
@@ -145,7 +150,7 @@ if (tool === "installer") {
 if [ "$1" = "scripts/ios-access-restart-proof.py" ]; then
   exec '${process.execPath}' '${runner}' python3 "$@"
 fi
-exec '${python.stdout.trim()}' "$@"
+exec '${pythonExecutable}' "$@"
 `,
   );
   chmodSync(pythonWrapper, 0o755);
@@ -284,14 +289,17 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       resultBundle("OpenClawLifecycleTests"),
       "-only-testing:OpenClawTests/ChatComposerTextViewIOSTests",
     ]);
-    const authSelectors = selectors("OpenClawTests", [
+    const lifecycleSelectors = selectors("OpenClawTests", [
       "CloudflareAccessClientTests",
       "CloudflareAccessBrowserPresenterTests",
       "CloudflareAccessTransferTests",
       "CloudflareAccessSessionStoreTests",
       "GatewayConnectionSecurityTests",
+      "Security2AdvertisementTests",
+      "ESPSetupWireTests",
+      "ESPSetupSessionTests",
     ]);
-    expect(tests[0]?.args).toEqual(expect.arrayContaining(authSelectors));
+    expect(tests[0]?.args).toEqual(expect.arrayContaining(lifecycleSelectors));
     expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
     if (phase === "smoke") {
       expect(commands.at(-1)).toEqual({
@@ -303,7 +311,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       return;
     }
     expectArgs(tests[0]?.args, [
-      ...authSelectors,
+      ...lifecycleSelectors,
       "-only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests",
       "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
     ]);
@@ -395,6 +403,9 @@ it.skipIf(process.platform === "win32").each([
   { owner: "apps/ios/fastlane/Fastfile", groups: [] },
   { owner: "apps/ios/Tests/TalkModeConfigParsingTests.swift", groups: ["voice"] },
   { owner: "apps/ios/Tests/ChatSendHydrationTests.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/ThirdParty/ESPProvision/ESPProvision/ESPDevice.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/Tests/ESPSetupWireTests.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/Tests/ESPSetupSessionTests.swift", groups: ["lifecycle"] },
   {
     owner: "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatComposerTextViewIOSTests.swift",
     groups: ["lifecycle"],

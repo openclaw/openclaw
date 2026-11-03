@@ -17,26 +17,22 @@ const forbiddenInputs = [
 ];
 
 describe("standalone runtime process build graph", () => {
-  it("isolates the metadata inventory program from the shared runtime graph", () => {
-    expect(
-      sharedRuntimeProcessBuildEntries({
-        "infra/update-state-sizes.entry": "src/infra/update-state-sizes.entry.ts",
-        "fixture/shared": "fixture/shared.ts",
-      }),
-    ).toEqual({ "fixture/shared": "fixture/shared.ts" });
-  });
-
-  it("keeps small disk, attachment, and catalog workers out of shared Gateway chunks", () => {
+  it("keeps small workers out of shared Gateway chunks", () => {
     const workers = [
+      "infra/update-state-sizes.entry",
       "config/sessions/disk-budget.worker",
       "media/attachment-processor.worker",
       "agents/plugin-model-catalog-read.worker",
+      "agents/code-mode-node.worker",
     ];
     expect(
       Object.keys(
-        sharedRuntimeProcessBuildEntries(Object.fromEntries(workers.map((name) => [name, name]))),
+        sharedRuntimeProcessBuildEntries({
+          ...Object.fromEntries(workers.map((name) => [name, name])),
+          "fixture/shared": "fixture/shared.ts",
+        }),
       ),
-    ).toHaveLength(0);
+    ).toEqual(["fixture/shared"]);
   });
 
   it.each(Object.entries(standaloneRuntimeProcessBuildEntries))(

@@ -30,6 +30,7 @@ import {
   parseCatalogSessionKey,
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
+import { catalogReadMethod } from "../../lib/sessions/catalog-read-method.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
@@ -442,6 +443,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       return;
     }
     const runs = collectUnreadHiddenRunRows(state.sessionsResult?.sessions ?? [], parent.key);
+    const pending: GatewaySessionRow[] = [];
+    const settlements = new Map<string, ReturnType<SessionUnreadPatchGuard["settlePatch"]>>();
     for (const run of runs) {
       const revision = run.updatedAt ?? null;
       // Manual unread markers stay until the run itself is acknowledged.
@@ -450,8 +453,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       const agentId = parseAgentSessionKey(run.key)?.agentId ?? resolveChatAgentId(state);
       const access = readSessionMethodAccess(this.context.gateway.snapshot, {
-        method: "sessions.patch",
-        params: { key: run.key, unread: false, agentId },
+        method: "sessions.patchMany",
+        params: { targets: [{ key: run.key, agentId }], patch: { unread: false } },
         sessionScope: true,
         session: run,
       });
@@ -464,9 +467,36 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         this.hiddenRunReadRequests.set(run.key, request);
       }
       if (request.guard.shouldPatch(run.key, true)) {
-        this.acknowledgeSessionRead(run, request.guard, agentId);
+        pending.push(run);
+        settlements.set(run.key, request.guard.settlePatch());
       }
     }
+    if (pending.length === 0) {
+      return;
+    }
+    const sessionKey = state.sessionKey;
+    void this.context.sessions
+      .acknowledgeHiddenRuns(pending, {
+        agentId: resolveChatAgentId(state),
+      })
+      .then(
+        (outcomes) => {
+          let acknowledged = false;
+          for (const outcome of outcomes) {
+            if (settlements.get(outcome.key)?.(outcome.ok, outcome.error) && outcome.ok) {
+              acknowledged = true;
+            }
+          }
+          if (acknowledged && this.state === state && state.sessionKey === sessionKey) {
+            this.markSessionRead(selectedChatSessionRow(state));
+          }
+        },
+        (error: unknown) => {
+          for (const settle of settlements.values()) {
+            settle(false, error);
+          }
+        },
+      );
   }
 
   protected async restoreArchivedSession(sessionKey: string, expectedSessionId: string) {
@@ -616,6 +646,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           key,
           isCurrent,
           signal: read.controller.signal,
+          listMethod: catalogReadMethod(scope.context.gateway.snapshot, key.catalogId, "list"),
         });
         if (!lookup || !isCurrent()) {
           return false;
@@ -625,7 +656,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       const requestedOlderCursor = older ? this.history.catalogCursor : undefined;
       const page = await client.request<SessionsCatalogReadResult>(
-        "sessions.catalog.read",
+        catalogReadMethod(scope.context.gateway.snapshot, key.catalogId, "read"),
         {
           agentId,
           catalogId: key.catalogId,
@@ -665,12 +696,20 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           this.olderCursorsSeen.has(page.nextCursor));
       this.history.catalogMessages = nextMessages;
       this.history.catalogCursor = olderExhausted ? undefined : page.nextCursor;
-      state.lastError = null;
+      if (older) {
+        this.history.olderError = null;
+      } else {
+        state.lastError = null;
+      }
       scheduleChatScroll(state, !older);
       return !older || addedMessages || !olderExhausted;
     } catch (error) {
       if (isCurrent()) {
-        state.lastError = formatUiError(error);
+        if (older) {
+          this.history.olderError = formatUiError(error);
+        } else {
+          state.lastError = formatUiError(error);
+        }
       }
       return false;
     } finally {

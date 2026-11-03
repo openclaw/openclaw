@@ -2,7 +2,11 @@ import type { MessageReactionSummary } from "../../../../../packages/gateway-pro
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
@@ -63,9 +67,9 @@ export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
-    turnVideoMessages?: ReadonlyMap<
+    turnMediaMessages?: ReadonlyMap<
       string,
-      readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
+      readonly import("./chat-turn-media-gallery.ts").TurnMediaMessage[]
     >;
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
@@ -90,10 +94,19 @@ export type ChatThreadProps = Omit<
   | "presented"
   | "agentId"
   | "mediaPolicyKey"
-  | "getTurnVideoMessages"
+  | "getTurnMediaMessages"
   | "onOpenWorkspaceFile"
 > &
-  ChatWelcomeIdentityProps &
+  Pick<
+    ChatWelcomeIdentityProps,
+    | "currentAgentId"
+    | "agents"
+    | "assistantName"
+    | "assistantAvatar"
+    | "assistantAvatarUrl"
+    | "assistantAvatarSource"
+    | "sessionHost"
+  > &
   ChatSendStatusActions &
   SubagentRoster & {
     applicationContext?: ApplicationContext;
@@ -111,9 +124,11 @@ export type ChatThreadProps = Omit<
     transcriptVisible?: PresentationValue;
     gatewayClient?: GatewayBrowserClient | null;
     selectedSession: GatewaySessionRow | undefined;
+    modelCatalog?: ModelCatalogEntry[];
     transcriptMetadata?: ChatTranscriptMetadata;
     announceTranscript?: boolean;
     loading: boolean;
+    restoring?: boolean;
     routeLoadingSkeleton?: boolean;
     /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
     historyPagination?: ChatHistoryBoundaryProps;
@@ -164,6 +179,7 @@ export type ChatThreadProps = Omit<
     typingOverflow?: ChatTypingOverflow;
     onOpenSidebar?: (content: SidebarContent) => void;
     onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
+    onOpenManagedArtifact?: (href: string) => boolean;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
     onNavigate?: (routeId: "cron", options: { search: string }) => void;
     onChatScroll?: (event: Event) => void;

@@ -1,7 +1,13 @@
-import { afterAll, beforeAll, expect, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, vi, type Mock } from "vitest";
+import type { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
+import { buildCliMcpGrantContext } from "../agents/cli-runner/mcp-grant-context.js";
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { activateMcpLoopbackClientGrantCapture } from "./mcp-grant-store.js";
+import {
+  activateMcpLoopbackClientGrantCapture,
+  mintAttachGrant,
+  type McpLoopbackRequestContext,
+} from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
@@ -219,4 +225,98 @@ export function createMcpToolCacheResolver({
         ...context,
       },
     });
+}
+
+export function registerRequesterPolicyTests({
+  createCliGrant,
+  mockScopedTools,
+  beforeToolCall,
+}: {
+  createCliGrant: (
+    runId: string,
+    options: { context: McpLoopbackRequestContext },
+  ) => Promise<{ scope: { token: string; headers: Record<string, string> } }>;
+  mockScopedTools: (tools: MockGatewayTool[]) => void;
+  beforeToolCall: Mock<typeof runBeforeToolCallHook>;
+}) {
+  it.each(["owner", "guest", "unknown", "missing", "attach", "bearer"] as const)(
+    "enforces requester policy from captured CLI identity despite forged MCP input (%s)",
+    async (identity) => {
+      const { runtime } = await startLoopbackServerForTest();
+      const execute = vi.fn(async () => ({ content: [{ type: "text", text: "delivered" }] }));
+      mockScopedTools([makeMessageTool({ execute })]);
+      beforeToolCall.mockImplementation(async ({ params, ctx }) =>
+        ctx?.agentId === "main" && ctx.requester?.senderIsOwner === true
+          ? { blocked: false, params }
+          : { blocked: true, kind: "veto", reason: "Proven owner required", params },
+      );
+      const hasSender = ["owner", "guest", "unknown"].includes(identity);
+      const context = buildCliMcpGrantContext({
+        run: {
+          sessionId: "policy-session",
+          sessionKey: "agent:main:policy",
+          sessionFile: "/tmp/policy-session",
+          workspaceDir: "/tmp/policy-workspace",
+          provider: "fixture-cli",
+          prompt: "Policy check",
+          timeoutMs: 1000,
+          runId: "policy-run",
+          ...(hasSender
+            ? {
+                messageChannel: "discord",
+                messageProvider: "telegram",
+                agentAccountId: "verified-account",
+                senderId: "verified-sender",
+                memberRoleIds: ["verified-role"],
+                ...(identity !== "unknown" ? { senderIsOwner: identity === "owner" } : {}),
+              }
+            : {}),
+        },
+        config: {},
+        requireExplicitMessageTarget: false,
+        agentId: "main",
+        modelProvider: "fixture-provider",
+        modelId: "fixture-model",
+      });
+      const scope =
+        identity === "attach"
+          ? { token: mintAttachGrant({ sessionKey: context.sessionKey, agentId: "main" }).token }
+          : identity === "bearer"
+            ? { token: runtime.ownerToken }
+            : (await createCliGrant("policy-run", { context })).scope;
+      const payload = await readOkMcpPayload(
+        await sendLoopbackToolCall({
+          ...scope,
+          name: "message",
+          args: { requester: { senderIsOwner: true, senderId: "forged" }, agentId: "forged-agent" },
+          headers: {
+            ...("headers" in scope ? scope.headers : {}),
+            "x-openclaw-message-channel": "slack",
+            "x-openclaw-account-id": "forged-account",
+            "x-openclaw-sender-id": "forged",
+            "x-openclaw-sender-is-owner": "true",
+            "x-openclaw-agent-id": "forged-agent",
+          },
+        }),
+      );
+      expect(payload.result?.isError).toBe(identity !== "owner");
+      expect(payload.result?.content?.[0]?.text).toBe(
+        identity === "owner" ? "delivered" : "Proven owner required",
+      );
+      expect(execute).toHaveBeenCalledTimes(identity === "owner" ? 1 : 0);
+      const hookContext = beforeToolCall.mock.calls[0]?.[0].ctx;
+      expect(hookContext?.agentId).toBe("main");
+      expect(hookContext?.requester).toEqual(
+        hasSender
+          ? {
+              channel: "discord",
+              accountId: "verified-account",
+              senderId: "verified-sender",
+              roleIds: ["verified-role"],
+              ...(identity !== "unknown" ? { senderIsOwner: identity === "owner" } : {}),
+            }
+          : undefined,
+      );
+    },
+  );
 }
