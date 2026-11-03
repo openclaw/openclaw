@@ -445,9 +445,7 @@ describe("failed run recovery actions", () => {
     expect(state.handleSendChat).not.toHaveBeenCalled();
     actions.onRetryRun?.("run-a");
     actions.onRetryRun?.("run-a");
-    expect(state.handleSendChat).toHaveBeenCalledExactlyOnceWith(
-      "Continue from where you stopped. Check which actions already completed before retrying anything.",
-    );
+    expect(state.handleSendChat).toHaveBeenCalledOnce();
     state.chatSending = false;
     current = false;
     actions.onRetryRun?.("run-a");

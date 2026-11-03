@@ -1,4 +1,5 @@
 import { createMemo } from "solid-js";
+import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { clearCompositionEnd } from "../../../lib/ime.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -70,7 +71,14 @@ export function renderComposerTextarea(
       aria-describedby={`${view.announcementId}${
         composer.disabledReason ? ` ${view.disabledReasonId}` : ""
       }`}
-      aria-keyshortcuts={context().sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"}
+      enterkeyhint="enter"
+      aria-keyshortcuts={
+        isMobileBrowserPlatform()
+          ? undefined
+          : context().sendShortcut === "enter"
+            ? "Enter"
+            : "Control+Enter Meta+Enter"
+      }
       onKeyDown={(event) => {
         handleTextareaOverflowInteraction(event);
         context().handleKeyDown(event);

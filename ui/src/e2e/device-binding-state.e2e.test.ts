@@ -8,6 +8,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Device binding capability lifecycle" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const nodes = [
   ["default-node", "Default worker"],
   ["agent-node", "Research worker"],
@@ -95,7 +96,11 @@ suite.define(() => {
       const config = makeConfig(defaultBinding, agentBinding);
       const viewport = { width: 1280, height: 900 };
       await suite.withPage(
-        { viewport, colorScheme: "dark", recordVideo: { dir: suite.artifactDir, size: viewport } },
+        {
+          viewport,
+          colorScheme: "dark",
+          ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
+        },
         async ({ page }) => {
           const { gateway, section, defaultSelect, researchSelect } = await bindingControls(
             page,
@@ -117,7 +122,9 @@ suite.define(() => {
               expect(bounds?.y).toBeGreaterThanOrEqual(0);
               expect(bounds && bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height);
             }
-            await page.screenshot({ path: path.join(suite.artifactDir, name) });
+            if (captureUiProof) {
+              await page.screenshot({ path: path.join(suite.artifactDir, name) });
+            }
           };
           await capture("available.png");
 
@@ -159,7 +166,9 @@ suite.define(() => {
       const requireRecord = createRequireRecord("record", "expected-object-value");
       const config = makeConfig("default-node", "agent-node");
       await suite.withPage({ viewport: { width: 1280, height: 1000 } }, async ({ page }) => {
-        const artifacts = createControlUiE2eArtifactDir("device-binding-clear");
+        const artifacts = captureUiProof
+          ? createControlUiE2eArtifactDir("device-binding-clear")
+          : undefined;
         const { gateway, section, defaultSelect, researchSelect } = await bindingControls(
           page,
           config,
@@ -182,10 +191,14 @@ suite.define(() => {
         );
         await expectWrites(gateway, 0);
         await section.scrollIntoViewIfNeeded();
-        await page.screenshot({ path: path.join(artifacts, "unavailable-before-clear.png") });
+        if (artifacts) {
+          await page.screenshot({ path: path.join(artifacts, "unavailable-before-clear.png") });
+        }
         await expect(defaultSelect).toBeEnabled();
         await expect(researchSelect).toBeEnabled();
-        await page.screenshot({ path: path.join(artifacts, "unavailable-clear-enabled.png") });
+        if (artifacts) {
+          await page.screenshot({ path: path.join(artifacts, "unavailable-clear-enabled.png") });
+        }
         await gateway.deferNext("config.set");
         await defaultSelect.selectOption({ label: "Any node" });
         const clearedDefault = requireRecord((await gateway.waitForRequest("config.set")).params);
@@ -198,10 +211,12 @@ suite.define(() => {
         await gateway.deferNext("config.get");
         await gateway.resolveDeferred("config.set");
         const indicator = page.locator("openclaw-settings-save-indicator");
-        await expect(indicator).toContainText("Saved");
+        await expect(indicator).toContainText("Apply changes");
         await gateway.waitForRequest("config.get", { after: refreshReads });
         await gateway.resolveDeferred("config.get");
-        await page.screenshot({ path: path.join(artifacts, "after-clear-refresh.png") });
+        if (artifacts) {
+          await page.screenshot({ path: path.join(artifacts, "after-clear-refresh.png") });
+        }
         await expectBindings(selects, ["", "agent-node"]);
         await expect(defaultSelect).toBeDisabled();
         await expect(researchSelect).toBeEnabled();
@@ -213,11 +228,13 @@ suite.define(() => {
         );
         expect(JSON.parse(String(clearedAgent.raw))).toEqual(makeConfig("", ""));
         await gateway.resolveDeferred("config.set");
-        await expect(indicator).toContainText("Saved");
+        await expect(indicator).toContainText("Apply changes");
         await expect(researchSelect).toHaveValue("__default__");
         await expect(researchSelect).toBeDisabled();
         await expect(defaultSelect).toBeDisabled();
-        await page.screenshot({ path: path.join(artifacts, "unavailable-cleared.png") });
+        if (artifacts) {
+          await page.screenshot({ path: path.join(artifacts, "unavailable-cleared.png") });
+        }
 
         await gateway.setMethodResponse("node.list", { nodes });
         await gateway.emitGatewayEvent("node.runnerInventory.changed", {});

@@ -28,6 +28,40 @@ vi.mock("../agents/github-tool-identity.js", async (importOriginal) => ({
 const session = { agentId: "main", sessionKey: "agent:main:discovery", sessionId: "session-1" };
 type PreparedFact = Awaited<ReturnType<typeof prepareRepositoryWorkerPublicationFact>>;
 
+type Projection = NonNullable<
+  Parameters<typeof createRepositoryPublicationDiscovery>[0]["projection"]
+>;
+type SelectionListener = Parameters<Projection["onSelectionChange"]>[0];
+
+type WorkspaceBinding = Pick<
+  NonNullable<Extract<Parameters<SelectionListener>[0], { kind: "row" }>["row"]>["entry"],
+  "repositoryWorkspaceId" | "worktree"
+>;
+
+function projectionFixture(binding: WorkspaceBinding = { repositoryWorkspaceId: "workspace-1" }) {
+  let listener: SelectionListener | undefined;
+  const row = {
+    key: session.sessionKey,
+    agentId: session.agentId,
+    entry: { sessionId: session.sessionId, updatedAt: 1, ...binding },
+  };
+  const projection = {
+    ensureMaterialized: async () => {},
+    selectEntries: () => [row],
+    onSelectionChange: (next: SelectionListener) => {
+      listener = next;
+    },
+  };
+  return {
+    projection,
+    observe: (observed: typeof row) => listener?.({ kind: "row", row: observed }),
+    rebind: (next: WorkspaceBinding = { repositoryWorkspaceId: "workspace-2" }) => {
+      row.entry = { sessionId: session.sessionId, updatedAt: 1, ...next };
+      listener?.({ kind: "row", row });
+    },
+  };
+}
+
 // Stored-row publications replace the retired projection listener: qualification stays with the worker owner.
 function workspaceChanged() {
   sessionChanges.emit({
@@ -125,6 +159,70 @@ describe("Gateway-owned publication discovery", () => {
     expect(prepareRepositoryWorkerPublicationFact).not.toHaveBeenCalled();
     await clock.wake();
     expect(prepareRepositoryWorkerPublicationFact).toHaveBeenCalledOnce();
+    expect(owner.read(session)).toEqual(replacement);
+  });
+
+  it("revokes a removed binding before its queued preparation starts", async () => {
+    const { projection, rebind } = projectionFixture();
+    owner = createRepositoryPublicationDiscovery({
+      scheduler,
+      projection,
+      getProvider: () => provider,
+    });
+    owner.read(session);
+
+    rebind({});
+    owner.invalidate();
+    sessionChanges.emit({ all: true, scope: "config" });
+    vi.mocked(prepareRepositoryWorkerPublicationFact).mockImplementationOnce(async (params) => {
+      // The preparation owner checks this live guard before performing I/O.
+      expect(() => params.assertCurrent?.()).toThrow();
+      return published;
+    });
+    await clock.wake();
+    expect(vi.mocked(prepareRepositoryWorkerPublicationFact).mock.calls.length).toBeLessThanOrEqual(
+      1,
+    );
+    expect(clock.armedAtMs).toBeNull();
+    expect(owner.read(session)).toEqual({ available: false });
+  });
+
+  it("retires removed bindings without reviving them on identity or config changes", async () => {
+    const { projection, rebind } = projectionFixture();
+    owner = createRepositoryPublicationDiscovery({
+      scheduler,
+      projection,
+      getProvider: () => provider,
+    });
+    owner.read(session);
+    await clock.wake();
+    expect(owner.read(session)).toEqual(published);
+
+    const stale = holdPreparation();
+    owner.invalidate();
+    const oldRefresh = clock.wake();
+    const oldPreparation = vi.mocked(prepareRepositoryWorkerPublicationFact).mock.calls[1]![0];
+    expect(() => oldPreparation.assertCurrent?.()).not.toThrow();
+    rebind({});
+    expect(() => oldPreparation.assertCurrent?.()).toThrow();
+    owner.invalidate();
+    sessionChanges.emit({ all: true, scope: "config" });
+    await clock.wake();
+    expect(prepareRepositoryWorkerPublicationFact).toHaveBeenCalledTimes(2);
+
+    stale.resolve(published);
+    await oldRefresh;
+    expect(clock.armedAtMs).toBeNull();
+    // Explicit demand still returns immediately and can prepare a previously unknown target.
+    expect(owner.read(session)).toEqual({ available: false });
+    rebind();
+    const replacement = {
+      ...published,
+      branch: "openclaw/rebound",
+    };
+    vi.mocked(prepareRepositoryWorkerPublicationFact).mockResolvedValueOnce(replacement);
+    await clock.wake();
+    expect(prepareRepositoryWorkerPublicationFact).toHaveBeenCalledTimes(3);
     expect(owner.read(session)).toEqual(replacement);
   });
 

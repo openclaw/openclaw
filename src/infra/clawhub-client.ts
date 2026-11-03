@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sleepWithAbort } from "./backoff.js";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { isTruthyEnvValue } from "./env.js";
 import { isErrno } from "./errno.js";
@@ -28,6 +29,7 @@ export type ClawHubFetchOptions = {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 export type ClawHubRequestParams = ClawHubFetchOptions & {
@@ -183,7 +185,13 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
   return undefined;
 }
 
-function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "search" | "url">): URL {
+type ClawHubResponse = Awaited<ReturnType<typeof requestClawHub>>;
+
+async function requestClawHub(params: ClawHubRequestParams) {
+  params.signal?.throwIfAborted();
+  if (params.json !== undefined && params.form !== undefined) {
+    throw new Error("ClawHub requests cannot contain both JSON and multipart bodies");
+  }
   let url: URL;
   if (params.url) {
     url = new URL(params.url, `${resolveClawHubBaseUrl(params.baseUrl)}/`);
@@ -202,16 +210,6 @@ function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "searc
     }
     url.searchParams.set(key, value);
   }
-  return url;
-}
-
-type ClawHubResponse = Awaited<ReturnType<typeof requestClawHub>>;
-
-async function requestClawHub(params: ClawHubRequestParams) {
-  if (params.json !== undefined && params.form !== undefined) {
-    throw new Error("ClawHub requests cannot contain both JSON and multipart bodies");
-  }
-  const url = buildUrl(params);
   const token = params.skipAuth
     ? undefined
     : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
@@ -234,6 +232,7 @@ async function requestClawHub(params: ClawHubRequestParams) {
     init.body = params.form;
   }
   const request = async () => {
+    params.signal?.throwIfAborted();
     const controller = new AbortController();
     // Fetch rejects with the abort reason; preserve timeout classification for read retries.
     const timeoutError = Object.assign(
@@ -246,15 +245,15 @@ async function requestClawHub(params: ClawHubRequestParams) {
     );
     // Successful archives keep only their chunk-idle timeout while streaming.
     const releaseDeadline = () => {
-      if (timeout !== undefined) {
-        clearTimeout(timeout);
-        timeout = undefined;
-      }
+      clearTimeout(timeout);
+      timeout = undefined;
     };
     try {
       const response = await fetch(url, {
         ...init,
-        signal: controller.signal,
+        signal: params.signal
+          ? AbortSignal.any([controller.signal, params.signal])
+          : controller.signal,
       });
       return { response, url, hasToken: Boolean(token), releaseDeadline };
     } catch (error) {
@@ -269,6 +268,7 @@ async function requestClawHub(params: ClawHubRequestParams) {
     return await request();
   }
   return await retryClawHubRead(request, {
+    sleep: params.signal ? (ms) => sleepWithAbort(ms, params.signal) : undefined,
     disposeRetry: async ({ response, releaseDeadline }) => {
       releaseDeadline();
       await cancelUnreadResponseBody(response);
@@ -311,7 +311,18 @@ export async function createClawHubError(
 ): Promise<ClawHubRequestError> {
   let body = await readErrorBody(response, timeoutMs);
   if (response.status === 429) {
-    const suffix = formatRateLimitSuffix(response.headers, hasToken);
+    const headers = response.headers;
+    const resetSeconds =
+      parseRateLimitDeltaSeconds(headers.get("RateLimit-Reset")) ??
+      parseRateLimitDeltaSeconds(headers.get("Retry-After"));
+    const segments: string[] = [];
+    if (resetSeconds !== undefined) {
+      segments.push(`(resets in ${resetSeconds}s)`);
+    }
+    if (!hasToken) {
+      segments.push("Sign in for higher rate limits.");
+    }
+    const suffix = segments.join(" ");
     if (suffix) {
       body = `${body} ${suffix}`;
     }
@@ -321,20 +332,6 @@ export async function createClawHubError(
     status: response.status,
     body,
   });
-}
-
-function formatRateLimitSuffix(headers: Headers, hasToken: boolean): string {
-  const resetSeconds =
-    parseRateLimitDeltaSeconds(headers.get("RateLimit-Reset")) ??
-    parseRateLimitDeltaSeconds(headers.get("Retry-After"));
-  const segments: string[] = [];
-  if (resetSeconds !== undefined) {
-    segments.push(`(resets in ${resetSeconds}s)`);
-  }
-  if (!hasToken) {
-    segments.push("Sign in for higher rate limits.");
-  }
-  return segments.join(" ");
 }
 
 function parseRateLimitDeltaSeconds(value: string | null): number | undefined {

@@ -80,6 +80,7 @@ export function createWorkspacePublicationHost(params: {
     inspectPullRequest: (...args) => requireProvider().inspectPullRequest(...args),
     prepareBoundPublication: (...args) => requireProvider().prepareBoundPublication(...args),
     prepareTarget: (...args) => requireProvider().prepareTarget(...args),
+    preparePublishedTarget: (...args) => requireProvider().preparePublishedTarget(...args),
     readBase: (...args) => requireProvider().readBase(...args),
     observeBranch: (...args) => requireProvider().observeBranch(...args),
     findPullRequest: (...args) => requireProvider().findPullRequest(...args),
@@ -94,7 +95,7 @@ export function createWorkspacePublicationHost(params: {
       error instanceof RepositoryPublicationFailureError ||
       Boolean(current && !current.signal.aborted && current.provider.isDefinitiveFailure(error)),
     resolveFailure: (error) =>
-      error instanceof RepositoryPublicationFailureError
+      error instanceof RepositoryPublicationFailureError && (!current || current.signal.aborted)
         ? error.failure
         : requireProvider().resolveFailure(error),
   };
@@ -294,6 +295,7 @@ export function createWorkspacePublicationHost(params: {
         throw error;
       }
     },
+    bindSessionRowProjection: discovery.bindProjection,
     readWorkerPublicationFact: (session: Parameters<typeof discovery.read>[0]) =>
       discovery.read(session),
     resolveGitAuthor: (agentId: string) => provider.resolveGitAuthor?.(agentId),

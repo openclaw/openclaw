@@ -5,9 +5,10 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer, type RawData } from "ws";
+import { WebSocketServer } from "ws";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
 import type { CodexAppServerAuthHandoff, CodexAppServerPreparedAuth } from "./auth-types.js";
+import { rawDataToText } from "./client-websocket.test-support.js";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { withCodexAppServerJsonClient } from "./request.js";
@@ -19,6 +20,11 @@ import { registerSharedClientInferenceTests } from "./shared-client-inference.te
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./shared-client-lifecycle.js";
 import { registerSharedClientLifetimeTests } from "./shared-client-lifetime.test-support.js";
 import { registerSharedClientManagedFallbackTests } from "./shared-client-managed-fallback.test-support.js";
+import {
+  createInitializingClientHarness,
+  createStartOptions,
+} from "./shared-client-start.test-support.js";
+import { registerSharedClientUsageTests } from "./shared-client-usage.test-support.js";
 import { registerSharedClientWebSocketStartupTests } from "./shared-client-websocket-startup.test-support.js";
 import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -156,18 +162,6 @@ async function sendInitializeResult(
   harness.send({ id: initialize.id, result: { userAgent } });
 }
 
-// Capture reads runtime files before startup; respond when initialize reaches the wire.
-function createInitializingClientHarness(userAgent = `codex-cli/${CODEX_APP_SERVER_VERSION}`) {
-  return createClientHarness({
-    onWrite: (line, send) => {
-      const request = JSON.parse(line) as { id: number; method: string };
-      if (request.method === "initialize") {
-        send({ id: request.id, result: { userAgent } });
-      }
-    },
-  });
-}
-
 async function sendEmptyModelList(harness: ReturnType<typeof createClientHarness>): Promise<void> {
   const modelList = JSON.parse(await harness.waitForWrite(2)) as { id: number; method: string };
   expect(modelList.method).toBe("model/list");
@@ -253,12 +247,6 @@ function configureManagedDesktopFallback(): CodexAppServerStartOptions {
     commandSource: "managed",
     args: ["app-server", "--listen", "stdio://"],
   });
-}
-
-function createStartOptions(
-  overrides: Partial<CodexAppServerStartOptions> = {},
-): CodexAppServerStartOptions {
-  return { transport: "stdio", command: "codex", args: ["app-server"], headers: {}, ...overrides };
 }
 
 describe("shared Codex app-server client", () => {
@@ -357,13 +345,11 @@ describe("shared Codex app-server client", () => {
             url: transport === "unix" ? "unix://" : "ws://127.0.0.1:39175",
           },
         },
-        startOptions: {
+        startOptions: createStartOptions({
           transport: "websocket",
-          command: "codex",
           args: [],
-          headers: {},
           url: "ws://127.0.0.1:39176",
-        },
+        }),
         timeoutMs: 1_000,
       });
 
@@ -390,15 +376,11 @@ describe("shared Codex app-server client", () => {
         async () => {
           const client = await acquire({
             config: { agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } } },
-            startOptions: {
-              transport: "stdio",
+            startOptions: createStartOptions({
               homeScope: "user",
-              command: "codex",
               commandSource: "managed",
-              args: ["app-server"],
-              headers: {},
               env: { CODEX_HOME: "/native/codex" },
-            },
+            }),
             authProfileId: null,
             timeoutMs: 1_000,
           });
@@ -751,13 +733,10 @@ describe("shared Codex app-server client", () => {
         .spyOn(CodexAppServerClient, "start")
         .mockResolvedValueOnce(normal.client)
         .mockResolvedValueOnce(captured.client);
-      const startOptions: CodexAppServerStartOptions = {
-        transport: "stdio",
+      const startOptions: CodexAppServerStartOptions = createStartOptions({
         command,
         commandSource: "config",
-        args: ["app-server"],
-        headers: {},
-      };
+      });
 
       try {
         const normalClient = await getLeasedSharedCodexAppServerClient({ startOptions });
@@ -1338,6 +1317,8 @@ describe("shared Codex app-server client", () => {
       expect(resolvedCacheKeys.join("\n")).not.toContain("second-secret-token");
     },
   );
+
+  registerSharedClientUsageTests();
 
   it.each(["api-key", "subscription"] as const)(
     "reuses a turn's %s physical client for a control resume",
@@ -2437,13 +2418,4 @@ describe("shared Codex app-server client", () => {
   });
 });
 
-function rawDataToText(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(new Uint8Array(data)).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,16 +1,14 @@
 import path from "node:path";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
 
 export function createIndex(rootDir: string): InstalledPluginIndex {
-  return {
-    version: 1,
+  return createIndexFixture({
     hostContractVersion: "2026.4.25",
     compatRegistryVersion: "compat-v1",
-    migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
-    installRecords: {},
     plugins: [
       {
         pluginId: "installed",
@@ -28,8 +26,7 @@ export function createIndex(rootDir: string): InstalledPluginIndex {
         compat: [],
       },
     ],
-    diagnostics: [],
-  };
+  });
 }
 
 export function createMsteamsClawHubInstallRecord(

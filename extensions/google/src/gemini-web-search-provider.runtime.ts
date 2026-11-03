@@ -29,12 +29,18 @@ import {
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleApiClientHeaders } from "../google-api-client-header.js";
-import {
-  resolveGeminiConfig,
-  resolveGeminiBaseUrl,
-  resolveGeminiModel,
-  type GeminiConfig,
-} from "./gemini-web-search-provider.shared.js";
+import { normalizeGoogleApiBaseUrl } from "./google-api-base-url.js";
+
+const DEFAULT_GEMINI_WEB_SEARCH_MODEL = "gemini-3.6-flash";
+
+type GeminiConfig = {
+  apiKey?: unknown;
+  baseUrl?: unknown;
+  headers?: unknown;
+  model?: unknown;
+  providerApiKey?: unknown;
+  providerBaseUrl?: unknown;
+};
 
 type GeminiFreshness = "day" | "week" | "month" | "year";
 
@@ -194,7 +200,8 @@ export async function executeGeminiSearch(
     };
   }
 
-  const geminiConfig = resolveGeminiConfig(searchConfig);
+  const gemini = searchConfig?.gemini;
+  const geminiConfig: GeminiConfig = isRecord(gemini) ? gemini : {};
   const apiKey = resolveGeminiRuntimeApiKey(geminiConfig);
   if (!apiKey) {
     return {
@@ -210,8 +217,11 @@ export async function executeGeminiSearch(
     max: MAX_SEARCH_COUNT,
     message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
   });
-  const model = resolveGeminiModel(geminiConfig);
-  const baseUrl = resolveGeminiBaseUrl(geminiConfig);
+  const model = normalizeOptionalString(geminiConfig?.model) ?? DEFAULT_GEMINI_WEB_SEARCH_MODEL;
+  const baseUrl = normalizeGoogleApiBaseUrl(
+    normalizeOptionalString(geminiConfig?.baseUrl) ??
+      normalizeOptionalString(geminiConfig?.providerBaseUrl),
+  );
   const operatorHeaders = resolveGeminiWebSearchHeaders(geminiConfig);
   const headersCacheKey = sha256Hex(JSON.stringify([apiKey, operatorHeaders]));
   const cacheKey = buildSearchCacheKey([

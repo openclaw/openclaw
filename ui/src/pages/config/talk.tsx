@@ -44,11 +44,14 @@ export type TalkCatalogState =
     };
 
 type TalkViewProps = {
+  presentationRetired: () => Promise<void>;
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   nativeDeviceSnapshot?: NativeDeviceSettingsSnapshot | null;
   voiceWake?: {
     readState: () => VoiceWakeEditorState;
     scope?: object | null;
+    saving: boolean;
+    readWriteResult: () => void;
     onInput: (text: string) => void;
     onRetry: () => void;
   };
@@ -146,10 +149,11 @@ function StatusRow(props: TalkViewProps) {
       label: t(catalog.ready ? "talkPage.status.ready" : "talkPage.status.notReady"),
     };
   };
+  // The first catalog reply supplies this line without moving the schema editor below it.
   return (
     <SettingsRow
       title={t("talkPage.status.title")}
-      description={status().description}
+      description={status().description ?? "\u00a0"}
       control={<SettingsStatus kind={status().kind} label={status().label} />}
     />
   );
@@ -353,11 +357,17 @@ export function Talk(props: TalkViewProps) {
   return (
     <section class="talk-page">
       <SettingsPage>
-        <DeviceTalk capability={props.nativeDeviceSettings} snapshot={props.nativeDeviceSnapshot} />
+        <DeviceTalk
+          capability={props.nativeDeviceSettings}
+          snapshot={props.nativeDeviceSnapshot}
+          presentationRetired={props.presentationRetired}
+        />
         {props.voiceWake && (
           <VoiceWakeEditor
             readState={props.voiceWake.readState}
             scope={props.voiceWake.scope}
+            saving={props.voiceWake.saving}
+            readWriteResult={props.voiceWake.readWriteResult}
             onInput={props.voiceWake.onInput}
             onRetry={props.voiceWake.onRetry}
           />

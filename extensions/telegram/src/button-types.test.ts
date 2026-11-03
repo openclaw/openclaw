@@ -11,6 +11,16 @@ import { parseTelegramQuestionCallbackData } from "./question-callback-data.js";
 function buildButtons(buttons: MessagePresentationButton[]) {
   return buildTelegramPresentationButtons({ blocks: [{ type: "buttons", buttons }] });
 }
+const callbacks = (buttons: MessagePresentationButton[]) =>
+  buildButtons(buttons)
+    ?.flat()
+    .map((button) => button.callback_data);
+const actionButton = (action: NonNullable<MessagePresentationButton["action"]>) => ({
+  label: "Action",
+  action,
+});
+const approval = (approvalId: string, decision: "allow-once" | "allow-always") =>
+  ({ type: "approval", approvalId, approvalKind: "exec", decision }) as const;
 
 describe("resolveTelegramInlineButtons precedence", () => {
   it("returns explicit buttons without reading lower-priority payloads", () => {
@@ -47,33 +57,20 @@ describe("resolveTelegramInlineButtons precedence", () => {
 
 describe("buildTelegramPresentationButtons action domains", () => {
   it("keeps raw slash callbacks distinct from typed commands and drops oversized commands", () => {
-    const rows = buildButtons([
-      { label: "Raw", value: "/approve req-1 allow-once" },
-      { label: "Command", action: { type: "command", command: "/approve req-1 allow-once" } },
-      {
-        label: "Oversized",
-        action: { type: "command", command: `/codex plugins enable ${"x".repeat(80)}` },
-      },
-    ]);
-    expect(rows?.flat().map((button) => button.callback_data)).toEqual([
-      "/approve req-1 allow-once",
-      "tgcmd:/approve req-1 allow-once",
-    ]);
+    expect(
+      callbacks([
+        { label: "Raw", value: "/approve req-1 allow-once" },
+        actionButton({ type: "command", command: "/approve req-1 allow-once" }),
+        actionButton({ type: "command", command: `/codex plugins enable ${"x".repeat(80)}` }),
+      ]),
+    ).toEqual(["/approve req-1 allow-once", "tgcmd:/approve req-1 allow-once"]);
   });
 
   it("keeps typed callback values opaque, including slash text, whitespace and delimiters", () => {
-    const rows = buildButtons([
-      { label: "Slash", action: { type: "callback", value: "/not-a-native-command" } },
-      { label: "Value", action: { type: "callback", value: "env | prod" } },
-      { label: "Approval", action: { type: "callback", value: "/approve plugin:123 allow-once" } },
-    ]);
-    const callbacks = rows?.flat().map((button) => button.callback_data);
-    expect(callbacks?.map(parseTelegramOpaqueCallbackData)).toEqual([
-      "/not-a-native-command",
-      "env | prod",
-      "/approve plugin:123 allow-once",
-    ]);
-    for (const callback of callbacks ?? []) {
+    const values = ["/not-a-native-command", "env | prod", "/approve plugin:123 allow-once"];
+    const data = callbacks(values.map((value) => actionButton({ type: "callback", value })));
+    expect(data?.map(parseTelegramOpaqueCallbackData)).toEqual(values);
+    for (const callback of data ?? []) {
       expect(parseTelegramApprovalCallbackData(callback)).toBeNull();
       expect(parseTelegramNativeCommandCallbackData(callback)).toBeNull();
     }
@@ -86,10 +83,9 @@ describe("buildTelegramPresentationButtons action domains", () => {
       "tgq1:ask_0123456789abcdef0123456789abcdef:0",
       " tgq1:ask_0123456789abcdef0123456789abcdef:0 ",
     ];
-    const rows = buildButtons(values.map((value) => ({ label: "Plugin", value })));
-    const callbacks = rows?.flat().map((button) => button.callback_data);
-    expect(callbacks?.map(parseTelegramOpaqueCallbackData)).toEqual(values);
-    for (const callback of callbacks ?? []) {
+    const data = callbacks(values.map((value) => ({ label: "Plugin", value })));
+    expect(data?.map(parseTelegramOpaqueCallbackData)).toEqual(values);
+    for (const callback of data ?? []) {
       expect(parseTelegramApprovalCallbackData(callback)).toBeNull();
       expect(parseTelegramQuestionCallbackData(callback)).toBeNull();
     }
@@ -104,49 +100,25 @@ describe("buildTelegramPresentationButtons action domains", () => {
   it("shortens legacy allow-always before prefixing and retains the approval overflow path", () => {
     const uuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const approvalId = `plugin:${"a".repeat(36)}`;
-    const rows = buildButtons(
+    const data = callbacks(
       [uuid, approvalId].map((id) => ({
         label: "Always",
         action: { type: "command", command: `/approve ${id} allow-always` },
       })),
     );
-    expect(rows?.flat().map((button) => button.callback_data)).toEqual([
-      `tgcmd:/approve ${uuid} always`,
-      `/approve ${approvalId} always`,
-    ]);
+    expect(data).toEqual([`tgcmd:/approve ${uuid} always`, `/approve ${approvalId} always`]);
   });
 
   it("encodes typed approvals with explicit kind, decision, and exact id", () => {
-    const rows = buildButtons([
-      {
-        label: "Allow",
-        action: {
-          type: "approval",
-          approvalId: "plugin:id/with:delimiters",
-          approvalKind: "exec",
-          decision: "allow-always",
-        },
-      },
-    ]);
-    expect(parseTelegramApprovalCallbackData(rows?.[0]?.[0]?.callback_data)).toEqual({
-      type: "approval",
-      approvalId: "plugin:id/with:delimiters",
-      approvalKind: "exec",
-      decision: "allow-always",
-    });
+    const data = callbacks([actionButton(approval("plugin:id/with:delimiters", "allow-always"))]);
+    expect(parseTelegramApprovalCallbackData(data?.[0])).toEqual(
+      approval("plugin:id/with:delimiters", "allow-always"),
+    );
   });
 
   it("compacts an overlong approval callback and keeps the Review URL", () => {
     const rows = buildButtons([
-      {
-        label: "Allow",
-        action: {
-          type: "approval",
-          approvalId: "x".repeat(56),
-          approvalKind: "exec",
-          decision: "allow-once",
-        },
-      },
+      actionButton(approval("x".repeat(56), "allow-once")),
       { label: "Review", action: { type: "url", url: "https://gateway.example/approve/long-id" } },
     ]);
     expect(parseTelegramApprovalCallbackData(rows?.[0]?.[0]?.callback_data)).toEqual({

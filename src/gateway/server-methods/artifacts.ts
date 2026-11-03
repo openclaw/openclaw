@@ -24,6 +24,11 @@ import {
 } from "../artifact-download-grants.js";
 import type { PreparedArtifactDownload } from "../artifact-download-projection.js";
 import {
+  type ArtifactLookup,
+  type ArtifactRecord,
+  toArtifactSummary,
+} from "../artifacts-content.js";
+import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
   resolveManagedOutgoingMediaUrlDownload,
@@ -37,11 +42,6 @@ import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-a
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { readSessionArtifacts } from "../session-transcript-readers.js";
 import { parseTranscriptImageArtifactId } from "../transcript-image-artifacts.js";
-import {
-  type ArtifactLookup,
-  type ArtifactRecord,
-  toArtifactSummary,
-} from "./artifacts-content.js";
 import { prepareArtifactSessionRead } from "./artifacts-session-read.js";
 import {
   ArtifactSessionResolutionError,
@@ -51,6 +51,7 @@ import {
   createArtifactSessionAccess,
 } from "./artifacts-session-resolution.js";
 import { findTranscriptImageArtifact } from "./artifacts-transcript-images.js";
+import { sessionFilesError } from "./session-files-errors.js";
 import {
   readGatewayRequestMutationAuthority,
   retainGatewayRequestMutationAuthority,
@@ -126,15 +127,6 @@ function createArtifactRequestAccess(
     respond: (...args: Parameters<RespondFn>) => {
       assertCurrent();
       respond(...args);
-    },
-  });
-}
-
-function artifactError(type: string, message: string, details?: Record<string, unknown>) {
-  return errorShape(ErrorCodes.INVALID_REQUEST, message, {
-    details: {
-      type,
-      ...details,
     },
   });
 }
@@ -265,7 +257,7 @@ function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {
   respond(
     false,
     undefined,
-    artifactError("artifact_query_unsupported", "artifacts require sessionKey or runId"),
+    sessionFilesError("artifact_query_unsupported", "artifacts require sessionKey or runId"),
   );
   return false;
 }
@@ -274,7 +266,7 @@ function respondArtifactNotFound(respond: RespondFn, requestedArtifactId: string
   respond(
     false,
     undefined,
-    artifactError("artifact_not_found", "artifact not found", {
+    sessionFilesError("artifact_not_found", "artifact not found", {
       artifactId: requestedArtifactId,
     }),
   );
@@ -412,7 +404,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        artifactError("artifact_query_unsupported", "limit and cursor require type image"),
+        sessionFilesError("artifact_query_unsupported", "limit and cursor require type image"),
       );
       return;
     }
@@ -428,13 +420,13 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        artifactError("artifact_scope_not_found", "no session found for artifact query"),
+        sessionFilesError("artifact_scope_not_found", "no session found for artifact query"),
       );
       return;
     }
     if (artifactResponseIsCurrent(loaded.value, respond)) {
       respond(true, {
-        artifacts: artifacts.map(toArtifactSummary),
+        artifacts,
         ...(nextCursor ? { nextCursor } : {}),
         ...(omittedOversized ? { omittedOversized: true } : {}),
       });
@@ -518,7 +510,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        artifactError("artifact_download_unsupported", "artifact download is unsupported", {
+        sessionFilesError("artifact_download_unsupported", "artifact download is unsupported", {
           artifactId: artifact.id,
         }),
       );
@@ -620,9 +612,11 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          artifactError("artifact_preview_unavailable", "artifact image preview is unavailable", {
-            artifactId: artifact.id,
-          }),
+          sessionFilesError(
+            "artifact_preview_unavailable",
+            "artifact image preview is unavailable",
+            { artifactId: artifact.id },
+          ),
         );
         return;
       }
@@ -666,7 +660,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          artifactError(
+          sessionFilesError(
             "artifact_download_unsupported",
             'artifact is too large for inline transfer; request transport: "http"',
             { artifactId: artifact.id },

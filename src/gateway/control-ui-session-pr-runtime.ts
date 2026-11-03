@@ -313,7 +313,13 @@ export function createRepositorySessionReadHost(deps: {
                     sessionKey: change.sessionKey,
                     agentId: change.agentId,
                     removed: change.facts?.kind === "removed",
-                    lineageChanged: sessionChangeScopeAffectsStoredRows(change),
+                    lineageChanged:
+                      sessionChangeScopeAffectsStoredRows(change) &&
+                      change.factsInvalidated !== "category" &&
+                      (Boolean(change.factsInvalidated) ||
+                        (change.facts?.kind !== "unchanged" &&
+                          change.facts?.kind !== "participants" &&
+                          change.facts?.kind !== "category")),
                   }
                 : { kind: "config" },
             );

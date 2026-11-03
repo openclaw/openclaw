@@ -1,0 +1,2 @@
+# Preserve accepted provider-disabled publication recovery and its original GitHub host through the real receipt owner; retain bounded genuine network-failure recovery.
+76

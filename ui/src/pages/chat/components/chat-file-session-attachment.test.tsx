@@ -11,94 +11,14 @@ import { ChatAttachmentReadLifecycle } from "./chat-attachment-reads.ts";
 import { setFileDraft } from "./chat-file-drafts.ts";
 import {
   createFileSessionAttachment,
-  type FileSessionAttachment,
+  type FileSessionAttachmentProps,
 } from "./chat-file-session-attachment.ts";
-import type {
-  SidebarSelection,
-  FileSidebarContent,
-  FileReaderDownload,
-} from "./chat-sidebar-content-types.ts";
+import type { FileSidebarContent, FileReaderDownload } from "./chat-sidebar-content-types.ts";
 
 afterEach(async () => {
   await resetComposerFixture();
   vi.unstubAllGlobals();
 });
-
-it.each(["file", "session", "connection", "unmount"] as const)(
-  "drops a pending download after %s changes and balances pending reads",
-  async (change) => {
-    const result = createDeferredCore<FileReaderDownload | null>();
-    let signal: AbortSignal | undefined;
-    let calls = 0;
-    let pending = 0;
-    const attachments: ChatAttachment[] = [];
-    const file: SidebarSelection = {
-      kind: "file",
-      path: "notes.md",
-      name: "notes.md",
-      content: "Preview only",
-      download: (value) => {
-        signal = value;
-        calls++;
-        return result.promise;
-      },
-    };
-    const [content, setContent] = createSignal(file);
-    const [session, setSession] = createSignal("agent:main:first");
-    const [epoch, setEpoch] = createSignal(1);
-    const chat = createComposerProps({
-      getAttachments: () => attachments,
-      onAttachmentsChange: (values) => {
-        attachments.splice(0, attachments.length, ...values);
-      },
-      onPendingReadsChange: (delta) => {
-        pending += delta;
-      },
-    });
-    let action!: () => FileSessionAttachment | undefined;
-    const view = mountSolid(() => {
-      action = createFileSessionAttachment({
-        get attachmentChat() {
-          return { ...chat, sessionKey: session() };
-        },
-        get content() {
-          return content();
-        },
-        get attachmentRuntime() {
-          return { connectionEpoch: epoch() };
-        },
-      });
-      return (
-        <button disabled={action()?.disabled} onClick={() => action()?.attach()}>
-          Attach
-        </button>
-      );
-    });
-    action()?.attach();
-    action()?.attach();
-    flush();
-    await waitForSolid(() => expect(calls).toBe(1));
-    expect(pending).toBe(1);
-    if (change === "file") {
-      setContent({ ...file, path: "other.md" });
-    } else if (change === "session") {
-      setSession("agent:main:second");
-    } else if (change === "connection") {
-      setEpoch(2);
-    } else {
-      view.unmount();
-    }
-    flush();
-    expect(signal?.aborted).toBe(true);
-    expect(pending).toBe(0);
-    result.resolve({ filename: "notes.md", blob: new Blob(["wrong session"]) });
-    await result.promise;
-    await Promise.resolve();
-    flush();
-    expect(attachments).toEqual([]);
-    expect(pending).toBe(0);
-  },
-);
 
 it.each(["original", "dirty", "fallback"])(
   "stages file bytes through the attachment owner (%s)",
@@ -168,10 +88,7 @@ it.each(["original", "dirty", "fallback"])(
     });
     view.container.querySelector("button")!.click();
     await waitForSolid(() => expect(attachments).toHaveLength(1));
-    const attachment = attachments[0];
-    if (!attachment) {
-      throw new Error("The file was not staged");
-    }
+    const attachment = attachments[0]!;
     expect(attachment).toMatchObject({
       fileName: "notes.md",
       mimeType: "text/markdown",
@@ -190,5 +107,122 @@ it.each(["original", "dirty", "fallback"])(
     expect(pending).toBe(0);
     expect(sends).toBe(0);
     setFileDraft(file, null);
+  },
+);
+
+it.each([
+  "file",
+  "session",
+  "connection",
+  "unmount",
+  "source",
+  "policy",
+  "auth",
+  "runtime agent",
+  "runtime session",
+  "resource base",
+  "artifact resolver",
+  "hidden",
+  "folder",
+  "pending owner",
+  "disconnect",
+] as const)(
+  "retires a held transfer before %s publication and balances pending reads",
+  async (change) => {
+    const completion = createDeferredCore<FileReaderDownload | null>();
+    const attachments: ChatAttachment[] = [];
+    let balance = 0;
+    let signal: AbortSignal | undefined;
+    const download = vi.fn((nextSignal: AbortSignal) => {
+      signal = nextSignal;
+      return completion.promise;
+    });
+    const file: FileSidebarContent = {
+      kind: "file",
+      path: "notes.md",
+      name: "notes.md",
+      content: "Preview",
+      download,
+    };
+    const initial: FileSessionAttachmentProps = {
+      content: file,
+      attachmentRuntime: {
+        connectionEpoch: 1,
+        policyKey: "first",
+        authToken: "synthetic-first",
+        agentId: "main",
+        sessionKey: "agent:main:first",
+        resourceBasePath: "/",
+      },
+      attachmentChat: createComposerProps({
+        sessionKey: "agent:main:first",
+        getAttachments: () => attachments,
+        onAttachmentsChange: (next) => {
+          attachments.splice(0, attachments.length, ...next);
+        },
+        onPendingReadsChange: (delta) => {
+          balance += delta;
+        },
+      }),
+      filePresented: true,
+      fileWorkspace: { showingFolder: false },
+    };
+    const [props, setProps] = createSignal(initial);
+    let transfer!: ReturnType<typeof createFileSessionAttachment>;
+    function TransferButton(current: FileSessionAttachmentProps) {
+      transfer = createFileSessionAttachment(current);
+      return <button onClick={() => transfer()?.attach()}>Attach</button>;
+    }
+    const view = mountSolid(() => <TransferButton {...props()} />);
+    const button = view.getByRole("button", { name: "Attach" });
+    button.click();
+    button.click();
+    expect(balance).toBe(1);
+    await waitForSolid(() => expect(transfer()?.pending).toBe(true));
+    expect(download).toHaveBeenCalledOnce();
+    const runtime = (patch: Partial<FileSessionAttachmentProps["attachmentRuntime"]>) => ({
+      attachmentRuntime: { ...initial.attachmentRuntime, ...patch },
+    });
+    const changes: Record<typeof change, Partial<FileSessionAttachmentProps>> = {
+      file: { content: { ...file, path: "other.md" } },
+      source: { content: { ...file, download: async () => null } },
+      session: { attachmentChat: { ...initial.attachmentChat!, sessionKey: "agent:main:other" } },
+      connection: runtime({ connectionEpoch: 2 }),
+      policy: runtime({ policyKey: "next" }),
+      auth: runtime({ authToken: "synthetic-next" }),
+      "runtime agent": runtime({ agentId: "other" }),
+      "runtime session": runtime({ sessionKey: "agent:main:other" }),
+      "resource base": runtime({ resourceBasePath: "/next/" }),
+      "artifact resolver": runtime({ resolveArtifactDownload: async () => null }),
+      hidden: { filePresented: false },
+      folder: { fileWorkspace: { showingFolder: true } },
+      "pending owner": {
+        attachmentChat: { ...initial.attachmentChat!, onPendingReadsChange: () => {} },
+      },
+      unmount: {},
+      disconnect: {},
+    };
+    const next = { ...initial, ...changes[change] };
+    if (change === "unmount") {
+      view.unmount();
+    } else {
+      transfer.retire(change === "disconnect" ? undefined : next);
+      if (change === "file" || change === "session" || change === "connection") {
+        setProps(next);
+        flush();
+      }
+    }
+    expect(signal?.aborted).toBe(true);
+    expect(balance).toBe(0);
+    if (change !== "unmount") {
+      await waitForSolid(() => expect(transfer()?.pending).toBe(false));
+    }
+    completion.resolve({ filename: "notes.md", blob: new Blob(["Retired bytes"]) });
+    await completion.promise;
+    await Promise.resolve();
+    flush();
+    expect(attachments).toEqual([]);
+    expect(balance).toBe(0);
+    view.unmount();
   },
 );

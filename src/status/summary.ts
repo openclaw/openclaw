@@ -1,7 +1,6 @@
 import type { SystemInfoResult } from "../../packages/gateway-protocol/src/schema/system-info.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { readStartupRecoveryWarning } from "../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
@@ -27,6 +26,7 @@ import type { SessionRowProjection } from "../gateway/session-row-projection.js"
 import { getGatewayInstallationReplacement } from "../gateway/stale-install.js";
 import {
   projectHeartbeatSummary,
+  readHeartbeatSummaryForStatus,
   readHeartbeatSummarySnapshot,
 } from "../infra/heartbeat-summary-snapshot.js";
 import { hasResolvableProactiveOwnerRoute } from "../infra/outbound/targets.js";
@@ -115,7 +115,6 @@ async function prepareSessionStatusDetails(
     resolveSessionRuntime,
     readSessionRuntimeMetadata,
     resolveSessionModelRef,
-    resolveStatusModelComparisonLabel,
     resolveStatusModelLookupRef,
     createStatusModelContextResolver,
   } = await loadStatusSummaryRuntimeModule();
@@ -163,25 +162,26 @@ async function prepareSessionStatusDetails(
       const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
       const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
       const model = resolvedModel.model ?? configuredSessionModel;
-      const lookupModel =
-        resolveStatusModelLookupRef({
-          provider: resolvedModel.provider,
-          model,
-          defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-        }) ?? resolvedModel;
-      const lookupModelId = lookupModel.model ?? model;
-      const selectedModelLabel =
-        resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
-      const configuredSessionModelComparisonLabel = resolveStatusModelComparisonLabel({
-        provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-        model: configuredSessionModel,
-        defaultProvider: DEFAULT_PROVIDER,
-      });
-      const selectedModelComparisonLabel = resolveStatusModelComparisonLabel({
+      const selectedLookupModel = resolveStatusModelLookupRef({
         provider: resolvedModel.provider,
         model,
         defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
       });
+      const lookupModel = selectedLookupModel ?? resolvedModel;
+      const lookupModelId = lookupModel.model ?? model;
+      const selectedModelLabel =
+        resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
+      const configuredLookupModel = resolveStatusModelLookupRef({
+        provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+        model: configuredSessionModel,
+        defaultProvider: DEFAULT_PROVIDER,
+      });
+      const configuredSessionModelComparisonLabel = configuredLookupModel
+        ? `${configuredLookupModel.provider}/${configuredLookupModel.model}`
+        : null;
+      const selectedModelComparisonLabel = selectedLookupModel
+        ? `${selectedLookupModel.provider}/${selectedLookupModel.model}`
+        : null;
       const runtimeMatchesConfiguredModel =
         selectedModelComparisonLabel != null &&
         configuredSessionModelComparisonLabel != null &&
@@ -336,14 +336,13 @@ export async function prepareStatusSummary(
     : null;
   const agentList = await listGatewayAgentsBasic(cfg);
   // Receipts list the primary job first; retain it when converted siblings share an agent.
-  const heartbeatJobs = new Map(
-    (await readHeartbeatSummarySnapshot(cfg)).toReversed().map((job) => [job.agentId, job]),
-  );
+  const heartbeat = await readHeartbeatSummaryForStatus(() => readHeartbeatSummarySnapshot(cfg));
+  const heartbeatJobs = new Map(heartbeat.jobs.toReversed().map((job) => [job.agentId, job]));
   // Share the remaining per-agent main-session resolution across the fleet.
   const heartbeatInputs = withAgentRosterFactsBatch(cfg, () => {
     return agentList.agents.map((agent) => {
       const job = heartbeatJobs.get(agent.id);
-      const summary = projectHeartbeatSummary(job);
+      const summary = projectHeartbeatSummary(job, heartbeat.selectionWarning);
       let routeTarget:
         | {
             storePath: string;
@@ -560,8 +559,10 @@ export async function prepareStatusSummary(
           },
           channelSummary,
           queuedSystemEvents,
-          startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
-          startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
+          startupMigrationWarning:
+            [readStartupMigrationWarning(includeSensitive), heartbeat.selectionWarning]
+              .filter(Boolean)
+              .join("\n") || undefined,
           modelReasoningWarning: readModelReasoningWarning(includeSensitive),
           installationReplacementWarning: getGatewayInstallationReplacement()?.message,
           ...(utilityModelWarnings.length

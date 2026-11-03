@@ -25,7 +25,7 @@ export class RepositoryPublicationChangePermissionError extends RepositoryPublic
     super("Publishing GitHub workflow changes requires full operator write permission.", {
       code: "github_rejected",
       nextAction:
-        "Your saved changes are intact. Ask a maintainer with full write access to publish the GitHub workflow changes, or restore the workflow definitions and request publication again.",
+        "OpenClaw requires the requester's full operator write authority for these workflow changes; this is not a GitHub token scope failure. Your saved changes are intact. Ask a maintainer with full write access to publish, or remove only unintended workflow edits after reviewing the accepted diff.",
     });
   }
 }

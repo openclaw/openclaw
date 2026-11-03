@@ -1,5 +1,5 @@
 import { emitDiagnosticEventWithTrustedTraceContext } from "../infra/diagnostic-events.js";
-import type { ExecProcessOutcome } from "./bash-tools.exec-types.js";
+import type { ExecProcessOutcome } from "./bash-tools.exec-output.js";
 
 export function emitExecProcessCompleted(params: {
   command: string;

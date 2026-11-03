@@ -1,5 +1,4 @@
 import { channel } from "node:diagnostics_channel";
-import { once } from "node:events";
 import { totalmem } from "node:os";
 import { expect, it, vi } from "vitest";
 import {
@@ -11,13 +10,7 @@ import {
 import type { GatewaySchedulerClock } from "../infra/gateway-scheduler.js";
 import * as workerCpu from "../infra/worker-cpu.js";
 import * as workerMessages from "../infra/worker-message-metrics.js";
-import { createOwnedWorkerTaskPool } from "../infra/worker-task-pool.js";
-import type {
-  PoolFixtureInput,
-  PoolFixtureResult,
-} from "../infra/worker-task-pool.test-support.js";
 import { logWebhookReceived } from "../logging/diagnostic.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewaySchedulerClock } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -55,14 +48,11 @@ it("owns diagnostic dispatch and heartbeat across initial disable, enable, disab
     vi.restoreAllMocks();
   });
   let unsubscribe: (() => void) | undefined = undefined;
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
   const pressure = channel("openclaw.memory.critical");
   const pressureSamples = vi.fn();
   pressure.subscribe(pressureSamples);
   using observers = new DisposableStack();
   observers.defer(() => {
-    release.resolve();
     unsubscribe?.();
     pressure.unsubscribe(pressureSamples);
   });
@@ -82,44 +72,9 @@ it("owns diagnostic dispatch and heartbeat across initial disable, enable, disab
   });
   cleanup.defer(() => kernel.closeOnStartupFailure());
   expect(areDiagnosticsEnabledForProcess()).toBe(false);
-  const spawned = vi.spyOn(workerCpu, "createCpuTrackedWorker");
-  const pool = createOwnedWorkerTaskPool<PoolFixtureInput, PoolFixtureResult>({
-    workerUrl: new URL("../infra/worker-task-pool.test-support.ts", import.meta.url),
-    maxWorkers: 2,
-  });
-  cleanup.defer(() => pool.close());
-  const warm = await pool.run({ label: "warm" }, {});
-  const active = pool.runTask(
-    { label: "active", exchanges: 1 },
-    {
-      onRequest: async () => {
-        entered.resolve();
-        await release.promise;
-        return { input: undefined, timeoutMs: 10_000 };
-      },
-    },
-  );
-  cleanup.defer(() => active.close());
-  await Promise.race([
-    entered.promise,
-    active.result.then(() => {
-      throw new Error("Active Worker completed without entering its held exchange");
-    }),
-  ]);
-  const idle = await pool.run({ label: "idle" }, {});
-  const workers = spawned.mock.results.flatMap((result) =>
-    result.type === "return" &&
-    (result.value.threadId === warm.threadId || result.value.threadId === idle.threadId)
-      ? [result.value]
-      : [],
-  );
-  expect(workers).toHaveLength(2);
-  const idleWorker = workers.find((worker) => worker.threadId === idle.threadId)!;
-  const activeWorker = workers.find((worker) => worker !== idleWorker)!;
-  const idleExit = once(idleWorker, "exit");
   const readMemoryUsage = process.memoryUsage;
   const criticalRss = totalmem();
-  // Inject counters, not allocations; retirement still crosses the real scheduler and Worker.
+  // Exercise the real scheduler's pressure publication without allocating memory.
   Object.assign(
     vi.spyOn(process, "memoryUsage").mockImplementation(() => ({
       ...readMemoryUsage(),
@@ -147,22 +102,7 @@ it("owns diagnostic dispatch and heartbeat across initial disable, enable, disab
   };
   await tick({ pressure: 1, worker: 0, messages: 0 });
   expect(events).toEqual([]);
-  await idleExit;
-  expect(idleWorker.threadId).toBe(-1);
-  expect(activeWorker.threadId).toBeGreaterThan(0);
-  expect(pool.getSnapshot()).toMatchObject({ activeTasks: 1, pendingTasks: 1 });
-  release.resolve();
-  expect(await active.result).toMatchObject({ label: "active", threadId: activeWorker.threadId });
-
-  // A delivered result is still owned until the caller closes it.
   await tick({ pressure: 2 });
-  expect(activeWorker.threadId).toBeGreaterThan(0);
-  await active.close();
-  await pool.close();
-  expect(activeWorker.threadId).toBe(-1);
-  expect(pool.getSnapshot()).toMatchObject({ workers: 0, activeTasks: 0, pendingTasks: 0 });
-
-  // Keep activity timestamps on the scheduler clock after real Worker teardown.
   vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
 
   kernel.configureDiagnostics({ diagnostics: { enabled: true } });

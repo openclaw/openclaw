@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
+  listAgentIds,
   resolveSessionAgentId,
   resolveSessionAgentIdStrict,
   resolveSessionAgentIds,
@@ -9,6 +11,14 @@ import {
 } from "./agent-scope-runtime.js";
 
 describe("agent-scope-runtime compatibility", () => {
+  it("returns independently writable agent ids for immutable runtime config", () => {
+    const captured = freezeJsonSnapshot({ agents: { entries: { main: {}, ops: {} } } });
+    const ids = listAgentIds(captured);
+    ids.splice(0, ids.length, "replacement");
+    expect(ids).toEqual(["replacement"]);
+    expect(listAgentIds(captured)).toEqual(["main", "ops"]);
+  });
+
   const config = {
     agents: {
       ownership: "explicit",

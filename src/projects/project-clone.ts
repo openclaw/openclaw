@@ -18,6 +18,7 @@ import type { ManagedProjectSourceV1 } from "./managed-project-source.js";
 import { resolveProjectDirectory, withProjectCheckoutLifecycle } from "./project-checkout.js";
 import {
   cloneProjectCheckout,
+  configureProjectCheckoutMaintenance,
   ensureProjectCheckoutCommit,
   ProjectCloneError,
   refreshProjectCheckout,
@@ -115,6 +116,16 @@ export async function materializeProjectClone(
             checkoutLease.assertOwned();
             if (current?.repoRoot !== candidate.repoRoot) {
               return undefined;
+            }
+            if (current.source === "cloned") {
+              await configureProjectCheckoutMaintenance(current.repoRoot, {
+                env,
+                signal: checkoutLease.signal,
+                assertCurrent: () => {
+                  assertCloneCurrent();
+                  checkoutLease.assertOwned();
+                },
+              });
             }
             if (requiredCommit) {
               await (source?.ensureCommit ?? ensureProjectCheckoutCommit)(
@@ -260,6 +271,11 @@ export async function refreshProjectClone(
           "Saved project repository is invalid; select the repository and retry.",
         );
       }
+      await configureProjectCheckoutMaintenance(current.repoRoot, {
+        env,
+        signal: lease.signal,
+        assertCurrent: assertRefreshCurrent,
+      });
       // The registry owns source identity; origin can be changed inside the shared checkout.
       await (source?.refresh ?? refreshProjectCheckout)(
         { target: current.repoRoot, url: originUrl },
@@ -277,40 +293,6 @@ export async function refreshProjectClone(
   );
 }
 
-async function resolveClonedProjectCheckout(
-  project: ProjectRegistryRecord,
-  options: { env?: NodeJS.ProcessEnv } = {},
-): Promise<string> {
-  if (project.source !== "cloned") {
-    throw new ProjectCloneError(
-      "clone_failed",
-      "Only projects cloned by the Gateway can delete their checkout.",
-    );
-  }
-  const managedRoot = await fs.realpath(path.join(resolveStateDir(options.env), "projects"));
-  const checkout = await fs.realpath(project.repoRoot).catch(() => {
-    throw new ProjectCloneError(
-      "clone_failed",
-      "The managed project checkout is already unavailable. Remove only its registry entry instead.",
-    );
-  });
-  const relative = path.relative(managedRoot, checkout);
-  const segments = relative.split(path.sep);
-  if (
-    !relative ||
-    relative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relative) ||
-    segments.length !== 2 ||
-    !/^[a-f0-9]{16}$/u.test(segments[0] ?? "")
-  ) {
-    throw new ProjectCloneError(
-      "clone_failed",
-      "The cloned project is outside the Gateway-managed projects area, so its checkout was not deleted.",
-    );
-  }
-  return checkout;
-}
-
 /** Removes one cloned-project reference and deletes its checkout only after the final reference. */
 export async function removeClonedProjectCheckout(
   project: ProjectRegistryRecord,
@@ -325,7 +307,35 @@ export async function removeClonedProjectCheckout(
     selectedProject.repoRoot,
     databaseOptions,
     async (lease) => {
-      const checkout = await resolveClonedProjectCheckout(selectedProject, databaseOptions);
+      if (selectedProject.source !== "cloned") {
+        throw new ProjectCloneError(
+          "clone_failed",
+          "Only projects cloned by the Gateway can delete their checkout.",
+        );
+      }
+      const managedRoot = await fs.realpath(
+        path.join(resolveStateDir(databaseOptions.env), "projects"),
+      );
+      const checkout = await fs.realpath(selectedProject.repoRoot).catch(() => {
+        throw new ProjectCloneError(
+          "clone_failed",
+          "The managed project checkout is already unavailable. Remove only its registry entry instead.",
+        );
+      });
+      const relative = path.relative(managedRoot, checkout);
+      const segments = relative.split(path.sep);
+      if (
+        !relative ||
+        relative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relative) ||
+        segments.length !== 2 ||
+        !/^[a-f0-9]{16}$/u.test(segments[0] ?? "")
+      ) {
+        throw new ProjectCloneError(
+          "clone_failed",
+          "The cloned project is outside the Gateway-managed projects area, so its checkout was not deleted.",
+        );
+      }
       lease.assertOwned();
       await assertUnreferenced();
       const { runWithOpenClawStateLeaseWorker } =

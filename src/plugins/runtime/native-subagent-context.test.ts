@@ -73,6 +73,67 @@ describe("native subagent requester binding", () => {
     },
   );
 
+  it("reports optional listing absence honestly on an older runtime", async () => {
+    const runtime = fixture();
+    await withNativeSubagentRequest(
+      () => runtime,
+      () =>
+        withNativeSubagentRuntimeGuard(guard, async () => {
+          await expect(expectDefined(nativeSubagentRuntime.list, "list facade")()).rejects.toThrow(
+            "listing is unsupported",
+          );
+        }),
+    );
+    expect(runtime.collect).not.toHaveBeenCalled();
+    expect(runtime.spawn).not.toHaveBeenCalled();
+  });
+
+  it("rechecks unload after listing preparation", async () => {
+    const ready = createDeferred<NativeSubagentRuntime>();
+    const list = vi.fn<NonNullable<NativeSubagentRuntime["list"]>>().mockResolvedValue([]);
+    let active = true;
+    const pending = withNativeSubagentRequest(
+      () => ready.promise,
+      () =>
+        withNativeSubagentRuntimeGuard(
+          {
+            pluginId: "test-plugin",
+            assertCurrent() {
+              if (!active) {
+                throw new Error("plugin unloaded");
+              }
+            },
+          },
+          () => expectDefined(nativeSubagentRuntime.list, "list facade")(),
+        ),
+    );
+    active = false;
+    ready.resolve({ ...fixture(), list });
+    await expect(pending).rejects.toThrow("plugin unloaded");
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("expires retained listing calls with their invoking request", async () => {
+    const list = vi.fn<NonNullable<NativeSubagentRuntime["list"]>>().mockResolvedValue([]);
+    const gate = createDeferred();
+    let detached: Promise<unknown> | undefined;
+    await withNativeSubagentRequest(
+      () => ({ ...fixture(), list }),
+      () =>
+        withNativeSubagentRuntimeGuard(guard, async () => {
+          expect(
+            await expectDefined(nativeSubagentRuntime.list, "list facade")({ status: "queued" }),
+          ).toEqual([]);
+          detached = gate.promise.then(() =>
+            expectDefined(nativeSubagentRuntime.list, "list facade")(),
+          );
+        }),
+    );
+    gate.resolve();
+    await expect(detached).rejects.toThrow("requester-bound");
+    expect(list).toHaveBeenCalledExactlyOnceWith({ status: "queued" });
+  });
+
   it("aborts the request scope and rejects detached calls after a handler exits", async () => {
     const gate = createDeferred();
     const runtime = fixture();

@@ -6,13 +6,17 @@ import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.j
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import { hasRestrictiveAllowPolicy, replaceWithEffectiveToolAllowlist } from "./tool-policy.js";
 
+export type InheritedToolPolicyDefinition = Pick<AnyAgentTool, "name" | "parameters"> & {
+  pluginMetadata?: { pluginId: string; policyGroups?: readonly string[] };
+};
+
 /** Record parent restrictions for future children without adding callable parent tools. */
 export function captureChildToolAllowlist(params: {
   options?: InternalCodingToolsOptions;
   capabilityProfile: ResolvedConversationCapabilityProfile;
   tools: AnyAgentTool[];
   inheritedToolAllowlist: string[];
-  policyDefinitions: readonly Pick<AnyAgentTool, "name" | "parameters">[];
+  policyDefinitions: readonly InheritedToolPolicyDefinition[];
   includeOpenClawTools: boolean;
   isMemoryFlushRun: boolean;
 }): void {
@@ -31,7 +35,9 @@ export function captureChildToolAllowlist(params: {
     const permitted = filterToolsByMessageProvider(
       [...params.policyDefinitions],
       options?.toolPolicyMessageProvider ?? options?.messageProvider,
-    ).filter(({ name }) => isConversationToolAllowed(capabilityProfile, name));
+    ).filter(({ name, pluginMetadata }) =>
+      isConversationToolAllowed(capabilityProfile, name, pluginMetadata),
+    );
     extraNames.push(...applyGatewayToolPolicy(permitted, options?.config).map((tool) => tool.name));
   }
   // An empty native allowlist adds no allow restriction; deny rules still apply.

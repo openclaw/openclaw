@@ -29,16 +29,11 @@ import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatComposerPersistenceState } from "./composer-persistence-state.ts";
 import { ChatComposerPersistence } from "./composer-persistence.ts";
 
+type DraftStore = typeof import("../../lib/chat/composer-draft-store.runtime.ts");
 const recoveryIo = vi.hoisted(() => ({
   confirm: vi.fn<(typeof import("../../components/confirm-dialog.ts"))["showConfirmDialog"]>(),
-  prepare:
-    vi.fn<
-      (typeof import("../../lib/chat/composer-draft-store.runtime.ts"))["prepareDurableComposerRecovery"]
-    >(),
-  readDraft:
-    vi.fn<
-      (typeof import("../../lib/chat/composer-draft-store.runtime.ts"))["readDurableComposerDraft"]
-    >(),
+  prepare: vi.fn<DraftStore["prepareDurableComposerRecovery"]>(),
+  readDraft: vi.fn<DraftStore["readDurableComposerDraft"]>(),
 }));
 
 // mock-isolation: Defer confirmation to test retirement while keeping recovery storage real.
@@ -118,6 +113,8 @@ async function mountRecovery(kind: "draft" | "queue" = "draft") {
       preview,
     ),
   );
+  // Wait for initial durable preparation before measuring later run-owner refreshes.
+  await waitForSolid(() => expect(recoveryIo.prepare).toHaveBeenCalled());
   const button = (action: "restore" | "discard") => {
     const label = t(
       action === "restore" ? "chat.outboxRecoveryRestore" : "chat.outboxRecoveryDelete",
@@ -179,7 +176,7 @@ it("clears a failed restore on retry and admits one review before Solid flushes"
     typeof import("../../components/confirm-dialog.ts")
   >("../../components/confirm-dialog.ts");
   // Exercise the already-loaded modal path that otherwise inherits the action transaction.
-  await import("../../components/modal-dialog.ts");
+  await import("../../components/modal-dialog.tsx");
   recoveryIo.confirm.mockImplementation((options) =>
     dialogs.track(showConfirmDialog({ ...options, signal: cancellation.signal })),
   );

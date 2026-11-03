@@ -1,4 +1,4 @@
-import type { Filter, Relay } from "nostr-tools";
+import type { Relay } from "nostr-tools";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openBuzzRelaySubscription, queryBuzzRelaySnapshot } from "./relay-subscription.js";
@@ -16,22 +16,6 @@ function relayFixture(sub = subscription()) {
 
 describe("Buzz relay subscriptions", () => {
   afterEach(() => vi.useRealTimers());
-  it("sends an explicit REQ without synthesizing EOSE", async () => {
-    vi.useFakeTimers();
-    const oneose = vi.fn();
-    const { relay, sub, send, prepareSubscription } = relayFixture();
-    relay.idleSince = Date.now();
-    const filters: Filter[] = [{ kinds: [0], authors: ["a".repeat(64)] }];
-
-    expect(openBuzzRelaySubscription(relay, filters, { oneose })).toBe(sub);
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    expect(prepareSubscription).toHaveBeenCalledWith(filters, { oneose });
-    expect(send).toHaveBeenCalledWith(JSON.stringify(["REQ", "sub:1", ...filters]));
-    expect(relay).toMatchObject({ ongoingOperations: 1, idleSince: undefined });
-    expect(oneose).not.toHaveBeenCalled();
-  });
-
   it("does not close a subscription twice when sending fails after relay shutdown", async () => {
     const pending = createDeferred<void>();
     const { relay, sub, send } = relayFixture();
@@ -46,7 +30,7 @@ describe("Buzz relay subscriptions", () => {
 
     expect(close).not.toHaveBeenCalled();
   });
-  it("cancels a queued query while all three slots stay occupied and preserves capacity", async () => {
+  it("keeps queries pending until real EOSE while canceling queued work without losing capacity", async () => {
     vi.useFakeTimers();
     const cleanup = new AbortController();
     const replacementStarted = createDeferred<void>();
@@ -71,6 +55,7 @@ describe("Buzz relay subscriptions", () => {
         onEvent: () => {},
         result: () => id,
       });
+    relay.idleSince = Date.now();
     const active = [query(1), query(2), query(3)];
     const abort = new AbortController();
     const onAborted = vi.fn();
@@ -83,7 +68,10 @@ describe("Buzz relay subscriptions", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(Date.now()).toBe(beforeAbort);
       expect(onAborted).toHaveBeenCalledExactlyOnceWith(reason);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(prepareSubscription).toHaveBeenCalledTimes(3);
+      expect(send).toHaveBeenNthCalledWith(1, '["REQ","1",{"ids":["1"]}]');
+      expect(relay).toMatchObject({ ongoingOperations: 3, idleSince: undefined });
       ready[0]?.();
       await replacementStarted.promise;
       await aborted;

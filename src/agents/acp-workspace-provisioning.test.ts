@@ -8,10 +8,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import { resolveAcpAgentWorkspaceProvisioningForTurn as resolve } from "./acp-workspace-provisioning.js";
 
 const bindings: ChannelConfiguredBindingProvider = {
-  compileConfiguredBinding: ({ conversationId }) => {
-    const normalized = conversationId.trim();
-    return normalized ? { conversationId: normalized } : null;
-  },
+  compileConfiguredBinding: ({ conversationId }) => ({ conversationId }),
   matchInboundConversation: ({ compiledBinding, conversationId }) =>
     compiledBinding.conversationId === conversationId ? { conversationId, matchPriority: 2 } : null,
 };

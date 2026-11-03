@@ -77,6 +77,36 @@
   overflow: visible;
 }
 
+/* The first row keeps the native branch layout; the second starts under its label. */
+.chat-environment__branch-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding-inline: calc(
+      var(--details-row-padding, 0px) + var(--details-row-icon-size, 15px) +
+        var(--details-row-gap, 9px)
+    )
+    var(--details-row-padding, 0px);
+}
+
+.chat-environment__branch-controls > .chat-pr__diff {
+  flex: none;
+  overflow: visible;
+  font-family: var(--font-body);
+  font-size: var(--details-meta-font-size, 12px);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-environment__branch-controls > .chat-pr__publication-actions {
+  margin-inline-start: auto;
+}
+
+.chat-details .chat-environment__branch .chat-environment__branch-name {
+  text-overflow: clip;
+}
+
 .chat-environment-desktop__summary
   > .chat-environment-desktop__branch[data-scrollable="true"]:last-child:dir(rtl) {
   mask-image: linear-gradient(to left, black calc(100% - 16px), transparent);

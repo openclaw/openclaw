@@ -1,5 +1,4 @@
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
@@ -21,23 +20,6 @@ import type {
 } from "../types.js";
 import type { CronIdleAdmissionSource, CronIdleAdmissionWait, CronServiceState } from "./state.js";
 
-export const MAX_CRON_TIMER_DELAY_MS = 60_000;
-
-/**
- * Minimum gap between consecutive fires of the same cron job.  This is a
- * safety net that prevents spin-loops when `computeJobNextRunAtMs` returns
- * a value within the same second as the just-completed run.  The guard
- * is intentionally generous (2 s) so it never masks a legitimate schedule
- * but always breaks an infinite re-trigger cycle.  (See #17821)
- */
-export const MIN_REFIRE_GAP_MS = 2_000;
-
-export const DEFAULT_MISSED_JOB_STAGGER_MS = 5_000;
-
-export const DEFAULT_MAX_MISSED_JOBS_PER_RESTART = 5;
-
-export const DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS = 2 * 60_000;
-
 export type TimedCronRunOutcome = CronJobExecutionResult & {
   jobId: string;
   job: CronJob;
@@ -48,6 +30,7 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   activeJobMarker?: CronActiveJobMarker;
   runReceipt?: CronRunReceiptHandle;
   runReceiptContext?: OpenClawStateWorkerContext;
+  executionSettlement?: Promise<unknown>;
   request?: {
     executionJob: CronJob;
     preserveCadence: boolean;
@@ -88,16 +71,9 @@ export type ExecuteJobCoreOptions = {
   waitForIdle?: CronIdleAdmissionWait;
   deliveryAttemptFence?: CronCompletionDeliveryFence;
   activeJobMarker?: CronActiveJobMarker;
-  onPayloadExecutionStarted?: () => void;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
-  onHeartbeatExecutionStarted?: (opts: HeartbeatWakeRequest & { agentId: string }) =>
-    | {
-        onAttemptStarted?: () => void;
-        onQueued?: () => void;
-      }
-    | undefined;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
   /** Revalidates live Gateway admission after awaited planning and before effects. */
   assertRunCurrent?: () => Promise<void>;
@@ -138,6 +114,7 @@ export async function resolveMainSessionCronDeliveryContext(
       agentId,
       sessionKey: targetSessionKey,
       storePath,
+      projection: "list",
     });
     return deliveryContextFromSession(sessionEntry);
   } catch {

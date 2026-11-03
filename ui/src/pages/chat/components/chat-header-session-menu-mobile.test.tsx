@@ -4,6 +4,7 @@ import { createSignal, flush, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { openSubmenu } from "../../../test-helpers/session-menu.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { chatPaneLayoutModel } from "./chat-header-panel-actions.tsx";
 import type { HeaderSessionMenuPage } from "./chat-header-session-menu-mobile.tsx";
 import "./chat-header-session-menu.ts";
@@ -30,6 +31,11 @@ async function menuFixture(mobile: boolean | undefined) {
   expect(menu.openMenu()).toBe(true);
   flush();
   await menu.updateComplete;
+  await waitForSolid(() =>
+    expect(
+      menu.querySelector(mobile ? '[value="mobile-copy"]' : '[value="rename"]'),
+    ).not.toBeNull(),
+  );
   return { menu, onAction, open, close, currentPage, setCurrentPage, setPresented };
 }
 

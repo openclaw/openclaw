@@ -1,4 +1,5 @@
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import {
@@ -9,7 +10,6 @@ import {
 import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import { normalizeToolPolicyName, readToolAllowlistIntersection } from "./tool-policy-shared.js";
-import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import type { ToolSearchConfig } from "./tool-search-types.js";
 import {
   applyToolSchemaDirectoryCatalog,
@@ -31,7 +31,6 @@ export type AgentToolSurfacePlanParams = {
   disableTools?: boolean;
   isRawModelRun: boolean;
   toolsAllow?: readonly string[];
-  forceCodeModeControls?: boolean;
   trigger?: EmbeddedRunTrigger;
 };
 
@@ -56,7 +55,7 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
   codeModeConfig.enabled = params.codeModeOverride ?? codeModeConfig.enabled;
   // Select before overlay cloning; cloning source config first loses snapshot identity and can
   // reintroduce unresolved SecretRefs into plugin tool factories.
-  const runtimeConfig = resolveAgentRuntimeToolConfig(params.config);
+  const runtimeConfig = selectLiveRuntimeConfig(params.config);
   const selectedToolConfig: OpenClawConfig | undefined =
     completionPrivateMessageOnly ||
     runtimeConfig?.tools?.toolSearch !== undefined ||
@@ -90,11 +89,7 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     restrictions.every((allow) => allow.length > 0) &&
     !completionPrivateMessageOnly;
   const codeModeControlsEnabled =
-    toolsAvailable &&
-    // Restart recovery continues one provider turn. Keep its original control
-    // schema even when the reloaded config disables Code Mode for new turns.
-    (params.forceCodeModeControls === true ||
-      isCodeModeEngagedForModel(codeModeConfig, params.model));
+    toolsAvailable && isCodeModeEngagedForModel(codeModeConfig, params.model);
   const toolSearchControlsEnabled =
     toolsAvailable && !codeModeControlsEnabled && toolSearchConfig.enabled;
   return {

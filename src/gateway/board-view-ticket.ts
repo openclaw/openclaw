@@ -54,10 +54,6 @@ export type BoardViewTicketClaims = {
   authorityGeneration: string;
   expiresAtMs: number;
   nonce: string;
-  pluginFrame?: {
-    pluginKind: string;
-    scopedHostUrl: string;
-  };
 };
 
 function signTicketPayload(payload: string, secret: Buffer): string {
@@ -90,13 +86,7 @@ function isValidClaims(value: unknown): value is BoardViewTicketClaims {
     /^[A-Za-z0-9_-]{32}$/u.test(claims.authorityGeneration) &&
     Number.isSafeInteger(claims.expiresAtMs) &&
     typeof claims.nonce === "string" &&
-    /^[A-Za-z0-9_-]{32}$/u.test(claims.nonce) &&
-    (claims.pluginFrame === undefined ||
-      (typeof claims.pluginFrame === "object" &&
-        typeof claims.pluginFrame.pluginKind === "string" &&
-        claims.pluginFrame.pluginKind.length <= 128 &&
-        typeof claims.pluginFrame.scopedHostUrl === "string" &&
-        claims.pluginFrame.scopedHostUrl.length <= 1024))
+    /^[A-Za-z0-9_-]{32}$/u.test(claims.nonce)
   );
 }
 
@@ -196,7 +186,6 @@ export function createBoardViewTicket(params: {
   revision: number;
   viewGeneration: string;
   nowMs?: number;
-  pluginFrame?: BoardViewTicketClaims["pluginFrame"];
   authority: BoardViewTicketAuthorityInput;
 }): BoardViewTicket {
   const nowMs = params.nowMs ?? Date.now();
@@ -210,7 +199,6 @@ export function createBoardViewTicket(params: {
     authorityGeneration: authority.generation,
     expiresAtMs: nowMs + BOARD_VIEW_TICKET_TTL_MS,
     nonce: randomBytes(24).toString("base64url"),
-    ...(params.pluginFrame ? { pluginFrame: params.pluginFrame } : {}),
   };
   if (!Number.isSafeInteger(nowMs) || !isValidClaims(claims)) {
     throw new Error("invalid board view ticket binding");

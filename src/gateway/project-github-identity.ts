@@ -4,8 +4,10 @@ import {
 } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { factoryGitHubClientProof, type FactoryGitHubProofClaim } from "./factory-github-proof.js";
-import { withFactoryPublicationIdentity } from "./github-publication-factory-identity.js";
+import {
+  prepareFactoryGitHubIdentity,
+  type FactoryGitHubProofClaim,
+} from "./factory-github-proof.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
@@ -68,24 +70,15 @@ export async function prepareGatewayProjectGitHubIdentity(params: {
   if (!credential) {
     return await prepare();
   }
-  const actor =
-    process.env.FACTORY_AUTH_MODE === "github"
-      ? factoryGitHubClientProof({
-          client: params.client,
-          claim: credential.claim,
-          assertCurrent: params.assertActive,
-        })
-      : undefined;
-  return await withFactoryPublicationIdentity(
-    actor
-      ? {
-          actorId: actor.actorId,
-          profileId: actor.profileId,
-          sessionKey: credential.claim.binding.sessionKey,
-          assertCurrent: actor.assertCurrent,
-        }
-      : undefined,
-    credential,
+  return await prepareFactoryGitHubIdentity(
+    {
+      client: params.client,
+      claim: credential.claim,
+      assertCurrent: () => {
+        params.assertActive();
+        credential.assertCurrent();
+      },
+    },
     prepare,
   );
 }

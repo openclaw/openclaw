@@ -128,6 +128,7 @@ export async function startMeetingRealtimeEngine(params: {
       );
       stopAfterFailure(source);
     },
+    onStall: () => handleOutputBackpressure(),
   });
 
   const stop = async () => {

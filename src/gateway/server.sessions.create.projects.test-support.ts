@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect } from "vitest";
+import { managedWorktrees } from "../agents/worktrees/service.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import {
   captureSessionControllerSettlement,
@@ -13,6 +14,7 @@ import { requestRpcSourceCancellation } from "../sessions/session-controller.rpc
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
+import type { directSessionReq } from "./test/server-sessions.test-helpers.js";
 
 const execFileAsync = promisify(execFile);
 const git = (repo: string, ...args: string[]) => execFileAsync("git", ["-C", repo, ...args]);
@@ -53,6 +55,26 @@ export const controlUiClient = {
     },
   } as never,
 };
+
+export async function successfulSessionRequest<T = unknown>(
+  ...args: Parameters<typeof directSessionReq<T>>
+) {
+  const { directSessionReq } = await import("./test/server-sessions.test-helpers.js");
+  const result = await directSessionReq<T>(...args);
+  expect(result.ok, JSON.stringify(result.error)).toBe(true);
+  return result.payload!;
+}
+
+export async function removeOwnedSessionWorktree(key?: string) {
+  const owned = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
+  if (owned) {
+    await managedWorktrees.remove({
+      id: owned.id,
+      reason: "test-cleanup",
+      allowSnapshotLoss: true,
+    });
+  }
+}
 
 export async function initializeRepository(root: string, name: string, readme = `${name}\n`) {
   const repo = path.join(root, name);

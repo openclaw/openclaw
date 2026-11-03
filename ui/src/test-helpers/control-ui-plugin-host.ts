@@ -23,6 +23,7 @@ export function createTestControlUiPluginHost(context: ApplicationContext, plugi
       accessories: new Map(),
       textReferences: new Map(),
       widgets: new Map(),
+      inlineViews: new Map(),
       replacements: new Map(),
     },
     selections: new Map(),

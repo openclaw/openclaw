@@ -38,15 +38,13 @@ on:
       - "packages/**"
       - "scripts/**"
       - "src/**"
-  push:
-    branches:
-      - main
   schedule:
-    - cron: "0 6 * * *"
+    - cron: "23 * * * *"
 
 concurrency:
   group: codeql-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('ref-{0}', github.ref) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+  # Finish the active main scan; newer hours may replace only pending work.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -61,9 +59,11 @@ jobs:
     if: ${{ ((github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security')) }}
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: read
     outputs:
       matrix: ${{ steps.scope.outputs.matrix }}
+      has_work: ${{ steps.scope.outputs.has_work }}
     steps:
       - name: Checkout event merge
         id: checkout
@@ -77,10 +77,103 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Checkout scheduled admission
+        if: github.event_name == 'schedule'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            .github/actions/detect-scheduled-changes
+            .github/codeql
+          persist-credentials: false
+
+      - name: Detect scheduled core-auth-secrets changes
+        id: core_auth_secrets_scope
+        if: github.event_name == 'schedule'
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Security High (core-auth-secrets)
+          codeql-config: .github/codeql/codeql-core-auth-secrets-critical-security.yml
+          git-diff: "true"
+          # Extraction inputs come from each profile. Shared query/tool changes refresh all.
+          paths: &codeql_shared_inputs |
+            .github/workflows/codeql.yml
+            .github/codeql/**
+            .github/actions/detect-scheduled-changes/**
+            .gitattributes
+            **/.gitattributes
+
+      - name: Detect scheduled channel-runtime-boundary changes
+        id: channel_runtime_boundary_scope
+        if: github.event_name == 'schedule'
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Security High (channel-runtime-boundary)
+          codeql-config: .github/codeql/codeql-channel-runtime-boundary-critical-security.yml
+          git-diff: "true"
+          paths: *codeql_shared_inputs
+
+      - name: Detect scheduled network-ssrf-boundary changes
+        id: network_ssrf_boundary_scope
+        if: github.event_name == 'schedule'
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Security High (network-ssrf-boundary)
+          codeql-config: .github/codeql/codeql-network-ssrf-boundary-critical-security.yml
+          git-diff: "true"
+          paths: *codeql_shared_inputs
+
+      - name: Detect scheduled mcp-process-tool-boundary changes
+        id: mcp_process_tool_boundary_scope
+        if: github.event_name == 'schedule'
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Security High (mcp-process-tool-boundary)
+          codeql-config: .github/codeql/codeql-mcp-process-tool-boundary-critical-security.yml
+          git-diff: "true"
+          paths: *codeql_shared_inputs
+
+      - name: Detect scheduled process-exec-boundary changes
+        id: process_exec_boundary_scope
+        if: github.event_name == 'schedule'
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Security High (process-exec-boundary)
+          codeql-config: .github/codeql/codeql-process-exec-boundary-critical-security.yml
+          git-diff: "true"
+          paths: *codeql_shared_inputs
+
+      - name: Detect scheduled plugin-trust-boundary changes
+        id: plugin_trust_boundary_scope
+        if: github.event_name == 'schedule'
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Security High (plugin-trust-boundary)
+          codeql-config: .github/codeql/codeql-plugin-trust-boundary-critical-security.yml
+          git-diff: "true"
+          paths: *codeql_shared_inputs
+
+      - name: Detect scheduled actions changes
+        id: actions_scope
+        if: github.event_name == 'schedule'
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Security High (actions)
+          codeql-config: .github/codeql/codeql-actions-critical-security.yml
+          git-diff: "true"
+          paths: *codeql_shared_inputs
+
       - name: Select security languages
         id: scope
         env:
           CODEQL_CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          CODEQL_CORE_AUTH_SECRETS_CHANGED: ${{ steps.core_auth_secrets_scope.outputs.changed }}
+          CODEQL_CHANNEL_RUNTIME_BOUNDARY_CHANGED: ${{ steps.channel_runtime_boundary_scope.outputs.changed }}
+          CODEQL_NETWORK_SSRF_BOUNDARY_CHANGED: ${{ steps.network_ssrf_boundary_scope.outputs.changed }}
+          CODEQL_MCP_PROCESS_TOOL_BOUNDARY_CHANGED: ${{ steps.mcp_process_tool_boundary_scope.outputs.changed }}
+          CODEQL_PROCESS_EXEC_BOUNDARY_CHANGED: ${{ steps.process_exec_boundary_scope.outputs.changed }}
+          CODEQL_PLUGIN_TRUST_BOUNDARY_CHANGED: ${{ steps.plugin_trust_boundary_scope.outputs.changed }}
+          CODEQL_ACTIONS_CHANGED: ${{ steps.actions_scope.outputs.changed }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
@@ -119,7 +212,9 @@ jobs:
               }
             }
             const include = categories
-              .filter((category) => category === "actions" ? actions : javascript)
+              .filter((category) => context.eventName === "schedule"
+                ? process.env[`CODEQL_${category.toUpperCase().replaceAll("-", "_")}_CHANGED`] !== "false"
+                : category === "actions" ? actions : javascript)
               .map((category) => ({
                 language: category === "actions" ? "actions" : "javascript-typescript",
                 category,
@@ -128,11 +223,13 @@ jobs:
                 config_file: `./.github/codeql/codeql-${category}-critical-security.yml`,
               }));
             core.setOutput("matrix", JSON.stringify({ include }));
+            core.setOutput("has_work", include.length > 0);
 
   security-high:
     needs: scope
     name: Security High (${{ matrix.category }})
-    if: ${{ ((github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security')) }}
+    # Gate before matrix expansion: a skip-only run must not record successful scan jobs.
+    if: ${{ needs.scope.outputs.has_work == 'true' }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:

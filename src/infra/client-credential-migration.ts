@@ -19,6 +19,7 @@ import {
   writeClientCredentialReceipt,
 } from "./client-credential-readiness.js";
 import {
+  CLIENT_CREDENTIAL_LEGACY_KEYS,
   readClientCredentialFileIdentity,
   serializeClientCredentialReceipt,
   type ClientCredentialReceipt,
@@ -263,8 +264,8 @@ export function bindFreshClientCredentialStore(
 /** Resume publication after the shared transaction committed but its local completion did not. */
 export function recoverClientCredentialStore(
   source: EngineConnection,
-  options: { path: string; env: NodeJS.ProcessEnv },
-): void {
+  options: { path: string; env: NodeJS.ProcessEnv; rebindMissing?: boolean },
+): "rebound" | void {
   const metadata = source
     .prepare("SELECT created_at FROM schema_meta WHERE meta_key = 'primary'")
     .get();
@@ -285,8 +286,43 @@ export function recoverClientCredentialStore(
     migration: true,
   });
   if (!target) {
+    if (options.rebindMissing === true && isPostgresSqlConnection(source)) {
+      const sharedFile = readClientCredentialFileIdentity(options.path);
+      if (!sharedFile) {
+        throw new Error("Shared credential source is missing; restore its matching backup.");
+      }
+      const receipt: ClientCredentialReceipt = {
+        format: 1,
+        source: readClientCredentialBootstrapSource(source, sharedFile.path),
+        sharedFile,
+        legacyImports: {},
+      };
+      // Lost local custody cannot make previously retired JSON authoritative again.
+      for (const key of CLIENT_CREDENTIAL_LEGACY_KEYS) {
+        receipt.legacyImports[key] = { sha256: null };
+      }
+      using replacement = openClientCredentialCustody(env, {
+        createIfMissing: true,
+        migration: true,
+      });
+      if (!replacement?.created) {
+        throw new Error("Local credentials appeared during recovery; retry without rebinding.");
+      }
+      const publication = beginUpdateSqliteCompanion(
+        replacement.database,
+        replacement.path,
+        replacement.created,
+      );
+      replacement.transaction(() =>
+        writeClientCredentialReceipt(replacement.database, receipt, "complete"),
+      );
+      publication?.complete();
+      return "rebound";
+    }
     throw new Error(
-      "Local credentials are missing; restore the matching client credential backup.",
+      isPostgresSqlConnection(source)
+        ? "Local credentials are missing; restore the matching client credential backup or run openclaw doctor --fix to create new local identities."
+        : "Local credentials are missing; restore the matching client credential backup.",
     );
   }
   try {

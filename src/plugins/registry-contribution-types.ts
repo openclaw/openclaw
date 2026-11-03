@@ -1,6 +1,5 @@
 /** Acyclic contracts for capabilities stored in the installed plugin registry. */
 import type { SessionDiscussionInfo } from "../../packages/gateway-protocol/src/schema/session-discussion.js";
-import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,18 +14,11 @@ import type {
   MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
 import type {
-  EmbeddingBatchChunk,
-  EmbeddingBatchOptions,
-} from "./embedding-provider-runtime-types.js";
-import type {
-  EmbeddingProvider,
   EmbeddingProviderAdapter,
-  EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
   EmbeddingProviderCreateResult,
-  EmbeddingProviderIndexIdentity,
-  EmbeddingProviderRuntime,
 } from "./embedding-provider-types.js";
+import type { MemoryEmbeddingProviderRuntime } from "./memory-embedding-providers.js";
 import type {
   MemoryProviderOpenParams,
   MemoryProviderOpenResult,
@@ -70,24 +62,6 @@ export type RegisteredCompactionProvider = {
   ownerPluginId?: string;
 };
 
-export type MemoryEmbeddingBatchChunk = EmbeddingBatchChunk & {
-  embeddingInput?: EmbeddingInput;
-};
-
-export type MemoryEmbeddingBatchOptions = Omit<EmbeddingBatchOptions, "chunks"> & {
-  chunks: MemoryEmbeddingBatchChunk[];
-};
-
-export type MemoryEmbeddingProviderCallOptions = Pick<EmbeddingProviderCallOptions, "signal">;
-
-export type MemoryEmbeddingProviderRuntime = Omit<EmbeddingProviderRuntime, "batchEmbed"> & {
-  batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
-};
-
-export type MemoryEmbeddingProviderIndexIdentity = EmbeddingProviderIndexIdentity;
-
-export type MemoryEmbeddingProvider = EmbeddingProvider;
-
 export type MemoryEmbeddingProviderCreateOptions = Omit<EmbeddingProviderCreateOptions, "local"> & {
   fallback?: string;
   local?: NonNullable<EmbeddingProviderCreateOptions["local"]> & {
@@ -120,6 +94,9 @@ export type MemoryPromptSectionParams = {
 };
 
 export type MemoryPromptSectionBuilder = (params: MemoryPromptSectionParams) => string[];
+
+/** Provider-owned /learn guidance for the tools tool policy leaves this turn; [] when it cannot learn. */
+export type MemoryLearnGuidanceBuilder = (params: { availableTools: Set<string> }) => string[];
 
 export type MemoryPromptSectionPreparer = (
   params: MemoryPromptSectionParams,
@@ -203,15 +180,11 @@ export type MemoryPromptPreparationRegistration = {
   prepare: MemoryPromptSectionPreparer;
 };
 
-/**
- * A file-persistence flush plan with its resolved timing. Its shape is unchanged from earlier
- * releases, so existing producers and readers keep compiling and behaving the same.
- */
+/** A file-persistence flush plan with its resolved timing. */
 export type MemoryFlushPlan = {
   softThresholdTokens: number;
   forceFlushTranscriptBytes: number;
   reserveTokensFloor: number;
-  model?: string;
   prompt: string;
   systemPrompt: string;
   relativePath: string;
@@ -225,17 +198,16 @@ type MemoryFlushPlanTiming = Pick<
 
 /**
  * A file plan as a resolver may return it: omitted timing fields are filled by the host, and
- * defined ones deliberately override it. A file plan without a model keeps the session's model.
+ * defined ones deliberately override it.
  */
 export type MemoryFlushFilePlanDraft = Omit<MemoryFlushPlan, keyof MemoryFlushPlanTiming> &
   Partial<MemoryFlushPlanTiming> & { persistenceToolNames?: never; lookupToolNames?: never };
 
 /**
- * Tool persistence for the selected memory slot owner. The host fills omitted timing and the
- * configured flush model; defined values deliberately override them.
+ * Tool persistence for the selected memory slot owner. The host fills omitted timing;
+ * defined values deliberately override it.
  */
 export type MemoryFlushToolsPlan = Partial<MemoryFlushPlanTiming> & {
-  model?: string;
   prompt: string;
   systemPrompt: string;
   /** Absent on every tools plan; a tools plan never names a workspace file. */
@@ -251,7 +223,7 @@ type MemoryFlushPlanResolverParams = {
   contextWindowTokens?: number;
 };
 
-/** Resolves a complete file flush plan; its contract is unchanged from earlier releases. */
+/** Resolves a complete file flush plan. */
 export type MemoryFlushPlanResolver = (
   params: MemoryFlushPlanResolverParams,
 ) => MemoryFlushPlan | null;
@@ -366,6 +338,10 @@ export type MemoryPluginCapability = {
   deterministicRecallToolName?: string;
   /** Whether recall may read protected same-agent private session transcripts. */
   supportsPrivateTranscriptRecall?: boolean;
+  /** Tools a /learn turn may use to persist lessons; the host checks them against tool policy. */
+  learnToolNames?: readonly string[];
+  /** Guidance appended to /learn when some learnToolNames are available. */
+  learnGuidanceBuilder?: MemoryLearnGuidanceBuilder;
 };
 
 export type MemoryPluginCapabilityRegistration = {

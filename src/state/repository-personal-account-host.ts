@@ -1,5 +1,9 @@
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { withOpenClawStateLease } from "./openclaw-state-lease.js";
+import {
+  withOpenClawStateLeaseAsync,
+  type OpenClawStateAsyncLeaseContext,
+} from "./openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
   observeUserGitHubConnectionAuthority,
   observeUserGitHubProfileRetirement,
@@ -43,18 +47,19 @@ export function createRepositoryPersonalAccountHostV1(signal: AbortSignal) {
     },
     async withProfile<T>(
       profileId: string,
-      run: (assertOwned: () => void) => Promise<T>,
+      run: (lease: OpenClawStateAsyncLeaseContext) => Promise<T>,
     ): Promise<T> {
       signal.throwIfAborted();
-      return await withOpenClawStateLease(
+      return await withOpenClawStateLeaseAsync(
         {
           scope: "personal-github-profile",
           key: profileId,
-          database: { scope: "shared" },
           leaseMs: 60000,
           waitMs: 30000,
+          heartbeat: "worker",
         },
-        async (lease) => await run(() => lease.assertOwned()),
+        captureOpenClawStateWorkerContext(),
+        run,
       );
     },
     async listForMaintenance() {

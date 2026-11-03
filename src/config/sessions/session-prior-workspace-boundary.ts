@@ -53,3 +53,34 @@ export function rewriteSessionPriorWorkspaceBoundary(
     priorWorkspace: { ...prior, through: { generation, maxSeq } },
   };
 }
+
+/**
+ * Maintenance rewrites append copies in branch order; each copy keeps its source's side.
+ * The rows they abandon stay off the active path, and maintenance branches are not reopened.
+ */
+export function appendSessionPriorWorkspaceCopies(
+  entry: InternalSessionEntry,
+  generation: string | null,
+  copies: readonly { sourceSeq: number; seq: number }[],
+): InternalSessionEntry {
+  const prior = entry.priorWorkspace;
+  const original = prior?.through.maxSeq ?? null;
+  if (
+    !prior ||
+    original === null ||
+    prior.through.generation !== generation ||
+    prior.sessionId !== entry.sessionId ||
+    prior.worktreeId !== entry.worktree?.id
+  ) {
+    return entry;
+  }
+  let maxSeq = original;
+  for (const copy of copies) {
+    if (copy.sourceSeq <= original) {
+      maxSeq = Math.max(maxSeq, copy.seq);
+    }
+  }
+  return maxSeq === original
+    ? entry
+    : { ...entry, priorWorkspace: { ...prior, through: { generation, maxSeq } } };
+}

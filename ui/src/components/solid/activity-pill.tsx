@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { children, onSettled, Show } from "solid-js";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { observeIntersection } from "../../lib/reactive/observers.ts";
 import { createScrollStateRef } from "../../lib/reactive/scroll-state.ts";
 import { iconData } from "../icon-data.ts";
 import { BrandIcon, Icon, type IconName } from "./icon.tsx";
@@ -97,13 +98,11 @@ export function ActivityPill(props: {
           badge: props.view.badge.label,
         })
       : props.view.label);
-  onSettled(() => {
-    const observer = new IntersectionObserver(([entry]) =>
+  onSettled(() =>
+    observeIntersection([button], ([entry]) =>
       button.toggleAttribute("data-out-of-view", !entry?.isIntersecting),
-    );
-    observer.observe(button);
-    return () => observer.disconnect();
-  });
+    ),
+  );
   return (
     <button
       ref={[
@@ -149,16 +148,8 @@ export function ActivityPill(props: {
       >
         {leading()}
       </Show>
-      <span
-        ref={labelRef}
-        class={["activity-pill__label", { "activity-pill__label--shine": props.view.shine }]}
-      >
+      <span ref={labelRef} class={["activity-pill__label", { "text-shimmer": props.view.shine }]}>
         {props.view.label}
-        <Show when={props.view.shine}>
-          <span class="activity-pill__shimmer" aria-hidden="true">
-            {props.view.label}
-          </span>
-        </Show>
       </span>
       <Show when={props.view.count}>
         {(count) => <span class="activity-pill__count">{count()}</span>}

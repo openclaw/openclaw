@@ -36,33 +36,22 @@ describe("browser-runtime", () => {
   it("sends normalized browser.request payloads through the gateway", async () => {
     const env = createEnv();
 
-    const result = await callQaBrowserRequest(env, {
-      method: "GET",
-      path: "/snapshot",
-      query: {
-        format: "ai",
-        targetId: "tab-1",
-        skip: undefined,
-        limit: 50,
-      },
-      timeoutMs: 12_345,
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(env.gateway.call).toHaveBeenCalledWith(
-      "browser.request",
+    expect(
+      await callQaBrowserRequest(env, {
+        method: "GET",
+        path: "/snapshot",
+        query: { format: "ai", targetId: "tab-1", skip: undefined, limit: 50 },
+        timeoutMs: 12_345,
+      }),
+    ).toEqual({ ok: true });
+    expectRequest(
+      env,
       {
         method: "GET",
         path: "/snapshot",
-        query: {
-          format: "ai",
-          targetId: "tab-1",
-          limit: "50",
-        },
-        body: undefined,
-        timeoutMs: 12_345,
+        query: { format: "ai", targetId: "tab-1", limit: "50" },
       },
-      { timeoutMs: 12_345 },
+      12_345,
     );
   });
 
@@ -110,12 +99,7 @@ describe("browser-runtime", () => {
 
     await qaBrowserAct(env, {
       profile: "openclaw",
-      request: {
-        kind: "type",
-        ref: "12",
-        text: "hello",
-        submit: true,
-      },
+      request: { kind: "type", ref: "12", text: "hello", submit: true },
       timeoutMs: 9_000,
     });
 
@@ -125,12 +109,7 @@ describe("browser-runtime", () => {
         method: "POST",
         path: "/act",
         query: { profile: "openclaw" },
-        body: {
-          kind: "type",
-          ref: "12",
-          text: "hello",
-          submit: true,
-        },
+        body: { kind: "type", ref: "12", text: "hello", submit: true },
       },
       9_000,
     );
@@ -163,17 +142,10 @@ describe("browser-runtime", () => {
     });
 
     expect(status).toEqual({ enabled: true, running: true, cdpReady: true });
-    expect(env.gateway.call).toHaveBeenNthCalledWith(
-      1,
+    expect(env.gateway.call.mock.calls[0]).toEqual([
       "browser.request",
-      {
-        method: "GET",
-        path: "/",
-        query: { profile: "user" },
-        body: undefined,
-        timeoutMs: 5_000,
-      },
+      { method: "GET", path: "/", query: { profile: "user" }, body: undefined, timeoutMs: 5_000 },
       { timeoutMs: 5_000 },
-    );
+    ]);
   });
 });

@@ -35,6 +35,7 @@ import {
   readGitHubPublisher,
 } from "./github-publication-publisher.js";
 import {
+  readPublishedGitHubPullRequest,
   findGitHubPublicationPullRequest,
   reconcileGitHubPublicationPullRequest,
 } from "./github-publication-pull-requests.js";
@@ -203,10 +204,13 @@ export function createGitHubPublicationProvider(owner: {
           pullRequest: inspected.result,
           identity,
           assertCurrent: assertInspection,
+          requirePublicRepositories: inspected.requirePublicRepositories,
         });
       };
       return {
         result: inspected.result,
+        ownPublication: inspected.ownPublication,
+        publishedHeadCommit: inspected.publishedHeadCommit,
         assertCurrent: assertInspection,
         verifyWriteAccess,
         assertSource(originUrl) {
@@ -232,26 +236,68 @@ export function createGitHubPublicationProvider(owner: {
       input.assertCurrent();
       input.publisher.assertCurrent();
       const identity = readGitHubPublisher(input.publisher);
-      const target = input.repositoryOnly
+      if (input.recorded) {
+        const original = parseGitHubRemoteUrl(
+          input.originUrl,
+          identity.host ?? resolveGitHubHost(),
+        );
+        if (
+          !original ||
+          `${original.owner}/${original.repo}`.toLowerCase() !==
+            input.recorded.pushRepository.toLowerCase()
+        ) {
+          throw new Error("GitHub publication's original target is unavailable.");
+        }
+      }
+      const target = input.recorded
         ? {
-            ...(await prepareRepositoryGitHubPublicationTarget(
-              { url: input.originUrl, branch: input.branch, requestedRef: input.baseRef },
-              identity,
-              input.assertCurrent,
-            )),
+            ...input.recorded,
             branch: input.branch,
             githubHost: identity.host ?? resolveGitHubHost(),
           }
-        : await prepareGitHubPublicationTarget({
-            source: input,
-            identity,
-            assertCurrent: input.assertCurrent,
-          });
+        : input.repositoryOnly
+          ? {
+              ...(await prepareRepositoryGitHubPublicationTarget(
+                { url: input.originUrl, branch: input.branch, requestedRef: input.baseRef },
+                identity,
+                input.assertCurrent,
+              )),
+              branch: input.branch,
+              githubHost: identity.host ?? resolveGitHubHost(),
+            }
+          : await prepareGitHubPublicationTarget({
+              source: input,
+              identity,
+              assertCurrent: input.assertCurrent,
+            });
       return {
         ...target,
         ...(input.pullRequest ? { pullRequest: input.pullRequest } : {}),
         remoteUrl: githubRepositoryUrl(target.pushRepository, target.githubHost),
         baseRemoteUrl: githubRepositoryUrl(target.repository, target.githubHost),
+      };
+    },
+    async preparePublishedTarget(input) {
+      assertCurrent();
+      input.assertCurrent();
+      const identity = readGitHubPublisher(input.publisher);
+      const { candidate } = await readPublishedGitHubPullRequest({
+        publishedPullRequest: input.publishedPullRequest,
+        repository: input.target.repository,
+        branch: input.target.branch,
+        host: identity.host ?? resolveGitHubHost(),
+        publisherAccountId: input.publisherAccountId,
+        refreshIdentity: async () => identity,
+        assertCurrent: input.assertCurrent,
+      });
+      input.assertCurrent();
+      if (!input.reconcile && candidate.state === "closed") {
+        return input.target;
+      }
+      return {
+        ...input.target,
+        baseBranch: candidate.baseRef,
+        publishedPullRequest: input.publishedPullRequest,
       };
     },
     async readBase(input) {
@@ -307,6 +353,7 @@ export function createGitHubPublicationProvider(owner: {
       return await findGitHubPublicationPullRequest({
         repository: input.target.repository,
         pullRequest: input.target.pullRequest,
+        publishedPullRequest: input.target.publishedPullRequest,
         pushOwner: input.target.pushRepository.split("/")[0]!,
         branch: input.target.branch,
         baseBranch: input.target.baseBranch,
@@ -354,6 +401,7 @@ export function createGitHubPublicationProvider(owner: {
         pushRepository: input.target.pushRepository,
         repository: input.target.repository,
         pullRequest: input.target.pullRequest,
+        publishedPullRequest: input.target.publishedPullRequest,
         pushOwner: input.target.pushRepository.split("/")[0]!,
         branch: input.target.branch,
         baseBranch: input.target.baseBranch,
@@ -363,6 +411,8 @@ export function createGitHubPublicationProvider(owner: {
         parentCommit: input.parentCommit,
         knownPullRequestUrls: input.knownPullRequestUrls,
         pushOnly: input.pushOnly,
+        beforeRetry: input.beforeRetry,
+        readContinuation: input.readContinuation,
         recordObserved: input.recordObserved,
         recordPushObserved: input.recordPushObserved,
         assertCurrent: input.assertCurrent,
@@ -410,9 +460,7 @@ export function createGitHubPublicationProvider(owner: {
     },
     executeRepository: executeRepositoryGitHubPublication,
     resolveFailure(error) {
-      return error instanceof RepositoryPublicationFailureError
-        ? error.failure
-        : resolveGitHubPublicationFailure(error);
+      return resolveGitHubPublicationFailure(error);
     },
     isDefinitiveFailure(error) {
       return (

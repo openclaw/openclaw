@@ -11,6 +11,8 @@ export {
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
 } from "../../packages/gateway-protocol/src/control-ui-session-pull-requests.js";
 
+export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
+
 /** Anonymous public-page presentation; remote URLs never cross into the renderer. */
 export type ControlUiLinkPreview = {
   title?: string;

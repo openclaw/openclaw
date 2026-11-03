@@ -59,6 +59,20 @@ const {
 
 afterEach(closeOpenClawStateDatabaseForTest);
 
+type ResetOptions = Parameters<
+  typeof import("./session-reset-service.js").performGatewaySessionReset
+>[0];
+async function resetSession(options: Partial<ResetOptions> = {}) {
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  return performGatewaySessionReset({
+    key: "main",
+    reason: "reset",
+    commandSource: "gateway:sessions.reset",
+    workerPlacementContext: {},
+    ...options,
+  });
+}
+
 describe("ACP reset", () => {
   const sessionKey = "agent:main:main";
   const readSession = (storePath: string) => loadSessionEntry({ storePath, sessionKey });
@@ -67,20 +81,6 @@ describe("ACP reset", () => {
     new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "owner repair required", {
       detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
     });
-  type ResetOptions = Parameters<
-    typeof import("./session-reset-service.js").performGatewaySessionReset
-  >[0];
-  async function resetSession(options: Partial<ResetOptions> = {}) {
-    const { performGatewaySessionReset } = await import("./session-reset-service.js");
-    return performGatewaySessionReset({
-      key: "main",
-      reason: "reset",
-      commandSource: "gateway:sessions.reset",
-      workerPlacementContext: {},
-      ...options,
-    });
-  }
-
   const acpMeta = () =>
     resolvedAcpMeta({
       recordId: sessionKey,
@@ -469,12 +469,9 @@ describe("concurrency", () => {
           lifecycleRevision: "replacement-revision",
         });
       });
-      const { performGatewaySessionReset } = await import("./session-reset-service.js");
-      const reset = await performGatewaySessionReset({
-        key: "main",
+      const reset = await resetSession({
         reason: "new",
         commandSource: "gateway:agent",
-        workerPlacementContext: {},
         assertCurrent: () => {
           if (!lifecycleCurrent) {
             throw new Error("stale lifecycle");
@@ -529,18 +526,14 @@ describe("concurrency", () => {
         return { ok: true as const, value: {} };
       };
       using _ = { [Symbol.dispose]: () => admission?.release() };
-      const { performGatewaySessionReset } = await import("./session-reset-service.js");
       const reset =
         point === "admission"
           ? await directSessionReq("sessions.reset", {
               key: sessionKey,
               expectedSessionId: "sess-stale",
             })
-          : await performGatewaySessionReset({
+          : await resetSession({
               key: sessionKey,
-              reason: "reset",
-              commandSource: "gateway:sessions.reset",
-              workerPlacementContext: {},
               expectedSessionId: observedSessionId,
               assertCurrent: point === "interrupt" ? replace : undefined,
               prepareLifecycle: point === "drain" ? async () => replace() : undefined,

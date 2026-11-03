@@ -25,8 +25,6 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token-config.js";
 
-type MSTeamsConversationType = "personal" | "groupChat" | "channel";
-
 // Keep reply policy and the Connector thread suffix together so every proactive
 // activity kind uses the same resolved destination instead of re-deriving it.
 type MSTeamsProactiveReplyTarget =
@@ -177,7 +175,7 @@ export async function resolveMSTeamsSendContext(params: {
   const storedConversationType = normalizeLowercaseStringOrEmpty(
     safeRef.conversation?.conversationType ?? "",
   );
-  const conversationType: MSTeamsConversationType =
+  const conversationType: "personal" | "groupChat" | "channel" =
     storedConversationType === "personal" || storedConversationType === "channel"
       ? storedConversationType
       : "groupChat";

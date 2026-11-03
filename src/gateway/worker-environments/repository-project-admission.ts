@@ -7,6 +7,7 @@ import {
   matchesAgentLifecycleBinding,
   matchesAgentLifecycleBindingAsync,
 } from "../../agents/agent-lifecycle-registry.js";
+import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import {
   GitHubIdentityError,
   prepareGitHubReadIdentity,
@@ -16,6 +17,7 @@ import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.run
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
 import { gitHubPublicApi } from "../github-public-api.js";
+import { assertRepositoryDispatchAdmission } from "../repository-dispatch.js";
 import {
   resolveEnvironmentRecipe,
   type EnvironmentRecipe,
@@ -48,6 +50,8 @@ export type RepositoryProjectAdmissionRequest = {
   getConfig: () => OpenClawConfig;
   assertCurrent: () => void;
   signal?: AbortSignal;
+  readNativeCredential?: GitHubCredentialReader;
+  retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
   knownRecipe?: (
     project: RepositoryWorkerProjectSnapshot,
   ) => { setupRecipe?: string; recipe?: EnvironmentRecipe } | undefined;
@@ -111,7 +115,9 @@ export async function prepareRepositoryWorkerProjectSource(
   }
   const getConfig = params.getConfig;
   const assertAgent = () => {
-    if (!matchesAgentLifecycleBinding(getConfig(), agent)) {
+    const currentConfig = getConfig();
+    assertRepositoryDispatchAdmission(params.readNativeCredential, currentConfig);
+    if (!matchesAgentLifecycleBinding(currentConfig, agent)) {
       sourceChanged();
     }
   };
@@ -128,6 +134,7 @@ export async function prepareRepositoryWorkerProjectSource(
     assertCaller();
     assertAgent();
   };
+  const repositoryPath = new URL(url).pathname.replace(/\.git$/u, "");
   const prepareIdentity = async (assertPreparationCurrent: () => void) => {
     await assertAgentPrepared();
     assertPreparationCurrent();
@@ -137,7 +144,13 @@ export async function prepareRepositoryWorkerProjectSource(
       sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
       agentId: agent.agentId,
       getCurrentConfig: getConfig,
-      assertActive: assertAgent,
+      assertActive:
+        params.readNativeCredential || params.retainCredentialCleanup
+          ? assertAdmission
+          : assertAgent,
+      readNativeCredential: params.readNativeCredential,
+      allowAppInstallation: params.retainCredentialCleanup !== undefined,
+      requestedRepository: repositoryPath.slice(1),
       refresh: () => requestCurrentGitHubOAuthRefresh(agent.agentId),
       allowAnonymous: true,
     }).catch(async (error: unknown) => {
@@ -145,6 +158,10 @@ export async function prepareRepositoryWorkerProjectSource(
       // Native credential subprocess diagnostics must never enter provider errors.
       throw error instanceof GitHubIdentityError ? error : new GitHubIdentityError("unverified");
     });
+    if (identity.revoke) {
+      params.retainCredentialCleanup?.(identity.revoke);
+    }
+    assertPreparationCurrent();
     assertAgent();
     return identity;
   };
@@ -160,7 +177,6 @@ export async function prepareRepositoryWorkerProjectSource(
     assertAgent();
     identity.assertSelected();
   };
-  const repositoryPath = new URL(url).pathname.replace(/\.git$/u, "");
   const endpoint = `${gitHubPublicApi.GITHUB_API_BASE_URL}/repos${repositoryPath}`;
   const read = async (
     suffix: string,

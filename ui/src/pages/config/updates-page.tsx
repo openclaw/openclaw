@@ -13,19 +13,19 @@ import {
   projectGateway,
   projectOverlays,
 } from "../../lib/reactive/application.ts";
+import type { UpdatesCommandPresentation } from "./updates-types.ts";
 import { Updates } from "./updates.tsx";
 
-export type UpdatesPageProps = {
+export function UpdatesPage(props: {
   context: ApplicationContext;
   configObject: Record<string, unknown>;
   configBusy: boolean;
   updateBusy: boolean;
   statusRead: Promise<boolean> | null;
   onCheckStatus: () => Promise<boolean>;
+  captureCommandPresentation: () => UpdatesCommandPresentation;
   nowMs?: number;
-};
-
-export function UpdatesPage(props: UpdatesPageProps) {
+}) {
   const gateway = createMemo(() => projectGateway(props.context.gateway));
   const overlays = createMemo(() => projectOverlays(props.context.overlays));
   const config = createMemo(() => projectApplicationConfig(props.context.config));
@@ -35,9 +35,11 @@ export function UpdatesPage(props: UpdatesPageProps) {
       update={overlays().read()}
       statusRead={props.statusRead}
       commandScope={snapshot().client ?? props.context.overlays}
+      captureCommandPresentation={props.captureCommandPresentation}
       nativeDeviceSettings={props.context.nativeDeviceSettings}
       configObject={props.configObject}
       gatewayVersion={config().read().serverVersion ?? snapshot().hello?.server?.version ?? null}
+      gatewayBuildId={snapshot().hello?.server?.buildId}
       controlUiCommit={CONTROL_UI_BUILD_INFO.commit}
       controlUiCommitAt={CONTROL_UI_BUILD_INFO.commitAt}
       controlUiBuiltAt={CONTROL_UI_BUILD_INFO.builtAt}

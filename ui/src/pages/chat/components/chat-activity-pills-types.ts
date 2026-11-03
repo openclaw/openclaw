@@ -23,17 +23,15 @@ export type ChatActivityPillsProps = {
     /** Confirmed direct execution, never queued/submitted/accepted Resume alone. */
     executionConfirmed: boolean;
     recovery?: ChatGoalRecovery;
-    /** Only an explicit user hide; completion, idle and approval do not set this. */
-    hidden?: boolean;
     onOpen: OpenActivity;
   };
   progress?: {
     card: ProgressCard;
-    showInChat: boolean;
     sessionStatus?: SessionRunStatus;
     startedAt?: number;
     endedAt?: number;
     hasActiveRun: boolean;
+    runtime?: import("../../../lib/session-progress-runtime.ts").SessionProgressCardRuntime;
     refresh?: SessionProgressCardRefreshState;
     onOpen: OpenActivity;
   };

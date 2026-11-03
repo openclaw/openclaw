@@ -91,7 +91,6 @@ type SessionEntryCacheUpdate = { sessionKey: string } & (
 function readCachedExactSessionEntries(
   database: SessionEntryCacheDatabase,
   sessionKeys: readonly string[],
-  clone: boolean,
 ): Map<string, SessionEntry> | undefined {
   const cached = sessionEntryCaches.get(database.db);
   if (!cached || database.db.isTransaction) {
@@ -110,11 +109,8 @@ function readCachedExactSessionEntries(
     for (const sessionKey of new Set(sessionKeys)) {
       const key = toUSVString(sessionKey);
       const entry = cached.entries.get(key)!;
-      // Mutable reads own each raw key; internal readers borrow the frozen committed facts.
-      entries.set(
-        sessionKey,
-        validateDeliveryCanonicalSessionEntry(key, clone ? structuredClone(entry) : entry),
-      );
+      // Mutable reads own each raw key, including nested entry values.
+      entries.set(sessionKey, validateDeliveryCanonicalSessionEntry(key, structuredClone(entry)));
     }
     return entries;
   } catch {
@@ -129,7 +125,7 @@ export function readExactSessionEntryCandidatesInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   requests: readonly (readonly string[])[],
   projection: SessionEntryReadScope["projection"] | "delivery",
-  options: { clone?: boolean; validation?: "canonical" } = {},
+  options: { validation?: "canonical" } = {},
 ): Array<Result<ExactSessionEntry[], unknown>> {
   const entries = new Map<string, Result<ExactSessionEntry | undefined, unknown>>();
   const validationKeys = (sessionKey: string) =>
@@ -139,7 +135,7 @@ export function readExactSessionEntryCandidatesInDatabase(
   const keys = [...new Set(requests.flatMap((request) => request.flatMap(validationKeys)))];
   const cachedEntries =
     projection === "list" && options.validation === undefined
-      ? readCachedExactSessionEntries(database, keys, options.clone !== false)
+      ? readCachedExactSessionEntries(database, keys)
       : undefined;
   let readPrepared: (sessionKey: string) => InternalSessionEntry | undefined;
   if (cachedEntries) {

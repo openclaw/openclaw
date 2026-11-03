@@ -8,6 +8,7 @@ import {
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { observeSettlement } from "../promise-settlement.test-support.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import * as relayBridge from "./native-hook-relay-bridge.js";
 import * as clientStore from "./native-hook-relay-client-store.js";
@@ -530,19 +531,11 @@ it.each(["cancellation", "replacement", "foreground retirement"] as const)(
       });
       let successor: ReturnType<typeof registerOwnedNativeHookRelay> | undefined;
       let preparation: Promise<void> | undefined;
-      let settled = false;
       try {
         preparation = relay.prepareInvocation();
-        void preparation.then(
-          () => {
-            settled = true;
-          },
-          () => {
-            settled = true;
-          },
-        );
+        const settled = observeSettlement(preparation);
         await entered.promise;
-        expect(settled).toBe(false);
+        expect(settled()).toBe(false);
         if (retirement === "cancellation") {
           abort.abort();
           expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
@@ -751,18 +744,10 @@ it("joins a renewal accepted while an earlier drain reports failure", async () =
     const expiresAtMs = relay.expiresAtMs;
     relay.renew(120_000);
     const draining = relay.drain();
-    let settled = false;
-    void draining.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const settled = observeSettlement(draining);
     try {
       await entered.promise;
-      expect(settled).toBe(false);
+      expect(settled()).toBe(false);
       expect(relay.expiresAtMs).toBe(expiresAtMs);
       resume.resolve();
       await expect(draining).rejects.toBe(failure);

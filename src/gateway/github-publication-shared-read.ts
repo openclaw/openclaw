@@ -69,7 +69,7 @@ export async function readSharedGitHubPublication(
         readSharedPublicationObservation(
           { path: context.admission.databasePath, env: context.environment },
           input,
-          { current: true, preferIndependentWarmRead: true, context },
+          { current: true, context },
         ),
       );
       if (key) {

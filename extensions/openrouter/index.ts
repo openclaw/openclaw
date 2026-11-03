@@ -37,7 +37,8 @@ import {
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { buildOpenRouterDecisionProvider, isOpenRouterDecisionModel } from "./decision-provider.js";
+import { isOpenRouterDecisionModel } from "./decision-codec.js";
+import { buildOpenRouterDecisionProvider } from "./decision-provider.js";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./models.js";
@@ -265,6 +266,11 @@ type OpenRouterFusionPromptContribution = {
   dynamicSuffix?: string;
 };
 
+function normalizeRouterBaseUrl<T extends { baseUrl?: string }>(value: T) {
+  const baseUrl = normalizeOpenRouterBaseUrl(value.baseUrl);
+  return baseUrl && baseUrl !== value.baseUrl ? { ...value, baseUrl } : undefined;
+}
+
 function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model: T): T | undefined {
   const normalizedBaseUrl = normalizeOpenRouterBaseUrl(model.baseUrl);
   const normalizedId = normalizeOpenRouterApiModelId(model.id);
@@ -449,22 +455,9 @@ export default defineSingleProviderPluginEntry({
           normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
         );
       },
-      normalizeConfig: ({ providerConfig }) => {
-        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(providerConfig.baseUrl);
-        return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
-          ? { ...providerConfig, baseUrl: normalizedBaseUrl }
-          : undefined;
-      },
+      normalizeConfig: ({ providerConfig }) => normalizeRouterBaseUrl(providerConfig),
       normalizeResolvedModel: ({ model }) => normalizeOpenRouterResolvedModel(model),
-      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
-        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
-        return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
-          ? {
-              api: apiLocal,
-              baseUrl: normalizedBaseUrl,
-            }
-          : undefined;
-      },
+      normalizeTransport: ({ api, baseUrl }) => normalizeRouterBaseUrl({ api, baseUrl }),
       classifyFailoverReason: ({ provider, errorMessage }) => {
         if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
           return undefined;

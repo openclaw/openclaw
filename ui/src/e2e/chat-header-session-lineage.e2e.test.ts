@@ -79,6 +79,7 @@ suite.define(() => {
         await actions.click();
         const menu = header.locator("openclaw-chat-header-session-menu");
         await page.getByRole("menu", { name: "Actions for Header lineage" }).waitFor();
+        await menu.getByText("Move to group", { exact: true }).waitFor();
         const count = (name: string) => menu.getByText(name, { exact: true }).count();
         expect(await count("Pin session")).toBe(Number(independent));
         expect(await count("Move to group")).toBe(1);
@@ -90,15 +91,22 @@ suite.define(() => {
           return;
         }
 
-        const pin = page.locator(`.sidebar-rail [data-sidebar-entry="session:${sessionKey}"]`);
+        const pin = page.locator(
+          `[data-session-section="pinned"] .sidebar-recent-session[data-session-key="${sessionKey}"]`,
+        );
         const shortcuts = [`session:${sessionKey}`];
         for (const [after, name] of ["Pin session", "Unpin session"].entries()) {
           if (after) {
             await actions.click();
           }
+          const match = { entries: { "ui.railShortcuts": after ? [] : shortcuts } };
+          const preferenceWrites = (await gateway.getRequests("users.prefs.set", match)).length;
           await menu.getByText(name, { exact: true }).click();
-          expect((await gateway.waitForRequest("users.prefs.set", { after })).params).toEqual({
-            entries: { "ui.railShortcuts": after ? [] : shortcuts },
+          expect(
+            (await gateway.waitForRequest("users.prefs.set", { match, after: preferenceWrites }))
+              .params,
+          ).toEqual({
+            ...match,
             expectedEntries: { "ui.railShortcuts": after ? shortcuts : [] },
           });
           await pin.waitFor({ state: after ? "detached" : "visible" });

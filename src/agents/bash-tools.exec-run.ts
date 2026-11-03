@@ -29,17 +29,21 @@ import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import { ExecProcessPreflightError } from "./bash-tools.exec-launch.js";
-import { EXEC_MANUAL_COLLECTION_FOLLOW_UP } from "./bash-tools.exec-output.js";
+import {
+  buildExecRuntimeErrorOutcome,
+  EXEC_MANUAL_COLLECTION_FOLLOW_UP,
+} from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
+  assertDurableExecAvailable,
   createExecRequestPreparation,
   type ExecToolArgs,
   resolveExecPreparedRunEnvironment,
+  resolveExecProcessEnvironment,
   resolveExecNotificationDefaults,
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
 import {
-  buildExecRuntimeErrorOutcome,
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
   type ExecProcessHandle,
@@ -158,8 +162,8 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
-    notifyFromConversationTurn,
   } = resolveExecNotificationDefaults(defaults);
+  const durableNotifications = { notifyOnExit, notifyOnExitEmptySuccess };
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -201,6 +205,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
+      const approvalTransport = defaults?.createApprovalTransport?.(toolCallId, signal);
       const assertSourceActive = captureAgentToolSourceExecutionGuard(signal);
       assertSupportedExecParams(args);
       // Capture settings and cancellation per execution; unused reviewers must not load model runtime.
@@ -285,6 +290,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         );
       }
       const host = resolveExecHost(params, defaults);
+      assertDurableExecAvailable(params, host, allowBackground);
       const foregroundFallbackWarning =
         (host === "node" || !backgroundAvailable) &&
         (params.background === true || typeof params.yieldMs === "number")
@@ -413,18 +419,17 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         const storeEnv = await resolveStoreEnv();
         const subagentExecution = await resolveSubagentExecution();
         assertSourceActive();
-        // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
-        // cannot use its sentinels, so both sides of the contract stay absent.
-        const useSecretEgress = secretEgressEnabled && host === "gateway";
-        if (useSecretEgress) {
-          if (!defaults?.operationalRunInstance) {
-            throw new Error("Secret egress proxy requires an admitted agent run instance");
-          }
-          assertSourceActive();
+        const storeBindings = storeEnv.secretEgressBindings ?? [];
+        const useSecretEgress = secretEgressEnabled && host === "gateway" && !params.durable;
+        const secretEgressBindings = useSecretEgress ? storeBindings : undefined;
+        if (secretEgressEnabled && params.durable && storeBindings.length) {
+          warnings.push(
+            `Durable execution starts without ${storeBindings.length} secret-store credential${storeBindings.length === 1 ? "" : "s"}: secret-egress grants end when the Gateway restarts. Use the managed GitHub identity, the command's own configuration, or non-durable background execution for commands that need them.`,
+          );
         }
-        const secretEgressBindings = useSecretEgress
-          ? (storeEnv.secretEgressBindings ?? [])
-          : undefined;
+        if (useSecretEgress && !defaults?.operationalRunInstance) {
+          throw new Error("Secret egress proxy requires an admitted agent run instance");
+        }
         const { env, requestedEnv, executionContext } = resolvePreparedExecEnvironment({
           execParams: params,
           host,
@@ -441,6 +446,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         });
 
         const hostApprovalParams = () => ({
+          approvalTransport,
           command: params.command,
           toolCallId,
           env,
@@ -453,7 +459,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           nonInteractiveApproval: defaults?.nonInteractiveApproval,
           approvalFollowupMode: defaults?.approvalFollowupMode,
           turnSourceChannel: defaults?.messageProvider,
-          turnSourceTo: defaults?.currentChannelId,
+          turnSourceTo: defaults?.currentMessagingTarget ?? defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,
           turnSourceThreadId: defaults?.currentThreadTs,
           agentId,
@@ -492,22 +498,15 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           throw new Error("exec internal error: local execution requires a resolved workdir");
         }
 
-        const githubProfileDir =
-          host === "gateway" && preparedRunEnvironment.managedLocalIdentity
-            ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
-            : undefined;
-        const wrapLocalLaunch =
-          host === "gateway" ? preparedRunEnvironment.wrapLocalLaunch : undefined;
+        const processEnvironment = resolveExecProcessEnvironment(host, preparedRunEnvironment);
 
         if (host === "gateway" && !bypassApprovals) {
           gatewayApproval = await processGatewayAllowlist({
             ...hostApprovalParams(),
             workdir,
             secretEgressBindings,
-            githubProfileDir,
-            wrapLocalLaunch,
-            assertExecutionEnvironmentCurrent: preparedRunEnvironment.assertCurrent,
-            transportCredentialScrubEnv: preparedRunEnvironment.credentialScrubEnv,
+            durable: params.durable ? durableNotifications : undefined,
+            ...processEnvironment,
             pathPrepend: defaultPathPrepend,
             pty: params.pty === true && !sandbox,
             safeBins,
@@ -539,6 +538,11 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         }
 
         const usePty = params.pty === true && !sandbox;
+        if (params.pty === true && sandbox) {
+          warnings.push(
+            "Warning: PTY is unavailable in sandbox mode; running without a PTY. Use a noninteractive command.",
+          );
+        }
 
         // Preflight: check Python shell-syntax mistakes and ambiguous interpreter commands
         // before execution. JavaScript source diagnostics belong to Node.
@@ -558,10 +562,9 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           workdir,
           env,
           secretEgressBindings,
-          githubProfileDir,
-          wrapLocalLaunch,
-          assertExecutionEnvironmentCurrent: preparedRunEnvironment.assertCurrent,
-          transportCredentialScrubEnv: preparedRunEnvironment.credentialScrubEnv,
+          durable: params.durable ? durableNotifications : undefined,
+          sessionId: defaults?.sessionId,
+          ...processEnvironment,
           pathPrepend: defaultPathPrepend,
           sandbox,
           containerWorkdir,
@@ -579,19 +582,21 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           agentId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
-          notifyFromConversationTurn,
           timeoutSec: effectiveTimeout,
           processContinuationAvailable: allowBackground,
           startupSignal: signal,
           onUpdate,
           beforeSpawn: gatewayApproval?.revalidateBeforeExecution,
           assertCurrent: gatewayApproval?.assertCurrent,
+          approvalTransport,
           initiateSpawn: gatewayApproval?.initiateSpawn,
           releaseSpawn: gatewayApproval?.releaseSpawn,
           onSettledBeforeNotify: () => {
             settled = true;
           },
         });
+        // Completion wakes need the backgrounding below, so this precedes any wake.
+        run.session.originRunId = defaults?.runId;
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
         gatewayApproval?.releaseSpawn?.();
@@ -671,16 +676,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         yielded = true;
         run.disableUpdates();
         markBackgrounded(run.session);
-        void Promise.resolve(run.session.exitNotificationPersistence).then(
-          () => backgrounded.resolve({ status: "backgrounded" }),
-          (error: unknown) =>
-            backgrounded.reject(
-              new Error(
-                `Process ${run.session.id} started, but its restart notification could not be saved. Use process poll before retrying.`,
-                { cause: error },
-              ),
-            ),
-        );
+        backgrounded.resolve({ status: "backgrounded" });
       };
 
       try {
@@ -726,6 +722,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                   ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
                   cwd: run.session.cwd,
                   tail: run.session.tail,
+                  ...(warnings.length ? { warningText: warnings.join("\n") } : {}),
                   // Structured callers receive details without the visible content.
                   followUp,
                 },

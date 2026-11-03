@@ -88,10 +88,8 @@ export function buildStatusUpdateSurface(params: {
   updateConfigChannel?: string | null;
   update: UpdateCheckResult;
 }) {
-  const channelInfo = resolveStatusUpdateChannelInfo(params);
   return {
-    channelInfo,
-    channelLabel: channelInfo.label,
+    channelLabel: resolveStatusUpdateChannelInfo(params).label,
     gitLabel: formatGitInstallLabel(params.update),
     updateLine: formatUpdateOneLiner(params.update).replace(/^Update:\s*/i, ""),
     updateAvailable: resolveUpdateAvailability(params.update).available,
@@ -290,31 +288,4 @@ function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string | null
         .filter(Boolean)
         .join(" ")
     : null;
-}
-
-export function buildGatewayStatusJsonPayload(
-  params: Pick<
-    Parameters<typeof buildStatusOverviewSurfaceRows>[0],
-    | "gatewayMode"
-    | "gatewayConnection"
-    | "remoteUrlMissing"
-    | "gatewayReachable"
-    | "gatewaySelf"
-    | "gatewayProbeAuthWarning"
-  > & { gatewayProbe: StatusGatewayProbe | undefined },
-) {
-  return {
-    mode: params.gatewayMode,
-    url: projectGatewayUrlForDiagnostics(params.gatewayConnection.url),
-    urlSource: params.gatewayConnection.urlSource,
-    misconfigured: params.remoteUrlMissing,
-    reachable: params.gatewayReachable,
-    ...(params.gatewayProbe?.startupPhase
-      ? { readiness: "still-starting", startupPhase: params.gatewayProbe.startupPhase }
-      : {}),
-    connectLatencyMs: params.gatewayProbe?.connectLatencyMs ?? null,
-    self: params.gatewaySelf ?? null,
-    error: params.gatewayProbe?.error ?? null,
-    authWarning: params.gatewayProbeAuthWarning ?? null,
-  };
 }

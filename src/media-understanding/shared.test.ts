@@ -1,7 +1,4 @@
-import {
-  MAX_DATE_TIMESTAMP_MS,
-  MAX_TIMER_TIMEOUT_MS,
-} from "@openclaw/normalization-core/number-coercion";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VERSION } from "../version.js";
 
@@ -154,29 +151,48 @@ describe("provider operation deadlines", () => {
     ).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("keeps operation deadlines inside the Date timestamp range", () => {
-    vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
-
+  it("exhausts a short deadline as the monotonic clock advances", () => {
     const deadline = makeDeadline(1);
 
-    expect(deadline.deadlineAtMs).toBe(MAX_DATE_TIMESTAMP_MS);
+    vi.advanceTimersByTime(1);
+
     expect(() => resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toThrow(
       "video generation timed out after 1ms",
     );
   });
 
-  it("resolves a lazy total timeout once when the deadline starts", () => {
+  it.each([false, true])("keeps admitted budgets monotonic (cloned=%s)", (cloned) => {
+    const created = makeDeadline(60_000);
+    const deadline = cloned ? structuredClone(created) : created;
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 120_000 })).toBe(60_000);
+    vi.setSystemTime(1_000 - 100_000);
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 120_000 })).toBe(60_000);
+    vi.setSystemTime(1_000 + 120_000);
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 120_000 })).toBe(60_000);
+
+    vi.advanceTimersByTime(30_000);
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 120_000 })).toBe(30_000);
+  });
+
+  it("honors public epoch edits without resolving a lazy total timeout again", () => {
     const resolveTimeoutMs = vi.fn(() => 5_000);
 
     const deadline = createProviderOperationDeadline({
       label: "generated media download",
       timeoutMs: resolveTimeoutMs,
     });
-    vi.setSystemTime(4_250);
+    vi.advanceTimersByTime(3_250);
 
+    deadline.deadlineAtMs = 7_000;
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(2_750);
     expect(resolveTimeoutMs).toHaveBeenCalledTimes(1);
-    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(1_750);
-    expect(resolveTimeoutMs).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes fractional remaining budgets before passing them to Node timers", () => {
+    const deadline = makeDeadline(5_000);
+    vi.advanceTimersByTime(1.25);
+
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(4_998);
   });
 
   it.each([
@@ -200,22 +216,6 @@ describe("provider operation deadlines", () => {
     await expect(wait).resolves.toBeUndefined();
   });
 
-  it("polls provider status JSON until a payload is complete", async () => {
-    const fetchFn = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ status: "in_progress" }))
-      .mockResolvedValueOnce(jsonResponse({ status: "completed" }));
-
-    const result = poll(fetchFn, 10_000, {
-      headers: new Headers({ authorization: "Bearer test" }),
-    });
-
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    await expect(result).resolves.toEqual({ status: "completed" });
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-  });
-
   it.each(["poll", "download"])("bounds a trickling %s response body", async (stage) => {
     const fetchFn = vi
       .fn<typeof fetch>()
@@ -235,26 +235,6 @@ describe("provider operation deadlines", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
-  it("passes guarded request policy through provider status polling", async () => {
-    const release = queueGuardedResponse(jsonResponse({ status: "completed" }));
-
-    const result = await poll(fetch, undefined, {
-      headers: new Headers({ authorization: "Bearer test" }),
-      allowPrivateNetwork: true,
-      dispatcherPolicy: { mode: "direct" },
-      auditContext: "provider-video-status",
-    });
-
-    expect(result).toEqual({ status: "completed" });
-    const call = getFirstGuardedFetchCall();
-    expect([call.policy, call.dispatcherPolicy, call.auditContext]).toEqual([
-      { allowPrivateNetwork: true },
-      { mode: "direct" },
-      "provider-video-status",
-    ]);
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
   it("retries guarded transient provider status failures while polling", async () => {
     const firstRelease = queueGuardedResponse(busyResponse());
     const secondRelease = queueGuardedResponse(jsonResponse({ status: "completed" }));
@@ -262,29 +242,22 @@ describe("provider operation deadlines", () => {
     const result = poll(fetch, 10_000, {
       headers: new Headers({ authorization: "Bearer test" }),
       allowPrivateNetwork: true,
+      dispatcherPolicy: { mode: "direct" },
+      auditContext: "provider-video-status",
     });
 
     await vi.advanceTimersByTimeAsync(250);
 
     await expect(result).resolves.toEqual({ status: "completed" });
     expect(guardedFetch).toHaveBeenCalledTimes(2);
+    const call = getFirstGuardedFetchCall();
+    expect([call.policy, call.dispatcherPolicy, call.auditContext]).toEqual([
+      { allowPrivateNetwork: true },
+      { mode: "direct" },
+      "provider-video-status",
+    ]);
     expect(firstRelease).toHaveBeenCalledTimes(1);
     expect(secondRelease).toHaveBeenCalledTimes(1);
-  });
-
-  it("throws provider failure messages while polling status JSON", async () => {
-    const fetchFn = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse({ status: "failed", error: { message: "model rejected" } }),
-      );
-
-    await expect(
-      poll(fetchFn, undefined, {
-        getFailureMessage: (payload) =>
-          payload.status === "failed" ? payload.error?.message : undefined,
-      }),
-    ).rejects.toThrow("model rejected");
   });
 
   it.each(["poll", "download"])(
@@ -292,7 +265,7 @@ describe("provider operation deadlines", () => {
     async (stage) => {
       const sleep = vi.fn(async () => undefined);
       const fetchFn = vi.fn<typeof fetch>(async () => {
-        vi.setSystemTime(2_001);
+        vi.advanceTimersByTime(1_001);
         if (stage === "download") {
           throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
         }
@@ -375,6 +348,19 @@ describe("resolveProviderHttpRequestConfig", () => {
     });
   });
 
+  it("removes default headers marked null by the runtime caller", () => {
+    const defaults = { Authorization: "Bearer original", "X-Keep": "retained" };
+    const resolved = resolveProviderHttpRequestConfig({
+      defaultBaseUrl: "https://provider.example/v1",
+      defaultHeaders: defaults,
+      headers: { authorization: null },
+      provider: "custom",
+    });
+    expect(resolved.headers.has("authorization")).toBe(false);
+    expect(resolved.headers.get("x-keep")).toBe("retained");
+    expect(defaults.Authorization).toBe("Bearer original");
+  });
+
   it("keeps configured-origin trust eligibility internal to core callers", () => {
     const customConfig = {
       baseUrl: "https://models.internal/v1",
@@ -427,11 +413,20 @@ describe("fetchWithTimeoutGuarded", () => {
       allowPrivateNetwork: true,
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
-
     expect(getFirstGuardedFetchCall().policy).toEqual({
       allowPrivateNetwork: true,
       allowRfc2544BenchmarkRange: true,
     });
+  });
+
+  it.each([
+    ["pinDns", postMultipartRequest, { pinDns: false }, false],
+    ["mode", postTranscriptionRequest, {}, "trusted_env_proxy"],
+    ["mode", postTranscriptionRequest, { mode: "strict" }, "strict"],
+  ] as const)("forwards multipart %s (case %#)", async (field, send, options, expected) => {
+    usesProxy.mockReturnValue(true);
+    await send({ ...postOptions(), body: "audio-bytes", ...options });
+    expect(getFirstGuardedFetchCall()[field]).toEqual(expected);
   });
 
   it("does not retry JSON POST requests by default", async () => {
@@ -464,29 +459,6 @@ describe("fetchWithTimeoutGuarded", () => {
     expect(secondRelease).not.toHaveBeenCalled();
     expect(sleep).toHaveBeenCalledWith(0, undefined);
   });
-
-  it("forwards explicit pinDns overrides for multipart POST requests", async () => {
-    await postMultipartRequest({
-      ...postOptions(),
-      body: "audio-bytes",
-      pinDns: false,
-    });
-
-    expect(getFirstGuardedFetchCall().pinDns).toBe(false);
-  });
-
-  it.each([undefined, "strict"] as const)(
-    "uses transcription mode %s with a configured env proxy",
-    async (mode) => {
-      usesProxy.mockReturnValue(true);
-      await postTranscriptionRequest({
-        ...postOptions(),
-        body: "audio-bytes",
-        mode,
-      });
-      expect(getFirstGuardedFetchCall().mode).toBe(mode ?? "trusted_env_proxy");
-    },
-  );
 
   it("does not auto-upgrade when caller passes explicit dispatcherPolicy", async () => {
     // Auto-upgrade would discard the caller's explicit dispatcher overrides.

@@ -86,14 +86,3 @@ it("routes reaction helpers through the typed REST client", async () => {
     { method: "DELETE", path: `${reactionPath}/@me` },
   ]);
 });
-
-it("routes webhook helper through the typed REST client", async () => {
-  const webhook = { id: "wh1", token: "token1" };
-  const data = { body: { name: "OpenClaw" } };
-  const rest = createFakeRestClient([webhook]);
-  await expect(api.createChannelWebhook(rest, "c1", data)).resolves.toEqual({
-    id: "wh1",
-    token: "token1",
-  });
-  expect(rest.calls).toEqual([{ method: "POST", path: "/channels/c1/webhooks", data }]);
-});

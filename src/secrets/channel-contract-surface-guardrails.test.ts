@@ -10,28 +10,18 @@ const WEB_PLUGIN_KEY =
 const CORE_SECRET_SURFACE_GUARDS = [
   [
     "src/secrets/runtime-config-collectors-channels.ts",
-    [/["']irc["']/, /["']imessage["']/, /["']msteams["']/, /["']nextcloud-talk["']/],
+    [/["'](?:irc|imessage|msteams|nextcloud-talk)["']/],
   ],
   [
     "src/secrets/target-registry-data.ts",
-    [
-      /channels\.irc\./,
-      /channels\.imessage\./,
-      /channels\.msteams\./,
-      /channels\.nextcloud-talk\./,
-      WEB_PLUGIN_KEY,
-    ],
+    [/channels\.(?:irc|imessage|msteams|nextcloud-talk)\./, WEB_PLUGIN_KEY],
   ],
   ["src/cli/command-secret-targets.ts", [WEB_PLUGIN_KEY]],
-  ["src/config/markdown-tables.ts", [/["']signal["']/, /["']whatsapp["']/, /["']mattermost["']/]],
+  ["src/config/markdown-tables.ts", [/["'](?:signal|whatsapp|mattermost)["']/]],
   [
     "src/plugin-sdk/channel-config-helpers.ts",
     [
-      /\bresolveWhatsAppConfigAllowFrom\b/,
-      /\bresolveWhatsAppConfigDefaultTo\b/,
-      /\bresolveIMessageConfigAllowFrom\b/,
-      /\bresolveIMessageConfigDefaultTo\b/,
-      /\bformatWhatsAppConfigAllowFromEntries\b/,
+      /\b(?:resolve(?:WhatsApp|IMessage)Config(?:AllowFrom|DefaultTo)|formatWhatsAppConfigAllowFromEntries)\b/,
     ],
   ],
   ["src/gateway/channel-health-policy.ts", [/\btelegram\b/]],

@@ -77,7 +77,6 @@ describe("Gateway operation policy reload", () => {
       restartReasons: [],
       hotReasons: [path],
       noopPaths: [],
-      restartHeartbeat: false,
       restartCron: false,
       reloadHooks: false,
       reloadPlugins: false,

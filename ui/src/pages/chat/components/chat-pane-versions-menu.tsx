@@ -11,6 +11,7 @@ registerEnglishCatalog(registerChatSessionEnglish);
 
 type ChatPaneVersionsMenuProps = {
   catalog: boolean;
+  hasVersions?: boolean;
   branches: SessionBranch[];
   branchSwitchDisabledReason: string | null;
   onBranchSelect: (leafEntryId: string) => void;
@@ -65,8 +66,8 @@ export function ChatPaneVersionsMenu(props: { menu: ChatPaneVersionsMenuProps })
     }),
   );
   return (
-    <openclaw-chat-pane-versions-menu>
-      <Show when={!props.menu.catalog && props.menu.branches.length > 1}>
+    <Show when={!props.menu.catalog && (props.menu.hasVersions ?? props.menu.branches.length > 1)}>
+      <openclaw-chat-pane-versions-menu>
         <Menu
           controls={controls}
           lazy
@@ -74,7 +75,9 @@ export function ChatPaneVersionsMenu(props: { menu: ChatPaneVersionsMenuProps })
           class="chat-pane__branches-menu"
           placement="bottom"
           label={t("chat.sessionHeader.branches")}
-          disabled={Boolean(props.menu.branchSwitchDisabledReason)}
+          disabled={
+            Boolean(props.menu.branchSwitchDisabledReason) || props.menu.branches.length < 2
+          }
           triggerClass="btn btn--ghost btn--icon chat-icon-btn chat-pane__branches-trigger"
           triggerAttributes={{
             title: props.menu.branchSwitchDisabledReason ?? t("chat.sessionHeader.branches"),
@@ -119,7 +122,7 @@ export function ChatPaneVersionsMenu(props: { menu: ChatPaneVersionsMenuProps })
             </Show>
           </div>
         </Menu>
-      </Show>
-    </openclaw-chat-pane-versions-menu>
+      </openclaw-chat-pane-versions-menu>
+    </Show>
   );
 }

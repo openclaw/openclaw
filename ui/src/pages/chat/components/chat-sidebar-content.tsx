@@ -24,21 +24,24 @@ import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { McpAppPanel } from "../../../components/solid/mcp-app-panel.tsx";
 import "../../../components/tooltip.ts";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
   type EmbedSandboxMode,
-} from "../../../lib/chat/tool-display.ts";
+} from "../../../lib/chat/canvas-embed-policy.ts";
+import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import type { AttachmentDownload } from "./chat-attachment-download.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
-import { openResolvedImage } from "./chat-message-image-open.ts";
+import { openResolvedImage } from "./chat-image-presentation.ts";
+import { isPdfAttachment } from "./chat-pdf-preview.tsx";
 import { SidebarAttachment } from "./chat-sidebar-attachment.tsx";
 import type {
   AttachmentSidebarRuntime,
@@ -52,6 +55,8 @@ import {
 import { SidebarFile } from "./chat-sidebar-file-view.tsx";
 import { SidebarImage, SidebarSvgFile, SidebarFileFallback } from "./chat-sidebar-image-view.tsx";
 import { SessionDiffPanel } from "./session-diff-panel.tsx";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
@@ -96,16 +101,15 @@ export type SidebarPanelProps = {
   fileView?: FileViewControls;
   onClose: () => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
+  onBrowseFiles?: () => void;
   onViewRawText: () => void;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   textReferences?: MarkdownRenderOptions["textReferences"];
-  githubRepo?: MarkdownRenderOptions["githubRepo"];
-  githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   embedded?: boolean;
   attachmentRuntime: AttachmentSidebarRuntime;
-  attachmentDownload?: { pending: boolean; error: string | null; onDownload: () => void };
+  attachmentDownload?: AttachmentDownload;
   onClick: (event: MouseEvent) => void;
   onKeydown: (event: KeyboardEvent) => void;
 };
@@ -272,14 +276,18 @@ export function SidebarPanel(props: SidebarPanelProps) {
           >
             <Switch fallback={<div class="muted">{t("chat.detailPanel.noContent")}</div>}>
               <Match when={props.content?.kind === "mcp-app" ? props.content : undefined}>
-                {(content) => <McpAppPanel launch={content().launch} />}
+                {(content) => (
+                  <McpAppPanel
+                    launch={content().launch}
+                    observeRetirement={content().observeRetirement}
+                  />
+                )}
               </Match>
               <Match
                 when={
                   props.filePresentation === "desktop" &&
                   props.fileView?.imagePreview &&
-                  props.content?.kind === "file" &&
-                  props.content.mimeType === "image/svg+xml"
+                  props.content?.kind === "file"
                     ? props.content
                     : undefined
                 }
@@ -316,6 +324,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                     }
                     active={props.active ?? content().presentation?.active ?? true}
                     openFileView={content().presentation?.openFileView ?? null}
+                    canEditFile={content().canEditFile ?? null}
                     onOpenMobilePage={content().presentation?.onOpenMobilePage ?? null}
                     scopeRequest={content().presentation?.scopeRequest ?? null}
                     onResult={content().onResult ?? null}
@@ -351,7 +360,12 @@ export function SidebarPanel(props: SidebarPanelProps) {
                 when={
                   props.filePresentation === "desktop" &&
                   props.fileView &&
-                  (props.content?.kind === "markdown" || props.content?.kind === "attachment") &&
+                  (props.content?.kind === "markdown" ||
+                    (props.content?.kind === "attachment" &&
+                      !props.content.src &&
+                      !props.content.resolveSource &&
+                      (props.content.download ||
+                        !isPdfAttachment(props.content.mimeType ?? "", props.content.title)))) &&
                   props.content.file
                     ? props.content.file
                     : undefined
@@ -444,6 +458,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                       mobile={props.filePresentation === "mobile"}
                       back={props.fileBack}
                       onOpenImage={props.onOpenImage}
+                      onBrowseFiles={props.onBrowseFiles}
                     />
                   </div>
                 )}
@@ -534,9 +549,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                           content: toSanitizedMarkdownHtml(content().content, {
                             codeBlockInteraction: "interactive",
                             fileLinks: true,
-                            githubRepo: props.githubRepo ?? null,
                             textReferences: props.textReferences,
-                            githubRepositories: props.githubRepositories,
                             interactiveImages: props.onOpenImage !== undefined,
                             sessionLinks: true,
                           }),

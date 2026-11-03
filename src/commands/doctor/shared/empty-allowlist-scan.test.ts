@@ -34,7 +34,80 @@ function scan(
   );
 }
 
+async function scanWithContexts(channels: OpenClawConfig["channels"]) {
+  const contexts: unknown[] = [];
+  const warnings = await scan(channels, {
+    extraWarningsForAccount: ({ prefix, dmPolicy, effectiveAllowFrom }) => {
+      contexts.push({ prefix, dmPolicy, effectiveAllowFrom });
+      return [];
+    },
+  });
+  return { warnings, contexts };
+}
+
 describe("doctor empty allowlist policy scan", () => {
+  it("projects malformed selected fields without falling through to inherited hook values", async () => {
+    const { warnings, contexts } = await scanWithContexts({
+      "legacy-channel": {
+        dmPolicy: "allowlist",
+        allowFrom: ["parent"],
+        accounts: {
+          work: {
+            dmPolicy: 42,
+            allowFrom: "not-a-list",
+            dm: { policy: "allowlist", allowFrom: ["nested"] },
+          },
+        },
+      },
+    });
+
+    expect(warnings).toEqual([]);
+    expect(contexts).toEqual([
+      {
+        prefix: "channels.legacy-channel",
+        dmPolicy: "allowlist",
+        effectiveAllowFrom: ["parent"],
+      },
+      {
+        prefix: "channels.legacy-channel.accounts.work",
+        dmPolicy: undefined,
+        effectiveAllowFrom: undefined,
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      channelName: "imessage",
+      skip: false,
+      expected: [
+        '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped. Add sender IDs to channels.imessage.groupAllowFrom, or set groupPolicy to "open".',
+      ],
+    },
+    { channelName: "zalouser", skip: true, expected: [] },
+    { channelName: "discord", skip: false, expected: [] },
+    {
+      channelName: "telegram",
+      skip: false,
+      expected: [
+        '- channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.telegram.groupAllowFrom or channels.telegram.allowFrom, or set groupPolicy to "open".',
+      ],
+    },
+  ])(
+    "retains $channelName group warnings and subsequent plugin warnings",
+    async ({ channelName, skip, expected }) => {
+      expect(
+        await scan(
+          { [channelName]: { groupPolicy: "allowlist" } },
+          {
+            shouldSkipDefaultEmptyGroupAllowlistWarning: () => skip,
+            extraWarningsForAccount: ({ prefix }) => [`extra:${prefix}`],
+          },
+        ),
+      ).toStrictEqual([...expected, `extra:channels.${channelName}`]);
+    },
+  );
+
   it("does not warn on empty parent groupAllowFrom when active accounts have effective group allowlists", async () => {
     const warnings = await scan({
       telegram: {
@@ -50,42 +123,18 @@ describe("doctor empty allowlist policy scan", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("allows provider-specific extra warnings without importing providers", async () => {
-    const warnings = await scan(
-      { telegram: { groupPolicy: "allowlist" } },
-      {
-        extraWarningsForAccount: ({ channelName, prefix }) =>
-          channelName === "telegram" ? [`extra:${prefix}`] : [],
-      },
-    );
-
-    expect(warnings).toStrictEqual([
-      '- channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.telegram.groupAllowFrom or channels.telegram.allowFrom, or set groupPolicy to "open".',
-      "extra:channels.telegram",
-    ]);
-  });
-
   it("keeps inherited top-level allowlists ahead of nested account values in warnings and hooks", async () => {
-    const accountContexts: unknown[] = [];
-    const warnings = await scan(
-      {
-        "legacy-channel": {
-          allowFrom: [],
-          accounts: { work: { dm: { policy: "allowlist", allowFrom: ["nested-sender"] } } },
-        },
+    const { warnings, contexts } = await scanWithContexts({
+      "legacy-channel": {
+        allowFrom: [],
+        accounts: { work: { dm: { policy: "allowlist", allowFrom: ["nested-sender"] } } },
       },
-      {
-        extraWarningsForAccount: ({ dmPolicy, effectiveAllowFrom, prefix }) => {
-          accountContexts.push({ dmPolicy, effectiveAllowFrom, prefix });
-          return [];
-        },
-      },
-    );
+    });
 
     expect(warnings).toEqual([
       '- channels.legacy-channel.accounts.work.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.legacy-channel.accounts.work.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
     ]);
-    expect(accountContexts).toContainEqual({
+    expect(contexts).toContainEqual({
       dmPolicy: "allowlist",
       effectiveAllowFrom: [],
       prefix: "channels.legacy-channel.accounts.work",
@@ -93,8 +142,6 @@ describe("doctor empty allowlist policy scan", () => {
   });
 
   it("skips disabled channel and account entries", async () => {
-    const extraWarningsForAccount = vi.fn(({ prefix }) => [`extra:${prefix}`]);
-
     const warnings = await scan(
       {
         telegram: {
@@ -104,12 +151,9 @@ describe("doctor empty allowlist policy scan", () => {
         },
         signal: { accounts: { disabled: { enabled: false, dmPolicy: "allowlist" } } },
       },
-      { extraWarningsForAccount },
+      { extraWarningsForAccount: ({ prefix }) => [`extra:${prefix}`] },
     );
 
     expect(warnings).toEqual(["extra:channels.signal"]);
-    expect(extraWarningsForAccount).toHaveBeenCalledTimes(1);
-    const [warningOptions] = extraWarningsForAccount.mock.calls[0] ?? [];
-    expect(warningOptions?.prefix).toBe("channels.signal");
   });
 });

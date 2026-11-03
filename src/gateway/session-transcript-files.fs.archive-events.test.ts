@@ -24,7 +24,6 @@ function archive(onArchiveError?: (err: unknown, sourcePath: string) => void) {
     sessionId,
     sessionFile,
     storePath: path.join(tmpDir, "store.json"),
-    agentId: "main",
     reason: "reset",
     onArchiveError,
   });

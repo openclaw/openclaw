@@ -1,3 +1,4 @@
+import { attachPluginCommandCreation } from "../../cron/plugin-command-creation.js";
 import type { CronStreamExecPolicy } from "../../cron/stream-exec-authority.js";
 import { attachCronStreamExecPolicy } from "../../gateway/cron-creator-authority-grant.js";
 import type {
@@ -9,7 +10,7 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
-import { callGatewayTool } from "./gateway.js";
+import { callGatewayTool, shouldUseInProcessGatewayTool } from "./gateway.js";
 
 /** Each cron request carries its current creator or management grants. */
 export function createCronToolGatewayCaller({
@@ -57,6 +58,11 @@ export function createCronToolGatewayCaller({
     }
     operationSignal?.throwIfAborted();
     assertCurrent?.();
+    request[2] = attachPluginCommandCreation(
+      request[0],
+      request[2],
+      shouldUseInProcessGatewayTool(request[1]),
+    );
     const result =
       (grant || requesterGrant) && identity
         ? await withGatewayToolCallerIdentity(

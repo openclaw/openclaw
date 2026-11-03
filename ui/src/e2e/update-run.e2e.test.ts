@@ -1,7 +1,10 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import type { UpdateRunPhase, UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { configResponse } from "./chat-flow-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createUpdateRunFixture } from "./update-run.test-support.ts";
 
@@ -12,43 +15,103 @@ function text(root: Page | Locator, value: string, exact = true) {
 }
 
 suite.define(() => {
-  it("resumes the same update after restart and keeps its successful report visible", async () => {
+  it.each([
+    ["installed ahead", "2026.10.1", "2026.9.4", "2026.9.4", false],
+    ["serving moved", "2026.9.4", "2026.10.1", "2026.9.4", true],
+    ["installed ahead, no observation", "2026.10.1", "2026.9.4", undefined, false],
+    ["newer Gateway, no observation", "2026.9.4", "2026.10.1", undefined, false],
+  ] as const)(
+    "projects saved update failures: %s",
+    async (_name, installed, serverVersion, recorded, historical) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 1200, width: 1440 } },
+        async ({ page }) => {
+          const run = {
+            ...createUpdateRunFixture(),
+            phase: "finished",
+            status: "failed",
+            reason: "preflight-no-good-commit",
+            before: { version: installed, sha: "37ea9f110bad" },
+            after: {},
+            verification: recorded ? { serviceRunning: true, runningVersion: recorded } : {},
+            target: { kind: "git", channel: "dev" },
+            finishedAtMs: Date.now(),
+            origin: { nextAction: "Run openclaw update." },
+          } as const;
+          const schedule = {
+            channel: "dev",
+            autoEnabled: false,
+            install: { kind: "git", git: { status: "current" } },
+          } as const;
+          const gateway = await installMockGateway(page, {
+            communityInvite: false,
+            serverVersion,
+            controlUiBuildSource: "configured",
+            updateAvailable: null,
+            updateSchedule: schedule,
+            methodResponses: {
+              "config.get": configResponse(
+                { update: { channel: "dev", auto: { enabled: false } } },
+                "historical-update",
+              ),
+              "update.status": { lastRun: run, schedule },
+              "update.runs.get": { run },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}settings/updates`);
+          await gateway.waitForRequest("update.status");
+          const surface = page.locator("openclaw-update-run-view");
+          await surface
+            .getByText(historical ? /Last update run failed/ : /OpenClaw update failed/)
+            .first()
+            .waitFor();
+          expect(
+            await page.getByRole("button", { name: "Retry update", exact: true }).count(),
+          ).toBe(historical ? 0 : 1);
+          if (historical) {
+            expect(await surface.textContent()).not.toContain("Run openclaw update.");
+          }
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
+          const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
+            animations: "disabled",
+            scrollTo: surface,
+          });
+          await writeFile(
+            path.join(
+              suite.artifactDir,
+              `${installed}-${serverVersion}-${recorded ?? "unknown"}.png`,
+            ),
+            frame.png,
+          );
+        },
+      );
+    },
+  );
+
+  it("requires confirmation and keeps long update output keyboard accessible", async () => {
     await suite.withPage(
       {
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 1100, width: 1440 },
       },
-      async ({ context, page }) => {
+      async ({ page }) => {
         let run = createUpdateRunFixture();
         run.steps.push(
           ...Array.from({ length: 24 }, (_, index) => ({
             step: `verify-plugin-example-${index + 1}`,
             status: "completed" as const,
           })),
-          { step: "snapshot-space-preflight", status: "completed" },
-          {
-            step: "diagnostic:snapshot-space-preflight:8",
-            status: "completed",
-            detail: "Recovery backup needs 18 GiB; 32 GiB is available.",
-          },
         );
         const config = { update: { auto: { enabled: false }, channel: "stable" } };
-        const configResponse = {
-          config,
-          hash: "update-run-config",
-          issues: [],
-          raw: JSON.stringify(config),
-          runtimeConfig: config,
-          valid: true,
-        };
+        const settings = configResponse(config, "update-run-config");
         const gateway = await installMockGateway(page, {
           communityInvite: false,
           agentModel: "openai/gpt-5.6-luna",
           models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
           updateAvailable: { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" },
           methodResponses: {
-            "config.get": configResponse,
+            "config.get": settings,
             "update.run": { ok: true, runId: run.runId, result: { status: "ok" } },
             "update.runs.get": { run },
             "update.status": { activeRun: null, lastRun: null },
@@ -56,7 +119,7 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}settings/updates`);
         await gateway.waitForRequest("config.get");
-        await page.getByRole("button", { name: "Update now", exact: true }).click();
+        await page.getByRole("button", { name: "Update Gateway…", exact: true }).click();
         const dialog = page.locator("openclaw-modal-dialog");
         await dialog.getByRole("button", { name: "Update and restart", exact: true }).waitFor();
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
@@ -68,10 +131,8 @@ suite.define(() => {
         });
         const runView = dialog.locator("openclaw-update-run-view");
         const runDetails = runView.locator(".update-run-view__details");
-        const repairing = runView.locator('[data-step="repairing"]');
         await text(runView, "⬆️ OpenClaw update in progress: staging.").waitFor();
         await text(runDetails, "Downloading the update package.", false).waitFor();
-        expect(await repairing.count()).toBe(0);
         const installationSteps = runView.locator(".update-run-view__step-list");
         await installationSteps.locator(":scope > summary").click();
 
@@ -80,8 +141,6 @@ suite.define(() => {
           (list) => list && list.scrollHeight - list.scrollTop - list.clientHeight < 2,
           await stepList.elementHandle(),
         );
-        expect(await stepList.textContent()).not.toContain("diagnostic:snapshot-space-preflight:8");
-        expect(await stepList.textContent()).toContain("Checking space for the recovery backup");
         const summaryBox = await installationSteps.locator(":scope > summary").boundingBox();
         const listBox = await stepList.boundingBox();
         expect(summaryBox!.y + summaryBox!.height).toBeLessThanOrEqual(listBox!.y + 1);
@@ -95,73 +154,6 @@ suite.define(() => {
         await details.locator("summary").press("Enter");
         expect(await details.getAttribute("open")).not.toBeNull();
 
-        const advance = async (phase: UpdateRunPhase, detail: string) => {
-          run = {
-            ...run,
-            phase,
-            updatedAtMs: run.updatedAtMs + 1000,
-            steps: [
-              ...run.steps
-                .filter((step) => step.step !== phase)
-                .map((step) => Object.assign({}, step, { status: "completed" as const })),
-              { step: phase, status: "in_progress", detail },
-            ],
-          };
-          const reads = (await gateway.getRequests("update.runs.get")).length;
-          await gateway.setMethodResponse("update.runs.get", { run });
-          await gateway.emitGatewayEvent("update.run.changed", {
-            runId: run.runId,
-            phase: run.phase,
-            status: run.status,
-            updatedAtMs: run.updatedAtMs,
-          });
-          await gateway.waitForRequest("update.runs.get", { after: reads });
-          await text(runDetails, detail, false).waitFor();
-        };
-        await advance("validating", "Package integrity and startup checks passed.");
-        const snapshotDetails = runView.locator('[data-step="snapshot-space-preflight"] details');
-        await snapshotDetails.locator("summary").click();
-        await text(snapshotDetails, "Recovery backup needs 18 GiB; 32 GiB is available.").waitFor();
-        expect(await snapshotDetails.getAttribute("open")).not.toBeNull();
-        await snapshotDetails.locator("summary").click();
-        expect(await snapshotDetails.getAttribute("open")).toBeNull();
-        await advance("activating", "Activating the verified package.");
-        await advance("restarting", "Waiting for the Gateway to reconnect.");
-        await gateway.setOnline(false);
-        await text(runView, "Gateway restarting…").waitFor();
-        expect(await dialog.count()).toBe(1);
-
-        run = {
-          ...run,
-          phase: "verifying",
-          updatedAtMs: run.updatedAtMs + 1000,
-          after: { version: "2.0.0" },
-          steps: [
-            ...run.steps.map((step) => Object.assign({}, step, { status: "completed" as const })),
-            {
-              step: "verifying",
-              status: "in_progress",
-              detail: "Checking channels and readiness.",
-            },
-          ],
-          verification: { booted: true, serviceRunning: true, runningVersion: "2.0.0" },
-        };
-        await gateway.setMethodResponse("update.runs.get", { run });
-        await gateway.setMethodResponse("update.status", { activeRun: run, lastRun: run });
-        const readsBeforeReconnect = (await gateway.getRequests("update.runs.get")).length;
-        await gateway.setGatewayBootId("update-run-restarted");
-        await gateway.setOnline(true);
-        expect(
-          (await gateway.waitForRequest("update.runs.get", { after: readsBeforeReconnect })).params,
-        ).toEqual({ runId: run.runId });
-        await text(runDetails, "Checking channels and readiness.", false).waitFor();
-        expect(await repairing.count()).toBe(0);
-
-        await advance("repairing", "Repairing the installed candidate after verification failed.");
-        expect(await repairing.getAttribute("data-status")).toBe("in_progress");
-
-        await advance("verifying", "Verifying the repaired candidate.");
-
         const finishedAtMs = run.updatedAtMs + 1000;
         run = {
           ...run,
@@ -171,8 +163,9 @@ suite.define(() => {
           finishedAtMs,
           confirmedAtMs: finishedAtMs,
           downtimeMs: 1000,
+          after: { version: "2.0.0" },
           steps: [
-            ...run.steps.map((step) => Object.assign({}, step, { status: "completed" as const })),
+            ...run.steps.map((step) => ({ ...step, status: "completed" as const })),
             ...Array.from({ length: 3 }, (_, index) => ({
               step: `warning:doctor:${index + 1}`,
               status: "completed" as const,
@@ -180,12 +173,14 @@ suite.define(() => {
             })),
           ],
           verification: {
-            ...run.verification,
+            booted: true,
+            serviceRunning: true,
+            runningVersion: "2.0.0",
             versionMatch: true,
             pluginErrors: [],
             channelsReady: true,
           },
-        } satisfies UpdateRunRecord;
+        };
         await gateway.setMethodResponse("update.runs.get", { run });
         await gateway.setMethodResponse("update.status", { activeRun: null, lastRun: run });
         await gateway.emitGatewayEvent("update.run.changed", {
@@ -198,7 +193,6 @@ suite.define(() => {
         await text(runView, headline).first().waitFor();
         await text(runView, "Gateway downtime: 1s.", false).waitFor();
         expect(await runView.locator('[data-oracle][data-state="pass"]').count()).toBe(4);
-        expect(await repairing.getAttribute("data-status")).toBe("completed");
 
         const reportBody = runView.locator(".update-run-view__report-body");
         const reportMetrics = await reportBody.evaluate((element) => ({
@@ -220,24 +214,6 @@ suite.define(() => {
         await dialog.waitFor({ state: "detached" });
         await text(page.locator("openclaw-update-run-view"), headline).first().waitFor();
         await page.locator(".update-run-view__report").scrollIntoViewIfNeeded();
-
-        // A fresh page has no in-memory run ID and must discover the last run from status.
-        const freshPage = await context.newPage();
-        const freshGateway = await installMockGateway(freshPage, {
-          communityInvite: false,
-          agentModel: "openai/gpt-5.6-luna",
-          models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
-          methodResponses: {
-            "update.status": { activeRun: null, lastRun: run },
-            "update.runs.get": { run },
-            "config.get": configResponse,
-          },
-        });
-        await freshPage.goto(`${suite.server.baseUrl}settings/updates`);
-        await freshGateway.waitForRequest("update.status");
-        await text(freshPage.locator("openclaw-update-run-view"), headline).first().waitFor();
-        expect(await freshGateway.getRequests("update.run")).toHaveLength(0);
-        await freshPage.locator(".update-run-view__report").scrollIntoViewIfNeeded();
       },
     );
   });

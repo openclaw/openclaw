@@ -48,6 +48,7 @@ export {
   type SessionToolOverrides,
 } from "./schema/sessions-row.js";
 export * from "./schema/session-classification.js";
+export * from "./schema/native-subagents.js";
 export * from "./schema/session-participant.js";
 export {
   SessionOwnerSessionCountSchema,

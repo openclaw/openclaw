@@ -1,9 +1,10 @@
-import { lazy, Loading, Show } from "solid-js";
+import { lazy, Show } from "solid-js";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { pathForPluginCatalogEntry } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import "../../../styles/chat/clawhub-card.css";
 
 export type ChatClawHubCardProps = {
@@ -39,7 +40,7 @@ export function ChatClawHubCard(props: ChatClawHubCardProps) {
   }
   return (
     <openclaw-chat-clawhub-card>
-      <Loading
+      <ChatLazyBoundary
         fallback={
           <Show when={props.recommendation}>
             {(card) => (
@@ -77,7 +78,7 @@ export function ChatClawHubCard(props: ChatClawHubCardProps) {
         }
       >
         <CardBody {...props} onOpenListing={openListing} />
-      </Loading>
+      </ChatLazyBoundary>
     </openclaw-chat-clawhub-card>
   );
 }

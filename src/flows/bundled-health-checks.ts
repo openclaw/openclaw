@@ -64,6 +64,10 @@ type BundledHealthApi = {
     memoryCoreActive: boolean;
   }) => void;
   registerPolicyDoctorChecks?: (host: { registerHealthCheck: typeof registerHealthCheck }) => void;
+  registerOpenAIDoctorChecks?: (host: {
+    getHealthCheck: typeof getHealthCheck;
+    registerHealthCheck: typeof registerHealthCheck;
+  }) => void;
 };
 
 type WorkerProviderHealthApi = {
@@ -118,6 +122,7 @@ function defineHealthCheckRegistration(
 const HEALTH_CHECK_REGISTRATIONS = [
   defineHealthCheckRegistration(registerMemoryCoreHealthChecks, "post-plugin"),
   defineHealthCheckRegistration(registerPolicyHealthChecks),
+  defineHealthCheckRegistration(registerOpenAIHealthChecks),
   defineHealthCheckRegistration(registerCuaHealthChecks),
   defineHealthCheckRegistration(registerBundledWorkerProviderHealthChecks),
 ];
@@ -362,7 +367,6 @@ export function collectDeclaredPluginDoctorHealthChecks(params: BundledHealthChe
         Pick<BundledHealthApi, "registerDoctorHealthChecks">
       >({
         pluginRoot: owner.rootDir,
-        pluginId: owner.id,
         artifactBasename: "api.js",
         origin: owner.origin === "bundled" ? "bundled" : "global",
       });
@@ -389,6 +393,17 @@ function registerPolicyHealthChecks(
       artifactBasename: "api.js",
     }).registerPolicyDoctorChecks?.({ registerHealthCheck: registerCheck });
   }
+}
+
+function registerOpenAIHealthChecks(
+  _params: BundledHealthCheckParams,
+  registerCheck: typeof registerHealthCheck,
+): void {
+  // Inspect retained model references even when no OpenAI runtime is active.
+  loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+    dirName: "openai",
+    artifactBasename: "doctor-health-api.js",
+  }).registerOpenAIDoctorChecks?.({ getHealthCheck, registerHealthCheck: registerCheck });
 }
 
 function registerCuaHealthChecks(

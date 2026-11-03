@@ -91,7 +91,7 @@ it("bounds expired-session SQL per maintenance request and drains the same archi
     for (let pass = 0; pass < 10; pass += 1) {
       let before = statements.counts.sql;
       const beforeRows = statements.rowCounts.sql;
-      const apply = runSqliteReadSnapshotSync(database.db, () =>
+      const prepared = runSqliteReadSnapshotSync(database.db, () =>
         prepareSessionEntryMaintenanceInDatabase(
           database,
           operation.input,
@@ -101,7 +101,7 @@ it("bounds expired-session SQL per maintenance request and drains the same archi
       preparedCounts.push(statements.counts.sql - before);
       preparedRows.push(statements.rowCounts.sql - beforeRows);
       before = statements.counts.sql;
-      const plan = runOpenClawAgentWriteTransaction((current) => apply(current), options);
+      const plan = runOpenClawAgentWriteTransaction((current) => prepared.apply(current), options);
       writerCounts.push(statements.counts.sql - before);
       expect(plan.archived).toBeLessThanOrEqual(64);
       archived.push(...plan.archivedEntries.map((entry) => entry.sessionKey));

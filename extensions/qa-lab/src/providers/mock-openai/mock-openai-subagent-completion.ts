@@ -13,6 +13,18 @@ function normalizeChildResult(result: string) {
   return result === "Child result: (no output)" || result === "(no output)" ? "" : result;
 }
 
+export function resolveMockSettledReply(caseName: string) {
+  switch (caseName) {
+    case "visible":
+    case "silent":
+    case "fallback":
+    case "restart":
+      return "";
+    default:
+      return "Completion processed.";
+  }
+}
+
 export function readMockSubagentCompletion(
   input: ResponsesInputItem[],
   label: "qa-sidecar" | "qa-fork-context",

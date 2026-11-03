@@ -41,6 +41,9 @@ const rawSqliteAllowPathGroups = {
   "native close conformance on disposable probe databases": [
     "src/infra/bun-sqlite-close-probe.worker.ts",
   ],
+  "immutable inspection reader cache/mmap PRAGMAs are connection-local SQLite primitives": [
+    "src/infra/sqlite-snapshot.ts",
+  ],
   "native Kysely adapter and sync execution": [
     "src/infra/kysely-node-sqlite.ts",
     "src/infra/kysely-sync-cache-state.ts",
@@ -69,6 +72,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-schema-contract.ts",
     // Cross-store reservations own native BEGIN/ROLLBACK, without application queries.
     "src/infra/sqlite-source-fence.ts",
+    "src/infra/sqlite-staging-token.ts",
     "src/infra/sqlite-strict.ts",
     "src/infra/sqlite-transaction.ts",
     "src/infra/sqlite-user-version.ts",
@@ -136,6 +140,8 @@ const rawSqliteAllowPathGroups = {
     "src/agents/harness/native-hook-relay-client-read.ts",
   ],
   "read-only schema preflight and integrity verification access": [
+    // Legacy-table presence was split from the migration so readers avoid its codecs.
+    "src/infra/state-legacy-cron-presence.ts",
     "src/state/openclaw-database-preflight.ts",
     "src/state/openclaw-database-verify.worker.ts",
     "src/state/openclaw-state-ownership.ts",

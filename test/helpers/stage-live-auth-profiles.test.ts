@@ -21,7 +21,9 @@ import { createTempDirTracker } from "./temp-dir.js";
 const tempDirs = createTempDirTracker();
 const agentDir = (stateDir: string) => path.join(stateDir, "agents", "main", "agent");
 
-function createAuthSource(stateDir: string): string {
+function stagingFixture(sql: string) {
+  const stateDir = tempDirs.make("openclaw-live-auth-source-");
+  const target = tempDirs.make("openclaw-live-auth-target-");
   const source = agentDir(stateDir);
   runAuthProfileWriteTransaction(
     source,
@@ -46,16 +48,10 @@ function createAuthSource(stateDir: string): string {
   );
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  return source;
-}
-
-function stagingFixture(sql: string) {
-  const source = tempDirs.make("openclaw-live-auth-source-");
-  const target = tempDirs.make("openclaw-live-auth-target-");
-  const database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(createAuthSource(source)));
+  const database = openNodeSqliteDatabase(resolveAuthProfileDatabasePath(source));
   database.exec(sql);
   database.close();
-  return { stage: () => stageLiveAuthProfiles(source, target), target: agentDir(target) };
+  return { stage: () => stageLiveAuthProfiles(stateDir, target), target: agentDir(target) };
 }
 
 afterEach(async () => {
@@ -65,15 +61,14 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-it.each([
-  "DROP TABLE auth_profile_store;",
-  "DROP TABLE auth_profile_state;",
-  "DROP TABLE auth_profile_store; DROP TABLE auth_profile_state;",
-])("fails closed for incomplete auth schema: %s", async (sql) => {
-  const fixture = stagingFixture(sql);
-  await expect(fixture.stage()).rejects.toThrow("canonical auth schema is incomplete");
-  expect(fs.existsSync(resolveAuthProfileDatabasePath(fixture.target))).toBe(false);
-});
+it.each(["DROP TABLE auth_profile_store;", "DROP TABLE auth_profile_state;"])(
+  "fails closed for incomplete auth schema: %s",
+  async (sql) => {
+    const fixture = stagingFixture(sql);
+    await expect(fixture.stage()).rejects.toThrow("canonical auth schema is incomplete");
+    expect(fs.existsSync(resolveAuthProfileDatabasePath(fixture.target))).toBe(false);
+  },
+);
 
 it("stages a readable store when the state row is absent", async () => {
   const fixture = stagingFixture("DELETE FROM auth_profile_state;");

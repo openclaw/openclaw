@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
-import "../../../components/modal-dialog.ts";
+import "../../../components/modal-dialog.tsx";
 import { i18n } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
@@ -141,13 +141,9 @@ export function WikiPreviewOverlay(props: DreamingProps) {
   );
 }
 
-type ImportedInsightItem = WikiImportInsights["clusters"][number]["items"][number];
-
-type WikiPageItem = WikiOverview["clusters"][number]["items"][number];
-
 type WikiInsightCard =
-  | { kind: "import"; item: ImportedInsightItem }
-  | { kind: "wiki"; item: WikiPageItem };
+  | { kind: "import"; item: WikiImportInsights["clusters"][number]["items"][number] }
+  | { kind: "wiki"; item: WikiOverview["clusters"][number]["items"][number] };
 
 function renderInsightList(labelKey: string, entries: string[]) {
   return entries.length > 0 ? (
@@ -346,7 +342,6 @@ export function ImportedInsightsContent(props: {
   owner: DreamingProps;
   data: WikiImportInsights | null;
   selectedPage: number;
-  loading: boolean;
 }) {
   const cluster = createMemo(() => props.data?.clusters[props.selectedPage]);
   const returnedItems = createMemo(
@@ -383,8 +378,8 @@ export function ImportedInsightsContent(props: {
       when={cluster()}
       fallback={
         <DiaryEmpty
-          message={t(props.loading ? "dreaming.wiki.loadingInsights" : "dreaming.wiki.noInsights")}
-          hint={props.loading ? undefined : t("dreaming.wiki.noInsightsHint")}
+          message={t("dreaming.wiki.noInsights")}
+          hint={t("dreaming.wiki.noInsightsHint")}
         />
       }
     >
@@ -411,7 +406,6 @@ export function WikiOverviewContent(props: {
   owner: DreamingProps;
   data: WikiOverview | null;
   selectedPage: number;
-  loading: boolean;
 }) {
   const cluster = createMemo(() => props.data?.clusters[props.selectedPage]);
   const returnedItems = createMemo(
@@ -435,8 +429,8 @@ export function WikiOverviewContent(props: {
       when={cluster()}
       fallback={
         <DiaryEmpty
-          message={t(props.loading ? "dreaming.wiki.loadingWiki" : "dreaming.wiki.emptyWiki")}
-          hint={props.loading ? undefined : t("dreaming.wiki.emptyWikiHint")}
+          message={t("dreaming.wiki.emptyWiki")}
+          hint={t("dreaming.wiki.emptyWikiHint")}
         />
       }
     >

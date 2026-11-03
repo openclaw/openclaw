@@ -3,7 +3,7 @@ import type {
   ControlUiChannelSettingsContext,
   ControlUiChannelSettingsSnapshot,
 } from "openclaw/plugin-sdk/control-ui";
-import { createMemo, createSignal, For, Show, onSettled } from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, Show, onSettled } from "solid-js";
 import { createTranslator } from "./i18n/index.ts";
 import type { WhatsAppStatus } from "./types.ts";
 
@@ -12,9 +12,10 @@ export function WhatsAppCard(props: {
   snapshot: ControlUiChannelSettingsSnapshot;
 }) {
   const t = createTranslator(() => props.snapshot.locale);
-  const [actionError, setActionError] = createSignal<string | null>(null);
+  const [completion, setCompletion] = createSignal<Promise<void>>();
   // SAFETY: this declared placement receives the WhatsApp status published by its channel.
   const status = () => props.snapshot.status as WhatsAppStatus | undefined;
+  const completed = createMemo(() => completion()?.then(() => null) ?? null);
   const linked = () => status()?.linked === true;
   const login = () => props.snapshot.login;
   const configured = () => {
@@ -29,6 +30,7 @@ export function WhatsAppCard(props: {
     field: "configured" | "linked" | "running" | "connected",
     value: boolean | null | undefined,
   ) => ({
+    key: field,
     label: t(`common.${field}`),
     value: t(value == null ? "common.na" : value ? "common.yes" : "common.no"),
     kind: value === true ? "ok" : "muted",
@@ -42,6 +44,7 @@ export function WhatsAppCard(props: {
       ...(phone
         ? [
             {
+              key: "phone",
               label: t("channels.whatsapp.phoneNumber"),
               value: props.context.formatPhoneNumber!(phone),
               kind: undefined,
@@ -51,6 +54,7 @@ export function WhatsAppCard(props: {
       booleanFact("running", value?.running === true),
       booleanFact("connected", value?.connected === true),
       {
+        key: "lastConnect",
         label: t("common.lastConnect"),
         value: value?.lastConnectedAt
           ? props.context.formatRelativeTimestamp(value.lastConnectedAt)
@@ -58,6 +62,7 @@ export function WhatsAppCard(props: {
         kind: undefined,
       },
       {
+        key: "lastMessage",
         label: t("common.lastMessage"),
         value: value?.lastMessageAt
           ? props.context.formatRelativeTimestamp(value.lastMessageAt)
@@ -65,6 +70,7 @@ export function WhatsAppCard(props: {
         kind: undefined,
       },
       {
+        key: "authAge",
         label: t("common.authAge"),
         value:
           value?.authAgeMs != null
@@ -74,19 +80,23 @@ export function WhatsAppCard(props: {
       },
     ];
   });
-  async function run(action: () => Promise<void>) {
-    setActionError(null);
-    try {
-      await action();
-    } catch (error) {
-      if (
-        props.context.signal.aborted ||
-        (error instanceof DOMException && error.name === "AbortError")
-      ) {
-        return;
+  function run(action: () => Promise<void>) {
+    const pending = (async () => {
+      try {
+        await action();
+      } catch (error) {
+        if (
+          props.context.signal.aborted ||
+          (error instanceof DOMException && error.name === "AbortError")
+        ) {
+          return;
+        }
+        throw error;
       }
-      setActionError(props.context.formatError(error));
-    }
+    })();
+    void setCompletion(pending);
+    // The current receipt renders failures; superseded or disposed work still needs a consumer.
+    void pending.catch(() => undefined);
   }
   async function logout() {
     const account = props.context.login!.captureLogout();
@@ -104,6 +114,19 @@ export function WhatsAppCard(props: {
   }
   let config!: HTMLDivElement;
   onSettled(() => props.context.mountConfig(config));
+  const ErrorRow = (errorProps: { error: unknown }) => (
+    <div class="settings-row">
+      <div class="settings-row__text">
+        <span class="settings-row__title">
+          <span class="settings-status settings-status--danger">
+            <span class="settings-status__dot" />
+            <span>{t("channels.lastError")}</span>
+          </span>
+        </span>
+        <span class="settings-row__desc">{props.context.formatError(errorProps.error)}</span>
+      </div>
+    </div>
+  );
   return (
     <section class="settings-section">
       <div class="settings-section__header">
@@ -120,16 +143,16 @@ export function WhatsAppCard(props: {
       </div>
       <div class="settings-group">
         <dl class="settings-kv">
-          <For each={facts()}>
+          <For each={facts()} keyed={(fact) => fact.key}>
             {(fact) => (
               <>
-                <dt>{fact.label}</dt>
+                <dt>{fact().label}</dt>
                 <dd>
-                  <Show when={fact.kind} fallback={fact.value}>
+                  <Show when={fact().kind} fallback={fact().value}>
                     {(kind) => (
                       <span class={["settings-status", { "settings-status--ok": kind() === "ok" }]}>
                         <span class="settings-status__dot" />
-                        <span>{fact.value}</span>
+                        <span>{fact().value}</span>
                       </span>
                     )}
                   </Show>
@@ -138,20 +161,15 @@ export function WhatsAppCard(props: {
             )}
           </For>
         </dl>
-        <Show when={status()?.lastError || actionError()}>
-          {(error) => (
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <span class="settings-row__title">
-                  <span class="settings-status settings-status--danger">
-                    <span class="settings-status__dot" />
-                    <span>{t("channels.lastError")}</span>
-                  </span>
-                </span>
-                <span class="settings-row__desc">{props.context.formatError(error())}</span>
-              </div>
-            </div>
-          )}
+        <Show
+          when={status()?.lastError}
+          fallback={
+            <Loading on={completion()}>
+              <Errored fallback={(error) => <ErrorRow error={error()} />}>{completed()}</Errored>
+            </Loading>
+          }
+        >
+          {(error) => <ErrorRow error={error()} />}
         </Show>
         <div
           style={{ display: "contents" }}
@@ -183,7 +201,7 @@ export function WhatsAppCard(props: {
               type="button"
               class={["btn", { primary: !linked() }]}
               disabled={login()?.busy}
-              onClick={() => void run(() => props.context.login!.start(linked()))}
+              onClick={() => run(() => props.context.login!.start(linked()))}
             >
               {linked()
                 ? t("common.relink")
@@ -196,7 +214,7 @@ export function WhatsAppCard(props: {
                 type="button"
                 class="btn"
                 disabled={login()?.busy}
-                onClick={() => void run(() => props.context.login!.wait())}
+                onClick={() => run(() => props.context.login!.wait())}
               >
                 {t("common.waitForScan")}
               </button>
@@ -205,14 +223,14 @@ export function WhatsAppCard(props: {
               type="button"
               class="btn danger"
               disabled={login()?.busy}
-              onClick={() => void run(logout)}
+              onClick={() => run(logout)}
             >
               {t("common.logout")}
             </button>
             <button
               type="button"
               class="btn"
-              onClick={() => void run(() => props.context.refresh(true))}
+              onClick={() => run(() => props.context.refresh(true))}
             >
               {t("common.refresh")}
             </button>

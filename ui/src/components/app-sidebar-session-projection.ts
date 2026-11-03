@@ -1,7 +1,6 @@
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { SidebarZoneEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
@@ -22,7 +21,9 @@ import {
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
 import {
-  SIDEBAR_SESSION_PAGE_SIZE,
+  sidebarSessionPagination,
+  isListedInPinnedSection,
+  type SidebarPinZone,
   visibleSessionChildren,
   type SidebarEmptyGroupsMode,
   type SidebarRecentSession,
@@ -47,7 +48,11 @@ type SidebarSubtitleValue = ReturnType<typeof resolveSidebarSessionSubtitle>;
 
 type SidebarProjectionInput = {
   rows: SidebarRecentSession[];
+  /** Personal placements participate in disclosure lifetime, not canonical grouping. */
+  referencedRows?: readonly SidebarRecentSession[];
   sections?: SidebarSessionSection<SidebarRecentSession>[];
+  /** Personal pins render in the Pinned section above these sections, never twice. */
+  pinnedKeys?: ReadonlySet<string>;
   grouping: SidebarSessionsGrouping;
   knownGroups: string[] | undefined;
   selfOwnerId?: string | null;
@@ -107,6 +112,7 @@ type SidebarPresentationHost = Pick<
     identities: ReadonlyMap<string, ReturnType<ApplicationContext["agentIdentity"]["get"]>>;
   };
   pluginNavigation(): readonly ControlUiRegistration<ControlUiNavigationItem>[];
+  reconciledSidebarZone(): SidebarPinZone;
   getSessionNavigationState(): { toSidebarSession(row: GatewaySessionRow): SidebarRecentSession };
   mainSessionRow(agentId: string): GatewaySessionRow | null;
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
@@ -161,6 +167,13 @@ export class SidebarSessionProjection {
   ): boolean {
     const data = host.sessionData;
     const context = host.sessionDataContext;
+    const zone = host.reconciledSidebarZone();
+    // Rail-only descriptors still need to repaint outside list selection.
+    const railRows = zone.entries.flatMap((entry) => {
+      const row =
+        entry.type === "session" && entry.rail ? zone.sessionRows.get(entry.key) : undefined;
+      return row ? [row] : [];
+    });
     const sessionsVisible = host.navigationView === "sessions" && !host.contextualSidebar;
     const chip = host.activeChipAgent();
     const replacement =
@@ -183,6 +196,12 @@ export class SidebarSessionProjection {
     );
     const presentation = [
       host.navigationView,
+      railRows.map(({ children: _children, ...row }) => row),
+      // Off-page group descriptors must admit repaint even when the roster tree is unchanged.
+      sessionsVisible &&
+        (context?.navigation.snapshot.personalSessionGroups ?? []).map((group) =>
+          group.sessionKeys.map((key) => zone.sessionRows.get(key)),
+        ),
       host.connected,
       this.helloPresentation.readRevision(
         () => [context?.gateway.snapshot.hello, context?.gateway.snapshot.pluginCapabilities],
@@ -343,20 +362,6 @@ export class SidebarSessionProjection {
     };
     roots.forEach(append);
     return rows;
-  }
-
-  visibleRowsInOrder(
-    zone: {
-      entries: readonly SidebarZoneEntry[];
-      sessionRows: ReadonlyMap<string, SidebarRecentSession>;
-    },
-    visibleRows: SidebarRecentSession[],
-  ): SidebarRecentSession[] {
-    const pinnedRows = zone.entries.flatMap((entry) => {
-      const row = entry.type === "session" ? zone.sessionRows.get(entry.key) : undefined;
-      return row ? [row] : [];
-    });
-    return [...pinnedRows, ...visibleRows];
   }
 
   childSessionParents(rows: SidebarRecentSession[], host: SidebarPresentationHost): Set<string> {
@@ -542,15 +547,18 @@ export class SidebarSessionProjection {
     this.previousCollapsedSections = new Set(input.collapsedSections);
 
     const staleKeys = new Set([...this.children.keys(), ...this.heldSubtitles.keys()]);
-    const observeTree = (session: SidebarRecentSession) => {
+    const observed = new Set<string>();
+    const pending = [...input.rows, ...(input.referencedRows ?? [])];
+    for (const session of pending) {
+      if (observed.has(session.key)) {
+        continue;
+      }
+      observed.add(session.key);
       staleKeys.delete(session.key);
       this.children.observe(session, input.listLoaded);
       this.observeSubtitle(session, input.subtitle);
-      for (const child of session.children) {
-        observeTree(child);
-      }
-    };
-    input.rows.forEach(observeTree);
+      pending.push(...session.children);
+    }
     for (const key of staleKeys) {
       this.children.delete(key);
       this.heldSubtitles.delete(key);
@@ -562,15 +570,21 @@ export class SidebarSessionProjection {
       (input.emptyGroupsMode === "always" ||
         (input.emptyGroupsMode === "filtering" &&
           (input.ownerFilter !== null || input.statusFilter !== "all")));
+    const pinnedKeys = input.pinnedKeys ?? new Set<string>();
     const sections =
       input.sections ??
-      groupSidebarSessionRows(input.rows, {
-        grouping,
-        knownGroups,
-        selfOwnerId,
-        sectionOrder,
-        catalogIds,
-      }).filter(
+      groupSidebarSessionRows(
+        pinnedKeys.size > 0
+          ? input.rows.filter((row) => !isListedInPinnedSection(row, pinnedKeys))
+          : input.rows,
+        {
+          grouping,
+          knownGroups,
+          selfOwnerId,
+          sectionOrder,
+          catalogIds,
+        },
+      ).filter(
         (section) =>
           section.id !== "pinned" &&
           // Catalog rows have their own projection; these sections are placeholders.
@@ -595,13 +609,14 @@ export class SidebarSessionProjection {
         ? sections.find((section) => section.id.startsWith("person:"))?.id
         : undefined;
     const ungroupedHasPeerHeader =
-      input.grouping !== "none" &&
-      sections.some(
-        (section) =>
-          section.id !== "ungrouped" &&
-          section.id !== soloOwnerSectionId &&
-          (section.id !== "work" || section.rows.length > 0),
-      );
+      pinnedKeys.size > 0 ||
+      (input.grouping !== "none" &&
+        sections.some(
+          (section) =>
+            section.id !== "ungrouped" &&
+            section.id !== soloOwnerSectionId &&
+            (section.id !== "work" || section.rows.length > 0),
+        ));
     const visibleRows: SidebarRecentSession[] = [];
     const limitedSections: SidebarVisibleSections["sections"] = [];
     for (const section of sections) {
@@ -615,14 +630,15 @@ export class SidebarSessionProjection {
       const collapsed =
         (renderHeader || section.id.startsWith("agent:")) &&
         input.collapsedSections.has(section.id);
-      const visibleLimit = input.visibleSessionLimits.get(section.id) ?? SIDEBAR_SESSION_PAGE_SIZE;
+      const { initialLimit, key } = sidebarSessionPagination(grouping, section.id);
+      const visibleLimit = input.visibleSessionLimits.get(key) ?? initialLimit;
       const requiredRowCount = section.rows.reduce(
         (count, row) => count + Number(row.active || row.pinned),
         0,
       );
       const collapsedVisibleRowCount = Math.max(
         requiredRowCount,
-        Math.min(totalRowCount, SIDEBAR_SESSION_PAGE_SIZE),
+        Math.min(totalRowCount, initialLimit),
       );
       let visibleRowCount = 0;
       if (!collapsed) {
@@ -677,6 +693,10 @@ export class SidebarSessionProjection {
   }
 
   resolveSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue {
+    return this.heldSubtitle(params) ?? resolveSidebarSessionSubtitle(params);
+  }
+
+  heldSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue | undefined {
     // While a run is live the held value is the display: observeSubtitle
     // refreshed it this update pass, applying the minimum-display floor.
     // Tool identity and its prepared progress must advance together; the
@@ -685,12 +705,7 @@ export class SidebarSessionProjection {
       params.session.hasActiveRun && params.showPreview && !params.toolActivity
         ? this.heldSubtitles.get(params.session.key)
         : undefined;
-    if (!held) {
-      return resolveSidebarSessionSubtitle(params);
-    }
-    return params.hasDisplay
-      ? (held.catalogValue ?? resolveSidebarSessionSubtitle(params))
-      : held.value;
+    return params.hasDisplay ? held?.catalogValue : held?.value;
   }
 
   private observeSubtitle(

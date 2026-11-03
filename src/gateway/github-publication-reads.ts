@@ -20,7 +20,7 @@ export async function readSharedPublicationObservation(
 ) {
   const result = await executeExistingOpenClawStateRead(
     options,
-    { type: "githubPublication.sharedObservation", input },
+    { type: "githubPublications.sharedObservation", input },
     readOptions,
   );
   return result ? { row: result.row } : undefined;

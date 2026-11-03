@@ -60,6 +60,7 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
   });
   params.gatewayRequestContext.modelAccountConnectService = modelAccountConnect;
   params.publishSidecars({
+    name: "model-account-connect",
     stop: async () => {
       await modelAccountConnect.stop();
       if (params.gatewayRequestContext.modelAccountConnectService === modelAccountConnect) {
@@ -79,6 +80,7 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     githubOAuth.start();
   }
   params.publishSidecars({
+    name: "github-oauth",
     stop: async () => {
       uninstallGitHubOAuth();
       await githubOAuth.stop();
@@ -137,13 +139,14 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
       },
       { once: true },
     );
-    params.publishSidecars(expiryScheduler);
+    params.publishSidecars({ name: "secret-expiry", stop: expiryScheduler.stop });
     scheduleExpiry(expiryScheduler.now());
   }
   const reconcileGitHubPublications = params.reconcileGitHubPublications;
   if (reconcileGitHubPublications) {
-    params.publishSidecars(
-      params.scheduler.schedule({
+    params.publishSidecars({
+      name: "github-publication-recovery",
+      ...params.scheduler.schedule({
         id: "maintenance:github-publication",
         atMs: params.scheduler.now(),
         everyMs: 60_000,
@@ -152,10 +155,11 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
             params.logWarning("GitHub publication recovery failed; will retry."),
           ),
       }),
-    );
+    });
   }
   attachSessionChangeEventLifetime(params.gatewayRequestContext, () =>
     params.publishSidecars({
+      name: "session-change-events",
       stop: async () => {
         await params.flushPendingSessionsChangedEvents(params.gatewayRequestContext);
       },

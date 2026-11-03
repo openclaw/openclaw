@@ -1,11 +1,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionGitHubPublicationPublished } from "../../packages/gateway-protocol/src/index.js";
-import type { NativeGitHubPullRequestBinding as SessionGitHubPullRequestBinding } from "../plugin-sdk/native-github-publication-host.js";
+import type {
+  SessionGitHubPublicationPublished,
+  SessionGitHubPullRequestInspectResult,
+} from "../../packages/gateway-protocol/src/index.js";
 
 export function pullRequestState(
   value: unknown,
   publication: Pick<SessionGitHubPublicationPublished, "url" | "repository" | "branch">,
-  binding?: SessionGitHubPullRequestBinding,
+  binding?: Pick<SessionGitHubPullRequestInspectResult, "number" | "base" | "head">,
   authorAccountId?: number,
 ) {
   if (
@@ -39,9 +41,11 @@ export function pullRequestState(
     (value.number !== binding.number ||
       value.base.repo.id !== binding.base.repositoryId ||
       value.base.ref !== binding.base.branch ||
-      !isRecord(value.head.repo) ||
-      value.head.repo.id !== binding.head.repositoryId ||
-      value.head.repo.full_name !== binding.head.repository ||
+      (binding.head
+        ? !isRecord(value.head.repo) ||
+          value.head.repo.id !== binding.head.repositoryId ||
+          value.head.repo.full_name !== binding.head.repository
+        : value.head.repo !== null) ||
       (authorAccountId !== undefined &&
         (!isRecord(value.user) || value.user.id !== authorAccountId)))
   ) {

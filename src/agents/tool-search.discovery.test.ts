@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { mcpTool, pluginTool } from "./code-mode.test-support.js";
 import {
@@ -26,19 +27,7 @@ describe("Tool Search schema discovery", () => {
         id: { type: "string" },
         mode: { type: "string", enum: ["drip", "flood"] },
         policy: { enum: ["auto", { mode: "custom" }] },
-        nested: {
-          type: "array",
-          items: {
-            type: "array",
-            items: {
-              type: "array",
-              items: {
-                type: "array",
-                items: { type: "array", items: { type: "string" } },
-              },
-            },
-          },
-        },
+        nested: Type.Array(Type.Array(Type.Array(Type.Array(Type.Array(Type.String()))))),
         zones: { type: "array", items: { type: "string", enum: ["north", "south"] } },
       },
     };

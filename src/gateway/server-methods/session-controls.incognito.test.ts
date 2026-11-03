@@ -96,6 +96,23 @@ context.getRuntimeConfig = () => cfg;
 context.getCommittedRuntimeConfig = () => cfg;
 context.publishPresence = vi.fn();
 
+function actorEntry(sessionId: string, fields: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId, updatedAt: Date.now(), incognito: true, ...fields };
+}
+
+function pause() {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  return {
+    entered: entered.promise,
+    release: release.resolve,
+    async wait() {
+      entered.resolve();
+      await release.promise;
+    },
+  };
+}
+
 function request(method: string, params: Record<string, unknown>): GatewayRequestHandlerOptions {
   return {
     req: { type: "req", id: "test", method },
@@ -144,7 +161,6 @@ afterEach(async () => {
   ingress.mockClear();
   resetSystemEventsForTest();
   vi.restoreAllMocks();
-  clearRuntimeConfigSnapshot();
 });
 afterAll(async () => {
   memorySessionActorOwners.reset();
@@ -153,11 +169,8 @@ afterAll(async () => {
   vi.unstubAllEnvs();
 });
 
-async function processWake(
-  options: GatewayRequestHandlerOptions,
-  sessionKey: string,
-  text: string,
-) {
+async function processWake(sessionKey: string, text: string) {
+  const options = request("system-event", { text, sessionKey, wake: true });
   const original = loadSessionEntry({ sessionKey });
   assert(original);
   model.mockImplementationOnce(async (params) => {
@@ -185,19 +198,11 @@ it.each([false, true])(
   "guards actor tool disclosure after catalogue preparation (replaced=%s)",
   async (replaced) => {
     const sessionKey = `agent:main:dashboard:incognito-tools-${replaced}`;
-    const entry: SessionEntry = {
-      sessionId: `tools-${replaced}`,
-      updatedAt: Date.now(),
-      incognito: true,
-      model: "gpt-4.1",
-      modelProvider: "openai",
-    };
+    const entry = actorEntry(`tools-${replaced}`, { model: "gpt-4.1", modelProvider: "openai" });
     await replaceSessionEntry({ sessionKey }, entry);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const preparation = pause();
     toolsEffectiveInventoryMocks.resolveEffectiveToolInventory.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
+      await preparation.wait();
       return { agentId: "main", profile: "coding", groups: [] };
     });
     const options = request("tools.effective", { agentId: "main", sessionKey });
@@ -206,7 +211,7 @@ it.each([false, true])(
       const pending = Promise.resolve(toolsEffectiveHandlers["tools.effective"]!(options));
       try {
         await awaitGateBeforeSettlement(
-          entered.promise,
+          preparation.entered,
           pending.then(() => {
             const response = vi.mocked(options.respond).mock.calls[0];
             if (response?.[2]) {
@@ -222,7 +227,7 @@ it.each([false, true])(
           );
         }
       } finally {
-        release.resolve();
+        preparation.release();
         await pending;
       }
       expect(options.respond).toHaveBeenCalledWith(
@@ -232,7 +237,7 @@ it.each([false, true])(
       );
       expect(host.queries).toEqual([]);
     } finally {
-      release.resolve();
+      preparation.release();
       host.restore();
     }
   },
@@ -240,14 +245,9 @@ it.each([false, true])(
 
 it("refuses terminal ownership after its actor session is replaced during catalogue preparation", async () => {
   const sessionKey = "agent:main:dashboard:incognito-terminal";
-  const entry: SessionEntry = {
-    sessionId: "terminal-source",
-    updatedAt: Date.now(),
-    incognito: true,
-  };
+  const entry = actorEntry("terminal-source");
   await replaceSessionEntry({ sessionKey }, entry);
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
+  const preparation = pause();
   const policy = createTerminalLaunchPolicy(cfg);
   const manager = new TerminalSessionManager({ emit: vi.fn() });
   const open = vi.spyOn(manager, "open").mockResolvedValue({
@@ -273,18 +273,14 @@ it("refuses terminal ownership after its actor session is replaced during catalo
     cols: 80,
     rows: 24,
     resolveCatalogPlan: async () => {
-      entered.resolve();
-      await release.promise;
+      await preparation.wait();
       return { kind: "local", argv: ["synthetic-shell"], cwd: "/synthetic" };
     },
   });
-  const settled = pending.then(
-    () => undefined,
-    () => undefined,
-  );
+  const settled = pending.catch(() => {});
   try {
     await awaitGateBeforeSettlement(
-      entered.promise,
+      preparation.entered,
       pending,
       "Terminal settled before catalogue preparation",
     );
@@ -293,7 +289,7 @@ it("refuses terminal ownership after its actor session is replaced during catalo
       { ...entry, sessionId: "replacement" },
     );
   } finally {
-    release.resolve();
+    preparation.release();
     await settled;
   }
   await expect(pending).rejects.toThrow(/session|current/i);
@@ -305,31 +301,18 @@ it("routes actor system wakes and parent approval audiences without host SQL", a
   const parent = "agent:sibling:dashboard:incognito-control-parent";
   const grandparent = "agent:main:dashboard:incognito-control-grandparent";
   const child = "agent:main:dashboard:incognito-control-child";
-  await replaceSessionEntry(
-    { sessionKey: grandparent },
-    { sessionId: "grandparent", updatedAt: Date.now(), incognito: true },
-  );
+  await replaceSessionEntry({ sessionKey: grandparent }, actorEntry("grandparent"));
   await replaceSessionEntry(
     { agentId: "sibling", sessionKey: parent },
-    {
-      sessionId: "parent",
-      updatedAt: Date.now(),
-      incognito: true,
-      parentSessionKey: grandparent,
-    },
+    actorEntry("parent", { parentSessionKey: grandparent }),
   );
   await replaceSessionEntry(
     { sessionKey: child },
-    { sessionId: "child", updatedAt: Date.now(), incognito: true, parentSessionKey: parent },
+    actorEntry("child", { parentSessionKey: parent }),
   );
-  const options = request("system-event", {
-    text: "Synthetic wake",
-    sessionKey: child,
-    wake: true,
-  });
   const host = observeHostDataSql();
   try {
-    await processWake(options, child, "Synthetic wake");
+    await processWake(child, "Synthetic wake");
     expect(await resolveApprovalSessionAudienceWithFallback(child, "main")).toEqual([
       child,
       parent,
@@ -343,27 +326,18 @@ it("routes actor system wakes and parent approval audiences without host SQL", a
 
 it("rejects a replaced actor source during approval lineage preparation", async () => {
   const sessionKey = "agent:main:dashboard:incognito-approval-replaced";
-  const entry: SessionEntry = {
-    sessionId: "approval-source",
-    updatedAt: Date.now(),
-    incognito: true,
-  };
+  const entry = actorEntry("approval-source");
   await replaceSessionEntry({ sessionKey }, entry);
-  const entered = createDeferredCore();
-  const finish = createDeferredCore();
+  const preparation = pause();
   prepareRegistry.mockImplementationOnce(async () => {
-    entered.resolve();
-    await finish.promise;
+    await preparation.wait();
     return false;
   });
   const pending = resolveApprovalSessionAudienceWithFallback(sessionKey, "main");
-  const settled = pending.then(
-    () => undefined,
-    () => undefined,
-  );
+  const settled = pending.catch(() => {});
   try {
     await awaitGateBeforeSettlement(
-      entered.promise,
+      preparation.entered,
       pending,
       "Approval lineage settled before registry preparation",
     );
@@ -372,41 +346,30 @@ it("rejects a replaced actor source during approval lineage preparation", async 
       { ...entry, sessionId: "successor" },
     );
   } finally {
-    finish.resolve();
+    preparation.release();
     await settled;
   }
   await expect(pending).rejects.toThrow(/session|current/i);
 });
 
-it.each(["agent:native:dashboard:incognito-native-controls"])(
-  "preserves unbound wake %s without allocating another owner",
-  async (sessionKey) => {
-    await replaceSessionEntry(
-      { agentId: "native", sessionKey },
-      { sessionId: sessionKey, updatedAt: Date.now() },
-    );
-    const before = memorySessionActorOwners.list();
-    const options = request("system-event", { text: "Native wake", sessionKey, wake: true });
-    await processWake(options, sessionKey, "Native wake");
-    expect(memorySessionActorOwners.list()).toEqual(before);
-  },
-);
+it("preserves an unbound native wake without allocating another owner", async () => {
+  const sessionKey = "agent:native:dashboard:incognito-native-controls";
+  await replaceSessionEntry(
+    { agentId: "native", sessionKey },
+    { sessionId: sessionKey, updatedAt: Date.now() },
+  );
+  const before = memorySessionActorOwners.list();
+  await processWake(sessionKey, "Native wake");
+  expect(memorySessionActorOwners.list()).toEqual(before);
+});
 
 it("joins accepted actor node work, preserves changed session settings, and canonicalizes subscriptions without host SQL", async () => {
   const sessionKey = "agent:main:dashboard:incognito-node-event";
-  await replaceSessionEntry(
-    { sessionKey },
-    { sessionId: "node-event", updatedAt: Date.now(), incognito: true, sendPolicy: "allow" },
-  );
-  const selected = createDeferredCore();
-  const continueAdmission = createDeferredCore();
-  const entered = createDeferredCore();
-  const finish = createDeferredCore();
+  await replaceSessionEntry({ sessionKey }, actorEntry("node-event", { sendPolicy: "allow" }));
+  const selection = pause();
+  const ingressWork = pause();
   let connectionChecks = 0;
-  ingress.mockImplementationOnce(async () => {
-    entered.resolve();
-    await finish.promise;
-  });
+  ingress.mockImplementationOnce(() => ingressWork.wait());
   const subscribe = vi.fn();
   const nodeContext = {
     ...context,
@@ -433,8 +396,7 @@ it("joins accepted actor node work, preserves changed session settings, and cano
             isConnectionCurrent: async () => {
               connectionChecks += 1;
               if (connectionChecks === 2) {
-                selected.resolve();
-                await continueAdmission.promise;
+                await selection.wait();
               }
               return true;
             },
@@ -446,7 +408,7 @@ it("joins accepted actor node work, preserves changed session settings, and cano
       });
     try {
       await awaitGateBeforeSettlement(
-        selected.promise,
+        selection.entered,
         pending,
         "Node event settled before session selection",
       );
@@ -454,16 +416,16 @@ it("joins accepted actor node work, preserves changed session settings, and cano
         { agentId: "main", sessionKey },
         { sendPolicy: "deny", thinkingLevel: "high", systemSent: true },
       );
-      continueAdmission.resolve();
+      selection.release();
       await awaitGateBeforeSettlement(
-        entered.promise,
+        ingressWork.entered,
         pending,
         "Node event settled before ingress admission",
       );
       expect(settled).toBe(false);
     } finally {
-      continueAdmission.resolve();
-      finish.resolve();
+      selection.release();
+      ingressWork.release();
       await pending;
     }
     expect(loadSessionEntry({ sessionKey })).toMatchObject({
@@ -483,8 +445,8 @@ it("joins accepted actor node work, preserves changed session settings, and cano
     expect(subscribe).toHaveBeenCalledWith("synthetic-node", sessionKey, undefined);
     expect(host.queries).toEqual([]);
   } finally {
-    continueAdmission.resolve();
-    finish.resolve();
+    selection.release();
+    ingressWork.release();
     admission.release();
     host.restore();
   }
@@ -498,14 +460,12 @@ it.each(["actor", "native"] as const)(
       sourceKind === "actor"
         ? "agent:main:dashboard:incognito-node-skills"
         : "agent:native:node-skills";
-    const entry: SessionEntry = {
-      sessionId: "node-skills",
-      updatedAt: Date.now(),
+    const entry = actorEntry("node-skills", {
       incognito: sourceKind === "actor" ? true : undefined,
-      execHost: "node" as const,
+      execHost: "node",
       execNode: "skill-node",
       execCwd: "/synthetic",
-    };
+    });
     await replaceSessionEntry({ agentId, sessionKey }, entry);
     const registry = new NodeRegistry();
     const nodeClient = makeClient("skill-connection", "skill-node", [], {

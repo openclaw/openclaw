@@ -3,16 +3,17 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type {
-  ControlUiHost,
   ControlUiReplacement,
   ControlUiSurface,
 } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createInertViewHost } from "../../plugins/control-ui-view.test-support.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
@@ -21,12 +22,12 @@ import { createChatProps } from "./chat-view.test-helpers.ts";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
+import "../../plugins/control-ui-view.solid.tsx";
+import "../../plugins/control-ui-contributions.solid.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import "../../plugins/control-ui-view.solid.tsx";
-import "../../plugins/control-ui-contributions.solid.tsx";
 
 const fontsDescriptor = Object.getOwnPropertyDescriptor(document, "fonts");
 beforeEach(() => {
@@ -41,11 +42,7 @@ afterEach(async () => {
   resetChatViewState();
   resetTranscriptTestDom();
   await resetComposerFixture();
-  if (fontsDescriptor) {
-    Object.defineProperty(document, "fonts", fontsDescriptor);
-  } else {
-    Reflect.deleteProperty(document, "fonts");
-  }
+  restorePropertyDescriptor(document, "fonts", fontsDescriptor);
 });
 
 function createPluginChat(
@@ -54,14 +51,7 @@ function createPluginChat(
 ) {
   installTranscriptDomMocks();
   const lifetime = new AbortController();
-  const pluginHost = {
-    signal: lifetime.signal,
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as unknown as ControlUiHost;
+  const pluginHost = createInertViewHost(lifetime.signal);
   const reportError = vi.fn();
   const registration = replacement && {
     key: `questions/${replacement.id}`,
@@ -182,8 +172,8 @@ it.each([
       onAsyncQuestionSubmit: submit,
     });
     selectReplacement();
-    await waitForSolid(async () => {
-      await questionPanelIn(provider);
+    await questionPanelIn(provider);
+    await waitForSolid(() => {
       expect(count("openclaw-chat-question-panel")).toBe(1);
       expect(count('textarea[aria-label="Custom draft"]')).toBe(mode === "nondelegating" ? 1 : 0);
       expect(count(".agent-chat__composer-combobox textarea")).toBe(

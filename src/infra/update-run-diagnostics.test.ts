@@ -20,6 +20,12 @@ const healthy = {
   readyz: true,
   settled: true,
 };
+const migrationRefusal = { serviceRestartSafe: false, reason: "state-migration-started" } as const;
+const servingRecovery = {
+  serviceRestartSafe: true,
+  version: "2026.9.5",
+  service: "healthy",
+} as const;
 const observation = (exitCode: number | null) => ({
   name: "gateway recovery verification",
   command: "verify",
@@ -71,7 +77,7 @@ it("records serving health without replacing a persisted restart refusal", () =>
   const { verify, record } = fixture();
   verify({ recovery });
   const recorded = record({
-    recovery: { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" },
+    recovery: servingRecovery,
     verification: healthy,
     steps: [observation(0)],
   });
@@ -85,16 +91,8 @@ it.each([undefined, "active-mutation"] as const)(
   "preserves named data risk over an older refusal (%s) and healthy observation",
   (existingRisk) => {
     const { verify, record, read } = fixture();
-    verify({
-      recovery: {
-        ...recovery,
-        ...(existingRisk ? { dataAtRisk: existingRisk } : {}),
-      },
-    });
-    const incoming = {
-      ...recovery,
-      dataAtRisk: "unreadable-state",
-    } as const;
+    verify({ recovery: { ...recovery, ...(existingRisk ? { dataAtRisk: existingRisk } : {}) } });
+    const incoming = { ...recovery, dataAtRisk: "unreadable-state" };
     record({ recovery: incoming, verification: { serviceRunning: true, readyz: true } }, () => {});
     expect(read()?.verification.recovery).toEqual({
       ...incoming,
@@ -108,14 +106,12 @@ it("keeps the first terminal receipt when a stale publisher carries success veri
   const terminal = finish({
     status: "failed",
     reason: "doctor-failed",
-    diagnostics: {
-      recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
-    },
+    diagnostics: { recovery: migrationRefusal },
   });
   const stale = finish({
     status: "succeeded",
     diagnostics: {
-      recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" },
+      recovery: servingRecovery,
       verification: { readyz: true, settled: true, versionMatch: true },
     },
   });
@@ -132,7 +128,7 @@ it("keeps recovery observations atomic across a busy write without revising the 
     ...healthy,
     channelsReady: true,
     pluginErrors: [],
-    recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
+    recovery: migrationRefusal,
   });
   step({ step: "gateway recovery verification", status: "completed", exitCode: 0 });
   finish({ status: "failed", reason: "doctor-failed" });
@@ -178,7 +174,7 @@ it("keeps recovery observations atomic across a busy write without revising the 
       doctorHint: "run doctor",
       readyz: false,
       settled: false,
-      recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
+      recovery: migrationRefusal,
     },
     steps: expect.arrayContaining([
       expect.objectContaining({ step: "gateway recovery verification", exitCode: null }),

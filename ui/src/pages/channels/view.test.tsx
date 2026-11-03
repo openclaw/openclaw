@@ -5,6 +5,7 @@ import type { JsonSchema } from "../../components/config-form.shared.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
+import { emptyPairingSnapshot } from "./pairing.test-support.ts";
 import { ChannelConfig } from "./view.config.tsx";
 import { renderChannelDetail } from "./view.detail.tsx";
 import { resolveChannelDisplayState } from "./view.shared.tsx";
@@ -17,12 +18,7 @@ import { ChannelsView } from "./view.tsx";
 import type { ChannelsProps } from "./view.types.ts";
 
 function createProps(snapshot: ChannelsProps["channels"]["channelsSnapshot"]): ChannelsProps {
-  return createChannelsViewProps(snapshot, {
-    accounts: [],
-    requests: [],
-    commandOwnerConfigured: true,
-    limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-  });
+  return createChannelsViewProps(snapshot, emptyPairingSnapshot());
 }
 
 function channelSnapshot(
@@ -101,6 +97,25 @@ describe("channel hub refresh actions", () => {
     refreshButtons[1]!.click();
     expect(onPairingRefresh).toHaveBeenCalledOnce();
     expect(onRefresh).toHaveBeenCalledWith(true);
+  });
+
+  it("announces a channel status failure as an alert", () => {
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: [],
+      channelLabels: {},
+      channels: {},
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    props.channels.channelsError = "Channel status unavailable";
+    const container = document.createElement("div");
+
+    renderChannelView(ChannelsView, props, container);
+
+    expect(
+      Array.from(container.querySelectorAll('[role="alert"]'), (alert) => alert.textContent),
+    ).toEqual(["Channel status unavailable"]);
   });
 });
 

@@ -30,22 +30,16 @@ async function flush(): Promise<void> {
 }
 
 describe("Buzz replay dispatch capacity reservations", () => {
-  it("withholds a reservation while queued work occupies the pending limit", async () => {
-    const { queue, blockTask } = createBlockedQueue(true);
-
-    const granted = vi.fn();
-    void queue.reserveCapacity(10).then(granted);
-    await flush();
-
-    expect(granted).not.toHaveBeenCalled();
-    expect(queue.enqueue(blockTask())).toBe("overflow");
-  });
-
   it("withholds reserved slots from later live events", async () => {
     const { queue, releases, blockTask } = createBlockedQueue(true);
     const pageSize = 100;
 
     const reservationPromise = queue.reserveCapacity(pageSize);
+    const granted = vi.fn();
+    void reservationPromise.then(granted);
+    await flush();
+    expect(granted).not.toHaveBeenCalled();
+    expect(queue.enqueue(blockTask())).toBe("overflow");
     releases.slice(0, pageSize).forEach((release) => release());
     const reservation = await reservationPromise;
     expect(reservation).toBeDefined();

@@ -16,7 +16,7 @@ Own agent assembly, run authority, focused tests.
 
 ## Client Capability Scope
 
-- Attached-client tools: current connection/session capabilities, never backend host flags; clients differ. Capabilities ≠ authorization: [client capabilities](../../docs/gateway/protocol/handshake.md#client-capabilities).
+- Attached-client tool listing uses the session's recorded operator capabilities, never the current turn or backend host flags. Execution uses current client authority and checks the live recipient; clients differ. Capabilities ≠ authorization: [client capabilities](../../docs/gateway/protocol/handshake.md#client-capabilities).
 - Capability caches: connection/session lifecycles; share only process-stable provider metadata. Never select tools from another client's cached answer.
 - Backend portable-artifact tools need no client merely for UI display.
 - Prove differing clients on one backend, supported remote client without local UI flag, retirement of cached capabilities.
@@ -27,6 +27,9 @@ Own agent assembly, run authority, focused tests.
 - Lifecycle owner's `finally`: close admission on terminal, error, cancellation, unsupported recovery paths.
 - Harness host capabilities capture exact admitted authority. Gate tool binding/preparation/execution, hooks, approvals.
 - Retained tools, preparers, callbacks, approval handles: fail after close, replacement, release, abort, claim loss, lifecycle rotation.
+- One model resolver for every entry path (turn, `/model`, spawn, isolated/utility completions, `agent --local`, `sessions.create`): a shown model runs on each of them.
+- Run on the runtime and credential the user signed in with. Fallback to API-key billing or another runtime happens only where documented, never silently.
+- Native-runtime consent: asked once at provider setup by the core owner; channel chats, approvals and subagents honor it.
 
 ## Source Reply Completion
 

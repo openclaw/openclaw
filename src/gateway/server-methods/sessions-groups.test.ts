@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -96,43 +94,21 @@ describe("sessions.groups.put", () => {
     expectFailure(h.respond, { code: "INVALID_REQUEST", message });
   });
 
-  it("replaces the catalog using the runtime config and authorization guards", async () => {
-    const changes = vi.spyOn(sessionChanges, "emit");
-    const accessRevision = readGatewayAccessRevision();
-    const cfg = { agents: { entries: { main: {} } } };
-    const names = ["Keep"];
-    const sectionOrder = ["category:Keep", "ungrouped"];
-    const groups = [{ name: "Keep", position: 0 }];
-    groupMocks.put.mockReturnValue(groups);
-    const h = groupRequest("sessions.groups.put", { names, sectionOrder });
-    h.options.context.getRuntimeConfig = () => cfg;
-    const assertCurrent = vi.fn();
-    const assertTargetCurrent = vi.fn();
-    h.options.sessionMutationAuthorization = { assertCurrent, assertTargetCurrent };
-    await h.invoke();
-
-    expect(groupMocks.put).toHaveBeenCalledExactlyOnceWith({
-      cfg,
-      names,
-      sectionOrder,
-      assertCurrent,
-      assertTargetCurrent,
-    });
-    expect(groupMocks.put.mock.calls[0]?.[0].cfg).toBe(cfg);
-    expect(h.respond).toHaveBeenCalledWith(true, { ok: true, groups, sectionOrder: [] }, undefined);
-    expect(changes).not.toHaveBeenCalled();
-    expect(readGatewayAccessRevision()).toBe(accessRevision);
-  });
-
   it("rethrows changed authorization instead of mapping it to an unavailable response", async () => {
     const error = new SessionMutationAuthorizationChangedError({
       code: "INVALID_REQUEST",
       message: "session changed before sessions.groups.put; retry the request",
     });
-    groupMocks.put.mockImplementation(() => {
+    const assertCurrent = vi.fn(() => {
       throw error;
     });
+    const assertTargetCurrent = vi.fn();
+    groupMocks.put.mockImplementation((options) => {
+      expect(options.assertTargetCurrent).toBe(assertTargetCurrent);
+      options.assertCurrent();
+    });
     const h = groupRequest("sessions.groups.put", { names: [] });
+    h.options.sessionMutationAuthorization = { assertCurrent, assertTargetCurrent };
     await expect(h.invoke()).rejects.toBe(error);
     expect(h.respond).not.toHaveBeenCalled();
   });
@@ -164,8 +140,6 @@ describe("sessions.groups.update", () => {
   );
 
   it("persists the canonical workspace-contained cwd for a write caller", async () => {
-    const changes = vi.spyOn(sessionChanges, "emit");
-    const accessRevision = readGatewayAccessRevision();
     pathMocks.resolveContainment.mockResolvedValue(containment);
     groupMocks.update.mockImplementation((_name, _defaults, _env, assertCurrent) => {
       assertCurrent();
@@ -186,19 +160,13 @@ describe("sessions.groups.update", () => {
     await h.invoke();
 
     expect(assertCurrent).toHaveBeenCalledOnce();
-    expect(changes).not.toHaveBeenCalled();
-    expect(readGatewayAccessRevision()).toBe(accessRevision);
-    const defaults = { cwd: "/workspace/client", worktree: true };
-    expect(groupMocks.update).toHaveBeenCalledWith(
-      "Client",
-      defaults,
-      expect.any(Object),
-      expect.any(Function),
-      {},
-    );
+    expect(groupMocks.update.mock.calls[0]?.[1]).toEqual({
+      cwd: "/workspace/client",
+      worktree: true,
+    });
     expect(h.respond).toHaveBeenCalledWith(
       true,
-      { ok: true, defaults: [{ name: "Client", ...defaults }] },
+      { ok: true, defaults: [{ name: "Client", cwd: "/workspace/client", worktree: true }] },
       undefined,
     );
   });

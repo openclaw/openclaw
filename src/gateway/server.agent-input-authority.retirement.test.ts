@@ -12,42 +12,32 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { createSessionsCreateTool } from "../agents/tools/sessions-create-tool.js";
+import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import { readReplySourceInput } from "../auto-reply/reply/reply-source-binding.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
-import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
-import type { PreparedAgentRunDispatch } from "./agent-turn/agent-run-admission-types.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
-import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
-import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import {
+  holdExecution,
+  installAuthorityProofKernel,
+} from "./server.agent-runtime-authority-proof.test-support.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import {
   agentCommandMock,
   dispatchInboundMessageMock,
-  installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
 } from "./test-helpers.js";
 
-let harness: GatewayServerHarness;
-let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
-installGatewayTestHooks({
-  scope: "suite",
-  setup: async () => {
-    kernel = await captureGatewayKernel(async () => {
-      harness = await startGatewayServerHarness();
-    });
-  },
-  cleanup: async () => harness?.close(),
-});
+const { kernel } = installAuthorityProofKernel();
 
 it("rejects retained agent and independent-creation input after acceptance", async ({ signal }) => {
   await prepareGatewayReplyRuntimeForTest();
-  const context = kernel.gatewayRequestContext;
-  const runtime = kernel.gatewayInstanceRuntime;
+  const { gatewayRequestContext: context, gatewayInstanceRuntime: runtime } = kernel();
   const runId = randomUUID();
   const parentKey = `agent:main:parent:${runId}`;
   const childKey = `agent:main:subagent:${runId}`;
@@ -94,12 +84,10 @@ it("rejects retained agent and independent-creation input after acceptance", asy
       agentId: "main",
       sessionKey: parentKey,
     });
-  const executionEntered = createDeferred<PreparedAgentRunDispatch>();
+  const held = await holdExecution(signal);
   const release = () => releaseExecution.resolve();
   signal.addEventListener("abort", release, { once: true });
   let dispatch: Promise<unknown> | undefined;
-  let execution: Promise<void> | undefined;
-  let restoreExecution: (() => void) | undefined;
   let restoreRuntimeRelease: (() => void) | undefined;
   let createdWorkReleased: Promise<void> | undefined;
   try {
@@ -107,16 +95,6 @@ it("rejects retained agent and independent-creation input after acceptance", asy
       await createCaller(admission),
       captureAgentToolSourceExecutionGuard,
     );
-    const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
-    const execute = executionModule.startAgentRunExecution;
-    const executionSpy = vi
-      .spyOn(executionModule, "startAgentRunExecution")
-      .mockImplementationOnce((params) => {
-        executionEntered.resolve(params.prepared);
-        execution = releaseExecution.promise.then(() => execute(params));
-        return execution;
-      });
-    restoreExecution = () => executionSpy.mockRestore();
     dispatch = dispatchGatewayMethodInProcess(
       "agent",
       { message, sessionKey: childKey, idempotencyKey: runId },
@@ -134,7 +112,7 @@ it("rejects retained agent and independent-creation input after acceptance", asy
       activeRunAbort: abort,
       activeGatewayWorkAdmission,
       preparedModelRuntimeLease,
-    } = await executionEntered.promise;
+    } = await held.entered;
     const pending = await listSessionPendingInputs(scope);
     expect(pending).toMatchObject({
       total: 1,
@@ -166,11 +144,9 @@ it("rejects retained agent and independent-creation input after acceptance", asy
       creationCaller,
       captureAgentToolSourceExecutionGuard,
     );
-    const createdInputEntered = createDeferred<UserTurnTranscriptRecorder>();
+    const createdInputEntered = createDeferred<Parameters<typeof dispatchInboundMessage>[0]>();
     dispatchInboundMessageMock.mockReset().mockImplementation((args) => {
-      createdInputEntered.resolve(
-        expectDefined(args.replyOptions?.userTurnTranscriptRecorder, "created input recorder"),
-      );
+      createdInputEntered.resolve(args);
       return releaseExecution.promise.then(() => ({
         queuedFinal: false,
         counts: { tool: 0, block: 0, final: 0 },
@@ -190,21 +166,39 @@ it("rejects retained agent and independent-creation input after acceptance", asy
       sessionKey: expect.any(String),
       sessionId: expect.any(String),
     });
-    const createdReceipt = created.details as { sessionKey: string; sessionId: string };
+    const createdReceipt = created.details as {
+      sessionKey: string;
+      sessionId: string;
+      runId?: string;
+    };
     const createdScope = await sessionScope(createdReceipt.sessionKey, createdReceipt.sessionId);
-    const createdRecorder = await withinTest(createdInputEntered.promise, signal);
+    const createdInput = await withinTest(createdInputEntered.promise, signal);
+    const createdRecorder = expectDefined(
+      createdInput.replyOptions?.userTurnTranscriptRecorder,
+      "created input recorder",
+    );
+    const createdSource = expectDefined(
+      readReplySourceInput(createdInput.replyOptions),
+      "created physical source",
+    );
     createdWorkReleased = captureSessionControllerSettlement({
       scope: createdScope.storePath,
       identities: [createdReceipt.sessionKey, createdReceipt.sessionId],
     });
     const createdPending = await listSessionPendingInputs(createdScope);
-    expect(createdPending).toMatchObject({ total: 1, items: [{ state: "queued" }] });
-    const createdRunId = expectDefined(createdPending.items[0], "created pending input").runId;
+    expect(createdPending).toEqual({ total: 0, items: [] });
+    const createdRunId = expectDefined(createdReceipt.runId, "created run");
     const createdAbortEntry = expectDefined(
       rpcSourceTesting.get(createdRunId),
       "created input target",
     );
     const createdTranscript = sessionAccessor.loadTranscriptEventsSync(createdScope);
+    const createdAdmission = createdRecorder.getAdmissionReceipt();
+    expect(createdAdmission).toBeDefined();
+    expect(createdRecorder.getPersistedMessage?.()).toMatchObject({
+      content: "Continue independently",
+      provenance: { kind: "inter_session", sourceTool: "sessions_create" },
+    });
     expect(createdAbortEntry.input.abortSignal.aborted).toBe(false);
     expect(() => creationGuard()).not.toThrow();
 
@@ -219,16 +213,17 @@ it("rejects retained agent and independent-creation input after acceptance", asy
     expect(rpcSourceTesting.get(createdRunId)).toBe(createdAbortEntry);
     expect(createdAbortEntry.input.abortSignal.aborted).toBe(false);
     await expect(
-      Promise.resolve().then(() =>
+      Promise.resolve().then(() => {
+        createdSource.abortSignal.throwIfAborted();
         expectDefined(
-          createdRecorder.withPendingInput,
-          "accepted creation input",
-        )(() => createdRecorder.persistApproved()),
-      ),
+          createdSource.sourceAdapter?.authority,
+          "accepted creation authority",
+        ).assertCurrent();
+      }),
     ).rejects.toThrow();
-    expect(createdRecorder.getAdmissionReceipt?.()).toBeUndefined();
+    expect(createdRecorder.getAdmissionReceipt()).toEqual(createdAdmission);
     release();
-    await Promise.all([execution, createdWorkReleased]);
+    await Promise.all([held.resume(), createdWorkReleased]);
     // The service owns source release after the intercepted execution returns.
     await expectDefined(abort.entry, "accepted source").input.settlement.promise;
 
@@ -245,16 +240,13 @@ it("rejects retained agent and independent-creation input after acceptance", asy
         message: "Gateway instance dispatch unavailable for agent turn",
       },
     });
-    for (const [target, before, beforeTranscript] of [
-      [scope, pending, transcript],
-      [createdScope, createdPending, createdTranscript],
-    ] as const) {
-      expect(await listSessionPendingInputs(target)).toEqual({
-        total: 1,
-        items: [{ ...before.items[0], state: "interrupted" }],
-      });
-      expect(sessionAccessor.loadTranscriptEventsSync(target)).toEqual(beforeTranscript);
-    }
+    expect(await listSessionPendingInputs(scope)).toEqual({
+      total: 1,
+      items: [{ ...pending.items[0], state: "cancelled" }],
+    });
+    expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(transcript);
+    expect(await listSessionPendingInputs(createdScope)).toEqual(createdPending);
+    expect(sessionAccessor.loadTranscriptEventsSync(createdScope)).toEqual(createdTranscript);
     expect(userTurn.recorder?.getAdmissionReceipt()).toBeUndefined();
     expect(createdAbortEntry.input.abortSignal.aborted).toBe(false);
     expect(agentCommandMock).not.toHaveBeenCalled();
@@ -266,10 +258,9 @@ it("rejects retained agent and independent-creation input after acceptance", asy
     expect(() => guard()).not.toThrow();
   } finally {
     release();
-    await Promise.allSettled([dispatch, execution, createdWorkReleased]);
+    await Promise.allSettled([dispatch, held.cleanup(), createdWorkReleased]);
     dispatchInboundMessageMock.mockReset();
     restoreRuntimeRelease?.();
-    restoreExecution?.();
     admission.close();
     creationAdmission.close();
     operator.release();

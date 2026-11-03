@@ -309,6 +309,7 @@ it.skipIf(process.platform === "win32")("routes recorded sources", () => {
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 if (process.argv[2] === "run") {
   const args = process.argv.slice(3);
   fs.appendFileSync(process.env.DOCKER_ARGS_FILE, JSON.stringify(args) + "\\n");
@@ -319,9 +320,9 @@ if (process.argv[2] === "run") {
     const mount = args.find(arg => arg.endsWith(":/tmp/openclaw-update-first-hop-" + name + ".tgz:ro"));
     if (!mount) return undefined;
     const archive = mount.split(":")[0];
-    const manifest = JSON.parse(execFileSync("tar", ["-xOf", archive, "package/package.json"], { encoding: "utf8" }));
-    const entries = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" }).trim().split("\\n");
-    return { version: manifest.version, entries };
+    const sha256 = createHash("sha256").update(fs.readFileSync(archive)).digest("hex");
+    const entries = name === "negative" ? execFileSync("tar", ["-tzf", archive], { encoding: "utf8" }).trim().split("\\n") : undefined;
+    return { sha256, entries };
   };
   fs.writeFileSync(path.join(artifact, "summary.json"), JSON.stringify({ source,
     candidate: inspect("candidate"), negative: inspect("negative"), future: inspect("future"), original: inspect("original") }));
@@ -367,7 +368,6 @@ process.stdout.write(JSON.stringify(version === "2026.9.2" ? { openclaw: packed 
   expect(invocations).toHaveLength(3);
   const firstFixture = readJson(path.join(root, "artifacts/first-hop-fixture.json"));
   const secondFixture = readJson(path.join(root, "artifacts/second-hop-fixture.json"));
-  expect(firstFixture.sourceSha256).toBe(sha256(fs.readFileSync(tarball)));
   expect(secondFixture).toMatchObject({
     sourceSha256: firstFixture.targetSha256,
     removedCompatibilityChunks: [],
@@ -383,19 +383,17 @@ process.stdout.write(JSON.stringify(version === "2026.9.2" ? { openclaw: packed 
       sourceVersion: negativeFixture.targetVersion,
       removedCompatibilityChunks: [`dist/${artifact.source.expectedMissingChunk}`],
     });
-    expect(artifact).toMatchObject({
-      candidate: { version: "2026.8.2-first-hop.0" },
-      negative: { version: "2026.8.2-first-hop.0" },
-      future: { version: "2026.8.2-first-hop.1" },
-      original: { version: "2026.8.1" },
-    });
+    const roles = ["candidate", "negative", "future", "original"];
+    expect(roles.map((role) => artifact[role].sha256)).toEqual([
+      firstFixture.targetSha256,
+      negativeFixture.targetSha256,
+      secondFixture.targetSha256,
+      sha256(fs.readFileSync(tarball)),
+    ]);
     for (const bridge of legacyChunks) {
-      const memberPath = `package/dist/${bridge}`;
-      expect([
-        artifact.candidate.entries.includes(memberPath),
-        artifact.negative.entries.includes(memberPath),
-        artifact.future.entries.includes(memberPath),
-      ]).toEqual([true, bridge !== artifact.source.expectedMissingChunk, true]);
+      expect(artifact.negative.entries.includes(`package/dist/${bridge}`)).toBe(
+        bridge !== artifact.source.expectedMissingChunk,
+      );
     }
   }
   const expectedChunkEnv = "OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK=";

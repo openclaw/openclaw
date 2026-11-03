@@ -18,7 +18,6 @@ import type {
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   errorBackoffMs,
-  HEARTBEAT_SKIP_DISABLED,
   resolveNextRunAtMsOrDisable,
 } from "./jobs-scheduling.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
@@ -32,13 +31,6 @@ type TransientCronRetryDecision = {
   retryCategory?: CronRetryOn;
   backoffMs?: number;
   reason: "transient retry" | "max retries exhausted" | "permanent error" | "aborted";
-};
-
-type DisabledHeartbeatOneShotRetryDecision = {
-  retryable: boolean;
-  consecutiveSkipped: number;
-  backoffMs?: number;
-  reason: "disabled heartbeat retry" | "max retries exhausted";
 };
 
 /** Persists non-busy trigger evaluation state without touching payload-run history. */
@@ -191,41 +183,6 @@ export function resolveTransientCronRetryDecision(params: {
     ),
     reason: "transient retry",
   };
-}
-
-export function resolveDisabledHeartbeatOneShotRetryDecision(params: {
-  consecutiveSkipped: number | undefined;
-}): DisabledHeartbeatOneShotRetryDecision {
-  const consecutiveSkipped = params.consecutiveSkipped ?? 0;
-  if (consecutiveSkipped > DEFAULT_MAX_TRANSIENT_RETRIES) {
-    return {
-      retryable: false,
-      consecutiveSkipped,
-      reason: "max retries exhausted",
-    };
-  }
-  return {
-    retryable: true,
-    consecutiveSkipped,
-    backoffMs: errorBackoffMs(
-      consecutiveSkipped,
-      DEFAULT_ERROR_BACKOFF_SCHEDULE_MS.slice(0, DEFAULT_MAX_TRANSIENT_RETRIES),
-    ),
-    reason: "disabled heartbeat retry",
-  };
-}
-
-export function shouldRetryDisabledHeartbeatOneShot(
-  job: CronJob,
-  result: { status: CronRunStatus; error?: string },
-): boolean {
-  return (
-    job.schedule.kind === "at" &&
-    job.sessionTarget === "main" &&
-    job.wakeMode === "now" &&
-    result.status === "skipped" &&
-    result.error === HEARTBEAT_SKIP_DISABLED
-  );
 }
 
 export function resolveDeliveryState(params: {

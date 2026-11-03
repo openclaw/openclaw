@@ -17,6 +17,7 @@ on:
       - "packages/plugin-package-contract/src/**"
       - "scripts/generate-npm-package-lock.mjs"
       - "scripts/generate-npm-package-lock.mts"
+      - "scripts/lib/npm-lock-package-selection.mjs"
       - "scripts/lib/bounded-response.mjs"
       - "scripts/lib/npm-publish-plan.mjs"
       - "scripts/lib/npm-json-output.mts"
@@ -125,7 +126,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   preview_plugins_npm:
@@ -251,6 +252,19 @@ jobs:
                       return False
                   raise
 
+          def require_current_main_tooling(message):
+              run_git(
+                  workspace,
+                  "fetch",
+                  "--no-tags",
+                  "origin",
+                  "+refs/heads/main:refs/remotes/origin/main",
+                  timeout=120,
+                  reclaim_locks=True,
+              )
+              if not is_ancestor("origin/main", os.environ["WORKFLOW_SHA"]):
+                  fail(message)
+
           preflight = os.environ["PREFLIGHT_ONLY"] == "true"
           if os.environ["REQUIRE_NPM_PUBLISH_ENVIRONMENT"] == "true":
               tooling_tag = re.fullmatch(
@@ -286,6 +300,18 @@ jobs:
                   fail("Plugin npm preflight must not include a release publish parent run tuple.")
               if candidate_branch.strip():
                   fail("Plugin npm preflight must not include release_candidate_branch.")
+          if os.environ["TRUSTED_PUBLISHER_PREFLIGHT"] == "true":
+              if os.environ["NPM_DIST_TAG"] != "extended-stable" and (
+                  os.environ["PUBLISH_SCOPE"] != "selected"
+                  or not os.environ["RELEASE_PLUGINS"].strip()
+              ):
+                  fail(
+                      "Regular trusted-publisher preflight requires publish_scope=selected "
+                      "with an explicit plugin list."
+                  )
+              require_current_main_tooling(
+                  "Trusted-publisher preflight tooling revision is not reachable from current main."
+              )
           if run_id.strip() and not re.fullmatch(r"[1-9][0-9]*", run_attempt):
               fail("release_publish_run_id requires the exact positive release_publish_run_attempt.")
 
@@ -338,17 +364,9 @@ jobs:
                       )
                   # The preceding identity check binds the protected tag to WORKFLOW_SHA.
                   # Source and tooling ancestry are separate release admission boundaries.
-                  run_git(
-                      workspace,
-                      "fetch",
-                      "--no-tags",
-                      "origin",
-                      "+refs/heads/main:refs/remotes/origin/main",
-                      timeout=120,
-                      reclaim_locks=True,
+                  require_current_main_tooling(
+                      "Extended-stable plugin workflow revision is not reachable from current main."
                   )
-                  if not is_ancestor("origin/main", os.environ["WORKFLOW_SHA"]):
-                      fail("Extended-stable plugin workflow revision is not reachable from current main.")
                   if is_ancestor(f"refs/remotes/origin/{extended_branch}"):
                       raise SystemExit(0)
                   fail(f"Extended-stable plugin target must be reachable from {extended_branch}.")
@@ -359,6 +377,8 @@ jobs:
                   f"refs/remotes/origin/{extended_branch}",
               ):
                   fail(f"Extended-stable plugin source must equal the exact {extended_branch} branch tip.")
+              if os.environ["TRUSTED_PUBLISHER_PREFLIGHT"] == "true":
+                  raise SystemExit(0)
               # Nonpublishing preflight accepts the canonical branch, main, or an
               # immutable release-ci transport whose pinned tooling is on main.
               workflow_ref = os.environ["WORKFLOW_REF"]
@@ -372,17 +392,9 @@ jobs:
                   workflow_sha = os.environ["WORKFLOW_SHA"]
                   if not workflow_sha.startswith(release_ci.group(1)):
                       fail("Extended-stable release-ci ref does not match the workflow SHA.")
-                  run_git(
-                      workspace,
-                      "fetch",
-                      "--no-tags",
-                      "origin",
-                      "+refs/heads/main:refs/remotes/origin/main",
-                      timeout=120,
-                      reclaim_locks=True,
+                  require_current_main_tooling(
+                      "Extended-stable release-ci workflow revision is not reachable from current main."
                   )
-                  if not is_ancestor("origin/main", workflow_sha):
-                      fail("Extended-stable release-ci workflow revision is not reachable from current main.")
                   raise SystemExit(0)
               fail(
                   f"Extended-stable plugin npm preflights must run from {extended_branch} "

@@ -1,0 +1,2 @@
+# Make gallery and catalog layout proof own the shared browser pointer state without weakening hover behavior or geometry assertions.
+8

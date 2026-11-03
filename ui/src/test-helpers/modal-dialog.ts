@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { assert, expect, vi } from "vitest";
-import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
+import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
 
 export function nextFrame() {
   return new Promise<void>((resolve) => {

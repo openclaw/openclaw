@@ -23,6 +23,7 @@ export function AgentsPage(props: { routeData?: AgentsRouteData }) {
       <SettingsWorkspace>
         <Agents
           {...viewProps()}
+          identitySavePending={state.identitySavePending()}
           renderToolsSettings={() => (
             <ControlUiSettingsSlot placement={{ section: "agents", panel: "tools" }} />
           )}

@@ -1,4 +1,5 @@
 import type { PluginToolExecutionCapabilities } from "../agents/plugin-tool-execution.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { assertMemoryAudienceSession } from "./memory-audience.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
@@ -20,6 +21,7 @@ export function createPluginToolFactoryContext(params: {
   entry: PluginToolRegistration;
   registry: PluginRegistry;
   context: OpenClawPluginToolContext;
+  manifestToolMetadata?: PluginManifestRecord["toolMetadata"];
   assertInvocationCurrent?: () => void;
   ownerContinuation?: PluginToolOwnerContinuation;
   bindExecutionCapabilities?: (
@@ -71,7 +73,15 @@ export function createPluginToolFactoryContext(params: {
             `Plugin "${entry.pluginId}" cannot inherit undeclared tool "${definition.name}".`,
           );
         }
-        context.inheritToolPolicy?.(definition);
+        // Only admitted manifest metadata may grant group membership to an unavailable tool.
+        const inherited = {
+          ...definition,
+          pluginMetadata: {
+            pluginId: entry.pluginId,
+            policyGroups: params.manifestToolMetadata?.[definition.name]?.policyGroups,
+          },
+        };
+        context.inheritToolPolicy?.(inherited);
       }),
     ...(entry.contextVersion === 2
       ? params.bindExecutionCapabilities?.(

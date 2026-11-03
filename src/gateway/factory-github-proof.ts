@@ -1,7 +1,9 @@
 import { randomBytes } from "node:crypto";
+import type { GitHubCredentialReader } from "../agents/github-credential-reader.js";
 import { resolveGitHubHost, resolveGitHubApiBaseUrl } from "../agents/github-host-runtime.js";
 import { parseEnterpriseGitHubPrincipal } from "../shared/enterprise-github-principal.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
+import { readFactoryRepositoryAdmission } from "./factory-github-repository-admission.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 
 const AUDIENCE = "lobster.github.system-token" as const;
@@ -155,7 +157,6 @@ export function redeemFactoryGitHubProof(proof: string): FactoryGitHubProofVerdi
 /** Retain original caller, profile bindings and issuer through one broker-owned operation. */
 export async function withFactoryGitHubProof<T>(
   input: {
-    env?: NodeJS.ProcessEnv;
     actorId: number;
     profileId: string;
     claim: FactoryGitHubProofClaim;
@@ -195,7 +196,7 @@ export async function withFactoryGitHubProof<T>(
       assertCurrent,
     });
     const env = {
-      ...(input.env ?? process.env),
+      ...process.env,
       GH_TOKEN: undefined,
       GH_ENTERPRISE_TOKEN: undefined,
       GITHUB_TOKEN: undefined,
@@ -213,5 +214,59 @@ export async function withFactoryGitHubProof<T>(
     return result;
   } finally {
     issued?.release();
+  }
+}
+
+export type FactoryGitHubIdentityPreparation<T> = (
+  env?: NodeJS.ProcessEnv,
+  readNativeCredential?: GitHubCredentialReader,
+  assertCurrent?: () => void,
+) => Promise<T>;
+
+/** Both admitted session reads retain proof redemption and issued-token cleanup at this owner. */
+export async function prepareFactoryGitHubIdentity<
+  T extends { revoke?: () => Promise<void> } | undefined,
+>(
+  input: {
+    client: GatewayClient | null | undefined;
+    claim: FactoryGitHubProofClaim;
+    assertCurrent: () => void;
+  },
+  prepare: FactoryGitHubIdentityPreparation<T>,
+): Promise<T> {
+  if (process.env.FACTORY_AUTH_MODE !== "github") {
+    return await prepare();
+  }
+  const actor = factoryGitHubClientProof(input);
+  let issued: T | undefined;
+  try {
+    return await withFactoryGitHubProof(actor, async (proofEnv, assertCurrent) => {
+      const { [FACTORY_GITHUB_PROOF_ENV]: proof, ...env } = proofEnv;
+      issued = await prepare(
+        env,
+        async (nativeEnv, admission) => {
+          assertCurrent();
+          if (!admission) {
+            throw new Error(
+              "Factory requires GitHub App execution; human execution credentials are disabled.",
+            );
+          }
+          await readFactoryRepositoryAdmission({
+            env: { ...nativeEnv, [FACTORY_GITHUB_PROOF_ENV]: proof },
+            request: admission,
+            claim: input.claim,
+            profileId: actor.profileId,
+            assertCurrent,
+          });
+          assertCurrent();
+          return undefined;
+        },
+        assertCurrent,
+      );
+      return issued;
+    });
+  } catch (error) {
+    await issued?.revoke?.();
+    throw error;
   }
 }

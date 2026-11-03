@@ -28,7 +28,13 @@ export type RepositoryPublicationPublisher = {
   /** Credentials are consumed only by this one-use host-bound Git operation. */
   authorizeGit(this: void, transfer: RepositoryPublicationGitTransfer): Promise<void>;
 };
+export type RepositoryPublicationPublishedPullRequest = {
+  url: string;
+  number: number;
+  pushRepository: string;
+};
 export type RepositoryPublicationTarget = {
+  publishedPullRequest?: RepositoryPublicationPublishedPullRequest;
   pullRequest?: SessionGitHubPullRequestBinding;
   pushRepository: string;
   repository: string;
@@ -83,8 +89,10 @@ export type RepositoryPublicationPersonalAction = {
   owner: string;
   assertCurrent(this: void): void;
 };
-export type RepositoryPublicationOwnPullRequestReader = ReturnType<
-  typeof import("./github-publication-inspect-reader.js").captureOwnGitHubPullRequestReader
+export type RepositoryPublicationOwnPullRequestReader = Awaited<
+  ReturnType<
+    typeof import("./github-publication-inspect-reader.js").captureOwnGitHubPullRequestReader
+  >
 >;
 
 export type RepositoryPublicationPersonalSessionAction = RepositoryPublicationPersonalAction &
@@ -212,6 +220,8 @@ export type RepositoryPublicationProvider = {
     },
   ): Promise<{
     result: SessionGitHubPullRequestInspectResult;
+    ownPublication: boolean;
+    publishedHeadCommit?: string;
     assertCurrent(this: void): void;
     assertSource(this: void, originUrl: string): void;
     verifyWriteAccess(this: void): Promise<void>;
@@ -237,11 +247,24 @@ export type RepositoryPublicationProvider = {
     this: void,
     input: {
       repositoryOnly?: boolean;
+      /** Observe the accepted destination without discovering fresh publication eligibility. */
+      recorded?: Pick<RepositoryPublicationTarget, "pushRepository" | "repository" | "baseBranch">;
       pullRequest?: SessionGitHubPullRequestBinding;
       originUrl: string;
       branch: string;
       baseRef: string;
       publisher: RepositoryPublicationPublisher;
+      assertCurrent(this: void): void;
+    },
+  ): Promise<RepositoryPublicationTarget>;
+  preparePublishedTarget(
+    this: void,
+    input: {
+      target: RepositoryPublicationTarget;
+      publisher: RepositoryPublicationPublisher;
+      publishedPullRequest: RepositoryPublicationPublishedPullRequest;
+      publisherAccountId?: number;
+      reconcile?: boolean;
       assertCurrent(this: void): void;
     },
   ): Promise<RepositoryPublicationTarget>;
@@ -279,6 +302,12 @@ export type RepositoryPublicationProvider = {
     this: void,
     input: RepositoryPublicationRemoteFacts & {
       knownPullRequestUrls: readonly string[];
+      beforeRetry?: boolean;
+      readContinuation?: (
+        this: void,
+      ) => Promise<
+        Pick<RepositoryPublicationTarget, "publishedPullRequest" | "baseBranch"> | undefined
+      >;
       pushOnly?: "observed" | "dispatched";
       assertCurrent(this: void): void;
       recordObserved(this: void, url: string): Promise<void>;

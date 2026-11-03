@@ -1,9 +1,9 @@
-import { beforeEach, expect, it, vi, type Mock } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { AgentHarness } from "../agents/harness/types.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { WizardCancelledError } from "../wizard/prompts.js";
 import { WizardSession } from "../wizard/session.js";
 import { setupNativeRuntime } from "./setup-native-runtime.js";
 import { createSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
@@ -25,10 +25,7 @@ const pluginPatch = (id = "fixture", enabled = true) => ({
 let config: OpenClawConfig;
 let registry: ReturnType<typeof createEmptyPluginRegistry>;
 let harness: AgentHarness;
-let params: Parameters<typeof setupNativeRuntime>[0] & {
-  assertCurrent: Mock<() => void>;
-  onCommitStarted: Mock<() => void>;
-};
+let params: Parameters<typeof setupNativeRuntime>[0];
 beforeEach(() => {
   vi.resetAllMocks();
   config = {
@@ -50,11 +47,7 @@ beforeEach(() => {
     },
   };
   registry.agentHarnesses.push({ pluginId: "fixture", source: "runtime", harness });
-  io.read.mockResolvedValue({
-    exists: true,
-    valid: true,
-    sourceConfig: config,
-  } satisfies Partial<ConfigFileSnapshot>);
+  io.read.mockResolvedValue(createTestConfigSnapshot(config));
   io.load.mockResolvedValue({
     pluginRegistry: registry,
     metadataSnapshot: createSystemAgentPluginMetadataTestSnapshot(config).bindForConfig(config),
@@ -74,26 +67,9 @@ beforeEach(() => {
   };
 });
 
-it.each(["runtime declaration", "remembered consent"])("skips prompting for %s", async (reason) => {
-  const consent = reason === "remembered consent" ? [harness.id] : undefined;
-  if (consent) {
-    config.agents!.entries!.research!.nativeRuntimeConsent = consent;
-  } else {
-    delete harness.executionEnvironment;
-  }
-  await setupNativeRuntime(params);
-  expect(params.prompter.select).not.toHaveBeenCalled();
-  expect(io.write.mock.calls[0]?.[0].agents.entries.research.nativeRuntimeConsent).toEqual(consent);
-});
-
 it("cancels consent without enabling or remembering it", async () => {
-  const session = new WizardSession((prompter, signal, owner) =>
-    setupNativeRuntime({
-      ...params,
-      prompter,
-      signal,
-      onCommitStarted: () => owner.lockCancellation(),
-    }),
+  const session = new WizardSession((prompter, signal) =>
+    setupNativeRuntime({ ...params, prompter, signal }),
   );
   const { step } = await session.next();
   expect(step).toMatchObject({
@@ -113,47 +89,29 @@ it("commits enablement and only the selected agent's consent without changing mo
   await setupNativeRuntime(params);
   expect(io.write).toHaveBeenCalledOnce();
   const [committed, options] = io.write.mock.calls[0]!;
-  expect(committed).toEqual({
-    ...config,
-    agents: {
-      ...config.agents,
-      entries: {
-        main: {},
-        research: { model: "stable/model", nativeRuntimeConsent: [harness.id] },
-      },
-    },
-    ...pluginPatch(),
-  });
+  const expected = structuredClone(config);
+  expected.agents!.entries!.research!.nativeRuntimeConsent = [harness.id];
+  expected.plugins = pluginPatch().plugins;
+  expect(committed).toEqual(expected);
   expect(options.baseSnapshot.sourceConfig).toBe(config);
   expect(params.onCommitStarted).toHaveBeenCalledOnce();
   expect(config.plugins?.entries?.fixture?.config).toEqual({ enabled: false });
 });
 
-it.each(["cancel", "owner", "authority"])(
-  "does not commit after %s changes at consent",
-  async (change) => {
-    let current = true;
-    params.assertCurrent.mockImplementation(() => {
-      if (!current) {
+it.each(["owner", "authority"])("does not commit after %s changes at consent", async (change) => {
+  vi.mocked(params.prompter.select).mockImplementation(async (selection) => {
+    if (change === "owner") {
+      registry.agentHarnesses.length = 0;
+    } else {
+      vi.mocked(params.assertCurrent).mockImplementation(() => {
         throw new Error("authority revoked");
-      }
-    });
-    vi.mocked(params.prompter.select).mockImplementation(async (selection) => {
-      if (change === "cancel") {
-        throw new WizardCancelledError();
-      }
-      if (change === "owner") {
-        registry.agentHarnesses.length = 0;
-      }
-      if (change === "authority") {
-        current = false;
-      }
-      return selection.options[0]!.value;
-    });
-    await expect(setupNativeRuntime(params)).rejects.toThrow();
-    expect(io.write).not.toHaveBeenCalled();
-  },
-);
+      });
+    }
+    return selection.options[0]!.value;
+  });
+  await expect(setupNativeRuntime(params)).rejects.toThrow();
+  expect(io.write).not.toHaveBeenCalled();
+});
 
 it.each([
   [

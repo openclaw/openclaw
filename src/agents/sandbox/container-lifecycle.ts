@@ -10,6 +10,11 @@ import { containerHasTerminated } from "./container-inspect.js";
 
 const log = createSubsystemLogger("docker");
 const sandboxContainerLifecycleQueue = new KeyedAsyncQueue();
+const pendingLifecycles = new Map<string, number>();
+
+export function isSandboxContainerLifecycleBusy(name: string): boolean {
+  return pendingLifecycles.has(name);
+}
 
 export type ContainerSourceLease = {
   authority: AdmittedRunOperatorAuthority;
@@ -206,9 +211,16 @@ export async function withSandboxContainerLifecycle<T>(
   operation: (source: ContainerSourceLease | undefined) => Promise<T>,
 ): Promise<T> {
   const source = retainContainerSource(authority);
+  pendingLifecycles.set(name, (pendingLifecycles.get(name) ?? 0) + 1);
   try {
     return await sandboxContainerLifecycleQueue.enqueue(name, () => operation(source));
   } finally {
+    const pending = pendingLifecycles.get(name)! - 1;
+    if (pending) {
+      pendingLifecycles.set(name, pending);
+    } else {
+      pendingLifecycles.delete(name);
+    }
     if (source && !source.adopted) {
       source.release();
     }

@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsRow,
@@ -107,15 +108,22 @@ export function AgentCron(
       <CronReadBoundary read={params.read().command} reportError>
         {(_pending, message) => (message ? <div class="callout danger">{message}</div> : undefined)}
       </CronReadBoundary>
+      <Show when={params.read().command && params.readState().cronNotice}>
+        {(notice) => (
+          <div class="callout" role="status">
+            {notice()}
+          </div>
+        )}
+      </Show>
       <SettingsSection
         title={t("agents.cronPanel.schedulerTitle")}
         description={t("agents.cronPanel.schedulerSubtitle")}
         actions={
           <CronReadBoundary read={params.read().refresh}>
             {(pending) => (
-              <AgentPanelAction
-                label={pending ? t("common.refreshing") : t("common.refresh")}
-                disabled={pending}
+              <RefreshButton
+                label={t("common.refresh")}
+                busy={pending}
                 onClick={params.onRefresh}
               />
             )}

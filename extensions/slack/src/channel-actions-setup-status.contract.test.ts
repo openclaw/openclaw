@@ -53,6 +53,7 @@ function expectSharedSigningSecret(cfg: OpenClawConfig, accountId: string) {
 
 const slackDefaultActions = [
   "send",
+  "channel-create",
   "conversation-open",
   "react",
   "reactions",
@@ -78,7 +79,11 @@ installChannelActionsContractSuite({
   cases: [
     {
       name: "configured account exposes default Slack actions",
-      cfg: slackConfig({ botToken: "xoxb-test", appToken: "xapp-test" }),
+      cfg: slackConfig({
+        botToken: "xoxb-test",
+        appToken: "xapp-test",
+        actions: { channels: true },
+      }),
       expectedActions: slackDefaultActions,
       expectedCapabilities: ["presentation"],
     },

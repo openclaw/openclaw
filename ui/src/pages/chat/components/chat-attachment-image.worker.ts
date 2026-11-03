@@ -46,4 +46,5 @@ function onMessage({ data }: MessageEvent<ChatAttachmentImageRequest>) {
   );
 }
 
+// The dedicated worker accepts one job; onMessage detaches before decoding it.
 globalThis.addEventListener("message", onMessage);

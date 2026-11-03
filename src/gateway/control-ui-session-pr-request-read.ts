@@ -2,12 +2,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { factoryGitHubClientProof } from "./factory-github-proof.js";
-import { withFactoryPublicationIdentity } from "./github-publication-factory-identity.js";
+import {
+  prepareFactoryGitHubIdentity,
+  type FactoryGitHubIdentityPreparation,
+} from "./factory-github-proof.js";
 import type { PreparedRepositorySessionRead } from "./repository-session-read.types.js";
 
 export type RepositoryReadCredentialPreparation<T extends { revoke?: () => Promise<void> }> =
-  Parameters<typeof withFactoryPublicationIdentity<T>>[2];
+  FactoryGitHubIdentityPreparation<T>;
 
 /** Request-only source custody; callers cannot supply a client, profile or session incarnation. */
 export function captureRepositorySessionRequestRead() {
@@ -127,19 +129,7 @@ function createRepositorySessionRequestRead(
                   },
                   assertCurrent: assertReadCurrent,
                 };
-                const actor =
-                  process.env.FACTORY_AUTH_MODE === "github"
-                    ? factoryGitHubClientProof({
-                        client,
-                        claim: credential.claim,
-                        assertCurrent: assertReadCurrent,
-                      })
-                    : undefined;
-                return await withFactoryPublicationIdentity(
-                  actor ? { ...actor, sessionKey: read.session.sessionKey } : undefined,
-                  credential,
-                  run,
-                );
+                return await prepareFactoryGitHubIdentity({ client, ...credential }, run);
               },
             });
             assertReadCurrent();

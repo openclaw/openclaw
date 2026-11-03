@@ -17,8 +17,6 @@ import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 type DiscordRuntime = Parameters<typeof setDiscordRuntime>[0];
 
 const hoisted = vi.hoisted(() => {
-  const sendMessageDiscord = vi.fn(async (_to: string, _text: string, _opts?: unknown) => ({}));
-  const sendWebhookMessageDiscord = vi.fn(async (_text: string, _opts?: unknown) => ({}));
   const restGet = vi.fn(async (..._args: unknown[]) => ({
     id: "thread-1",
     type: 11,
@@ -28,43 +26,36 @@ const hoisted = vi.hoisted(() => {
     id: "wh-created",
     token: "tok-created",
   }));
-  const createDiscordRestClient = vi.fn((..._args: unknown[]) => ({
-    rest: { get: restGet, post: restPost },
-  }));
-  const createThreadDiscord = vi.fn(async (..._args: unknown[]) => ({ id: "thread-created" }));
-  const readAcpSessionEntryAsync = vi.fn();
   return {
-    sendMessageDiscord,
-    sendWebhookMessageDiscord,
+    sendMessageDiscord: vi.fn(async (_to: string, _text: string, _opts?: unknown) => ({})),
+    sendWebhookMessageDiscord: vi.fn(async (_text: string, _opts?: unknown) => ({})),
     restGet,
     restPost,
-    createDiscordRestClient,
-    createThreadDiscord,
-    readAcpSessionEntryAsync,
+    createDiscordRestClient: vi.fn((..._args: unknown[]) => ({
+      rest: { get: restGet, post: restPost },
+    })),
+    createThreadDiscord: vi.fn(async (..._args: unknown[]) => ({ id: "thread-created" })),
+    readAcpSessionEntryAsync: vi.fn(),
   };
 });
 
-vi.mock("../send.js", async () => {
-  return {
-    ...(await vi.importActual<typeof import("../send.js")>("../send.js")),
-    addRoleDiscord: vi.fn(),
-    sendMessageDiscord: hoisted.sendMessageDiscord,
-    sendWebhookMessageDiscord: hoisted.sendWebhookMessageDiscord,
-  };
-});
+vi.mock("../send.js", async () => ({
+  ...(await vi.importActual<typeof import("../send.js")>("../send.js")),
+  addRoleDiscord: vi.fn(),
+  sendMessageDiscord: hoisted.sendMessageDiscord,
+  sendWebhookMessageDiscord: hoisted.sendWebhookMessageDiscord,
+}));
 
 vi.mock("../send.messages.js", () => ({
   createThreadDiscord: hoisted.createThreadDiscord,
 }));
 
-vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
-  return {
-    ...(await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
-      "openclaw/plugin-sdk/acp-runtime",
-    )),
-    readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsync,
-  };
-});
+vi.mock("openclaw/plugin-sdk/acp-runtime", async () => ({
+  ...(await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
+    "openclaw/plugin-sdk/acp-runtime",
+  )),
+  readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsync,
+}));
 
 const { createThreadBindingManager } = await import("./thread-bindings.manager.js");
 const discordClientModule = await import("../client.js");

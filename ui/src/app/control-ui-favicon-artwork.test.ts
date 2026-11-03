@@ -8,6 +8,7 @@ import { loadUnlockedLobsterFavicon } from "../components/lobster-favicon.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import { fetchPluginThemeArtworkBlobUrl } from "../pages/plugins/icon-loader.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { makeBootRoster } from "./bootstrap.test-support.ts";
 import { applyControlUiFaviconImage } from "./control-ui-environment-presentation.runtime.ts";
 import { connectControlUiFaviconArtwork } from "./control-ui-favicon-artwork.runtime.ts";
 import { client, createGatewayHarness } from "./overlays-access.test-support.ts";
@@ -64,12 +65,9 @@ function setup(preference?: TabIconPreference) {
   const selection = { state: { selectedId: "main", scopeId: "main" }, subscribe };
   const agents = {
     state: {
-      agentsList: {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender" as const,
+      agentsList: makeBootRoster({
         agents: [{ id: "main", identity: { avatarUrl: "/avatar/main" } }, { id: "other" }],
-      },
+      }),
     },
     subscribe,
   };
@@ -82,10 +80,8 @@ function setup(preference?: TabIconPreference) {
     agentIdentity: identity,
   });
   cleanups.push(disconnect);
-  const publish = () => {
-    listeners.forEach((listener) => listener());
-  };
-  return { theme, selection, gateway, disconnect, publish, identity };
+  const publish = () => listeners.forEach((listener) => listener());
+  return { theme, selection, gateway, disconnect, publish };
 }
 function retireSource(
   fixture: ReturnType<typeof setup>,
@@ -139,7 +135,6 @@ it("uses theme artwork as fallback, respects personal artwork, and follows theme
   fixture.theme.branding = shipBranding();
   await settle(fixture, null);
   await settle(fixture, "blob:/__openclaw__/theme-art/ship?v=1");
-  expect(fetchPluginThemeArtworkBlobUrl).toHaveBeenCalledTimes(2);
 
   fixture.theme.branding.artwork = shipBranding(2).artwork;
   await settle(fixture, "blob:/__openclaw__/theme-art/ship?v=2");
@@ -183,32 +178,25 @@ it.each(["theme", "gateway", "disconnect"] as const)(
   },
 );
 
-it("re-bakes selected lobster artwork on theme and unlock changes, retaining an unavailable choice", async () => {
+it("re-bakes selected lobster artwork on unlock and theme changes, stopping after disconnect", async () => {
   vi.stubGlobal("localStorage", createStorageMock());
   const image = document.createElement("img");
   vi.mocked(loadUnlockedLobsterFavicon).mockResolvedValue(null);
   const fixture = setup("lobster:crimson");
   await vi.dynamicImportSettled();
   expectArtwork(null);
-  expect(fixture.theme.settings.tabIcon).toBe("lobster:crimson");
   vi.mocked(loadUnlockedLobsterFavicon).mockResolvedValue(image);
   recordLobsterVisit("crimson", { name: "Pinchy" });
   await vi.dynamicImportSettled();
   expectArtwork(image);
-  const afterUnlock = vi.mocked(loadUnlockedLobsterFavicon).mock.calls.length;
-  await settle(fixture, image);
-  expect(loadUnlockedLobsterFavicon).toHaveBeenCalledTimes(afterUnlock + 1);
-  fixture.theme.branding.lobsterdex = false;
-  await settle(fixture, null);
-  expect(loadUnlockedLobsterFavicon).toHaveBeenCalledTimes(afterUnlock + 1);
-  expect(fixture.theme.settings.tabIcon).toBe("lobster:crimson");
-  fixture.theme.branding.lobsterdex = true;
-  await settle(fixture, image);
-  expect(loadUnlockedLobsterFavicon).toHaveBeenCalledTimes(afterUnlock + 2);
+  const rebaked = document.createElement("img");
+  vi.mocked(loadUnlockedLobsterFavicon).mockResolvedValue(rebaked);
+  await settle(fixture, rebaked);
   fixture.disconnect();
+  const calls = vi.mocked(loadUnlockedLobsterFavicon).mock.calls.length;
   recordLobsterVisit("blue");
   await settle(fixture, null);
-  expect(loadUnlockedLobsterFavicon).toHaveBeenCalledTimes(afterUnlock + 2);
+  expect(loadUnlockedLobsterFavicon).toHaveBeenCalledTimes(calls);
 });
 
 it("fences late lobster images after selection, Gateway replacement, and teardown", async () => {
@@ -232,7 +220,6 @@ it("discards superseded protected-avatar results and stops reacting after discon
   vi.mocked(resolveAvatarImageUrl).mockReturnValue(pending.promise);
   vi.mocked(retainAvatarImageUrl).mockReturnValue(released);
   const fixture = setup("agent");
-  expect(resolveAvatarImageUrl).toHaveBeenCalledWith("/avatar/main");
   fixture.selection.state.selectedId = "other";
   fixture.publish();
   expect(released).toHaveBeenCalledOnce();

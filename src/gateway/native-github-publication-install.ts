@@ -172,6 +172,8 @@ export async function installRepositoryPublicationProvider(
       signal.throwIfAborted();
       return {
         result: inspected.result,
+        ownPublication: inspected.ownPublication,
+        publishedHeadCommit: inspected.publishedHeadCommit,
         assertCurrent() {
           signal.throwIfAborted();
           inspected.assertCurrent();
@@ -203,6 +205,7 @@ export async function installRepositoryPublicationProvider(
       };
     },
     prepareTarget: (input) => provider.prepareTarget(restoreInput(input)),
+    preparePublishedTarget: (input) => provider.preparePublishedTarget(restoreInput(input)),
     readBase: (input) => provider.readBase(restoreInput(input)),
     observeBranch: (input) => provider.observeBranch(restoreInput(input)),
     findPullRequest: (input) => provider.findPullRequest(restoreInput(input)),

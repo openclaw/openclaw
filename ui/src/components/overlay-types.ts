@@ -20,6 +20,8 @@ export interface OverlayOptions {
   reflectTriggerExpanded?: boolean;
   /** Only members of the same group displace one another. Dialogs have no group. */
   exclusiveGroup?: string;
+  /** Resolve external nesting before an opening captures its transition intent. */
+  prepareOpen?(): void;
   isValid?(surface: HTMLElement, trigger?: HTMLElement): boolean;
   dismissOutsidePointer?: boolean;
   dismissOutsideFocus?: boolean;

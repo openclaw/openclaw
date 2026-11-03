@@ -23,7 +23,11 @@ Inspect shows identity, load status, source, manifest capabilities, policy flags
 Default human inspection uses `enabled`, `disabled`, or `error` status labels,
 matching `plugins list`. It describes the metadata snapshot; it does not claim
 that a plugin module was imported. With `--runtime`, successful runtime inspection
-uses `loaded`. JSON retains the underlying registry status and separate `imported` field.
+uses `CLI status: loaded` for this CLI process's module load, not the Gateway.
+JSON labels those registrations with `inspectionScope: "cli"` and retains the
+underlying registry status and separate `imported` field. Gateway status is queried
+separately through the existing `plugins.list` RPC when a local Gateway is running.
+JSON includes that result as `gatewayRuntime`, or `null` when unavailable.
 Known-incompatible plugins remain visible with their repair guidance. Their
 diagnostics do not prevent inspection of other plugins, including with `--runtime`.
 
@@ -88,6 +92,23 @@ registrations are not disposed by this inspection.
 If a configured plugin is present on disk but blocked by the loader's path-safety checks, config validation keeps the plugin entry and reports it as `present but blocked`. Fix the preceding blocked-plugin diagnostic, such as path ownership or world-writable permissions, instead of removing the `plugins.entries.<id>` or `plugins.allow` config.
 
 For module-shape failures such as missing `register`/`activate` exports, rerun with `OPENCLAW_PLUGIN_LOAD_DEBUG=1` to include a compact export-shape summary in the diagnostic output.
+
+### Doctor priorities and repair steps
+
+The main `openclaw doctor` summary puts current plugin inspection and loading
+failures under **Fix now**. Run `openclaw plugins inspect <id> --runtime` for the
+named plugin, then repair its configured path, ownership, dependencies, or install
+according to that diagnostic. For an incompatible official plugin, run
+`openclaw plugins update <id>` and rerun Doctor. Preserve an enabled plugin's
+configuration while repairing its files.
+
+Legacy compatibility notices are **Recommended improvements**: update or replace
+the affected plugin to remove its dependence on legacy APIs. A plugin version
+mismatch includes a confirmed update command when one is available; update before
+restarting the Gateway. When no compatible registry release exists, keep the
+current install and check for a compatible release rather than attempting an
+unavailable version. These local findings do not replace the running Gateway's
+health check.
 
 ## Registry
 

@@ -10,7 +10,6 @@ type PluginAuditContext = {
   stateDir: string;
   configPath: string;
   workspaceDir?: string;
-  includeChannelSecurity: boolean;
   plugins?: AnyChannelPlugin[];
   loadPluginSecurityCollectors: boolean;
 };
@@ -47,7 +46,7 @@ export async function collectPluginSecurityAuditFindings(
           .map(([id]) => id),
       ]),
     );
-    if (context.includeChannelSecurity && context.plugins !== undefined) {
+    if (context.plugins !== undefined) {
       const { resolveConfiguredChannelPluginIdsAsync } =
         await import("../plugins/channel-plugin-ids.js");
       const auditedChannelPluginIds = new Set(context.plugins.map((plugin) => plugin.id));

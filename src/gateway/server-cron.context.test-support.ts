@@ -42,10 +42,8 @@ type GatewayCronContextTestHarness = {
     run: (state: CronFixture) => void | Promise<void>,
   ) => Promise<void>;
   finishedEvent: (jobId?: string) => Record<string, unknown> | undefined;
-  legacyWakeMocks: {
+  legacyEventMocks: {
     enqueue: typeof import("../infra/system-events.js").enqueueSystemEvent;
-    wake: typeof import("../infra/heartbeat-wake.js").requestHeartbeatAndWait;
-    requestWake: typeof import("../infra/heartbeat-wake.js").requestHeartbeat;
   };
   createCronService: (
     cfg: OpenClawConfig,
@@ -73,7 +71,7 @@ export function registerGatewayCronContextTests({
   createMultiAgentConfig,
   withCronService,
   finishedEvent,
-  legacyWakeMocks,
+  legacyEventMocks,
   createCronService,
   getCronState,
   addAgentTurnJob,
@@ -88,6 +86,13 @@ export function registerGatewayCronContextTests({
     const cfg = createCronConfig(name);
     loadConfigMock.mockReturnValue(cfg);
     return cfg;
+  }
+  function expectWake(text: string, route: Record<string, unknown>) {
+    expect(enqueueSessionEventMock).toHaveBeenCalledExactlyOnceWith(
+      text,
+      expect.objectContaining({ source: "cron", ...route }),
+    );
+    expect(legacyEventMocks.enqueue).not.toHaveBeenCalled();
   }
   function timedConfig(name: string, hour: string) {
     vi.useFakeTimers();
@@ -156,9 +161,7 @@ export function registerGatewayCronContextTests({
           }),
         );
         expect(finishedEvent(job.id)).toMatchObject({ status: "ok" });
-        expect(legacyWakeMocks.enqueue).not.toHaveBeenCalled();
-        expect(legacyWakeMocks.wake).not.toHaveBeenCalled();
-        expect(legacyWakeMocks.requestWake).not.toHaveBeenCalled();
+        expect(legacyEventMocks.enqueue).not.toHaveBeenCalled();
       });
     },
   );
@@ -171,16 +174,7 @@ export function registerGatewayCronContextTests({
         ok: true,
       });
 
-      expect(enqueueSessionEventMock).toHaveBeenCalledExactlyOnceWith(
-        "hello",
-        expect.objectContaining({
-          source: "cron",
-          agentId: "ops",
-          sessionKey: expect.stringMatching(/^agent:ops:/),
-        }),
-      );
-      expect(legacyWakeMocks.enqueue).not.toHaveBeenCalled();
-      expect(legacyWakeMocks.requestWake).not.toHaveBeenCalled();
+      expectWake("hello", { agentId: "ops", sessionKey: expect.stringMatching(/^agent:ops:/) });
     });
   });
 
@@ -192,16 +186,7 @@ export function registerGatewayCronContextTests({
     await withCronService(cfg, async (state) => {
       expect(await state.cron.wake({ mode: "now", text: "system wake" })).toEqual({ ok: true });
 
-      expect(enqueueSessionEventMock).toHaveBeenCalledExactlyOnceWith(
-        "system wake",
-        expect.objectContaining({
-          source: "cron",
-          agentId: "ops",
-          sessionKey: "agent:ops:main",
-        }),
-      );
-      expect(legacyWakeMocks.enqueue).not.toHaveBeenCalled();
-      expect(legacyWakeMocks.requestWake).not.toHaveBeenCalled();
+      expectWake("system wake", { agentId: "ops", sessionKey: "agent:ops:main" });
     });
   });
 

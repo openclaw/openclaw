@@ -2,8 +2,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerXAllowlistMethods } from "./admin.js";
-import { createXApiClient, type XFetch } from "./api.js";
 import { openXSpend, XBudgetExceededError } from "./spend.js";
+import { createXTestApi as createXApiClient, type XFetch } from "./test-support/api-client.js";
 import { createKeyedState } from "./test-support/monitor.js";
 import { createXTestSpend } from "./test-support/spend.js";
 
@@ -153,10 +153,11 @@ describe("X allowlist Gateway methods", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it.each(["implicit default", "explicit default", "named account"])(
+  it.each(["implicit default", "explicit default", "mixed-case default", "named account"])(
     "persists guest mode for the %s while preserving other account settings",
     async (selection) => {
       const accountId = selection === "named account" ? "second" : "default";
+      const key = selection === "mixed-case default" ? "Default" : accountId;
       const { invoke, getConfig } = gateway(undefined, {
         channels: {
           x: {
@@ -165,7 +166,9 @@ describe("X allowlist Gateway methods", () => {
             guests: { enabled: false, maxMentionsPerAuthorPerDay: 7 },
             costLimits: { dailyUsd: 100, monthlyUsd: 1000, cycleStartDay: 20 },
             accounts: {
-              ...(selection === "explicit default" ? { default: {} } : {}),
+              ...(selection === "explicit default" || selection === "mixed-case default"
+                ? { [key]: {} }
+                : {}),
               second: {
                 userId: "101",
                 username: "second_bot",
@@ -181,6 +184,10 @@ describe("X allowlist Gateway methods", () => {
         true,
         expect.objectContaining({
           accountId,
+          accounts: [
+            { accountId: "default", username: "example_bot" },
+            { accountId: "second", username: "second_bot" },
+          ],
           spend: expect.objectContaining({
             dailyLimitUsd: selection === "named account" ? 5 : 100,
             monthlyLimitUsd: 1000,
@@ -195,7 +202,7 @@ describe("X allowlist Gateway methods", () => {
         }),
       );
       const channel = getConfig().channels!.x;
-      const selected = selection === "implicit default" ? channel : channel.accounts[accountId];
+      const selected = selection === "implicit default" ? channel : channel.accounts[key];
       expect(selected.guests.enabled).toBe(true);
       expect(channel.guests.maxMentionsPerAuthorPerDay).toBe(7);
       expect(channel.accounts.second.guests.threadContextMaxPosts).toBe(4);
@@ -410,6 +417,54 @@ describe("X allowlist Gateway methods", () => {
       accounts: [{ accountId: "maintainers", username: "maintainers_bot" }],
       entries: [{ userId: "40", configured: true, editable: false }],
     });
+  });
+
+  it("manages an account whose config key is mixed case", async () => {
+    const { invoke, getConfig } = gateway(undefined, {
+      channels: {
+        x: { accounts: { Work: { userId: "101", username: "work_bot", allowFrom: [] } } },
+      },
+    });
+    expect(await invoke("x.allowlist.list")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        accountId: "work",
+        accounts: [{ accountId: "work", username: "work_bot" }],
+      }),
+    );
+    expect(
+      await invoke("x.allowlist.add", { accountId: "Work", username: "maintainer" }),
+    ).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        accountId: "work",
+        entries: [expect.objectContaining({ userId: "30", editable: true })],
+      }),
+    );
+    expect(
+      await invoke("x.allowlist.remove", { accountId: "work", userId: "30" }),
+    ).toHaveBeenCalledWith(true, expect.objectContaining({ accountId: "work", entries: [] }));
+    expect(await invoke("x.guests.set", { accountId: "Work", enabled: true })).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ guests: expect.objectContaining({ enabled: true }) }),
+    );
+    expect(getConfig().channels?.x).toEqual({
+      accounts: {
+        Work: { userId: "101", username: "work_bot", allowFrom: [], guests: { enabled: true } },
+      },
+    });
+  });
+
+  it("never writes a named account's guest mode to the channel root", async () => {
+    // Root guest settings apply to every account; an id without a config entry must fail instead.
+    const { invoke, getConfig } = gateway(undefined, {
+      channels: { x: { accounts: { "Work Bot": { userId: "101", username: "work_bot" } } } },
+    });
+    const before = structuredClone(getConfig());
+    expect(
+      await invoke("x.guests.set", { accountId: "work-bot", enabled: true }),
+    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "INVALID_REQUEST" }));
+    expect(getConfig()).toEqual(before);
   });
 
   it("resolves handles, records the caller, merges config IDs, and removes only stored grants", async () => {

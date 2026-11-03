@@ -1,5 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
+import { normalizeToolPolicyName } from "../agents/tool-policy-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
@@ -9,7 +11,7 @@ import type {
   PluginManifestCapabilityProviderAuthSignal,
   PluginManifestCapabilityProviderConfigSignal,
 } from "./manifest.js";
-import type { PluginToolAllowlist } from "./tool-grant-allowlist.js";
+import type { createPluginToolAllowlist } from "./tool-grant-allowlist.js";
 
 function readPath(root: unknown, path: string | undefined): unknown {
   if (!path?.trim()) {
@@ -194,7 +196,7 @@ export function hasManifestToolAvailability(params: {
 }
 
 export function manifestToolAllowed(
-  allowlist: PluginToolAllowlist,
+  allowlist: ReturnType<typeof createPluginToolAllowlist>,
   plugin: PluginManifestRecord | undefined,
   pluginId: string,
   name: string,
@@ -204,5 +206,30 @@ export function manifestToolAllowed(
     Boolean(
       plugin?.toolMetadata?.[name]?.policyGroups?.some((group) => allowlist.allowsToolName(group)),
     )
+  );
+}
+
+export function normalizeDenylist(list?: string[]) {
+  return compileGlobPatterns({
+    raw: list,
+    normalize: normalizeToolPolicyName,
+  });
+}
+
+export function denylistBlocksName(
+  name: string,
+  denylist: ReturnType<typeof normalizeDenylist>,
+): boolean {
+  const normalized = normalizeToolPolicyName(name);
+  return normalized ? matchesAnyGlobPattern(normalized, denylist) : false;
+}
+
+export function denylistBlocksPlugin(params: {
+  pluginId: string;
+  denylist: ReturnType<typeof normalizeDenylist>;
+}): boolean {
+  return (
+    denylistBlocksName(params.pluginId, params.denylist) ||
+    matchesAnyGlobPattern("group:plugins", params.denylist)
   );
 }

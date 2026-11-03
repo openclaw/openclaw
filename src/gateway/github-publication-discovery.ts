@@ -12,8 +12,15 @@ import {
 } from "../sessions/session-row-changes.js";
 import type { PublicationSessionIdentity } from "./github-publication-availability.js";
 import type { RepositoryPublicationProvider } from "./repository-publication-contract.js";
+import type { SelectionRow } from "./session-row-projection-record.js";
 import type { RepositoryWorkerPublicationFact } from "./worker-environments/worker-github-binding.js";
 
+type WorkspaceRow = Pick<SelectionRow, "agentId" | "key" | "entry">;
+type DiscoveryProjection = {
+  onSelectionChange(
+    listener: (change: { kind: "reset" } | { kind: "row"; row?: WorkspaceRow }) => void,
+  ): void;
+};
 const unavailable: RepositoryWorkerPublicationFact = { available: false };
 const MAX_AGE_MS = 60_000;
 
@@ -21,11 +28,13 @@ const MAX_AGE_MS = 60_000;
 export function createRepositoryPublicationDiscovery(params: {
   scheduler: GatewayScheduler;
   getProvider(): RepositoryPublicationProvider;
+  projection?: DiscoveryProjection;
 }) {
   const inOwner = AsyncLocalStorage.snapshot();
   const scheduler = params.scheduler.scope();
   const sessions = new LruCache<{
     session: PublicationSessionIdentity;
+    binding?: string;
     incognito?: Pick<CapturedSessionActorStorageOwner, "owner" | "agentId" | "path">;
     fact: RepositoryWorkerPublicationFact;
     refreshAfterMs: number;
@@ -110,6 +119,49 @@ export function createRepositoryPublicationDiscovery(params: {
       refresh(key, true);
     }
   };
+  const observe = (row: WorkspaceRow) => {
+    if (scheduler.signal.aborted) {
+      return;
+    }
+    const session = { agentId: row.agentId, sessionKey: row.key, sessionId: row.entry.sessionId };
+    const key = keyOf(session);
+    const previous = sessions.peek(key);
+    if (!previous) {
+      return;
+    }
+    if (!row.entry.repositoryWorkspaceId && !row.entry.worktree?.id) {
+      // Resident absence retires pending credentials; only renewed demand may rebind.
+      sessions.delete(key);
+      return;
+    }
+    const binding = JSON.stringify([
+      row.entry.lifecycleRevision,
+      row.entry.worktree,
+      row.entry.repositoryWorkspaceId,
+    ]);
+    if (previous.session.sessionId !== session.sessionId || previous.binding !== binding) {
+      sessions.set(key, { session, binding, fact: unavailable, refreshAfterMs: 0 });
+      refresh(key);
+    }
+  };
+  const bindProjection = (projection: DiscoveryProjection | undefined) => {
+    if (!projection) {
+      return;
+    }
+    projection.onSelectionChange((change) => {
+      if (scheduler.signal.aborted) {
+        return;
+      }
+      if (change.kind === "row" && change.row) {
+        observe(change.row);
+      } else if (change.kind === "reset") {
+        sessions.clear();
+      }
+    });
+  };
+  if (params.projection) {
+    bindProjection(params.projection);
+  }
   const stopChanges = sessionChanges.subscribeFacts((change) => {
     if ("all" in change) {
       if (
@@ -131,7 +183,11 @@ export function createRepositoryPublicationDiscovery(params: {
         current?.session.sessionKey === change.sessionKey &&
         (!change.agentId || current.session.agentId === change.agentId)
       ) {
-        refresh(key, true);
+        if (change.facts?.kind === "removed") {
+          sessions.delete(key);
+        } else {
+          refresh(key, true);
+        }
       }
     }
   });
@@ -147,6 +203,7 @@ export function createRepositoryPublicationDiscovery(params: {
     { once: true },
   );
   return {
+    bindProjection,
     clear,
     invalidate,
     read(session: PublicationSessionIdentity): RepositoryWorkerPublicationFact {

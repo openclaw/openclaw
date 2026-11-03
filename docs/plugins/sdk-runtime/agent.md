@@ -40,6 +40,8 @@ compaction with session-store patches and harness calls. The result contains
 `compacted`, optional `reason`, and optional `tokensBefore` and `tokensAfter`
 snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
+Opted-in authorized commands may also use [command-scoped native children](/plugins/sdk-runtime/background-work#command-scoped-native-children) through `ctx.runtimeContext?.subagents`.
+
 ## Auth-profile resolution
 
 The experimental `openclaw/plugin-sdk/agent-runtime` entrypoint exports
@@ -108,7 +110,8 @@ this same worker path. Incognito retains its process-local persistence owner;
 its awaited API preserves the same completion ordering.
 
 The low-level `persistAsync` retains its raw persistence contract and does not add
-the supplied entry to the loaded tree; use an append method or reload afterward.
+the supplied entry to the loaded tree. It does not prepare a replacement view;
+use an append method or explicitly await `reloadPersistedTranscriptAsync()` afterward.
 `branchAsync` and `resetLeafAsync` prepare navigation in queue order without
 writing a leaf record by themselves. The synchronous `resetLeaf()` remains a
 supported in-memory operation.
@@ -443,6 +446,24 @@ Each `SessionTranscriptMessageEntry` contains:
 
     `resolveThinkingPolicy(...)` returns the provider/model's supported thinking levels and optional default. Provider plugins own the model-specific profile through their thinking hooks, so tool plugins should call this runtime helper instead of importing or duplicating provider lists.
 
+    `explainToolAvailability({ agentId?, sessionKey?, toolNames, pluginId? })` explains whether named tools reach an agent or one session. It replays the same final tool-policy composition that agent runs use, with the current runtime config. Pass `pluginId` for tools your plugin owns, so plugin-ID and `group:plugins` policy entries match; omit it for core tools.
+
+    ```typescript
+    const report = await api.runtime.agent.explainToolAvailability({
+      sessionKey,
+      toolNames: ["memory_save"],
+      pluginId: "my-memory",
+    });
+    for (const tool of report.tools) {
+      if (!tool.available) {
+        // tool.block: { stage, source?, detail, fix }
+        console.warn(`${tool.name} hidden at ${tool.block.stage}: ${tool.block.detail} ${tool.block.fix}`);
+      }
+    }
+    ```
+
+    The result is `{ agentId, sandbox: { mode, source, sandboxed? }, tools }`. Each blocked tool names one stage: `deny` (an explicit deny entry, which wins over earlier exclusions), `harness` (the harness or CLI backend does not expose OpenClaw tools), `model` (the model has no tool support), `sandbox` (sandbox tool policy), `profile`, `provider-policy` (`tools.byProvider`), `allowlist`, or `session` (group, sender, subagent, or inherited policy). `source` names the config path that removed the tool, and `fix` gives a generic remedy. An agent query (no `sessionKey`) covers configured policy only; a session query adds that session's model, harness, and sandbox, and matches group and account tool policy through the session's delivery route. Plugin manifest tool-profile grants apply as they do for real runs. `sandbox.mode` and `sandbox.source` report the agent's sandbox setting, so a plugin whose tool factory refuses sandboxed runs can explain that gate in its own words. The call is read-only and does not grant access.
+
     `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the standard stored level before checking it against the resolved policy.
 
     `resolveSessionCatalogCreateTarget(...)` is the supported synchronous policy interface for trusted native plugins that implement `SessionCatalogProvider.resolveCreateSession`. It selects the first candidate model routed to the requested runtime and allowed for the requested or default agent. It returns `undefined` when no candidate satisfies both policies. Use this helper instead of importing or duplicating core model-selection policy in a plugin.
@@ -519,6 +540,10 @@ Each `SessionTranscriptMessageEntry` contains:
 
     Maintenance and repair plugins may use `deleteSessionEntry(...)` for one scoped session entry, `cleanupSessionLifecycleArtifacts(...)` for lifecycle-owned scratch sessions, and `deleteSessionEntry({ ..., backupDir })` to complete a recovery snapshot before deletion. When repairing several entries in one store, pass `backupDir` on the first deletion only. The backup uses the verified SQLite snapshot owner, embeds retained cold transcripts, and publishes a standalone database without WAL or SHM sidecars alongside any legacy session index. Use a fresh backup directory; existing target files are never overwritten. `resolveSessionStoreBackupPaths(...)` remains an artifact inventory, not a safe file-copy protocol. Pass `expectedSessionId` and `expectedUpdatedAt` when deletion must not race a concurrent session update; use `expectedSessionId: null` when the earlier snapshot had no session id. These helpers are narrow repair/lifecycle surfaces, not a general store deletion API.
 
+    For person-filtered disclosure, use `api.runtime.agent.session.withSessionEntriesAsync({ stores: [{ agentId, storePath, sessionKeys }], involvingProfileId, env }, consume)`. The optional `involvingProfileId` selects an exact source-local profile ID or merge alias, matching canonical effective human owners or direct profile participants; a trusted creator is the effective owner only when no owner is assigned. Mentions alone do not match. This filter is distinct from Activity filters. Personal hide/show state does not change this selection. Missing profiles, names, logins, and shortened display references match nothing. Identity resolution respects the optional `env` scope. Omit `involvingProfileId` for an unfiltered selection; an empty value matches nothing.
+
+    The host prepares selected stores off-thread and retains their physical sources through the synchronous `consume(entries)` callback. After the selected stores are prepared, the shared-state worker reads a fresh canonical profile snapshot without reusing resident catalogs or inherited inspection snapshots. Local identity changes invalidate that prepared selection. Final native reads select current session metadata after the last await. Profile and session reads are separate snapshots; an external profile commit after the profile snapshot is not covered by the local identity guard. After awaited preparation, revalidate current configuration, selected groups, exact session IDs, source/currentness checks, and other caller-owned policy inside that callback, then serialize without awaiting. Returning a Promise is rejected; returned metadata carries no authority after the callback. Person selection does not grant viewer access or replace the publishing plugin's explicit filters and safety exclusions. Neither the deprecated `listSessionEntries` nor the metadata-only `listSessionEntriesAsync` provides this person-filtered disclosure contract. See [session store entrypoints](/plugins/sdk-entrypoints#session-persistence).
+
     `resolveStorePath(...)` and `updateSessionStoreEntry(...)` round out the session helpers: `resolveStorePath` resolves the session store path for a given scope, and `updateSessionStoreEntry({ storePath, sessionKey, update })` patches one entry directly by store path when the caller already knows it.
 
     `loadTranscriptEventsSync(...)` is available for synchronous doctor and repair paths that cannot use the async transcript runtime. It returns raw `SessionStoreTranscriptEvent` records and does not consult runtime `session.store`; pass `storePath` for a non-default store. Normal plugin runtime code should prefer `openclaw/plugin-sdk/session-transcript-runtime`.
@@ -531,7 +556,7 @@ Each `SessionTranscriptMessageEntry` contains:
 
     `readLatestAssistantTextByIdentity(...)` preserves the selected assistant text's whitespace and includes optional validated `openclawDelivery` facts from that same persisted message. Recovery consumers can retain reply, voice, media, and TTS intent without reparsing removed directives. These facts do not grant delivery authority; callers still apply their current-turn and reply-policy checks.
 
-    `withSessionTranscriptWrite(...)` exposes `readMessageFacts({ idempotencyKeys })` for exact-key lookups without loading the complete transcript. Facts and writes retain the context’s captured session and store; retained callbacks reject after the context closes. Native-history repair can preserve an existing message’s original run attribution while leaving the append owner’s strict payload comparison intact. A returned identity is evidence, not new execution authority.
+    `withSessionTranscriptWrite(...)` exposes `readMessageFacts({ idempotencyKeys })` for exact-key lookups without loading the complete transcript when its index is current. Pass `activeBranchOnly: true` to exclude identities on abandoned branches; the default includes every branch. While projection repair is pending, the owner derives the same facts from raw history. Facts and writes retain the context’s captured session and store; retained callbacks reject after the context closes. Native-history repair can preserve an existing message’s original run attribution while leaving the append owner’s strict payload comparison intact. A returned identity is evidence, not new execution authority.
 
     `appendSessionTranscriptMessageByIdentity(...)` is a low-level append of a message already in the supported format. Plugins must not synthesize media-bearing user rows with top-level `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, or `MediaTypes`. Channel ingress should pass ordered facts through `MsgContext.media` and let the host own user-turn persistence. A host-prepared persisted user message carries normalized ordered facts under `message.__openclaw.media`; the generic append API does not infer or repair legacy parallel arrays.
 

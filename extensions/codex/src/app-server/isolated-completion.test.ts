@@ -13,20 +13,9 @@ vi.mock("./bounded-turn.js", () => ({ runBoundedCodexAppServerTurn: mocks.runBou
 import { runCodexIsolatedCompletion } from "./isolated-completion.js";
 import { isolatedParams, type IsolatedParams } from "./isolated-completion.params-test-support.js";
 
-const authProfileStore: AuthProfileStore = {
-  version: 1,
-  profiles: {
-    "openai:test": {
-      type: "oauth",
-      provider: "openai",
-      access: "test-access",
-      refresh: "test-refresh",
-      expires: Date.now() + 60_000,
-    },
-  },
-};
-
-const createParams = () => isolatedParams(authProfileStore, "openai:test");
+const authProfileStore: AuthProfileStore = { version: 1, profiles: {} };
+const outputSchema = { type: "object" };
+const createParams = () => ({ ...isolatedParams(authProfileStore, "openai:test"), outputSchema });
 const authHandoff = { authProfileId: "openai:test", nativeAuthProfile: true };
 const expectCall = (mock: ReturnType<typeof vi.fn>, params: Record<string, unknown>) =>
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(params));
@@ -46,6 +35,7 @@ function turn(items: unknown[], managedHooksEnabled?: boolean) {
   mocks.runBoundedTurn.mockResolvedValue({
     text: "Garden Planning",
     model: "gpt-5.4",
+    submittedInput: [{ type: "text", text: createParams().prompt, text_elements: [] }],
     usage: { input: 7, output: 3, cacheRead: 2, total: 10 },
     items,
     managedHooksEnabled,
@@ -60,7 +50,21 @@ describe("runCodexIsolatedCompletion", () => {
     turn([prompt, { id: "reasoning", type: "reasoning" }, answer]);
   });
 
-  it("uses the selected native authorization on a private ring-zero turn", async () => {
+  it.each([false, true])("uses private ring-zero auth with managed hooks=%s", async (managed) => {
+    turn(
+      [
+        prompt,
+        { id: "reasoning", type: "reasoning" },
+        ...(managed
+          ? [
+              { id: "draft", type: "agentMessage", text: "An earlier draft." },
+              hook("managed-stop-1"),
+            ]
+          : []),
+        answer,
+      ],
+      managed,
+    );
     const params = { ...createParams(), assertCurrent: vi.fn() };
 
     await expect(run(params)).resolves.toEqual({
@@ -89,6 +93,7 @@ describe("runCodexIsolatedCompletion", () => {
       requireNoExternalCapabilities: true,
       developerInstructions: "Name the conversation.",
       input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
+      outputSchema,
     });
     expect(mocks.runBoundedTurn.mock.calls[0]?.[0]).not.toHaveProperty("modelProvider");
   });
@@ -103,10 +108,7 @@ describe("runCodexIsolatedCompletion", () => {
         secretFreeCacheKey: "test-account",
       },
     };
-    mocks.resolveAuthHandoff.mockResolvedValue({
-      ...authHandoff,
-      preparedAuth,
-    });
+    mocks.resolveAuthHandoff.mockResolvedValue({ ...authHandoff, preparedAuth });
 
     await run();
 
@@ -124,51 +126,25 @@ describe("runCodexIsolatedCompletion", () => {
       return authHandoff;
     });
     const retired = new Error("isolated completion caller retired");
-    let current = true;
-    const params = {
-      ...createParams(),
-      assertCurrent: () => {
-        if (!current) {
-          throw retired;
-        }
-      },
-    };
-    const rejection = expect(run(params)).rejects.toBe(retired);
+    const assertCurrent = vi.fn<() => void>();
+    const rejection = expect(run({ ...createParams(), assertCurrent })).rejects.toBe(retired);
     await preparing.promise;
-    current = false;
+    assertCurrent.mockImplementation(() => {
+      throw retired;
+    });
     release.resolve();
 
     await rejection;
     expect(mocks.runBoundedTurn).not.toHaveBeenCalled();
   });
 
-  it("accepts a policy-directed continuation only from attested managed hooks", async () => {
-    turn(
-      [
-        prompt,
-        { id: "draft", type: "agentMessage", text: "An earlier draft." },
-        hook("managed-stop-1"),
-        answer,
-      ],
-      true,
-    );
-
-    await expect(run()).resolves.toMatchObject({
-      assistant: { content: [{ type: "text", text: "Garden Planning" }] },
-    });
-  });
-
-  it("rejects hook continuations without active managed attestation", async () => {
-    turn([hook("hook-1")]);
-
-    await expect(run()).rejects.toThrow("unexpected native item: hookPrompt");
-  });
-
-  it("rejects native tools even when managed hooks were attested", async () => {
-    turn([{ id: "tool", type: "commandExecution" }], true);
-
+  it.each([
+    ["hookPrompt", undefined],
+    ["commandExecution", true],
+  ] as const)("rejects native %s with managed attestation %s", async (type, attested) => {
+    turn([type === "hookPrompt" ? hook("hook-1") : { id: "tool", type }], attested);
     await expect(run()).rejects.toThrow(
-      "Codex isolated completion returned unexpected native item: commandExecution",
+      `Codex isolated completion returned unexpected native item: ${type}`,
     );
   });
 

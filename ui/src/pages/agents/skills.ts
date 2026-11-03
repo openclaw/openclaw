@@ -1,5 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 
@@ -13,7 +15,6 @@ export type AgentSkillsState = {
   connected: boolean;
   requestGeneration: number;
   agentSkillsRead: AgentSkillsRead | null;
-  agentSkillsUpdateError: string | null;
   agentSkillsReport: SkillStatusReport | null;
   agentSkillsAgentId: string | null;
 };
@@ -25,7 +26,6 @@ export function createAgentSkillsReader(state: AgentSkillsState) {
       if (!state.client || !state.connected || pending) {
         return;
       }
-      state.agentSkillsUpdateError = null;
       const result = readAgentSkills(state, agentId);
       pending = result;
       state.agentSkillsRead = { agentId, result };
@@ -67,7 +67,7 @@ async function readAgentSkills(
   return report;
 }
 
-export async function clearAgentSkillFilter(
+async function clearAgentSkillFilter(
   runtimeConfig: RuntimeConfigCapability,
   agentId: string,
   canDispatch: () => boolean = () => true,
@@ -92,4 +92,55 @@ export async function clearAgentSkillFilter(
     replacePaths: [`agents.entries.${targetKey}.skills`],
     canDispatch,
   });
+}
+
+export function createAgentSkillsReset(options: {
+  state: AgentSkillsState;
+  context: Pick<ApplicationContext, "agents" | "runtimeConfig">;
+  canReset: () => boolean;
+  isCurrent: (
+    client: GatewayBrowserClient,
+    generation: number,
+    agentId: string,
+    agents: ApplicationContext["agents"],
+  ) => boolean;
+  onUpdated: (agentId: string) => void;
+  retired: () => Promise<void>;
+}) {
+  return {
+    clear(agentId: string) {
+      if (!options.canReset()) {
+        return undefined;
+      }
+      const { state, context } = options;
+      const client = state.client;
+      const generation = state.requestGeneration;
+      const agents = context.agents;
+      const runtimeConfig = context.runtimeConfig;
+      if (!client) {
+        return undefined;
+      }
+      const canDispatch = () =>
+        context.runtimeConfig === runtimeConfig &&
+        options.isCurrent(client, generation, agentId, agents) &&
+        options.canReset();
+      if (!canDispatch()) {
+        return undefined;
+      }
+      const retirement = options.retired();
+      const completion = clearAgentSkillFilter(runtimeConfig, agentId, canDispatch).then(
+        (updated) => {
+          if (!canDispatch()) {
+            return;
+          }
+          if (!updated) {
+            throw new Error(runtimeConfig.state.lastError ?? t("agents.skillsPanel.updateError"));
+          }
+          options.onUpdated(agentId);
+        },
+      );
+      // Retire presentation synchronously; the config owner still records the write outcome.
+      return Promise.race([completion, retirement]);
+    },
+  };
 }

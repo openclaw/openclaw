@@ -18,11 +18,13 @@ import {
   type ControlUiGitHubSessionIdentity,
 } from "../github-public-api.js";
 import { prepareGitHubReaderIdentity } from "../github-reader-identity.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import { respondError } from "./response.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -89,7 +91,7 @@ function createGitHubReadHandler<
             section !== "files" &&
             section !== "discussion")))
     ) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${method} params`));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, `invalid ${method} params`);
       return;
     }
     const resolved = resolveAgentIdOrRespondError({
@@ -210,8 +212,20 @@ async function withControlUiSessionPreview(
   const preview = previewOwner.ok
     ? projection.readPreview({ key: sessionKey, agentId: previewOwner.agentId })
     : null;
-  if (preview !== undefined) {
-    const entryFilter = createSessionListEntryFilter({ client, cfg: previewConfig });
+  if (
+    preview !== undefined &&
+    !(
+      operatorSessionCap(client, previewConfig) === "invited" &&
+      projection.needsMembershipPreparation()
+    )
+  ) {
+    const entryFilter = createSessionListEntryFilter({
+      client,
+      cfg: previewConfig,
+      membership: previewOwner.ok
+        ? projection.readMembership({ key: sessionKey, agentId: previewOwner.agentId })
+        : undefined,
+    });
     consume(
       preview && (!entryFilter || entryFilter(preview.sessionKey, preview.entry)) ? preview : null,
     );
@@ -230,7 +244,11 @@ async function withControlUiSessionPreview(
         ? read.describe({ key: sessionKey, agentId: owner.agentId })
         : undefined;
       // Hover previews follow list visibility, including after asynchronous preparation.
-      const entryFilter = createSessionListEntryFilter({ client, cfg });
+      const entryFilter = createSessionListEntryFilter({
+        client,
+        cfg,
+        membership: record?.membership,
+      });
       if (!record || (entryFilter && !entryFilter(record.key, record.entry))) {
         consume(null);
         return;
@@ -264,7 +282,10 @@ function parseCheckDetailsParams(
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
   const headSha = typeof params.headSha === "string" ? params.headSha : "";
   const target = gitHubPublicApi.parseControlUiGitHubPreviewTarget({ ...params, kind: "pull" });
-  return target && sessionKey && sessionKey.length <= 512 && /^[0-9a-f]{40}$/i.test(headSha)
+  return target?.kind === "pull" &&
+    sessionKey &&
+    sessionKey.length <= 512 &&
+    /^[0-9a-f]{40}$/i.test(headSha)
     ? {
         sessionKey,
         owner: target.owner,
@@ -306,11 +327,7 @@ export const controlUiHandlers: GatewayRequestHandlers = {
       ? parseControlUiLinkPreviewUrl(params.url)
       : null;
     if (!url) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid controlUi.linkPreview params"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid controlUi.linkPreview params");
       return;
     }
     const preview = await loadControlUiLinkPreview(url, isEnabled, scope);
@@ -341,11 +358,7 @@ export const controlUiHandlers: GatewayRequestHandlers = {
   }) => {
     const sessionKey = parseSessionPreviewKey(params);
     if (!sessionKey) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid controlUi.sessionPreview params"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid controlUi.sessionPreview params");
       return;
     }
     try {
@@ -369,13 +382,10 @@ export const controlUiHandlers: GatewayRequestHandlers = {
     const { params, respond, signal } = options;
     const parsed = parseCheckDetailsParams(params);
     if (!parsed) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid controlUi.sessionPullRequests.checks params",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "invalid controlUi.sessionPullRequests.checks params",
       );
       return;
     }
@@ -430,13 +440,10 @@ export const controlUiHandlers: GatewayRequestHandlers = {
     const { params, context, respond } = options;
     const parsed = parseControlUiSessionPullRequestsSubscribeParams(params);
     if (!parsed) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid controlUi.sessionPullRequests.subscribe params",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "invalid controlUi.sessionPullRequests.subscribe params",
       );
       return;
     }

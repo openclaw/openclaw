@@ -3,7 +3,8 @@
 // config form draft so the embedded schema editor below stays in sync.
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, onSettled } from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, onSettled } from "solid-js";
+import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
@@ -78,6 +79,7 @@ class VoiceWakeSettingsOwner {
   private voiceWakeTimer: ReturnType<typeof setTimeout> | undefined;
   private voiceWakeWrite: VoiceWakeWrite | null = null;
   private voiceWakeRead: { promise: Promise<void>; pending: boolean } | null = null;
+  private voiceWakeCompletion: (Deferred & { pending: boolean }) | null = null;
   private render?: () => void;
 
   constructor(private readonly gateway: ApplicationContext["gateway"]) {
@@ -89,12 +91,34 @@ class VoiceWakeSettingsOwner {
     return this.value;
   }
 
-  get readRequest() {
-    return this.voiceWakeRead?.promise;
+  get readReceipt() {
+    return this.voiceWakeRead;
   }
 
-  get connectionScope() {
-    return this.connection;
+  get writeReceipt() {
+    return this.voiceWakeCompletion;
+  }
+
+  private beginWrite() {
+    if (!this.voiceWakeCompletion?.pending) {
+      this.voiceWakeCompletion = { ...createDeferredCore(), pending: true };
+      // Navigation can leave the owner draining writes without a mounted presenter.
+      void this.voiceWakeCompletion.promise.catch(() => {});
+    }
+    return this.voiceWakeCompletion.promise;
+  }
+
+  private settleWrite(error?: Error) {
+    const completion = this.voiceWakeCompletion;
+    if (!completion?.pending) {
+      return;
+    }
+    completion.pending = false;
+    if (error) {
+      completion.reject(error);
+    } else {
+      completion.resolve();
+    }
   }
 
   private update(nextState: VoiceWakeEditorState) {
@@ -128,10 +152,13 @@ class VoiceWakeSettingsOwner {
 
   retry() {
     if (this.state.kind === "ready") {
+      const completion = this.beginWrite();
       void this.saveVoiceWake();
+      return completion;
     } else if (this.connection) {
       this.loadVoiceWake(this.connection);
     }
+    return undefined;
   }
 
   private sync() {
@@ -160,11 +187,13 @@ class VoiceWakeSettingsOwner {
         : null;
     this.connection = connection;
     this.voiceWakeRead = null;
-    this.update(
-      draft
-        ? { ...draft, phase: "pending", error: t("configPage.deviceTalk.triggerWordsDisconnected") }
-        : { kind: "unavailable" },
+    this.settleWrite(
+      draft ? new Error(t("configPage.deviceTalk.triggerWordsDisconnected")) : undefined,
     );
+    if (!draft) {
+      this.voiceWakeCompletion = null;
+    }
+    this.update(draft ? { ...draft, phase: "pending" } : { kind: "unavailable" });
     if (client && connected && !draft && this.render) {
       this.loadVoiceWake(connection);
     }
@@ -200,7 +229,6 @@ class VoiceWakeSettingsOwner {
           kind: "ready",
           text: result.triggers.join("\n"),
           phase: "saved",
-          error: null,
         });
       }
     } catch (error) {
@@ -215,9 +243,10 @@ class VoiceWakeSettingsOwner {
 
   edit(text: string) {
     if (this.state.kind !== "ready") {
-      return;
+      return undefined;
     }
-    this.update({ kind: "ready", text, phase: "pending", error: null });
+    const completion = this.beginWrite();
+    this.update({ kind: "ready", text, phase: "pending" });
     const write = this.voiceWakeWrite;
     if (write?.connection === this.connection && write.next !== null) {
       write.next = text === write.text ? null : text;
@@ -227,6 +256,7 @@ class VoiceWakeSettingsOwner {
       this.voiceWakeTimer = undefined;
       void this.saveVoiceWake();
     }, 400);
+    return completion;
   }
 
   private async saveVoiceWake() {
@@ -236,11 +266,8 @@ class VoiceWakeSettingsOwner {
       return;
     }
     if (!connection?.client || !connection.connected) {
-      this.update({
-        ...currentState,
-        phase: "pending",
-        error: t("configPage.deviceTalk.triggerWordsDisconnected"),
-      });
+      this.settleWrite(new Error(t("configPage.deviceTalk.triggerWordsDisconnected")));
+      this.update({ ...currentState, phase: "pending" });
       return;
     }
     if (this.voiceWakeWrite?.connection === connection) {
@@ -250,6 +277,7 @@ class VoiceWakeSettingsOwner {
     }
     const write: VoiceWakeWrite = { connection, text: currentState.text, next: currentState.text };
     this.voiceWakeWrite = write;
+    let writeError: Error | undefined;
     // The editor remains writable. Coalesce elapsed debounces into one queued
     // write, and drain a navigation flush against the same captured Gateway.
     while (write.next !== null) {
@@ -257,12 +285,13 @@ class VoiceWakeSettingsOwner {
       write.next = null;
       const draft = this.state;
       if (this.connection === connection && draft.kind === "ready" && draft.text === write.text) {
-        this.update({ ...draft, phase: "saving", error: null });
+        this.update({ ...draft, phase: "saving" });
       }
       try {
         const result = await connection.client.request<{ triggers: string[] }>("voicewake.set", {
           triggers: write.text.split("\n"),
         });
+        writeError = undefined;
         // The Gateway owns normalization; only apply its acknowledgment when
         // the editable draft still matches the submitted text.
         if (
@@ -274,21 +303,27 @@ class VoiceWakeSettingsOwner {
             kind: "ready",
             text: result.triggers.join("\n"),
             phase: "saved",
-            error: null,
           });
         }
       } catch (error) {
+        writeError = new Error(
+          t("configPage.deviceTalk.triggerWordsError", { error: String(error) }),
+          { cause: error },
+        );
         if (this.connection === connection && this.state.kind === "ready") {
-          this.update({
-            ...this.state,
-            phase: "pending",
-            error: t("configPage.deviceTalk.triggerWordsError", { error: String(error) }),
-          });
+          this.update({ ...this.state, phase: "pending" });
         }
       }
     }
     if (this.voiceWakeWrite === write) {
       this.voiceWakeWrite = null;
+      // A newer draft whose debounce has not elapsed still owns this completion.
+      if (
+        this.state.kind === "ready" &&
+        (this.state.phase === "saved" || this.state.text === write.text)
+      ) {
+        this.settleWrite(writeError);
+      }
     }
   }
 }
@@ -303,6 +338,7 @@ function voiceWakeOwner(gateway: ApplicationContext["gateway"]): VoiceWakeSettin
 }
 
 export type TalkSettingsPageProps = {
+  presentationRetired: () => Promise<void>;
   configObject?: Record<string, unknown>;
   mutationDisabled?: boolean;
   buildEditor?: () => JSX.Element;
@@ -605,15 +641,38 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
   const voiceWake = voiceWakeOwner(context.gateway);
   const voiceWakeState = projectOwner(voiceWake, (owner) => owner);
   // Only a new read receipt starts async work; draft and write updates stay synchronous.
-  const voiceWakeRequest = createMemo(() => voiceWakeState.read().readRequest);
-  const voiceWakeRead = createMemo(async () => voiceWakeRequest());
+  const voiceWakeRequest = createMemo(() => voiceWakeState.read().readReceipt);
+  const voiceWakeRead = createMemo(async () => voiceWakeRequest()?.promise);
+  const voiceWakeReceipt = createMemo(() => voiceWakeState.read().writeReceipt);
+  const voiceWakeResult = createMemo(async () => voiceWakeReceipt()?.promise);
+  const [voiceWakeSaving, setVoiceWakeSaving] = createOptimistic(false);
+  const presentVoiceWakeWrite = action(function* (completion: Promise<void>) {
+    setVoiceWakeSaving(true);
+    // The receipt's async read owns errors; this action owns only the saving affordance.
+    yield completion.catch(() => {});
+  });
+  let presentedVoiceWakeWrite: Promise<void> | undefined;
+  const presentWrite = (start: () => Promise<void> | undefined) => {
+    const completion = start();
+    if (completion && completion !== presentedVoiceWakeWrite) {
+      presentedVoiceWakeWrite = completion;
+      // Publish the owner's draft before joining its transition.
+      void Promise.resolve()
+        .then(() => presentVoiceWakeWrite(completion))
+        .catch(() => {});
+    }
+  };
   const device = context.nativeDeviceSettings
     ? projectNativeDeviceSettings(context.nativeDeviceSettings)
     : undefined;
-  onSettled(() => () => voiceWake.flush());
+  onSettled(() => {
+    presentWrite(() => voiceWake.writeReceipt?.promise);
+    return () => voiceWake.flush();
+  });
   return (
     <openclaw-talk-settings>
       <Talk
+        presentationRetired={props.presentationRetired}
         nativeDeviceSettings={context.nativeDeviceSettings}
         nativeDeviceSnapshot={device?.read()}
         voiceWake={{
@@ -622,10 +681,12 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
             return voiceWakeState.read().state;
           },
           get scope() {
-            return voiceWakeState.read().connectionScope;
+            return voiceWakeRequest();
           },
-          onInput: (text) => voiceWake.edit(text),
-          onRetry: () => voiceWake.retry(),
+          saving: voiceWakeSaving(),
+          readWriteResult: () => voiceWakeResult(),
+          onInput: (text) => presentWrite(() => voiceWake.edit(text)),
+          onRetry: () => presentWrite(() => voiceWake.retry()),
         }}
         selection={resolveTalkRealtimeSelection(props.configObject ?? {})}
         catalog={settings.catalog()}

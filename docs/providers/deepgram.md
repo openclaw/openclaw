@@ -143,6 +143,10 @@ precedence. Both settings are ignored for the English-only `flux-general-en` mod
 The bundled `deepgram` plugin also registers a realtime transcription provider
 for the Voice Call plugin.
 
+Realtime transcription WebSockets honor the Gateway's `HTTPS_PROXY` / `https_proxy`
+and `NO_PROXY` / `no_proxy` settings, including CIDR bypasses. Configured debug
+capture proxies take precedence; TLS certificate verification remains enabled.
+
 | Setting         | Config path                                                             | Default                                      |
 | --------------- | ----------------------------------------------------------------------- | -------------------------------------------- |
 | API key         | `plugins.entries.voice-call.config.streaming.providers.deepgram.apiKey` | Falls back to `DEEPGRAM_API_KEY`             |

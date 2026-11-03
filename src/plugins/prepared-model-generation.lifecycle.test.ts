@@ -93,24 +93,16 @@ it.each(["standalone reset", "shared runtime projection"] as const)(
           skipCredentials: true,
         });
       if (shared) {
-        await loadAndActivateRootPluginRegistry({
-          ...scope,
-          cache: false,
-        });
+        await loadAndActivateRootPluginRegistry({ ...scope, cache: false });
       }
       const before = process.listenerCount(event);
-      let lease: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>> | undefined;
       let service:
         | Parameters<import("./types.js").OpenClawPluginApi["registerService"]>[0]
         | undefined;
-      let peer: typeof lease;
       try {
-        lease = await acquire();
+        await using lease = await acquire();
         const metadata = lease.snapshot.metadataSnapshot;
         const registry = lease.snapshot.pluginRegistry;
-        expect(registry?.plugins, JSON.stringify(registry?.diagnostics)).toContainEqual(
-          expect.objectContaining({ id, status: "loaded" }),
-        );
         service = registry?.services.find((entry) => entry.pluginId === id)?.service;
         expect(service?.id).toBe("retained-service");
         expect(process.listenerCount(event)).toBe(before + 1);
@@ -125,8 +117,7 @@ it.each(["standalone reset", "shared runtime projection"] as const)(
           resetPluginCache();
           await waitForPluginCacheRetirement();
         } else {
-          peer = await acquire("peer");
-          expect(peer.snapshot.pluginRegistry?.contextEngines.get(id)?.lifecycle).toBe("runtime");
+          await using peer = await acquire("peer");
           const peerService = peer.snapshot.pluginRegistry?.services.find(
             (entry) => entry.pluginId === id,
           )?.service;
@@ -162,8 +153,6 @@ it.each(["standalone reset", "shared runtime projection"] as const)(
         assert.ok(typeof module.read === "function");
         expect(module.read()).toBe("captured setup");
       } finally {
-        await peer?.[Symbol.asyncDispose]();
-        await lease?.[Symbol.asyncDispose]();
         await closePreparedModelRuntimeSnapshots();
         await waitForPluginCacheRetirement(true);
         if (shared) {

@@ -74,7 +74,7 @@ export function ControlUiSettingsPresentation(props: {
   application: ApplicationContext;
   placement: ControlUiSettingsView["placement"] | ControlUiContributedSettingsView["placement"];
   pluginId?: string;
-  readSnapshot: () => ControlUiSettingsSnapshot | ControlUiContributionSettingsSnapshot;
+  readSnapshot: () => ControlUiSettingsSnapshot | ControlUiContributionSettingsSnapshot | null;
   subscribe: (listener: () => void) => () => void;
   navigate: ControlUiSettingsContext["navigate"];
   refreshAgents: () => void;
@@ -113,6 +113,10 @@ export function ControlUiSettingsPresentation(props: {
       return;
     }
     const snapshot = props.readSnapshot();
+    if (!snapshot) {
+      retire();
+      return;
+    }
     const identity = viewLifetime(props.application, snapshot, props.placement);
     if (owner && sameLifetime(owner.identity, identity)) {
       try {
@@ -128,16 +132,16 @@ export function ControlUiSettingsPresentation(props: {
     owner = next;
     const current = () => {
       lifetime.throwIfAborted();
+      const currentSnapshot = props.readSnapshot();
       if (
+        !currentSnapshot ||
         !active ||
         owner !== next ||
-        !sameLifetime(
-          identity,
-          viewLifetime(props.application, props.readSnapshot(), props.placement),
-        )
+        !sameLifetime(identity, viewLifetime(props.application, currentSnapshot, props.placement))
       ) {
         throw new Error("This Settings presentation has ended.");
       }
+      return currentSnapshot;
     };
     void props.application.plugins
       .loadSettingsView(props.placement, next.abort.signal, props.pluginId)
@@ -157,9 +161,9 @@ export function ControlUiSettingsPresentation(props: {
           signal: lifetime,
           components: createControlUiSettingsComponents(lifetime),
           async request<T>(method: string, params?: unknown, options?: { signal?: AbortSignal }) {
-            current();
+            const requestSnapshot = current();
             const gateway = props.application.gateway.snapshot;
-            const epoch = props.readSnapshot().connectionEpoch;
+            const epoch = requestSnapshot.connectionEpoch;
             if (
               !gateway.client ||
               gateway.phase !== "connected" ||
@@ -180,7 +184,7 @@ export function ControlUiSettingsPresentation(props: {
             );
             current();
             // The view survives reconnects; replies from an earlier transport epoch do not.
-            if (props.readSnapshot().connectionEpoch !== epoch) {
+            if (current().connectionEpoch !== epoch) {
               throw new Error("The Gateway connection changed before this request completed.");
             }
             return result;
@@ -268,7 +272,7 @@ export function ControlUiSettingsPresentation(props: {
             return formatUiError(error);
           },
         };
-        const initial = props.readSnapshot();
+        const initial = current();
         const view = loaded.view;
         let mounted: { dispose(): void };
         if (isMemoryView(view) && "engine" in initial) {
@@ -307,7 +311,7 @@ export function ControlUiSettingsPresentation(props: {
           },
           { once: true },
         );
-        next.update?.(props.readSnapshot());
+        next.update?.(current());
       })
       .catch((error: unknown) => {
         if (owner === next && !next.abort.signal.aborted) {

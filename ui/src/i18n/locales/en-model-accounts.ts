@@ -1,6 +1,8 @@
 import type { TranslationMap } from "../lib/types.ts";
+import { registerModelAccountListEnglish } from "./en-model-account-list.ts";
 import { en } from "./en.ts";
 
+const accountList = registerModelAccountListEnglish.catalog.profilePage.modelAccounts;
 const enModelAccounts = {
   profilePage: {
     modelAccounts: {
@@ -37,8 +39,8 @@ const enModelAccounts = {
       gatewayAccount: "Selected saved account",
       selectAction: "Use for new chats",
       savedAccounts: "Saved accounts",
-      loadMore: "Load more saved accounts",
-      inventoryFailed: "Could not load saved accounts. Refresh to retry.",
+      loadMore: accountList.loadMore,
+      inventoryFailed: accountList.inventoryFailed,
       authTypes: {
         oauth: "Browser sign-in · saved account",
         token: "Token · saved account",

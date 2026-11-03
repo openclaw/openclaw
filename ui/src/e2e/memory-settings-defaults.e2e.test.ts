@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
+import { createSettingsPageOptions } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -42,15 +43,7 @@ function installMemoryGateway(page: Page, config: Record<string, unknown>, confi
 }
 
 function withMemoryPage(run: (page: Page) => Promise<void>) {
-  return suite.withPage(
-    {
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1000, width: 1440 },
-    },
-    ({ page }) => run(page),
-  );
+  return suite.withPage(createSettingsPageOptions(), ({ page }) => run(page));
 }
 
 async function expectQuery(advanced: Locator, section: Locator) {
@@ -162,7 +155,7 @@ suite.define(() => {
       expect(saved).not.toHaveProperty("plugins.entries.memory-core.config.dreaming.frequency");
       await expect
         .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Saved");
+        .toContain("Apply changes");
 
       await page.reload();
       await expect.poll(() => engineRow.textContent()).toContain("Default: OpenClaw Memory");

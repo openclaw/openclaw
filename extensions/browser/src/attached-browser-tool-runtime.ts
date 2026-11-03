@@ -98,14 +98,14 @@ export async function createAttachedBrowserToolRuntime(
       allowHostControl: false,
       ...(params.agentSessionKey !== undefined ? { agentSessionKey: params.agentSessionKey } : {}),
       ...(params.agentDir !== undefined ? { agentDir: params.agentDir } : {}),
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      workspaceDir: params.workspaceDir,
       // Worker transcript frames are bounded and inference is Gateway-proxied.
       // Persist proof in the managed workspace, then return only a bounded receipt.
       screenshotResultMode: "path",
-      persistScreenshot: async ({ sourcePath, type }) => {
+      persistScreenshot: async ({ sourcePath }) => {
         const { workspaceDir } = params;
-        const extension = type === "jpeg" ? "jpg" : "png";
-        const fileName = `screenshot-${randomBytes(8).toString("hex")}.${extension}`;
+        // The media store names the normalized image, which may differ from the requested format.
+        const fileName = `screenshot-${randomBytes(8).toString("hex")}${path.extname(sourcePath)}`;
         const result = await writeExternalFileWithinRoot({
           rootDir: workspaceDir,
           path: path.join(".artifacts", "cloud-worker-browser", fileName),

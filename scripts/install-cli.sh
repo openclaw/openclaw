@@ -123,12 +123,13 @@ OPENCLAW_EFFECTIVE_HOME="$(resolve_home_path "${OPENCLAW_HOME:-$HOME}")"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
-DEFAULT_NODE_VERSION="24.21.0"
+DEFAULT_NODE_VERSION="24.22.1"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
+# Compatibility floors mirror node-version.mjs, not the patched download default.
 MIN_NODE_24_VERSION="24.16.0"
 MIN_NODE_26_VERSION="26.1.0"
 SUPPORTED_NODE_VERSION_LABEL="Node 24.16.0+ or Node 26.1.0+"
@@ -162,7 +163,7 @@ FAQ: https://docs.openclaw.ai/start/faq
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
-  --node-version <ver>                Node version (default: 24.21.0)
+  --node-version <ver>                Node version (default: 24.22.1)
   --node-only                         Install only a private Node runtime (no system package changes)
   --runtime-only                      Install CLI runtime without Gateway probes, service changes, or onboarding
   --onboard                           Run "openclaw onboard" after install
@@ -959,7 +960,7 @@ install_node() {
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
     sqlite_version="$(node_binary_sqlite_version "$(node_bin)")"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.21.0 (or newer)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.22.1 (or newer)"
   fi
   # Existing CLI wrappers use this alias; activate only a runtime that can start.
   ln -sfn "$dir" "${PREFIX}/tools/node"
@@ -970,7 +971,7 @@ ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.12.1"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.15.0"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -1027,7 +1028,8 @@ fix_npm_prefix_if_needed() {
   "$(npm_bin)" config set prefix "$target"
 
   local path_line="export PATH=\"${target}/bin:\$PATH\""
-  for rc in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
+  local zsh_rc_dir="${ZDOTDIR:-$HOME}"
+  for rc in "${HOME}/.bashrc" "${zsh_rc_dir}/.zshrc"; do
     if [[ -f "$rc" ]] && ! grep -q ".npm-global" "$rc"; then
       echo "$path_line" >> "$rc"
     fi
@@ -1044,7 +1046,8 @@ publish_executable_wrapper() {
   (umask 077; mkdir -p "$target_dir")
   temp="$(mktemp "${target_dir}/.openclaw-wrapper.XXXXXX")" || return 1
   TMPFILES+=("$temp")
-  cat > "$temp"
+  # Generated Bash must execute literal paths, not expand their shell characters.
+  printf '#!/usr/bin/env bash\nset -euo pipefail\nexec %q %q "$@"\n' "$2" "$3" > "$temp"
   chmod +x "$temp"
   if [[ -z "$WRAPPER_BACKUP_PATH" && ( -e "$target" || -L "$target" ) ]]; then
     backup="$(mktemp "${target}.backup.XXXXXX")" || return 1
@@ -1117,11 +1120,8 @@ install_openclaw() {
     fi
   fi
 
-  publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-exec "${PREFIX}/tools/node/bin/node" "$(node_dir)/lib/node_modules/openclaw/dist/entry.js" "\$@"
-EOF
+  publish_executable_wrapper "${PREFIX}/bin/openclaw" \
+    "${PREFIX}/tools/node/bin/node" "$(node_dir)/lib/node_modules/openclaw/dist/entry.js"
   emit_json step name openclaw status ok version "$requested"
 }
 
@@ -1213,11 +1213,8 @@ install_openclaw_from_git() {
   run_pnpm -C "$repo_dir" build
   emit_json step name cli-build status ok
 
-  publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-exec "${PREFIX}/tools/node/bin/node" "${repo_dir}/dist/entry.js" "\$@"
-EOF
+  publish_executable_wrapper "${PREFIX}/bin/openclaw" \
+    "${PREFIX}/tools/node/bin/node" "${repo_dir}/dist/entry.js"
   emit_json step name openclaw status ok method git
 }
 

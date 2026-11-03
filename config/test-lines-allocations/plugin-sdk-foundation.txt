@@ -1,0 +1,2 @@
+# Public SDK boundary regressions for repository/worker admission, execution authority, tool policy, Control UI lifecycle, config persistence, and stable consumer contracts; excludes separately allocated refresh repairs.
+3893

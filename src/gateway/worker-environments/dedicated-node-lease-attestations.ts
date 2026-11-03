@@ -1,4 +1,5 @@
 import type { WorkerProvider } from "../../plugins/types.js";
+import { assertWorkerResourceReceiptMatch } from "../../plugins/worker-resource-receipt.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import {
   isWorkerNodeCarrierBindingCurrent,
@@ -120,14 +121,26 @@ export function createDedicatedNodeLeaseAttestations(
       const inspection = await options
         .callProvider(
           record.environmentId,
-          () => provider.inspect({ ...lease, signal: inspectionSignal }),
+          "inspect",
+          () => {
+            if (record.resourceReceipt && !provider.supportsResourceReceipts) {
+              throw new Error("Worker provider cannot honor the recorded resource receipt");
+            }
+            return provider.inspect({ ...lease, signal: inspectionSignal });
+          },
           undefined,
           inspectionSignal,
         )
-        .then((result) => ({
-          ...requireWorkerLeaseStatus(result),
-          explicitlyDedicated: result.status === "active" && result.sharedHost === false,
-        }))
+        .then((result) => {
+          const status = requireWorkerLeaseStatus(result);
+          if (record.resourceReceipt) {
+            assertWorkerResourceReceiptMatch(record.resourceReceipt, status.resourceReceipt);
+          }
+          return {
+            ...status,
+            explicitlyDedicated: result.status === "active" && result.sharedHost === false,
+          };
+        })
         .catch(async (error: unknown) => {
           signal?.throwIfAborted();
           getGatewayRestartDrainSignal().throwIfAborted();
