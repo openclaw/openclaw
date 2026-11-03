@@ -74,6 +74,7 @@ export function withAdmittedCliCandidate(
       }
       // History preparation publishes its writer into this candidate's working row.
       let contextEntry = sessionEntry ? { ...sessionEntry } : undefined;
+      const resumedCliSessionId = getCliSessionBinding(sessionEntry, params.provider)?.sessionId;
       const runResult = await run({
         sessionEntry: contextEntry,
         cliSessionBinding: getCliSessionBinding(sessionEntry, params.provider),
@@ -93,6 +94,7 @@ export function withAdmittedCliCandidate(
             expectedSession,
             sessionStore,
             preserveBinding,
+            resumedCliSessionId,
             assertSettlementCurrent,
             abortSignal: params.admission?.abortSignal,
           });

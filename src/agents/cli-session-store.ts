@@ -229,6 +229,8 @@ export async function persistCliSessionBindingResult(
     result: EmbeddedAgentRunResult;
     expectedSession?: InternalSessionEntry;
     preserveBinding?: boolean;
+    /** Native session id this turn resumed; used to avoid resurrecting a cleared binding. */
+    resumedCliSessionId?: string;
     assertSettlementCurrent: SessionSourceAssertion;
     abortSignal?: AbortSignal;
   },
@@ -246,6 +248,20 @@ export async function persistCliSessionBindingResult(
       update: (entry) => {
         const meta = params.result.meta.agentMeta;
         if (!params.preserveBinding) {
+          const resumedId = params.resumedCliSessionId?.trim();
+          const resultSessionId = meta?.cliSessionBinding?.sessionId?.trim();
+          // Another writer cleared/replaced the binding this turn resumed; do not
+          // re-publish the retired id during settle (agent_end can clear before settle).
+          if (
+            meta?.clearCliSessionBinding !== true &&
+            resumedId &&
+            resultSessionId === resumedId
+          ) {
+            const storedId = getCliSessionBinding(entry, params.provider)?.sessionId?.trim();
+            if (storedId !== resumedId) {
+              return false;
+            }
+          }
           return applyCliSessionBindingResult(entry, params.provider, meta);
         }
         const binding = getCliSessionBinding(entry, params.provider);

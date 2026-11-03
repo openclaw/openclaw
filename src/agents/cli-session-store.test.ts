@@ -488,3 +488,38 @@ it.for([
     }
   },
 );
+
+it("does not re-publish a resumed binding another writer cleared mid-turn", async ({ f }) => {
+  const resumedId = "cli-session-resumed";
+  const sessionStore = await f.seed(boundEntry(resumedId));
+  // Simulate another writer clearing the binding while the turn was in flight.
+  const cleared = makeSessionEntry({
+    sessionId: sessionStore[f.target.sessionKey]!.sessionId,
+    lifecycleRevision: sessionStore[f.target.sessionKey]!.lifecycleRevision,
+    activeWriterRunId: sessionStore[f.target.sessionKey]!.activeWriterRunId,
+  });
+  sessionStore[f.target.sessionKey] = cleared;
+  await seedSessionStore(f.target.storePath, { [f.target.sessionKey]: cleared });
+
+  await f.publish(nativeResult(resumedId), { resumedCliSessionId: resumedId });
+
+  expect(getCliSessionBinding(f.read()!, "claude-cli")).toBeUndefined();
+  expect(getCliSessionBinding(sessionStore[f.target.sessionKey]!, "claude-cli")).toBeUndefined();
+});
+
+it("still publishes a newly minted native id after a mid-turn clear", async ({ f }) => {
+  const resumedId = "cli-session-resumed";
+  const freshId = "cli-session-fresh";
+  const sessionStore = await f.seed(boundEntry(resumedId));
+  const cleared = makeSessionEntry({
+    sessionId: sessionStore[f.target.sessionKey]!.sessionId,
+    lifecycleRevision: sessionStore[f.target.sessionKey]!.lifecycleRevision,
+    activeWriterRunId: sessionStore[f.target.sessionKey]!.activeWriterRunId,
+  });
+  sessionStore[f.target.sessionKey] = cleared;
+  await seedSessionStore(f.target.storePath, { [f.target.sessionKey]: cleared });
+
+  await f.publish(nativeResult(freshId), { resumedCliSessionId: resumedId });
+
+  expect(getCliSessionBinding(f.read()!, "claude-cli")?.sessionId).toBe(freshId);
+});
