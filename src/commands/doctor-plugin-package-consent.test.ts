@@ -9,7 +9,10 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as configFlow from "./doctor-config-flow.js";
 import { doctorCommand } from "./doctor.js";
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
+vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
+  note: vi.fn(),
+}));
 
 const downloads = vi.hoisted(() => ({ specs: [] as string[] }));
 vi.mock("../plugins/install.js", async (original) => ({

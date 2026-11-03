@@ -81,19 +81,10 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
-vi.mock("./streaming-card.js", async () => {
-  class FeishuStreamingFinalizationError extends Error {
-    result: { visibleReplySent: boolean; content?: string; messageId?: string };
-    constructor(
-      cause: unknown,
-      result: { visibleReplySent: boolean; content?: string; messageId?: string },
-    ) {
-      super(cause instanceof Error ? cause.message : String(cause), { cause });
-      this.result = result;
-    }
-  }
+vi.mock("./streaming-card.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./streaming-card.js")>();
   return {
-    FeishuStreamingFinalizationError,
+    ...actual,
     FeishuStreamingSession: class {
       active = false;
       credentials: unknown;

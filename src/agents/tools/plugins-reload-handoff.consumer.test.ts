@@ -28,6 +28,7 @@ import { createAgentHarnessHostCapabilities } from "../harness/host-capability.j
 import { resolveAttemptWorkspaceSandbox } from "../workspace-sandbox.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createPluginsTool } from "./plugins-tool.js";
+// mock-isolation: Exercise real reload/handoff admission without starting a model-backed agent run.
 vi.mock("../embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
 const runEmbeddedAgentMock = vi.mocked(runEmbeddedAgent);
 await import("../../auto-reply/reply/get-reply-from-config.runtime.js").then((m) =>
