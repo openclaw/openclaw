@@ -1,4 +1,5 @@
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
+import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { emitAgentEvent, emitAgentEventForOwner } from "../infra/agent-events.js";
@@ -35,6 +36,12 @@ export function reportSessionObserverDegradation(
     useUtilityModel: "required",
   });
   const modelLabel = selection ? ` "${selection.provider}/${selection.modelId}"` : "";
+  const utility = readUtilityModelSetting(cfg, state.agentId);
+  const hasFallbacks = utility.kind !== "disabled" && utility.fallbacks.length > 0;
+  const failureScope = hasFallbacks ? " and its configured fallbacks" : "";
+  const recovery = hasFallbacks
+    ? "choose capable utility models"
+    : "choose a capable utility model or add capable utilityModel.fallbacks";
   const notice = {
     runId: state.runId,
     sessionKey: state.sessionKey,
@@ -42,7 +49,7 @@ export function reportSessionObserverDegradation(
     stream: "notice",
     data: {
       phase: "warning",
-      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly. To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.`,
+      message: `Session observer assessments stopped for this run after utility model${modelLabel}${failureScope} failed repeatedly. To restore assessments, ${recovery}.`,
     },
   };
   const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
@@ -98,6 +105,10 @@ export function createSessionObserverCompletion(params: {
     try {
       const execute = async () => {
         const prepared = await ensurePrepared(state);
+        // Isolated completion owns a fresh timeout for every fallback candidate.
+        // Keeping the preparation deadline armed here would cancel the whole
+        // chain as soon as its primary used one full candidate budget.
+        clearTimeout(timeout);
         let lastRejectedText = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {

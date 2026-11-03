@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { FailoverError } from "../agents/failover-error.js";
+import { runUtilityCompletion } from "../agents/utility-completion.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -6,7 +8,10 @@ import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { createSessionObserverCompletion } from "./session-observer-completion.js";
+import {
+  createSessionObserverCompletion,
+  reportSessionObserverDegradation,
+} from "./session-observer-completion.js";
 import type { defaultCompleteModel } from "./session-observer-model.js";
 import { observerState } from "./session-observer-state.test-support.js";
 import {
@@ -128,7 +133,7 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
 
 function completionAfter(delay?: number) {
   return vi.fn(
-    (params: { abortSignal?: AbortSignal }) =>
+    (params: { abortSignal?: AbortSignal; timeoutMs: number }) =>
       new Promise<ReturnType<typeof modelMessage>>((resolve, reject) => {
         params.abortSignal!.addEventListener("abort", () => reject(new Error("aborted")), {
           once: true,
@@ -138,6 +143,8 @@ function completionAfter(delay?: number) {
             () => resolve(modelMessage({ headline: "Working", health: "on-track" })),
             delay,
           );
+        } else {
+          setTimeout(() => reject(new Error("candidate timed out")), params.timeoutMs);
         }
       }),
   );
@@ -190,7 +197,88 @@ it("publishes a digest from a utility model that answers after 15s", async () =>
   expectBroadcast(harness, { headline: "Working", health: "on-track" });
 });
 
-it("aborts stuck completions at the cap and disables the run after two failures", async () => {
+it("reports exhaustion of an existing fallback chain without telling the user to add one", () => {
+  const notices: AgentEventPayload[] = [];
+  const unsubscribe = onAgentEvent((evt) => {
+    if (evt.stream === "notice") {
+      notices.push(evt);
+    }
+  });
+  try {
+    reportSessionObserverDegradation(
+      observerState({ consecutiveFailures: 2 }),
+      new Error("candidate timed out"),
+      {
+        agents: {
+          defaults: {
+            utilityModel: {
+              primary: "openai/gpt-test",
+              fallbacks: ["anthropic/claude-haiku-5-5"],
+            },
+          },
+        },
+      },
+    );
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.data.message).toContain("and its configured fallbacks failed repeatedly");
+    expect(notices[0]?.data.message).not.toContain("add capable utilityModel.fallbacks");
+  } finally {
+    unsubscribe();
+  }
+});
+
+it("gives a configured fallback its own model budget after the primary times out", async () => {
+  const isolated = vi.fn((params: Parameters<typeof runUtilityCompletion>[0]) => {
+    if (params.provider !== "openai") {
+      return Promise.resolve(modelMessage({ headline: "Recovered", health: "on-track" }));
+    }
+    return new Promise<ReturnType<typeof modelMessage>>((_, reject) => {
+      const timer = setTimeout(
+        () => reject(new FailoverError("Primary timed out", { reason: "timeout" })),
+        params.timeoutMs,
+      );
+      params.abortSignal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(params.abortSignal?.reason ?? new Error("aborted"));
+        },
+        { once: true },
+      );
+    });
+  });
+  const completeModel = vi.fn<typeof defaultCompleteModel>((params) =>
+    runUtilityCompletion(params, isolated),
+  );
+  const request = createSessionObserverCompletion({
+    getConfig: () => ({
+      agents: {
+        defaults: {
+          utilityModel: {
+            primary: "openai/gpt-test",
+            fallbacks: ["anthropic/claude-haiku-5-5"],
+          },
+        },
+      },
+    }),
+    prepareModel: vi.fn(async () => ({ ...preparedModel(), useUtilityModel: true as const })),
+    completeModel,
+    isCurrent: () => true,
+  });
+  const completion = request(observerState(), []);
+  await vi.waitFor(() => expect(isolated).toHaveBeenCalledOnce(), {
+    timeout: 1_000,
+    interval: 1,
+  });
+
+  await advance(30_000);
+
+  await expect(completion).resolves.toMatchObject({ headline: "Recovered", health: "on-track" });
+  expect(isolated).toHaveBeenCalledTimes(2);
+  expect(isolated.mock.calls[1]?.[0].model).toBe("claude-haiku-5-5");
+});
+
+it("times out stuck candidates independently and disables the run after two failures", async () => {
   const completeModel = completionAfter();
   const signal = (index: number) => completeModel.mock.calls[index]?.[0].abortSignal;
   const harness = createHarness({ completeModel });
@@ -199,10 +287,10 @@ it("aborts stuck completions at the cap and disables the run after two failures"
   await advance(29_999);
   expect(signal(0)?.aborted).toBe(false);
   await advance(1);
-  expect(signal(0)?.aborted).toBe(true);
+  expect(signal(0)?.aborted).toBe(false);
   expect(completeModel).toHaveBeenCalledTimes(2);
   await advance(30_000);
-  expect(signal(1)?.aborted).toBe(true);
+  expect(signal(1)?.aborted).toBe(false);
   await advance(60_000);
   expect(completeModel).toHaveBeenCalledTimes(2);
   expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
