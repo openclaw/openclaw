@@ -344,6 +344,44 @@ describe("resolveMSTeamsSendContext", () => {
     },
   );
 
+  it("skips Connector URLs from another cloud before any create request", async () => {
+    store.findPreferredDmByUserId.mockResolvedValue(null);
+    store.list.mockResolvedValue([{ conversationId, reference: channelRef({ serviceUrl }) }]);
+
+    await expect(
+      sendMessageMSTeams({ cfg: createConfig({ cloud: "China" }), to: "user:user-aad", text: "x" }),
+    ).rejects.toThrow("No conversation reference found for user:user-aad");
+
+    expect(fromServiceUrl).not.toHaveBeenCalled();
+    expect(createConversation).not.toHaveBeenCalled();
+    expect(store.upsert).not.toHaveBeenCalled();
+  });
+
+  it("does not open a personal chat after delivery authority closes during lookup", async () => {
+    const authority = { active: true };
+    store.findPreferredDmByUserId.mockImplementation(async () => {
+      authority.active = false;
+      return null;
+    });
+    store.list.mockResolvedValue([]);
+
+    await expect(
+      sendMessageMSTeams({
+        cfg: createConfig(),
+        to: "user:user-aad",
+        text: "x",
+        assertDirectAdapterHandoff: () => {
+          if (!authority.active) {
+            throw new Error("delivery authority closed");
+          }
+        },
+      }),
+    ).rejects.toThrow("delivery authority closed");
+
+    expect(createConversation).not.toHaveBeenCalled();
+    expect(store.upsert).not.toHaveBeenCalled();
+  });
+
   it("removes stored conversation references with blocked serviceUrl hosts", async () => {
     storedChannel({ serviceUrl: "https://attacker.example.com/teams/" });
     store.remove.mockResolvedValue(true);
