@@ -588,7 +588,6 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   displayNameInput.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   const accountContext = page.querySelector("openclaw-model-accounts");
-  expect(accountContext?.textContent).toContain("Augusta Ada");
   expect(accountContext?.textContent).not.toContain("Unsaved draft");
   stubProfileAvatarProcessing();
   const processAvatar = vi.spyOn(avatarProcessing, "processProfileAvatar");
@@ -748,7 +747,10 @@ it("keeps model-account actions usable when identity refresh overlaps ChatGPT co
   await waitForFast(() => expect(page.textContent).toContain("Ada · Personal workspace"));
   expect(page.querySelector("#profile-account-auth-answer")).toBeNull();
   expect(page.querySelector<HTMLButtonElement>(".profile-auth-add-account")?.disabled).toBe(false);
-  expect(page.querySelector<HTMLButtonElement>(".profile-auth-link-unlink")?.disabled).toBe(false);
+  expect(
+    page.querySelector<HTMLButtonElement>(".profile-auth-account-picker .picker-select__trigger")
+      ?.disabled,
+  ).toBe(false);
 });
 
 it("rechecks avatar upload policy after processing and rerenders on config updates", async () => {

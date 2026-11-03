@@ -53,6 +53,13 @@ backup.
 
 ## Update implementation contract
 
+Candidate state inventory includes normally discovered global plugins even when
+there is no install record or explicit load path. Their private copies retain
+`extensions/<name>` discovery, including linked plugin directories, so candidate
+Doctor validates configured slots against the same installed plugins. The
+candidate snapshot worker must contain this fix; validation remains strict and
+live plugin configuration is unchanged.
+
 During captured SQLite migrations, candidate Doctor reads current update authority
 through private snapshots. It does not retain an independent WAL reader that can
 block its own next migration's exclusive lock. Exec approvals policy, local socket

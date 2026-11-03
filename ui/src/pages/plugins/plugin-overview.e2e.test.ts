@@ -402,9 +402,9 @@ describeControlUiE2e("Plugin overview", () => {
     expect(await content(".plugin-metadata__repository")).toContain("Acme/calendar");
     expect(await content(".plugin-catalog-detail__readme")).toContain("README_TAIL");
     expect(await page.locator(".plugin-capabilities h2").allTextContents()).toEqual([
-      "Skills1",
-      "Tools2",
-      "MCP Server1",
+      "Skills",
+      "Tools",
+      "MCP Server",
     ]);
     await page.getByRole("button", { name: /calendar_search/ }).click();
     await page.getByRole("dialog", { name: "calendar_search" }).waitFor();

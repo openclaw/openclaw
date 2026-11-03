@@ -38,6 +38,12 @@ it("does not advertise hidden Lobsterdex choices while retaining the rest of tab
   setCurrentThemeBranding(resolveThemeBranding({ lobsterdex: true }));
   expect(search("Lobsterdex")).toContainEqual(expect.objectContaining({ routeId: "appearance" }));
 });
+it.each(["permission", "subscription", "browser support", "gateway access", "blocked"])(
+  "finds Notifications by %s",
+  (query) => {
+    expect(search(query)).toContainEqual(expect.objectContaining({ routeId: "notifications" }));
+  },
+);
 it("keeps target metadata cold and loads Settings English when search opens", async () => {
   const testApiKey = Symbol.for("openclaw.i18nManagerTestApi");
   const previousTestApi = Object.getOwnPropertyDescriptor(globalThis, testApiKey);

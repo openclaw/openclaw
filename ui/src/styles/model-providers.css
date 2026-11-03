@@ -293,16 +293,8 @@
   font-size: 12px;
 }
 
-.model-providers__probe--success {
-  border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
-}
-
-.model-providers__probe--warning {
-  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
-}
-
-.model-providers__probe--error {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+.model-providers__probe-summary .settings-status {
+  color: var(--text-strong);
 }
 
 .model-providers__probe-summary,
@@ -327,11 +319,6 @@
   align-items: center;
   gap: var(--space-2);
   width: fit-content;
-}
-
-.model-providers__label-with-help .settings-section__help-button svg {
-  width: 14px;
-  height: 14px;
 }
 
 .model-providers__help-button {
@@ -695,6 +682,7 @@
   inline-size: var(--list-row-icon-size);
   block-size: var(--list-row-icon-size);
   color: var(--oc-text-muted);
+  stroke-width: var(--list-row-icon-stroke);
   transition: transform var(--oc-duration-fast, 140ms) var(--oc-ease-out, ease-out);
 }
 
@@ -711,8 +699,9 @@
 }
 
 .provider-row .model-providers__profile-avatar svg {
-  width: 14px;
-  height: 14px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .provider-row__accounts {

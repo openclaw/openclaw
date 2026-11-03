@@ -728,7 +728,8 @@ describe("renderModelProviders", () => {
       }),
     );
 
-    const probe = container.querySelector(".model-providers__probe--warning");
+    const probe = container.querySelector(".model-providers__probe");
+    expect(probe?.querySelector(".settings-status--warn")).not.toBeNull();
     expect(text(probe)).toContain("Connected with warnings");
     expect(text(probe)).toContain("Configured credential · openai/gpt-5.6-sol");
     expect(text(probe)).toContain("Profile Default · openai/gpt-5.6-sol");

@@ -822,3 +822,13 @@ describe("channel display selectors", () => {
 });
 
 afterEach(disposeChannelViews);
+
+it("keeps a space between the partial snapshot notice and its warnings", () => {
+  const props = createProps(
+    channelSnapshot({}, { partial: true, warnings: ["Telegram probe timed out"] }),
+  );
+  const container = renderHub(props);
+  expect(container.querySelector(".callout.warn")?.textContent).toContain(
+    "UI budget. Telegram probe timed out",
+  );
+});

@@ -12,6 +12,7 @@ import type {
 import { formatUnknownText } from "../lib/format.ts";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { configLabelInContext } from "./config-form.label-context.ts";
+import { humanizeConfigEnumValue } from "./config-form.labels.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
 import { resolveConfigFieldMeta, type ConfigSearchCriteria } from "./config-form.search.ts";
 import {
@@ -206,14 +207,16 @@ export function getSensitiveRenderState(params: {
 
 export function configEnumOptionLabel(option: unknown, options: readonly unknown[]): string {
   const presentsBooleanState = options.includes(true) && options.includes(false);
-  if (!presentsBooleanState) {
-    return formatConfigValueText(option);
-  }
-  if (option === true) {
+  if (presentsBooleanState && option === true) {
     return t("configForm.enumOn");
   }
-  if (option === false) {
+  if (presentsBooleanState && option === false) {
     return t("configForm.enumOff");
   }
-  return option === "auto" ? t("configForm.enumAuto") : formatConfigValueText(option);
+  if (presentsBooleanState && option === "auto") {
+    return t("configForm.enumAuto");
+  }
+  return typeof option === "string"
+    ? humanizeConfigEnumValue(option)
+    : formatConfigValueText(option);
 }
