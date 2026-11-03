@@ -15,6 +15,7 @@ import {
   fetchWithTimeoutGuarded,
   readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";
+import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -243,7 +244,7 @@ export const clawrouterEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
                   if (typeof init?.body !== "string") {
                     throw new Error("ClawRouter manifest embeddings require a JSON request body");
                   }
-                  return (client.fetchImpl ?? fetch)(input, {
+                  return (client.fetchImpl ?? fetchWithRuntimeDispatcherOrMockedGlobal)(input, {
                     ...init,
                     body: JSON.stringify({ body: JSON.parse(init.body) }),
                   });
