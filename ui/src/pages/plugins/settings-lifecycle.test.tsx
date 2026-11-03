@@ -117,10 +117,9 @@ it("lists declared extensions across enablement", () => {
     const extensions = [...container.querySelectorAll(".plugin-capabilities")].find(
       (section) => section.querySelector("h2")?.textContent === "Extensions",
     )!;
-    expect([...extensions.querySelectorAll(".settings-row__title")].map((row) => row.textContent)).toEqual([
-      "Pages",
-      "Panels",
-    ]);
+    expect(
+      [...extensions.querySelectorAll(".settings-row__title")].map((row) => row.textContent),
+    ).toEqual(["Pages", "Panels"]);
     expect(extensions.textContent).toContain("beside a conversation");
     expect(find(`[aria-label="${enabled ? "Disable" : "Enable"} Workboard"]`)).not.toBeNull();
   }

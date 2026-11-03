@@ -85,12 +85,11 @@ it("renders complete catalog content in capability order", () => {
     "MCP Server",
   ]);
   const extensions = all(".plugin-capabilities")[1]!;
-  expect([...extensions.querySelectorAll(".settings-row__title")].map((row) => row.textContent)).toEqual([
-    "Dashboard widgets",
-    "Link previews",
-  ]);
+  expect(
+    [...extensions.querySelectorAll(".settings-row__title")].map((row) => row.textContent),
+  ).toEqual(["Dashboard widgets", "Link previews"]);
   expect(extensions.textContent).toContain("session dashboards");
-  expect(extensions.textContent).toContain("reader inside the web app");
+  expect(extensions.textContent).toContain("Opens supported links in a plugin-provided reader.");
   expect(container.textContent).not.toMatch(/internal-dispatch|heygen-alias/);
 });
 
@@ -103,7 +102,9 @@ it("renders a distinct icon for each extension type with a plain section heading
   expect(icons).toHaveLength(9);
   expect(new Set(icons.map((icon) => icon.innerHTML)).size).toBe(9);
   expect(section.querySelectorAll("h2 svg")).toHaveLength(0);
-  expect([...section.querySelectorAll(".settings-row__title")].map((row) => row.textContent)).toEqual([
+  expect(
+    [...section.querySelectorAll(".settings-row__title")].map((row) => row.textContent),
+  ).toEqual([
     "Pages",
     "Navigation",
     "Panels",

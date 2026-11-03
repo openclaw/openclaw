@@ -257,7 +257,7 @@ const enPluginManagement = {
     detailCapabilities: "Capabilities",
     detailExtensions: "Extensions",
     uiCapabilities: {
-      page: { name: "Pages", description: "Adds dedicated plugin pages in the web app." },
+      page: { name: "Pages", description: "Adds dedicated plugin pages." },
       navigation: { name: "Navigation", description: "Adds destinations to the app sidebar." },
       panel: { name: "Panels", description: "Adds panels you can open beside a conversation." },
       action: {
@@ -283,7 +283,7 @@ const enPluginManagement = {
       },
       "link-reader": {
         name: "Link previews",
-        description: "Opens supported links in a plugin-provided reader inside the web app.",
+        description: "Opens supported links in a plugin-provided reader.",
       },
     },
     capabilityFamilies: {

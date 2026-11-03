@@ -311,7 +311,7 @@ function PluginCapabilityRowControl(props: { value: PluginCapabilityRow; chevron
 export function renderPluginCapabilitySection(
   title: string,
   values: PluginCapabilityRow[],
-  icon: () => JSX.Element,
+  icon?: () => JSX.Element,
 ): JSX.Element {
   return values.length ? (
     <div class="plugin-capabilities">
@@ -321,7 +321,7 @@ export function renderPluginCapabilitySection(
             const content = (chevron: boolean) => (
               <>
                 <span class="plugin-capability__icon" aria-hidden="true">
-                  {value.icon?.() ?? icon()}
+                  {value.icon?.() ?? icon?.()}
                 </span>
                 <PluginCapabilityRowText value={value} />
                 <PluginCapabilityRowControl value={value} chevron={chevron} />
@@ -458,9 +458,6 @@ export function renderPluginContentCapabilities(params: {
           name: t(`pluginsPage.uiCapabilities.${capability}.name`),
           description: t(`pluginsPage.uiCapabilities.${capability}.description`),
         })),
-        () => (
-          <Icon name="puzzle" />
-        ),
       )}
       {params.skillsSection ??
         renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), params.skills, () => (
