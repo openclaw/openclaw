@@ -21,7 +21,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => ({ warn: warnMock }),
 }));
 
-import { withIMessageRemoteFile } from "./remote-file.js";
+import { buildRemoteStagingFileName, withIMessageRemoteFile } from "./remote-file.js";
 
 const remoteDir = "/tmp/openclaw-imessage-0123456789abcdef0123456789abcdef";
 const use = vi.fn(async () => "sent");
@@ -100,7 +100,7 @@ it("does not allocate or clean a directory when authority is already retired", a
 it("uploads into an owner-only remote directory and cleans after success", async () => {
   respond({}, {}, {});
   const localPath = "/gateway/private/a file;$(touch nope).png";
-  const remotePath = `${remoteDir}/a-file-touch-nope-.png`;
+  const remotePath = `${remoteDir}/a-file-touch-nope.png`;
 
   await expect(stage({ remoteHost: "bot@messages-mac", localPath })).resolves.toBe("sent");
 
@@ -120,6 +120,37 @@ it("uploads into an owner-only remote directory and cleans after success", async
   ]);
   expect(use).toHaveBeenCalledWith(remotePath);
   expect(cleanup?.[1].input).toBe(`set -eu\nrm -rf -- ${remoteDir}\n`);
+});
+
+it("keeps the non-ASCII attachment name for the remote copy", async () => {
+  respond({}, {}, {});
+  const localPath = "/gateway/中文文件名测试（出站验证）.txt";
+  const remotePath = `${remoteDir}/中文文件名测试-出站验证.txt`;
+
+  await stage({ localPath });
+
+  const upload = runCommand.mock.calls.find(([argv]) => argv[0] === "scp");
+  expect(upload?.[0].at(-1)).toBe(`messages-mac:${remotePath}`);
+  expect(use).toHaveBeenCalledWith(remotePath);
+});
+
+it.each([
+  ["plain-report.doc", "plain-report.doc"],
+  ["中文报告.doc", "中文报告.doc"],
+  ["../escape.txt", "escape.txt"],
+  ["a\\b.txt", "a-b.txt"],
+  ["\u0007bell.txt", "bell.txt"],
+  ["...", "attachment"],
+  ["", "attachment"],
+])("stages %j as %j", (input, expected) => {
+  expect(buildRemoteStagingFileName(input)).toBe(expected);
+});
+
+it("keeps the extension when the staging name is too long", () => {
+  const long = `${"长".repeat(200)}.doc`;
+  const staged = buildRemoteStagingFileName(long);
+  expect(staged.length).toBeLessThanOrEqual(120);
+  expect(staged.endsWith(".doc")).toBe(true);
 });
 
 it("cleans the token-owned parent after setup timeout", async () => {

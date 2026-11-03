@@ -4,7 +4,6 @@ import path from "node:path";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { type CommandOptions, runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { sanitizeTempFileName } from "openclaw/plugin-sdk/temp-path";
 
 const SSH_OPTIONS = [
   "-o",
@@ -21,6 +20,31 @@ const SSH_OPTIONS = [
   "ForwardX11=no",
 ] as const;
 const CLEANUP_TIMEOUT_MS = 10_000;
+const MAX_STAGING_NAME_CHARS = 120;
+
+/**
+ * Keep the attachment's display name for the remote copy. scp receives this as one
+ * argued path, so only separators and control characters are unsafe, not UTF-8;
+ * collapsing non-ASCII names to hyphens delivered ".txt" to the recipient.
+ */
+export function buildRemoteStagingFileName(basename: string): string {
+  const cleaned = basename
+    .replace(/[\\/]+/gu, "-")
+    // Allow letters and digits from any script; neutralise shell metacharacters,
+    // separators and control characters that a remote scp path must never carry.
+    .replace(/[^\p{L}\p{N}._-]+/gu, "-")
+    .replace(/-{2,}/gu, "-")
+    .replace(/-+(?=\.[^.]+$)/gu, "")
+    .replace(/^[.-]+/u, "")
+    .replace(/[.-]+$/u, "");
+  const safe = cleaned === "" ? "attachment" : cleaned;
+  if (safe.length <= MAX_STAGING_NAME_CHARS) {
+    return safe;
+  }
+  const extension = path.extname(safe).slice(0, 16);
+  return `${safe.slice(0, MAX_STAGING_NAME_CHARS - extension.length)}${extension}`;
+}
+
 const log = createSubsystemLogger("channels/imessage");
 
 async function runChecked(label: string, argv: string[], options: CommandOptions): Promise<void> {
@@ -51,7 +75,7 @@ export async function withIMessageRemoteFile<T>(params: {
   }
   const token = randomUUID().replaceAll("-", "");
   const remoteDir = `/tmp/openclaw-imessage-${token}`;
-  const remotePath = `${remoteDir}/${sanitizeTempFileName(path.basename(params.localPath))}`;
+  const remotePath = `${remoteDir}/${buildRemoteStagingFileName(path.basename(params.localPath))}`;
   const createScript = `set -eu
 umask 077
 directory=${remoteDir}
