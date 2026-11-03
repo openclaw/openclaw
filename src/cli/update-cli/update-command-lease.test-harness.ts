@@ -175,6 +175,7 @@ async function prepareCandidateDoctorRuntime(): Promise<void> {
     [
       runtimeProcessEntrypoints.updateMigratedFinalize,
       runtimeProcessEntrypoints.workerNativeLifecycle,
+      runtimeProcessEntrypoints.spawnBroker,
       runtimeProcessEntrypoints.sqliteWriterAdmission,
       runtimeProcessEntrypoints.sqliteStore,
       runtimeProcessEntrypoints.sqliteIntegrity,

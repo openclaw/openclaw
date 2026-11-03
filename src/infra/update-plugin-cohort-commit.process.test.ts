@@ -39,6 +39,8 @@ it.each([false, true])(
       [
         runtimeProcessEntrypoints.updateMigratedFinalize,
         runtimeProcessEntrypoints.workerNativeLifecycle,
+        // Native lifecycle selects this through the manifest, outside literal imports.
+        runtimeProcessEntrypoints.spawnBroker,
         runtimeProcessEntrypoints.sqliteWriterAdmission,
         runtimeProcessEntrypoints.sqliteStore,
         runtimeProcessEntrypoints.sqliteIntegrity,
