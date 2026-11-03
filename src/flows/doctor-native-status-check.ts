@@ -28,7 +28,7 @@ export const nativeStatusCheck: HealthCheck = {
       const library = index === 0 ? "fs-safe" : "proc-safe";
       const linuxProcessLoadFailure =
         library === "proc-safe" && process.platform === "linux" && status.reason === "load-failed";
-      const reapingFallback =
+      const nativeChildReapingUnavailable =
         library === "proc-safe" && process.platform === "linux" && !nativeChildReapingAvailable;
       let runtime = "";
       if (linuxProcessLoadFailure) {
@@ -49,11 +49,11 @@ export const nativeStatusCheck: HealthCheck = {
       return {
         checkId: CHECK_ID,
         severity: status.loaded || status.mode === "off" ? "info" : "warning",
-        message: reapingFallback
-          ? `${baseMessage}; service-child supervision falls back to POSIX process groups because native child reaping is unavailable`
+        message: nativeChildReapingUnavailable
+          ? `${baseMessage}; native child reaping is unavailable; supervised service-child commands may fail before launch`
           : baseMessage,
-        fixHint: reapingFallback
-          ? `${remedy ?? ""}${remedy ? " " : ""}Service children still spawn: supervision automatically falls back to POSIX process groups until a compatible process helper is available.`
+        fixHint: nativeChildReapingUnavailable
+          ? `${remedy ?? ""}${remedy ? " " : ""}Restore a compatible native process helper and rerun \`openclaw doctor\` before retrying service-child commands.`
           : remedy,
       };
     });

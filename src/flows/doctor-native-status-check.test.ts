@@ -74,46 +74,41 @@ it.each([
       : "Library guidance.",
   });
 });
-it("surfaces the POSIX process-group fallback when Linux native child reaping is unavailable", async () => {
+it.each([
+  ["auto", "load-failed", "warning"],
+  ["off", "disabled", "info"],
+] as const)("reports unavailable Linux reaping in %s mode", async (mode, reason, severity) => {
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   vi.spyOn(process.report, "getReport").mockReturnValue({
     header: { glibcVersionRuntime: "2.28" },
   });
   procStatus.mockReturnValue({
-    mode: "auto",
+    mode,
     loaded: false,
-    reason: "load-failed",
+    reason,
     guidance: "Library guidance.",
   });
   reaperSupported.mockReturnValue(false);
-  expect(await nativeStatusCheck.detect(context)).toContainEqual({
+  const finding = (await nativeStatusCheck.detect(context)).find((entry) =>
+    entry.message.startsWith("proc-safe:"),
+  );
+  expect(finding).toEqual({
     checkId: "core/doctor/native-status",
-    severity: "warning",
-    message:
-      "proc-safe: load-failed (glibc 2.28); service-child supervision falls back to POSIX process groups because native child reaping is unavailable",
+    severity,
+    message: expect.stringMatching(
+      /native child reaping is unavailable; supervised service-child commands may fail before launch$/,
+    ),
     fixHint: expect.stringContaining(
-      "Service children still spawn: supervision automatically falls back to POSIX process groups",
+      "Restore a compatible native process helper and rerun `openclaw doctor` before retrying service-child commands.",
     ),
   });
-});
-it("keeps the standard message when Linux native child reaping is available", async () => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-  vi.spyOn(process.report, "getReport").mockReturnValue({
-    header: { glibcVersionRuntime: "2.28" },
-  });
-  procStatus.mockReturnValue({
-    mode: "auto",
-    loaded: false,
-    reason: "load-failed",
-    guidance: "Library guidance.",
-  });
-  reaperSupported.mockReturnValue(true);
-  expect(await nativeStatusCheck.detect(context)).toContainEqual({
-    checkId: "core/doctor/native-status",
-    severity: "warning",
-    message: "proc-safe: load-failed (glibc 2.28)",
-    fixHint: expect.stringMatching(/^Library.*\/proc\/.*driver exits.*openclaw update repair/),
-  });
+  expect(`${finding?.message} ${finding?.fixHint}`).not.toMatch(
+    /falls? back|fallback|still spawn/i,
+  );
+  if (reason === "load-failed") {
+    expect(finding?.message).toContain("glibc 2.28");
+    expect(finding?.fixHint).toMatch(/\/proc\/.*driver exits.*openclaw update repair/);
+  }
 });
 it("reports the named AppContainer failure and its remedy", async () => {
   expect(await appContainerSpawnCheck.detect(context)).toEqual([]);
