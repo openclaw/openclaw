@@ -443,6 +443,7 @@ suite.define(() => {
         await gateway.deferNext("wizard.next");
         const account = wizard.locator("openclaw-select-picker");
         await selectPickerValue(account, "1");
+        await button(wizard, "Continue").click();
         await expectRequests(gateway, "wizard.next", 1);
         await expect
           .poll(() => account.locator(".picker-select__trigger").getAttribute("disabled"))

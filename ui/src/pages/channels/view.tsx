@@ -585,21 +585,31 @@ function WizardDialog(props: { controls: ChannelsProps }) {
       label={t("channels.setup.dialogLabel", { channel: label() })}
       onModal-cancel={() => props.controls.wizardHost.close()}
     >
-      <div class="channels-wizard">
-        <div class="channels-wizard__header">
-          <Show when={channel()}>
-            {(channelId) => (
-              <ChannelIcon
-                channelId={channelId()}
-                label={label()}
-                variant="tile"
-                pluginIconUrl={props.controls.presentation.pluginIconUrls[channelId()]}
-              />
-            )}
-          </Show>
-          <div class="channels-wizard__heading">
-            <h2>{t("channels.setup.title", { channel: label() })}</h2>
-            <div class="muted channels-wizard__subtitle">
+      <div class="oc-dialog channels-wizard">
+        <div class="oc-dialog__header">
+          <h2 class="oc-dialog__title">
+            <Show when={channel()}>
+              {(channelId) => (
+                <ChannelIcon
+                  channelId={channelId()}
+                  label={label()}
+                  variant="picker"
+                  pluginIconUrl={props.controls.presentation.pluginIconUrls[channelId()]}
+                />
+              )}
+            </Show>
+            {t("channels.setup.title", { channel: label() })}
+          </h2>
+          <button
+            type="button"
+            class="oc-dialog__close"
+            aria-label={t("common.close")}
+            onClick={() => props.controls.wizardHost.close()}
+          >
+            <Icon name="x" />
+          </button>
+          <div class="oc-dialog__description">
+            <p class="channels-wizard__subtitle">
               <span>{t("channels.setup.subtitle")}</span>{" "}
               {channel() ? (
                 <a
@@ -611,10 +621,10 @@ function WizardDialog(props: { controls: ChannelsProps }) {
                   {t("channels.setup.viewDocs")}
                 </a>
               ) : undefined}
-            </div>
+            </p>
           </div>
         </div>
-        <div class="channels-wizard__body">
+        <div class="oc-dialog__body channels-wizard__body">
           <Show when={step()?.step.externalUrl}>
             {(url) => (
               <div class="channels-wizard__links">
@@ -636,14 +646,9 @@ function WizardDialog(props: { controls: ChannelsProps }) {
           </Show>
           <Show when={error()}>
             {(failure) => (
-              <>
-                <div class="channels-wizard__error" role="alert">
-                  {failure().message}
-                </div>
-                <openclaw-modal-actions class="channels-wizard__footer">
-                  {renderCloseButton(props.controls, "common.close")}
-                </openclaw-modal-actions>
-              </>
+              <div class="callout danger channels-wizard__error" role="alert">
+                {failure().message}
+              </div>
             )}
           </Show>
           <Show when={done()}>
@@ -655,7 +660,7 @@ function WizardDialog(props: { controls: ChannelsProps }) {
                 {current().validationError ? (
                   <div
                     id="channel-wizard-validation-error"
-                    class="channels-wizard__error"
+                    class="callout danger channels-wizard__error"
                     role="alert"
                   >
                     {current().validationError}
