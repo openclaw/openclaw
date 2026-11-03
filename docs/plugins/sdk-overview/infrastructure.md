@@ -28,6 +28,7 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerMemoryPromptSupplement(builder)`     | Additive memory-adjacent prompt section                                |
 | `api.registerMemoryPromptPreparation(prepare)`    | Async preparation for a memory-adjacent prompt section                 |
 | `api.registerMemoryCorpusSupplement(adapter)`     | Additive memory search/read corpus                                     |
+| `api.registerLearnContribution(contribution)`     | `/learn` medium, guidance and subcommands                              |
 | `api.registerMcpServerConnectionResolver(...)`    | Per-requester MCP transport (`url`/`headers`) for a static server name |
 | `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
@@ -35,6 +36,21 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
 | `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
+
+`api.registerLearnContribution(...)` adds a plugin to `/learn` turns. The
+contribution names its `medium` (`"skills"` or `"memory"`), the `toolNames` it
+writes with, and optional `requiredToolNames` that must all be allowed. OpenClaw
+checks the tools against the turn's tool policy; when the contribution can
+learn, it calls `buildGuidance({ availableTools, media })` and adds the returned
+`lines` to the prompt and `appendix` blocks after the closing instruction.
+OpenClaw owns the prompt frame and the routing rule between media, and orders
+contributions by medium and then plugin id. Only the selected memory slot owner
+can register a `"memory"` contribution. Optional `subcommands` handle
+`/learn <name> [args]`: `matchArgs` decides which arguments select the
+subcommand, and `handle` returns `{ text }` for a reply or `{ prompt }` to
+replace the turn's message. A subcommand runs only while its contribution can
+learn, unless it is `direct`: a direct subcommand changes state without a model
+turn, so only owners can run it and gateway clients need `operator.admin`.
 
 Gateway handlers can return a payload synchronously or asynchronously, for example
 `api.registerGatewayMethod("example.status", async () => ({ status: "ready" }))`.

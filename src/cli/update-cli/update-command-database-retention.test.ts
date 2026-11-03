@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createNpmTarget } from "../../infra/package-update-steps.test-support.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
@@ -25,7 +26,12 @@ function captureExecution(
   return {
     root,
     installKind,
-    updateInstallKind: installKind,
+    ...(installKind === "package"
+      ? {
+          updateInstallKind: "package" as const,
+          packageInstallTarget: createNpmTarget(path.dirname(root)),
+        }
+      : { updateInstallKind: "git" as const }),
     switchToGit: false,
     timeoutMs: 30_000,
     updateStepTimeoutMs: 30_000,

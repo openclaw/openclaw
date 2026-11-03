@@ -52,13 +52,11 @@ suite.define(() => {
             );
           const settingsTopbar = await topbarGeometry();
           const phoneUsageActions = width === 400 && to.routeId === "usage";
+          const settingsPill = phoneUsageActions
+            ? await page.locator(".topnav-shell__actions").boundingBox()
+            : null;
           if (phoneUsageActions) {
-            expect(await page.locator(".topnav-shell__actions").boundingBox()).toEqual({
-              x: 300,
-              y: 8,
-              width: 84,
-              height: 45,
-            });
+            expect(settingsPill).not.toBeNull();
             expect(await page.locator(".usage-phone-actions__trigger").count()).toBe(0);
           }
           await page.evaluate(() => {
@@ -89,6 +87,11 @@ suite.define(() => {
             window.dispatchEvent(new PopStateEvent("popstate"));
           }, to.pathname);
           await waitForControlUiRoute(page, to);
+          if (phoneUsageActions) {
+            await page
+              .locator(".topnav-shell__page-actions .usage-phone-actions__trigger")
+              .waitFor();
+          }
           await page.waitForFunction(
             () =>
               !document
@@ -112,28 +115,12 @@ suite.define(() => {
               }),
           );
           if (phoneUsageActions) {
-            // Usage adds its page menu to the phone pill (#190743); the shared
-            // controls stay still while only their backing box expands left.
-            expect(
-              await page
-                .locator(".topnav-shell__page-actions .usage-phone-actions__trigger")
-                .boundingBox(),
-            ).toEqual({ x: 264, y: 11, width: 39, height: 39 });
-            expect(await page.locator(".topnav-shell__actions").boundingBox()).toEqual({
-              x: 261,
-              y: 8,
-              width: 123,
-              height: 45,
-            });
-            expect(shifts).toEqual([
-              {
-                nodes: ["topnav-shell__actions"],
-                value: expect.closeTo(((123 * 45) / (400 * 900)) * (39 / 900), 12),
-              },
-            ]);
-          } else {
-            expect(shifts).toEqual([]);
+            // The pill reserves its page action before the route mounts.
+            expect(await page.locator(".topnav-shell__actions").boundingBox()).toEqual(
+              settingsPill,
+            );
           }
+          expect(shifts).toEqual([]);
           expect(await topbarGeometry()).toEqual(settingsTopbar);
         },
       ),

@@ -42,7 +42,7 @@ const enChatMessageMetadata = {
       actions: "Message actions",
       selectionActions: "Selection actions",
       askInSideChat: "Ask in side chat",
-      addToChat: "Add to chat",
+      addToChat: "Add to message",
       annotationEditor: "Comment",
       annotationComment: "Add an optional comment…",
       saveAnnotation: "Save comment",
@@ -68,6 +68,7 @@ const enChatMessageMetadata = {
       unattributedSender: en.chat.messages.unattributedSender,
       toolSender: en.chat.messages.toolSender,
       errorSender: en.chat.messages.errorSender,
+      agentName: en.chat.messages.agentName,
       forwardedFrom: "From",
       interSessionUpdateFrom: "1 update from",
       interSessionUpdatesFrom: "{count} updates from",
@@ -104,7 +105,7 @@ const enChatMessageMetadata = {
         summary: "An automation failed — asked the agent to investigate and continue if needed.",
       },
       gatewayRestarted: {
-        label: "System · gateway restarted",
+        label: "System · Gateway restarted",
       },
       cliHarnessContext: {
         label: "System · injected context",

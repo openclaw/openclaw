@@ -48,6 +48,7 @@ import { requestChatSend, resolveDisplayedLeafEntryId } from "./chat-send-reques
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
@@ -289,6 +290,7 @@ export function createPageState(
 
   state.cacheChatAvatarSource = (agentId, source) =>
     cacheChatAvatarSource(chatMessagesBySession, state, state, agentId, source);
+  state.refreshCurrentChat = () => refreshPageChat(state);
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.scrollToBottom = (options) => {

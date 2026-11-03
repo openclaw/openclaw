@@ -3,6 +3,7 @@ import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
 import "../../components/modal-dialog.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
@@ -270,7 +271,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
       editor={{ title: entry()?.slug ?? t("skillLibrary.create"), disabled: disabled() }}
       footer={
         <Show when={props.library.canEdit()}>
-          <openclaw-modal-actions class="skill-reader-dialog__actions">
+          <openclaw-modal-actions class="oc-dialog__footer">
             <Show when={entry()}>
               <MutationButton action="remove" />
               <MutationButton action={entry()!.enabled ? "disable" : "enable"} />
@@ -306,8 +307,11 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
           : t("skillLibrary.personalTarget")}
       </p>
       <Show when={entry()}>
-        <details class="muted" style={{ "overflow-wrap": "anywhere", "min-width": "0" }}>
-          <summary>{t("skillLibrary.technicalDetails")}</summary>
+        <SettingsDisclosure
+          quiet
+          class="skill-library-details"
+          title={t("skillLibrary.technicalDetails")}
+        >
           <dl>
             <dt>{t("skillLibrary.skillId")}</dt>
             <dd>{entry()!.skillId}</dd>
@@ -316,7 +320,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
             <dt>{t("skillLibrary.command")}</dt>
             <dd>{entry()!.name}</dd>
           </dl>
-        </details>
+        </SettingsDisclosure>
       </Show>
       <Show when={!props.library.canEdit()}>
         <p role="status">{t("skillLibrary.readOnly")}</p>
@@ -523,7 +527,7 @@ function LibraryImport(props: { library: SkillLibraryModel }) {
     <LibraryDialog
       library={props.library}
       footer={
-        <openclaw-modal-actions class="skill-reader-dialog__actions">
+        <openclaw-modal-actions class="oc-dialog__footer">
           <button
             type="submit"
             class="btn primary"

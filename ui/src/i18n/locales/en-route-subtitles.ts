@@ -17,7 +17,7 @@ const enRouteSubtitles = {
     channels: "Channels and settings.",
     connection: "Gateway endpoint, credentials, and handshake status.",
     sessions: "Active sessions and defaults.",
-    systems: "Machines and desktops.",
+    systems: "Devices and desktops.",
     usage: "API usage and costs.",
     cron: "Scheduled tasks and recurring agent runs.",
     skills: "Manage your agent skills",

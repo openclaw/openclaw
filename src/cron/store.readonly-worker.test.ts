@@ -1,14 +1,98 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { StatementSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { expect, it, vi } from "vitest";
+import { isProcessAlive, waitForFixtureFile } from "../../test/helpers/process-wait.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { collectLegacyCronStoreHealthFindings } from "../commands/doctor/cron/index.js";
+import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
+import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { resolveCronJobsStorePath, saveCronQuarantinedJobs } from "./store.js";
 import { withCronStore } from "./store.worker.test-support.js";
+import { inspectCronJobsReadOnly } from "./store/read-only.js";
 import type { CronStoreFile } from "./types.js";
+
+it("cancels Doctor cron inventory during copying without an orphan child or snapshot", async ({
+  signal,
+}) => {
+  await withCronStore("cron-readonly-cancellation", async (state) => {
+    await state.save({ version: 1, jobs: [makeCronJob({})] });
+    await state.close();
+    const original = await state.bytes();
+    const ready = state.statePath("cron-copy-ready.json");
+    const preload = state.statePath("hold-cron-copy.mjs");
+    await fs.writeFile(
+      preload,
+      `import fs from "node:fs";
+const open = fs.openSync;
+fs.openSync = (pathname, ...args) => {
+  const descriptor = open(pathname, ...args);
+  if (String(pathname).endsWith("database.sqlite.partial") &&
+      process.argv.includes(${JSON.stringify(SQLITE_READONLY_CHILD_ARG)})) {
+    fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ pid: process.pid, partial: String(pathname) }));
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+  }
+  return descriptor;
+};`,
+    );
+    const previousNodeOptions = process.env.NODE_OPTIONS;
+    vi.stubEnv(
+      "NODE_OPTIONS",
+      [previousNodeOptions, `--import=${pathToFileURL(preload).href}`].filter(Boolean).join(" "),
+    );
+    const cancellation = new AbortController();
+    const inspection = withSqliteReadOnlyWorkerScope(() => inspectCronJobsReadOnly(state.env), {
+      signal: cancellation.signal,
+      deadlineOwnedByCaller: true,
+    });
+    const settled = inspection.then(
+      () => undefined,
+      () => undefined,
+    );
+    let childPid: number | undefined;
+    try {
+      await withinTest(waitForFixtureFile(ready, settled), signal);
+      const receipt: unknown = JSON.parse(await fs.readFile(ready, "utf8"));
+      if (
+        typeof receipt !== "object" ||
+        receipt === null ||
+        !("pid" in receipt) ||
+        typeof receipt.pid !== "number" ||
+        !("partial" in receipt) ||
+        typeof receipt.partial !== "string"
+      ) {
+        throw new Error("Cron copy fixture did not publish its child and partial image.");
+      }
+      childPid = receipt.pid;
+      await expect(fs.stat(receipt.partial)).resolves.toBeDefined();
+      cancellation.abort(new Error("Doctor cron inspection cancelled"));
+      await expect(withinTest(inspection, signal)).rejects.toThrow(
+        "Doctor cron inspection cancelled",
+      );
+      expect(isProcessAlive(childPid)).toBe(false);
+      await expect(fs.stat(path.dirname(receipt.partial))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await state.bytes()).toEqual(original);
+    } finally {
+      cancellation.abort();
+      if (childPid !== undefined && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      await settled;
+      if (previousNodeOptions === undefined) {
+        delete process.env.NODE_OPTIONS;
+      } else {
+        process.env.NODE_OPTIONS = previousNodeOptions;
+      }
+    }
+  });
+});
 
 it.each([false, true])(
   "reports persisted quarantine through Doctor without caller-thread queries (cold=%s)",

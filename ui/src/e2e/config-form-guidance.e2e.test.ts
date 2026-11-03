@@ -72,7 +72,7 @@ suite.define(() => {
             .allTextContents()
             .then((labels) => labels.map((label) => label.trim())),
         )
-        .toEqual(expect.arrayContaining(["open", "allowlist", "disabled", "allowall"]));
+        .toEqual(expect.arrayContaining(["Open", "Allowlist", "Disabled", "Allowall"]));
       await expect
         .poll(() => page.getByText("Unsupported schema node. Use Raw mode.").count())
         .toBe(0);
