@@ -124,7 +124,7 @@ In textual CLI/TUI commands, starting a second goal still fails with
 ## Statuses
 
 - `active`: the session is pursuing the goal.
-- `paused`: the operator paused the goal, or its run ended with an error or
+- `paused`: the operator paused or stopped the goal, or its run ended with an error or
   timeout. `/goal resume` makes it active again. A failed run preserves the
   objective and records the error as a status note; sending an ordinary message
   does not automatically resume the goal. Errors that recover through a retry
@@ -224,8 +224,9 @@ make independent command runs autonomous.
 The goal and session are checked again at admission, so a stale queued nudge
 cannot pursue a cleared, replaced, completed, blocked, paused, or limited goal.
 
-**Stop** cancels the current work and pending follow-ups; it does not mark an
-unfinished goal complete. Once the stopped work has fully settled, **Resume**
+**Stop** cancels the current work and pending follow-ups, and pauses an active
+unfinished goal with a status note explaining the stop; it does not mark the goal
+complete. Once the stopped work has fully settled, **Resume**
 can pursue the same goal again without clearing its history. Pause prevents further
 goal turns. Terminal errors and timeouts pause the goal as described above. Resuming a paused or limited
 goal remains an explicit operator action, not something the continuation does.

@@ -46,7 +46,7 @@ export class VisitorAccessService {
   private closed = false;
 
   constructor(
-    private readonly config: VisitorAccessConfig,
+    private readonly readLimits: () => Pick<VisitorAccessConfig, "maxVisitors" | "defaultTtlDays">,
     private readonly store: PluginStateKeyedStore<VisitorGrant>,
     private readonly policy: VisitorPolicyClient,
     private readonly logger: PluginLogger,
@@ -358,7 +358,7 @@ export class VisitorAccessService {
       if (input.forever && input.days !== undefined) {
         throw new VisitorAccessError("Choose days or forever: true, not both.");
       }
-      const days = input.days ?? this.config.defaultTtlDays;
+      const days = input.days ?? this.readLimits().defaultTtlDays;
       let expiresAt: number | null = null;
       if (!input.forever) {
         if (!days) {
@@ -392,9 +392,10 @@ export class VisitorAccessService {
           ...targets.map(visitorTargetKey),
           ...entries.map((entry) => entry.key),
         ]);
-        if (!known.has(key) && known.size >= this.config.maxVisitors) {
+        const { maxVisitors } = this.readLimits();
+        if (!known.has(key) && known.size >= maxVisitors) {
           throw new VisitorAccessError(
-            `Visitor limit (${this.config.maxVisitors}) reached. Revoke an existing visitor before inviting another.`,
+            `Visitor limit (${maxVisitors}) reached. Revoke an existing visitor before inviting another.`,
           );
         }
         const access = await this.readAccess(typeof target === "number" ? [target] : []);
@@ -579,10 +580,11 @@ export class VisitorAccessService {
       const unmanaged = policyTargets
         .filter((target) => !managed.has(visitorTargetKey(target)))
         .toSorted((left, right) => visitorTargetKey(left).localeCompare(visitorTargetKey(right)));
+      const { maxVisitors } = this.readLimits();
       const displayedTargets = [
         ...entries.map(({ value }) => visitorGrantTarget(value)),
         ...unmanaged,
-      ].slice(0, this.config.maxVisitors);
+      ].slice(0, maxVisitors);
       const access = await this.readAccess([
         ...new Set(displayedTargets.filter((target) => typeof target === "number")),
       ]);
@@ -656,7 +658,7 @@ export class VisitorAccessService {
       );
       let length = summary.length;
       let shown = 0;
-      for (const row of rows.slice(0, this.config.maxVisitors)) {
+      for (const row of rows.slice(0, maxVisitors)) {
         if (length + row.line.length + 1 > LIST_MAX_CHARS - 120) {
           break;
         }

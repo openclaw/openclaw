@@ -18,6 +18,7 @@ import {
   prepareSqliteReadOnlyLocationAwaited,
   startSqliteReadOnlyLocationAsync,
 } from "../infra/sqlite-snapshot-source.js";
+import { isUpdateRunAdmissionReadCommand } from "../infra/update-run-admission.types.js";
 import {
   borrowOpenClawStateDatabaseForAsyncRead,
   retainOpenClawStateDatabaseForIndependentRead,
@@ -273,30 +274,29 @@ export function startOpenClawStateReadOperation(
       authority.assertCurrent();
       return undefined;
     }
-    if (native && !independentWarmSource) {
-      if (isPostgresSqlConnection(native.database.db)) {
-        requireNativeDatabaseFile("postgres", "file-snapshot");
-      }
-      prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-        native.database.db,
-        authority.assertCurrent,
-        signal,
-        "async",
-      );
-    } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
-      const sourceIdentity = { key: context.admission.identity.key };
-      const validation = selectedTransport.startValidateFresh(context, authority);
-      await validation;
-      if (
-        (command.type === "plugins.metadata.read" || command.type === "config.health.read") &&
+    if (!snapshot && preserveArtifacts && !independentWarmSource) {
+      const currentMetadata =
+        (command.type === "plugins.metadata.read" ||
+          command.type === "config.health.read" ||
+          isUpdateRunAdmissionReadCommand(command)) &&
         !context.existingSchemaPath &&
         !context.maintenanceScope &&
         !getStateDatabaseSchemaLease(pathname) &&
-        (hasVerifiedLiveSqliteOwner(pathname) || readSqliteDatabaseCleanClose(pathname))
-      ) {
-        // Read startup metadata in the child's pinned transaction instead of
-        // copying unrelated state. Sealed files retain custody in that child;
-        // unclean and retained snapshots keep their private recovery owner.
+        (!native ||
+          (!isPostgresSqlConnection(native.database.db) &&
+            canReadWarmNativeSourceIndependently(
+              native.database,
+              pathname,
+              context.admission.identity.key,
+            ))) &&
+        (hasVerifiedLiveSqliteOwner(pathname) || readSqliteDatabaseCleanClose(pathname));
+      if (!native || currentMetadata) {
+        await selectedTransport.startValidateFresh(context, authority);
+      }
+      if (currentMetadata) {
+        // Metadata reads pin the admitted source in a child before copying a warm
+        // writer's unrelated state. Replaced paths and retained/private snapshots
+        // keep their original recovery owner; the native borrow lasts through close.
         authority.assertCurrent();
         const inspected = await runSqliteReadOnlyOperation(
           pathname,
@@ -328,6 +328,19 @@ export function startOpenClawStateReadOperation(
           });
         }
       }
+    }
+    if (native && !independentWarmSource) {
+      if (isPostgresSqlConnection(native.database.db)) {
+        requireNativeDatabaseFile("postgres", "file-snapshot");
+      }
+      prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
+        native.database.db,
+        authority.assertCurrent,
+        signal,
+        "async",
+      );
+    } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
+      const sourceIdentity = { key: context.admission.identity.key };
       if (selection.snapshotPreparation === "awaited") {
         prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
           signal,

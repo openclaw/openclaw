@@ -158,7 +158,7 @@ describe("config form and navigation", () => {
       [...groups[0]!.querySelectorAll(".settings-row__title")].map((node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["Open links in Control UI browser", "Browser enabled"]);
+    ).toEqual(["Open links in Control UI browser", "Enabled"]);
   });
 
   it("honors advanced disclosure overrides and subsection scope", () => {
