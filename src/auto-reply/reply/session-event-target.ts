@@ -489,14 +489,15 @@ export function readSessionEventTargetRetainedRequester(
   return targetScopes.get(target)?.retainedRequester;
 }
 
-function commandOwnerRequesterKey(target: SessionEventTarget): string | undefined {
-  const requester = targetScopes.get(target)?.commandOwner?.requester;
+function requesterKey(requester: RetainedSessionEventRequester | undefined): string | undefined {
   return requester
     ? JSON.stringify([
         requester.channel,
         requester.accountId ?? null,
         requester.senderId,
         requester.senderE164 ?? null,
+        requester.chatType ?? null,
+        requester.conversationId ?? null,
       ])
     : undefined;
 }
@@ -524,7 +525,11 @@ export function combineSessionEventTargetsForHost(
       readSessionEventTargetOwnerContinuation(target) !==
         readSessionEventTargetOwnerContinuation(first) ||
       hasSessionEventOriginatingCaller(target) !== hasSessionEventOriginatingCaller(first) ||
-      commandOwnerRequesterKey(target) !== commandOwnerRequesterKey(first) ||
+      requesterKey(readSessionEventTargetCommandOwner(target)?.requester) !==
+        requesterKey(readSessionEventTargetCommandOwner(first)?.requester) ||
+      // The combined turn restores the first target's requester for every target.
+      requesterKey(readSessionEventTargetRetainedRequester(target)) !==
+        requesterKey(readSessionEventTargetRetainedRequester(first)) ||
       readSessionEventTargetRequesterOwner(target) !==
         readSessionEventTargetRequesterOwner(first) ||
       channelRouteDedupeKey(target.deliveryContext) !== route
