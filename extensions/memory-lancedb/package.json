@@ -16,17 +16,17 @@
     "typebox": "1.4.3"
   },
   "devDependencies": {
-    "@lancedb/lancedb": "0.40.0",
+    "@lancedb/lancedb": "0.41.0",
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "optionalDependencies": {
-    "@lancedb/lancedb-darwin-arm64": "0.40.0",
-    "@lancedb/lancedb-linux-arm64-gnu": "0.40.0",
-    "@lancedb/lancedb-linux-arm64-musl": "0.40.0",
-    "@lancedb/lancedb-linux-x64-gnu": "0.40.0",
-    "@lancedb/lancedb-linux-x64-musl": "0.40.0",
-    "@lancedb/lancedb-win32-arm64-msvc": "0.40.0",
-    "@lancedb/lancedb-win32-x64-msvc": "0.40.0"
+    "@lancedb/lancedb-darwin-arm64": "0.41.0",
+    "@lancedb/lancedb-linux-arm64-gnu": "0.41.0",
+    "@lancedb/lancedb-linux-arm64-musl": "0.41.0",
+    "@lancedb/lancedb-linux-x64-gnu": "0.41.0",
+    "@lancedb/lancedb-linux-x64-musl": "0.41.0",
+    "@lancedb/lancedb-win32-arm64-msvc": "0.41.0",
+    "@lancedb/lancedb-win32-x64-msvc": "0.41.0"
   },
   "openclaw": {
     "extensions": [

@@ -251,7 +251,8 @@ it.for([false, true])(
         await published((result) => available(result) === true);
         expect((await list()).models).toContainEqual(model("harness-host-row"));
         if (!withProviderCredentials) {
-          // Cold startup discovers the full catalog, as an explicit refresh would.
+          // Cold startup discovers the full catalog independently of native readiness.
+          await published((result) => !result.pendingProviders?.includes(provider));
           expect(requests.toSorted()).toEqual(["/native/models", "/provider/models"]);
           // Gateway refresh can return a pending snapshot before discovery publishes.
           const refresh = () =>

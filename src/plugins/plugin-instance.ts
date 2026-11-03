@@ -361,16 +361,18 @@ export class PluginInstance {
       wrap: this.bindings.create(run, run),
       close: (cleanup) => {
         if (!closing && this.consumers.has(token)) {
-          // Close operation callbacks before entering a separate host teardown token.
-          // Its release must not join the disposal waiting on this physical hold.
+          // Host teardown outlives the caller scope, but must revoke operation callbacks first.
+          // Its separate token must not join disposal waiting on this physical hold.
           token.active = false;
           reference.cleanupState = "pending";
           closing = new Promise<void>((resolve) => {
             resolve(
-              this.invoke(
-                cleanup,
-                this.lease({ cleanup: true, registry: token.registry }),
-                this.disposalFailures,
+              pluginInvocationContext.exit(() =>
+                this.invoke(
+                  cleanup,
+                  this.lease({ cleanup: true, registry: token.registry }),
+                  this.disposalFailures,
+                ),
               ),
             );
           }).finally(release);

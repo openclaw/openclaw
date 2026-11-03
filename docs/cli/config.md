@@ -429,7 +429,7 @@ Provider builder targets must use `secrets.providers.<alias>` as the path.
     - `--provider-no-output-timeout-ms <ms>`
     - `--provider-max-output-bytes <bytes>`
     - `--provider-json-only`
-    - `--provider-env <KEY=VALUE>` (repeatable)
+    - `--provider-env <KEY=VALUE>` (repeatable; keys `__proto__`, `constructor`, and `prototype` are reserved)
     - `--provider-pass-env <ENV_VAR>` (repeatable)
     - `--provider-trusted-dir <path>` (repeatable)
 

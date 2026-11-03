@@ -488,7 +488,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .settings-section__heading.oc-settings-section-title {
-  color: var(--oc-text-muted);
   font-family: var(--oc-font-body);
   font-size: var(--oc-font-size-xs);
   font-weight: 600;

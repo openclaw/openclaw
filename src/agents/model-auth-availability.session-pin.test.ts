@@ -167,7 +167,11 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
           modelId: "gpt-5.5",
           pinnedProfileId: pin,
         }),
-      ).toMatchObject({ availability: false, unavailableReason: "auth-failed" });
+      ).toMatchObject({
+        availability: false,
+        unavailableReason: "auth-failed",
+        selectedProfileId: pin,
+      });
     },
   );
 });
