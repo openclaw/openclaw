@@ -281,29 +281,32 @@ describe("public ClawHub Template catalog", () => {
         stats: { installs: 20 },
       };
       const community = { ...communityPackage(), stats: { installs: 1 } };
-      vi.stubGlobal("fetch", async (input: string | URL | Request) => {
-        const url = new URL(
-          typeof input === "string" ? input : input instanceof URL ? input : input.url,
-        );
-        const nextPage = mode === "category" && !url.searchParams.has("cursor");
-        const valid =
-          mode === "category" ? [nextPage ? community : official] : [community, official];
-        const items =
-          url.searchParams.get("isOfficial") === "true"
-            ? [official]
-            : [
-                ...valid,
-                officialPackage("@other/impostor"),
-                { ...officialPackage(), ownerHandle: "someone-else" },
-                { ...officialPackage(), name: 42 },
-                { ...communityPackage(), channel: "private" },
-              ];
-        return Response.json(
-          url.pathname.endsWith("/search")
-            ? { results: items.map((pkg, index) => ({ score: 10 - index, package: pkg })) }
-            : { items, nextCursor: nextPage || mode === "limited" ? "next" : null },
-        );
-      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) => {
+          const url = new URL(
+            typeof input === "string" ? input : input instanceof URL ? input : input.url,
+          );
+          const nextPage = mode === "category" && !url.searchParams.has("cursor");
+          const valid =
+            mode === "category" ? [nextPage ? community : official] : [community, official];
+          const items =
+            url.searchParams.get("isOfficial") === "true"
+              ? [official]
+              : [
+                  ...valid,
+                  officialPackage("@other/impostor"),
+                  { ...officialPackage(), ownerHandle: "someone-else" },
+                  { ...officialPackage(), name: 42 },
+                  { ...communityPackage(), channel: "private" },
+                ];
+          return Response.json(
+            url.pathname.endsWith("/search")
+              ? { results: items.map((pkg, index) => ({ score: 10 - index, package: pkg })) }
+              : { items, nextCursor: nextPage || mode === "limited" ? "next" : null },
+          );
+        }),
+      );
       const entries =
         mode !== "featured" && mode !== "category"
           ? await searchClawHubTemplates({
