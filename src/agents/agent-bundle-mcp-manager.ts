@@ -192,13 +192,15 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       params.agentId ?? parseAgentSessionKey(params.sessionKey ?? "")?.agentId,
       params.workspaceDir,
       params.agentDir,
-      loadSessionMcpConfig({
-        ...params,
-        loaded: fullConfig.loaded,
-        logDiagnostics: false,
-        redactConnectionServerNames: new Set(partition.requesterScopedServerNames),
-        safeServerNamesByServer,
-      }).fingerprint,
+      partition.requesterScopedServerNames.length === 0
+        ? fullConfig.fingerprint
+        : loadSessionMcpConfig({
+            ...params,
+            loaded: fullConfig.loaded,
+            logDiagnostics: false,
+            redactConnectionServerNames: new Set(partition.requesterScopedServerNames),
+            safeServerNamesByServer,
+          }).fingerprint,
     ]);
     // Static admissions can be projections; requester discovery owns this binding.
     if (scope === "requester" || (requester && partition.requesterScopedServerNames.length > 0)) {
@@ -304,16 +306,23 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       try {
         let staticLease: SessionMcpRuntimeLease;
         try {
+          const runtimeParams = {
+            ...params,
+            runtimeKey: params.sessionId,
+            configReloadAtAdmission,
+            excludeServerNames: new Set(requesterScopedServerNames),
+            safeServerNamesByServer,
+          };
           staticLease = leaseRuntime(
             await install.getOrCreateRuntimeEntry(
-              {
-                ...params,
-                runtimeKey: params.sessionId,
-                configReloadAtAdmission,
-                excludeServerNames: new Set(requesterScopedServerNames),
-                safeServerNamesByServer,
-              },
-              fullConfig.loaded,
+              runtimeParams,
+              requesterScopedServerNames.length === 0
+                ? fullConfig
+                : loadSessionMcpConfig({
+                    ...runtimeParams,
+                    loaded: fullConfig.loaded,
+                    logDiagnostics: false,
+                  }),
             ),
             params.sessionId,
           );

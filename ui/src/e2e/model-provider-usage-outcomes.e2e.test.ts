@@ -48,6 +48,49 @@ function providerUsageResponses(usageStatus: unknown) {
 }
 
 suite.define(() => {
+  it.each([1440, 390])("draws the daily cost trend on desktop only: %ipx", async (width) => {
+    await withPage(async (page) => {
+      await installMockGateway(page, {
+        methodResponses: providerUsageResponses({
+          updatedAt: now,
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              windows: [],
+              costHistory: {
+                unit: "USD",
+                periodDays: 2,
+                daily: [2, 5].map((amount, index) => ({
+                  date: new Date(now - index * 86_400_000).toISOString().slice(0, 10),
+                  amount,
+                  inputTokens: 100,
+                  cacheReadTokens: 0,
+                  cacheWriteTokens: 0,
+                  outputTokens: 100,
+                  totalTokens: 200,
+                })),
+                models: [],
+                categories: [],
+              },
+            },
+          ],
+        }),
+      });
+      await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+      const row = await expandProvider(page, "openai");
+      const line = row.locator(".oc-sparkline-line");
+      if (width === 390) {
+        await row.locator(".provider-usage__trend small").waitFor();
+        expect(await line.isVisible()).toBe(false);
+        return;
+      }
+      await line.waitFor();
+      // An undefined stroke token computes to `none`: the path exists but draws nothing.
+      expect(await line.evaluate((path) => getComputedStyle(path).stroke)).not.toBe("none");
+    }, width);
+  });
+
   it.each(["request failure", "provider error"] as const)(
     "distinguishes usage outcomes: %s",
     async (outcome) => {
@@ -133,14 +176,13 @@ suite.define(() => {
 
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.getByRole("menuitemradio", { name: "Writer", exact: true }).click();
+      await agentPicker.getByRole("option", { name: "Writer", exact: true }).click();
       await expect.poll(credentials).toContain("Credentials for Writer");
       await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
       await page.locator("[data-models-connect]").click();
       await page.locator('[data-models-login-provider="google"]').click();
-      await page.locator("[data-models-login-api-key]").click();
       const addSection = page.locator("[data-models-key-dialog]");
       await addSection.getByLabel("API key").fill("synthetic-writer-provider-key");
       // The modal makes the picker inert. Use its selection owner without

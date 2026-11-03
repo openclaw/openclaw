@@ -15,6 +15,7 @@ import {
 import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import {
   discoverConfiguredPluginLoadPaths,
+  discoverOpenClawPlugins,
   resolveBundledSourceCheckoutExtensionsDir,
   resolvePluginPackageEntries,
 } from "../plugins/discovery.js";
@@ -291,6 +292,26 @@ export async function prepareUpdateCandidatePlugins(
   for (const source of params.config.plugins?.load?.paths ?? []) {
     sources.add(resolve(source));
   }
+  // Bundled payload selection remains with bundledPluginRedirects below.
+  const globalRoot = path.join(canonicalStateRoot, "extensions");
+  const globalSources = new Set(
+    discoverOpenClawPlugins({
+      env: {
+        ...params.env,
+        OPENCLAW_STATE_DIR: canonicalStateRoot,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      },
+      installRecords: records,
+    }).candidates.flatMap((candidate) => {
+      const source = candidate.packageDir;
+      return candidate.origin === "global" && source && path.dirname(source) === globalRoot
+        ? [source]
+        : [];
+    }),
+  );
+  for (const source of globalSources) {
+    sources.add(source);
+  }
   const bundledRedirects =
     sources.size > 0
       ? bundledPluginRedirects(params.candidateRoot, params.env, params.sourceBundledPlugins)
@@ -314,7 +335,9 @@ export async function prepareUpdateCandidatePlugins(
       source,
       real,
       file,
-      preserveBasename: path.basename(source) !== path.basename(real),
+      // Implicit global discovery needs its original extensions/<name> locator,
+      // including when that directory links to a package outside the state root.
+      preserveBasename: globalSources.has(source) || path.basename(source) !== path.basename(real),
     });
     // Copy the whole managed project so hoisted dependencies remain available.
     const owner = isPathInside(npmProjects, real)

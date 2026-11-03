@@ -11,7 +11,7 @@ import { parseInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import type { PluginRuntimeApplication } from "./lifecycle.js";
-import { inspectPluginGenerationSources } from "./plugin-generation-source-inspection.js";
+import { inspectPluginGenerationSourcesAsync } from "./plugin-generation-worker.js";
 import {
   hasPluginLifecycleLease,
   withPluginLifecycleLeaseAsync,
@@ -159,7 +159,7 @@ export class PluginInstallRuntimeBatch {
       if (!current[pluginId]) {
         throw new Error(`Resumable plugin ${pluginId} is no longer installed`);
       }
-      const source = inspectPluginGenerationSources(
+      const source = await inspectPluginGenerationSourcesAsync(
         (index?.plugins ?? [])
           .filter(
             (entry) =>
@@ -173,6 +173,7 @@ export class PluginInstallRuntimeBatch {
             entryFile: entry.source === entry.manifestPath ? entry.source : undefined,
           })),
       );
+      await lease.assertOwned();
       targets.set(pluginId, {
         pluginId,
         installHash: hashStableJson(current[pluginId]),

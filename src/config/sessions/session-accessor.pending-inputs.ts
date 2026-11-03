@@ -555,7 +555,20 @@ async function stagePreparedPendingInput(
       registerSessionPendingInputOwner(owner);
       retained = true;
       // Replays have committed bytes but still need execution and completion custody.
-      return Object.assign(ownerReceipt(owner, true), completionMethods);
+      const replayOwner = owner;
+      return Object.assign(ownerReceipt(replayOwner, true), completionMethods, {
+        validateCommittedReplay: async () => {
+          replayOwner.assertCurrent();
+          if (!options.trackCompletion && !previous && !existing) {
+            // Staging adopted approved bytes. A completed replay must also match the raw retry;
+            // unfinished current turns retain their original, once-only hook decision.
+            await assertCurrent();
+            resolveCommittedPendingInputRequestHash({ ...options, message }, committed.message);
+            await assertCurrent();
+          }
+          replayOwner.assertCurrent();
+        },
+      });
     }
     phase.mark("persist.stage.sourceAuthority");
     return await runWithSessionSourceScope(

@@ -171,6 +171,29 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     });
   });
 
+  it.each(["dark", "light"] as const)(
+    "drops the accent from a disabled primary in %s mode",
+    async (theme) => {
+      await withBrowserPage(desktopContext.newPage(), async (page) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await setFixture(
+          page,
+          `<main style="padding: 24px">
+          <button class="btn" type="button" disabled>Neutral</button>
+          <button class="btn primary" type="button" disabled>Primary</button>
+        </main>`,
+          `data-theme="${theme}" data-theme-mode="${theme}"`,
+        );
+        const paint = (name: string) =>
+          page.getByRole("button", { name, exact: true }).evaluate((button) => {
+            const style = getComputedStyle(button);
+            return [style.backgroundColor, style.borderTopColor, style.color, style.opacity];
+          });
+        expect(await paint("Primary")).toEqual(await paint("Neutral"));
+      });
+    },
+  );
+
   it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await setFixture(
@@ -384,7 +407,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         );
 
       const desktop = await measure();
-      expect(desktop.map((row) => row.selectWidth)).toEqual([340, 340]);
+      expect(desktop.map((row) => row.selectWidth)).toEqual([220, 220]);
       expect(desktop.every((row) => row.selectTop === row.buttonTop)).toBe(true);
 
       await page.setViewportSize({ width: 390, height: 800 });
@@ -431,13 +454,12 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       const selects = await page.locator("select.settings-select").evaluateAll((nodes) =>
         nodes.map((node) => {
           const style = getComputedStyle(node as HTMLElement);
+          const icon = getComputedStyle(node as HTMLElement, "::picker-icon");
           return {
             appearance: style.appearance,
             image: style.backgroundImage,
-            paddingRight: Number.parseFloat(style.paddingRight),
-            positionX: style.backgroundPositionX.split(",").map((value) => value.trim()),
-            size: style.backgroundSize.split(",").map((value) => value.trim()),
-            repeat: style.backgroundRepeat.split(",").map((value) => value.trim()),
+            iconWidth: icon.width,
+            iconMask: icon.maskImage,
           };
         }),
       );
@@ -445,13 +467,11 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       expect(selects).toHaveLength(2);
       for (const select of selects) {
         expect(select).toMatchObject({
-          appearance: "none",
-          positionX: ["calc(100% - 18px)", "calc(100% - 14px)"],
-          size: ["5px 5px", "5px 5px"],
-          repeat: ["no-repeat", "no-repeat"],
+          appearance: "base-select",
+          image: "none",
+          iconWidth: "16px",
+          iconMask: expect.stringContaining("svg"),
         });
-        expect(select.image.match(/linear-gradient[(]/g)).toHaveLength(2);
-        expect(select.paddingRight).toBeGreaterThanOrEqual(32);
       }
       const [checkbox, radio, select, text] = await Promise.all(
         [
@@ -469,6 +489,17 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       expect([text, select]).toEqual([38, 38]);
       expect(checkbox).toBeLessThan(38);
       expect(radio).toBeLessThan(38);
+
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      for (const picker of await page.locator(".field select, select.settings-select").all()) {
+        await picker.click();
+        expect(
+          await picker.evaluate(
+            (node) => getComputedStyle(node, "::picker(select)").transitionProperty,
+          ),
+        ).toBe("none");
+        await page.keyboard.press("Escape");
+      }
     });
   });
 

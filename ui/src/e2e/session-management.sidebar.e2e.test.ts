@@ -140,11 +140,13 @@ suite.define(() => {
       await initialToggle.waitFor();
       expect(await initialToggle.getAttribute("aria-expanded")).toBe("false");
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
-      // Delegated work keeps the idle parent's ring visible even with children collapsed.
+      // Hidden work belongs to the child toggle; the idle parent's own glyph stays idle.
       await expect
         .poll(() => parent.locator(".sidebar-child-session-toggle--running").count())
         .toBe(1);
-      await parent.getByRole("img", { name: "Subagents working", exact: true }).waitFor();
+      expect(await parent.locator(".sidebar-session-indicator .session-glyph__ring").count()).toBe(
+        0,
+      );
       const accessibility = await context.newCDPSession(page);
       const collapsedTree = await accessibility.send("Accessibility.getFullAXTree");
       const collapsedToggle = collapsedTree.nodes.find(
@@ -320,7 +322,7 @@ suite.define(() => {
           .toBeLessThanOrEqual(0);
       };
       const hiddenActionCounts = async () => ({
-        confirms: await page.locator("openclaw-modal-dialog .exec-approval-actions").count(),
+        confirms: await page.locator("openclaw-modal-actions").count(),
         nativeDialogs: nativeDialogs.length,
         patches: (await gateway.getRequests("sessions.patch")).length,
         personalPins: await sidebar
@@ -462,6 +464,8 @@ suite.define(() => {
       await page.keyboard.press("ContextMenu");
       const menu = page.getByRole("menu", { name: "Actions for Research notes" });
       await menu.waitFor({ state: "visible" });
+      await captureUiProof(suite, page, "session-context-menu.png", menu);
+      expect(await menu.getByText(/^Last active /).count()).toBe(0);
 
       await expect
         .poll(() =>
@@ -993,7 +997,11 @@ suite.define(() => {
         page.locator('.sidebar-recent-session[data-session-key="agent:main:chat-29"]'),
       );
       await viewport.evaluate((element) => element.scrollTo(0, 0));
-      await page.locator('.sidebar-recent-session[data-session-key="agent:main:work-0"]').waitFor();
+      // Coding follows the chat list, so reveal its row through the real viewport.
+      await revealSidebarTarget(
+        viewport,
+        page.locator('.sidebar-recent-session[data-session-key="agent:main:work-0"]'),
+      );
       await captureUiProof(suite, page, "short-window-session-sections.png");
 
       // Sections must stack below each other, not paint over the rows above.

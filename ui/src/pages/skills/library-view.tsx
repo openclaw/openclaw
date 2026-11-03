@@ -1,8 +1,10 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
-import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import "../../components/modal-dialog.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
   SettingsSection,
@@ -18,6 +20,7 @@ import { SkillLibraryToolbar } from "./library-toolbar.tsx";
 export function SkillLibrary(props: {
   library: SkillLibraryModel;
   navigationActions: JSX.Element;
+  pageMenu?: () => JSX.Element;
 }) {
   const current = () => props.library.state;
   const busy = () => props.library.saving() || current().busy;
@@ -115,20 +118,31 @@ export function SkillLibrary(props: {
         </Show>
       </Show>
       <Show when={!props.library.showWorkspace()}>
-        <label class="field">
-          <span>{t("common.search")}</span>
-          <input
-            class="settings-input"
-            name="library-search"
-            value={props.library.local.query}
-            placeholder={t("skillLibrary.search")}
-            onInput={(event) =>
-              props.library.setLocal((state) => {
-                state.query = event.currentTarget.value;
-              })
-            }
-          />
-        </label>
+        <div class="skill-library-search">
+          <label class="field">
+            <span>{t("common.search")}</span>
+            <input
+              class="settings-input"
+              name="library-search"
+              value={props.library.local.query}
+              placeholder={t("skillLibrary.search")}
+              onInput={(event) =>
+                props.library.setLocal((state) => {
+                  state.query = event.currentTarget.value;
+                })
+              }
+            />
+          </label>
+          <span class="skill-library-search__action">
+            <RefreshButton
+              label={t("common.refresh")}
+              busy={current().loading}
+              disabled={props.library.saving() || current().busy}
+              onClick={() => void props.library.load()}
+            />
+          </span>
+          {props.pageMenu?.()}
+        </div>
         {/* A stable list host keeps async replacement from reparenting the focused search field. */}
         <div>
           <Loading
@@ -257,7 +271,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
       editor={{ title: entry()?.slug ?? t("skillLibrary.create"), disabled: disabled() }}
       footer={
         <Show when={props.library.canEdit()}>
-          <openclaw-modal-actions class="skill-reader-dialog__actions">
+          <openclaw-modal-actions class="oc-dialog__footer">
             <Show when={entry()}>
               <MutationButton action="remove" />
               <MutationButton action={entry()!.enabled ? "disable" : "enable"} />
@@ -293,8 +307,11 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
           : t("skillLibrary.personalTarget")}
       </p>
       <Show when={entry()}>
-        <details class="muted" style={{ "overflow-wrap": "anywhere", "min-width": "0" }}>
-          <summary>{t("skillLibrary.technicalDetails")}</summary>
+        <SettingsDisclosure
+          quiet
+          class="skill-library-details"
+          title={t("skillLibrary.technicalDetails")}
+        >
           <dl>
             <dt>{t("skillLibrary.skillId")}</dt>
             <dd>{entry()!.skillId}</dd>
@@ -303,7 +320,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
             <dt>{t("skillLibrary.command")}</dt>
             <dd>{entry()!.name}</dd>
           </dl>
-        </details>
+        </SettingsDisclosure>
       </Show>
       <Show when={!props.library.canEdit()}>
         <p role="status">{t("skillLibrary.readOnly")}</p>
@@ -510,7 +527,7 @@ function LibraryImport(props: { library: SkillLibraryModel }) {
     <LibraryDialog
       library={props.library}
       footer={
-        <openclaw-modal-actions class="skill-reader-dialog__actions">
+        <openclaw-modal-actions class="oc-dialog__footer">
           <button
             type="submit"
             class="btn primary"

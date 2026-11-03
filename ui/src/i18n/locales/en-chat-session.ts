@@ -9,6 +9,9 @@ const enChatSession = {
     savedConversation: "Saved conversation · {status}",
     sessionAutomation: {
       everyDuration: "Every {duration}",
+      onceAt: "{day} at {time}",
+      today: "Today",
+      tomorrow: "Tomorrow",
     },
     activityPills: {
       publication: {
@@ -34,8 +37,6 @@ const enChatSession = {
       automationEmpty: en.chat.sessionDetails.automationEmpty,
       automationMore: en.chat.sessionDetails.automationMore,
       automationAttention: en.chat.sessionDetails.automationAttention,
-      automationChecked: "Checked",
-      automationCheckFailed: "Check failed",
       automationPaused: en.chat.sessionDetails.automationPaused,
       automationEnabled: en.chat.sessionDetails.automationEnabled,
     },
@@ -133,7 +134,6 @@ const enChatSession = {
       copyBranch: "Copy branch name",
       copied: "Copied",
       branches: "Versions",
-      versionsHelpLabel: "About versions",
       versionsHelp:
         "Saved copies of this conversation from rewinds or repairs. You can return to an earlier version here.",
       versionsEmptyTitle: "No earlier versions",
@@ -225,13 +225,12 @@ const enChatSession = {
       closeSearch: "Close search",
       loading: "Loading chat",
       showEarlier: "Show earlier",
-      loadingEarlier: "Loading earlier…",
       retryEarlier: "Retry earlier messages",
       earlierUnavailable: "Couldn’t load earlier messages",
       earlierInterrupted: "History refreshed before this page loaded. Try again.",
-      earlierConnecting: "Waiting for connection…",
       earlierHint: "Scroll up for earlier messages",
       noMatches: "No matching messages",
+      noMessages: "No messages yet",
       positionRail: "Conversation position",
       positionMarker: "{label}, marker {position} of {count}",
       positionUserMessage: "User message",

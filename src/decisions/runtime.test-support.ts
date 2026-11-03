@@ -3,13 +3,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createDecisionRegistry } from "./contract.test-support.js";
-import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
-import type {
-  DecisionBatch,
-  DecisionProviderV1,
-  DecisionRuntimeV1,
-  ProviderDecisionOutcome,
-} from "./types.js";
+import type { DecisionEvaluateOptions } from "./execution-types.js";
+import type { ProviderDecisionOutcome } from "./provider-outcomes.js";
+import { prepareDecisionProviderReload } from "./provider-reload.js";
+import type { DecisionProviderV1 } from "./provider-types.js";
+import { evaluateDecisionInRegistry } from "./runtime.js";
+import type { DecisionBatch } from "./types.js";
 
 export const batch: DecisionBatch = {
   state: { evidence: "synthetic" },
@@ -34,7 +33,7 @@ export const answer = {
 export const config: OpenClawConfig = {
   agents: { defaults: { decisionModel: "fixture/fixture-v1" } },
 };
-export const options = (): Parameters<DecisionRuntimeV1["evaluate"]>[1] => ({
+export const options = (): DecisionEvaluateOptions => ({
   purpose: "test",
   rubricVersion: "1",
   timeoutMs: 1_000,

@@ -9,6 +9,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
@@ -120,15 +121,18 @@ export class DraftPlaceBrowser {
         }
         this.callbacks.onApprovedListing(listing);
         const snapshot = this.read();
-        const client = snapshot.context?.gateway.snapshot.client;
-        if (!snapshot.isAdmin || !client) {
+        const applicationGateway = snapshot.context?.gateway;
+        if (!snapshot.isAdmin || !applicationGateway?.snapshot.client) {
           return;
         }
-        void client
-          .request<WorktreesBranchesResult>("worktrees.branches", {
+        void requestCheckoutSnapshot<WorktreesBranchesResult>(
+          applicationGateway,
+          "worktrees.branches",
+          {
             repoRoot: listing.path,
             includeRepositoryStatus: true,
-          })
+          },
+        )
           .then((branches) => {
             // Typing keeps this listing valid; replacement or reset retires its probe.
             if (this.browser.listing === listing && branches.repositoryStatus === "git") {

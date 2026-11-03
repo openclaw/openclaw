@@ -37,6 +37,7 @@ import {
   createRequesterPublicationFixture,
 } from "./github-publication-requester.test-support.js";
 import { commandResult, githubPublicationTestMocks } from "./github-publication.test-support.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
@@ -65,6 +66,10 @@ export async function fixture(
     conflict?: boolean;
     priorPublication?: boolean;
     linked?: boolean;
+    newerProjectBase?: boolean;
+    unpublishedProjectWork?: boolean;
+    baseBranch?: string;
+    projectFork?: boolean;
   } = {},
 ) {
   const original = { ...mocks.findWorktree("session", "unused"), id: randomUUID() };
@@ -109,14 +114,30 @@ export async function fixture(
   const baseCommit = await commitUpstream("Newer base work", {
     "newer-base.txt": "base advanced after PR\n",
   });
+  if (options.baseBranch && options.baseBranch !== "main") {
+    await upstreamGit("branch", options.baseBranch, baseCommit);
+  }
+  let projectCommit = baseCommit;
+  if (options.newerProjectBase) {
+    for (let revision = 1; revision <= 5; revision++) {
+      projectCommit = await commitUpstream("Advance published project base", {
+        "published-base.txt": `Published revision ${revision}\n`,
+      });
+    }
+  }
   // The publication harness starts with staged work. A fresh selected-project
   // fixture instead starts at the real, clean project base; prior publications
   // retain their existing work and must be refused by initial preparation.
   if (!options.empty) {
     await local.git("fetch", "--no-write-fetch-head", upstream, "main");
-    await local.git("update-ref", "refs/heads/main", baseCommit);
+    await local.git("update-ref", "refs/heads/main", projectCommit);
     if (!options.priorPublication) {
-      await local.git("reset", "--hard", baseCommit);
+      await local.git("reset", "--hard", projectCommit);
+    }
+    if (options.unpublishedProjectWork) {
+      await fs.writeFile(path.join(local.cwd, "notes.txt"), "unpublished project work\n");
+      await local.git("add", "notes.txt");
+      await local.git("commit", "-m", "Unpublished project work");
     }
   }
   let cwd = local.cwd;
@@ -148,6 +169,12 @@ export async function fixture(
   }
   const git = (...args: string[]) => local.git("-C", cwd, ...args);
   const { baseRepo, headRepo } = createPublicationRepositories(options.fork);
+  if (options.projectFork) {
+    mocks.resolveRepository.mockResolvedValue({
+      ...(await mocks.resolveRepository(cwd)),
+      originUrl: `https://github.com/${headRepo.full_name}.git`,
+    });
+  }
   const pr = {
     number: 7,
     html_url: "https://github.com/openclaw/openclaw/pull/7",
@@ -156,7 +183,7 @@ export async function fixture(
     draft: false,
     merged: false,
     maintainer_can_modify: true,
-    base: { repo: baseRepo, ref: "main", sha: baseCommit },
+    base: { repo: baseRepo, ref: options.baseBranch ?? "main", sha: baseCommit },
     head: { repo: headRepo, ref: "topic/existing", sha: headCommit },
   };
   const branch = { name: pr.head.ref, commit: { sha: pr.head.sha }, protected: false };
@@ -169,15 +196,43 @@ export async function fixture(
       argv: string[],
       commandOptions?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string },
     ) => {
-      if (argv.includes("push") || (argv[0] === "gh" && !argv.includes("GET"))) {
+      const method = argv.indexOf("--method");
+      if (
+        argv.includes("push") ||
+        (argv[0] === "gh" && method >= 0 && argv[method + 1] !== "GET")
+      ) {
         writes.push(argv);
         throw new Error("PR preparation attempted a GitHub write");
       }
       if (argv[0] === "gh") {
-        const endpoint = argv.at(-1)!;
+        const endpoint = argv.find((arg) => /^(repos|user)\//u.test(arg))!;
+        const reference =
+          /^repos\/((?:openclaw|contributor)\/openclaw)\/git\/ref\/heads\/(.+)$/u.exec(endpoint);
+        if (reference) {
+          const [, repository, ref] = reference;
+          return commandResult(
+            JSON.stringify({
+              ref: `refs/heads/${ref}`,
+              // The fork's main may advance independently of the upstream base.
+              sha:
+                options.projectFork && repository === baseRepo.full_name && ref === "main"
+                  ? baseCommit
+                  : await upstreamGit("rev-parse", ref!),
+            }),
+          );
+        }
         const reads: Record<string, unknown> = {
           "repos/openclaw/openclaw": baseRepo,
           "repos/contributor/openclaw": headRepo,
+          "user/101": { id: 101, login: "contributor" },
+          "repos/openclaw/openclaw/collaborators/contributor/permission": {
+            permission: "read",
+            user: { id: 101, login: "contributor" },
+          },
+          "repos/contributor/openclaw/collaborators/contributor/permission": {
+            permission: "read",
+            user: { id: 101, login: "contributor" },
+          },
           [`repos/openclaw/openclaw/pulls/${pr.number}`]: pr,
         };
         const value = endpoint.includes("/branches/") ? branch : reads[endpoint];
@@ -258,7 +313,17 @@ export async function fixture(
     args: Record<string, unknown> = {},
     prepared: SandboxContext | null = sandbox,
     signal?: AbortSignal,
+    invocation: {
+      requester?: "guest" | "maintainer";
+      caller?: "guest" | "maintainer" | null;
+    } = {},
   ) => {
+    const principal = invocation.requester === "maintainer" ? f.maintainerSource : f.guestSource;
+    const caller = invocation.caller === undefined ? invocation.requester : invocation.caller;
+    const callerSource = caller === "maintainer" ? f.maintainerSource : f.guestSource;
+    const operator =
+      caller === null ? undefined : await captureGatewayOperatorRunAuthority(callerSource);
+    using _ = { [Symbol.dispose]: () => operator?.release() };
     const callGateway: InProcessGatewayCaller = async <T>(
       method: string,
       params: Record<string, unknown>,
@@ -266,8 +331,8 @@ export async function fixture(
       const respond = vi.fn();
       await handleGatewayRequest({
         req: { type: "req", id: randomUUID(), method, params },
-        client: f.guestSource.client,
-        context: Object.assign(createRequestContext(), f.guestSource.context, {
+        client: principal.client,
+        context: Object.assign(createRequestContext(), principal.context, {
           githubPublicationService: f.coordinator,
           workerSessionPlacementService: f.placements,
         }),
@@ -283,13 +348,15 @@ export async function fixture(
       return result as T;
     };
     const toolArgs = { action: "prepare_pr", pullRequestUrl: pr.html_url, ...args };
-    const result = await withGatewayToolCallerIdentity(scope, () =>
-      withPublicationToolTransport(callGateway, () =>
-        createGitHubPublishTool({ sandbox: prepared }).execute(
-          "prepare",
-          Object.fromEntries(Object.entries(toolArgs).filter(([, value]) => value !== undefined)),
+    const result = await withGatewayToolCallerIdentity(
+      { ...scope, operatorAuthority: operator?.authority },
+      () =>
+        withPublicationToolTransport(callGateway, () =>
+          createGitHubPublishTool({ sandbox: prepared }).execute(
+            "prepare",
+            Object.fromEntries(Object.entries(toolArgs).filter(([, value]) => value !== undefined)),
+          ),
         ),
-      ),
     );
     if ((args.action ?? "prepare_pr") === "prepare_pr") {
       expect(Value.Check(SessionGitHubPullRequestPrepareResultSchema, result.details)).toBe(true);

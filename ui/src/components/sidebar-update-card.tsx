@@ -273,7 +273,6 @@ export function SidebarUpdateCard(
     if (props.refreshRequired) {
       return {
         timestampMs: undefined,
-        critical: false,
         detail: t("chat.sidebar.serverUpdatedRefresh"),
         icon: <Icon name="refresh" />,
         severity: "warning" as const,
@@ -313,7 +312,6 @@ export function SidebarUpdateCard(
           />
         ),
         severity: props.updateRun.status === "failed" ? ("error" as const) : ("warning" as const),
-        critical: false,
       };
     }
     const campaign = props.updateSchedule?.campaign;
@@ -341,7 +339,6 @@ export function SidebarUpdateCard(
             statusBanner?.text ??
             t("updates.sidebar.availableSummary")),
       icon: <Icon name={statusBanner ? "alertTriangle" : busy ? "refresh" : "download"} />,
-      critical: Boolean(blocked),
       severity: statusBanner?.tone === "danger" ? ("error" as const) : ("warning" as const),
       title: blocked
         ? t("updates.sidebar.blockedTitle")
@@ -362,7 +359,6 @@ export function SidebarUpdateCard(
             timestampMs={current().timestampMs}
             icon={current().icon}
             severity={current().severity}
-            critical={current().critical}
             onToggle={(open) => {
               setExpanded(open);
               if (open && expansionChecksTarget()) {

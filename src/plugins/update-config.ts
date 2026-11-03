@@ -9,12 +9,9 @@ import {
   getExternalizedBundledPluginLookupIds,
   type ExternalizedBundledPluginBridge,
 } from "./externalized-bundled-plugins.js";
-import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { resolvePluginInstallDir } from "./install.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
-import { reconcileRegisteredOpenClawHostLinks } from "./plugin-peer-link.js";
-import type { PluginUpdateLogger } from "./update-source.js";
 
 export async function hasRunnableInstalledNpmPayload(params: {
   installPath: string;
@@ -324,45 +321,4 @@ export function migratePluginConfigId(
   }
 
   return nextPlugins === plugins ? cfg : { ...cfg, plugins: nextPlugins };
-}
-
-/** Repairs a legacy npm-owned extensions-root host without reinstalling its package. */
-export async function repairRegisteredOpenClawHostLink(params: {
-  pluginId: string;
-  record: PluginInstallRecord;
-  logger: PluginUpdateLogger;
-  beforePersistentApply?: () => void;
-  beforePersistentEffect?: () => void | Promise<void>;
-}): Promise<boolean> {
-  const result = await reconcileRegisteredOpenClawHostLinks({
-    installRecords: { [params.pluginId]: params.record },
-    extensionsDir: resolveDefaultPluginExtensionsDir(),
-    mode: "repair",
-    logger: params.logger,
-    beforePersistentApply: params.beforePersistentApply,
-    beforePersistentEffect: params.beforePersistentEffect,
-  });
-  return result.repaired > 0;
-}
-
-export async function repairOpenClawPeerLinksForNpmInstalls(params: {
-  config: OpenClawConfig;
-  logger: PluginUpdateLogger;
-  beforePersistentApply?: () => void;
-  beforePersistentEffect?: () => void | Promise<void>;
-}): Promise<boolean> {
-  const result = await reconcileRegisteredOpenClawHostLinks({
-    installRecords: params.config.plugins?.installs ?? {},
-    extensionsDir: resolveDefaultPluginExtensionsDir(),
-    mode: "repair",
-    logger: params.logger,
-    beforePersistentApply: params.beforePersistentApply,
-    beforePersistentEffect: params.beforePersistentEffect,
-    onPackageReadError: (error, packageDir) => {
-      params.logger.warn?.(
-        `Could not repair openclaw peer link at ${packageDir}: ${String(error)}`,
-      );
-    },
-  });
-  return result.repaired > 0;
 }

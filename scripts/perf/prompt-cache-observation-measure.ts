@@ -33,10 +33,8 @@ import {
 import { bindToolResultPromptProjectionKeys } from "../../src/agents/embedded-agent-runner/tool-result-projection-key.js";
 import { replayToolResultPromptProjections } from "../../src/agents/embedded-agent-runner/tool-result-projection-replay.js";
 import { convertToLlm } from "../../src/agents/sessions/messages.js";
-import {
-  isOwnedTranscriptPayload,
-  normalizeTranscriptJsonValue,
-} from "../../src/config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json-normalize.js";
+import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-json.js";
 import { cloneTranscriptView } from "../../src/config/sessions/transcript-snapshot.js";
 import type { Message } from "../../src/llm/types.js";
 import { isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
