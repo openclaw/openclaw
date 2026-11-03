@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   evaluateReleaseBootstrapGate,
   evaluateReleasePublishGates,
+  evaluateStableRollbackDrill,
 } from "../../scripts/lib/release-publish-gates.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -31,6 +32,38 @@ it.each([
       message: "Alpha releases are retired; use a beta prerelease instead.",
     }),
   );
+});
+
+it("warns when the stable rollback drill will expire before the release window", () => {
+  expect(
+    evaluateStableRollbackDrill({
+      now: new Date("2026-08-18T00:00:00.000Z"),
+      rollbackDrillDate: "2026-06-01",
+      rollbackDrillId: "rollback-drill-2026-q2",
+    }),
+  ).toEqual({
+    id: "stable-closeout.rollback-drill-date",
+    status: "WARN",
+    message:
+      "Rollback drill expires on 2026-08-30; run the private rollback drill before stable closeout.",
+    remediation:
+      "Run the private rollback drill and record its UTC date in RELEASE_ROLLBACK_DRILL_DATE or supply rollback_drill_date to stable closeout.",
+  });
+});
+
+it("passes when the stable rollback drill covers the release window", () => {
+  expect(
+    evaluateStableRollbackDrill({
+      now: new Date("2026-08-16T00:00:00.000Z"),
+      rollbackDrillDate: "2026-06-01",
+      rollbackDrillId: "rollback-drill-2026-q2",
+    }),
+  ).toEqual({
+    id: "stable-closeout.rollback-drill-date",
+    status: "PASS",
+    message: "Rollback drill rollback-drill-2026-q2 is fresh through 2026-08-30.",
+    remediation: null,
+  });
 });
 
 describe("release publication control admission", () => {
