@@ -214,7 +214,7 @@ describe("LabsPage", () => {
       experimental({ templates: null }),
     ],
     [
-      "Host Desktop",
+      "This computer’s desktop",
       "hostDesktop",
       false,
       hostDesktop({ enabled: true, managed: false, port: 5908, passwordFile: "/tmp/vnc-password" }),
@@ -232,8 +232,8 @@ describe("LabsPage", () => {
     ["Code Mode", "codeMode", true, codeMode(false), codeMode(null)],
     ["Speech bubbles", "chatBubbles", true, {}, experimental({ chatBubbles: true })],
     ["Templates", "templates", true, {}, experimental({ templates: true })],
-    ["Host Desktop", "hostDesktop", true, hostEnabled(false), hostEnabled(true)],
-    ["Cloud Worker Desktop", "workerDesktop", true, workerDesktop(false), workerDesktop(true)],
+    ["This computer’s desktop", "hostDesktop", true, hostEnabled(false), hostEnabled(true)],
+    ["Cloud device desktop", "workerDesktop", true, workerDesktop(false), workerDesktop(true)],
     ["Advisor", "advisor", true, {}, advisor({ enabled: true })],
     ["Code Mode", "codeMode", false, {}, codeMode({ enabled: false })],
     [
@@ -352,7 +352,7 @@ describe("LabsPage tool search enablement", () => {
     ["option-bearing override", { tools: { toolSearch: { enabled: true, maxSearchLimit: 3 } } }],
   ])("disables %s without replacing authored modes or options", async (_label, config) => {
     const { page, runtimeConfig } = await mountPage(config);
-    const toggle = labToggle(page, "Tool Search for all models");
+    const toggle = labToggle(page, "Tool search for all models");
 
     expect(toggle.checked).toBe(true);
     changeToggle(toggle, false);

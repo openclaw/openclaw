@@ -837,7 +837,7 @@ it.each([
     scopes: ["operator.sessions.read"],
     summary: "You have permission to view your own sessions.",
   },
-  { scopes: ["operator.admin"], summary: "You have permission to manage this server." },
+  { scopes: ["operator.admin"], summary: "You have admin access." },
   {
     scopes: ["operator.approvals"],
     summary: "This connection has a limited set of permissions.",
@@ -857,12 +857,12 @@ it.each([
   expect(access?.querySelector(".settings-row__title")?.textContent).toBe(summary);
   const details = access?.querySelector("details");
   expect(details?.open).toBe(false);
-  expect(details?.querySelector("summary")?.textContent).toBe("Technical details");
+  expect(details?.querySelector("summary")?.textContent).toBe("Show details");
   expect(details?.querySelector(".settings-row__value")?.textContent).toBe(scopes.join(", "));
   expect(access?.textContent).toContain(
     "Sessions, browsers, and tools may have additional restrictions.",
   );
-  expect(access?.textContent).toContain("Ask your server administrator to review your access.");
+  expect(access?.textContent).toContain("Ask your admin to review your access.");
   expect(request).not.toHaveBeenCalled();
 });
 
@@ -873,7 +873,7 @@ it("distinguishes unreported permissions from an explicit empty grant", async ()
   const page = mountProfilePage(harness.context);
   flush();
   expect(page.querySelector("#settings-profile-access")?.textContent).toContain(
-    "Your permissions could not be confirmed.",
+    "Couldn’t confirm your permissions. Reconnect to try again.",
   );
 
   harness.emitHello(gatewayHelloForMethods([], []));
@@ -907,7 +907,7 @@ it("reconnects through the connection owner while retaining the last access summ
   expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
     scope,
   );
-  expect(page.textContent).toContain("You have permission to manage this server.");
+  expect(page.textContent).toContain("You have admin access.");
   expect(page.querySelector("openclaw-personal-instructions")).toBe(personalEditor);
 
   harness.emitHello(gatewayHelloForMethods([], ["operator.read"]));
