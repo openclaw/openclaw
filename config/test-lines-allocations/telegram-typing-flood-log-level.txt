@@ -1,0 +1,2 @@
+# Typing the flood gate held back stays out of the Telegram API error log.
+134

@@ -1,4 +1,4 @@
-import { HttpError } from "grammy";
+import { GrammyError, HttpError } from "grammy";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -15,6 +15,18 @@ type TelegramApiLoggingParams<T> = {
 };
 
 const fallbackLogger = createSubsystemLogger("telegram/api");
+
+/** Ends the description of the synthetic 429 the account limiter returns for a request it held back. */
+export const TELEGRAM_UNSENT_FLOOD_SUFFIX = "; request not sent)";
+
+/** True when the account limiter held the request back, so it never reached Telegram. */
+function isTelegramUnsentFloodError(err: unknown): boolean {
+  return (
+    err instanceof GrammyError &&
+    err.error_code === 429 &&
+    err.description.endsWith(TELEGRAM_UNSENT_FLOOD_SUFFIX)
+  );
+}
 
 export function formatTelegramTransportDiagnostics(error: unknown): string {
   const fields: { code?: string; syscall?: string } = {};
@@ -47,7 +59,8 @@ export async function withTelegramApiErrorLogging<T>(
   try {
     return await fn();
   } catch (err) {
-    if (!shouldLog || shouldLog(err)) {
+    // The limiter already warned once about the flood wait that held this request back.
+    if (!isTelegramUnsentFloodError(err) && (!shouldLog || shouldLog(err))) {
       const transport = formatTelegramTransportDiagnostics(err);
       const errText =
         err instanceof HttpError || transport

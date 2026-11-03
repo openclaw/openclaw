@@ -9,6 +9,7 @@ import {
   sleepWithAbort,
   waitForAbortSignal,
 } from "openclaw/plugin-sdk/runtime-env";
+import { TELEGRAM_UNSENT_FLOOD_SUFFIX } from "./api-logging.js";
 import { apiThrottler } from "./bot.runtime.js";
 import {
   createOwnedGrammyApiThrottler,
@@ -78,7 +79,7 @@ function skippedFloodResponse(waitMs: number, reason: string): ApiError {
   const response: ApiError = {
     ok: false,
     error_code: 429,
-    description: `Too Many Requests: retry after ${retryAfter} (${reason}; request not sent)`,
+    description: `Too Many Requests: retry after ${retryAfter} (${reason}${TELEGRAM_UNSENT_FLOOD_SUFFIX}`,
     parameters: { retry_after: retryAfter },
   };
   unsentFloodResponses.add(response);
