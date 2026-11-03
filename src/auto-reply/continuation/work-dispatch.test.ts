@@ -342,6 +342,11 @@ vi.mock("./custody/custody-store.js", async (importOriginal) =>
     await importOriginal(),
   ),
 );
+vi.mock("./work-recipient-authority.js", async (importOriginal) =>
+  (
+    await import("./work-dispatch-flow-mock.test-support.js")
+  ).wrapWorkRecipientAuthorityForWorkDispatch(await importOriginal()),
+);
 
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
@@ -390,6 +395,7 @@ import {
   scheduleContinuationWork,
   scheduleContinuationWorkBatch,
 } from "./work-dispatch.js";
+import { captureContinuationWorkRecipientAuthority } from "./work-recipient-authority.js";
 import {
   consumePendingWork,
   hasLiveOrRecentlyDispatchedContinuationWork,
@@ -516,12 +522,14 @@ async function advanceTimers(ms: number): Promise<void> {
 
 /**
  * Fake timers owned by continuation dispatch. Every custody command re-arms
- * the shared-state worker's one idle-retirement timer, which is not dispatch
- * state, so the count is taken right after a custody read and excludes it.
+ * the shared-state worker's one idle-retirement timer, and every recipient-
+ * authority read or capture the agent database owner's; neither is dispatch
+ * state, so the count is taken right after one of each and excludes both.
  */
 async function dispatchTimerCount(): Promise<number> {
   await listCustodyRecordsForTest();
-  return vi.getTimerCount() - 1;
+  await captureContinuationWorkRecipientAuthority("agent:main:dispatch-timer-count");
+  return vi.getTimerCount() - 2;
 }
 
 describe("durable continuation_work dispatch", () => {

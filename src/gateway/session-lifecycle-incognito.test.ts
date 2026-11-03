@@ -115,14 +115,17 @@ it("an incognito reset ends the session's queued continuation custody as a delet
         throw new Error(created.error.message);
       }
       const now = Date.now();
-      const work = await enqueuePendingWork({
-        sessionKey: created.key,
-        hop: 1,
-        delayMs: 60_000,
-        electedAt: now,
-        dueAt: now + 60_000,
-        maxChainLength: 8,
-      });
+      const work = await enqueuePendingWork(
+        {
+          sessionKey: created.key,
+          hop: 1,
+          delayMs: 60_000,
+          electedAt: now,
+          dueAt: now + 60_000,
+          maxChainLength: 8,
+        },
+        { bind: false },
+      );
       const recordId = work!.flowId!;
 
       expect(

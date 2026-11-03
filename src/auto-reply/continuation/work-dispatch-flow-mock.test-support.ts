@@ -8,11 +8,14 @@
 //
 // Every write still commits in the real store. The hooks only observe applied
 // writes, or put a real concurrent writer (or a refused write) in front of one.
+// The recipient-authority capture and checks read the real agent database the
+// same way, so suites count them with `wrapWorkRecipientAuthorityForWorkDispatch`.
 import type * as CustodyStore from "./custody/custody-store.js";
 import type {
   ContinuationRecord,
   ContinuationRecordUpdate,
 } from "./custody/custody-store.types.js";
+import type * as WorkRecipientAuthority from "./work-recipient-authority.js";
 
 type CustodyStoreModule = typeof CustodyStore;
 
@@ -165,6 +168,22 @@ export function wrapCustodyStoreForWorkDispatch(actual: CustodyStoreModule): Cus
   }
   // SAFETY: every export keeps its signature; functions only gain in-flight accounting.
   return wrapped as CustodyStoreModule;
+}
+
+/** Every recipient-authority read or capture counts as an in-flight command for the settle. */
+export function wrapWorkRecipientAuthorityForWorkDispatch(
+  actual: typeof WorkRecipientAuthority,
+): typeof WorkRecipientAuthority {
+  const wrapped = Object.fromEntries(
+    Object.entries(actual).map(([name, value]) => [
+      name,
+      typeof value === "function"
+        ? countInFlight(name, value as (...args: unknown[]) => Promise<unknown>)
+        : value,
+    ]),
+  );
+  // SAFETY: every export is async and keeps its signature; it only gains in-flight accounting.
+  return wrapped as typeof WorkRecipientAuthority;
 }
 
 /** Commit a revision bump on every live work record, as a concurrent writer would. */

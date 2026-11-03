@@ -367,6 +367,11 @@ vi.mock("./custody/custody-store.js", async (importOriginal) =>
     await importOriginal(),
   ),
 );
+vi.mock("./work-recipient-authority.js", async (importOriginal) =>
+  (
+    await import("./work-dispatch-flow-mock.test-support.js")
+  ).wrapWorkRecipientAuthorityForWorkDispatch(await importOriginal()),
+);
 
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
