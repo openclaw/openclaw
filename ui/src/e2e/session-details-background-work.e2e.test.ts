@@ -20,6 +20,7 @@ import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Session Details background work" });
+
 const now = 1_800_000_000_000;
 const parentKey = "agent:main:details-background";
 
@@ -193,6 +194,38 @@ function installBackgroundWorkGateway(page: Page, deferred = true, initialProces
 }
 
 suite.define(() => {
+  for (const width of [1440, 390]) {
+    it(`offers retry after the initial process read fails at ${width}px`, async () => {
+      await suite.withPage(
+        { viewport: { width, height: 1000 }, reducedMotion: "reduce" },
+        async ({ page }) => {
+          const gateway = await installBackgroundWorkGateway(page);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
+          const details = await openChatDetails(page);
+          await expect
+            .poll(async () => (await gateway.getRequests("sessions.processes.list")).length)
+            .toBeGreaterThan(0);
+          await gateway.rejectDeferred("sessions.processes.list", {
+            code: "UNAVAILABLE",
+            message: "Process service unavailable",
+          });
+          const processGroup = details.locator('[data-details-group="processes"]');
+          await expect
+            .poll(() => processGroup.textContent())
+            .toContain("Process service unavailable");
+          const retry = processGroup.getByRole("button", { name: "Retry", exact: true });
+          await expect.poll(() => retry.count()).toBe(1);
+          await gateway.setMethodResponse("sessions.processes.list", {
+            sessionId: "details-background",
+            processes: [],
+            truncated: false,
+          });
+          await retry.click();
+          await expect.poll(() => retry.count()).toBe(0);
+        },
+      );
+    });
+  }
   it("visualizes subagents and background processes in Details", async () => {
     await suite.withPage(
       { colorScheme: "light", locale: "en-US", viewport: { width: 1728, height: 1100 } },
@@ -568,8 +601,11 @@ suite.define(() => {
               const listError = details.getByRole("alert").filter({
                 hasText: "Process list temporarily unavailable",
               });
-              expect(await listError.count()).toBe(0);
-              expect(await processGroup.count()).toBe(0);
+              await listError.waitFor();
+              expect(await processGroup.count()).toBe(1);
+              expect(
+                await processGroup.getByRole("button", { name: "Retry", exact: true }).count(),
+              ).toBe(1);
               if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
                 await checkThemes(async () => {
                   await capture(`processes-list-error-${colorScheme}`, details, [subagents]);

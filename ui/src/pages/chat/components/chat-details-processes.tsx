@@ -116,7 +116,7 @@ export function ChatDetailsProcesses(props: Props) {
   };
   const hasRunning = () => rows().length > 0;
   const ProcessError = (errorProps: { loading: boolean; retry: () => void }) => (
-    <Show when={snapshot()?.errorKind !== "read" && snapshot()?.error}>
+    <Show when={presentation.error()}>
       {(error) => (
         <div class="chat-details-processes__error" role="alert">
           <span>{error()}</span>
@@ -190,23 +190,33 @@ export function ChatDetailsProcesses(props: Props) {
       </Loading>
     </Errored>
   );
+  const ProcessSection = () => (
+    <ChatDetailsDesktopSection
+      section="processes"
+      title={t("chat.sessionDetails.processes")}
+      expanded={props.expanded}
+      presented={props.presented}
+      onExpandedChange={(expanded) => props.onExpandedChange(expanded)}
+      onRevealMotionChange={setRevealing}
+    >
+      <ReadContent />
+    </ChatDetailsDesktopSection>
+  );
   // The disclosure's layout owner must survive pending and errored body reads.
   return (
     <Show when={props.onOpen}>
-      <Show when={motion.present()} fallback={<ReadContent />}>
+      <Show
+        when={motion.present()}
+        fallback={
+          <Show when={presentation.error()} fallback={<ReadContent />}>
+            <ProcessSection />
+          </Show>
+        }
+      >
         <div ref={motion.shell} class="chat-details-processes__envelope">
           <div ref={motion.content} class="chat-details-processes__motion-content">
             <Show when={hasRunning()}>
-              <ChatDetailsDesktopSection
-                section="processes"
-                title={t("chat.sessionDetails.processes")}
-                expanded={props.expanded}
-                presented={props.presented}
-                onExpandedChange={(expanded) => props.onExpandedChange(expanded)}
-                onRevealMotionChange={setRevealing}
-              >
-                <ReadContent />
-              </ChatDetailsDesktopSection>
+              <ProcessSection />
             </Show>
           </div>
         </div>

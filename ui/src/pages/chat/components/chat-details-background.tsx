@@ -337,8 +337,7 @@ function DetailsProcesses(
   );
   const visibleRows = createMemo(() => processRows().slice(0, 2));
   const hidden = () => processRows().length - visibleRows().length;
-  const processError = () =>
-    props.processes()?.snapshot.errorKind !== "read" ? props.processes()?.snapshot.error : null;
+  const processError = presentation.error;
   const openProcesses = (instanceId?: string) => {
     if (props.presented) {
       props.details.onOpenProcesses?.(instanceId);
