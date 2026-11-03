@@ -65,7 +65,7 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
   await search.waitFor();
   const inventoryGeometry = await page.evaluate(() => {
     const surface = document.querySelector<HTMLElement>(".settings-page.oc-app-surface");
-    const title = surface?.querySelector<HTMLElement>(".content-header--settings h1.page-title");
+    const title = document.querySelector<HTMLElement>(".content-header--settings h1.page-title");
     const tabs = surface?.querySelector<HTMLElement>(".plugins-settings-tabs.oc-segmented");
     const searchField = surface?.querySelector<HTMLElement>(".plugins-settings-search");
     const section = surface?.querySelector<HTMLElement>("#plugin-settings-panel .settings-group");
@@ -119,7 +119,7 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
   await workboardRow.waitFor();
   const workboardLink = workboardRow.getByRole("link", { name: /Workboard/iu });
   expect(await workboardLink.getAttribute("href")).toBe("/settings/plugins/workboard");
-  const enabledStatus = workboardRow.locator('.settings-status[data-plugin-state="enabled"]');
+  const enabledStatus = workboardRow.locator('[data-plugin-state="enabled"]');
   expect(await enabledStatus.count()).toBe(1);
   expect(await enabledStatus.getAttribute("title")).toBe("Enabled");
   expect(await workboardRow.getByRole("switch").count()).toBe(0);

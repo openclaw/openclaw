@@ -523,6 +523,7 @@ const enPluginManagement = {
     disabled: "Disabled",
     available: "Available",
     needsAttention: "Needs attention",
+    needsSetup: "Needs setup",
     included: "Included",
     global: "Global",
     workspace: "Workspace",
