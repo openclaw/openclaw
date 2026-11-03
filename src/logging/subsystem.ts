@@ -262,11 +262,11 @@ function formatConsoleMetaValue(value: unknown): string | undefined {
   return stringifyConsoleMetaValue(value);
 }
 
-// JSON escapes C0 controls but not DEL/C1; escape those too so field values,
-// often peer-supplied, cannot drive the terminal.
+// JSON leaves DEL/C1 and Unicode line separators literal; escape those too so
+// peer-supplied fields cannot split console entries or drive the terminal.
 function stringifyConsoleMetaValue(value: unknown): string {
   return JSON.stringify(value).replace(
-    /[\u007f-\u009f]/gu,
+    /[\u007f-\u009f\u2028\u2029]/gu,
     (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
 }

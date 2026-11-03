@@ -161,7 +161,7 @@ export function formatForLog(value: unknown): string {
  * fields also drop controls and escapes that could forge entries or drive the terminal.
  */
 export function formatPeerTextForLog(value: string): string {
-  return sanitizeForLog(formatForLog(value));
+  return sanitizeForLog(formatForLog(value)).replace(/[\u2028\u2029]/gu, "");
 }
 
 function redactLogText(text: string): string {

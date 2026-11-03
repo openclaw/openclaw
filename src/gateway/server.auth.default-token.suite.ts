@@ -484,8 +484,8 @@ export function registerDefaultAuthTokenSuite(): void {
       const client = {
         ...TEST_OPERATOR_CLIENT,
         displayName: "\u001b]0;pwned\u0007name",
-        version: `1.0.0\r${forged}`,
-        platform: `linux\n${forged}`,
+        version: `1.0.0\r${forged}\u2028${forged}`,
+        platform: `linux\n${forged}\u2029${forged}`,
         instanceId: `\u001b[2J${forged}`,
       };
       const warnings: string[] = [];
@@ -518,7 +518,7 @@ export function registerDefaultAuthTokenSuite(): void {
       // Only the logger's own SGR colors may carry an escape; peer text must not add controls.
       const loggerColors = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*m`, "gu");
       for (const line of warnings) {
-        expect(line.replace(loggerColors, "")).not.toMatch(/\p{Cc}/u);
+        expect(line.replace(loggerColors, "")).not.toMatch(/[\p{Cc}\u2028\u2029]/u);
       }
     });
 
