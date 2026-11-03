@@ -19,7 +19,7 @@ crate-type = ["cdylib"]
 iroh = "=1.4.1"
 napi = { version = "3", default-features = false, features = ["napi8", "async"] }
 napi-derive = "3"
-tokio = { version = "1", features = ["sync", "io-util", "rt"] }
+tokio = { version = "1", features = ["sync", "io-util", "rt", "macros"] }
 
 [build-dependencies]
 napi-build = "2"

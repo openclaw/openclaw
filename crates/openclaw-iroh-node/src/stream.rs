@@ -1,23 +1,44 @@
 //! Stream halves. Reads copy the received bytes into a JS-owned Buffer on the JS thread; writes
 //! copy the caller's Buffer/Uint8Array once on the JS thread (so JS may reuse it immediately) and
 //! then await QUIC flow control off-thread.
+//!
+//! Each half serializes I/O behind a mutex. `stop` and `reset` first raise the half's cancel
+//! signal, which makes a pending read or write give up its lock, so they never wait on a peer
+//! that stays silent or withholds flow-control credit.
 
 use std::sync::Arc;
 
 use iroh::endpoint::{self, VarInt};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use tokio::{io::AsyncReadExt, sync::Mutex};
+use tokio::{
+    io::AsyncReadExt,
+    sync::{Mutex, watch},
+};
 
 use crate::js_err;
 
+// Resolves once `stop` or `reset` has been requested for this half. The sender lives as long as
+// the half itself, so a dropped sender means nobody can cancel and the wait never resolves.
+async fn cancelled(mut rx: watch::Receiver<bool>) {
+    if rx.wait_for(|requested| *requested).await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
 /// Sending half of a bidirectional stream.
 #[napi]
-pub struct SendStream(Arc<Mutex<endpoint::SendStream>>);
+pub struct SendStream {
+    inner: Arc<Mutex<endpoint::SendStream>>,
+    cancel: watch::Sender<bool>,
+}
 
 impl SendStream {
     pub(crate) fn new(s: endpoint::SendStream) -> Self {
-        Self(Arc::new(Mutex::new(s)))
+        Self {
+            inner: Arc::new(Mutex::new(s)),
+            cancel: watch::Sender::new(false),
+        }
     }
 }
 
@@ -27,23 +48,32 @@ impl SendStream {
     #[napi(ts_return_type = "Promise<void>")]
     pub fn write<'env>(&self, env: &'env Env, data: &[u8]) -> Result<PromiseRaw<'env, ()>> {
         let bytes = data.to_vec();
-        let s = self.0.clone();
+        let inner = self.inner.clone();
+        let cancel = self.cancel.subscribe();
         env.spawn_future(async move {
-            s.lock().await.write_all(&bytes).await.map_err(js_err)?;
-            Ok(())
+            // A reset abandons the write; otherwise wait for QUIC to accept every byte.
+            tokio::select! {
+                biased;
+                () = cancelled(cancel) => Err(js_err("stream reset")),
+                written = async { inner.lock().await.write_all(&bytes).await } => {
+                    written.map_err(js_err)
+                }
+            }
         })
     }
 
     /// Ends the send side cleanly (FIN).
     #[napi]
     pub async fn finish(&self) -> Result<()> {
-        self.0.lock().await.finish().map_err(js_err)
+        self.inner.lock().await.finish().map_err(js_err)
     }
 
-    /// Abandons the send side with an application error code.
+    /// Abandons the send side with an application error code. A pending write rejects first, so
+    /// the reset is not held up by a peer that withholds flow-control credit.
     #[napi]
     pub async fn reset(&self, code: u32) -> Result<()> {
-        self.0
+        self.cancel.send_replace(true);
+        self.inner
             .lock()
             .await
             .reset(VarInt::from_u32(code))
@@ -53,11 +83,17 @@ impl SendStream {
 
 /// Receiving half of a bidirectional stream.
 #[napi]
-pub struct RecvStream(Arc<Mutex<endpoint::RecvStream>>);
+pub struct RecvStream {
+    inner: Mutex<endpoint::RecvStream>,
+    cancel: watch::Sender<bool>,
+}
 
 impl RecvStream {
     pub(crate) fn new(r: endpoint::RecvStream) -> Self {
-        Self(Arc::new(Mutex::new(r)))
+        Self {
+            inner: Mutex::new(r),
+            cancel: watch::Sender::new(false),
+        }
     }
 }
 
@@ -73,20 +109,23 @@ impl RecvStream {
         }
         // read_buf fills spare capacity without zeroing it; 0 bytes read with room left means EOF.
         let mut buf = Vec::with_capacity(max as usize);
-        let n = self
-            .0
-            .lock()
-            .await
-            .read_buf(&mut buf)
-            .await
-            .map_err(js_err)?;
+        // A stop abandons the read; otherwise wait for data, end of stream or a peer reset.
+        let n = tokio::select! {
+            biased;
+            () = cancelled(self.cancel.subscribe()) => return Err(js_err("stream stopped")),
+            read = async { self.inner.lock().await.read_buf(&mut buf).await } => {
+                read.map_err(js_err)?
+            }
+        };
         Ok((n > 0).then_some(ReadBytes(buf)))
     }
 
-    /// Asks the peer to stop sending, with an application error code.
+    /// Asks the peer to stop sending, with an application error code. A pending read rejects
+    /// first, so STOP_SENDING is not held up by a peer that stays silent.
     #[napi]
     pub async fn stop(&self, code: u32) -> Result<()> {
-        self.0
+        self.cancel.send_replace(true);
+        self.inner
             .lock()
             .await
             .stop(VarInt::from_u32(code))
