@@ -103,10 +103,27 @@ it("keeps worker arguments out of source, maps tabs, fences browser routes and c
   let tabIds = [41];
   let disconnect = () => {};
   let destroyWorker = () => {};
+  let replaceContext = () => {};
+  let scriptLoaded = () => {};
+  let runtimeEnabled = createDeferred<void>();
   vi.spyOn(cdp, "withCdpSocket").mockImplementation(async (_url, run, options) => {
     disconnect = () => options?.onClose?.();
     destroyWorker = () =>
       options?.onEvent?.({ method: "Target.targetDestroyed", params: { targetId: "worker-1" } });
+    let contextId = 1;
+    const emit = (method: string, params?: unknown) =>
+      options?.onEvent?.({ method, params, sessionId: "worker-session" });
+    const contextCreated = () =>
+      emit("Runtime.executionContextCreated", {
+        context: { id: contextId, origin: `chrome-extension://${id}/background.js`, name: "" },
+      });
+    scriptLoaded = () => emit("Inspector.workerScriptLoaded");
+    replaceContext = () => {
+      emit("Runtime.executionContextDestroyed", { executionContextId: contextId });
+      contextId += 1;
+      contextCreated();
+      scriptLoaded();
+    };
     return await run(async (method, params, sessionId) => {
       calls.push({ method, params, sessionId });
       if (method === "Target.getTargets") {
@@ -123,10 +140,17 @@ it("keeps worker arguments out of source, maps tabs, fences browser routes and c
       if (method === "Target.attachToTarget") {
         return { sessionId: "worker-session" };
       }
+      if (method === "Runtime.enable") {
+        contextCreated();
+        runtimeEnabled.resolve();
+      }
       if (method === "Runtime.evaluate") {
+        runtimeEnabled.resolve();
         return { result: { objectId: "worker-global" } };
       }
       if (method === "Runtime.callFunctionOn") {
+        expect(params?.executionContextId).toBe(contextId);
+        expect(params?.objectId).toBeUndefined();
         const source = String(params?.functionDeclaration);
         const fn = vm.runInNewContext(`(${source})`, {
           chrome: {
@@ -153,7 +177,19 @@ it("keeps worker arguments out of source, maps tabs, fences browser routes and c
   const registration = await registerBrowserExtension(request);
   try {
     await expect(registerBrowserExtension(request)).rejects.toThrow("already owned");
-    const session = await registration.openSession();
+    const opening = registration.openSession();
+    let opened = false;
+    void opening.then(() => {
+      opened = true;
+    });
+    await runtimeEnabled.promise;
+    expect(calls.some((call) => call.method === "Runtime.enable")).toBe(true);
+    expect(opened).toBe(false);
+    // A pre-script context is not ready; replacement before use is not worker loss.
+    replaceContext();
+    const session = await opening;
+    expect(calls.some((call) => call.method === "Runtime.runIfWaitingForDebugger")).toBe(true);
+    replaceContext();
     const secret = "synthetic-sensitive-argument";
     expect(
       await session.callInServiceWorker(
@@ -230,7 +266,15 @@ it("keeps worker arguments out of source, maps tabs, fences browser routes and c
     await session.close();
     expect(calls.filter((call) => call.method === "Target.detachFromTarget")).toHaveLength(1);
     await expect(session.callInServiceWorker(() => true, null)).rejects.toThrow("closed");
-    const staleSession = await registration.openSession();
+    runtimeEnabled = createDeferred<void>();
+    const openRunningSession = async (timeoutMs?: number) => {
+      runtimeEnabled = createDeferred<void>();
+      const runningSession = registration.openSession({ timeoutMs });
+      await runtimeEnabled.promise;
+      scriptLoaded();
+      return await runningSession;
+    };
+    const staleSession = await openRunningSession();
     const selecting = createDeferred<void>();
     const finishSelection = createDeferred<void>();
     profile.ensureTabAvailable = async () => {
@@ -247,8 +291,8 @@ it("keeps worker arguments out of source, maps tabs, fences browser routes and c
     await staleRejected;
     expect(staleCallback).not.toHaveBeenCalled();
     profile.ensureTabAvailable = async () => tab;
-    for (const loss of ["socket", "worker"] as const) {
-      const lostSession = await registration.openSession();
+    for (const loss of ["socket", "worker", "context"] as const) {
+      const lostSession = await openRunningSession();
       const waiting = createDeferred<void>();
       const finish = createDeferred<void>();
       const interrupted = lostSession.withExclusiveTab(tab, async () => {
@@ -257,7 +301,7 @@ it("keeps worker arguments out of source, maps tabs, fences browser routes and c
       });
       const rejected = expect(interrupted).rejects.toThrow("disconnected");
       await waiting.promise;
-      (loss === "socket" ? disconnect : destroyWorker)();
+      (loss === "socket" ? disconnect : loss === "worker" ? destroyWorker : replaceContext)();
       await rejected;
       await expect(
         runProfileContextOperation(profile, undefined, async () => "unsafe read"),
@@ -268,7 +312,7 @@ it("keeps worker arguments out of source, maps tabs, fences browser routes and c
       await profile.stopRunningBrowser();
       finish.resolve();
     }
-    const timedSession = await registration.openSession({ timeoutMs: 100 });
+    const timedSession = await openRunningSession(100);
     vi.useFakeTimers();
     try {
       const timeoutEntered = createDeferred<void>();

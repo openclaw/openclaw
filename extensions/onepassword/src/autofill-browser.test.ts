@@ -1,4 +1,5 @@
 import type { ExtensionHostSession } from "openclaw/plugin-sdk/browser-extension-host";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
 import { BrowserAutofillExtension } from "./autofill-browser.js";
 
@@ -225,4 +226,91 @@ it("never fills after failed mode enable and never reflects host errors", async 
   expect(await bad.readiness()).toEqual({ success: false, error: { code: "extensionNotReady" } });
   await s.adapter.close();
   await bad.close();
+});
+
+it("renews failed attachments and lost sessions without retrying an uncertain request", async () => {
+  const s = setup();
+  s.registration.openSession.mockRejectedValueOnce(new Error("worker unavailable"));
+  expect((await s.adapter.readiness()).success).toBe(false);
+  expect((await s.adapter.readiness()).success).toBe(true);
+  const call = vi.spyOn(s.session, "callInServiceWorker");
+  call.mockRejectedValueOnce(new Error("worker disconnected"));
+  expect((await s.adapter.readiness()).success).toBe(false);
+  expect((await s.adapter.readiness()).success).toBe(true);
+  s.worker.agenticAutofill.v1.createAccessRequest.mockRejectedValueOnce(new Error("uncertain"));
+  expect(
+    (
+      await s.adapter.createAccessRequest({
+        ...credentials,
+        requests: { version: 2, goal: "test", entries: [] },
+      })
+    ).success,
+  ).toBe(false);
+  expect(s.worker.agenticAutofill.v1.createAccessRequest).toHaveBeenCalledOnce();
+  expect((await s.adapter.readiness()).success).toBe(true);
+  expect(s.registration.openSession).toHaveBeenCalledTimes(4);
+  await s.adapter.close();
+});
+
+it("does not close an active fill when another caller cannot enter its profile", async () => {
+  const s = setup();
+  const filling = createDeferred<void>();
+  const finish = createDeferred<void>();
+  s.worker.agenticAutofill.v1.fillCredential.mockImplementationOnce(async () => {
+    filling.resolve();
+    await finish.promise;
+    return fill;
+  });
+  const operation = s.adapter.fillCredential({
+    ...credentials,
+    resourcePath: "opaque",
+    tab: { targetId: "tab" },
+  });
+  await filling.promise;
+  vi.spyOn(s.session, "callInServiceWorker").mockRejectedValueOnce(new Error("profile busy"));
+  expect((await s.adapter.readiness()).success).toBe(false);
+  expect(s.sessionClose).not.toHaveBeenCalled();
+  const busyClose = vi.fn(async () => {});
+  s.registration.openSession.mockResolvedValueOnce({
+    ...s.session,
+    callInServiceWorker: vi.fn(async () => {
+      throw new Error("profile busy");
+    }),
+    close: busyClose,
+  });
+  expect((await s.adapter.readiness()).success).toBe(false);
+  expect(busyClose).toHaveBeenCalledOnce();
+  expect(s.sessionClose).not.toHaveBeenCalled();
+  finish.resolve();
+  expect(await operation).toEqual(fill);
+  expect(s.sessionClose).toHaveBeenCalledOnce();
+  await s.adapter.close();
+});
+
+it("does not discard a new attachment when an old overlapping call fails late", async () => {
+  const s = setup();
+  const first = createDeferred<never>();
+  const second = createDeferred<never>();
+  const entered = createDeferred<void>();
+  const call = vi.spyOn(s.session, "callInServiceWorker");
+  call
+    .mockImplementationOnce(async () => await first.promise)
+    .mockImplementationOnce(async () => {
+      entered.resolve();
+      return await second.promise;
+    });
+  const a = s.adapter.readiness();
+  const b = s.adapter.readiness();
+  await entered.promise;
+  first.reject(new Error("lost"));
+  expect((await a).success).toBe(false);
+  const replacement = { ...s.session, close: vi.fn(async () => {}) };
+  s.registration.openSession.mockResolvedValueOnce(replacement);
+  expect((await s.adapter.readiness()).success).toBe(true);
+  second.reject(new Error("late loss"));
+  expect((await b).success).toBe(false);
+  expect((await s.adapter.readiness()).success).toBe(true);
+  expect(s.registration.openSession).toHaveBeenCalledTimes(2);
+  expect(replacement.close).not.toHaveBeenCalled();
+  await s.adapter.close();
 });

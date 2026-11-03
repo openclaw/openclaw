@@ -235,9 +235,19 @@ async function openWorkerSession(params: {
   }
   const ready = createDeferred<{ send: CdpSendFn; sessionId: string }>();
   const workerTarget = createDeferred<string>();
+  let executionContext = createDeferred<number>();
+  let contextId: number | undefined;
+  let scriptLoaded = false;
+  let contextReady = false;
+  const resolveExecutionContext = () => {
+    if (contextId !== undefined && scriptLoaded) {
+      contextReady = true;
+      executionContext.resolve(contextId);
+    }
+  };
   const workerTimer = setTimeout(
     () =>
-      workerTarget.reject(
+      ready.reject(
         new Error(
           "Declared extension worker is missing. Verify extension id, manifest key, and browser build.",
         ),
@@ -265,6 +275,7 @@ async function openWorkerSession(params: {
     );
     workerLost.reject(error);
     workerTarget.reject(error);
+    ready.reject(error);
     done.resolve();
   };
   const connection = withCdpSocket(
@@ -284,6 +295,11 @@ async function openWorkerSession(params: {
         await send("Target.attachToTarget", { targetId: workerId, flatten: true }),
       );
       workerSessionId = attached.sessionId;
+      // Runtime can expose a pre-script global: even timers do not run there.
+      // Chromium emits workerScriptLoaded when the worker can execute async work.
+      await send("Runtime.enable", {}, attached.sessionId);
+      await send("Runtime.runIfWaitingForDebugger", {}, attached.sessionId);
+      await Promise.race([executionContext.promise, workerLost.promise]);
       ready.resolve({ send, sessionId: attached.sessionId });
       await done.promise;
       await send("Target.detachFromTarget", { sessionId: attached.sessionId }).catch(() => {});
@@ -294,6 +310,36 @@ async function openWorkerSession(params: {
       handshakeRetries: 0,
       onClose: markWorkerLost,
       onEvent: (event) => {
+        if (workerSessionId !== undefined && event.sessionId === workerSessionId) {
+          if (event.method === "Runtime.executionContextCreated") {
+            const parsed = z
+              .object({ context: z.object({ id: z.number() }) })
+              .safeParse(event.params);
+            if (parsed.success) {
+              contextId = parsed.data.context.id;
+              resolveExecutionContext();
+            }
+          } else if (event.method === "Inspector.workerScriptLoaded") {
+            scriptLoaded = true;
+            resolveExecutionContext();
+          } else if (
+            event.method === "Runtime.executionContextsCleared" ||
+            (event.method === "Runtime.executionContextDestroyed" &&
+              z.object({ executionContextId: z.number() }).safeParse(event.params).data
+                ?.executionContextId === contextId)
+          ) {
+            if (exclusive) {
+              markWorkerLost();
+              return;
+            }
+            contextId = undefined;
+            scriptLoaded = false;
+            if (contextReady) {
+              executionContext = createDeferred<number>();
+              contextReady = false;
+            }
+          }
+        }
         const targetLoss = z.object({ targetId: z.string() }).safeParse(event.params);
         const sessionLoss = z.object({ sessionId: z.string() }).safeParse(event.params);
         if (
@@ -331,23 +377,42 @@ async function openWorkerSession(params: {
   // Both deferreds have rejection handlers even if the handshake fails first.
   void workerTarget.promise.catch(() => {});
   void connection.catch((error: unknown) => ready.reject(error));
-  const { send, sessionId } = await ready.promise.finally(() => clearTimeout(workerTimer));
-  let globalObject: string;
+  let attachedWorker: Awaited<typeof ready.promise>;
   try {
-    globalObject = z
-      .object({ result: z.object({ objectId: z.string().min(1) }) })
-      .parse(await send("Runtime.evaluate", { expression: "globalThis" }, sessionId))
-      .result.objectId;
+    attachedWorker = await ready.promise;
   } catch (error) {
+    workerTarget.reject(error);
     done.resolve();
+    // Release startup waits as well as a retained session when admission fails.
+    workerLost.reject(error);
     await connection.catch(() => {});
     throw error;
+  } finally {
+    clearTimeout(workerTimer);
   }
+  const { send, sessionId } = attachedWorker;
   const assertCurrent = () => {
     if (closed || lost) {
       throw new Error("Browser extension task session is closed or disconnected.");
     }
     params.assertCurrent();
+  };
+  const waitForExecutionContext = async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        executionContext.promise,
+        workerLost.promise,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("Extension worker execution context timed out.")),
+            params.timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   };
   const close = async () => {
     if (exclusive) {
@@ -365,6 +430,8 @@ async function openWorkerSession(params: {
       return await runProfileContextOperation(params.profileCtx, undefined, async () => {
         assertCurrent();
         try {
+          const executionContextId = await waitForExecutionContext();
+          assertCurrent();
           // Source contains only caller-authored code. Secrets travel as call arguments,
           // never interpolated source; neither transport traffic nor worker errors are logged.
           const response = evaluationSchema.parse(
@@ -372,7 +439,7 @@ async function openWorkerSession(params: {
               "Runtime.callFunctionOn",
               {
                 functionDeclaration: `function(args) { return (${fn.toString()})(args); }`,
-                objectId: globalObject,
+                executionContextId,
                 arguments: [{ value: args }],
                 awaitPromise: true,
                 returnByValue: true,

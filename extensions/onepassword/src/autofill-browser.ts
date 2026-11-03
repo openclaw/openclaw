@@ -84,11 +84,17 @@ function parseResult<T>(schema: z.ZodType<T>, value: unknown): ExtResult<T> {
   return parsed.success ? parsed.data : internal;
 }
 
+type AutofillAttachment = {
+  session: Promise<ExtensionHostSession>;
+  users: number;
+  retired: boolean;
+};
+
 /** Plugin-owned adapter; one owner-only profile attachment survives the approval polling window. */
 export class BrowserAutofillExtension implements AgenticAutofillExtension {
   private registration: BrowserExtensionRegistration | undefined;
   private starting: Promise<void> | undefined;
-  private session: Promise<ExtensionHostSession> | undefined;
+  private session: AutofillAttachment | undefined;
   private closed = false;
 
   constructor(
@@ -126,17 +132,7 @@ export class BrowserAutofillExtension implements AgenticAutofillExtension {
     await this.starting;
   }
 
-  private async attached(): Promise<ExtensionHostSession> {
-    await this.start();
-    if (this.closed || !this.registration) {
-      throw new Error("Extension unavailable");
-    }
-    this.session ??= this.registration.openSession();
-    return await this.session;
-  }
-
-  private async initialized(): Promise<ExtensionHostSession | undefined> {
-    const session = await this.attached();
+  private async initialized(session: ExtensionHostSession): Promise<boolean> {
     const result = await session.callInServiceWorker(
       async () => ({
         state: await api.initialization.v1.whenSettled(),
@@ -144,31 +140,49 @@ export class BrowserAutofillExtension implements AgenticAutofillExtension {
       }),
       undefined,
     );
-    return ready.safeParse(result).success ? session : undefined;
+    return ready.safeParse(result).success;
   }
 
   /** Probe initialization without tokens, network requests for grants, or raw diagnostics. */
   async readiness(): Promise<ExtResult<{ status: "ready" }>> {
-    try {
-      return (await this.initialized())
-        ? { success: true, result: { status: "ready" } }
-        : { success: false, error: { code: "extensionNotReady" } };
-    } catch {
-      return { success: false, error: { code: "extensionNotReady" } };
-    }
+    return await this.call(async () => ({ success: true, result: { status: "ready" } }));
   }
 
   private async call<T>(
     run: (session: ExtensionHostSession) => Promise<ExtResult<T>>,
   ): Promise<ExtResult<T>> {
+    let attachment: AutofillAttachment | undefined;
     try {
-      const session = await this.initialized();
-      return session
+      await this.start();
+      if (this.closed || !this.registration) {
+        throw new Error("Extension unavailable");
+      }
+      attachment = this.session ??= {
+        session: this.registration.openSession(),
+        users: 0,
+        retired: false,
+      };
+      attachment.users += 1;
+      const session = await attachment.session;
+      return (await this.initialized(session))
         ? await run(session)
         : { success: false, error: { code: "extensionNotReady" } };
     } catch {
       // Never retry an uncertain worker call, especially a fill or request creation.
+      if (attachment) {
+        attachment.retired = true;
+        if (this.session === attachment) {
+          this.session = undefined;
+        }
+      }
       return { success: false, error: { code: "extensionNotReady" } };
+    } finally {
+      // A busy probe must neither interrupt another caller's fill nor leak its
+      // discarded attachment. Retire it after its last admitted caller settles.
+      if (attachment && --attachment.users === 0 && attachment.retired) {
+        const session = await attachment.session.catch(() => undefined);
+        await session?.close().catch(() => {});
+      }
     }
   }
 
@@ -255,7 +269,7 @@ export class BrowserAutofillExtension implements AgenticAutofillExtension {
   async close(): Promise<void> {
     this.closed = true;
     await this.starting;
-    const session = await this.session?.catch(() => undefined);
+    const session = await this.session?.session.catch(() => undefined);
     try {
       await session?.close();
     } finally {
