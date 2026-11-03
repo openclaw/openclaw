@@ -476,7 +476,7 @@ unknown limits do not authorize generation.
 The registered audio consumer checks the current ClawRouter key's `/v1/catalog`
 before uploading a recording. It accepts only a fresh proxy-key observation and
 an eligible native `audio.transcription` offer with the selected model, upstream
-model, route, and supported multipart formats. A stale, foreign, revoked, or
+model, route, and supported native formats. A stale, foreign, revoked, or
 unknown-format offer fails before upload. Each transcription refreshes discovery;
 an earlier successful lookup does not authorize the next recording.
 
@@ -517,7 +517,6 @@ cancellation, deadline, proxy, and network policy cover discovery and upload.
 An uploaded request is not automatically retried after an HTTP or transport
 failure. Request-dependent affordability still needs the Worker's current grant
 and billing decision; unknown duration or pricing never becomes a free request.
-JSON OpenRouter transcription needs a separate native consumer.
 
 ### Native Deepgram files
 
@@ -543,6 +542,29 @@ consumer. It retains independent channels in provider order, including repeated
 speech, and rejects malformed tracks. Direct Deepgram auth and Flux behavior
 remain separate. Catalog grants, cancellation and network policy still apply;
 unknown duration, channel usage or tariffs do not authorize free inference.
+
+### Native OpenRouter JSON audio
+
+Select `openrouter/openai/whisper-large-v3-turbo` to consume a qualified native
+`openrouter.audio_transcription` offer. Both request and response must use that
+format at `/v1/native/openrouter/v1/audio/transcriptions`. The catalog owns
+the endpoint identifier; a multipart alias or a different API path is rejected.
+This client contract requires the deployment's JSON transcription dispatch and
+catalog declaration. Installing the client does not activate either prerequisite.
+
+The direct OpenRouter provider and this consumer share the native request
+formatter: unchanged file bytes become base64 `input_audio.data` with an explicit
+audio format. The proxy accepts at most 16 MiB of decoded audio, a lowercase
+two-letter language, and `providerOptions.clawrouter.temperature` from 0 to 1.
+Prompt hints, provider-routing preferences, remote audio URLs and other options
+are rejected. Native format mapping includes MP4 to M4A and OGA/Opus to OGG;
+AAC is not silently relabeled.
+
+Only the selected ClawRouter key is sent. Fresh discovery, cancellation and the
+operation deadline cover the request. Empty native transcripts are nonfatal and
+never cause an automatic paid retry; redirects and malformed or partial results
+do not replay the upload. Duration, token usage and native cost remain separate
+Worker accounting observations; absent prices do not imply free transcription.
 
 ## Native Gradium speech
 

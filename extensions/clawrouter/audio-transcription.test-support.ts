@@ -182,6 +182,7 @@ export async function withClawRouterAudioFixture(
         OPENAI_API_KEY: "fixture-upstream-never-router",
         SENSEAUDIO_API_KEY: "fixture-senseaudio-never-router",
         DEEPGRAM_API_KEY: "fixture-deepgram-never-router",
+        OPENROUTER_API_KEY: "fixture-openrouter-never-router",
       },
     },
   );

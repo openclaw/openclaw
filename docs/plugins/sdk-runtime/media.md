@@ -46,6 +46,14 @@ in provider order, including repeated speech. It does not discover credentials,
 grant models, estimate charges, or select a Flux/WebSocket transport. Resolve those
 policies before dispatch; retain the request's cancellation and deadline.
 
+`buildOpenRouterAudioTranscriptionBody` from `openclaw/plugin-sdk/provider-http`
+is the native JSON request formatter shared by the direct OpenRouter plugin and
+the catalog-scoped ClawRouter consumer. Pass the resolved model with the audio
+buffer, filename/MIME, language and optional temperature query. It preserves
+bytes as base64 and the native format aliases. The caller still owns credential
+selection, destination, input eligibility and transport; use the existing HTTP
+response helpers and `requireTranscriptionText` for result handling.
+
 ## Media and generation namespaces
 
 <AccordionGroup>
