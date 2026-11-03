@@ -37,7 +37,7 @@ export async function reportGitHubPublicationTranscript(
     resolveCanonicalSessionEntryFromStoreKeys: typeof import("./session-utils.js").resolveCanonicalSessionEntryFromStoreKeys;
     resolveGatewaySessionStoreTargetInWorker: typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker;
   }>,
-  coordinator: Pick<GitHubPublicationCoordinator, "markReportedAsync">,
+  coordinator: Pick<GitHubPublicationCoordinator, "markReportedAsync" | "readReportLifecycleAsync">,
   params: {
     sessionId: string;
     sessionKey: string;
@@ -45,6 +45,7 @@ export async function reportGitHubPublicationTranscript(
     result: SessionGitHubPublicationResult;
   },
 ): Promise<void> {
+  const lifecycleRevision = await coordinator.readReportLifecycleAsync(params);
   const memory = captureSessionActorStorageOwner(params, {
     assertCurrent() {},
     authorize() {},
@@ -71,6 +72,16 @@ export async function reportGitHubPublicationTranscript(
         };
       })();
   const { target, entry } = selected;
+  // A reset or rotation ended that transcript; its receipt stays readable by request ID.
+  if (
+    entry &&
+    target.canonicalKey === params.sessionKey &&
+    (entry.sessionId !== params.sessionId ||
+      (entry.lifecycleRevision ?? null) !== lifecycleRevision)
+  ) {
+    await coordinator.markReportedAsync(params.result.requestId);
+    return;
+  }
   if (entry?.sessionId !== params.sessionId || target.canonicalKey !== params.sessionKey) {
     throw new Error("GitHub publication transcript owner changed");
   }
@@ -80,6 +91,7 @@ export async function reportGitHubPublicationTranscript(
       sessionId: params.sessionId,
       sessionKey: target.canonicalKey,
       storePath: target.storePath,
+      expectedLifecycleRevision: lifecycleRevision ?? undefined,
     },
     {
       kind: "assistant",

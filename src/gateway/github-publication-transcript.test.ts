@@ -39,6 +39,34 @@ afterEach(() => {
 });
 
 describe("GitHub publication transcript reporting", () => {
+  it("retires a delayed report after a reset keeps the session ID but rotates its lifecycle", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const identity = { agentId: "main", sessionKey: "agent:main:main", sessionId: "same-id" };
+      await upsertSessionEntryCore(identity, {
+        sessionId: identity.sessionId,
+        lifecycleRevision: "after-reset",
+        updatedAt: 1,
+      });
+      const markReportedAsync = vi.fn().mockResolvedValue(undefined);
+      await reportGitHubPublicationTranscript(
+        () => import("./session-utils.js"),
+        { markReportedAsync, readReportLifecycleAsync: async () => "before-reset" },
+        {
+          ...identity,
+          result: {
+            requestId: "delayed-before-reset",
+            status: "failed",
+            code: "push_rejected",
+            message: "Failed",
+            nextAction: "Retry",
+          },
+        },
+      );
+      expect(await loadTranscriptEvents(identity)).toEqual([]);
+      expect(markReportedAsync).toHaveBeenCalledWith("delayed-before-reset");
+    });
+  });
   it("commits one memory-only private report before marking its publication receipt", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const authority = { assertCurrent() {}, authorize() {} };
@@ -82,12 +110,12 @@ describe("GitHub publication transcript reporting", () => {
       try {
         await reportGitHubPublicationTranscript(
           loadRuntime,
-          { markReportedAsync },
+          { markReportedAsync, readReportLifecycleAsync: async () => null },
           { ...session, result },
         );
         await reportGitHubPublicationTranscript(
           loadRuntime,
-          { markReportedAsync },
+          { markReportedAsync, readReportLifecycleAsync: async () => null },
           { ...session, result },
         );
         const events = await loadTranscriptEvents({
@@ -248,7 +276,10 @@ describe("GitHub publication transcript reporting", () => {
         expect(encoded?.count).toBe(encoding === "compressed" ? 3 + beforeTail.length : 0);
         await reportGitHubPublicationTranscript(
           () => import("./session-utils.js"),
-          { markReportedAsync: vi.fn().mockResolvedValue(undefined) },
+          {
+            markReportedAsync: vi.fn().mockResolvedValue(undefined),
+            readReportLifecycleAsync: async () => null,
+          },
           { ...identity, result },
         );
         const reports = (await loadTranscriptEvents(identity)).filter(
@@ -283,7 +314,7 @@ describe("GitHub publication transcript reporting", () => {
         await expect(
           reportGitHubPublicationTranscript(
             () => import("./session-utils.js"),
-            { markReportedAsync },
+            { markReportedAsync, readReportLifecycleAsync: async () => null },
             {
               ...identity,
               result: {
@@ -335,7 +366,7 @@ describe("GitHub publication transcript reporting", () => {
         await expect(
           reportGitHubPublicationTranscript(
             () => import("./session-utils.js"),
-            { markReportedAsync },
+            { markReportedAsync, readReportLifecycleAsync: async () => null },
             { ...identity, result },
           ),
         ).rejects.toThrow("report insert failed");
@@ -346,7 +377,7 @@ describe("GitHub publication transcript reporting", () => {
       }
       await reportGitHubPublicationTranscript(
         () => import("./session-utils.js"),
-        { markReportedAsync },
+        { markReportedAsync, readReportLifecycleAsync: async () => null },
         { ...identity, result },
       );
       expect(markReportedAsync).toHaveBeenCalledOnce();
@@ -409,12 +440,12 @@ describe("GitHub publication transcript reporting", () => {
       const markReportedAsync = vi.fn().mockResolvedValue(undefined);
       await reportGitHubPublicationTranscript(
         () => import("./session-utils.js"),
-        { markReportedAsync },
+        { markReportedAsync, readReportLifecycleAsync: async () => null },
         { ...identity, result },
       );
       await reportGitHubPublicationTranscript(
         () => import("./session-utils.js"),
-        { markReportedAsync },
+        { markReportedAsync, readReportLifecycleAsync: async () => null },
         { ...identity, result },
       );
       expect(readEvidence().slice(0, before.length)).toEqual(before);
@@ -465,12 +496,12 @@ describe("GitHub publication transcript reporting", () => {
         const markReportedAsync = vi.fn().mockResolvedValue(undefined);
         await reportGitHubPublicationTranscript(
           () => import("./session-utils.js"),
-          { markReportedAsync },
+          { markReportedAsync, readReportLifecycleAsync: async () => null },
           { sessionId, sessionKey, agentId: "main", result },
         );
         await reportGitHubPublicationTranscript(
           () => import("./session-utils.js"),
-          { markReportedAsync },
+          { markReportedAsync, readReportLifecycleAsync: async () => null },
           { sessionId, sessionKey, agentId: "main", result },
         );
 
