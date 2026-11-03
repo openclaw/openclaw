@@ -26,7 +26,6 @@
   min-width: 0;
 }
 
-.device-entry__heading,
 .personal-instructions__actions,
 .active-filters {
   display: flex;
@@ -506,6 +505,17 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   color: var(--muted);
   font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 1.45;
+}
+
+.settings-sidebar__empty--search {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.settings-sidebar__empty--search p {
+  margin: 0;
 }
 
 /* Loading skeleton reuses __nav/__group/__item geometry; only the fills are placeholders. */
@@ -1008,10 +1018,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   opacity: var(--sidebar-toolbar-action-opacity, 0.55);
 }
 
-.sidebar-session-toolbar .sidebar-recent-sessions__label-text {
-  flex: 0 0 auto;
-}
-
 .sidebar-session-toolbar__button:hover,
 .sidebar-session-toolbar__button:focus-visible,
 .sidebar-session-toolbar__button[aria-haspopup][aria-expanded="true"] {
@@ -1457,6 +1463,21 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-session-group-person > .sidebar-recent-sessions__label-text {
   min-width: 0;
   flex: 1 1 0;
+}
+
+/* A resting group title ends in an ellipsis. Hovering still scrolls the full title. */
+.sidebar-session-group-toggle
+  > .sidebar-recent-sessions__label-text.hover-marquee:not(.hover-marquee--scrolling),
+.sidebar-session-group-person
+  > .sidebar-recent-sessions__label-text.hover-marquee:not(.hover-marquee--scrolling) {
+  mask-image: none;
+
+  & > .hover-marquee__text {
+    display: block;
+    overflow: hidden;
+    width: auto;
+    text-overflow: ellipsis;
+  }
 }
 
 /* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing
@@ -2371,9 +2392,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-panel-header__title {
   margin-inline-end: auto;
   padding-inline-start: 4px;
+}
+
+/* Every sidebar panel title shares one type style, including the Sessions owner
+   picker, whose button host would otherwise reset the inherited letter spacing. */
+.sidebar-panel-header__title,
+.sidebar-session-owner-filter .picker-select__label {
   color: var(--text-strong);
   font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 550;
+  letter-spacing: -0.01em;
 }
 
 .sidebar--rail
@@ -3781,8 +3809,11 @@ html.openclaw-native-web-chrome
   color: var(--muted);
 }
 
-.page-meta,
-.dreaming-header-controls {
+.page-subtitle .learn-more-link {
+  white-space: nowrap;
+}
+
+.page-meta {
   display: flex;
   align-items: center;
   gap: 8px;

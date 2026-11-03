@@ -396,7 +396,7 @@ a.activity-current-work__row:hover {
   height: 7px;
   margin-right: var(--space-1);
   border-radius: 50%;
-  background: var(--ok);
+  background: var(--status-running);
 }
 
 .activity-pulse__bars {
@@ -459,11 +459,6 @@ a.activity-current-work__row:hover {
 
 .activity-feed__day > h3 {
   margin: 0 0 var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .activity-feed__sessions,
@@ -715,7 +710,7 @@ a.activity-current-work__row:hover {
   bottom: auto;
   left: -2px;
   border-color: var(--card);
-  background: var(--accent);
+  background: var(--status-running);
   animation: pulse-subtle 1.8s ease-in-out infinite;
 }
 

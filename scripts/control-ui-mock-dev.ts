@@ -77,6 +77,7 @@ import {
   pluginLifecycleMockInitScript,
 } from "./control-ui-mock-plugins.ts";
 import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
+import { buildSearchMocks } from "./control-ui-mock-search.ts";
 import {
   createSessionDesignPortalFixturePlugin,
   createSessionDesignDesktopFixturePlugin,
@@ -101,6 +102,7 @@ const FIXTURES = [
   "goal",
   "header-idle",
   "header-waiting",
+  "inbox",
   "meetings",
   "plugins-dense",
   "reactions",
@@ -2108,6 +2110,8 @@ async function createChatPickerScenario(
   const richAttention = fixture === "approval";
   const cronMocks = buildCronMocks(fixture === "session-design" ? baseTime : Date.now(), {
     richAttention,
+    // With the auth warning and the seeded failed and overdue jobs: 47 System rows.
+    ...(fixture === "inbox" ? { failedBacklog: 44 } : {}),
     ...(fixture === "sidebar-roster" ? { secondAgentId: "forge" } : {}),
     ...(fixture === "session-design" ? { sessionKey: "agent:main:main" } : {}),
   });
@@ -2454,7 +2458,9 @@ async function createChatPickerScenario(
         id: selfProfile.id,
         // A resolved viewer identity switches direct threads to gutter avatars;
         // only the reactions fixture emulates an identity-resolving Gateway.
-        ...(fixture === "reactions" ? { identity: { type: "profile", id: selfProfile.id } } : {}),
+        ...(fixture === "reactions" || fixture === "inbox"
+          ? { identity: { type: "profile", id: selfProfile.id } }
+          : {}),
         name: selfProfile.displayName ?? undefined,
         email: selfProfile.emails[0],
         avatarUrl: `/api/users/${selfProfile.id}/avatar`,
@@ -2793,6 +2799,7 @@ async function createChatPickerScenario(
         qrDataUrl: whatsappLoginQrDataUrl,
       },
       "web.login.wait": { message: "Linked.", connected: true },
+      ...buildSearchMocks(configMocks.get.hash),
       "wizard.start": channelWizard.start,
       "wizard.next": channelWizard.next,
       "wizard.cancel": { status: "cancelled" },
@@ -2896,8 +2903,11 @@ async function createChatPickerScenario(
         gatewayUrl: "wss://gateway.example.test",
         qrDataUrl: devicePairQrDataUrl,
         setupCode: devicePairSetupCode,
+        setupId: "mock-pair-setup",
+        expiresAtMs: Date.now() + 86_400_000,
         urlSource: "mock",
       },
+      "device.pair.setupStatus": {},
       "node.list": {
         nodes: [
           createOfflineDeviceNode(),
@@ -3355,6 +3365,40 @@ async function createChatPickerScenario(
     scenario.sessions = rosterSessions;
     scenario.repeatingSessionEvents = { events: [] };
     scenario.sessionGroups = [];
+  }
+  if (fixture === "inbox") {
+    const mentionSenders = [
+      { id: "mock-mira", label: "Mira" },
+      { id: "mock-jules", label: "Jules" },
+    ] as const;
+    scenario.featureMethods = [
+      ...(scenario.featureMethods ?? []),
+      "mentions.list",
+      "mentions.dismiss",
+      "users.self",
+    ];
+    scenario.methodResponses = {
+      ...scenario.methodResponses,
+      "mentions.list": {
+        gatewayInstanceId: "mock-gateway-boot-1",
+        revision: 1,
+        items: Array.from({ length: 10 }, (_, index) => {
+          const sender = mentionSenders[index % 2 === 0 ? 0 : 1];
+          return {
+            id: `mock-mention-${index}`,
+            senderProfileId: sender.id,
+            senderLabel: sender.label,
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            sessionTitle: "Release readiness check",
+            messageId: `mock-mention-message-${index}`,
+            createdAt: Date.now() - (index + 1) * 11 * 60_000,
+            expiresAt: ATTENTION_FIXTURE_EXPIRES_AT,
+            excerpt: "Can you confirm the rollback plan before the deploy window?",
+          };
+        }),
+      },
+    };
   }
   if (fixture === "meetings") {
     scenario.methodResponses = {

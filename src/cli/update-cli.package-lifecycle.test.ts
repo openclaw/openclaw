@@ -9,6 +9,7 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
+import { resolveGlobalInstallTarget } from "../infra/update-global.js";
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -228,11 +229,18 @@ describe("update-cli", () => {
       return commandResult({ code: 1, stderr: "Doctor failed after rewriting the managed config" });
     });
     const { runPackageInstallUpdate } = await import("./update-cli/update-command-package.js");
+    const installTarget = await resolveGlobalInstallTarget({
+      manager: "npm",
+      runCommand: runCommandWithTimeout,
+      timeoutMs: 30_000,
+      pkgRoot,
+    });
     let transaction: PackageUpdateTransaction | undefined;
     const result = await withEnvAsync({ OPENCLAW_CONFIG_PATH: callerConfig }, async () => {
       const packageResult = await runPackageInstallUpdate({
         root: pkgRoot,
         installKind: "package",
+        installTarget,
         tag: candidateVersion,
         timeoutMs: 30_000,
         startedAt: Date.now(),

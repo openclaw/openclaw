@@ -612,7 +612,8 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   flex-shrink: 0;
 }
 
-.btn.primary {
+/* The accent means "do this next": a primary that can't be pressed paints like any disabled button. */
+.btn.primary:where(:not(:disabled, [aria-disabled="true"])) {
   border-color: transparent;
   background: var(--primary);
   color: var(--primary-foreground);
@@ -1074,8 +1075,6 @@ select.input {
 }
 
 .field select,
-.usage-select,
-.dashboards-select select,
 select.settings-select:not([multiple]) {
   appearance: none;
   padding-right: 36px;
@@ -1089,8 +1088,6 @@ select.settings-select:not([multiple]) {
 
 @media (forced-colors: active) {
   .field select,
-  .usage-select,
-  .dashboards-select select,
   select.settings-select:not([multiple]) {
     appearance: auto;
     padding-inline-end: 10px;
@@ -1104,16 +1101,31 @@ select.settings-select:not([multiple]) {
     .field select:not([multiple], [size]),
     select.settings-select:not([multiple], [size]) {
       appearance: base-select;
-      display: inline-flex;
-      align-items: center;
-      padding-right: 10px;
+      /* The engine's value text ignores text-overflow, so a one-line clamp draws
+         the ellipsis. Breaking anywhere fills the line before it truncates. */
+      display: -webkit-inline-box;
+      overflow: hidden;
+      position: relative;
+      padding-block: 0;
+      padding-right: calc(26px + 0.5em);
       background-image: none;
+      line-height: calc(var(--settings-control-height) - 2px);
+      white-space: normal;
+      word-break: break-all;
+      vertical-align: middle;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 1;
 
       &::picker-icon {
         content: "";
+        position: absolute;
+        inset-block-start: calc(50% - 8px);
+        inset-inline-end: 10px;
+        /* Safari's default margin and padding push the icon up and inward. */
         width: 16px;
         height: 16px;
-        margin-inline-start: auto;
+        margin: 0;
+        padding: 0;
         background: var(--text-tertiary);
         mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
           center / contain no-repeat;
@@ -1124,9 +1136,10 @@ select.settings-select:not([multiple]) {
         appearance: base-select;
         box-sizing: border-box;
         min-width: anchor-size(width);
-        max-width: calc(100dvw - 16px);
+        max-width: min(320px, calc(100dvw - 32px));
         max-height: min(400px, calc(100dvh - 16px));
         margin-block: 4px;
+        margin-inline-end: 16px;
         padding: var(--menu-padding);
         border: 0;
         border-radius: var(--menu-radius);
@@ -1152,13 +1165,16 @@ select.settings-select:not([multiple]) {
       }
 
       & option {
-        gap: 8px;
-        min-height: 32px;
-        padding: 6px 8px;
+        /* One 32px line. The floated check keeps its room, so the ellipsis stops short of it. */
+        display: block;
+        overflow: hidden;
+        padding: 0 8px;
         border-radius: var(--menu-item-radius);
         corner-shape: superellipse(1.5);
         font-size: calc(13px * var(--control-ui-text-scale));
-        line-height: calc(1.25 / 0.875);
+        line-height: 32px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       & option + option {
@@ -1180,8 +1196,8 @@ select.settings-select:not([multiple]) {
       }
 
       & option::checkmark {
-        order: 1;
-        margin-inline-start: auto;
+        float: inline-end;
+        margin-inline-start: 8px;
         color: var(--accent);
       }
 
@@ -1240,7 +1256,8 @@ select.settings-select:not([multiple]) {
   border-color: var(--danger);
 }
 
-:root[data-theme-mode="light"] .btn:where(:not(.primary, .danger)) {
+:root[data-theme-mode="light"]
+  .btn:where(:not(.danger, .primary:not(:disabled, [aria-disabled="true"]))) {
   background: var(--bg);
   border-color: var(--input);
 }
@@ -2319,6 +2336,13 @@ td.data-table-key-col {
   cursor: not-allowed;
 }
 
+/* The dense footer keeps the select level with its 30px buttons. */
+select.data-table-pagination__size {
+  --settings-control-height: 30px;
+
+  width: auto;
+}
+
 .shell--chat .chat {
   flex: 1;
 }
@@ -2399,8 +2423,13 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
-.input-dialog__field {
-  margin-top: 14px;
+.confirm-dialog .oc-dialog__description {
+  white-space: pre-line;
+}
+
+.confirm-dialog .oc-dialog__body > .exec-approval-command,
+.confirm-dialog .oc-dialog__body > .exec-approval-skip {
+  margin-top: 0;
 }
 
 /* The confirm opt-out is a control, not a continuation of the message copy, so it
@@ -2564,7 +2593,7 @@ td.data-table-key-col {
 
 @media (pointer: coarse) {
   .agent-select--compact .agent-select__trigger {
-    min-height: 44px;
+    min-height: var(--settings-touch-control-height);
   }
 }
 
@@ -2800,40 +2829,7 @@ td.data-table-key-col {
   }
 }
 
-.device-pair-setup {
-  display: flex;
-  max-height: var(--openclaw-modal-height-limit);
-  flex-direction: column;
-  overflow-y: auto;
-}
-
-.device-pair-setup__header {
-  position: relative;
-  flex-shrink: 0;
-  display: grid;
-  justify-items: center;
-  gap: 12px;
-  padding: 28px 52px 18px;
-  text-align: center;
-}
-
-.device-pair-setup__header h2 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-}
-
-.device-pair-setup__header p {
-  max-width: 390px;
-  margin: 7px 0 0;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.device-pair-setup__get-apps button,
+.device-pair-setup__link,
 .apps-pair-hint button {
   padding: 0;
   border: 0;
@@ -2845,37 +2841,23 @@ td.data-table-key-col {
   text-underline-offset: 2px;
 }
 
-.device-pair-setup__get-apps button:hover,
+.device-pair-setup__link:hover,
 .apps-pair-hint button:hover {
   color: var(--text-strong);
 }
 
-.device-pair-setup__get-apps button:focus-visible,
+.device-pair-setup__link:focus-visible,
 .apps-pair-hint button:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
   border-radius: 4px;
 }
 
-.device-pair-setup__footer {
-  padding: 14px 20px;
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-elevated) 45%, transparent);
-  font-size: 13px;
-}
-
 .app-toast__dismiss svg,
 .data-table-bulk-bar .btn svg,
-.agent-select__option-check svg,
-.device-pair-setup__external-icon svg {
+.agent-select__option-check svg {
   width: 14px;
   height: 14px;
-}
-
-@media (max-width: 640px) {
-  .device-pair-setup__header {
-    padding: 22px 46px 16px;
-  }
 }
 
 .md-preview-expand-btn .when-fullscreen,
@@ -3194,6 +3176,14 @@ td.data-table-key-col {
   .session-glyph__trace-run {
     forced-color-adjust: none;
     stroke: CanvasText;
+  }
+
+  .settings-status__dot,
+  .cron-table__state-dot,
+  .activity-pulse__running,
+  .activity-feed__presence-dot {
+    forced-color-adjust: none;
+    background: CanvasText !important;
   }
 }
 

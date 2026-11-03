@@ -8,6 +8,7 @@ import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/sourc
 import { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
@@ -414,6 +415,45 @@ async function executeCliAuthCase(
     reply,
   );
   if (nativeContinuity) {
+    const turnsBeforeSelection = await fs.readFile(path.join(nativeRoot, "turns.jsonl"), "utf8");
+    const refusedKey = `agent:main:missing-account-${randomUUID()}`;
+    await expect(
+      fixture.gateway.client.request("sessions.create", {
+        agentId: "main",
+        key: refusedKey,
+        model: `${modelRef}@anthropic:missing`,
+      }),
+    ).rejects.toMatchObject({
+      message: `A runtime is not available for ${modelRef}: selected account "anthropic:missing" is unavailable. Restore that account, or change the explicit or default account selection.`,
+    });
+    expect((await loadGatewaySessionEntryReadOnlyAsync(refusedKey)).entry).toBeUndefined();
+    const personalKey = `agent:main:missing-personal-account-${randomUUID()}`;
+    await fixture.gateway.client.request("sessions.create", {
+      agentId: "main",
+      key: personalKey,
+      model: modelRef,
+    });
+    // Removed personal accounts leave their exact session pin behind. Re-selecting
+    // the same model must report recovery without exposing that private locator.
+    const personalProfileId = `personal:${randomUUID()}:${randomUUID()}`;
+    const retainedPin = {
+      authProfileOverride: personalProfileId,
+      authProfileOverrideSource: "user" as const,
+    };
+    expect(
+      await patchSessionEntryCore({ agentId: "main", sessionKey: personalKey }, () => retainedPin),
+    ).toMatchObject(retainedPin);
+    await expect(
+      fixture.gateway.client.request("sessions.patch", { key: personalKey, model: modelRef }),
+    ).rejects.toMatchObject({
+      message: `A runtime is not available for ${modelRef}: selected personal account is unavailable. Restore that account, or change the explicit or default account selection.`,
+    });
+    expect((await loadGatewaySessionEntryReadOnlyAsync(personalKey)).entry).toMatchObject(
+      retainedPin,
+    );
+    expect(await fs.readFile(path.join(nativeRoot, "turns.jsonl"), "utf8")).toBe(
+      turnsBeforeSelection,
+    );
     const original = await readBinding(sessionKey);
     expect(original?.sessionId).toBeTruthy();
     expect(original?.authProfileId).toBeUndefined();

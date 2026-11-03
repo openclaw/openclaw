@@ -462,13 +462,15 @@ export async function forkSession(
   deps: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
-) {
+  options: { title?: string } = {},
+): Promise<SidebarSessionMutationResult> {
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return;
+    return "stale";
   }
   const agentId = resolveUiSessionRowAgentId(session, scope.selectedAgentId);
   const createParams = {
     parentSessionKey: session.key,
+    ...(options.title?.trim() ? { label: options.title.trim() } : {}),
     fork: true,
     ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
       ? { forkFrom: "last-completed" as const }
@@ -483,24 +485,25 @@ export async function forkSession(
       session,
     })
   ) {
-    return;
+    return "failed";
   }
   try {
     const key = await scope.sessions.create(createParams, { signal: scope.signal });
     if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return;
+      return "stale";
     }
     if (key) {
       deps.selectSession(key);
-    } else {
-      deps.sessionData.publishSessionMutationError(
-        scope,
-        scope.sessions.state.error ?? t("newSession.createFailed"),
-      );
+      return "completed";
     }
+    deps.sessionData.publishSessionMutationError(
+      scope,
+      scope.sessions.state.error ?? t("newSession.createFailed"),
+    );
   } catch (error) {
     deps.sessionData.publishSessionMutationError(scope, error);
   }
+  return "failed";
 }
 
 export async function stopCloudWorker(

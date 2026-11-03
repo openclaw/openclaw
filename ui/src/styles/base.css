@@ -250,6 +250,8 @@
   --danger-muted: rgba(248, 113, 113, 0.75);
   --danger-subtle: rgba(248, 113, 113, 0.08);
   --info: #60a5fa;
+  /* A run in progress: the accent, unless a theme's accent reads as waiting or as plain text. */
+  --status-running: var(--accent);
   --info-subtle: rgba(96, 165, 250, 0.08);
   --pr-merged: #a78bfa;
   /* Categorical chart series: distinct hues validated for color-vision separation on this surface. */
@@ -1077,7 +1079,6 @@ a:where(
     .settings-row__value,
     .memory-page__link,
     .portals-preview__notice-url,
-    .settings-account,
     .transcripts-back,
     .chat-text a,
     .chat-thinking a,
