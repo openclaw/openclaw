@@ -10,6 +10,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   createDeferred,
+  createEffect,
   createMemo,
   createSignal,
   createStore,
@@ -38,6 +39,7 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
 import { projectPresencePayload } from "../../lib/presence-users.ts";
 import { t, getLocale, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { useStreamAutoFollow } from "../../lib/reactive/stream-auto-follow.ts";
 import {
@@ -175,13 +177,27 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     agentsList: pageProps.page.agents.read().agentsList,
     hello: state().context.gateway.snapshot.hello,
   });
-  let stream: HTMLDivElement | undefined;
+  // Match the page-scrolling layout in activity.css, including short landscape phones.
+  const pageScrolls = createMediaQuery(
+    "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
+  );
+  const [stream, setStream] = createSignal<HTMLDivElement>();
+  // Resolve ancestry after insertion; the stream ref is assigned before it joins main.
+  const scrollContainer = () =>
+    pageScrolls() ? (stream()?.closest<HTMLElement>("main.content") ?? stream()) : stream();
   const follow = useStreamAutoFollow({
-    container: () => stream,
+    container: scrollContainer,
     enabled: () => filters.autoFollow,
     identity: liveRevision,
     content: () => liveSnapshot().entries,
   });
+  createEffect(
+    () => [pageScrolls(), stream()] as const,
+    () => {
+      const container = scrollContainer();
+      return container ? listen(container, "scroll", follow.handleScroll) : undefined;
+    },
+  );
   const [presentationTime, setPresentationTime] = createSignal(Date.now());
   const activityExpiry = createPresenceActivityLifecycle(presence, () =>
     setPresentationTime(Date.now()),
@@ -518,12 +534,9 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
           <LiveToolbar toolNames={toolNames()} />
           <div
             class="activity-stream"
-            ref={(element) => {
-              stream = element;
-            }}
+            ref={setStream}
             role="group"
             aria-label={t("activity.streamLabel")}
-            onScroll={follow.handleScroll}
           >
             {filtered().length === 0 ? (
               <div class="activity-empty">
