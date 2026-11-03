@@ -1,2 +1,2 @@
-# Failed plugin replacement recovery at config/reload and inbound queue boundaries.
-235
+# Failed plugin replacement recovery and live restart/ingress lifetime contracts.
+253
