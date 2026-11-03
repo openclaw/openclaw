@@ -4,6 +4,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { createProgressiveList } from "../lib/reactive/progressive-list.ts";
 import { SECTION_META } from "./config-form.meta.ts";
+import { collectLiftedHelp } from "./config-form.node.collection.ts";
 import { ConfigNode } from "./config-form.node.tsx";
 import { matchesConfigSectionSearch, parseConfigSearchQuery } from "./config-form.search.ts";
 import {
@@ -93,6 +94,25 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
       description: sectionMeta?.description ?? hint?.help ?? node.description ?? "",
     };
   });
+  // Objects the form renders in place leave their help to the section.
+  const tiers = createMemo(() =>
+    splitConfigSchemaByTier({
+      schema: props.section.node,
+      path: props.section.path,
+      hints: hints(),
+    }),
+  );
+  const liftedHelp = createMemo(() => {
+    getLocale();
+    const { common, advanced } = tiers();
+    return [
+      ...new Set(
+        [common, advanced].flatMap((tier) =>
+          tier ? collectLiftedHelp(tier, props.section.path, hints()) : [],
+        ),
+      ),
+    ];
+  });
   const value = () =>
     props.section.path.reduce<unknown>(
       (current, key) => asNullableRecord(current)?.[key],
@@ -105,6 +125,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
       ? undefined
       : hintForPath(props.section.path.slice(0, 1), props.form.uiHints)?.docsUrl;
   const docsTriggerId = () => `settings-section-help-${props.section.id}`;
+  const hasSectionHelp = () => Boolean(docsUrl()) || liftedHelp().length > 0;
   // A search result or deep link has to land on open rows.
   const revealTarget = () =>
     props.form.forceAdvancedSection === props.section.path[0] || Boolean(props.form.searchQuery);
@@ -113,11 +134,11 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
     <section class="settings-section" id={props.section.id}>
       <div class="settings-section__header">
         <h2 class="settings-section__heading">{curated()?.label ?? meta().label}</h2>
-        <Show when={props.form.sectionActions || docsUrl()}>
+        <Show when={props.form.sectionActions || hasSectionHelp()}>
           <div class="settings-section__actions">
             {props.form.sectionActions}
-            <Show when={docsUrl()}>
-              {(url) => (
+            <Show when={hasSectionHelp()}>
+              {
                 <span class="settings-section__docs">
                   <openclaw-tooltip
                     prop:content={t("configForm.sectionHelp", { section: meta().label })}
@@ -151,13 +172,14 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
                           <Show when={meta().description}>
                             <p>{meta().description}</p>
                           </Show>
-                          <LearnMoreLink url={url()} />
+                          <For each={liftedHelp()}>{(text) => <p>{text}</p>}</For>
+                          <Show when={docsUrl()}>{(url) => <LearnMoreLink url={url()} />}</Show>
                         </div>
                       </Popover>
                     )}
                   </Show>
                 </span>
-              )}
+              }
             </Show>
           </div>
         </Show>
@@ -188,11 +210,13 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
               path: props.section.path,
               hints: props.form.uiHints,
               rawAvailable: props.form.rawAvailable ?? true,
+              onOpenRaw: props.form.onOpenRaw,
               unsupported: new Set(props.form.unsupportedPaths ?? []),
               disabled: props.form.disabled ?? false,
               showLabel: false,
               showHeaderMeta: true,
-              collapseObjects: Boolean(curated()) && !revealTarget(),
+              sectionRoot: true,
+              collapseObjects: curated() ? !revealTarget() : revealTarget() ? false : undefined,
               summarizeObject: curated()?.summarizeObject,
               searchCriteria: parseConfigSearchQuery(props.form.searchQuery ?? ""),
               revealSensitive: props.form.revealSensitive ?? false,

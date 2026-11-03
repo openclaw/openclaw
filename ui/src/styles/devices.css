@@ -227,6 +227,108 @@
   flex: 1 0 100%;
 }
 
+/* An open scope hangs off its title, a step quieter, so it's clear where the scope ends. */
+.device-policy__fields,
+.device-allowlist {
+  margin-inline-start: calc(var(--list-row-icon-size) + var(--space-2));
+}
+
+.device-policy__fields .settings-row {
+  padding-inline: 0;
+  padding-block: var(--space-2);
+}
+
+:is(.device-policy__fields, .device-allowlist) .settings-row__title {
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+}
+
+.device-allowlist {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.device-allowlist--inactive .device-allowlist__entry {
+  opacity: 0.55;
+}
+
+.device-allowlist--inactive .device-allowlist__entry:focus-within {
+  opacity: 1;
+}
+
+.device-allowlist--inactive .device-allowlist__entry:hover {
+  opacity: 1;
+}
+
+.device-policy__error {
+  display: block;
+}
+
+.device-allowlist__entry {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.device-allowlist__line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+textarea.device-allowlist__input.settings-input {
+  flex: 1 1 auto;
+  min-height: 36px;
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+  resize: none;
+  field-sizing: content;
+}
+
+.device-allowlist__entry .device-entry__part:nth-child(n + 2) {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+/* Save stays in reach down a long allowlist: content fades into it instead of meeting a
+   line, and its cover keeps content from showing through the scroller's bottom padding. */
+.settings-group:has(> .device-policy__save) {
+  overflow: clip;
+}
+
+.device-policy__save {
+  position: sticky;
+  z-index: 1;
+  inset-block-end: 0;
+  background-color: oklch(from var(--card) l c h / 1);
+}
+
+.device-policy__save::after {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 100%;
+  height: 5rem;
+  background-color: inherit;
+  content: "";
+  pointer-events: none;
+}
+
+.device-policy__save::before {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 100%;
+  height: var(--space-4);
+  background: linear-gradient(to top, oklch(from var(--card) l c h / 1), transparent);
+  content: "";
+  pointer-events: none;
+}
+
+.device-policy__action .settings-status {
+  align-items: baseline;
+  white-space: normal;
+}
+
 @media (max-width: 640px) {
   .device-entry {
     --device-fact-label: 6.75rem;
@@ -238,6 +340,29 @@
 
   .device-meter {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  /* Width is scarce here: enough to show the parent, and the fields keep the rest. */
+  .device-policy__fields,
+  .device-allowlist {
+    margin-inline-start: var(--space-3);
+  }
+
+  textarea.device-allowlist__input.settings-input {
+    padding-block: 6px;
+  }
+
+  .settings-row.device-policy__action,
+  .device-policy__fields .settings-row:has(.settings-toggle),
+  openclaw-devices-page .settings-row:has(> .settings-row__control > .settings-row__value) {
+    flex-wrap: nowrap;
+  }
+
+  .settings-row.device-policy__action > .settings-row__control,
+  .device-policy__fields .settings-row:has(.settings-toggle) > .settings-row__control,
+  openclaw-devices-page .settings-row > .settings-row__control:has(> .settings-row__value) {
+    flex: none;
+    width: auto;
   }
 
   /* Token rows need the width their actions take; the label sits above them. */

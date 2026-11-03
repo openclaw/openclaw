@@ -37,8 +37,7 @@ import {
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
-import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
-import { AgentPanelAction, renderAgentPanelFacts } from "./panel-ui.tsx";
+import { AgentPanelAction, renderAgentPanelFacts, type AgentConfigState } from "./panel-ui.tsx";
 import {
   buildToolPresentation,
   renderToolMetaBadges,
@@ -54,7 +53,7 @@ import {
 registerSettingsEnglish();
 
 export function AgentTools(
-  params: AgentConfigActions &
+  params: AgentConfigState &
     AgentsPageView["tools"] &
     Pick<AgentsPageView, "readData"> & {
       agentId: string;
@@ -278,7 +277,6 @@ export function AgentTools(
                   />
                 )}
               </For>
-              <AgentConfigButtons {...params} />
             </>
           }
         >
@@ -296,16 +294,6 @@ export function AgentTools(
               <EffectiveBoundary>
                 {(preview) => <ToolListed preview={preview} />}
               </EffectiveBoundary>,
-            ],
-            [
-              "agentTools.status",
-              t(
-                params.configSaving
-                  ? "agentTools.statusSaving"
-                  : params.configDirty
-                    ? "agentTools.statusUnsaved"
-                    : "agentTools.statusSaved",
-              ),
             ],
           ])}
           <SettingsRow

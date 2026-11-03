@@ -2,6 +2,7 @@ import "../../styles/skill-reader-dialog.css";
 import { createMemo, For, Show } from "solid-js";
 import type { SkillsLibraryReadResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import "../../components/modal-dialog.tsx";
 import { registerSessionSkillLibraryEnglish } from "../../i18n/locales/en-session-skill-library.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -85,8 +86,11 @@ export function LibraryPinRead(props: {
               />
             </label>
           </Show>
-          <details class="muted" style={{ "overflow-wrap": "anywhere", "min-width": "0" }}>
-            <summary>{t("skillLibrary.technicalDetails")}</summary>
+          <SettingsDisclosure
+            quiet
+            class="skill-library-details"
+            title={t("skillLibrary.technicalDetails")}
+          >
             <dl>
               <dt>{t("skillLibrary.skillId")}</dt>
               <dd>{props.read.entry.skillId}</dd>
@@ -95,7 +99,7 @@ export function LibraryPinRead(props: {
               <dt>{t("skillLibrary.command")}</dt>
               <dd>{props.read.entry.name}</dd>
             </dl>
-          </details>
+          </SettingsDisclosure>
         </div>
       </div>
     </openclaw-modal-dialog>

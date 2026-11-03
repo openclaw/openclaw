@@ -117,7 +117,6 @@ const enSettings = {
       fileHint: "Saving mirrors identity fields to IDENTITY.md; configured values take precedence.",
     },
     overview: {
-      unsavedConfig: "You have unsaved config changes.",
       modelSelection: "Model selection",
       primaryModel: "Primary model",
       primaryModelDefault: "Primary model (default)",
@@ -662,13 +661,9 @@ const enSettings = {
     profile: "Tool profile",
     source: "Source",
     listed: "Listed in preview",
-    status: "Status",
     profileSourceAgent: "agent override",
     profileSourceGlobal: "global default",
     profileSourceDefault: "default",
-    statusSaving: "saving…",
-    statusUnsaved: "unsaved",
-    statusSaved: "saved",
     toolPreview: "Tool preview",
     more: "+{count} more",
     toolsOne: "{count} Tool",
@@ -1822,7 +1817,9 @@ const enSettings = {
       overrideAgents: "Override for this device",
     },
     appearance: {
-      intro: "Theme, chat, and sidebar preferences for this Control UI client.",
+      intro:
+        "Theme, chat, and sidebar preferences for this Control UI client. Stored in this browser unless noted.",
+      languageAndText: "Language and text",
       theme: "Theme",
       chooseTheme: "Choosing a different theme resets its fonts and accent colors.",
       themeUnavailable: "{id} is unavailable. Using Claw until the theme becomes available again.",
@@ -1867,16 +1864,14 @@ const enSettings = {
         conflict: "Your background changed elsewhere. Check the current selection and try again.",
         private: "Only your view · saved to your profile.",
       },
-      typography: "Typography",
       fonts: {
         ui: "Interface",
         chat: "Chat prose",
         terminal: "Terminal font",
         terminalDefault: "JetBrains Mono + Nerd Font symbols",
         terminalHint:
-          "Bundled JetBrains Mono + Nerd Font symbols by default. To override, enter a monospace font installed on this computer. Missing fonts use the default; saved in this browser.",
-        terminalLigatures:
-          "The terminal currently renders characters individually; programming ligatures are not supported.",
+          "To override, enter a monospace font installed on this computer. Missing fonts use the default.",
+        terminalLigatures: "Programming ligatures are not supported.",
         terminalInvalid: "Enter one font family name, without quotes, commas, or CSS declarations.",
         terminalReset: "Use default",
         themeDefault: "Theme default",
@@ -1900,10 +1895,7 @@ const enSettings = {
         system: "No webfont",
       },
       accent: "Accent color",
-      accentHint: "Choose an accent color for buttons, highlights, and other controls.",
       customAccent: "Custom color",
-      usingThemeAccent: "Using theme accent",
-      usingAccent: "Using {value}",
       accents: {
         default: "Theme default",
         claw: "Claw red",
@@ -1929,12 +1921,8 @@ const enSettings = {
       importTheme: "Import theme",
       clear: "Clear {name}",
       loaded: "Loaded",
-      inlineHintBefore: "Click",
-      inlineHintAfter:
-        "to add one browser-local tweakcn theme. In tweakcn, use Share and paste the copied link here.",
       tabIcon: {
         title: "Browser tab icon",
-        source: "Source",
         sourceLabel: "Browser tab icon source",
         default: "Default",
         agent: "Agent avatar",
@@ -1953,25 +1941,22 @@ const enSettings = {
     },
     chatPrefs: {
       title: "Chat",
+      devices: "Microphone and camera",
       messageWidth: "Message width",
       messageWidthHint:
         "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
       messageWidthInvalid:
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
       showTaskProgress: "Show task progress cards",
-      showTaskProgressHint:
-        "Show task progress in chat Details and embedded composers. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
+      showTaskProgressHint: "Show task progress in chat Details and embedded composers.",
       openLinksExternally: "Open links outside OpenClaw",
       openLinksExternallyHint: "Use your browser instead of the OpenClaw built-in browser.",
-      openLinksExternallyStorage: "Saved in this browser only.",
       collapseTaskProgress: "Collapse task progress by default on desktop",
-      collapseTaskProgressHint:
-        "On desktop, start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session. On mobile, task progress always starts collapsed and only opens when you open it manually.",
+      collapseTaskProgressHint: "On mobile, task progress always starts collapsed.",
     },
     sidebarPrefs: {
       title: "Sidebar",
-      hint: "Choose what appears while sessions are running.",
-      liveActivity: "Show live agent activity in sidebar",
+      liveActivity: "Show live agent activity",
       liveActivityHint: "Show the latest assistant or tool activity beneath running sessions.",
       deleteConfirm: "Confirm before deleting sessions",
       deleteConfirmHint:
@@ -1979,7 +1964,7 @@ const enSettings = {
     },
     sessionObserver: {
       title: "Session observer",
-      hint: "Summarize long-running sessions with a small utility model.",
+      scope: "Applies to everyone on this Gateway.",
       toggle: "Session observer",
       toggleHint: "Generate live status digests for subscribed Control UI sessions.",
       resolvedModel: "Resolved small model",
@@ -2013,13 +1998,12 @@ const enSettings = {
     saveNow: registerSettingsSidebarEnglish.catalog.configView.saveNow,
     autoSaveFailed: registerSettingsSidebarEnglish.catalog.configView.autoSaveFailed,
     autoSaveRejected: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejected,
-    autoSaveRejectedHint: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejectedHint,
-    rejectionDetails: registerSettingsSidebarEnglish.catalog.configView.rejectionDetails,
-    rejectionDetailsHide: registerSettingsSidebarEnglish.catalog.configView.rejectionDetailsHide,
+    discardChanges: registerSettingsSidebarEnglish.catalog.configView.discardChanges,
+    discardChangesTitle: registerSettingsSidebarEnglish.catalog.configView.discardChangesTitle,
+    discardChangesMessage: registerSettingsSidebarEnglish.catalog.configView.discardChangesMessage,
     recoveryNotRestored: en.configView.recoveryNotRestored,
     recoveryUnknown: en.configView.recoveryUnknown,
     recoveryBackup: en.configView.recoveryBackup,
-    recoveryReload: registerSettingsSidebarEnglish.catalog.configView.recoveryReload,
     discardUnconfirmed: en.configView.discardUnconfirmed,
     writeGatewayChanged: en.configView.writeGatewayChanged,
     writeUnconfirmed: en.configView.writeUnconfirmed,

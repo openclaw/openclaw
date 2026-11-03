@@ -49,6 +49,14 @@ export type ConfigNodeRenderParams = {
   /** Compact editors show effective defaults and inline collection controls. */
   compact?: boolean;
   commitOnBlur?: boolean;
+  /** Help of an enclosing object that renders no row of its own. */
+  helpContext?: readonly string[];
+  /** The surrounding section heading names this object, and its "?" carries lifted help. */
+  sectionRoot?: boolean;
+  /** The long form of a string-or-object setting: with no fields left, the setting is unset. */
+  shorthandObject?: boolean;
+  /** This object renders its fields in place: a lone setting, or the only group at its level. */
+  inlineObject?: "lone-setting" | "only-group";
   /** Section shells own the title while collection rows still own help/default metadata. */
   showHeaderMeta?: boolean;
   /** Keep every nested group of settings closed until it is opened. */
@@ -60,6 +68,8 @@ export type ConfigNodeRenderParams = {
   maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
+  /** Switches this page to its Raw tab; absent where the page has none. */
+  onOpenRaw?: () => void;
   /** Secret-marked fields hold their edit here and write through their own Save. */
   secretFields?: ConfigSecretFields;
   /** The form's own Save writes these edits, so a stored secret can be typed over. */
@@ -84,6 +94,7 @@ export function configChildRenderOptions(params: ConfigNodeRenderParams) {
     revealSensitive: params.revealSensitive,
     isSensitivePathRevealed: params.isSensitivePathRevealed,
     onToggleSensitivePath: params.onToggleSensitivePath,
+    onOpenRaw: params.onOpenRaw,
     secretFields: params.secretFields,
     replaceStoredSecrets: params.replaceStoredSecrets,
   };
@@ -96,6 +107,8 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
     label,
     help,
     showLabel,
+    path: params.path,
+    helpContext: params.helpContext,
     required: configFieldRequiresInput(params),
     helpId:
       params.descriptionId ??

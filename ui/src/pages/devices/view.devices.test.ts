@@ -946,12 +946,11 @@ describe("devices access gating", () => {
         ],
       },
       configForm: { agents: { entries: { main: {} } } },
-      configDirty: true,
     });
 
     expect(container.querySelectorAll(".callout.info")).toHaveLength(1);
     expect(container.textContent).toContain("Device changes require operator.pairing");
-    for (const label of ["Approve", "Reject", "Rotate", "Revoke", "Save"]) {
+    for (const label of ["Approve", "Reject", "Rotate", "Revoke"]) {
       expect(findButton(container, label).disabled).toBe(true);
     }
     const row = getSettingsRow(container, "Device One");
@@ -969,8 +968,6 @@ describe("devices access gating", () => {
     expect(onDeviceRename).not.toHaveBeenCalled();
     expect(onNodeApprove).not.toHaveBeenCalled();
     expect(onNodeReject).not.toHaveBeenCalled();
-    expect(container.textContent).toContain(
-      "Browsing only. Exec approvals and node bindings require operator.admin access.",
-    );
+    expect(container.textContent).not.toContain("Exec approvals");
   });
 });
