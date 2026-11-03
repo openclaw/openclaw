@@ -127,21 +127,23 @@ it(
       const serializedHistory = JSON.stringify(history);
       const refusalDiagnosis = `${JSON.stringify(refused.terminal)}\n${serializedHistory}\n${currentInstance.logs()}`;
 
+      // The stored credential is the fact the issue is about: a refusal that never reached
+      // the provider must not leave a cooldown window behind for every sibling agent.
+      const store = loadPersistedSharedAuthProfileStore(currentInstance.env);
+      expect(store?.profiles[OAUTH_PROFILE_ID], refusalDiagnosis).toBeDefined();
+      expect(store?.profiles[OAUTH_PROFILE_ID], refusalDiagnosis).not.toHaveProperty(
+        "cooldownUntil",
+      );
+
       expect(refused.terminal.status, refusalDiagnosis).toBe("error");
       const failureNotices = (history.messages ?? [])
         .map(readRunFailureNotice)
         .filter(Boolean) as Array<{ summary?: string }>;
       expect(failureNotices, refusalDiagnosis).toHaveLength(1);
-      expect(failureNotices[0]?.summary).toContain(LOCAL_REFUSAL_USER_COPY);
+      expect(failureNotices[0]?.summary, refusalDiagnosis).toContain(LOCAL_REFUSAL_USER_COPY);
       for (const marker of RE_LOGIN_ADVICE_MARKERS) {
         expect(serializedHistory, refusalDiagnosis).not.toContain(marker);
       }
-
-      // The stored credential is the fact the issue is about: a refusal that never reached
-      // the provider must not leave a cooldown window behind for every sibling agent.
-      const store = loadPersistedSharedAuthProfileStore(currentInstance.env);
-      expect(store?.profiles[OAUTH_PROFILE_ID], refusalDiagnosis).toBeDefined();
-      expect(store?.profiles[OAUTH_PROFILE_ID]).not.toHaveProperty("cooldownUntil");
 
       const sibling = await send("Complete this ordinary later turn.");
       const laterHistory = await client.request<{
