@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -188,8 +189,9 @@ async function startConsult(
   config: VoiceCallConfig,
   agentRuntime: ReturnType<typeof createConsultRuntime>,
   coreConfig: OpenClawConfig = {},
+  options: Partial<Parameters<typeof createVoiceCallRuntime>[0]> = {},
 ) {
-  await createRuntime({ config, agentRuntime: agentRuntime as never, coreConfig });
+  await createRuntime({ config, agentRuntime: agentRuntime as never, coreConfig, ...options });
   const [name, handler] = expectDefined(
     mocks.realtimeHandlerRegisterToolHandler.mock.calls.at(0),
     "realtime tool handler registration call",
@@ -594,6 +596,29 @@ describe("createVoiceCallRuntime lifecycle", () => {
       expect(runAgentTurn).not.toHaveBeenCalled();
     },
   );
+
+  it("runs realtime consults in the service context that carries the Gateway", async () => {
+    const serviceContext = new AsyncLocalStorage<"voice-call-service">();
+    const contexts: Array<string | undefined> = [];
+    const runAgentTurn = answeringAgent("Relayed.");
+    runAgentTurn.mockImplementationOnce(async () => {
+      contexts.push(serviceContext.getStore());
+      return { payloads: [{ text: "Relayed." }], meta: {} };
+    });
+    setConsultCall();
+    const handler = await startConsult(
+      createRealtimeConfig({ toolPolicy: "owner" }),
+      createConsultRuntime(runAgentTurn),
+      {},
+      { runInServiceContext: (run) => serviceContext.run("voice-call-service", run) },
+    );
+
+    await expect(handler({ question: "Tell the engineer." }, "call-1", {})).resolves.toEqual({
+      text: "Relayed.",
+    });
+    expect(contexts).toEqual(["voice-call-service"]);
+    expect(consultParamsFrom(runAgentTurn).toolsAllow).toBeUndefined();
+  });
 
   it("canonicalizes restored legacy per-call keys for realtime consults", async () => {
     const config = createRealtimeConfig(
