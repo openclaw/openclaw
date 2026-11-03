@@ -377,8 +377,14 @@ describe("actual OpenCode proxy SDK session bridge", () => {
         modelId: model.id,
         streamFn: streamSimple,
       })!;
+      const unqualifiedGemini = {
+        ...model,
+        id: "opencode/gemini-3.6-flash",
+        api: "google-generative-ai" as const,
+        params: { clawrouterRoute: { api: "google-generative-ai", baseUrl: model.baseUrl } },
+      };
       expect(() =>
-        stream({ ...model, api: "google-generative-ai" }, completionContext("ok"), {
+        stream(unqualifiedGemini, completionContext("ok"), {
           apiKey: "synthetic-router-key",
         }),
       ).toThrow("qualified Chat");
