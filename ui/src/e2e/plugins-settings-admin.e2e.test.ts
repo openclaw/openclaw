@@ -2,6 +2,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { loadPluginManifest, PLUGIN_MANIFEST_FILENAME } from "../../../src/plugins/manifest.ts";
 import { resolveBundledPluginPublicModulePath } from "../../../src/test-utils/bundled-plugin-public-surface.ts";
@@ -37,6 +38,16 @@ beforeEach(() => {
     proofDir = createControlUiE2eArtifactDir("plugin-settings-admin");
   }
 });
+
+async function captureProof(page: Page, file: string, fullPage?: boolean) {
+  if (captureUiProof) {
+    await page.screenshot({
+      animations: "disabled",
+      fullPage,
+      path: path.join(proofDir, file),
+    });
+  }
+}
 
 const pluginMethods = [
   "config.get",
@@ -122,13 +133,7 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
   expect(await enabledStatus.getAttribute("title")).toBe("Enabled");
   expect(await workboardRow.getByRole("switch").count()).toBe(0);
   await page.locator(".settings-page.oc-app-surface").waitFor();
-  if (captureUiProof) {
-    await page.screenshot({
-      animations: "disabled",
-      fullPage: true,
-      path: path.join(proofDir, "01-installed-inventory.png"),
-    });
-  }
+  await captureProof(page, "01-installed-inventory.png", true);
   await workboardLink.click();
   await waitForControlUiRoute(page, {
     pathname: "/settings/plugins/workboard",
@@ -183,12 +188,7 @@ suite.define(() => {
         .click();
       const dialog = page.locator(".model-setup-wizard--sign-in");
       await dialog.getByRole("heading", { name: "Continue in your browser" }).waitFor();
-      if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(proofDir, "plugin-oauth-icon.png"),
-        });
-      }
+      await captureProof(page, "plugin-oauth-icon.png");
       expect(
         await dialog.locator(".wizard-sign-in__badge img").getAttribute("src", { timeout: 1000 }),
       ).toBe(iconUrl);
@@ -399,12 +399,7 @@ suite.define(() => {
           .waitFor();
         const apiKey = page.locator("input").and(page.getByLabel(new RegExp(`${label}$`, "u")));
         await apiKey.waitFor();
-        if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "credential-inputs.png"),
-          });
-        }
+        await captureProof(page, "credential-inputs.png");
         expect(await apiKey.count()).toBe(1);
         expect(await apiKey.getAttribute("type")).toBe("password");
         const reference = page
@@ -473,12 +468,7 @@ suite.define(() => {
         await expect.poll(() => apiKey.inputValue()).toBe("synthetic-credential");
         expect(await reference.inputValue()).toBe("");
         expect(await reference.getAttribute("readonly")).not.toBeNull();
-        if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "credential-reloaded.png"),
-          });
-        }
+        await captureProof(page, "credential-reloaded.png");
       });
     },
   );
@@ -531,13 +521,7 @@ suite.define(() => {
       await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
       await page.getByText("workboard_list", { exact: true }).waitFor();
       await page.getByText("1.2.3", { exact: true }).first().waitFor();
-      if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(proofDir, "02-plugin-detail.png"),
-        });
-      }
+      await captureProof(page, "02-plugin-detail.png", true);
       await page.reload();
       await waitForControlUiRoute(page, {
         pathname: "/settings/plugins/workboard",
@@ -646,12 +630,7 @@ suite.define(() => {
         .click();
       const workspace = page.getByLabel("Workspace label", { exact: true });
       await workspace.waitFor();
-      if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(proofDir, "grouped-settings.png"),
-        });
-      }
+      await captureProof(page, "grouped-settings.png");
       expect(
         await page.getByRole("heading", { name: "Workboard settings", exact: true }).count(),
       ).toBe(0);
@@ -681,10 +660,7 @@ suite.define(() => {
           { width: 1366, height: 768 },
         ]) {
           await page.setViewportSize(viewport);
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, `grouped-settings-${viewport.width}.png`),
-          });
+          await captureProof(page, `grouped-settings-${viewport.width}.png`);
           expect(
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
           ).toBe(true);
@@ -836,12 +812,7 @@ suite.define(() => {
         .locator(".plugin-editor")
         .getByRole("searchbox", { name: "Search settings", exact: true })
         .waitFor();
-      if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(proofDir, "selected-tab-after-inspection.png"),
-        });
-      }
+      await captureProof(page, "selected-tab-after-inspection.png");
 
       await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
       expect(await page.getByRole("tab").count()).toBe(0);
