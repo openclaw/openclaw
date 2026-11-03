@@ -101,6 +101,16 @@ it("cancels database-size preparation instead of swallowing the aborted inspecti
   ).rejects.toThrow(reason);
 });
 
+function readFreelistCount(pathname: string): number {
+  // Independent ground truth from a real SQLite open, used to pin header decodes.
+  const database = openNodeSqliteDatabase(pathname);
+  try {
+    return Number(database.prepare("PRAGMA freelist_count").get()?.freelist_count);
+  } finally {
+    database.close();
+  }
+}
+
 function createPaddedDatabase(params: {
   label: string;
   pageSize: number;
@@ -139,7 +149,7 @@ it("answers reporting-size files from the header without preparing a snapshot", 
   const results = await readSqliteDatabaseBloat({ path: pathname, env: {} });
   expect(results).toHaveLength(1);
   expect(results[0]?.stats.fileBytes).toBe(BLOAT_MIN_FILE_BYTES);
-  expect(results[0]?.stats.freeBytes).toBeGreaterThan(0);
+  expect(results[0]?.stats.freeBytes).toBe(readFreelistCount(pathname) * 4096);
   expect(results[0]?.stats.incrementalAutoVacuum).toBe(false);
   expect(prepare).not.toHaveBeenCalled();
 });
@@ -151,6 +161,8 @@ it("decodes a stored page-size value of 1 as 65536 from the header", async () =>
   });
   const results = await readSqliteDatabaseBloat({ path: pathname, env: {} });
   expect(results).toHaveLength(1);
+  // An exact PRAGMA comparison fails if the stored value 1 was not decoded.
+  expect(results[0]?.stats.freeBytes).toBe(readFreelistCount(pathname) * 65536);
   expect(prepare).not.toHaveBeenCalled();
 });
 
@@ -182,9 +194,29 @@ it("answers a WAL-mode file with nothing uncheckpointed from the header without 
   );
   const before = await Promise.all(family.map((member) => sha256File(member)));
   const results = await readSqliteDatabaseBloat({ path: pathname, env: {} });
-  expect(results).toHaveLength(1);
-  expect(results[0]?.stats.freeBytes).toBeGreaterThan(0);
   expect(await Promise.all(family.map((member) => sha256File(member)))).toEqual(before);
+  expect(results).toHaveLength(1);
+  expect(results[0]?.stats.freeBytes).toBe(readFreelistCount(pathname) * 4096);
+});
+
+it("falls back when the header freelist count exceeds the file extent", async () => {
+  const pathname = createPaddedDatabase({
+    label: "doctor-bloat-header-freelist-",
+    pageSize: 4096,
+  });
+  // A damaged header keeps its magic and page size but claims a freelist whose
+  // byte span cannot fit inside the file.
+  const handle = fs.openSync(pathname, "r+");
+  try {
+    fs.writeSync(handle, Buffer.from([0xff, 0xff, 0xff, 0xff]), 0, 4, 36);
+  } finally {
+    fs.closeSync(handle);
+  }
+  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(() => {
+    throw new Error("controlled preparation failure");
+  });
+  expect(await readSqliteDatabaseBloat({ path: pathname, env: {} })).toEqual([]);
+  expect(prepare).toHaveBeenCalledOnce();
 });
 
 it("falls back to the snapshot path for a WAL file with uncheckpointed committed frames", async () => {

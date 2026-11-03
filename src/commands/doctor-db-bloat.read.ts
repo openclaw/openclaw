@@ -49,13 +49,15 @@ function readWalSidecarBytes(pathname: string): number | null {
  * Reads bloat stats from the 100-byte SQLite header without opening the database.
  * The three values this check reports (page size, freelist count, auto-vacuum mode)
  * all live in the header, so a raw read avoids the size-scaled snapshot copy and the
- * sidecar creation risk that motivates it. Returns null on any doubt — including
- * non-SQLite files, truncated headers, and torn reads mid page-1 write — so callers
- * fall back to the snapshot path. WAL-mode files answer from the header only when
- * their -wal sidecar is absent or empty; uncheckpointed WAL frames can hold committed
- * freelist changes the header cannot see (page 1 is only rewritten at checkpoints),
- * so a non-empty sidecar falls back to the snapshot path where the PRAGMA answer
- * preserves the reclaimable-bytes contract.
+ * sidecar creation risk that motivates it. Returns null whenever the header does
+ * not validate — non-SQLite files, truncated headers, values outside physical
+ * bounds, WAL files with a live sidecar — so callers fall back to the snapshot
+ * path. Validation cannot certify every mid-write state (a torn page-1 write can
+ * keep a plausible shape), so unvalidatable doubt stays on the fallback. WAL-mode
+ * files answer from the header only when their -wal sidecar is absent or empty;
+ * uncheckpointed WAL frames can hold committed freelist changes the header cannot
+ * see (page 1 is only rewritten at checkpoints), so a non-empty sidecar falls back
+ * to the snapshot path where the PRAGMA answer preserves the reclaimable-bytes contract.
  */
 async function readSqliteBloatStatsFromHeader(
   pathname: string,
@@ -97,6 +99,12 @@ async function readSqliteBloatStatsFromHeader(
   }
   const pageSize = storedPageSize === 1 ? 65536 : storedPageSize;
   const freelistCount = header.getUint32(36, false);
+  // Every freelist page lives inside the main file, so a count whose byte span
+  // exceeds the captured size is a damaged header — take the fallback instead of
+  // reporting impossible reclaimable bytes.
+  if (freelistCount > 0 && freelistCount * pageSize > fileBytes) {
+    return null;
+  }
   const largestRootBTreePage = header.getUint32(52, false);
   const incrementalVacuumFlag = header.getUint32(64, false);
   const autoVacuum = largestRootBTreePage === 0 ? 0 : incrementalVacuumFlag !== 0 ? 2 : 1;
