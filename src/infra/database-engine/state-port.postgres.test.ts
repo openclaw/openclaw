@@ -7,6 +7,7 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { decodeWorkStateJson } from "../../auto-reply/continuation/work-flow-state.js";
 import {
   capturePostgresBackup,
   preparePostgresRestore,
@@ -18,6 +19,21 @@ import { admitDatabasePortDescriptor } from "./port-descriptor.js";
 import { sqliteDatabasePortProvider } from "./port-provider.js";
 import { inspectDatabasePort, materializeDatabasePort } from "./port.worker.js";
 import { statePortProvider } from "./state-port.js";
+
+// karmaterminal/openclaw#1271: continue_work state with and without its recipient-authority field.
+const oldWorkState = {
+  kind: "continuation_work",
+  sessionKey: "agent:main:ported",
+  hop: 1,
+  delayMs: 60_000,
+  electedAt: 1,
+  dueAt: 60_001,
+  maxChainLength: 8,
+};
+const boundWorkState = {
+  ...oldWorkState,
+  recipientAuthority: { state: "bound", epoch: "6f1c2a4e-8b3d-4c5e-9f70-1a2b3c4d5e6f" },
+};
 
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -66,6 +82,17 @@ describe.skipIf(!connection)("shared-state database port", () => {
     for (const key of ["newline\n", 'quote"', "slash\\"]) {
       source.prepare("INSERT INTO user_preferences VALUES ('profile', ?, '{}', 1)").run(key);
     }
+    for (const [id, state] of Object.entries({ bound: boundWorkState, old: oldWorkState })) {
+      source
+        .prepare(
+          "INSERT INTO continuation_records (record_id, kind, owner_session_key, revision, status, created_at, updated_at, due_at, state_json) VALUES (?, 'work', 'agent:main:ported', 0, 'queued', 1, 1, 60001, ?)",
+        )
+        .run(id, JSON.stringify(state));
+    }
+    const decodeWork = (records: unknown[]) =>
+      (records as Array<{ state_json: string }>).map((row) =>
+        decodeWorkStateJson(JSON.parse(row.state_json)),
+      );
     expect(descriptor.inspectSqliteSource!(source)).toEqual({
       version: OPENCLAW_STATE_SCHEMA_VERSION,
       migrationRequired: false,
@@ -95,6 +122,11 @@ describe.skipIf(!connection)("shared-state database port", () => {
     // Continuation (karmaterminal): the first-use continuation_records custody table ports too.
     expect(Object.keys(staged.tables)).toHaveLength(137);
     expect(Object.keys(staged.tables)).toContain("continuation_records");
+    expect(
+      decodeWork(
+        await rows(`SELECT state_json FROM "${namespace}".continuation_records ORDER BY record_id`),
+      ),
+    ).toEqual([boundWorkState, oldWorkState]);
     expect(await rows(`SELECT display_name, avatar FROM "${namespace}".user_profiles`)).toEqual([
       { display_name: "Café 🦞", avatar: Buffer.from([0, 255, 128]) },
     ]);
@@ -119,6 +151,13 @@ describe.skipIf(!connection)("shared-state database port", () => {
         display_name: "Café 🦞",
         avatar: Uint8Array.from([0, 255, 128]),
       });
+      expect(
+        decodeWork(
+          destination
+            .prepare("SELECT state_json FROM continuation_records ORDER BY record_id")
+            .all(),
+        ),
+      ).toEqual([boundWorkState, oldWorkState]);
       const next = destination.prepare(
         "INSERT INTO audit_events (event_id, source_id, source_sequence, occurred_at, kind, action, status, actor_type, actor_id) VALUES ('next', 'next', 3, 1, 'test', 'test', 'ok', 'test', 'test') RETURNING sequence",
       );
