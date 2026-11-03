@@ -200,6 +200,8 @@ stored session's conversation with tools, for example a reviewer that records
 what it learned. The fork is a hidden agent turn over a bounded copy of the
 session, read through one completed transcript entry. It never writes the source
 transcript, never appears in the Control UI, and yields to foreground work.
+In an `agent_end` hook, `ctx.sessionKey` and `ctx.completedTurn` name the
+finished turn to fork.
 
 ```typescript
 const result = await api.runtime.subagent.runForkedTurn({
@@ -208,7 +210,7 @@ const result = await api.runtime.subagent.runForkedTurn({
   prompt: "Review this conversation and record one reusable note.",
   tools: ["my_plugin_note"], // tools this plugin registered
   runId: `my-plugin-review:${reviewId}`, // optional; unique per run
-  timeoutMs: 120_000, // optional; capped at 120 seconds
+  timeoutMs: 120_000, // optional; defaults to 120 seconds
   signal, // optional cancellation
   onSettled: async (outcome) => {
     // Runs inside the fork's Gateway work admission: a graceful restart waits for it.
