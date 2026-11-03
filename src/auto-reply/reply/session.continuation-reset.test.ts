@@ -254,7 +254,8 @@ describe("initSessionState reset policy", () => {
 
 describe("initSessionState browser tab cleanup", () => {
   useContinuationCustodyTestState();
-  it("cancels durable continuation work and delegates on inline reset", async () => {
+  // #1271: an inline /new replaces the head; the queued elections stay for its successor.
+  it("keeps queued continuation work and delegates on inline reset", async () => {
     const storePath = await makeStorePath("openclaw-inline-reset-continuation-");
     const sessionKey = "agent:main:telegram:dm:inline-reset-continuation";
     const existingSessionId = "inline-reset-continuation-session";
@@ -291,8 +292,8 @@ describe("initSessionState browser tab cleanup", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect((await readCustodyRecordForTest(work.flowId))?.status).toBe("cancelled");
-    expect((await readCustodyRecordForTest(delegate.recordId))?.status).toBe("cancelled");
+    expect((await readCustodyRecordForTest(work.flowId))?.status).toBe("queued");
+    expect((await readCustodyRecordForTest(delegate.recordId))?.status).toBe("queued");
   });
 });
 

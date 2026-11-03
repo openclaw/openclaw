@@ -24,7 +24,7 @@ import {
   readCustodyRecordForTest,
   useContinuationCustodyTestState,
 } from "../continuation/custody/custody.test-support.js";
-import { enqueuePendingDelegate } from "../continuation/delegate-store.js";
+import { stagePostCompactionDelegate } from "../continuation/delegate-store-post-compaction.js";
 import { SessionContinuationResetError } from "../continuation/session-reset.js";
 import {
   hasLiveContinuationTimerRefs,
@@ -32,7 +32,6 @@ import {
   releaseContinuationTimerRef,
   retainContinuationTimerRef,
 } from "../continuation/state.js";
-import { enqueuePendingWorkReplacing } from "../continuation/work-replacement-store.js";
 import { clearReplacedSessionRuntimeState } from "./session-init-reset-cleanup.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, writeSessionStore } from "./test/session.test-support.js";
@@ -161,28 +160,17 @@ async function seedStore(updatedAt: number) {
   return storePath;
 }
 
-/** Durable work and delegate custody plus the live claim, timer and event one session owns. */
+/**
+ * Durable custody a head swap still retires, plus the live claim, timer and event one session
+ * owns. Queued wakes and delegates now outlive /new and /reset (#1271), so these proofs close two
+ * staged post-compaction shards.
+ */
 async function seedCustody(sessionKey: string) {
-  const now = Date.now();
-  const elected = await enqueuePendingWorkReplacing({
-    work: {
-      sessionKey,
-      hop: 1,
-      delayMs: 60_000,
-      electedAt: now,
-      dueAt: now + 60_000,
-      maxChainLength: 8,
-    },
-    summary: "seeded reset proof work",
-    maxPendingWork: Number.MAX_SAFE_INTEGER,
-    replaceParkedWork: false,
-    expectedRunningFlowIds: [],
-  });
-  if (!elected.applied || !elected.work.flowId) {
-    throw new Error("expected seeded continuation work");
-  }
-  const delegate = await enqueuePendingDelegate(sessionKey, { task: "proof", delayMs: 60_000 });
-  const claim = registerContinuationDispatchClaim({ sessionKey, flowId: delegate.recordId });
+  const [first, second] = [
+    await stagePostCompactionDelegate(sessionKey, { task: "proof", createdAt: Date.now() }),
+    await stagePostCompactionDelegate(sessionKey, { task: "proof 2", createdAt: Date.now() }),
+  ];
+  const claim = registerContinuationDispatchClaim({ sessionKey, flowId: second.recordId });
   retainContinuationTimerRef(sessionKey);
   timerKeys.push(sessionKey);
   const timer = setTimeout(() => {}, 60_000);
@@ -190,7 +178,7 @@ async function seedCustody(sessionKey: string) {
   registerContinuationTimerHandle(sessionKey, timer);
   const agentId = sessionKey.split(":")[1] ?? "main";
   enqueueSystemEvent(`${sessionKey} event`, withSystemEventOwner({ sessionKey }, agentId));
-  return { sessionKey, recordIds: [elected.work.flowId, delegate.recordId], claim };
+  return { sessionKey, recordIds: [first.recordId, second.recordId], claim };
 }
 
 type Seeded = Awaited<ReturnType<typeof seedCustody>>;

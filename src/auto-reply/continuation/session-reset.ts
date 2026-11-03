@@ -135,6 +135,14 @@ export async function rearmKeptContinuations(params: {
   sessionKey: string;
   storePath: string;
 }): Promise<void> {
+  const kept = await listContinuationRecords({
+    ownerSessionKey: params.sessionKey,
+    kinds: ["work", "delegate"],
+    statuses: ["queued", "running"],
+  });
+  if (kept.length === 0) {
+    return;
+  }
   const entry = loadSessionEntry({
     hydrateSkillPromptRefs: false,
     readConsistency: "latest",
