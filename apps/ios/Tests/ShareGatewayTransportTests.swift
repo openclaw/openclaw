@@ -31,14 +31,22 @@ struct ShareGatewayTransportTests {
                 url: server.url(),
                 credentials: .init(token: loaded.token, password: loaded.password),
                 connectOptions: GatewayConnectOptions(
-                    role: "node", scopes: [], caps: [], commands: [], permissions: [:],
-                    clientId: "openclaw-ios", clientMode: "node", clientDisplayName: "OpenClaw Share",
+                    role: "node",
+                    scopes: [],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-ios",
+                    clientMode: "node",
+                    clientDisplayName: "OpenClaw Share",
                     deviceIdentityProfile: .shareExtension,
-                    includeDeviceIdentity: true, allowStoredDeviceAuth: false,
+                    includeDeviceIdentity: true,
+                    allowStoredDeviceAuth: false,
                     deviceAuthGatewayID: loaded.gatewayStableID),
                 sessionBox: loaded.webSocketSessionBox(),
                 extraHeadersProvider: { try ShareGatewayRelaySettings.currentCustomHeaders(for: loaded) },
-                onConnected: {}, onDisconnected: { _ in },
+                onConnected: {},
+                onDisconnected: { _ in },
                 onInvoke: { BridgeInvokeResponse(id: $0.id, ok: false) })
             await gateway.disconnect()
             #expect(scenario == "accepted")
@@ -64,8 +72,11 @@ struct ShareGatewayTransportTests {
         let gatewayID = "share-transport-\(UUID().uuidString)"
         let secret = "fixture-service-credential"
         let config = ShareGatewayRelayConfig(
-            gatewayURLString: "wss://share.example.test", gatewayStableID: gatewayID,
-            token: nil, password: nil, sessionKey: "main",
+            gatewayURLString: "wss://share.example.test",
+            gatewayStableID: gatewayID,
+            token: nil,
+            password: nil,
+            sessionKey: "main",
             tlsFingerprintSHA256: String(repeating: "ab", count: 32),
             customHeaders: ["X-Service": secret])
         try #require(ShareGatewayRelaySettings.saveConfig(config))
@@ -76,8 +87,11 @@ struct ShareGatewayTransportTests {
         let metadata = try #require(defaults.data(forKey: "share.gatewayRelay.config.v1"))
         #expect(metadata.range(of: Data(secret.utf8)) == nil)
         let other = ShareGatewayRelayConfig(
-            gatewayURLString: config.gatewayURLString, gatewayStableID: gatewayID + "-other",
-            token: nil, password: nil, sessionKey: "main")
+            gatewayURLString: config.gatewayURLString,
+            gatewayStableID: gatewayID + "-other",
+            token: nil,
+            password: nil,
+            sessionKey: "main")
         try defaults.set(JSONEncoder().encode(other), forKey: "share.gatewayRelay.config.v1")
         let switched = try #require(ShareGatewayRelaySettings.loadConfig())
         #expect(switched.customHeaders == nil)
