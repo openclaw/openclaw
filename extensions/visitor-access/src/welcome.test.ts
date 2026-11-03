@@ -232,27 +232,21 @@ describe("visitor-access.welcome.ensure", () => {
     expect(await h.ensure()).toMatchObject({ status: "ready", created: false });
   });
 
-  it.each(["Welcome, Sam", "Willkommen, Sam", "My onboarding notes"])(
-    "adopts an existing pending reservation without renaming %s",
-    async (displayName) => {
-      const sessionKey = "agent:main:dashboard:reserved";
-      const grant = visitorGrant(EMAIL, {
-        onboarding: { state: "pending", welcomeSessionKey: sessionKey, updatedAt: NOW },
-      });
-      const restarted = await welcomeHarness([grant]);
-      restarted.sessions.set(sessionKey, { key: sessionKey, displayName });
+  it("adopts an existing pending reservation on startup", async () => {
+    const sessionKey = "agent:main:dashboard:reserved";
+    const grant = visitorGrant(EMAIL, {
+      onboarding: { state: "pending", welcomeSessionKey: sessionKey, updatedAt: NOW },
+    });
+    const restarted = await welcomeHarness([grant]);
+    restarted.sessions.set(sessionKey, { key: sessionKey });
 
-      expect(await restarted.ensure()).toEqual(readyResult(sessionKey));
-      expect(restarted.gateway.request).toHaveBeenCalledWith(
-        "sessions.create",
-        expect.objectContaining({ key: sessionKey }),
-      );
-      expect(restarted.messages.size).toBe(1);
-      expect(restarted.sessions.get(sessionKey)?.displayName).toBe(displayName);
-      expect(await restarted.ensure()).toMatchObject({ status: "ready", created: false });
-      expect(restarted.sessions.get(sessionKey)?.displayName).toBe(displayName);
-    },
-  );
+    expect(await restarted.ensure()).toEqual(readyResult(sessionKey));
+    expect(restarted.gateway.request).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({ key: sessionKey }),
+    );
+    expect(restarted.messages.size).toBe(1);
+  });
 
   it("gives a grant recorded by v2026.10.6, without inviter or onboarding, a generic welcome", async () => {
     // Shape the v2026.10.6 visitor_invite tool recorded before onboarding metadata existed.

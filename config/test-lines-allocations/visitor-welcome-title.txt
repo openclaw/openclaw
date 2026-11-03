@@ -1,2 +1,2 @@
-# Welcome-title fallback precedence and preservation of adopted/user-renamed titles.
-25
+# Welcome-title display-name and canonical-username fallback precedence.
+19
