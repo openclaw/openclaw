@@ -81,7 +81,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
             ?.registrations(host.kind)
             .find((candidate) => candidate.key === host.contributionKey);
     // SAFETY: host renderers pair each registry kind/surface with its SDK props; this mount erases that pair.
-    return entry as ViewRegistration | undefined;
+    return entry && "mount" in entry.value ? (entry as ViewRegistration) : undefined;
   };
   registration = resolveRegistration();
   const [available, setAvailable] = createSignal(Boolean(registration));

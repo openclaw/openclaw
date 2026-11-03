@@ -332,3 +332,43 @@ it("omits incognito-only section metadata and counts while preserving existing e
   ]);
   expect(JSON.stringify(admitted)).not.toContain("private");
 });
+
+it("round-trips only passive plugin badge facts in the existing row snapshot", () => {
+  const badge = {
+    pluginId: "review",
+    id: "checks",
+    icon: "check",
+    label: "2 checks",
+    count: 2,
+    tone: "positive",
+    state: "ready",
+  };
+  const row = {
+    key: "agent:main:one",
+    label: "Review",
+    pinned: false,
+    isChild: false,
+    children: [],
+    state: {
+      badges: [
+        {
+          ...badge,
+          html: "<button>run</button>",
+          moduleUrl: "/old-plugin.js",
+          request: "tools.exec",
+        },
+      ],
+    },
+  };
+  const saved = parse({ pinnedSessions: [row] });
+  expect(saved?.pinnedSessions[0]?.state?.badges).toEqual([badge]);
+  const restored = restoreSnapshotSession(saved!.pinnedSessions[0]!, "");
+  expect(restored.snapshot?.badges).toEqual([badge]);
+  expect(
+    snapshotSessions([restored], (current) => ({ state: current.snapshot }))[0]?.state?.badges,
+  ).toEqual([badge]);
+  expect(JSON.stringify(saved)).not.toMatch(/old-plugin|tools.exec|<button>/);
+  expect(
+    parse({ pinnedSessions: [{ ...row, state: { badges: [{ ...badge, id: "invalid name" }] } }] }),
+  ).toBeNull();
+});

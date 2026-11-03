@@ -70,6 +70,7 @@ export interface SessionListHost {
     | "presencePayload"
     | "refreshSessionCatalogs"
     | "retryChildSessions"
+    | "requestSessionDataUpdate"
     | "sessionCatalogRefreshStatus"
     | "sessionMutationError"
     | "visibleSessionLimits"

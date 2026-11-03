@@ -7,6 +7,7 @@ import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-
 import { t } from "../lib/reactive/i18n.ts";
 import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import { PluginContributions } from "../plugins/control-ui-contributions.solid.tsx";
+import { SessionAccessoryBadges } from "../plugins/control-ui-session-badges.solid.tsx";
 import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -22,6 +23,34 @@ import {
 } from "./solid/session-presentation.tsx";
 import { EMPTY_VIEWER_IDENTITIES } from "./solid/viewer-facepile.tsx";
 import "./tooltip.ts";
+/** Catalog-only rows use the same native and contributed trailing indicator order. */
+export function CatalogSessionIndicators(props: {
+  sessionKey: string;
+  agentId?: string;
+  artifact: unknown;
+  nativeBadges?: Parameters<typeof SessionRowBadges>[0];
+  onChange: () => void;
+}) {
+  return (
+    <span class="sidebar-recent-session__details-endcap">
+      {props.nativeBadges ? <SessionRowBadges {...props.nativeBadges} /> : undefined}
+      <SessionAccessoryBadges
+        sessionKey={props.sessionKey}
+        agentId={props.agentId}
+        artifact={props.artifact}
+        onChange={props.onChange}
+      />
+      <PluginContributions
+        kind="session-row"
+        sessionKey={props.sessionKey}
+        agentId={props.agentId}
+        artifact={props.artifact}
+        presented={true}
+      />
+    </span>
+  );
+}
+
 /** Compose independently owned session state and context indicators. */
 export function renderSidebarSessionIndicators(
   host: () => SessionListHost,
@@ -244,6 +273,14 @@ export function renderSidebarSessionIndicators(
             pullRequest={pullRequest()}
             pullRequestCount={badges().pullRequestCount}
             hasApproval={badges().hasApproval}
+          />
+          <SessionAccessoryBadges
+            sessionKey={readSession().key}
+            agentId={readSession().agentId}
+            worktreeId={readSession().worktreeId}
+            artifact={pullRequest()}
+            cached={readSession().snapshot ? (readSession().snapshot?.badges ?? []) : undefined}
+            onChange={() => host().sessionData.requestSessionDataUpdate()}
           />
           <PluginContributions
             kind="session-row"

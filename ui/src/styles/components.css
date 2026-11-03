@@ -3540,3 +3540,26 @@ select.data-table-pagination__size {
     outline-offset: -1px;
   }
 }
+
+/* Data-only plugin badges share native geometry before any plugin assets execute. */
+.session-row-badge[data-control-ui-badge] svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  stroke-width: 1.6;
+}
+.session-row-badge[data-badge-tone="positive"] {
+  color: var(--ok);
+}
+.session-row-badge[data-badge-tone="negative"] {
+  color: var(--danger);
+}
+.session-row-badge[data-badge-tone="accent"] {
+  color: var(--accent);
+}
+.session-row-badge[data-badge-tone="violet"] {
+  color: var(--pr-merged);
+}
+.session-row-badge[data-badge-tone="muted"] {
+  color: var(--muted);
+}

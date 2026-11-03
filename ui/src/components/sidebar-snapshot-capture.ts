@@ -5,6 +5,7 @@ import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { presenceViewerLastActivity, profilePresenceViewer } from "../lib/presence-users.ts";
+import { readSessionBadges } from "../plugins/control-ui-session-badges.ts";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -32,6 +33,22 @@ function displayUser(user: AuthenticatedUser | null | undefined) {
 export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
   const context = host.sessionDataContext;
   if (!host.connected || !context) {
+    return false;
+  }
+  // A cached producer's activation must settle before its native facts hand off to live rows.
+  if (
+    host.sidebarSnapshot &&
+    [
+      ...host.sidebarSnapshot.pages,
+      ...host.sidebarSnapshot.pinnedSessions,
+      ...host.sidebarSnapshot.sections.flatMap((section) => section.rows),
+    ].some(function pending(row): boolean {
+      return (
+        row.state?.badges?.some((badge) => context.plugins.isLoading(badge.pluginId)) === true ||
+        row.children.some(pending)
+      );
+    })
+  ) {
     return false;
   }
   if (host.navigationView === "pages") {
@@ -124,7 +141,15 @@ export function captureSidebarSnapshotModel(
     snapshotSubtitle: row.snapshot
       ? row.snapshotSubtitle
       : resolveSidebarSessionRowSubtitle(host, row),
-    state: sidebarSessionBadgeFacts(host.sessionPullRequests, row),
+    state: {
+      ...sidebarSessionBadgeFacts(host.sessionPullRequests, row),
+      badges: readSessionBadges(context.plugins, {
+        sessionKey: row.key,
+        agentId: row.agentId,
+        worktreeId: row.worktreeId,
+        artifact: row.pullRequest,
+      }),
+    },
   });
   return parseSidebarSnapshot({
     routingDefaults: {
