@@ -179,6 +179,25 @@ it("shows retained completed children on later parent turns with retry/recovery 
   ]);
 });
 
+const visibleFinal = { requesterTurnRunId: "turn", batchRunIds: ["recent-delivered"] };
+it.each([
+  ["private", "consumed_privately", "parent", undefined],
+  ["private visible-final", "delivered", "parent", visibleFinal],
+  ["announced", "delivered", undefined, undefined],
+] as const)(
+  "labels a recent %s completion as delivery=%s",
+  async (_name, label, completionTarget, requesterVisibleFinal) => {
+    seed({
+      runId: "recent-delivered",
+      endedAt: Date.now() - 60_000,
+      outcome: { status: "ok" },
+      completionTarget,
+      delivery: { status: "delivered", requesterVisibleFinal },
+    });
+    expect(await promptFor()).toContain(`delivery=${label};`);
+  },
+);
+
 it.each([
   { status: "failed", cleaned: true, wake: false, outstanding: false },
   { status: "failed", cleaned: false, wake: false, outstanding: true },

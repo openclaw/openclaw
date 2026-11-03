@@ -172,6 +172,19 @@ function buildChildSessionIndex(
   return childSessionsByController;
 }
 
+/**
+ * A private parent turn settles its child's delivery once it processes the result.
+ * Only recorded visible-final evidence shows the requester's user received it.
+ */
+export function resolveSubagentDeliveryStatus(entry: SubagentRunRecord) {
+  const delivery = entry.delivery;
+  return delivery?.status === "delivered" &&
+    entry.completionTarget === "parent" &&
+    !delivery.requesterVisibleFinal
+    ? "consumed_privately"
+    : delivery?.status;
+}
+
 export function buildSubagentList(params: {
   context: SubagentListReadContext;
   sessionEntries: ReadonlyMap<string, SessionEntry>;
@@ -205,6 +218,7 @@ export function buildSubagentList(params: {
     const pausedForMs = resolveYieldedLeafPausedForMs(entry, execution, now);
     const pausedAge =
       pausedForMs === undefined ? undefined : formatDurationCompact(pausedForMs, { spaced: true });
+    const deliveryStatus = resolveSubagentDeliveryStatus(entry);
     const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplayName(modelSelection)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${pausedAge ? `, paused ${pausedAge}` : ""}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
     const view = {
       index,
@@ -216,7 +230,7 @@ export function buildSubagentList(params: {
       task,
       status,
       execution,
-      ...(entry.delivery ? { deliveryStatus: entry.delivery.status } : {}),
+      ...(deliveryStatus ? { deliveryStatus } : {}),
       pendingDescendants,
       runtime,
       runtimeMs,
