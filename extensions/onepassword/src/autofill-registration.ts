@@ -174,7 +174,9 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
       }
     },
     {
-      scope: "operator.admin",
+      // Core admits session-scoped methods only at operator.write; the handler
+      // itself still requires a real Control UI client holding operator.admin.
+      scope: "operator.write",
       sessionAccess: { mode: "write", requiredTool: "onepassword_autofill" },
     },
   );

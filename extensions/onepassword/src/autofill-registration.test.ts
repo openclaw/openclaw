@@ -91,7 +91,7 @@ it("requires current real Control UI admin and admitted session access before hy
     expiresAt: 600_000,
   });
   expect(f.policies.get("onepassword.autofill.approval")).toEqual({
-    scope: "operator.admin",
+    scope: "operator.write",
     sessionAccess: { mode: "write", requiredTool: "onepassword_autofill" },
   });
   await f.handler(f.options);
