@@ -57,7 +57,6 @@ type OperatorSource = {
     device: object | undefined,
     access: object | null | undefined,
     ingress: object | undefined,
-    invocation: object | undefined,
   ];
   membership: string | undefined;
   token: object;
@@ -376,6 +375,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       : client.internal?.operatorAccessAuthority;
   const sourceAuthorities = [sourceAuthority, ingressPrincipal, params.invocationAuthority];
   const scopes = [...(client.connect.scopes ?? [])];
+  // Session/request checks constrain this capture, not its authenticated principal identity.
   const sourceOwners: OperatorSource["owners"] = [
     gatewayContext ?? params.context,
     resolveGatewayContext,
@@ -384,7 +384,6 @@ export async function captureGatewayOperatorRunAuthority(input: {
       (params.hasCurrentClientAuthority ? {} : undefined),
     sourceAuthority,
     ingressPrincipal,
-    params.invocationAuthority,
   ];
   let releaseSource: (() => void) | undefined;
   let references = 1;
