@@ -58,6 +58,7 @@ export function noticeRecipientAllowed(event: MailboxNoticeEvent, to: MailboxRec
  * seq in decimal (no sign, no leading zeros, at most 15 digits).
  */
 export function isValidNotice(event: unknown, ref: unknown): event is MailboxNoticeEvent {
+  // SAFETY: widening a literal tuple to its element supertype only for the membership test.
   if (!(MAILBOX_NOTICE_EVENTS as readonly unknown[]).includes(event) || typeof ref !== "string") {
     return false;
   }

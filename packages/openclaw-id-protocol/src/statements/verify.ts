@@ -91,6 +91,7 @@ function requiredCapability(
 ): OwnerCapability | null {
   if (
     statement.type === "MembershipChange" &&
+    // SAFETY: SignedStatement is not a discriminated union; `type` fixes the body.
     (statement as SignedStatement<"MembershipChange">).body.target.op === "add_owner_device"
   ) {
     return "approve_device";
@@ -99,6 +100,7 @@ function requiredCapability(
 }
 
 function statementEpoch(statement: SignedStatement<OwnerSignedType>): number | null {
+  // SAFETY: every owner-signed body type either has a numeric root_epoch or none.
   const body = statement.body as { root_epoch?: number };
   return typeof body.root_epoch === "number" ? body.root_epoch : null;
 }
@@ -140,6 +142,7 @@ export async function verifyOwnerStatement<T extends OwnerSignedType>(
     return failure("missing_capability", `signer lacks ${needed}`);
   }
   if (statement.type === "OwnerDeviceCert") {
+    // SAFETY: SignedStatement is not a discriminated union; `type` fixes the body.
     const granted = (statement as SignedStatement<"OwnerDeviceCert">).body.caps;
     if (!granted.every((cap) => caps.includes(cap))) {
       return failure("missing_capability", "certificate grants more than its signer holds");

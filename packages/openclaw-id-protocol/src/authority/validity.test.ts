@@ -21,7 +21,7 @@ const tunnel = { channel: "tunnel" as const, now: WORLD_NOW };
 type World = Awaited<ReturnType<typeof buildWorld>>;
 
 // Applies a setup write and fails loudly if it is refused.
-async function apply(state: AuthorityState, statement: unknown, context = local) {
+async function apply(state: AuthorityState, statement: unknown, context: WriteContext = local) {
   const result = await submitStatement(state, statement, context);
   if (!result.ok) {
     throw new Error(`setup refused: ${result.code} ${result.detail}`);

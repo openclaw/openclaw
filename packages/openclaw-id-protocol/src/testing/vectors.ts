@@ -11,6 +11,7 @@ import {
   formatIrohEndpointKey,
   type Ed25519PublicKey,
   type IrohEndpointKey,
+  type KeyFingerprint,
 } from "../keys.js";
 import { deriveRootSeed, encodeKit } from "../kit.js";
 import { signingInput, signStatement } from "../statements/envelope.js";
@@ -84,7 +85,7 @@ export type StatementVectors = {
   };
   keys: Record<
     string,
-    { seed_hex: string; ed25519: Ed25519PublicKey; iroh: IrohEndpointKey; fp: string }
+    { seed_hex: string; ed25519: Ed25519PublicKey; iroh: IrohEndpointKey; fp: KeyFingerprint }
   >;
   jcs: { input: JsonValue; canonical: string }[];
   anchor: TrustAnchor;
@@ -132,6 +133,7 @@ function vector<T extends StatementType>(
     verifier,
     statement,
     signing_input_hex: bytesToHex(
+      // SAFETY: a SignedStatement<T>'s body is StatementBodies[T].
       signingInput(statement.type, statement.body as StatementBodies[T]),
     ),
   };
@@ -149,6 +151,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
   const rootFp = await fingerprint(rootPub);
 
   // Named keys: each seed is used both as an Ed25519 signing key and an iroh endpoint key.
+  // SAFETY: the loop below fills a signer for every KeyName before any read.
   const signers = {} as Record<KeyName, StatementSigner>;
   const keys: StatementVectors["keys"] = {};
   for (const name of KEY_NAMES) {
@@ -164,12 +167,12 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
   }
   const pub = (name: KeyName) => keys[name]!.ed25519;
   const iroh = (name: KeyName) => keys[name]!.iroh;
-  const allCaps = [
+  const allCaps: StatementBodies["OwnerDeviceCert"]["caps"] = [
     "approve_device",
     "bind",
     "invite",
     "manage_members",
-  ] as StatementBodies["OwnerDeviceCert"]["caps"];
+  ];
 
   const certBody = (name: KeyName, caps = allCaps, epoch = 1, expiresAt: number | null = null) => ({
     device_pub: pub(name),
@@ -239,7 +242,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
   const revocation = await signStatement(
     "Revocation",
     {
-      target_fp: keys["device-3"]!.fp as `fp:${string}`,
+      target_fp: keys["device-3"]!.fp,
       target_kind: "owner_device",
       reason: "lost",
       root_epoch: 1,
@@ -309,6 +312,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
   // Signature over the same body under another type's domain must not verify (domain separation).
   const crossType = {
     ...change,
+    // SAFETY: deliberately signs a MembershipChange body under the Revocation domain.
     sig: (await signStatement("Revocation", change.body as never, signers["device-1"])).sig,
   };
   const removedInvite = await signStatement("InviteCap", { ...invite.body }, signers["device-4"]);
@@ -525,7 +529,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
           ok: true,
           pin: {
             claw_id: VECTOR_CLAW_ID,
-            root_fp: keys["root-2"]!.fp as `fp:${string}`,
+            root_fp: keys["root-2"]!.fp,
             root_epoch: 2,
             binding_seq: 3,
           },
@@ -534,7 +538,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       {
         name: "epoch-1 binding after the pin moved to epoch 2",
         host: VECTOR_HOST,
-        pin: { ...seenPin, root_fp: keys["root-2"]!.fp as `fp:${string}`, root_epoch: 2 },
+        pin: { ...seenPin, root_fp: keys["root-2"]!.fp, root_epoch: 2 },
         evidence: evidence(binding2, [], pub("root-2")),
         expected: { ok: false, error: "wrong_epoch" },
       },

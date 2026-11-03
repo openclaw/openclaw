@@ -38,6 +38,7 @@ export function canonicalize(value: JsonValue): string {
     return `[${value.map((item: JsonValue) => canonicalize(item)).join(",")}]`;
   }
   // Plain object: members sorted by key, undefined members dropped.
+  // SAFETY: scalars, strings and arrays returned above; only a JSON object remains.
   const record = value as { readonly [key: string]: JsonValue | undefined };
   const members: string[] = [];
   for (const key of Object.keys(record).toSorted()) {
