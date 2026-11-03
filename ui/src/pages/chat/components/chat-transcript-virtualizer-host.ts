@@ -243,7 +243,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           instance,
           callback,
         ),
-      measureElement: this.layout.measureRow,
+      measureElement: this.readerAnchor.measureRow,
       // Row measurements can resize the range and mount new observed rows.
       // Commit those writes outside native resize delivery to avoid WebKit's loop.
       useAnimationFrameWithResizeObserver: true,
