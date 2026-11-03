@@ -23,6 +23,8 @@ export function registerWindowsTaskAdmissionTests(
       { scenario: "highest privileges", facts: { ...ownTask, taskRunLevel: 1 } },
       { scenario: "timeout" },
       { scenario: "access denied", tag: "openclaw@2026.9.8" },
+      { scenario: "access denied", tag: "main" },
+      { scenario: "access denied", tag: "openclaw@MAIN" },
     ].map((row) => Object.assign({ tag: "2026.9.8" }, row)),
   )(
     "checks stopped Windows task admission from native facts: $scenario ($tag)",
@@ -81,9 +83,14 @@ export function registerWindowsTaskAdmissionTests(
         });
         const output = assertions.getErrorOutput();
         expect(output).toContain("elevated terminal");
-        expect(output).toContain("npm i -g openclaw@2026.9.8 --allow-scripts=openclaw");
-        expect(output).toContain("openclaw doctor --fix");
-        expect(output).toContain("openclaw gateway restart");
+        if (tag === "main" || tag === "openclaw@MAIN") {
+          expect(output).toContain("openclaw update --channel dev");
+          expect(output).not.toContain("npm i -g");
+        } else {
+          expect(output).toContain("npm i -g openclaw@2026.9.8 --allow-scripts=openclaw");
+          expect(output).toContain("openclaw doctor --fix");
+          expect(output).toContain("openclaw gateway restart");
+        }
         if (scenario === "timeout") {
           expect(output).toContain("Task Scheduler task lookup/elevation check timed out");
           expect(output).toContain("60000 ms");
