@@ -34,6 +34,7 @@ export async function generateMusic(
   params: GenerateMusicParams,
   deps?: MusicGenerationRuntimeDeps,
 ): Promise<GenerateMusicRuntimeResult> {
+  params.signal?.throwIfAborted();
   if (deps) {
     return runMusicGeneration(params, deps);
   }
@@ -57,11 +58,13 @@ async function runMusicGeneration(
     capability: "music",
     getProvider: (providerId) => deps.getProvider(providerId, params.cfg),
     onFailure: (attempt) => {
+      params.signal?.throwIfAborted();
       log.warn(
         `music-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,
       );
     },
     prepareCandidate(candidate, provider) {
+      params.signal?.throwIfAborted();
       const referenceImageError = resolveReferenceImageCapabilityError({
         candidateRef: `${candidate.provider}/${candidate.model}`,
         inputImageCount: params.inputImages?.length ?? 0,
@@ -138,6 +141,7 @@ async function runMusicGeneration(
           cfg: params.cfg,
           agentDir: params.agentDir,
           authStore: params.authStore,
+          signal: params.signal,
           lyrics,
           instrumental,
           durationSeconds,
@@ -145,6 +149,7 @@ async function runMusicGeneration(
           inputImages: params.inputImages,
           ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         });
+        params.signal?.throwIfAborted();
         if (!Array.isArray(result.tracks) || result.tracks.length === 0) {
           throw new Error("Music generation provider returned no tracks.");
         }

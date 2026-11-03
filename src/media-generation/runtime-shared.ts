@@ -9,6 +9,7 @@ import {
 import { parseGenerationModelRef } from "../../packages/media-generation-core/src/model-ref.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
+import { isRecordedModelFallbackStop } from "../agents/model-fallback-stop.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import {
   resolveAgentModelFallbackValues,
@@ -105,6 +106,9 @@ export async function runMediaGenerationCandidates<TProvider extends object, TRe
     try {
       return await prepared(attempts);
     } catch (error) {
+      if (params.capability === "music" && isRecordedModelFallbackStop(error)) {
+        throw error;
+      }
       lastError = error;
       const attempt = buildCapabilityCandidateFailure(candidate, error);
       attempts.push(attempt);

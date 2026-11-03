@@ -60,6 +60,38 @@ it("rejects empty audio", async () => {
   );
 });
 
+it.each(["before dispatch", "rejected response", "late complete response"])(
+  "stops provider fallback after cancellation: %s",
+  async (phase) => {
+    const controller = new AbortController();
+    const reason = new Error("caller stopped music");
+    const alternate = createProvider("alternate");
+    const first = createProvider();
+    providers = [first, alternate];
+    first.generateMusic.mockImplementation(async (request) => {
+      expect(request.signal).toBe(controller.signal);
+      controller.abort(reason);
+      if (phase === "rejected response") throw reason;
+      return {
+        tracks: [{ buffer: Buffer.from("complete audio"), mimeType: "audio/mpeg" }],
+        model: request.model,
+      };
+    });
+    if (phase === "before dispatch") controller.abort(reason);
+    await expect(
+      runGenerateMusic(
+        { signal: controller.signal },
+        {
+          primary: "music/track-v1",
+          fallbacks: ["alternate/track-v1"],
+        },
+      ),
+    ).rejects.toBe(reason);
+    expect(first.generateMusic).toHaveBeenCalledTimes(phase === "before dispatch" ? 0 : 1);
+    expect(alternate.generateMusic).not.toHaveBeenCalled();
+  },
+);
+
 it.each(["generate", "edit", "model-specific"] as const)(
   "normalizes optional overrides for %s capabilities",
   async (mode) => {

@@ -579,7 +579,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/meeting-runtime` | Browser-meeting session runtime, realtime audio engines/transports, `MeetingPlatformAdapter` and its declarative `defineBrowserMeetingPlugin` factory, browser/node control, agent-consult, voice-call delegation, setup checks, and SoX command helpers |
     | `plugin-sdk/image-generation` | Private-local after July 2026; Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder. `resolveImageSourceUrl` prefers a trimmed URL, otherwise inlines bytes with the image MIME default; callers supply the missing-data error text. |
     | `plugin-sdk/image-generation-core` | Private-local after July 2026; Provider environment-variable lookup |
-    | `plugin-sdk/music-generation` | Private-local after July 2026; Music generation provider/request/result types |
+    | `plugin-sdk/music-generation` | Private-local after July 2026; Music generation provider/request/result types, pure Google music serialization and asset conversion, and `recordModelFallbackStop` for non-replayable attempted operations |
     | `plugin-sdk/video-generation` | Private-local after July 2026; Video generation provider/request/result types |
     | `plugin-sdk/transcripts` | Private-local after July 2026; Shared transcript source provider types, registry helpers, meeting-provider bridge factory, session descriptors, and utterance metadata |
     | `plugin-sdk/webhook-targets` | Private-local after July 2026; Webhook target registry and route-install helpers |

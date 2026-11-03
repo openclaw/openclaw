@@ -289,6 +289,7 @@ export function createMusicGenerateTool(
                 run: async (taskHandle: MediaGenerationTaskHandle | null) => {
                   const request = {
                     cfg: effectiveCfg,
+                    signal,
                     prompt,
                     agentDir: options?.agentDir,
                     modelOverride: model,
@@ -309,6 +310,7 @@ export function createMusicGenerateTool(
                     request,
                     createCapabilityProviderRuntimeDeps(providers),
                   );
+                  signal?.throwIfAborted();
                   musicGenerationTaskLifecycle.recordTaskProgress({
                     handle: taskHandle,
                     progressSummary: "Saving generated music",
@@ -321,6 +323,8 @@ export function createMusicGenerateTool(
                     maxBytes: resolveGeneratedMediaMaxBytes(request.cfg, "audio"),
                     filename,
                   });
+                  // Cancellation after a complete result stops delivery, not upstream settlement.
+                  signal?.throwIfAborted();
                   const ignoredOverrides = result.ignoredOverrides ?? [];
                   const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
                   const duration = buildMediaGenerationDurationDetails(
@@ -337,6 +341,7 @@ export function createMusicGenerateTool(
                       maxProbes: MAX_GENERATED_MUSIC_PROBES,
                     },
                   );
+                  signal?.throwIfAborted();
                   const attachments: AgentGeneratedAttachment[] = savedTracks.map(
                     (track, index) => ({
                       ...buildSavedMediaAttachment("audio", track),
