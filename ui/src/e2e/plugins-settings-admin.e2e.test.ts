@@ -462,7 +462,11 @@ suite.define(() => {
           raw: JSON.stringify(savedConfig),
           hash: "credential-saved",
         });
-        await gateway.resolveDeferred("config.patch", { ok: true, hash: "credential-saved" });
+        await gateway.resolveDeferred("config.patch", {
+          ok: true,
+          config: savedConfig,
+          hash: "credential-saved",
+        });
         await page.getByRole("button", { name: "Apply changes", exact: true }).waitFor();
         await page.reload();
         await gateway.waitForRequest("config.get");
