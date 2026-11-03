@@ -70,6 +70,7 @@ import {
   stubCodexInferenceTransportEnv,
 } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
+import { buildCodexConversationTurnInstructions } from "./thread-prompt.js";
 
 const agentHarnessRuntimeMocks = vi.hoisted(() => ({ forceModelToolsUnsupported: false }));
 
@@ -200,9 +201,13 @@ describe("Codex native configuration", () => {
         );
         const result = await run;
         expect(result).toMatchObject({ terminal: { kind: "ok" } });
-        expect(result.systemPromptReport?.systemPrompt.chars).toBe(instructions.length);
+        // On managed inference routes the report represents both the native
+        // thread policy and the separately registered parent-local turn relay.
+        const turnRelay = buildCodexConversationTurnInstructions(params, toolSpecs);
+        const fullReportedInstructions = [instructions, turnRelay].join("\n\n");
+        expect(result.systemPromptReport?.systemPrompt.chars).toBe(fullReportedInstructions.length);
         expect(result.systemPromptReport?.systemPrompt.hash).toBe(
-          createHash("sha256").update(instructions).digest("hex"),
+          createHash("sha256").update(fullReportedInstructions).digest("hex"),
         );
       } finally {
         await transport.client.closeAndWait();
