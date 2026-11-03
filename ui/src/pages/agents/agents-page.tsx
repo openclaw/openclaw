@@ -22,7 +22,7 @@ export function AgentsPage(props: { routeData?: AgentsRouteData }) {
       <AgentsPageHeader />
       <SettingsWorkspace>
         <SettingsPage wide>
-          <Agents {...viewProps()} identitySavePending={state.identitySavePending()} />
+          <Agents {...viewProps()} />
         </SettingsPage>
       </SettingsWorkspace>
     </openclaw-agents-page>

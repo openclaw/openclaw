@@ -387,7 +387,7 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname, routeId: route });
         await expect
           .poll(() => readShellInsets(route), { message: `${route} settings shell alignment` })
-          .toEqual({ contentPaddingInline: 12, topbarPaddingInline: 16 });
+          .toEqual({ contentPaddingInline: 12, topbarPaddingInline: 12 });
       }
 
       for (const route of mobileStandaloneSettingsPageRoutes) {
@@ -508,7 +508,7 @@ suite.define(() => {
         columnLeft: 12,
         columnRightInset: 12,
         contentPaddingInline: 0,
-        topbarPaddingInline: 16,
+        topbarPaddingInline: 12,
       });
 
       await page.setViewportSize({ height: 900, width: 1440 });
@@ -532,7 +532,45 @@ suite.define(() => {
       // The shared header transitions its padding after adopting the settings layout.
       await expect
         .poll(readDesktopInsets)
-        .toEqual({ configPadding: 22, headerPadding: 16, pagePadding: 16 });
+        .toEqual({ configPadding: 0, headerPadding: 16, pagePadding: 16 });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps config groups on the title's axis while the column narrows", async () => {
+    const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      for (const route of ["appearance", "notifications"] as const) {
+        const pathname = pathForRoute(route);
+        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { pathname, routeId: route });
+        await page.locator(".settings-section .settings-group").first().waitFor();
+        for (const width of [1440, 1100, 820]) {
+          await page.setViewportSize({ height: 900, width });
+          await expect
+            .poll(
+              () =>
+                page.evaluate(() => {
+                  const title = document.querySelector<HTMLElement>(".content-header .page-title");
+                  const group = document.querySelector<HTMLElement>(
+                    ".settings-section .settings-group",
+                  );
+                  return title && group
+                    ? Math.round(
+                        group.getBoundingClientRect().left - title.getBoundingClientRect().left,
+                      )
+                    : null;
+                }),
+              { message: `${route} at ${width}` },
+            )
+            .toBe(0);
+        }
+        await page.setViewportSize({ height: 900, width: 1440 });
+      }
     } finally {
       await context.close();
     }
@@ -879,7 +917,7 @@ suite.define(() => {
 
         if (route === "cloud-workers") {
           expect(await page.locator(".page-subtitle").count()).toBe(0);
-          await page.locator(".cloud-environments__advanced > summary").click();
+          await page.locator(".settings-disclosure > summary").click();
         }
 
         const titleDescriptionPairs = page.locator(
