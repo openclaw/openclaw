@@ -170,7 +170,12 @@ export const clawrouterEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
                 "Content-Type": "application/json",
               },
               body: JSON.stringify(
-                request.offer.routeKind === "manifest" ? { body: request.body } : request.body,
+                request.offer.routeKind === "manifest"
+                  ? {
+                      body: request.body,
+                      ...(request.pathParams && { pathParams: request.pathParams }),
+                    }
+                  : request.body,
               ),
               signal,
             },

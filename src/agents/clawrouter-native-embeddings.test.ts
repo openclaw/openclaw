@@ -42,6 +42,8 @@ const cases = [
   ["aws-bedrock", "amazon.nova-2-multimodal-embeddings-v1:0", "aws_bedrock.invoke", 256],
   ["aws-bedrock", "us.twelvelabs.marengo-embed-2-7-v1:0", "aws_bedrock.invoke", 1024],
   ["aws-bedrock", "twelvelabs.marengo-embed-3-0-v1:0", "aws_bedrock.invoke", 512],
+  ["google-gemini", "gemini-embedding-001", "google.batch_embed_contents", 128],
+  ["google-gemini", "gemini-embedding-2", "google.embed_content", 128],
 ] as const;
 
 describe("actual ClawRouter native memory embeddings", () => {
@@ -58,7 +60,12 @@ describe("actual ClawRouter native memory embeddings", () => {
   let routeKind = "native",
     eligible = true,
     invalidTail = false;
-  const wires: Array<{ path: string; auth?: string; body: Record<string, unknown> }> = [];
+  const wires: Array<{
+    path: string;
+    auth?: string;
+    body: Record<string, unknown>;
+    pathModel?: unknown;
+  }> = [];
   const path = () =>
     selected[2] === "voyage.embeddings"
       ? "/v1/embeddings"
@@ -121,7 +128,18 @@ describe("actual ClawRouter native memory embeddings", () => {
       }
       const envelope = JSON.parse((await buffer(req)).toString()) as Record<string, unknown>;
       const body = (routeKind === "manifest" ? envelope.body : envelope) as Record<string, unknown>;
-      wires.push({ path: req.url ?? "", auth: req.headers.authorization, body });
+      const pathModel = (envelope.pathParams as Record<string, unknown> | undefined)?.model;
+      wires.push({ path: req.url ?? "", auth: req.headers.authorization, body, pathModel });
+      // Google manifest selection requires the model path parameter, even for a batch body.
+      if (
+        routeKind === "manifest" &&
+        selected[2].startsWith("google.") &&
+        pathModel !== selected[1]
+      ) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: { code: "invalid_native_embedding_route" } }));
+        return;
+      }
       const count = Array.isArray(body.requests)
         ? body.requests.length
         : Array.isArray(body.texts)
@@ -256,7 +274,15 @@ describe("actual ClawRouter native memory embeddings", () => {
         if (model.includes("marengo-3-0")) {
           expect(first).toEqual({ inputType: "text", text: { inputText: "query" } });
         }
-        if (model === "gemini-embedding-2") {
+        if (format.startsWith("google.")) {
+          for (const wire of wires) {
+            expect(wire.pathModel).toBe(kind === "manifest" ? model : undefined);
+          }
+          if (format === "google.batch_embed_contents") {
+            expect(first).toMatchObject({ requests: [{ model: "models/" + model }] });
+          }
+        }
+        if (model === "gemini-embedding-2" && format === "google.batch_embed_contents") {
           expect(first).toMatchObject({
             requests: [{ content: { parts: [{ text: "task: search result | query: query" }] } }],
           });

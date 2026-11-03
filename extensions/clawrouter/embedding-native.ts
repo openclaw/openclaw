@@ -24,6 +24,7 @@ import type { ClawRouterCapabilityOffer } from "./capability-offers.js";
 export type NativeEmbeddingRequest = {
   offer: ClawRouterCapabilityOffer;
   body: Record<string, unknown>;
+  pathParams?: { model: string };
   read: (payload: Record<string, unknown>) => number[][];
   usage: (payload: Record<string, unknown>) => EmbeddingUsage | undefined;
   maxResponseBytes: number;
@@ -168,6 +169,7 @@ export function prepareNativeEmbeddingRequests(
       requests.push({
         offer,
         body: batch ? { requests: group } : { ...group[0] },
+        pathParams: { model: upstream },
         maxResponseBytes: 16 * 1024 * 1024,
         read: (payload) => {
           const vectors = batch
