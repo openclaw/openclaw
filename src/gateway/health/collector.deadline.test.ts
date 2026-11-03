@@ -88,6 +88,7 @@ beforeAll(async () => {
   vi.doMock("../../config/sessions/session-entry-read-runtime.js", () => ({
     withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(() => readSummary()),
   }));
+  // mock-isolation: keep deadline probes on fixture plugins without loading live plugin metadata.
   vi.doMock("../../channels/plugins/read-only.js", () => ({
     listReadOnlyChannelPluginsForConfig: () => {
       channelPlanning.resolve();
