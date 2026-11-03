@@ -239,10 +239,13 @@ it("replays prior-provider tool history with the same strict9 IDs as native Mist
       }),
       resolveProviderApiKey: () => ({ apiKey: credential, discoveryApiKey: credential }),
     });
-    if (!catalog || !("provider" in catalog) || !catalog.provider)
+    if (!catalog || !("provider" in catalog) || !catalog.provider) {
       throw new Error("missing router catalog");
+    }
     const row = catalog.provider.models[0];
-    if (!row || row.api !== "openai-completions") throw new Error("missing routed Mistral");
+    if (!row || row.api !== "openai-completions") {
+      throw new Error("missing routed Mistral");
+    }
     const callIds = [
       "call_previous_provider_shared_prefix_one|fc_one",
       "call_previous_provider_shared_prefix_two|fc_two",
@@ -314,7 +317,7 @@ it("replays prior-provider tool history with the same strict9 IDs as native Mist
       };
       const replay = await sanitizeSessionHistory({ ...params, messages: history });
       expect(await sanitizeSessionHistory({ ...params, messages: replay })).toEqual(replay);
-      expect(sessionManager.appendCustomEntryAsync).toHaveBeenCalledTimes(1);
+      expect(sessionManager.getEntries()).toHaveLength(2);
       const stream =
         plugin.wrapStreamFn?.({
           provider: providerId,
@@ -322,7 +325,20 @@ it("replays prior-provider tool history with the same strict9 IDs as native Mist
           streamFn: streamSimple,
         }) ?? streamSimple;
       await (
-        await stream(model, { messages: convertToLlm(replay) }, { apiKey: credential })
+        await stream(
+          model,
+          {
+            messages: convertToLlm(replay),
+            tools: [
+              {
+                name: "lookup",
+                description: "Look up a synthetic record",
+                parameters: { type: "object", properties: { index: { type: "integer" } } },
+              },
+            ],
+          },
+          { apiKey: credential },
+        )
       ).result();
     }
     expect(requests).toHaveLength(2);
@@ -330,8 +346,12 @@ it("replays prior-provider tool history with the same strict9 IDs as native Mist
       `Bearer ${credential}`,
       `Bearer ${credential}`,
     ]);
-    expect(requests[0].body.messages).toEqual(requests[1].body.messages);
-    const messages = requests[0].body.messages as Array<{
+    const [routedRequest, nativeRequest] = requests;
+    if (!routedRequest || !nativeRequest) {
+      throw new Error("missing routed or native request");
+    }
+    expect(routedRequest.body.messages).toEqual(nativeRequest.body.messages);
+    const messages = routedRequest.body.messages as Array<{
       role: string;
       tool_calls?: Array<{ id: string }>;
       tool_call_id?: string;
@@ -339,7 +359,9 @@ it("replays prior-provider tool history with the same strict9 IDs as native Mist
     const ids = messages.flatMap((message) => message.tool_calls?.map(({ id }) => id) ?? []);
     expect(ids).toHaveLength(2);
     expect(new Set(ids).size).toBe(2);
-    for (const id of ids) expect(id).toMatch(/^[a-zA-Z0-9]{9}$/);
+    for (const id of ids) {
+      expect(id).toMatch(/^[a-zA-Z0-9]{9}$/);
+    }
     expect(
       messages.filter(({ role }) => role === "tool").map(({ tool_call_id }) => tool_call_id),
     ).toEqual(ids);
