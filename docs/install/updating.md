@@ -33,6 +33,19 @@ backup.
 
 ## Update implementation contract
 
+Within one database-generation observation, update and Doctor workers reuse a
+verified digest while the file's device, inode, size, and nanosecond birth,
+modification, and change times remain identical. Each family observation still
+checks the database, WAL, and rollback journal; private-copy verification and
+WAL commit checks remain in place. Changed or unavailable identities require
+hashing again. Reuse ends with that observation and does not cross Doctor
+invocations. Reuse also requires nanosecond bigint stat fields and modification
+and change times more than two seconds older than the start of hashing. Recent
+writes can share a coarse filesystem timestamp even when nanosecond fields are
+available, so their digests are recomputed. Millisecond-only stats never enable
+reuse. The runtime performing the observation must contain this change;
+a newer candidate cannot change an older installed updater's own reads.
+
 If the retained verifier cannot authenticate to the restarted Gateway, it stops
 retrying that rejection. Local HTTP readiness and runtime version/build identity
 can verify activation instead, with an RPC authentication warning recorded in
@@ -614,6 +627,12 @@ This improvement applies after the newer updater is installed; it cannot shorten
 the retention phase already running in an older updater.
 
 Database rehearsal also avoids a second full backup of each private snapshot.
+
+Candidate inventory reads database registrations and the installed plugin index
+in one read-only transaction instead of copying the whole shared database just
+for metadata. Sources requiring private recovery keep the snapshot path. The
+candidate worker must contain this improvement; snapshot publication, integrity
+checks, and rollback verification are unchanged.
 Update schema inspection and rehearsal use SQLite online backup with a pinned
 read transaction, so a busy Gateway can keep writing while the copy includes
 committed WAL data. Each acquisition makes one copy instead of retrying until

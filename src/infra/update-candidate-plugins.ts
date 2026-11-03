@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -231,6 +232,31 @@ async function statPluginLocator(source: string) {
   return fs.stat(source, { bigint: true }).catch(ignoreMissingUpdateCandidateFile);
 }
 
+export function readUpdateCandidatePluginIndex(db: DatabaseSync) {
+  if (!tableExists(db, "config_machine_state")) {
+    return undefined;
+  }
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
+      .selectFrom("config_machine_state")
+      .select("value_json")
+      .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
+  );
+  if (!row) {
+    return undefined;
+  }
+  const parsed: unknown = JSON.parse(row.value_json);
+  if (!isRecord(parsed) || !isRecord(parsed.index)) {
+    throw new Error("Invalid copied plugin index");
+  }
+  const installed = parsePluginInstallRecordMap(parsed.index.installRecords);
+  if (!installed) {
+    throw new Error("Invalid copied plugin install records");
+  }
+  return { value: parsed, records: installed };
+}
+
 async function readCopiedPluginIndex(shared: string): Promise<
   | {
       value: Record<string, unknown>;
@@ -244,37 +270,17 @@ async function readCopiedPluginIndex(shared: string): Promise<
   }
   const db = openNodeSqliteDatabase(shared, { readOnly: true });
   try {
-    if (!tableExists(db, "config_machine_state")) {
-      return undefined;
-    }
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
-        .selectFrom("config_machine_state")
-        .select("value_json")
-        .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
-    );
-    if (!row) {
-      return undefined;
-    }
-    const parsed: unknown = JSON.parse(row.value_json);
-    if (!isRecord(parsed) || !isRecord(parsed.index)) {
-      throw new Error("Invalid copied plugin index");
-    }
-    const installed = parsePluginInstallRecordMap(parsed.index.installRecords);
-    if (!installed) {
-      throw new Error("Invalid copied plugin install records");
-    }
-    return { value: parsed, records: installed };
+    return readUpdateCandidatePluginIndex(db);
   } finally {
     db.close();
   }
 }
 
-/** Inventory reads only private SQLite state and freezes the complete plugin projection. */
+/** Inventory freezes plugin metadata before projecting filesystem contents. */
 export async function prepareUpdateCandidatePlugins(
   params: UpdateCandidatePluginProjectionParams & {
     sharedStateDatabasePath?: string;
+    sharedPluginIndex?: { value: ReturnType<typeof readUpdateCandidatePluginIndex> };
     onProgress?: () => void | Promise<void>;
   },
 ): Promise<UpdateCandidatePluginPlan> {
@@ -282,7 +288,9 @@ export async function prepareUpdateCandidatePlugins(
   const targetStateDir = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   const shared =
     params.sharedStateDatabasePath ?? path.join(targetStateDir, "state", "openclaw.sqlite");
-  const copied = await readCopiedPluginIndex(shared);
+  const copied = params.sharedPluginIndex
+    ? params.sharedPluginIndex.value
+    : await readCopiedPluginIndex(shared);
   const records = copied?.records ?? params.config.plugins?.installs ?? {};
   const resolve = (locator: string) => resolveUserPath(locator, params.env);
   const canonicalStateRoot = await fs

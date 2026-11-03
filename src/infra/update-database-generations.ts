@@ -4,6 +4,7 @@ import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import {
+  createSqliteFileGenerationReader,
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
 } from "./sqlite-file-generation.js";
@@ -96,9 +97,10 @@ export function readUpdateDatabaseGenerations(paths: readonly string[]): UpdateD
         throw new Error(`Database generation requires a regular file: ${pathname}`);
       }
       const before = readWalIndexHeader(pathname);
-      const generation = readStableSqliteFileGeneration(pathname);
+      const readGeneration = createSqliteFileGenerationReader();
+      const generation = readStableSqliteFileGeneration(pathname, readGeneration);
       const content = readCommittedContent(pathname);
-      const current = readStableSqliteFileGeneration(pathname);
+      const current = readStableSqliteFileGeneration(pathname, readGeneration);
       const after = readWalIndexHeader(pathname);
       if (
         !sameSqliteFileGeneration(generation, current) ||
