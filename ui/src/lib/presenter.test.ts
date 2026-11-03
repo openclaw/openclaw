@@ -1,9 +1,61 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 // Control UI tests cover cron schedule presentation.
 import { contextBudgetStatusFixture } from "../../../src/config/sessions/context-budget.test-support.js";
 import type { CronJob } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
-import { formatCronPayload, formatCronSchedule, formatSessionTokens } from "./presenter.ts";
+import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
+import { formatMs } from "./format.ts";
+import {
+  formatCronPayload,
+  formatCronSchedule,
+  formatCronState,
+  formatSessionTokens,
+} from "./presenter.ts";
+
+registerCronEnglish();
+
+it("routes cron state and payload labels through whole catalog templates", async () => {
+  await i18n.setLocale("fr");
+  const translate = vi.spyOn(i18n, "t");
+  try {
+    const cronJob = job({ kind: "every", everyMs: 60_000 });
+    cronJob.state = { lastStatus: "ok", lastRunAtMs: 1000, nextRunAtMs: 2000 };
+    const expectedState = i18n.t("cronJob.state", {
+      status: "ok",
+      next: formatMs(2000),
+      last: formatMs(1000),
+    });
+    translate.mockClear();
+    expect(formatCronState(cronJob)).toBe(expectedState);
+    expect.soft(translate).toHaveBeenCalledWith("cronJob.state", {
+      status: "ok",
+      next: formatMs(2000),
+      last: formatMs(1000),
+    });
+    const cases: Array<[CronJob["payload"], string, Record<string, string>]> = [
+      [{ kind: "systemEvent", text: "User Text" }, "system", { text: "User Text" }],
+      [{ kind: "command", argv: ["Run", "--Flag"] }, "command", { command: "Run --Flag" }],
+      [{ kind: "script", script: "Echo User Text" }, "script", { script: "Echo User Text" }],
+      [{ kind: "agentTurn", message: "User Prompt" }, "agent", { message: "User Prompt" }],
+    ];
+    for (const [payload, label, params] of cases) {
+      cronJob.payload = payload;
+      const expectedPayload = i18n.t(`cronJob.payload.${label}`, params);
+      translate.mockClear();
+      expect(formatCronPayload(cronJob)).toBe(expectedPayload);
+      expect.soft(translate).toHaveBeenCalledWith(`cronJob.payload.${label}`, params);
+    }
+    cronJob.payloadSource = { kind: "pluginCommand", command: "DoThing", pluginId: "Plugin-ID" };
+    const params = { command: "DoThing", plugin: "Plugin-ID" };
+    const expectedPlugin = i18n.t("cronJob.payload.pluginCommand", params);
+    translate.mockClear();
+    expect(formatCronPayload(cronJob)).toBe(expectedPlugin);
+    expect.soft(translate).toHaveBeenCalledWith("cronJob.payload.pluginCommand", params);
+  } finally {
+    translate.mockRestore();
+    await i18n.setLocale("en");
+  }
+});
 
 function job(schedule: CronJob["schedule"]): CronJob {
   return {

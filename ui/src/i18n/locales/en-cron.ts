@@ -2,7 +2,24 @@ import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 const enCron = {
+  cronJob: {
+    state: "{status} · next {next} · last {last}",
+    payload: {
+      pluginCommand: "Plugin command: /{command} ({plugin})",
+      system: "System: {text}",
+      command: "Command: {command}",
+      script: "Script: {script}",
+      agent: "Agent: {message}",
+    },
+  },
   cron: {
+    missingConfigRevision:
+      "This automation is missing its configuration revision. Refresh and try again.",
+    changedOnGateway:
+      "This automation changed on the Gateway. The latest definition is loaded; review it before retrying.",
+    changedOnGatewayLoadFailed:
+      "This automation changed on the Gateway, but the latest definition could not be loaded. Refresh before retrying.",
+    runQueued: "Run queued. Run ID: {runId}",
     adminRequired:
       "Browsing only. Only the human owner or an administrator can change this automation.",
     runNotStarted: {
@@ -319,6 +336,8 @@ const enCron = {
       nextRelative: "Next {at}",
     },
     runEntry: {
+      tokens: "{count} tokens",
+      inputOutputTokens: "{input} in / {output} out",
       noSummary: "No summary.",
       deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Run at",
@@ -465,6 +484,7 @@ const enCron = {
 
 export const registerCronEnglish = Object.assign(
   () => {
+    Object.assign(en, { cronJob: enCron.cronJob });
     const { runNotStarted, errors, ...cron } = enCron.cron;
     Object.assign(en.cron, cron);
     Object.assign(en.cron.runNotStarted, runNotStarted);
