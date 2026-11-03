@@ -426,9 +426,8 @@ suite.define(() => {
         };
         for (const [channelId, label] of channelEntries) {
           const detail = await openChannel(page, label);
-          await expect
-            .poll(() => detail.locator(".oc-dialog__title").textContent())
-            .toContain(label);
+          const heading = detail.locator(".oc-dialog__title");
+          await expect.poll(() => heading.textContent()).toContain(label);
           await detail.getByRole("button", { name: "Check connection" }).waitFor();
           if (channelId === "googlechat" || channelId === "signal") {
             await detail.locator("summary", { hasText: "Details" }).click();
