@@ -5,6 +5,7 @@ import { linkClaw, type AuthorityState, type Channel } from "../authority/state.
 import { utf8 } from "../bytes.js";
 import { ed25519SignerFromSeed, sha256, type StatementSigner } from "../crypto.js";
 import {
+  fingerprint,
   formatEd25519PublicKey,
   formatIrohEndpointKey,
   type Ed25519PublicKey,
@@ -73,6 +74,98 @@ export async function signChange(
     "MembershipChange",
     { claw_id: state.claw_id, seq, target, issued_at: issuedAt },
     signer,
+  );
+}
+
+/** Applies a write and returns its events. A refusal throws, so a regression does not look like success. */
+export async function submitReady(
+  state: AuthorityState,
+  statement: unknown,
+  context: { channel: Channel; now: number } = { channel: "tunnel", now: WORLD_NOW },
+) {
+  const result = await submitStatement(state, statement, context);
+  if (!result.ok) {
+    throw new Error(`refused: ${result.code} ${result.detail}`);
+  }
+  return result;
+}
+
+/** Owner-device approval. The result may be a refusal, so callers can assert the code. */
+export async function approveDevice(
+  state: AuthorityState,
+  approver: WorldKey,
+  device: WorldKey,
+  issuedAt = WORLD_NOW - 60,
+) {
+  const cert = await signStatement(
+    "OwnerDeviceCert",
+    { ...certBody(device), issued_at: issuedAt },
+    approver.signer,
+  );
+  return submitStatement(
+    state,
+    await signChange(state, approver.signer, { op: "add_owner_device", cert }),
+    { channel: "tunnel", now: WORLD_NOW },
+  );
+}
+
+/** Same approval as `approveDevice`, throwing when the owner is not allowed to grant it. */
+export async function approveReady(
+  state: AuthorityState,
+  approver: WorldKey,
+  device: WorldKey,
+  issuedAt = WORLD_NOW - 60,
+) {
+  const result = await approveDevice(state, approver, device, issuedAt);
+  if (!result.ok) {
+    throw new Error(`refused: ${result.code} ${result.detail}`);
+  }
+  return result;
+}
+
+/** Viewer membership change, using the next sequence number. */
+export async function signViewerAdd(
+  state: AuthorityState,
+  signer: StatementSigner,
+  accountId: string,
+  peerKeys: readonly IrohEndpointKey[],
+) {
+  return signChange(state, signer, {
+    op: "add",
+    account_id: accountId,
+    role: "viewer",
+    peer_keys: [...peerKeys],
+    invite_id: null,
+  });
+}
+
+/** Owner-device revocation signed at `WORLD_NOW - 5`. */
+export async function ownerRevocation(target: WorldKey, signer: WorldKey) {
+  return signStatement(
+    "Revocation",
+    {
+      target_fp: await fingerprint(target.pub),
+      target_kind: "owner_device",
+      reason: "test",
+      root_epoch: ROOT_EPOCH,
+      issued_at: WORLD_NOW - 5,
+    },
+    signer.signer,
+  );
+}
+
+/** Peer-key revocation. `issuedAt` is the signer's clock, not a comparison against the certificate. */
+export async function peerRevocation(target: IrohEndpointKey, signer: WorldKey, issuedAt: number) {
+  return signStatement(
+    "Revocation",
+    {
+      target_fp: await fingerprint(target),
+      target_kind: "peer_key",
+      reason: "test",
+      root_epoch: ROOT_EPOCH,
+      issued_at: issuedAt,
+    },
+    signer.signer,
   );
 }
 
