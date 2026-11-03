@@ -27,6 +27,8 @@ describe("resolveSessionTitleSource", () => {
     expect(resolveSessionTitleSource("/status")).toBeNull();
     expect(resolveSessionTitleSource("/model choose-a-model")).toBeNull();
     expect(resolveSessionTitleSource("/unknown task")).toBeNull();
+    // A later path-shaped argument must not make an unregistered command look like a paste.
+    expect(resolveSessionTitleSource("/topic_proof /api routing needs repair")).toBeNull();
   });
 
   it("uses skill args when skill metadata matches", () => {
