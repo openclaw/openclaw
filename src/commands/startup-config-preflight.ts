@@ -196,10 +196,30 @@ async function prepareStartupConfig(
     // Finish that producer's bootstrap after read admission releases its snapshot,
     // before webhook history or other runtime tables are consumed.
     if (!isStatePostgres()) {
-      initializeNativeOpenClawStateDatabase({ env });
-      const { initializeFreshDaemonRuntimePinMigration } =
-        await import("../infra/state-migrations.daemon-runtime-pins.js");
-      initializeFreshDaemonRuntimePinMigration(env);
+      const [
+        { initializeFreshDaemonRuntimePinMigration },
+        { withStateDatabaseColdAdmission },
+        { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+        { resolveOpenClawStateSqlitePath },
+      ] = await Promise.all([
+        import("../infra/state-migrations.daemon-runtime-pins.js"),
+        import("../infra/gateway-state-owner.js"),
+        import("../state/openclaw-state-db-contract.js"),
+        import("../state/openclaw-state-db.paths.js"),
+      ]);
+      // A concurrent CLI (e.g. `gateway status` loading the device identity) can hold a
+      // transient schema lease here. Both steps are idempotent, so wait for it within the
+      // busy timeout; offline maintenance (Doctor, migrations) still refuses immediately.
+      withStateDatabaseColdAdmission(
+        {
+          databasePath: resolveOpenClawStateSqlitePath(env),
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        },
+        () => {
+          initializeNativeOpenClawStateDatabase({ env });
+          initializeFreshDaemonRuntimePinMigration(env);
+        },
+      );
     }
     const {
       HISTORICAL_WEBHOOK_CHANNELS,
