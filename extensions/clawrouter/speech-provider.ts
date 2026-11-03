@@ -240,9 +240,8 @@ export function buildClawRouterSpeechProvider(
       : undefined;
     if (
       ssml !== undefined &&
-      (!ssml.isWellFormed() ||
-        Buffer.byteLength(ssml, "utf8") > 65536 ||
-        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/u.test(ssml))
+      (Buffer.byteLength(ssml, "utf8") > 65536 ||
+        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ud800-\udfff\ufffe\uffff]/u.test(ssml))
     ) {
       throw new Error("ClawRouter Azure speech requires valid XML text within 64 KiB");
     }

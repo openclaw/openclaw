@@ -888,7 +888,7 @@ describe("ClawRouter native Azure SSML speech", () => {
     }, respondAzure);
   });
 
-  it.each(["\ud800", "\u0000"])(
+  it.each(["\ud800", "\udc00", "\u0000"])(
     "rejects invalid XML text before transmission (%j)",
     async (text) => {
       await withFixture(async (fixture) => {
