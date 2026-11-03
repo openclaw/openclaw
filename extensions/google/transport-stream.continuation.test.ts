@@ -72,7 +72,9 @@ describe("actual routed Google continuation transport", () => {
     const receipt = await initial();
     expect(guardedFetch).toHaveBeenCalledTimes(1);
     expect(receipt.id).toBe(token);
-    const original = JSON.parse(guardedFetch.mock.calls[0][1].body);
+    const firstCall = guardedFetch.mock.calls[0];
+    assert(firstCall);
+    const original = JSON.parse(firstCall[1].body);
     guardedFetch.mockResolvedValueOnce(response(frame(stopped)));
     const result = await (
       await start({
@@ -83,7 +85,9 @@ describe("actual routed Google continuation transport", () => {
     expect(result.stopReason).toBe("stop");
     expect(result.providerReplay).toBeUndefined();
     expect(guardedFetch).toHaveBeenCalledTimes(2);
-    const [url, request] = guardedFetch.mock.calls[1];
+    const nextCall = guardedFetch.mock.calls[1];
+    assert(nextCall);
+    const [url, request] = nextCall;
     expect(url).toBe(
       "https://router.example/v1/native/google-gemini/v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse",
     );
@@ -106,7 +110,10 @@ describe("actual routed Google continuation transport", () => {
       name: "origin",
       model: { ...model, baseUrl: "https://other.example/v1/native/google-gemini/v1beta" },
     },
-    { name: "input", messages: [{ ...context.messages[0], content: "Changed request" }] },
+    {
+      name: "input",
+      messages: [{ role: "user" as const, timestamp: 0, content: "Changed request" }],
+    },
   ])("rejects changed $name before another dispatch", async (change) => {
     const receipt = await initial();
     const result = await (
