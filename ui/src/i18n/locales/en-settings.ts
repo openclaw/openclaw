@@ -470,7 +470,7 @@ const enSettings = {
     noItems: 'No items yet. Click "Add" to create one.',
     removeItem: "Remove item",
     customEntries: "Custom entries",
-    addEntry: "Add Entry",
+    addEntry: "Add entry",
     key: "Key",
     removeEntry: "Remove entry",
     removeEntryKey: "Remove entry: {key}",
