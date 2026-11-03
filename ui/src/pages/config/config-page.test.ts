@@ -24,6 +24,7 @@ import {
 } from "../../app/server-prefs.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
+import { mockDocumentVisibility } from "../../test-helpers/mock-cleanup.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { preserveDocumentStyle } from "../../test-helpers/preserve-document-style.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -797,6 +798,57 @@ it("retires an update status receipt when the page leaves and re-enters", async 
   second.resolve(true);
   await waitForSolid(() => expect(status()).toContain("Current update status"));
 });
+
+it.each(["countdown", "waiting-for-idle"] as const)(
+  "parks the %s clock while hidden and catches up when visible",
+  async (state) => {
+    vi.useFakeTimers({ now: 1_000, toFake: ["Date", "setInterval", "clearInterval"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const show = mockDocumentVisibility();
+    const context = configContext({
+      gateway: connectedGateway([]),
+      overlays: {
+        snapshot: {
+          updateSchedule: {
+            channel: "stable",
+            autoEnabled: true,
+            campaign: {
+              id: "campaign-1",
+              state,
+              announcedAtMs: 0,
+              updatedAtMs: 0,
+              applyAtMs: 60_000,
+              forceAtMs: 60_000,
+            },
+          },
+        },
+      },
+    });
+    const view = mountConfigPage(context, { pageId: "updates" });
+    const label = () => view.container.querySelector('[role="timer"]')?.textContent;
+    await waitForSolid(() => expect(label()).toContain("0:59"));
+    await vi.advanceTimersByTimeAsync(1_000);
+    flush();
+    expect(label()).toContain("0:58");
+
+    show("hidden");
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    flush();
+    expect(label()).toContain("0:58");
+    show("visible");
+    flush();
+    expect(label()).toContain("0:48");
+    expect(vi.getTimerCount()).toBe(1);
+    publishConfigSource(context.overlays);
+    expect(vi.getTimerCount()).toBe(1);
+    view.update({ pageId: "advanced" });
+    expect(vi.getTimerCount()).toBe(0);
+    view.dispose();
+  },
+);
 
 it("routes update policy edits through the configuration owner", () => {
   const patchForm = vi.fn();

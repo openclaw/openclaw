@@ -15,7 +15,7 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
+import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -170,12 +170,9 @@ export function createAgentDatabaseExecution(
       return Promise.resolve();
     }
     clearIdleTimer();
-    if (nativeClosing) {
-      return nativeClosing;
-    }
     const captured = generation;
-    if (!captured) {
-      return Promise.resolve();
+    if (nativeClosing || !captured) {
+      return nativeClosing ?? Promise.resolve();
     }
     const result = captured
       .close()
@@ -201,6 +198,33 @@ export function createAgentDatabaseExecution(
     nativeClosing = result;
     return result;
   };
+  // Persistent generation callbacks must not capture a request's source or operation frame.
+  function createGeneration(
+    expectedIdentity?: AgentDatabaseExecutionFileIdentity,
+    creatingTarget?: DatabasePathIdentity,
+  ): AgentDatabaseNativeGeneration {
+    const created = createAgentDatabaseNativeGeneration(
+      agentId,
+      identity.canonicalPath,
+      context,
+      lifetime.state,
+      assertCurrent,
+      () => {
+        if (executions.get(pathname) !== owner || generation !== created || !nativeClosing) {
+          throw new Error("Agent cleanup no longer owns its original execution reference");
+        }
+      },
+      expectedIdentity ?? fileIdentity ?? toAgentExecutionConstraints(identity).expectedIdentity,
+      acceptFileIdentity,
+      reportTerminal,
+      fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
+      creationClaim?.witness,
+      retainAgentDatabaseStartupWorker(agentId, { env: context.environment }, () =>
+        closeNative(created),
+      ),
+    );
+    return created;
+  }
   async function run<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
@@ -241,29 +265,7 @@ export function createAgentDatabaseExecution(
       assertCallerCurrent();
       signal?.throwIfAborted();
     }
-    if (!generation) {
-      const created = createAgentDatabaseNativeGeneration(
-        agentId,
-        identity.canonicalPath,
-        context,
-        lifetime.state,
-        assertCurrent,
-        () => {
-          if (executions.get(pathname) !== owner || generation !== created || !nativeClosing) {
-            throw new Error("Agent cleanup no longer owns its original execution reference");
-          }
-        },
-        expectedIdentity ?? fileIdentity ?? toAgentExecutionConstraints(identity).expectedIdentity,
-        acceptFileIdentity,
-        reportTerminal,
-        fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
-        creationClaim?.witness,
-        retainAgentDatabaseStartupWorker(agentId, { env: context.environment }, () =>
-          closeNative(created),
-        ),
-      );
-      generation = created;
-    }
+    generation ??= createGeneration(expectedIdentity, creatingTarget);
     const current = generation;
     let entered = false;
     try {
@@ -578,8 +580,8 @@ export function createAgentDatabaseExecution(
             if (borrowers !== 0 || !lifetime.open || cleanupFailure || cleanupOwner) {
               return;
             }
-            const drainSignal = getGatewayRestartDrainSignal();
-            const canRetain = () => generation && !nativeClosing && !drainSignal.aborted;
+            const cleanupSignal = getGatewayShutdownCleanupSignal();
+            const canRetain = () => generation && !nativeClosing && !cleanupSignal.aborted;
             try {
               for (const idle of executionState.idle) {
                 if (!canRetain() || executionState.idle.size < MAX_IDLE_EXECUTORS) {
@@ -608,8 +610,8 @@ export function createAgentDatabaseExecution(
               );
               idleTimer = timer;
               timer.unref();
-              // Restart drain retires idle generations without interrupting accepted writers.
-              idleDrainListener = addAbortListener(drainSignal, () => {
+              // Marker persistence precedes shutdown retirement of idle generations.
+              idleDrainListener = addAbortListener(cleanupSignal, () => {
                 runInDetachedAsyncContext(() => {
                   void owner.closeIdle().catch(reportCleanupFailure);
                 });

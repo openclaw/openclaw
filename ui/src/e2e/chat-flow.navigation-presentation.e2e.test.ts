@@ -586,7 +586,7 @@ suite.define(() => {
   it("keeps every sidebar session stable while selecting sessions and supports sort modes", async () => {
     const { page } = await newChatPage(suite);
     const createdSessionKeys = Array.from(
-      { length: 11 },
+      { length: 16 },
       (_, index) => `agent:main:session-${String.fromCharCode(97 + index)}`,
     );
     const pinnedSessionKey = "agent:main:session-pinned";
@@ -620,14 +620,16 @@ suite.define(() => {
     await page
       .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
       .waitFor({ timeout: 10_000 });
-    // Pinned rows sit above, and do not occupy, the ten-row Sessions page.
+    // Pinned rows sit above, and do not occupy, the fifteen-row Sessions page.
     const pinnedLink = page.locator(
       `[data-session-section="pinned"] .sidebar-recent-session[data-session-key="${pinnedSessionKey}"] a.sidebar-recent-session__link`,
     );
     await pinnedLink.waitFor();
-    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 11));
-    await page.getByRole("button", { name: "Show more" }).click();
+    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 16));
+    const more = page.getByRole("button", { name: "Show more", exact: true });
+    await more.click();
     await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
+    expect(await more.count()).toBe(0);
 
     await page
       .locator(

@@ -38,10 +38,7 @@ function fallback(id: string, restored = false) {
 const events = [
   recovery("recovery-1", "Gateway restarted. The conversation has been restored."),
   fallback("fallback-1"),
-  {
-    ...message("custom", warningText, "delivery-1"),
-    customType: "session-send-recovery-blocked",
-  },
+  recovery("delivery-1", warningText),
   recovery("recovery-2", connectedText),
   fallback("fallback-2", true),
   recovery("recovery-3", "Recovery checks finished. Your conversation is ready."),
@@ -106,7 +103,6 @@ suite.define(() => {
             expect(await disclosure.getAttribute("open")).not.toBeNull();
           } else {
             expect(await disclosure.getAttribute("open")).toBeNull();
-            expect(await disclosure.locator(".chat-system-events__warning").isVisible()).toBe(true);
             await summary.click();
             await warning.waitFor();
             expect(await warning.isVisible()).toBe(true);
@@ -137,7 +133,6 @@ suite.define(() => {
       const summary = disclosure.locator("summary");
       await summary.waitFor();
       expect(await summary.textContent()).toContain("6 system events");
-      expect(await summary.textContent()).toContain("Updates not delivered");
       expect(await disclosure.getAttribute("open")).toBeNull();
       expect(await disclosure.locator(".chat-notice").count()).toBe(0);
       const prompt = page.getByText(promptText, { exact: true });
@@ -171,7 +166,7 @@ suite.define(() => {
       expect(contents.map((text) => text.replace(/\s+/gu, " ").trim())).toEqual([
         "System · gateway restartedGateway restarted. The conversation has been restored.",
         "Model fallback: Primary → BackupReason: capacity",
-        warningText,
+        "System · gateway restarted" + warningText,
         "System · gateway restartedThe workspace connection is available again.",
         "Returned to selected model: Backup → Primary",
         "System · gateway restartedRecovery checks finished. Your conversation is ready.",
@@ -181,7 +176,6 @@ suite.define(() => {
       await expect.poll(() => disclosure.getAttribute("open")).toBeNull();
       await page.setViewportSize({ width: 390, height: 844 });
       await summary.scrollIntoViewIfNeeded();
-      expect(await summary.locator(".chat-system-events__warning").isVisible()).toBe(true);
       expect(await summary.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
         true,
       );

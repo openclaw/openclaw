@@ -35,6 +35,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "chat.side_result": [SESSION_READ_SCOPE],
   cron: [READ_SCOPE],
   "cron.inventory.changed": [READ_SCOPE],
+  "worktrees.branches.changed": [WRITE_SCOPE],
+  "projects.checkoutOptions.changed": [SESSION_READ_SCOPE],
   health: [],
   "exec.approval.requested": [APPROVALS_SCOPE],
   "exec.approval.resolved": [APPROVALS_SCOPE],
@@ -136,6 +138,18 @@ export function isSessionReadInvalidation(
           "value" in field &&
           ((key === "gatewayInstanceId" && typeof field.value === "string") ||
             (key === "revision" && Number.isSafeInteger(field.value) && field.value >= 0)),
+      )
+    );
+  }
+  if (event === "projects.checkoutOptions.changed") {
+    return (
+      targeted &&
+      Object.hasOwn(payload, "projectId") &&
+      fields.every(
+        ([key, field]) =>
+          "value" in field &&
+          ((key === "projectId" && typeof field.value === "string") ||
+            (key === "agentId" && (field.value === undefined || typeof field.value === "string"))),
       )
     );
   }

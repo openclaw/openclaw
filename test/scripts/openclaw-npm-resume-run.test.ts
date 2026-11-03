@@ -296,10 +296,12 @@ it("prints an executable resume command that preserves all inputs without shell 
     resolve("scripts/lib/release-publish-children.sh"),
   );
   expect(printed.status, printed.stderr).toBe(0);
+  expect(printed.stdout).toContain("Release recovery command:\n");
   const command = readFileSync(summary, "utf8").match(/```bash\n([\s\S]+?)\n```/u)?.[1];
   if (!command) {
     throw new Error("Release summary did not contain a resume command.");
   }
+  expect(printed.stdout).toContain(command);
   const resumed = shell(`gh() { printf '%s\\n' "$@" > args; cat > inputs.json; }; ${command}`);
   expect(resumed.status, resumed.stderr).toBe(0);
   expect(JSON.parse(readFileSync(join(root, "inputs.json"), "utf8"))).toEqual(inputs);

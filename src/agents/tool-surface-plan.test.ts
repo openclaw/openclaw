@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
@@ -7,7 +6,6 @@ import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
   createToolSearchCatalogRef,
-  clearToolSearchCatalog,
   TOOL_SEARCH_RAW_TOOL_NAME,
   createToolSearchTools,
   type ToolSearchCatalogToolExecutor,
@@ -50,7 +48,6 @@ describe("resolveAgentToolSurfacePlan", () => {
         config,
         modelToolsEnabled: true,
         trigger: "memory" as const,
-        forceCodeModeControls: mode === "code",
         presentation: prepared
           ? prepareAgentToolSurfacePresentation({
               ...basePlanParams,
@@ -227,11 +224,6 @@ describe("resolveAgentToolSurfacePlan", () => {
       config: { tools: { codeMode: false, toolSearch: true } },
     },
     {
-      name: "checkpoint-proven Code Mode recovery",
-      config: { tools: { codeMode: false, toolSearch: true } },
-      forceCodeModeControls: true,
-    },
-    {
       name: "automatic model Tool Search",
       config: {},
       model: { toolSearchMode: "tools" },
@@ -240,7 +232,6 @@ describe("resolveAgentToolSurfacePlan", () => {
     name: string;
     config: OpenClawConfig;
     toolsAllow?: string[];
-    forceCodeModeControls?: boolean;
     model?: { toolSearchMode: "tools" };
   }>)("does not add $name controls to a completion-private message-only run", (run) => {
     const plan = resolveAgentToolSurfacePlan({
@@ -248,7 +239,6 @@ describe("resolveAgentToolSurfacePlan", () => {
       config: run.config,
       forceDirectMessageTool: true,
       toolsAllow: run.toolsAllow ?? ["message"],
-      forceCodeModeControls: run.forceCodeModeControls,
       model: run.model,
     });
     const result = applyAgentToolSurfaceCatalog({
@@ -287,12 +277,6 @@ describe("resolveAgentToolSurfacePlan", () => {
       expected: { codeMode: false, toolSearch: true },
     },
     {
-      name: "checkpoint-proven Code Mode recovery",
-      config: { tools: { codeMode: false, toolSearch: true } },
-      forceCodeModeControls: true,
-      expected: { codeMode: true, toolSearch: false },
-    },
-    {
       name: "a message-only run without a forced direct reply",
       config: { tools: { codeMode: true, toolSearch: true } },
       toolsAllow: ["message"],
@@ -302,14 +286,12 @@ describe("resolveAgentToolSurfacePlan", () => {
     name: string;
     config: OpenClawConfig;
     toolsAllow?: string[];
-    forceCodeModeControls?: boolean;
     expected: { codeMode: boolean; toolSearch: boolean };
   }>)("preserves $name for ordinary finite allowlists", (run) => {
     const plan = resolveAgentToolSurfacePlan({
       ...basePlanParams,
       config: run.config,
       toolsAllow: run.toolsAllow ?? ["read", "write"],
-      forceCodeModeControls: run.forceCodeModeControls,
     });
 
     expect(plan.codeModeControlsEnabled).toBe(run.expected.codeMode);
@@ -411,46 +393,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
 
     expect(result.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
     expect(result.catalogToolCount).toBe(1);
-  });
-
-  it("keeps checkpoint-proven recovery executable after Code Mode is disabled", async () => {
-    const config: OpenClawConfig = {
-      tools: { codeMode: false, toolSearch: { enabled: true, mode: "directory" } },
-    };
-    const plan = resolveAgentToolSurfacePlan({
-      ...basePlanParams,
-      config,
-      forceCodeModeControls: true,
-    });
-    const catalogRef = createToolSearchCatalogRef();
-    const result = applyAgentToolSurfaceCatalog({
-      tools: [
-        ...createCodeModeTools({ config, catalogRef, executeTool }),
-        createStubTool("hidden_target"),
-      ],
-      config,
-      toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
-      codeModeControlsEnabled: plan.codeModeControlsEnabled,
-      toolSearchConfig: plan.toolSearchConfig,
-      catalogRef,
-    });
-
-    expect(result.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
-    expect(result.catalogToolCount).toBe(1);
-    try {
-      const exec = expectDefined(
-        result.tools.find((tool) => tool.name === "exec"),
-        "recovered exec control",
-      );
-      expect(
-        (await exec.execute("recovered-exec", { code: 'return "recovered";' })).details,
-      ).toMatchObject({
-        status: "completed",
-        value: "recovered",
-      });
-    } finally {
-      clearToolSearchCatalog({ catalogRef });
-    }
   });
 
   it("uses the schema-directory catalog in directory mode", () => {

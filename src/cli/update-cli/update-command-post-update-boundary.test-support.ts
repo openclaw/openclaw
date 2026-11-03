@@ -4,22 +4,29 @@ import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
 import { GatewayServiceAuthorityError } from "../../daemon/service-update-authority.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as gatewayOwner from "../../infra/gateway-owner-lease.js";
 import type { PackageLauncherFingerprint } from "../../infra/package-update-integrity.js";
 import { stopSupervisedPredecessorGateway } from "../../infra/update-candidate-predecessor-stop.js";
 import * as updateLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import * as updateWriter from "../../infra/update-run-write.async.js";
-import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import * as postUpdateMaintenance from "./update-command-post-update-maintenance.js";
 import { registerServiceStartRefusalFinalizationTests } from "./update-command-post-update-runtime-refresh.test-support.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
   managedServiceState,
+  runFinalizationFailureWithNativeExecutor,
 } from "./update-command-post-update.test-support.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import * as rollbackModule from "./update-command-rollback.js";
 import * as nativeCommand from "./update-command-service-command.js";
 import type {
@@ -101,58 +108,80 @@ export function registerBoundaryFinalizationControls({
       };
       const rollback = vi.spyOn(rollbackModule, "rollbackFailedUpdate");
       const prepareService = vi.spyOn(postUpdateMaintenance, "preparePostUpdateService");
-      const finishing = finishSuccessfulPackageSwitch(
-        outcome === "revoked" ? { run } : {},
-        {},
-        {
-          beforeFinalization: async () => {
-            entered.resolve();
-            await release.promise;
-            if (outcome !== "confirmed") {
-              throw receiptFailure;
-            }
-          },
-        },
-      );
-      try {
-        await Promise.race([
-          entered.promise,
-          finishing.then(() => {
-            throw new Error("Finalization completed before progress settlement entered.");
-          }),
-        ]);
-        expectNoCalls(mocks.readServiceState, prepareService, mocks.restartService, rollback);
-        current = outcome !== "revoked";
-        release.resolve();
-        if (outcome === "confirmed") {
-          await finishing;
-          expect(prepareService).toHaveBeenCalledOnce();
-          expect(mocks.restartService).toHaveBeenCalledOnce();
-        } else if (outcome === "unknown") {
-          await expect(finishing).rejects.toBe(receiptFailure);
-        } else if (outcome === "refused") {
-          await expect(finishing).rejects.toMatchObject({
-            result: {
-              status: "error",
-              steps: expect.arrayContaining([
-                expect.objectContaining({ stderrTail: receiptFailure.message }),
-              ]),
+      const exercise = async () => {
+        const finishing = finishSuccessfulPackageSwitch(
+          outcome === "unknown" || outcome === "refused"
+            ? { run, packageRoot: env.OPENCLAW_STATE_DIR }
+            : outcome === "revoked"
+              ? { run }
+              : {},
+          {},
+          {
+            beforeFinalization: async () => {
+              entered.resolve();
+              await release.promise;
+              if (outcome !== "confirmed") {
+                throw receiptFailure;
+              }
             },
-            cause: receiptFailure,
-          });
-        } else {
-          await expect(finishing).rejects.toMatchObject({
-            errors: [expect.objectContaining({ message: "requester-revoked" }), receiptFailure],
-          });
-          expect(getUpdateRun(record.runId, { env })?.status).toBe("running");
+          },
+        );
+        try {
+          await Promise.race([
+            entered.promise,
+            finishing.then(() => {
+              throw new Error("Finalization completed before progress settlement entered.");
+            }),
+          ]);
+          expectNoCalls(mocks.readServiceState, prepareService, mocks.restartService, rollback);
+          current = outcome !== "revoked";
+          release.resolve();
+          if (outcome === "confirmed") {
+            await finishing;
+            expect(prepareService).toHaveBeenCalledOnce();
+            expect(mocks.restartService).toHaveBeenCalledOnce();
+          } else if (outcome === "unknown") {
+            await expect(finishing).rejects.toBe(receiptFailure);
+          } else if (outcome === "refused") {
+            await expect(finishing).rejects.toMatchObject({
+              result: {
+                status: "error",
+                steps: expect.arrayContaining([
+                  expect.objectContaining({ stderrTail: receiptFailure.message }),
+                ]),
+              },
+              cause: receiptFailure,
+            });
+          } else {
+            await expect(finishing).rejects.toMatchObject({
+              errors: [expect.objectContaining({ message: "requester-revoked" }), receiptFailure],
+            });
+            expect(getUpdateRun(record.runId, { env })?.status).toBe("running");
+          }
+          if (outcome !== "confirmed") {
+            expectNoCalls(prepareService, mocks.readServiceState, mocks.restartService, rollback);
+          }
+        } finally {
+          release.resolve();
+          await finishing.catch(() => undefined);
         }
-        if (outcome !== "confirmed") {
-          expectNoCalls(prepareService, mocks.readServiceState, mocks.restartService, rollback);
-        }
-      } finally {
-        release.resolve();
-        await finishing.catch(() => undefined);
+        return receiptFailure;
+      };
+      if (outcome !== "unknown" && outcome !== "refused") {
+        await exercise();
+        return;
       }
+      const ownerFailure = await runFinalizationFailureWithNativeExecutor(
+        env.OPENCLAW_STATE_DIR,
+        run,
+        exercise,
+      );
+      if (outcome === "unknown") {
+        expect(hasCommandProcessCleanupError(ownerFailure)).toBe(true);
+      } else {
+        expect(ownerFailure).toBe(receiptFailure);
+      }
+      expect(collectNestedErrorCandidates(ownerFailure)).toContain(receiptFailure);
     },
   );
 
@@ -633,28 +662,45 @@ export function registerBoundaryFinalizationControls({
             expect(originalManagedServiceRuntime).toBe(original);
             return { result, rolledBack: false, originalServiceRecovery: "healthy" };
           });
-        const finishing = finishSuccessfulPackageSwitch(undefined, {
-          originalManagedServiceRuntime: original,
-        });
+        const exercise = async (run?: NonNullable<UpdateCommandOptions["run"]>) => {
+          const finishing = finishSuccessfulPackageSwitch(
+            run ? { packageRoot: home, run } : undefined,
+            { originalManagedServiceRuntime: original },
+          );
+          if (scenario === "missing-entrypoint") {
+            await expect(finishing).rejects.toMatchObject({
+              name: "UpdateCommandFailure",
+              result: { status: "error" },
+            });
+            expect(rollback).toHaveBeenCalledOnce();
+          } else {
+            await expect(finishing).rejects.toMatchObject({
+              name: "UpdateCommandPendingRecoveryFailure",
+              cause: uncertain,
+            });
+            expect(rollback).not.toHaveBeenCalled();
+          }
+          expect(command).toHaveBeenCalledOnce();
+          await expect(command.mock.results[0]?.value).rejects.toMatchObject(
+            scenario === "missing-entrypoint"
+              ? { message: `updated install entrypoint not found under ${home}` }
+              : { name: "UpdateCommandRecoveryPendingError" },
+          );
+          return await finishing.catch((error: unknown) => error);
+        };
         if (scenario === "missing-entrypoint") {
-          await expect(finishing).rejects.toMatchObject({
-            name: "UpdateCommandFailure",
-            result: { status: "error" },
-          });
-          expect(rollback).toHaveBeenCalledOnce();
-        } else {
-          await expect(finishing).rejects.toMatchObject({
-            name: "UpdateCommandPendingRecoveryFailure",
-            cause: uncertain,
-          });
-          expect(rollback).not.toHaveBeenCalled();
+          await exercise();
+          return;
         }
-        expect(command).toHaveBeenCalledOnce();
-        await expect(command.mock.results[0]?.value).rejects.toMatchObject(
-          scenario === "missing-entrypoint"
-            ? { message: `updated install entrypoint not found under ${home}` }
-            : { name: "UpdateCommandRecoveryPendingError" },
+        const env = { ...process.env };
+        const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+        const run: NonNullable<UpdateCommandOptions["run"]> = { runId, env };
+        const ownerFailure = await runFinalizationFailureWithNativeExecutor(home, run, () =>
+          exercise(run),
         );
+        const causes = collectNestedErrorCandidates(ownerFailure);
+        expect(causes).toContainEqual(expect.any(UpdateCommandPendingRecoveryFailure));
+        expect(causes).toContain(uncertain);
       } finally {
         identity.restore();
       }

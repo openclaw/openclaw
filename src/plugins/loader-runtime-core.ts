@@ -1,14 +1,15 @@
 import { availableParallelism } from "node:os";
 import { isDeepStrictEqual } from "node:util";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
 import { createUnavailableRuntime } from "./api-builder.js";
 import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
-import { resolveEffectivePluginActivationState } from "./config-state.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
-import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
+import { isCachedPluginRegistryLoad } from "./loader-cache.js";
 import {
   resolvePluginLoadCacheContext,
   resolveRuntimeSubagentMode,
@@ -26,6 +27,7 @@ import {
   warnWhenAllowlistIsOpen,
 } from "./loader-provenance.js";
 import { formatPluginFailureSummary } from "./loader-records.js";
+import { samePluginLoadInput } from "./loader-registration-config.js";
 import {
   loadRuntimePluginCandidate,
   type PluginLoadLoopState,
@@ -61,6 +63,7 @@ import { projectPluginContributions } from "./registry-contributions.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import {
+  getPluginRegistryGatewayOwner,
   isPluginRecordActive,
   isPluginRecordBorrowed,
   isPluginRegistryActivated,
@@ -86,16 +89,6 @@ type PluginLoadInput = {
   config: PreparedPluginConfig;
 };
 const registryInputs = new WeakMap<PluginRegistry, Map<string, PluginLoadInput>>();
-
-/** Captured JSON inputs ignore object key order, but preserve array order and values. */
-function samePluginLoadInput(left: string | undefined, right: string | undefined): boolean {
-  return (
-    left === right ||
-    (left !== undefined &&
-      right !== undefined &&
-      isDeepStrictEqual(JSON.parse(left), JSON.parse(right)))
-  );
-}
 
 /**
  * Same-mode predecessors transfer to the candidate at publication. A live side-effect
@@ -241,11 +234,7 @@ export function* loadOpenClawPluginsSteps(
   const logger = options.logger ?? createSubsystemLogger("plugins");
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = createPluginIdScopeSet(context.onlyPluginIds);
-  const cacheEnabled =
-    !options.previousRegistry &&
-    !options.borrowRegistry &&
-    !options.moduleRecoveries &&
-    isPluginRegistryCacheEnabled(options);
+  const cacheEnabled = isCachedPluginRegistryLoad(options);
   if (cacheEnabled) {
     const cached = context.cacheState.get(context.cacheKey);
     if (cached) {
@@ -418,6 +407,12 @@ export function* loadOpenClawPluginsSteps(
     });
     const inputs = new Map<string, PluginLoadInput>();
     const retained = new Map<string, PluginRegistry["plugins"][number]>();
+    const lendingConfig =
+      options.borrowRegistry &&
+      getPluginRegistryGatewayOwner(options.borrowRegistry)?.current() === options.borrowRegistry
+        ? getRuntimeConfigSnapshot()
+        : undefined;
+    const lendingEntries = lendingConfig && normalizePluginsConfig(lendingConfig.plugins).entries;
     for (const { candidate, manifest } of orderedCandidates) {
       if (
         inputs.has(manifest.id) ||
@@ -440,8 +435,8 @@ export function* loadOpenClawPluginsSteps(
       });
       // Retention includes the committed install; same-version reinstalls can replace its code.
       const installOwner = resolvePluginCandidateInstallOwner(candidate);
-      const { config: pluginConfig, ...entryPolicy } =
-        context.normalized.entries[normalizePluginPolicyId(manifest.id)] ?? {};
+      const policyId = normalizePluginPolicyId(manifest.id);
+      const { config: pluginConfig, ...entryPolicy } = context.normalized.entries[policyId] ?? {};
       const preparedConfig: PreparedPluginConfig = { input: JSON.stringify(pluginConfig) };
       const degradedPlugin = findActiveDegradedPlugin(manifest.id);
       // Control UI builds apply through the UI-only plugins.controlUi.reload owner. An in-place
@@ -457,7 +452,7 @@ export function* loadOpenClawPluginsSteps(
         activation,
         // Undeclared plugins can register engines too; selection changes invalidate all closures.
         selectedContextEngine,
-        pendingStateMigrations.get(normalizePluginPolicyId(manifest.id)),
+        pendingStateMigrations.get(policyId),
         entryPolicy,
         degradedPlugin && degradedPluginMatchesRoot(degradedPlugin, candidate.rootDir)
           ? degradedPlugin
@@ -524,7 +519,14 @@ export function* loadOpenClawPluginsSteps(
             preparedConfig,
           });
         }
-        if (samePluginLoadInput(retention.input.config.input, preparedConfig.input)) {
+        // A live loan follows committed config even when the request matches the
+        // original registration; its service may now read different live settings.
+        if (
+          retention.registry === options.borrowRegistry && lendingEntries !== undefined
+            ? lendingEntries !== null &&
+              isDeepStrictEqual(pluginConfig, lendingEntries[policyId]?.config)
+            : samePluginLoadInput(retention.input.config.input, preparedConfig.input)
+        ) {
           retained.set(manifest.id, retention.record);
           if (retention.registry === options.borrowRegistry) {
             markPluginRecordBorrowed(registry, retention.record);

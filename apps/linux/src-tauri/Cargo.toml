@@ -14,7 +14,7 @@ name = "updater_check"
 harness = false
 
 [build-dependencies]
-tauri-build = { version = "2.7.2", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
 base64 = "0.23.1"
@@ -22,7 +22,7 @@ ed25519-dalek = "3.0.0"
 futures-util = "0.3.34"
 getrandom = "0.4.3"
 keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
-mdns-sd = { version = "0.21.5", default-features = false }
+mdns-sd = { version = "0.21.6", default-features = false }
 openclaw-gateway-client = { path = "../../../crates/openclaw-gateway-client" }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -32,7 +32,7 @@ sha2 = "0.11.1"
 # `WebviewWindowBuilder::transparent` behind it on macOS, and the feature must
 # stay in sync with `app.macOSPrivateApi` in tauri.conf.json or tauri-build
 # fails. It is inert on Linux and Windows.
-tauri = { version = "2.12.3", features = [
+tauri = { version = "2.12.5", features = [
   "image-png",
   "macos-private-api",
   "tray-icon",
@@ -40,9 +40,9 @@ tauri = { version = "2.12.3", features = [
 ] }
 tauri-plugin-autostart = "2.7.0"
 tauri-plugin-deep-link = "2.6.1"
-tauri-plugin-dialog = "2.8.2"
+tauri-plugin-dialog = "2.8.3"
 tauri-plugin-global-shortcut = "2.4.1"
-tauri-plugin-opener = "2.7.1"
+tauri-plugin-opener = "2.7.2"
 tauri-plugin-process = "2.4.0"
 tauri-plugin-single-instance = { version = "2.5.3", features = ["deep-link"] }
 # Defer Windows cleanup until the installer launches successfully.
@@ -50,10 +50,10 @@ tauri-plugin-single-instance = { version = "2.5.3", features = ["deep-link"] }
 # Preserve 2.10.1's network features instead of enabling OS proxy discovery.
 tauri-plugin-updater = { version = "=2.11.0", git = "https://github.com/steipete/plugins-workspace.git", rev = "63e8185eb184cf0af6b665f631e2314c7b14d9c6", default-features = false, features = ["rustls-tls", "zip"] }
 tauri-plugin-window-state = "2.5.0"
-tauri-utils = { version = "2.10.1", features = ["config-json5"] }
-tokio = { version = "1.53.2", features = ["macros", "sync", "time"] }
+tauri-utils = { version = "2.10.2", features = ["config-json5"] }
+tokio = { version = "1.54.1", features = ["macros", "sync", "time"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
-uuid = { version = "1.28.0", features = ["v4"] }
+uuid = { version = "1.29.0", features = ["v4"] }
 zeroize = "1.9.1"
 
 [target.'cfg(unix)'.dependencies]

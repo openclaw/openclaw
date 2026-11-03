@@ -84,7 +84,6 @@ export function createSubagentRegistryMockState() {
           lifecycleRevision: entry.lifecycleRevision,
           lifecycleRunId: entry.lifecycleRunId,
           activeWriterRunId: entry.activeWriterRunId,
-          subagentRecovery: entry.subagentRecovery,
         }
       );
     }),

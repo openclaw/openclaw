@@ -203,6 +203,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       const { container, props } = mountChatPaneHeader(containers, {
         title: "Prepare the autumn release",
         workspaceLabel: "workspace",
+        gatewayStatus: { kind: "offline", onRetry: vi.fn() },
         sharingControl: chatPaneHeaderSharing(),
         sessionMenuAction: chatPaneHeaderSessionMenu(),
         detailsControl: {

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -162,7 +163,7 @@ const schemaOwners = resolveGlobalSingleton(
     >(),
 );
 
-/** The synchronous lexical owner is live authority, not the existence of its sidecar. */
+/** The active lexical owner is live authority, not the existence of its sidecar. */
 export function getStateDatabaseSchemaLease(
   databasePath: string,
 ): StateDatabaseSchemaLease | undefined {
@@ -219,6 +220,29 @@ function leaseForFile(
   let released = false;
   const holdsPhysicalLease = () =>
     verifyOwnerLock(owner, lock) && (!projection || projection.verifyStillHeld());
+  function run<T>(operation: () => T): T;
+  function run(operation: () => unknown): unknown {
+    lease.assertCurrent();
+    readOwnerPaths.clear();
+    const inherited = new Map(schemaOwners.getStore());
+    const entry = { lease, active: true };
+    inherited.set(owner.key, entry);
+    const leave = () => {
+      entry.active = false;
+      readOwnerPaths.clear();
+    };
+    try {
+      const result = schemaOwners.run(inherited, operation);
+      if (isPromiseLike(result)) {
+        return Promise.resolve(result).finally(leave);
+      }
+      leave();
+      return result;
+    } catch (error) {
+      leave();
+      throw error;
+    }
+  }
   const lease: StateDatabaseSchemaLease = {
     path: pathname,
     assertCurrent() {
@@ -236,19 +260,7 @@ function leaseForFile(
         throw new Error("OpenClaw state maintenance does not own this database");
       }
     },
-    run(operation) {
-      lease.assertCurrent();
-      readOwnerPaths.clear();
-      const inherited = new Map(schemaOwners.getStore());
-      const entry = { lease, active: true };
-      inherited.set(owner.key, entry);
-      try {
-        return schemaOwners.run(inherited, operation);
-      } finally {
-        entry.active = false;
-        readOwnerPaths.clear();
-      }
-    },
+    run,
     release() {
       readOwnerPaths.clear();
       if (!released) {

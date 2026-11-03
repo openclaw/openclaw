@@ -31,6 +31,7 @@ const enSessionNavigation = {
       additionalMatches: "Search results remain. Use a longer id prefix.",
       notFoundTitle: "Session not found",
       notFoundExplanation: "The session may have been removed, or the link may be incorrect.",
+      bootDraftRecovery: "Copy any text below before opening another conversation.",
       homeUnavailableTitle: "Start a conversation",
       homeUnavailableBody:
         "This Home is unavailable. Start a new conversation, or open one from Sessions.",

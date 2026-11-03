@@ -38,6 +38,9 @@ type PruneableRegistryEntry = Pick<
 >;
 
 function resolveEntryPruneConfig(config: OpenClawConfig, entry: PruneableRegistryEntry) {
+  if (entry.sessionKey.startsWith("worktree-dependencies:")) {
+    return { idleHours: 0, maxAgeDays: 0 };
+  }
   return resolveSandboxConfigForAgent(config, resolveSandboxAgentId(entry.sessionKey)).prune;
 }
 
@@ -94,6 +97,11 @@ async function pruneSandboxContainers(config: OpenClawConfig, guard: WorkspaceSt
         assertCurrent?.();
         assertPruneCurrent();
       };
+      if (entry.sessionKey.startsWith("worktree-dependencies:")) {
+        return import("./dependency-template.js").then(({ retireSandboxDependencyBuilder }) =>
+          retireSandboxDependencyBuilder(entry, assertRemovalCurrent, true),
+        );
+      }
       return removeSandboxRegistryRuntime(
         entry,
         async (current) => {
@@ -148,7 +156,7 @@ async function pruneSandboxBrowsers(config: OpenClawConfig, assertCurrent?: () =
         }
         try {
           phases.mark("attempt.setup.sandbox.prune.browser_authority");
-          await assertSandboxRegistryRetirementCurrent("browser", entry);
+          assertSandboxRegistryRetirementCurrent("browser", entry);
         } catch {
           return;
         }
@@ -176,20 +184,23 @@ async function pruneSandboxBrowsers(config: OpenClawConfig, assertCurrent?: () =
 }
 
 /** Coalesced housekeeping belongs to the state owner, not the requesting turn. */
-export function scheduleSandboxPrune(assertHost: () => void): void {
+export async function runSandboxPrune(assertHost: () => void): Promise<void> {
+  assertHost();
+  const assertLiveHost = await captureSandboxStateOwner();
+  const assertCurrent = () => {
+    assertHost();
+    assertLiveHost();
+  };
+  assertCurrent();
+  await pruneSandboxes(undefined, assertCurrent, assertCurrent);
+}
+
+export function scheduleSandboxPrune(assertHost: () => void, request = false): void {
   startSandboxRegistryHousekeeping(
-    async () => {
-      assertHost();
-      // An offline SDK caller may have acquired a foreign Gateway owner since the last pass.
-      const assertLiveHost = await captureSandboxStateOwner();
-      const assertCurrent = () => {
-        assertHost();
-        assertLiveHost();
-      };
-      assertCurrent();
-      await pruneSandboxes(undefined, assertCurrent, assertCurrent);
-    },
+    () => runSandboxPrune(assertHost),
     (error) => defaultRuntime.error?.(`Sandbox prune failed: ${formatErrorMessage(error)}`),
+    undefined,
+    request,
   );
 }
 

@@ -22,10 +22,13 @@ on:
       - extensions/active-memory/control-ui.presentation.json
       - extensions/memory-wiki/control-ui.presentation.json
       - extensions/*/package.json
+      # Input changes that defer publication must also queue a successor refresh.
+      - extensions/**/*.ts
+      - extensions/**/*.css
       - extensions/**/i18n/locales/en.ts
       - extensions/**/i18n/locales/translated.json
       - ui/src/i18n/lib/config-hint-translation.ts
-      - ui/src/lib/fnv1a.ts
+      - src/shared/fnv1a.ts
       - src/config/schema*.ts
       - src/config/zod-schema*.ts
       - src/config/media-audio-field-metadata.ts
@@ -350,7 +353,7 @@ jobs:
             pnpm-workspace.yaml
             patches/**
             ui/src/i18n/lib/config-hint-translation.ts
-            ui/src/lib/fnv1a.ts
+            src/shared/fnv1a.ts
             src/config/schema*.ts
             src/config/zod-schema*.ts
             src/config/media-audio-field-metadata.ts

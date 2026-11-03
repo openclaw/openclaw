@@ -2,12 +2,14 @@
  * Synthetic 200-job definition publication; no database, Gateway, or live state.
  * node --import ./scripts/tsx.mjs scripts/perf/cron-definition-publication-measure.ts
  *   [--owner-dir /absolute/base-overlay] [--allocations] [--iterations 1000]
- * Overlay uses the canonical benchmark loader; include the baseline service/state.ts.
+ *   [--runtime-only]
+ * Overlay uses the canonical benchmark loader; include baseline service/state.ts
+ * and service/runtime-publication.ts.
  * Run base/candidate in alternating order; allocation sampling is a separate pass.
- * Worker preparation is reported separately: candidate prepares 200 revisions per
- * reload; baseline computes 400 on the main thread. Cloning/IPC is outside this
- * owner benchmark. Acceptance: unchanged notifications, lower total CPU/allocation
- * (publication plus preparation), and no main-thread revision derivation on reload.
+ * Worker preparation is reported separately; cloning/IPC is outside timed windows.
+ * Empty and single-row runtime publications include durable wake publication.
+ * Acceptance: unchanged notifications, lower runtime publication CPU/allocation,
+ * and no main-thread revision derivation on full reload.
  */
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
@@ -23,6 +25,7 @@ const { values } = parseArgs({
     "owner-dir": { type: "string" },
     allocations: { type: "boolean", default: false },
     iterations: { type: "string", default: "1000" },
+    "runtime-only": { type: "boolean", default: false },
   },
 });
 const iterations = Number(values.iterations);
@@ -33,6 +36,8 @@ process.env.OPENCLAW_BENCH_BASELINE_DIR = overlay;
 await import("./worker-retained-heap-preload.ts");
 const { createCronServiceState, emitCronDefinitionChanges } =
   await import("../../src/cron/service/state.js");
+const { applyCronRuntimeRowsToState } =
+  await import("../../src/cron/service/runtime-publication.js");
 const { captureCronJobConfigRevision } = await import("../../src/cron/config-revision.js");
 const { GatewayScheduler } = await import("../../src/infra/gateway-scheduler.js");
 const jobs: CronJob[] = Array.from({ length: 200 }, (_, index) => ({
@@ -63,7 +68,7 @@ const state = createCronServiceState({
     notifications++;
   },
 });
-// The fourth argument is deliberately ignored by the baseline owner.
+state.store = { version: 1, jobs };
 emitCronDefinitionChanges(state, [], jobs, revisions);
 notifications = 0;
 const inspector = new Session();
@@ -71,9 +76,26 @@ const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
   node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
 inspector.connect();
 try {
-  for (const phase of ["publication", "preparation"] as const) {
-    const run = () =>
-      phase === "publication" ? emitCronDefinitionChanges(state, jobs, next, revisions) : prepare();
+  const runtimeJob = { ...jobs[0]!, state: { lastRunAtMs: 2, nextRunAtMs: 60_001 } };
+  // Alternate detached snapshots so every publication sees a fresh row identity.
+  const runtimeJobs = [runtimeJob, structuredClone(runtimeJob)];
+  let runtimeRowIndex = 0;
+  for (const phase of ["publication", "preparation", "runtime-empty", "runtime-row"] as const) {
+    if (values["runtime-only"] && (phase === "publication" || phase === "preparation")) {
+      continue;
+    }
+    const run = () => {
+      switch (phase) {
+        case "publication":
+          return emitCronDefinitionChanges(state, jobs, next, revisions);
+        case "preparation":
+          return prepare();
+        case "runtime-empty":
+          return applyCronRuntimeRowsToState(state, []);
+        case "runtime-row":
+          return applyCronRuntimeRowsToState(state, [runtimeJobs[runtimeRowIndex++ % 2]!]);
+      }
+    };
     for (let index = 0; index < 100; index++) {
       run();
     }

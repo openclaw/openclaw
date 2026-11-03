@@ -22,6 +22,15 @@ function cursorOffset(value: string | undefined): number {
 
 type TranscriptCursor = { revision: string; end: number };
 
+export class BeamTranscriptCursorError extends Error {
+  readonly kind: "invalid" | "stale";
+
+  constructor(kind: "invalid" | "stale") {
+    super(`${kind} Beam transcript cursor`);
+    this.kind = kind;
+  }
+}
+
 function transcriptRevision(session: BeamStoredSession): string {
   return createHash("sha256").update(JSON.stringify(session.items)).digest("base64url");
 }
@@ -46,7 +55,7 @@ function decodeTranscriptCursor(value: string): TranscriptCursor {
   } catch {
     // Reject malformed cursors below.
   }
-  throw new Error("invalid Beam transcript cursor");
+  throw new BeamTranscriptCursorError("invalid");
 }
 
 export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvider {
@@ -124,7 +133,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
       if (cursor || start > 0) {
         const revision = transcriptRevision(session);
         if (cursor && cursor.revision !== revision) {
-          throw new Error("stale Beam transcript cursor");
+          throw new BeamTranscriptCursorError("stale");
         }
         if (start > 0) {
           nextCursor = encodeTranscriptCursor({ revision, end: start });

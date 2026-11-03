@@ -32,6 +32,11 @@ import {
 import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { cachedChatAssistantIdentity, invalidateChatAvatarCache } from "./chat-avatar.ts";
 import {
+  EMPTY_QUESTION_PROJECTION,
+  projectChildSessionQuestions,
+  reuseQuestionProjection,
+} from "./chat-child-questions.ts";
+import {
   getChatHistoryLoadState,
   isChatHistoryLoading,
   synchronizeInitialChatSnapshotConnection,
@@ -84,10 +89,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private outboxRecoveryReady = false;
   private gatewayReadsAvailable = false;
   private sidebarLayoutSource?: { client: ApplicationGatewaySnapshot["client"]; ready: boolean };
-  private questionProjection: { prompts: QuestionPrompt[]; revisions: number[] } = {
-    prompts: [],
-    revisions: [],
-  };
+  private questionProjection = EMPTY_QUESTION_PROJECTION;
   protected placementComposerPresentation(
     row: GatewaySessionRow | undefined,
     startupPending: boolean,
@@ -211,23 +213,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       agentId?: string | null;
     }) =>
       uiConversationMatches(state, state.sessionKey, request.sessionKey, request.agentId, agentId);
-    const questions = visible
-      ? listQuestionPrompts(this.questionPromptState).filter(matchesConversation)
-      : [];
-    // Question records mutate in place; their revisions own transcript-cache invalidation.
-    if (
-      questions.length !== this.questionProjection.prompts.length ||
-      questions.some(
-        (prompt, index) =>
-          prompt !== this.questionProjection.prompts[index] ||
-          prompt.revision !== this.questionProjection.revisions[index],
-      )
-    ) {
-      this.questionProjection = {
-        prompts: questions,
-        revisions: questions.map((prompt) => prompt.revision),
-      };
-    }
+    const questions = visible ? listQuestionPrompts(this.questionPromptState) : [];
+    this.questionProjection = reuseQuestionProjection(
+      this.questionProjection,
+      questions.filter(matchesConversation),
+      visible ? this.projectChildQuestions(state, questions) : undefined,
+    );
     const overlays = this.context.overlays;
     const snapshot = overlays?.snapshot;
     const inlineApproval = visible
@@ -235,6 +226,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       : null;
     return {
       gatewayQuestionPrompts: this.questionProjection.prompts,
+      gatewayQuestionSources: this.questionProjection.sources,
       inlineApproval,
       approvalBusy: snapshot?.approvalBusy,
       approvalCanGrant: snapshot?.approvalCanGrant ?? false,
@@ -256,6 +248,17 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
               overlays.decideApproval(decision, approvalId, inlineApproval ?? undefined)
           : undefined,
     };
+  }
+
+  // Reads the same child roster and owner-qualified ancestry key as the subagent rows.
+  private projectChildQuestions(state: ChatPageHost, questions: readonly QuestionPrompt[]) {
+    const roster = this.projectChildRoster(this.resolveChatReadTarget());
+    return projectChildSessionQuestions(
+      state,
+      roster.subagentParentKey,
+      roster.subagentSessions,
+      questions,
+    );
   }
 
   protected applyApplicationConfig(config: ApplicationContext["config"]["current"]) {

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { reviewExecRequestWithConfiguredModel } from "openclaw/plugin-sdk/agent-harness-exec-review-runtime";
 import {
+  embeddedAgentLog,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
@@ -656,6 +657,32 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
+  it("reports why a command approval could not bind instead of a silent denial", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    const onNativeToolFailureDisposition = vi.fn();
+    const reason =
+      "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command";
+    try {
+      const result = await approve(
+        { command: "/bin/bash -c 'touch /tmp/openclaw-probe && echo created'" },
+        { onNativeToolFailureDisposition },
+      );
+      expect(result).toEqual({ decision: "decline" });
+      expectNoHumanApproval();
+      expect(beforeToolCall).not.toHaveBeenCalled();
+      expect(onNativeToolFailureDisposition).toHaveBeenCalledWith("cmd", "failed");
+      expect(warn).toHaveBeenCalledWith(
+        "codex app-server command approval could not bind the command",
+        { itemId: "cmd", reason },
+      );
+      const event = approvalEvent(params, { status: "unavailable" });
+      expect(event.message).toContain(reason);
+      expect(event.message).toContain("ask an operator");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("fails closed when waitDecision reports a stale approval id", async () => {
     requestApproval.mockResolvedValueOnce({ id: "plugin:approval-stale" });
     waitForApproval.mockRejectedValueOnce(new Error("approval expired or not found"));
@@ -791,7 +818,7 @@ describe("Codex app-server approval bridge", () => {
       command: [`${"\u0000".repeat(4095)}😀tail`],
     });
 
-    const event = approvalEvent(params, { status: "denied" });
+    const event = approvalEvent(params, { status: "unavailable" });
     expect(event.commandPreviewOmitted).toBe(true);
     expect(event.command).toBeUndefined();
     expectNoHumanApproval();
