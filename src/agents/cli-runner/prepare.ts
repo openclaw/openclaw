@@ -342,12 +342,12 @@ async function prepareCliRunContextWithinReadFence(
   params.assertCurrent?.();
   params.abortSignal?.throwIfAborted();
   if (nodeClaudePlacement && params.cliToolAvailability) {
-    // Only the personal Workshop has an invocation-bound node callback adapter.
+    // Only the personal library has an invocation-bound node callback adapter.
     params = {
       ...params,
       cliToolAvailability: {
         native: params.cliToolAvailability.native,
-        openClaw: params.cliToolAvailability.openClaw.filter((name) => name === "skill_workshop"),
+        openClaw: params.cliToolAvailability.openClaw.filter((name) => name === "skill_library"),
       },
     };
   }
@@ -902,7 +902,7 @@ async function prepareCliRunContextWithinReadFence(
     });
   const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(bootstrapPromptWarning.lines);
   const nodeSkillWorkshop = nodeWorkshopEnabled
-    ? projectedTools.find((tool) => tool.name === "skill_workshop")
+    ? projectedTools.find((tool) => tool.name === "skill_library")
     : undefined;
   const promptTools = bundleMcpEnabled
     ? projectedTools

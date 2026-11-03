@@ -144,6 +144,7 @@ export const CORE_TOOL_DEFINITIONS = [
     ["progress_card"],
     ["ask_user", { profiles: ["coding", "messaging"] }],
     ["skill_workshop", { executionLocation: "gateway" }],
+    ["skill_library", { executionLocation: "gateway" }],
     ["skills_search", { factoryFamily: undefined, replay: "blind" }],
     ["skills_read", { factoryFamily: undefined, replay: "blind" }],
   ]),
