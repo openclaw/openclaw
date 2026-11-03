@@ -398,17 +398,9 @@ openclaw-appearance-background .settings-background-preview .session-background_
   display: none;
 }
 
-/* With no heading or description to sit beside, the help joins the tab row above. */
-[role="tabpanel"]
-  .settings-section__header:not(:has(.settings-section__heading, .settings-section__copy)):has(
-    > .settings-section__actions > .settings-section__docs:only-child
-  ) {
+/* With no heading or description to sit beside, the help keeps the heading's place at the end. */
+.settings-section__header:not(:has(.settings-section__heading, .settings-section__copy)) {
   justify-content: flex-end;
-  height: 0;
-
-  .settings-section__actions {
-    transform: translateY(-29px);
-  }
 }
 
 .settings-section__heading {
