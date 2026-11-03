@@ -1,2 +1,2 @@
-# Explicit/current/automatic browser regressions plus hidden-row adjacency coverage.
-58
+# Reply-mode browser regressions, search-hidden excerpts, and displayed-adjacency coverage.
+73

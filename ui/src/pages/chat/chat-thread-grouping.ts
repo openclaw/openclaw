@@ -36,7 +36,6 @@ import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import type { ChatReasoning } from "./tool-stream-contract.ts";
 
 type ReplyState = {
-  previousMessageId?: string;
   sender?: MessageGroup["sender"];
   message?: MessageGroup["replyToMessage"];
   turnSource?: MessageGroup["replyTurnSource"];
@@ -198,7 +197,6 @@ export function groupMessages(
   const promptCounts = new Map<string, number>();
   const stateBefore = new Map<string, ReplyState>();
   let state: ReplyState = {};
-  let previousMessageId: string | undefined;
   for (const item of context) {
     // System notices and projected/forwarded inputs own turns too. Clear the
     // previous prompt before recording reply state for their output.
@@ -206,16 +204,13 @@ export function groupMessages(
       state = {};
     }
     if (item.kind === "stream") {
-      stateBefore.set(item.key, { ...state, previousMessageId });
+      stateBefore.set(item.key, { ...state });
     }
     if (item.kind !== "group") {
       continue;
     }
     for (const source of item.messages) {
-      stateBefore.set(source.key, { ...state, previousMessageId });
-      if ((item.role === "user" || item.role === "assistant") && source.hasVisibleContent) {
-        previousMessageId = persistedMessageEntryId(source.message) ?? undefined;
-      }
+      stateBefore.set(source.key, { ...state });
     }
     if (item.role === "user") {
       for (const source of item.messages) {
@@ -275,7 +270,7 @@ export function groupMessages(
   // Rows outside the context (live output) take the state of the next row that
   // has one, or the transcript end.
   const states: ReplyState[] = [];
-  let next: ReplyState = { ...state, previousMessageId };
+  let next: ReplyState = state;
   for (let index = result.length - 1; index >= 0; index -= 1) {
     const item = result[index]!;
     const known =
@@ -287,12 +282,21 @@ export function groupMessages(
     next = known ?? next;
     states[index] = next;
   }
+  let previousMessageId: string | undefined;
   for (const [index, item] of result.entries()) {
-    const { sender, message, turnSource, previousMessageId: precedingMessageId } = states[index]!;
+    const { sender, message, turnSource } = states[index]!;
     if (item.kind === "group" || item.kind === "stream") {
-      item.replyPreviousMessageId = precedingMessageId;
+      item.replyPreviousMessageId = previousMessageId;
     }
     if (item.kind === "group") {
+      // Excerpts are redundant only when their source is in the displayed projection.
+      if (item.role === "user" || item.role === "assistant") {
+        for (const source of item.messages) {
+          if (source.hasVisibleContent) {
+            previousMessageId = persistedMessageEntryId(source.message) ?? undefined;
+          }
+        }
+      }
       // Every strip follows the thread: an unattributed source is "You" only in 1:1.
       if (shared) {
         item.replyShared = true;

@@ -79,7 +79,7 @@ const assistantGroups = (props: Partial<Props>) =>
 const forwarded = { provenance: { kind: "inter_session", sourceTool: "sessions_send" } };
 const projected = { senderSession: { sessionKey: "agent:other:main", agentId: "other" } };
 beforeEach(() => resetChatThreadState());
-it("keeps the preceding message identity when search hides its row", () => {
+it("does not treat a search-hidden source as a displayed adjacent message", () => {
   const groups = assistantGroups({
     searchOpen: true,
     searchQuery: "matching answer",
@@ -91,7 +91,7 @@ it("keeps the preceding message identity when search hides its row", () => {
     ],
   });
   expect(groups).toHaveLength(1);
-  expect(groups[0]?.replyPreviousMessageId).toBe("latest-prompt");
+  expect(groups[0]?.replyPreviousMessageId).toBeUndefined();
 });
 it.each([
   boundary("sender-less user", false, { role: "user" }),

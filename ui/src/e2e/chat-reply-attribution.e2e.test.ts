@@ -72,12 +72,13 @@ suite.define(() => {
   it.each(["explicit", "current", "automatic"])(
     "omits excerpts only for an adjacent %s reply",
     async (replyKind) => {
+      const source = message("adjacent-prompt", "user", "Check the release checklist.", {
+        ...peer,
+        idempotencyKey: "adjacent-run:user",
+      });
       const messages = sequence([
         message("thread-owner", "user", "Please review today's release.", self),
-        message("adjacent-prompt", "user", "Check the release checklist.", {
-          ...peer,
-          idempotencyKey: "adjacent-run:user",
-        }),
+        source,
         message(
           "adjacent-answer",
           "assistant",
@@ -91,6 +92,7 @@ suite.define(() => {
         message("new-prompt", "user", "Now check the release notes.", peer),
         message("older-answer", "assistant", "One more detail about the checklist.", {
           replyToId: "adjacent-prompt",
+          replyToMessage: { ok: true, message: source },
         }),
       ]);
       await suite.withPage(
@@ -108,6 +110,19 @@ suite.define(() => {
           expect(await older.locator(".chat-reply-attribution__excerpt").textContent()).toBe(
             "Check the release checklist.",
           );
+          await page.locator(".agent-chat__composer-combobox textarea").focus();
+          await page.keyboard.press(
+            (await page.evaluate(() => /Mac|iPhone|iPad|iPod/.test(navigator.platform)))
+              ? "Meta+f"
+              : "Control+f",
+          );
+          await page
+            .getByRole("textbox", { name: "Search messages", exact: true })
+            .fill("looks good");
+          expect(await page.locator('[data-entry-id="adjacent-prompt"]').count()).toBe(0);
+          await expect
+            .poll(() => adjacent.locator(".chat-reply-attribution__excerpt").allTextContents())
+            .toEqual(["Check the release checklist."]);
         },
       );
     },
