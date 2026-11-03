@@ -145,3 +145,26 @@ endpoints. Custom dimensions, task-specific input types and multimodal inputs fa
 explicitly. Remote destination overrides retain the memory transport's separate
 credential requirement; upstream OpenAI keys are never a fallback. A router
 deployment that declares endpoint formats for the offered route is required.
+
+## Web search
+
+Set `tools.web.search.provider` to `clawrouter` to use the configured ClawRouter
+credential. Each search resolves that credential and refreshes its catalog before
+dispatch. Supported formats are `tavily.search`, `brave.search`, `exa.search`,
+`parallel.search` and `searxng.search`, through eligible native or manifest offers
+with matching declared methods and request/response formats. Brave and SearXNG
+use GET query parameters; Exa, Parallel and Tavily use their native JSON bodies.
+Brave, Exa, Parallel and SearXNG share their request/result codecs with the native
+OpenClaw plugins.
+Model-less offers are supported. The adapter does not infer `/v1/search`, use
+upstream provider credentials, or execute undeclared formats. A router deployment
+that includes endpoint format declarations for the selected offer is required.
+
+Queries accept `query` and `count` (1–10). Catalog and search responses are bounded,
+cancellation is propagated, and result text is marked as untrusted web content.
+
+Parallel queries are limited to 200 characters. Native provider-specific advanced
+filters are not exposed by this adapter. Request counters alone do not establish
+USD prices or budget eligibility; catalog affordability and runtime admission
+remain authoritative. Other declared search formats fail closed until a consumer
+adapter and its transport fixtures are qualified.
