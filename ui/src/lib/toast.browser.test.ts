@@ -34,6 +34,7 @@ async function renderToast(
   }
   await host.updateComplete;
   showToast({
+    severity: "success",
     message: "Session archived",
     actionLabel: "Undo",
     onAction: () => undefined,
@@ -89,7 +90,7 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     for (const element of [toast, action, dismiss, host.querySelector(".app-toast__icon")!]) {
       expect(getComputedStyle(element).color).toBe(danger);
     }
-    showToast({ message: "Saved" });
+    showToast({ severity: "success", message: "Saved" });
     await waitForSolid(() => expect(toast.classList.contains("app-toast--error")).toBe(false));
     expect(getComputedStyle(toast).color).toBe(neutral);
   });
@@ -99,7 +100,11 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     const onAction = vi.fn();
     const { host } = await renderToast({ onAction, actionLabel: "Open session" });
     const avatar = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-    showToast({ ...host.toast!, avatar: { id: "gardener", name: "Garden keeper", avatar } });
+    showToast({
+      severity: "success",
+      ...host.toast!,
+      avatar: { id: "gardener", name: "Garden keeper", avatar },
+    });
     const avatarImage = () => host.querySelector<HTMLImageElement>(".app-toast__avatar img")!;
     await waitForSolid(() => expect(avatarImage().naturalWidth).toBeGreaterThan(0));
     expect(avatarImage().getAttribute("src")).toBe(avatar);
@@ -247,7 +252,7 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
       await expectFocusPreserved(fixture, recovery.link);
       expect(actionBox.height).toBeGreaterThanOrEqual(width < 768 ? 44 : 32);
       const replacement = linkedMessage("Sidebar", "Hidden. ");
-      showToast({ ...host.toast!, message: replacement.message });
+      showToast({ severity: undefined, ...host.toast!, message: replacement.message });
       await waitForSolid(() => expect(replacement.link.isConnected).toBe(true));
       expect(recovery.link.isConnected).toBe(false);
       expect(message.textContent).toBe("Hidden. Sidebar");

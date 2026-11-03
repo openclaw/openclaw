@@ -128,7 +128,11 @@ export async function reclaimChatPanePlacement(params: {
           if (outcome.status === "failed" && params.isCurrent()) {
             params.publishError(outcome.error);
           } else if (params.isCurrent()) {
-            showToast({ message: t("sessionsView.workerStopped"), icon: "check" });
+            showToast({
+              severity: "success",
+              message: t("sessionsView.workerStopped"),
+              icon: "check",
+            });
           }
         }
         return "close";
@@ -138,6 +142,7 @@ export async function reclaimChatPanePlacement(params: {
         }
         params.publishError(error);
         showToast({
+          severity: "error",
           message: error instanceof Error ? error.message : String(error),
           icon: "alertTriangle",
         });

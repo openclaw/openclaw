@@ -22,7 +22,11 @@ export async function createApplicationAgent(
   identity?: { name: string; avatar: string | null },
 ): Promise<void> {
   if (!canCallGatewayMethod(context.gateway.snapshot, "agents.create", "operator.admin")) {
-    showToast({ message: t("agentChip.creationUnavailable"), durationMs: 12_000 });
+    showToast({
+      severity: "error",
+      message: t("agentChip.creationUnavailable"),
+      durationMs: 12_000,
+    });
     return;
   }
   const client = context.gateway.snapshot.client;
@@ -115,6 +119,7 @@ export async function createApplicationAgent(
       restoreUncreatedChat();
     }
     showToast({
+      severity: "error",
       message:
         error instanceof AgentCreationUncertainError
           ? error.message

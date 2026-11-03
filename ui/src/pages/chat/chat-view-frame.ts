@@ -204,7 +204,7 @@ export function createChatViewFrame(
               return true;
             }
             if (!selectionContextOnly && !uploadsEnabled(props.uploadConfig)) {
-              showToast({ message: uploadsDisabledMessage() });
+              showToast({ severity: "error", message: uploadsDisabledMessage() });
               return false;
             }
             const attachment = createChatSelectionAttachment(
@@ -226,7 +226,7 @@ export function createChatViewFrame(
       );
     } catch (error) {
       if (current()) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   };

@@ -301,6 +301,7 @@ describe("login gate failure recovery", () => {
       () => false,
       () => {
         showToast({
+          severity: "error",
           message: "Recovery needs a reload. Unsaved starts will be lost.",
           actionLabel: "Discard unsaved starts and reload",
           onAction: discard,

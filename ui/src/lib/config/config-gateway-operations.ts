@@ -633,7 +633,7 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
       if (state.configAutoSaveStatus === "rejected") {
         state.configAutoSaveStatus = "error";
       }
-      showToast({ message: state.lastError });
+      showToast({ severity: "error", message: state.lastError });
     }
   };
   try {
@@ -651,7 +651,7 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
       );
       return;
     }
-    showToast({ message: t("configView.fileOpenedOnGateway") });
+    showToast({ severity: "success", message: t("configView.fileOpenedOnGateway") });
   } catch (err) {
     await publishFailure(formatUiError(err), state.configSnapshot?.path);
   }

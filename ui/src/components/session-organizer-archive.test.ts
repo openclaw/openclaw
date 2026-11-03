@@ -190,7 +190,9 @@ describe("session organizer nested archive choice", () => {
     // The page retires, but the same connection still owns the captured Undo.
     vi.mocked(harness.host.sessionData.isSessionMutationScopeCurrent).mockReturnValue(false);
     archived.onAction!();
-    await waitForFast(() => expect(showToast).toHaveBeenCalledWith({ message: undoError.message }));
+    await waitForFast(() =>
+      expect(showToast).toHaveBeenCalledWith({ severity: "error", message: undoError.message }),
+    );
     expect(harness.request.mock.calls[1]?.[1]).toEqual({
       targets: [rows[0]!, rows[2]!].map(sessionTarget),
       patch: { archived: false },

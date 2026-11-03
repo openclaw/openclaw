@@ -151,7 +151,7 @@ export class ShellGatewayOwner {
           await import("../lib/chat/composer-draft-retirement.runtime.ts");
         retireDrafts = retireDeletedComposerDrafts;
       } catch {
-        showToast({ message: t("sessionsView.draftCleanupFailed") });
+        showToast({ severity: "error", message: t("sessionsView.draftCleanupFailed") });
         return;
       }
       return retireDrafts(context, scope, deletedSessions);

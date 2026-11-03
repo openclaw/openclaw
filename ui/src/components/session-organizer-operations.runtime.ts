@@ -133,7 +133,10 @@ export async function deleteSessionsBatch(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.deleteSessionsStale", { count: String(rows.length) }) });
+    showToast({
+      severity: "error",
+      message: t("sessionsView.deleteSessionsStale", { count: String(rows.length) }),
+    });
     return;
   }
   if (!confirmed) {
@@ -164,7 +167,10 @@ export async function deleteSessionsBatch(
     }
     if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       if (result.preservedWorktrees.length > 0) {
-        showToast({ message: formatPreservedWorktreesNotice(result.preservedWorktrees) });
+        showToast({
+          severity: undefined,
+          message: formatPreservedWorktreesNotice(result.preservedWorktrees),
+        });
       }
       return;
     }
@@ -443,6 +449,7 @@ export async function assignSessionCategory(
   const currentSession = options.resolveSession ? options.resolveSession() : session;
   if (!currentSession) {
     showToast({
+      severity: catalogChanged ? "error" : undefined,
       message: t(catalogChanged ? "sessionsView.newGroupMoveSkipped" : "common.refresh"),
     });
     return "failed";
@@ -526,7 +533,10 @@ export async function stopCloudWorker(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.stopCloudWorkerStale", { session: session.label }) });
+    showToast({
+      severity: "error",
+      message: t("sessionsView.stopCloudWorkerStale", { session: session.label }),
+    });
     return;
   }
   if (!confirmed) {
@@ -577,7 +587,10 @@ export async function deleteSession(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.deleteSessionStale", { session: session.label }) });
+    showToast({
+      severity: "error",
+      message: t("sessionsView.deleteSessionStale", { session: session.label }),
+    });
     return;
   }
   if (!confirmed) {
@@ -612,7 +625,10 @@ export async function deleteSession(
     }
     if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       if (outcome.worktreePreserved) {
-        showToast({ message: formatPreservedWorktreesNotice([outcome.worktreePreserved]) });
+        showToast({
+          severity: undefined,
+          message: formatPreservedWorktreesNotice([outcome.worktreePreserved]),
+        });
       }
       return;
     }
@@ -640,9 +656,7 @@ export async function deleteSession(
         // Reconnect cancels the worktree prompt, not the confirmed deletion.
         // Report the preserved worktree without using the retired client.
         if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-          showToast({
-            message: formatPreservedWorktreesNotice([preserved]),
-          });
+          showToast({ severity: undefined, message: formatPreservedWorktreesNotice([preserved]) });
           return;
         }
         if (removeWorktree) {

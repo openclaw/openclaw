@@ -514,6 +514,7 @@ describe("session organizer destructive confirmations", () => {
     response.resolve({ deleted: true, worktreePreserved: preservedWorktree("busy", "wt-busy") });
     await pending;
     expect(showToast).toHaveBeenCalledWith({
+      severity: undefined,
       message: "Managed Worktrees:\nfeature — live run or cleanup active",
     });
   });
@@ -575,7 +576,7 @@ describe("session organizer destructive confirmations", () => {
       return;
     }
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(showToast).toHaveBeenCalledWith({ message: operation.staleMessage });
+    expect(showToast).toHaveBeenCalledWith({ severity: "error", message: operation.staleMessage });
 
     // Reconnecting must release the old dialog's lock before the operator retries.
     h.renewScope();
@@ -598,6 +599,7 @@ describe("session organizer destructive confirmations", () => {
 
     expectNoCalls(h.request, h.replaceCurrentSession);
     expect(showToast).toHaveBeenCalledWith({
+      severity: undefined,
       message: "Managed Worktrees:\nfeature — cleanup failed",
     });
   });

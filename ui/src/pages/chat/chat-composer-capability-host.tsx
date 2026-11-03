@@ -554,7 +554,7 @@ export class ChatComposerCapabilityHost {
           if (current() && canWriteLibrary) {
             void this.library.activate(action, skillId, revision).then((message) => {
               if (message && current()) {
-                showToast({ message });
+                showToast({ severity: undefined, message });
               }
             });
           }

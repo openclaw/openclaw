@@ -23,6 +23,7 @@ registerEnglishCatalog(registerSettingsEnglish);
 
 export function showProfileActionError(error: unknown): void {
   showToast({
+    severity: "error",
     placement: "bottom",
     message: modelProviderErrorMessage(error),
     icon: "alertTriangle",
@@ -32,6 +33,7 @@ export function showProfileActionError(error: unknown): void {
 
 export function showProfileLogoutSuccess(warning?: string): void {
   showToast({
+    severity: "success",
     placement: "bottom",
     message: [t("modelProviders.logout.done"), warning].filter(Boolean).join(" "),
     icon: "check",

@@ -508,6 +508,7 @@ export function createAsyncQuestionPresentation(
         !current.resolved.has(itemId)
       ) {
         showToast({
+          severity: storageError() ? "error" : "success",
           message: storageError() ?? t("chat.asyncQuestions.dismissedNotice"),
           actionLabel: t("common.undo"),
           // History can advance while the toast remains visible. The latest
