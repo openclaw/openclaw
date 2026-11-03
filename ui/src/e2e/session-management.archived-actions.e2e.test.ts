@@ -10,11 +10,18 @@ import {
   openChatDetails,
   openChatPublication,
 } from "./chat-details.test-support.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
 import * as support from "./session-management.test-support.ts";
 
-const suite = support.createSessionManagementE2eSuite();
+const suite = createControlUiE2eSuite({
+  name: "Control UI archived session actions",
+  // Native clipboard contents are shared across contexts in the same browser.
+  browserLaunchOptions: { headless: true },
+});
 const options = createControlUiE2eContextOptions();
 const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
 
