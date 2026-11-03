@@ -654,6 +654,12 @@ its private `location`, and always await `preparation.startClose().result` in
 `finally`, including when preparation fails. Keep readers closed before disposal;
 cleanup failure rejects instead of reporting a successful import.
 
+Use `openSqliteWorkerStore({ ..., isolation: "external" })` for externally managed
+databases such as Messages `chat.db`. These opens share a separate admission queue
+and worker pool, so a blocked external open or read cannot pin ordinary storage
+workers. Physical database ownership and input budgets stay with the same broker;
+the backend still determines read-only or writable access.
+
 SQLite worker backends set connection lock-wait policy with
 `setSqliteBusyTimeout` from `openclaw/plugin-sdk/sqlite-worker-runtime`, including
 temporary changes. The connection owner retains the current timeout, skips
