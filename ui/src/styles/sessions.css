@@ -50,7 +50,7 @@
 }
 
 .settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs:hover {
-  color: var(--primary-foreground);
+  color: var(--primary-hover-foreground);
   background: var(--primary-hover);
   border-color: transparent;
 }

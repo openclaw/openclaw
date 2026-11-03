@@ -160,4 +160,5 @@
 }
 .chat-machine__action--continue:hover:not(:disabled) {
   background: var(--primary-hover);
+  color: var(--primary-hover-foreground);
 }

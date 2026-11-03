@@ -867,7 +867,7 @@
   width: 36px;
   border-radius: var(--radius-full);
   background: var(--primary);
-  color: var(--chat-send-foreground);
+  color: var(--primary-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
   transition:
     background var(--duration-fast) ease,
@@ -892,6 +892,7 @@
 /* Capture variants below own their hover fill independently of the primary action. */
 .chat-send-btn:hover:not(:disabled) {
   background: var(--primary-hover);
+  color: var(--primary-hover-foreground);
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
@@ -924,15 +925,14 @@
   height: var(--chat-composer-send-size);
   padding: 5px;
   background: var(--primary);
-  color: var(--chat-send-foreground);
+  color: var(--primary-foreground);
   box-shadow: none;
 }
 
-/* Hover steps the fill toward the surface's own far end rather than reaching for
-   --primary-hover, which several themes leave at the base value and would render
-   as no feedback at all. */
+/* The accent owner pairs every interactive fill with its readable ink. */
 .agent-chat__input .chat-send-btn:hover:not(:disabled) {
-  background: var(--chat-send-hover-bg, color-mix(in srgb, var(--primary) 86%, var(--text-strong)));
+  background: var(--primary-hover);
+  color: var(--primary-hover-foreground);
   box-shadow: none;
 }
 

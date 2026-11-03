@@ -1,14 +1,43 @@
-export function controlUiAccentInk(accent: string): "#000000" | "#ffffff" {
-  const color = accent.trim().replace(/^#/, "");
-  if (!/^[0-9a-fA-F]{6}$/.test(color)) {
-    return "#ffffff";
-  }
+function luminance(color: string): number {
   const linearChannel = (offset: number) => {
     const channel = Number.parseInt(color.slice(offset, offset + 2), 16) / 255;
     return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
   };
-  const luminance =
-    0.2126 * linearChannel(0) + 0.7152 * linearChannel(2) + 0.0722 * linearChannel(4);
+  return 0.2126 * linearChannel(1) + 0.7152 * linearChannel(3) + 0.0722 * linearChannel(5);
+}
+
+export function controlUiAccentInk(accent: string): "#000000" | "#ffffff" {
+  if (!/^#[0-9a-f]{6}$/i.test(accent)) {
+    return "#ffffff";
+  }
   // Black and white reach equal WCAG contrast at relative luminance 0.179.
-  return luminance > 0.179 ? "#000000" : "#ffffff";
+  return luminance(accent) > 0.179 ? "#000000" : "#ffffff";
+}
+
+function mix(color: string, target: number, amount: number): string {
+  return `#${[1, 3, 5]
+    .map((offset) =>
+      Math.round(
+        Number.parseInt(color.slice(offset, offset + 2), 16) * (1 - amount) + target * amount,
+      )
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
+export function controlUiAccentStates(color: string, hover?: string) {
+  const hoverColor = hover ?? mix(color, 255, 0.18);
+  const active = mix(color, 0, 0.12);
+  return {
+    normal: { background: color, foreground: controlUiAccentInk(color) },
+    hover: { background: hoverColor, foreground: controlUiAccentInk(hoverColor) },
+    active: { background: active, foreground: controlUiAccentInk(active) },
+  };
+}
+
+export function controlUiAccentFocus(color: string, surface: string): string {
+  const values = [luminance(color), luminance(surface)].toSorted((a, b) => b - a);
+  // Keep the chosen hue where it is visible; a neutral ring does not constrain the accent.
+  return (values[0]! + 0.05) / (values[1]! + 0.05) >= 3 ? color : controlUiAccentInk(surface);
 }

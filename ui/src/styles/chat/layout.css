@@ -1351,6 +1351,7 @@ openclaw-chat-video-player {
 
 .chat-audio-player__toggle:hover {
   background: var(--primary-hover);
+  color: var(--primary-hover-foreground);
 }
 
 .chat-audio-player__toggle:focus-visible,
@@ -3076,7 +3077,7 @@ openclaw-chat-ci-details {
     min-width: var(--chat-composer-send-size);
     height: var(--chat-composer-send-size);
     background: var(--primary);
-    color: var(--chat-send-foreground);
+    color: var(--primary-foreground);
   }
 
   .agent-chat__input--chat .chat-mobile-primary-action .chat-send-btn {

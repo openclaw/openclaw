@@ -245,7 +245,7 @@
 
 .github-publication-mobile__actions .chat-pr__create:hover:not(:disabled) {
   background: var(--primary-hover);
-  color: var(--primary-foreground);
+  color: var(--primary-hover-foreground);
 }
 
 .github-publication-mobile__actions .chat-pr__create:focus-visible {

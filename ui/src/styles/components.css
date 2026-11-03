@@ -617,6 +617,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .btn.primary:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--primary-hover);
+  color: var(--primary-hover-foreground);
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
@@ -3539,4 +3540,21 @@ select.data-table-pagination__size {
     outline: 1px solid var(--field-focus-border);
     outline-offset: -1px;
   }
+}
+
+/* Filled accent controls share the same pressed color/ink pair. */
+.settings-page.oc-app-surface
+  .btn.oc-action.primary:active:hover:not(:disabled, [aria-disabled="true"]),
+.settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs:active:hover,
+.sidebar-issues-panel .sidebar-issues-panel__action--primary:active:hover,
+.sidebar-issues-panel .sidebar-update-card__review--primary:active:hover,
+.btn.primary:active:hover:where(:not(:disabled, [aria-disabled="true"])),
+.agent-chat__input .chat-send-btn:active:hover:not(:disabled),
+.github-publication-mobile__actions .chat-pr__create:active:hover:not(:disabled),
+.chat-audio-player__toggle:active:hover,
+.sidebar-file-view__edit-actions .btn:last-child:not(:disabled):active:hover,
+.primary:active:hover:not(:disabled),
+.chat-machine__action--continue:active:hover:not(:disabled) {
+  background: var(--primary-active);
+  color: var(--primary-active-foreground);
 }

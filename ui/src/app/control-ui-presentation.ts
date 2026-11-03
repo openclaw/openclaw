@@ -5,7 +5,7 @@ import {
   prepareThemeLinks,
 } from "../lib/chat/participant-colors.ts";
 import { resolveThemeColor, resolveThemeColors } from "../lib/theme-color.ts";
-import { controlUiAccentInk } from "./accent-contrast.ts";
+import { controlUiAccentFocus, controlUiAccentStates } from "./accent-contrast.ts";
 import { controlUiDocumentHead } from "./control-ui-document-head.ts";
 import { controlUiPaletteStyle } from "./control-ui-palette-style.ts";
 
@@ -14,11 +14,17 @@ const ACCENT_CSS_VARIABLES = [
   "--accent",
   "--accent-foreground",
   "--accent-hover",
+  "--accent-hover-foreground",
+  "--accent-active",
+  "--accent-active-foreground",
   "--accent-muted",
   "--accent-subtle",
   "--accent-glow",
   "--primary",
   "--primary-hover",
+  "--primary-hover-foreground",
+  "--primary-active",
+  "--primary-active-foreground",
   "--primary-foreground",
   "--focus",
   "--focus-ring",
@@ -228,29 +234,42 @@ export function applyControlUiAccent(userAccent?: string): void {
     userAccentOverride === "theme" ? undefined : (userAccentOverride ?? operatorSeamColor);
   const hex = accent?.trim().replace(/^#/, "");
   const color = hex && /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
-  if (!color) {
-    for (const property of ACCENT_CSS_VARIABLES) {
-      root.style.removeProperty(property);
+  // Remove the previous projection before resolving the current theme's palette.
+  for (const property of ACCENT_CSS_VARIABLES) {
+    root.style.removeProperty(property);
+  }
+  if (color) {
+    for (const property of ["--accent", "--accent-muted", "--primary"]) {
+      root.style.setProperty(property, color);
     }
+  }
+  const computed = getComputedStyle(root);
+  const accentColor = color ?? resolveThemeColor(computed, "--accent");
+  if (!/^#[0-9a-f]{6}$/i.test(accentColor)) {
     return;
   }
-
-  const ink = controlUiAccentInk(color);
+  for (const family of ["accent", "primary"]) {
+    const background = color ?? resolveThemeColor(computed, "--" + family);
+    const hover = color ? undefined : resolveThemeColor(computed, "--" + family + "-hover");
+    const states = controlUiAccentStates(background, hover);
+    for (const [state, pair] of Object.entries(states)) {
+      const suffix = state === "normal" ? "" : "-" + state;
+      if (color || state !== "normal") {
+        root.style.setProperty("--" + family + suffix, pair.background);
+      }
+      root.style.setProperty("--" + family + suffix + "-foreground", pair.foreground);
+    }
+  }
+  const surface = resolveThemeColor(computed, "--bg");
+  root.style.setProperty("--ring", controlUiAccentFocus(accentColor, surface));
   const mix = (variable: string, amount: number) =>
-    `color-mix(in srgb, var(${variable}) ${amount}%, transparent)`;
-
-  for (const property of ["--ring", "--accent", "--accent-muted", "--primary"]) {
-    root.style.setProperty(property, color);
+    "color-mix(in srgb, var(" + variable + ") " + amount + "%, transparent)";
+  if (color) {
+    root.style.setProperty("--accent-subtle", mix("--accent", 16));
+    root.style.setProperty("--accent-glow", mix("--accent", 30));
   }
-  for (const property of ["--accent-foreground", "--primary-foreground"]) {
-    root.style.setProperty(property, ink);
-  }
-  root.style.setProperty("--accent-hover", "color-mix(in srgb, var(--accent) 82%, white 18%)");
-  root.style.setProperty("--primary-hover", "color-mix(in srgb, var(--primary) 82%, white 18%)");
-  root.style.setProperty("--accent-subtle", mix("--accent", 16));
-  root.style.setProperty("--accent-glow", mix("--accent", 30));
   root.style.setProperty("--focus", mix("--ring", 22));
-  root.style.setProperty("--focus-ring", `0 0 0 2px var(--bg), 0 0 0 3px ${mix("--ring", 80)}`);
+  root.style.setProperty("--focus-ring", "0 0 0 2px var(--bg), 0 0 0 3px var(--ring)");
   root.style.setProperty(
     "--focus-glow",
     "0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow)",
