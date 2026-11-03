@@ -365,7 +365,7 @@ suite.define(() => {
     const sectionTitles = [
       "Use an installed agent",
       "Found on this Gateway",
-      "Run a model locally",
+      "Local AI",
       "Set up and verify a model",
       "Connect with an API key or token",
     ];
