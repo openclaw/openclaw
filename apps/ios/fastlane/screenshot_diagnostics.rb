@@ -84,12 +84,16 @@ class ScreenshotDiagnostics
     identity_path = "#{path}.identity"
     sample_path = "#{path}.sample"
     progress_path = "#{path}.sample-progress"
-    identity = bounded_startup_probe(["/bin/ps", "-p", child.to_s, "-o", "ppid=,comm="], identity_path, 2)
+    identity = bounded_startup_probe(["/bin/ps", "-p", child.to_s, "-o", "ppid=,state=,pcpu=,time=,etime=,comm="], identity_path, 2)
     result["identityProbe"] = identity
     return result["outcome"] = "identity-unavailable" unless identity == "ok"
-    actual_parent, command = File.read(identity_path, 4096).strip.split(/\s+/, 2)
+    actual_parent, state, cpu, cpu_time, elapsed_time, command = File.read(identity_path, 4096).strip.split(/\s+/, 6)
     return result["outcome"] = "identity-mismatch" unless actual_parent.to_i == parent && File.basename(command.to_s) == "xcodebuild"
     result["parentVerified"] = true
+    if state.match?(/\A[A-Za-z+<>-]{1,16}\z/) && cpu.match?(/\A\d{1,8}(?:\.\d+)?\z/) &&
+       [cpu_time, elapsed_time].all? { |value| value.match?(/\A[\d:.\-]{1,32}\z/) }
+      result["process"] = { "state" => state, "cpuPercent" => cpu.to_f, "cpuTime" => cpu_time, "elapsedTime" => elapsed_time }
+    end
     result["toolKind"] = if command == "/usr/bin/xcodebuild"
       "shim"
     elsif command.match?(%r{\A/Applications/[^/]+\.app/Contents/Developer/usr/bin/xcodebuild\z})
@@ -99,7 +103,8 @@ class ScreenshotDiagnostics
     end
     progress = result["progressSeconds"] = {}
     result["outcome"] = bounded_startup_probe(
-      ["/usr/bin/sample", child.to_s, "1", "10", "-file", sample_path], File::NULL, 5, error_output: progress_path
+      ["/usr/bin/sample", child.to_s, "1", "10", "-file", sample_path], progress_path, 5,
+      error_output: [:child, :out], timing: result["samplerTiming"] = {}
     ) do |elapsed|
       observe_sample_progress(progress_path, progress, elapsed)
       # Collection stays one second. Only observed completion grants report time.
@@ -133,10 +138,12 @@ class ScreenshotDiagnostics
   end
 
   # The probe owns only its own process group. Its deadline never kills Xcode.
-  def bounded_startup_probe(arguments, output, seconds, error_output: File::NULL)
+  def bounded_startup_probe(arguments, output, seconds, error_output: File::NULL, timing: nil)
     reaped = nil
+    requested = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     child = Process.spawn(*arguments, out: output, err: error_output, pgroup: true)
     started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    timing["spawnSeconds"] = (started - requested).round(3) if timing
     loop do
       reaped, status = Process.waitpid2(child, Process::WNOHANG)
       elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
@@ -146,6 +153,7 @@ class ScreenshotDiagnostics
       sleep(0.05)
     end
   ensure
+    timing["totalSeconds"] = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - requested).round(3) if timing
     if child && !reaped
       begin
         Process.kill("KILL", -child)
