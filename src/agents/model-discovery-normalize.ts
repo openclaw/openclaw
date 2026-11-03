@@ -7,7 +7,6 @@ import {
   applyProviderResolvedTransportWithPlugin,
   normalizeProviderResolvedModelWithPlugin,
 } from "../plugins/provider-runtime.js";
-import { isRecord } from "../utils.js";
 
 type NormalizeDiscoveredModelOptions = {
   config?: OpenClawConfig;
@@ -17,21 +16,10 @@ type NormalizeDiscoveredModelOptions = {
 
 /** Applies plugin model normalization and transport hooks to discovered agent models. */
 export function normalizeDiscoveredAgentModel(
-  value: Model,
+  model: Model,
   agentDir: string,
   options?: NormalizeDiscoveredModelOptions,
 ): Model {
-  if (!isRecord(value)) {
-    return value;
-  }
-  if (
-    typeof value.id !== "string" ||
-    typeof value.name !== "string" ||
-    typeof value.provider !== "string"
-  ) {
-    return value;
-  }
-  const model = value;
   const runtimeContext = {
     ...(options?.config !== undefined ? { config: options.config } : {}),
     ...(options?.workspaceDir !== undefined ? { workspaceDir: options.workspaceDir } : {}),
@@ -39,7 +27,6 @@ export function normalizeDiscoveredAgentModel(
   const pluginNormalized =
     normalizeProviderResolvedModelWithPlugin({
       provider: model.provider,
-      modelId: model.id,
       ...runtimeContext,
       context: {
         provider: model.provider,
@@ -51,7 +38,6 @@ export function normalizeDiscoveredAgentModel(
   const transportNormalized =
     applyProviderResolvedTransportWithPlugin({
       provider: model.provider,
-      modelId: model.id,
       ...runtimeContext,
       context: {
         provider: model.provider,
@@ -60,14 +46,5 @@ export function normalizeDiscoveredAgentModel(
         agentDir,
       },
     }) ?? pluginNormalized;
-  if (
-    !isRecord(transportNormalized) ||
-    typeof transportNormalized.id !== "string" ||
-    typeof transportNormalized.name !== "string" ||
-    typeof transportNormalized.provider !== "string" ||
-    typeof transportNormalized.api !== "string"
-  ) {
-    return value;
-  }
   return normalizeModelCompat(transportNormalized, options?.providerMetadataOwners);
 }

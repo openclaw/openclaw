@@ -7,27 +7,96 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import { forgetMemoryEntries } from "../memory-forget.js";
 import * as cpuRuntime from "./manager-cpu-worker-runtime.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const fixture = createManagerIndexFixture({ getMemorySearchManager, closeAllMemorySearchManagers });
 const execFileAsync = promisify(execFile);
+const createConfig = (sources: Array<"memory" | "sessions"> = ["memory"]) =>
+  fixture.createConfig({
+    provider: "none",
+    sources,
+    sessionMemory: sources.includes("sessions"),
+    vectorEnabled: false,
+  });
+async function indexedManager(cfg = createConfig()) {
+  const manager = await fixture.getFreshManager(cfg, "cli");
+  await manager.sync({ reason: "test", force: true });
+  return manager;
+}
+const sessionId = "worker-read";
+const sessionPath = `sessions/main/${sessionId}.jsonl`;
+const seedSession = (content: string, kind = "chat") =>
+  fixture.seedSessionTranscript({
+    sessionId,
+    sessionKey: `agent:main:${kind}:${sessionId}`,
+    messages: [{ role: "user", timestamp: Date.now(), content }],
+  });
+function gateWorker(signal: AbortSignal, fused = false) {
+  const ready = createDeferred<void>();
+  const release = createDeferred<void>();
+  const run = cpuRuntime.runMemoryKeywordSearch;
+  const query = vi
+    .spyOn(cpuRuntime, "runMemoryKeywordSearch")
+    .mockImplementationOnce(async (...args) => {
+      const result = await run(...args);
+      expect(result.body.rows.some((row) => row.path === sessionPath)).toBe(true);
+      if (fused) {
+        expect(result.recallData?.sourceMtimes.sessions.has(sessionPath)).toBe(true);
+        expect(result.body.rows.every((row) => result.recallData?.rows.has(row.id))).toBe(true);
+      }
+      ready.resolve();
+      await release.promise;
+      return result;
+    });
+  const abort = () => release.resolve();
+  signal.addEventListener("abort", abort, { once: true });
+  return {
+    wait: (search: Promise<unknown>) =>
+      Promise.race([
+        ready.promise,
+        search.then(() => {
+          throw new Error("Search settled before its worker result was gated");
+        }),
+      ]),
+    release: abort,
+    restore() {
+      signal.removeEventListener("abort", abort);
+      query.mockRestore();
+    },
+  };
+}
+type Manager = Awaited<ReturnType<typeof indexedManager>>;
+function expectMissingChunk(manager: Manager) {
+  const db = Reflect.get(manager, "db") as DatabaseSync;
+  expect(
+    db.prepare("SELECT id FROM memory_index_chunks WHERE path = ?").get(sessionPath),
+  ).toBeUndefined();
+}
+async function expectReaders(manager: Manager, word: string) {
+  const results = await manager.search(word, { lexicalOnly: true });
+  expect(results[0]?.snippet).toContain(word);
+  expect((await manager.listTriggerCandidates())[0]?.snippet).toContain(word);
+}
+
+it("sees published replacements through reused search and curated readers", async () => {
+  const filename = path.join(fixture.paths.workspace, "MEMORY.md");
+  await fs.writeFile(filename, "- Remember violetcompass. <!-- trigger: compass -->");
+  const manager = await indexedManager();
+  await expectReaders(manager, "violetcompass");
+
+  await fs.writeFile(filename, "- Remember ambercompass. <!-- trigger: compass -->");
+  await manager.sync({ reason: "replace-after-reader-reuse", force: true });
+  await expect(manager.search("violetcompass", { lexicalOnly: true })).resolves.toEqual([]);
+  await expectReaders(manager, "ambercompass");
+});
 
 it("cancels post-probe metadata reads and releases the generation for publication", async () => {
-  await fixture.seedSessionTranscript({
-    sessionId: "metadata-cancellation",
-    messages: [{ role: "user", timestamp: Date.now(), content: "Alpha cancellation proof." }],
-  });
-  const manager = await fixture.getFreshManager(
-    fixture.createConfig({
-      provider: "none",
-      sources: ["memory", "sessions"],
-      sessionMemory: true,
-      vectorEnabled: false,
-    }),
-    "cli",
-  );
-  await manager.sync({ reason: "test", force: true });
+  await seedSession("Alpha cancellation proof.", "memory");
+  const manager = await indexedManager(createConfig(["memory", "sessions"]));
   const caller = new AbortController();
   const reason = new Error("caller cancelled metadata enrichment");
   const run = cpuRuntime.runMemoryRecallMetadata;
@@ -47,62 +116,85 @@ it("cancels post-probe metadata reads and releases the generation for publicatio
   expect(results.some((result) => result.snippet.includes("Alpha cancellation proof."))).toBe(true);
 });
 
-it("discards a worker hit forgotten before authoritative metadata enrichment", async ({
-  signal,
-}) => {
-  const sessionId = "forgotten-worker-read";
-  const sessionPath = `sessions/main/${sessionId}.jsonl`;
-  await fixture.seedSessionTranscript({
-    sessionId,
-    sessionKey: `agent:main:chat:${sessionId}`,
-    messages: [{ role: "user", timestamp: Date.now(), content: "Private violetfragment." }],
-  });
+it("drops forgotten hits before metadata enrichment", async ({ signal }) => {
+  await seedSession("Private violetfragment.");
   await fs.writeFile(path.join(fixture.paths.memory, "survivor.md"), "Public violetfragment.");
-  const cfg = fixture.createConfig({
-    provider: "none",
-    sources: ["memory", "sessions"],
-    sessionMemory: true,
-    vectorEnabled: false,
-  });
-  const manager = await fixture.getFreshManager(cfg, "cli");
-  await manager.sync({ reason: "index-before-forget", force: true });
-  const ready = createDeferred<void>();
-  const release = createDeferred<void>();
-  const run = cpuRuntime.runMemoryKeywordSearch;
-  const query = vi
-    .spyOn(cpuRuntime, "runMemoryKeywordSearch")
-    .mockImplementationOnce(async (...args) => {
-      const result = await run(...args);
-      expect(result.body.rows.some((row) => row.path === sessionPath)).toBe(true);
-      ready.resolve();
-      await release.promise;
-      return result;
-    });
-  const abort = () => release.resolve();
-  signal.addEventListener("abort", abort, { once: true });
+  const cfg = createConfig(["memory", "sessions"]);
+  const manager = await indexedManager(cfg);
+  const gate = gateWorker(signal);
   const search = manager.search("violetfragment", { lexicalOnly: true, signal });
   try {
-    await Promise.race([
-      ready.promise,
-      search.then(() => {
-        throw new Error("Search settled before its worker result was gated");
-      }),
-    ]);
+    await gate.wait(search);
     await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
-    const db = Reflect.get(manager, "db") as DatabaseSync;
-    expect(
-      db.prepare("SELECT id FROM memory_index_chunks WHERE path = ?").get(sessionPath),
-    ).toBeUndefined();
-    release.resolve();
+    expectMissingChunk(manager);
+    gate.release();
     const results = await search;
     expect(results.map((result) => result.path)).toEqual(["memory/survivor.md"]);
   } finally {
-    signal.removeEventListener("abort", abort);
-    release.resolve();
+    gate.release();
     await search.catch(() => undefined);
-    query.mockRestore();
+    gate.restore();
   }
 });
+
+it.for(["completed", "cancelled"] as const)(
+  "settles a %s fused search before close and a queued forget",
+  async (outcome, { signal }) => {
+    await seedSession("Private violetcustody.");
+    const cfg = createConfig(["sessions"]);
+    const manager = await indexedManager(cfg);
+    const caller = new AbortController();
+    const cancellation = new Error("cancel fused search during result delivery");
+    const gate = gateWorker(signal, true);
+    const search = manager.search("violetcustody", {
+      lexicalOnly: true,
+      sources: ["sessions"],
+      signal: AbortSignal.any([signal, caller.signal]),
+    });
+    void search.catch(() => undefined);
+    let forgetting: ReturnType<typeof forgetMemoryEntries> | undefined;
+    let closing: Promise<void> | undefined;
+    let forgetSettled = false;
+    try {
+      await gate.wait(search);
+      forgetting = forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] }).finally(
+        () => {
+          forgetSettled = true;
+        },
+      );
+      void forgetting.catch(() => undefined);
+      closing = manager.close();
+      void closing.catch(() => undefined);
+      await expect(manager.search("violetcustody")).rejects.toThrow("manager is closed");
+      expect(forgetSettled).toBe(false);
+      if (outcome === "cancelled") {
+        caller.abort(cancellation);
+      }
+      gate.release();
+      if (outcome === "cancelled") {
+        await expect(search).rejects.toBe(cancellation);
+      } else {
+        expect((await search).map((result) => result.path)).toEqual([sessionPath]);
+      }
+      await Promise.all([forgetting, closing]);
+      gate.restore();
+
+      const reopened = await indexedManager(cfg);
+      await expect(
+        reopened.search("violetcustody", { lexicalOnly: true, sources: ["sessions"] }),
+      ).resolves.toEqual([]);
+      const db = Reflect.get(reopened, "db") as DatabaseSync;
+      expectMissingChunk(reopened);
+      expect(
+        db.prepare("SELECT session_id FROM session_windows WHERE session_id = ?").get(sessionId),
+      ).toEqual({ session_id: sessionId });
+    } finally {
+      gate.release();
+      await Promise.allSettled([search, forgetting, closing]);
+      gate.restore();
+    }
+  },
+);
 
 async function tryIndependentWriter(databasePath: string): Promise<string> {
   const result = await execFileAsync(process.execPath, [
@@ -125,16 +217,12 @@ async function tryIndependentWriter(databasePath: string): Promise<string> {
 
 it("keeps the owner's SQLite writer lock across worker reads and reader close", async () => {
   await fs.writeFile(path.join(fixture.paths.memory, "worker-lock.md"), "Axolotl lock proof.");
-  const manager = await fixture.getFreshManager(
-    fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
-    "cli",
-  );
-  await manager.sync({ reason: "test", force: true });
+  const manager = await indexedManager();
   const databasePath = manager.status().dbPath;
   if (!databasePath) {
     throw new Error("Expected a persistent memory database");
   }
-  const db = Reflect.get(manager, "db") as DatabaseSync;
+  const db = memoryIndexFixtureWriter(manager);
   db.exec("BEGIN IMMEDIATE");
   try {
     expect(await tryIndependentWriter(databasePath)).toBe("busy");

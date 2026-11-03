@@ -1,53 +1,18 @@
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
+import type { DevicePairingBinding } from "./device-pairing-read.types.js";
 import {
   getPairedDevice,
   hasEffectivePairedDeviceRole,
   resolveNodePairingState,
   type NodePairingGeneration,
   type NodePairingState,
-  type PairedDevice,
 } from "./device-pairing.js";
 import type { NodeApprovalSurface } from "./node-pairing-surface.js";
 
 export type { NodePairingGeneration } from "./device-pairing.js";
 
 /** Registry projection of a paired device's authenticated node-role state. */
-export type PairedDeviceNodeBinding = {
-  identity: string;
-  generation?: string;
-};
-
-function toPairedDeviceNodeBinding(
-  state: NodePairingState | null,
-): PairedDeviceNodeBinding | undefined {
-  return state
-    ? {
-        identity: state.identity.key,
-        ...(state.generation ? { generation: state.generation.key } : {}),
-      }
-    : undefined;
-}
-
-/** Project only authenticated node-role bindings from the caller's loaded device snapshot. */
-export function projectPairedDeviceNodeBindings(
-  pairedDevices: readonly PairedDevice[],
-): Map<string, PairedDeviceNodeBinding> {
-  const bindings = new Map<string, PairedDeviceNodeBinding>();
-  for (const device of pairedDevices) {
-    const binding = toPairedDeviceNodeBinding(resolveNodePairingState(device));
-    if (binding) {
-      bindings.set(device.deviceId, binding);
-    }
-  }
-  return bindings;
-}
-
-export async function captureNodePairingState(
-  nodeId: string,
-  baseDir?: string,
-): Promise<NodePairingState | null> {
-  return resolveNodePairingState(await getPairedDevice(nodeId, baseDir));
-}
+export type PairedDeviceNodeBinding = DevicePairingBinding;
 
 export async function resolveCurrentPairedDeviceNodeBinding(
   nodeId: string,
@@ -71,7 +36,7 @@ export function isPairedDeviceNodeBindingCurrent(
 export async function captureNodePairingGeneration(
   nodeId: string,
 ): Promise<NodePairingGeneration | null> {
-  return (await captureNodePairingState(nodeId))?.generation ?? null;
+  return resolveNodePairingState(await getPairedDevice(nodeId))?.generation ?? null;
 }
 
 /** Binds a connected session to the exact device key and node token used for authentication. */

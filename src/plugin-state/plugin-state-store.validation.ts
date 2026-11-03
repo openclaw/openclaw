@@ -23,17 +23,8 @@ type StoreOptionSignature = {
   defaultTtlMs?: number;
 };
 
-export type PreparedKeyedStoreOptions = StoreOptionSignature & {
-  pluginId: string;
-  namespace: string;
-  env?: NodeJS.ProcessEnv;
-};
-
-export type PreparedRegisterParams = {
-  key: string;
-  valueJson: string;
-  ttlMs?: number;
-};
+export type PreparedKeyedStoreOptions = ReturnType<typeof prepareKeyedStoreOptions>;
+export type PreparedRegisterParams = ReturnType<typeof prepareRegisterParams>;
 
 export type PluginStateImportEntry = {
   key: string;
@@ -59,10 +50,7 @@ export function validateNamespace(
   return validatePluginStoreNamespace({
     value,
     label: "plugin state",
-    errors: {
-      invalid: (message) => invalidInput(message, operation),
-      limit: (message) => invalidInput(message, operation),
-    },
+    invalid: (message) => invalidInput(message, operation),
   });
 }
 
@@ -81,10 +69,7 @@ export function validateKey(
   return validatePluginStoreKey({
     value,
     label: "plugin state",
-    errors: {
-      invalid: (message) => invalidInput(message, operation),
-      limit: (message) => invalidInput(message, operation),
-    },
+    invalid: (message) => invalidInput(message, operation),
   });
 }
 
@@ -107,10 +92,7 @@ export function validateOptionalTtlMs(
   return validateOptionalPluginStoreTtlMs({
     value,
     label: "plugin state ttlMs",
-    errors: {
-      invalid: (message) => invalidInput(message, operation),
-      limit: (message) => invalidInput(message, operation),
-    },
+    invalid: (message) => invalidInput(message, operation),
   });
 }
 
@@ -120,7 +102,7 @@ export function prepareRegisterParams(
   defaultTtlMs?: number,
   opts?: { ttlMs?: number },
   namespace?: string,
-): PreparedRegisterParams {
+) {
   const normalizedKey = validateKey(key, "register");
   const json = serializePluginStoreJson({
     value,
@@ -152,10 +134,7 @@ export function prepareLookupKeys(keys: readonly string[]): string[] {
   }
   return Array.from(keys, (key) => validateKey(key, "lookup"));
 }
-export function prepareKeyedStoreOptions(
-  pluginId: string,
-  options: OpenAsyncKeyedStoreOptions,
-): PreparedKeyedStoreOptions {
+export function prepareKeyedStoreOptions(pluginId: string, options: OpenAsyncKeyedStoreOptions) {
   const logicalNamespace = validateNamespace(options.namespace);
   if (options.retention === "retained") {
     if (
@@ -173,7 +152,7 @@ export function prepareKeyedStoreOptions(
       pluginId,
       namespace,
       maxEntries: undefined,
-      overflowPolicy: "evict-oldest",
+      overflowPolicy: "evict-oldest" as const,
       env: options.env,
     };
   }

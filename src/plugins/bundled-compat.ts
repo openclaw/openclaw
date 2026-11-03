@@ -49,10 +49,8 @@ export function withBundledPluginEnablementCompat(params: {
     changed = true;
   }
 
-  if (!changed) {
-    if (!forcePluginsEnabled || !hasEligiblePlugin) {
-      return params.config;
-    }
+  if (!changed && (!forcePluginsEnabled || !hasEligiblePlugin)) {
+    return params.config;
   }
 
   return {

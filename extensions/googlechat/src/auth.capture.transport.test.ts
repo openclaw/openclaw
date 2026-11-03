@@ -1,14 +1,13 @@
-import { createServer } from "node:http";
-import type { Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { captureHttpExchange, type CaptureEventRecord } from "openclaw/plugin-sdk/proxy-capture";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { afterAll, beforeEach, expect, it, vi } from "vitest";
 
 const fixture = vi.hoisted(() => ({
   url: "",
   release: async () => {},
-  received: undefined as ((response: Response) => void) | undefined,
+  response: undefined as Response | undefined,
   captured: undefined as ((event: CaptureEventRecord) => void) | undefined,
 }));
 
@@ -54,7 +53,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
           return response;
         },
       });
-      fixture.received?.(guarded.response);
+      fixture.response = guarded.response;
       fixture.release = guarded.release;
       return guarded;
     },
@@ -69,57 +68,38 @@ afterAll(() => {
   vi.resetModules();
 });
 
-describe("Google Chat captured response cleanup", () => {
-  it.each(["auth-overflow", "cert-error", "auth-complete"] as const)(
-    "settles %s through the guarded transport before fixture cleanup",
-    async (kind) => {
-      const closed = createDeferred<void>();
-      const captured = createDeferred<CaptureEventRecord>();
-      const received = createDeferred<Response>();
-      const sockets = new Map<Socket, Promise<void>>();
-      const completeBody = '{"access_token":"fixture"}';
-      let receivedResponse = false;
-      fixture.received = (response) => {
-        receivedResponse = true;
-        received.resolve(response);
-      };
-      fixture.release = async () => {};
-      fixture.captured = captured.resolve;
-      const server = createServer((request, response) => {
-        request.resume();
-        request.socket.once("close", () => closed.resolve());
-        response.writeHead(kind === "cert-error" ? 503 : 200, {
-          "content-type": "application/json",
-          connection: "close",
-        });
-        if (kind === "auth-complete") {
-          response.end(completeBody);
-        } else {
-          response.write(kind === "auth-overflow" ? Buffer.alloc(1024 * 1024 + 1) : "unavailable");
-        }
+beforeEach(() => {
+  fixture.response = undefined;
+  fixture.release = async () => {};
+});
+
+it.each(["auth-overflow", "cert-error", "auth-complete"] as const)(
+  "settles %s through the guarded transport before fixture cleanup",
+  async (kind) => {
+    const closed = createDeferred<void>();
+    const captured = createDeferred<CaptureEventRecord>();
+    const completeBody = '{"access_token":"fixture"}';
+    fixture.captured = captured.resolve;
+    const handler: Parameters<typeof withServer>[0] = (request, response) => {
+      request.resume();
+      request.socket.once("close", () => closed.resolve());
+      response.writeHead(kind === "cert-error" ? 503 : 200, {
+        "content-type": "application/json",
+        connection: "close",
       });
-      server.on("connection", (socket) => {
-        sockets.set(
-          socket,
-          new Promise<void>((resolve) => {
-            socket.once("close", resolve);
-          }),
-        );
-      });
-      let operation: Promise<unknown> | undefined;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const { OAuth2Client } = await loadGoogleAuthRuntime();
-      const verifyJwt = vi.spyOn(OAuth2Client.prototype, "verifySignedJwtWithCertsAsync");
-      try {
-        await new Promise<void>((resolve, reject) => {
-          server.once("error", reject);
-          server.listen(0, "127.0.0.1", resolve);
-        });
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Expected owned TCP listener");
-        }
-        fixture.url = `http://127.0.0.1:${address.port}/response`;
+      if (kind === "auth-complete") {
+        response.end(completeBody);
+      } else {
+        response.write(kind === "auth-overflow" ? Buffer.alloc(1024 * 1024 + 1) : "unavailable");
+      }
+    };
+    let operation: Promise<unknown> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const { OAuth2Client } = await loadGoogleAuthRuntime();
+    const verifyJwt = vi.spyOn(OAuth2Client.prototype, "verifySignedJwtWithCertsAsync");
+    try {
+      await withServer(handler, async (baseUrl) => {
+        fixture.url = `${baseUrl}/response`;
         const transport = await getGoogleAuthTransport();
         const deadline = new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => reject(new Error("Google Chat cleanup did not settle")), 1_000);
@@ -151,32 +131,23 @@ describe("Google Chat captured response cleanup", () => {
           expect(outcome).toMatchObject({ value: { data: { access_token: "fixture" } } });
         }
         await Promise.race([closed.promise, deadline]);
-        const response = await Promise.race([received.promise, deadline]);
-        expect(response.body?.locked).toBe(false);
+        expect(fixture.response?.body?.locked).toBe(false);
         const event = await Promise.race([captured.promise, deadline]);
         expect(event.kind).toBe(kind === "auth-complete" ? "response" : "error");
         if (kind === "auth-complete") {
           expect(event.dataText).toBe(completeBody);
         }
-      } finally {
-        clearTimeout(timer);
-        const stopped = new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
-        for (const socket of sockets.keys()) {
-          socket.destroy();
-        }
-        await stopped;
-        await Promise.all(sockets.values());
-        await operation?.catch(() => undefined);
-        await fixture.release();
-        if (receivedResponse) {
-          await captured.promise;
-        }
-        verifyJwt.mockRestore();
-        fixture.captured = undefined;
-        fixture.received = undefined;
+      });
+    } finally {
+      clearTimeout(timer);
+      await operation?.catch(() => undefined);
+      await fixture.release();
+      if (fixture.response) {
+        await captured.promise;
       }
-    },
-  );
-});
+      verifyJwt.mockRestore();
+      fixture.captured = undefined;
+      fixture.response = undefined;
+    }
+  },
+);

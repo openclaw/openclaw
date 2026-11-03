@@ -13,35 +13,25 @@ export const unsupportedSecretRefSurfacePatterns = [
 export function collectUnsupportedSecretRefConfigCandidates(
   raw: unknown,
 ): UnsupportedSecretRefConfigCandidate[] {
-  if (!isRecord(raw)) {
-    return [];
-  }
-  if (!isRecord(raw.channels) || !isRecord(raw.channels.discord)) {
+  if (!isRecord(raw) || !isRecord(raw.channels) || !isRecord(raw.channels.discord)) {
     return [];
   }
 
   const candidates: UnsupportedSecretRefConfigCandidate[] = [];
   const discord = raw.channels.discord;
-  const threadBindings = isRecord(discord.threadBindings) ? discord.threadBindings : null;
-  if (threadBindings) {
-    candidates.push({
-      path: "channels.discord.threadBindings.webhookToken",
-      value: threadBindings.webhookToken,
-    });
-  }
-
-  const accounts = isRecord(discord.accounts) ? discord.accounts : null;
-  if (!accounts) {
-    return candidates;
-  }
-  for (const [accountId, account] of Object.entries(accounts)) {
-    if (!isRecord(account) || !isRecord(account.threadBindings)) {
-      continue;
+  const addCandidate = (account: unknown, path: string) => {
+    if (isRecord(account) && isRecord(account.threadBindings)) {
+      candidates.push({
+        path: `${path}.threadBindings.webhookToken`,
+        value: account.threadBindings.webhookToken,
+      });
     }
-    candidates.push({
-      path: `channels.discord.accounts.${accountId}.threadBindings.webhookToken`,
-      value: account.threadBindings.webhookToken,
-    });
+  };
+  addCandidate(discord, "channels.discord");
+  for (const [accountId, account] of Object.entries(
+    isRecord(discord.accounts) ? discord.accounts : {},
+  )) {
+    addCandidate(account, `channels.discord.accounts.${accountId}`);
   }
   return candidates;
 }

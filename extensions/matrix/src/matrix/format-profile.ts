@@ -1,4 +1,3 @@
-// Matrix helper module declares formatting capabilities and shared projections.
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { convertMarkdownTables, FormatCapabilityProfile } from "openclaw/plugin-sdk/text-chunking";
 

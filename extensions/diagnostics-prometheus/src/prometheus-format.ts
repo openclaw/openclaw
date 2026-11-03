@@ -2,7 +2,7 @@ import { asNonNegativeFiniteNumber as numericValue } from "openclaw/plugin-sdk/n
 
 export type LabelSet = Record<string, string>;
 
-export function sortedLabels(labels: LabelSet): [string, string][] {
+function sortedLabels(labels: LabelSet): [string, string][] {
   const entries = Object.entries(labels);
   entries.sort(([left], [right]) => left.localeCompare(right));
   return entries;
@@ -16,12 +16,8 @@ export function escapeHelp(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n");
 }
 
-function escapeLabelValue(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/"/g, '\\"');
-}
-
-export function formatLabelEntry([key, value]: [string, string]): string {
-  return `${key}="${escapeLabelValue(value)}"`;
+function formatLabelEntry([key, value]: [string, string]): string {
+  return `${key}="${escapeHelp(value).replace(/"/g, '\\"')}"`;
 }
 
 export function formatLabels(labels: LabelSet): string {

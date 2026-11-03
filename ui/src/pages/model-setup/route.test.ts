@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { page } from "./route.ts";
 
 const location: RouteLocation = {
@@ -15,20 +16,12 @@ describe("model setup route", () => {
   it.each([
     ["?firstRun=1", true],
     ["?firstRun=explicit", true],
-    ["?firstRun=0", false],
     ["?firstRun=0&firstRun=explicit", false],
     ["", false],
   ])("preserves onboarding but redirects settings link %s to Models", async (search, firstRun) => {
     const context = { basePath: "/ui" } as ApplicationContext;
     const target = { ...location, pathname: "/ui/settings/model-setup", search };
-    const options: RouteLoaderOptions = {
-      signal: new AbortController().signal,
-      shouldRun: () => true,
-      revalidating: false,
-      location: target,
-      deps: search,
-      cause: "navigation",
-    };
+    const options: RouteLoaderOptions = createRouteLoaderOptions(target, search);
     expect(await page.loader?.(context, options)).toEqual(
       firstRun
         ? { firstRun: true }

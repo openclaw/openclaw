@@ -5,16 +5,21 @@ import "./test-helpers/fast-openclaw-tools.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayScopedTools } from "../gateway/tool-resolution.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { prepareTemplateInstallSchemaVersions } from "../templates/provenance-runtime-read.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 describe("scheduled message invocation admission", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    // Synchronous tool assembly consumes the runtime owner’s prepared consent facts.
+    (await prepareTemplateInstallSchemaVersions({ artifactPreservingReadOnly: false })).publish();
+  });
   afterEach(() => clearRuntimeConfigSnapshot());
 
   it.each(["embedded", "loopback"] as const)(
     "%s applies a published model policy for the borrowed owner to the next invocation",
-    (surface) => {
+    async (surface) => {
       const config: OpenClawConfig = {
         plugins: { enabled: false },
         tools: { profile: "full" },
@@ -36,7 +41,7 @@ describe("scheduled message invocation admission", () => {
       };
       const tools =
         surface === "embedded"
-          ? createOpenClawCodingTools({
+          ? await createOpenClawCodingToolsAsync({
               ...run,
               config,
               policyAgentId: "reader",
@@ -44,16 +49,18 @@ describe("scheduled message invocation admission", () => {
               runSessionKey: "agent:main:cron:execution",
               runtimeToolAllowlist: ["message"],
             })
-          : resolveGatewayScopedTools({
-              ...run,
-              cfg: config,
-              surface: "loopback",
-              sessionKey: "agent:main:cron:execution",
-              runtimePolicyAgentId: "reader",
-              runtimePolicySessionKey: "agent:reader:cron:policy",
-              gatewayRequestedTools: ["message"],
-              disablePluginTools: true,
-            }).tools;
+          : (
+              await resolveGatewayScopedTools({
+                ...run,
+                cfg: config,
+                surface: "loopback",
+                sessionKey: "agent:main:cron:execution",
+                runtimePolicyAgentId: "reader",
+                runtimePolicySessionKey: "agent:reader:cron:policy",
+                gatewayRequestedTools: ["message"],
+                disablePluginTools: true,
+              })
+            ).tools;
       expect(tools.some((tool) => tool.name === "message")).toBe(true);
       const factoryOptions = vi.mocked(createOpenClawTools).mock.calls.at(-1)?.[0];
       const admit = expectDefined(

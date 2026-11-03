@@ -2,15 +2,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { redeemDevicePairingJoinCode } from "../infra/device-pairing-join-code.js";
 import { isDevicePairingJoinCode } from "../pairing/join-code.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { AUTH_RATE_LIMIT_SCOPE_DEVICE_JOIN, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { sendJson } from "./http-common.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
-
-const NOT_FOUND_BODY = { error: "not_found" } as const;
-
-function sendJoinNotFound(res: ServerResponse): void {
-  sendJson(res, 404, NOT_FOUND_BODY);
-}
 
 /** Handle the core-owned /j namespace before hooks, plugins, and the Control UI SPA. */
 export async function handleDevicePairingJoinHttpRequest(params: {
@@ -22,6 +17,18 @@ export async function handleDevicePairingJoinHttpRequest(params: {
 }): Promise<boolean> {
   const parsed = URL.parse(params.req.url ?? "/", "http://localhost");
   params.res.setHeader("Cache-Control", "no-store");
+  const validRequest =
+    params.req.method === "GET" && !parsed?.search && isDevicePairingJoinCode(params.shortcode);
+  let context: ReturnType<typeof captureOpenClawStateWorkerContext> | undefined;
+  let captureFailure: { error: unknown } | undefined;
+  if (validRequest) {
+    try {
+      context = captureOpenClawStateWorkerContext();
+    } catch (error) {
+      // Throttling still wins over storage failures on this public route.
+      captureFailure = { error };
+    }
+  }
 
   await withSerializedRateLimitAttempt({
     ip: params.clientIp,
@@ -39,14 +46,15 @@ export async function handleDevicePairingJoinHttpRequest(params: {
         return;
       }
 
-      const validRequest =
-        params.req.method === "GET" && !parsed?.search && isDevicePairingJoinCode(params.shortcode);
+      if (captureFailure) {
+        throw captureFailure.error;
+      }
       const payload = validRequest
-        ? redeemDevicePairingJoinCode({ shortcode: params.shortcode })
+        ? await redeemDevicePairingJoinCode({ shortcode: params.shortcode, context })
         : null;
       if (!payload) {
         params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_JOIN);
-        sendJoinNotFound(params.res);
+        sendJson(params.res, 404, { error: "not_found" });
         return;
       }
 

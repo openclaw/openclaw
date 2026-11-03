@@ -9,8 +9,7 @@ public enum GatewayDiscoveryText {
     }
 
     public static func txtValue(_ dict: [String: String], key: String) -> String? {
-        let raw = dict[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return raw.isEmpty ? nil : raw
+        dict[key]?.trimmedNonEmpty
     }
 
     public static func txtBoolValue(_ dict: [String: String], key: String) -> Bool {

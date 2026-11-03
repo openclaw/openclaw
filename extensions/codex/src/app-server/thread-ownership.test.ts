@@ -1,80 +1,56 @@
+import { setImmediate } from "node:timers/promises";
+import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 
-describe("Codex thread ownership across module copies", () => {
-  it("orders ordinary mutation and adoption while another thread proceeds", async () => {
-    const first = await import("./thread-ownership.js");
-    vi.resetModules();
-    const second = await import("./thread-ownership.js");
-    expect(first.withCodexAppServerThreadMutation).not.toBe(
-      second.withCodexAppServerThreadMutation,
-    );
+async function loadOwners() {
+  const first = await import("./thread-ownership.js");
+  vi.resetModules();
+  return [first, await import("./thread-ownership.js")] as const;
+}
+
+it.each(["thread", "conversation"] as const)(
+  "shares %s ordering across module copies without blocking another key",
+  async (scope) => {
+    const [first, second] = await loadOwners();
+    const method =
+      scope === "thread"
+        ? "withCodexAppServerThreadMutation"
+        : "withCodexConversationThreadActivity";
+    const activeOwner = first[method];
+    const waitingOwner = second[method];
+    expect(activeOwner).not.toBe(waitingOwner);
     const bindingStore = createCodexTestBindingStore();
     const identity = { kind: "session" as const, agentId: "main", sessionId: "shared-session" };
     const threadId = "shared-thread";
-    await bindingStore.mutate(identity, {
-      kind: "set",
-      binding: { threadId, cwd: "/before" },
-    });
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    const events: string[] = [];
-    const mutation = first.withCodexAppServerThreadMutation(threadId, async () => {
-      events.push("mutation");
-      entered.resolve();
-      await release.promise;
-      await bindingStore.mutate(identity, {
+    const setBinding = (cwd: string) =>
+      bindingStore.mutate(identity, {
         kind: "set",
-        binding: { threadId, cwd: "/after" },
+        binding: { threadId, cwd },
       });
-    });
-    await entered.promise;
-    const adoption = second.withExclusiveCodexAppServerThread({
-      bindingStore,
-      identity,
-      threadId,
-      run: async () => {
-        events.push("adoption");
-        return bindingStore.read(identity);
-      },
-    });
-    const completed = Promise.all([mutation, adoption]);
-    try {
-      await second.withCodexAppServerThreadMutation("other-thread", async () => {
-        events.push("other");
-      });
-      expect(events).toEqual(["mutation", "other"]);
-    } finally {
-      release.resolve();
-      await completed;
-    }
-    expect(events).toEqual(["mutation", "other", "adoption"]);
-    await expect(adoption).resolves.toMatchObject({ threadId, cwd: "/after" });
-  });
-
-  it("shares conversation activity ordering across module copies", async () => {
-    const first = await import("./thread-ownership.js");
-    vi.resetModules();
-    const second = await import("./thread-ownership.js");
-    expect(first.withCodexConversationThreadActivity).not.toBe(
-      second.withCodexConversationThreadActivity,
-    );
+    await setBinding("/before");
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     const events: string[] = [];
-    const active = first.withCodexConversationThreadActivity("conversation", async () => {
+    const active = activeOwner(threadId, async () => {
       events.push("active");
       entered.resolve();
       await release.promise;
+      await setBinding("/after");
     });
     await entered.promise;
-    const waiting = second.withCodexConversationThreadActivity("conversation", async () => {
+    const run = async () => {
       events.push("waiting");
-    });
+      return bindingStore.read(identity);
+    };
+    const waiting =
+      scope === "thread"
+        ? second.withExclusiveCodexAppServerThread({ bindingStore, identity, threadId, run })
+        : waitingOwner(threadId, run);
     const completed = Promise.all([active, waiting]);
     try {
-      await second.withCodexConversationThreadActivity("other-conversation", async () => {
+      await waitingOwner("other-key", async () => {
         events.push("other");
       });
       expect(events).toEqual(["active", "other"]);
@@ -83,5 +59,36 @@ describe("Codex thread ownership across module copies", () => {
       await completed;
     }
     expect(events).toEqual(["active", "other", "waiting"]);
+    await expect(waiting).resolves.toMatchObject({ threadId, cwd: "/after" });
+  },
+);
+
+it("reserves a held lane immediately and retains authority after failure", async () => {
+  const [owner, successor] = await loadOwners();
+  const release = createDeferred<void>();
+  const authorityReleased = createDeferred<void>();
+  const releaseAuthority = vi.fn(() => authorityReleased.resolve());
+  const failed = runWithAsyncWorkResources(async (onAcquired) => {
+    onAcquired({ release: releaseAuthority });
+    return await owner.withCodexAppServerThreadMutationHold("held-thread", async (hold) => {
+      hold(release.promise);
+      throw new Error("cleanup uncertain");
+    });
   });
+  const failure = expect(failed).rejects.toThrow("cleanup uncertain");
+
+  const successorRun = vi.fn(async () => {});
+  const successorMutation = successor.withCodexAppServerThreadMutation("held-thread", successorRun);
+  try {
+    await failure;
+    await setImmediate();
+    expect(successorRun).not.toHaveBeenCalled();
+    expect(releaseAuthority).not.toHaveBeenCalled();
+  } finally {
+    release.resolve();
+    await successorMutation;
+    await authorityReleased.promise;
+  }
+  expect(releaseAuthority).toHaveBeenCalledOnce();
+  expect(successorRun).toHaveBeenCalledOnce();
 });

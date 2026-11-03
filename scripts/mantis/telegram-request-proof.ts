@@ -89,9 +89,6 @@ export const telegramReplyObservationSchema = binding.extend({
   kind: z.literal("telegram-reply"),
   events: z.array(event).max(256),
 });
-function telegramProofDigest(value: string | Uint8Array): string {
-  return createHash("sha256").update(value).digest("hex");
-}
 export function verifyTelegramProofFiles(
   identity: z.infer<typeof telegramProofIdentitySchema>,
   encoded: unknown,
@@ -107,11 +104,6 @@ export function verifyTelegramProofFiles(
     "telegram-send.json": telegramSendObservationSchema,
     "provider-request.json": telegramProviderObservationSchema,
     "telegram-reply.json": telegramReplyObservationSchema,
-  };
-  const ids = {
-    "telegram-send.json": "telegram-send",
-    "provider-request.json": "provider-request",
-    "telegram-reply.json": "telegram-reply",
   };
   let conversation: string | undefined;
   const observations = Object.entries(files).map(([filename, encodedFile]) => {
@@ -140,11 +132,11 @@ export function verifyTelegramProofFiles(
     }
     conversation = fact.conversation_digest;
     return {
-      id: ids[key],
+      id: fact.kind,
       source_path: filename,
       expected: "Inspect the selected claim against the complete observation",
       actual: "Complete trusted observation; semantic assessment belongs to the original reviewer",
-      sha256: telegramProofDigest(bytes),
+      sha256: createHash("sha256").update(bytes).digest("hex"),
       availability: "present" as const,
       authority: "trusted_observer" as const,
     };

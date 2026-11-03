@@ -1,0 +1,124 @@
+name: Linux App Mirror
+
+run-name: Linux App Release mirror=${{ inputs.release_publish_run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Published core tag to reconcile (mirror only; no native build)"
+        required: true
+        type: string
+      source_sha:
+        description: "Exact published core source SHA"
+        required: true
+        type: string
+      tooling_sha:
+        description: "Exact protected parent workflow SHA"
+        required: true
+        type: string
+      release_publish_run_id:
+        description: "Original core publication run"
+        required: true
+        type: string
+      release_publish_run_attempt:
+        description: "Exact original core publication attempt"
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  mirror_legacy:
+    name: Reconcile legacy Linux updater metadata
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'openclaw/openclaw' }}
+    # The core parent dispatches and exits; this queue never holds that parent.
+    concurrency:
+      group: linux-app-release-publish
+      queue: max
+      cancel-in-progress: false
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Checkout trusted Linux mirror tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            apps/linux/src-tauri/tauri.conf.json
+            scripts/linux-app-channel.mjs
+            scripts/lib/release-version.mjs
+            scripts/lib/record-shared.mjs
+            scripts/release-tooling-identity.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
+      - name: Verify detached mirror dispatch identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_TOOLING_SHA: ${{ inputs.tooling_sha }}
+          PARENT_RUN_ID: ${{ inputs.release_publish_run_id }}
+          PARENT_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_FULL_REF" == refs/tags/release-publish/* && "$EXPECTED_TOOLING_SHA" == "$WORKFLOW_SHA" ]]
+          node scripts/release-tooling-identity.mjs verify \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$WORKFLOW_REF" --workflow-full-ref "$WORKFLOW_FULL_REF" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --release-publish-run-id "$PARENT_RUN_ID" \
+            --release-publish-run-attempt "$PARENT_RUN_ATTEMPT" \
+            --release-publish-ref "$WORKFLOW_REF" --release-publish-full-ref "$WORKFLOW_FULL_REF" \
+            --release-publish-parent-state-policy active-or-success
+
+      - name: Mirror verified canonical bytes to the actual core latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          TAG_SHA: ${{ inputs.source_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
+          PARENT_RUN_ID: ${{ inputs.release_publish_run_id }}
+          PARENT_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+        run: |
+          set -euo pipefail
+          node scripts/linux-app-channel.mjs mirror \
+            --tag "$RELEASE_TAG" --source-sha "$TAG_SHA" --tooling-sha "$WORKFLOW_SHA" \
+            --workflow-ref "$WORKFLOW_REF" --workflow-full-ref "$WORKFLOW_FULL_REF" \
+            --release-publish-run-id "$PARENT_RUN_ID" --release-publish-run-attempt "$PARENT_RUN_ATTEMPT" \
+            --release-publish-ref "$WORKFLOW_REF" --release-publish-full-ref "$WORKFLOW_FULL_REF" \
+            --public-key-config apps/linux/src-tauri/tauri.conf.json \
+            2> "$RUNNER_TEMP/linux-mirror.log" | tee "$RUNNER_TEMP/linux-mirror.json"
+
+      - name: Record degraded legacy Linux bridge
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::Legacy Linux update delivery is degraded; core publication remains complete. Reconcile canonical/latest identity before recovering this mirror-only dispatch."
+          echo "- Legacy Linux bridge: incomplete. Dispatch acceptance was not mirror success; inspect this run before recovery." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain Linux mirror result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-mirror-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/linux-mirror.json
+            ${{ runner.temp }}/linux-mirror.log
+          if-no-files-found: warn

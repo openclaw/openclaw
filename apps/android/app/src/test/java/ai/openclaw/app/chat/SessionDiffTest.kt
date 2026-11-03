@@ -13,14 +13,12 @@ class SessionDiffTest {
   @Test
   fun snapshotPreservesUnavailableAndIncompleteResultsInsteadOfTreatingThemAsClean() {
     val unavailable =
-      parseSessionDiff(
-        json,
+      json.decodeFromString<SessionDiffSnapshot>(
         """{"sessionKey":"session","files":[],"additions":0,"deletions":0,"unavailableReason":"workspace_stopped"}""",
       )
     assertEquals("workspace_stopped", unavailable.unavailableReason)
     val snapshot =
-      parseSessionDiff(
-        json,
+      json.decodeFromString<SessionDiffSnapshot>(
         """
         {"sessionKey":"session","branch":"feature","baseRef":"main","aheadCount":1,
          "commits":[{"sha":"abc123","subject":"Rename asset"}],
@@ -40,7 +38,7 @@ class SessionDiffTest {
 
   @Test(expected = SerializationException::class)
   fun malformedResponseDoesNotBecomeAnEmptySuccessfulDiff() {
-    parseSessionDiff(json, """{"sessionKey":"session"}""")
+    json.decodeFromString<SessionDiffSnapshot>("""{"sessionKey":"session"}""")
   }
 
   @Test

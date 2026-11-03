@@ -1,6 +1,8 @@
 * text=auto eol=lf
 CLAUDE.md -text
-src/gateway/server-methods/CLAUDE.md -text
+# Preserve immutable upstream source and license bytes, including whitespace.
+apps/ios/ThirdParty/ESPProvision/ESPProvision/** -whitespace
+apps/ios/Resources/Licenses/SwiftProtobuf.txt -whitespace
 ui/src/i18n/.i18n/* linguist-generated
 apps/.i18n/** linguist-generated
 apps/android/app/src/main/res/values-*/strings.xml linguist-generated

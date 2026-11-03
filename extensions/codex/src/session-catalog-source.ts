@@ -1,6 +1,7 @@
 import { defineCodexBuildState } from "./build-state.js";
 
 export type CodexCatalogSource = { readonly closed: boolean };
+
 const getSources = defineCodexBuildState("openclaw.codexCatalogSources", () => ({
   clients: new WeakMap<object, { closed: boolean }>(),
   values: new WeakMap<object, CodexCatalogSource>(),
@@ -41,8 +42,8 @@ export function observeCodexCatalogEphemeralThreads(
   getEphemeralObservers().set(source, observer);
 }
 
-export function getCodexCatalogSource(value: unknown): CodexCatalogSource | undefined {
-  return value !== null && typeof value === "object" ? getSources().values.get(value) : undefined;
+export function getCodexCatalogSource(value: object): CodexCatalogSource | undefined {
+  return getSources().values.get(value);
 }
 
 export function setCodexCatalogSource<T extends object>(

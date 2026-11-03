@@ -1,4 +1,4 @@
-import { resolveUserProfileId } from "../../state/user-profiles.js";
+import { readResidentUserProfileId } from "../../state/user-profile-list.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export function publishUserPreferencesChanged(
@@ -9,7 +9,7 @@ export function publishUserPreferencesChanged(
   if (!keys.length || !context.getClientConnIds) {
     return;
   }
-  const canonicalProfileId = resolveUserProfileId(profileId);
+  const canonicalProfileId = readResidentUserProfileId(profileId);
   if (!canonicalProfileId) {
     return;
   }
@@ -18,7 +18,7 @@ export function publishUserPreferencesChanged(
     return Boolean(
       connectedProfileId &&
       (connectedProfileId === canonicalProfileId ||
-        resolveUserProfileId(connectedProfileId) === canonicalProfileId),
+        readResidentUserProfileId(connectedProfileId) === canonicalProfileId),
     );
   });
   if (connIds?.size) {

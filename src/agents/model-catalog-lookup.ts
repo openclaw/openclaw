@@ -2,12 +2,13 @@
  * Looks up model catalog entries and input capability support.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isModelThinkingFormat, type ModelCompatConfig } from "../config/types.models.js";
+import { isModelThinkingFormat } from "../config/types.models.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { Model } from "../llm/types.js";
 import {
   resolveProviderModelCatalogId,
@@ -22,6 +23,15 @@ import { canonicalizeProviderModelId } from "./provider-model-route.js";
 type ModelThinkingCompat = {
   thinkingFormat?: ModelCompatConfig["thinkingFormat"];
   supportedReasoningEfforts?: readonly string[] | null;
+};
+
+type ModelRunCapabilityEntry = {
+  provider: string;
+  id: string;
+  api?: string;
+  baseUrl?: string;
+  input?: readonly ModelInputType[];
+  compat?: unknown;
 };
 
 export type PreparedModelThinkingCapability = Readonly<{
@@ -45,10 +55,7 @@ export function projectModelThinkingCompat(compat: unknown): ModelThinkingCompat
   }
   if (record.supportedReasoningEfforts === null) {
     projected.supportedReasoningEfforts = null;
-  } else if (
-    Array.isArray(record.supportedReasoningEfforts) &&
-    record.supportedReasoningEfforts.every((effort) => typeof effort === "string")
-  ) {
+  } else if (isStringArray(record.supportedReasoningEfforts)) {
     projected.supportedReasoningEfforts = [...record.supportedReasoningEfforts];
   }
   return Object.keys(projected).length > 0 ? projected : undefined;
@@ -56,8 +63,8 @@ export function projectModelThinkingCompat(compat: unknown): ModelThinkingCompat
 
 /** Freezes thinking capability from the selected prepared catalog row. */
 function prepareModelThinkingCapability(params: {
-  entry: ModelCatalogEntry | undefined;
-  route?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
+  entry: ModelRunCapabilityEntry | undefined;
+  route?: Pick<ModelRunCapabilityEntry, "api" | "baseUrl">;
   agentRuntime: string;
 }): PreparedModelThinkingCapability | undefined {
   const compat = projectModelThinkingCompat(params.entry?.compat);
@@ -125,7 +132,10 @@ export function resolvePreparedModelThinkingCompat(params: {
 
 /** Projects the prepared capabilities needed by one selected run candidate. */
 export function prepareModelRunCapabilities(
-  [catalog, configuredCatalog]: readonly [ModelCatalogEntry[] | undefined, ModelCatalogEntry[]],
+  [catalog, configuredCatalog]: readonly [
+    readonly ModelRunCapabilityEntry[] | undefined,
+    readonly ModelRunCapabilityEntry[],
+  ],
   [provider, modelId, agentRuntime]: readonly [string, string, string],
 ) {
   const entry = findModelInCatalog(catalog ?? [], provider, modelId);
@@ -216,4 +226,11 @@ export function findModelCatalogEntry(
     ? exact
     : catalog.filter((entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId);
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * Check if a model supports image input based on its catalog entry.
+ */
+export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
+  return modelSupportsInput(entry, "image");
 }

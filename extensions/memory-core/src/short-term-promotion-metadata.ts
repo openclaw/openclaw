@@ -1,15 +1,7 @@
-// Memory Core plugin module formats deterministic recall metadata for promoted entries.
 import { extractProjectKeysFromCuratedEntry } from "openclaw/plugin-sdk/memory-core-host-engine-curated";
 import type { PromotionCandidate } from "./short-term-promotion-types.js";
 
 const MAX_PROMOTION_TRIGGER_PHRASE_CHARS = 64;
-
-export type PromotionProjectGroup<
-  Candidate extends Pick<PromotionCandidate, "projectKey"> = PromotionCandidate,
-> = {
-  projectKey?: string;
-  candidates: Candidate[];
-};
 
 function normalizePromotionTriggerPhrase(value: string): string {
   const singleLine = value
@@ -30,7 +22,7 @@ function resolvePromotionProjectKey(
 
 export function groupPromotionCandidatesByProjectKey<
   Candidate extends Pick<PromotionCandidate, "projectKey">,
->(candidates: readonly Candidate[]): PromotionProjectGroup<Candidate>[] {
+>(candidates: readonly Candidate[]) {
   const groups = new Map<string, Candidate[]>();
   for (const candidate of candidates) {
     const projectKey = resolvePromotionProjectKey(candidate) ?? "";

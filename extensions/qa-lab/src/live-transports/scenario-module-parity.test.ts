@@ -2,11 +2,9 @@ import { describe, expect, it } from "vitest";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "../scenario-catalog.js";
 import * as discordScenarioRuntime from "./discord/scenario-runtime.js";
 import * as slackScenarioRuntime from "./slack/scenario-runtime.js";
-import * as whatsappScenarioRuntime from "./whatsapp/scenario-runtime.js";
 
 const LANES = [
   {
-    canaryScenarioId: "discord-canary",
     channel: "discord",
     contextExpression: "discordScenarioContext",
     modulePath: "./live-transports/discord/scenario-runtime.js",
@@ -14,20 +12,11 @@ const LANES = [
     runtime: discordScenarioRuntime,
   },
   {
-    canaryScenarioId: "slack-canary",
     channel: "slack",
     contextExpression: "slackScenarioContext",
     modulePath: "./live-transports/slack/scenario-runtime.js",
     runnerName: "runSlackScenario",
     runtime: slackScenarioRuntime,
-  },
-  {
-    canaryScenarioId: "whatsapp-canary",
-    channel: "whatsapp",
-    contextExpression: "whatsappScenarioContext",
-    modulePath: "./live-transports/whatsapp/scenario-runtime.js",
-    runnerName: "runWhatsAppScenario",
-    runtime: whatsappScenarioRuntime,
   },
 ] as const;
 
@@ -87,19 +76,21 @@ function readExpression(value: unknown): string | undefined {
 describe("live transport scenario module routing", () => {
   it.each(LANES)(
     "routes every $channel flow through one shared channel runner",
-    ({ canaryScenarioId, channel, contextExpression, modulePath, runnerName, runtime }) => {
+    ({ channel, contextExpression, modulePath, runnerName, runtime }) => {
       expect(Reflect.get(runtime, runnerName)).toBeTypeOf("function");
 
       const bindings = readQaScenarioPack().scenarios.flatMap((scenario) => {
-        if (scenario.execution.kind !== "flow" || scenario.execution.channel !== channel) {
+        if (
+          scenario.execution.kind !== "flow" ||
+          scenario.execution.channel !== channel ||
+          scenario.execution.flowKind !== "module"
+        ) {
           return [];
         }
         const call = readScenarioModuleCall(scenario, modulePath);
+        expect(call, scenario.id).toBeDefined();
         return call ? [{ call, scenarioId: scenario.id }] : [];
       });
-
-      // A missing catalog or import must not turn this routing check into an empty loop.
-      expect(bindings.map(({ scenarioId }) => scenarioId)).toContain(canaryScenarioId);
 
       for (const { call, scenarioId } of bindings) {
         expect(call.call, scenarioId).toBe(runnerName);

@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { fetchWithControlUiAuth } from "../app/control-ui-auth.ts";
 import { isConfiguredUiDevGateway } from "../dev-gateway.ts";
@@ -6,24 +7,21 @@ import { isConfiguredUiDevGateway } from "../dev-gateway.ts";
 let appGatewayOrigin: string | null = null;
 let appGatewayResourceBasePath = "";
 let appGatewayAuthTokens: readonly string[] = [];
+let appGatewayStorageScope: string | undefined;
 let gatewayRequests = new AbortController();
 // More than one cache is keyed by the Gateway HTTP context (avatars,
 // geolocation), so every subscriber must be notified on a switch. A single slot
 // would silently drop whichever registered first.
-const gatewayContextResets = new Set<() => void>();
+const gatewayContextResets = createChangeListeners();
 
-export function registerAvatarGatewayReset(reset: () => void): () => void {
-  gatewayContextResets.add(reset);
-  return () => {
-    gatewayContextResets.delete(reset);
-  };
-}
+export const registerAvatarGatewayReset = gatewayContextResets.subscribe;
 
 export function readAvatarGatewayContext() {
   return {
     origin: appGatewayOrigin,
     resourceBasePath: appGatewayResourceBasePath,
     authTokens: appGatewayAuthTokens,
+    storageScope: appGatewayStorageScope,
   };
 }
 
@@ -47,21 +45,22 @@ export async function fetchGatewayContextResource(
     await response.body?.cancel();
     throw new Error("Gateway credentials rejected");
   }
+  if (!response.ok) {
+    // Optional resource callers ignore error bodies. Release the stream without
+    // letting stalled cleanup delay their fallback or retryable result.
+    void response.body?.cancel().catch(() => undefined);
+  }
   return response;
 }
 
 function toHttpOrigin(url: string | null | undefined): string | null {
-  if (!url) {
+  const parsed = url ? URL.parse(url) : null;
+  if (!parsed) {
     return null;
   }
-  try {
-    const parsed = new URL(url);
-    const scheme =
-      parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
-    return `${scheme}//${parsed.host}`;
-  } catch {
-    return null;
-  }
+  const scheme =
+    parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
+  return `${scheme}//${parsed.host}`;
 }
 
 /** Keeps avatar routes, credentials, and cached images scoped to the current gateway. */
@@ -69,6 +68,7 @@ export function setAvatarGatewayOrigin(
   gatewayUrl: string | null | undefined,
   authTokens: readonly string[] = [],
   resourceBasePath = "",
+  storageScope?: string,
 ): void {
   const nextOrigin =
     gatewayUrl && isConfiguredUiDevGateway(gatewayUrl)
@@ -80,6 +80,8 @@ export function setAvatarGatewayOrigin(
   if (
     appGatewayOrigin !== nextOrigin ||
     appGatewayResourceBasePath !== nextResourceBasePath ||
+    // Initial admission adopts pending reads; replacement or retirement invalidates them.
+    (appGatewayStorageScope !== undefined && appGatewayStorageScope !== storageScope) ||
     appGatewayAuthTokens.length !== authTokens.length ||
     appGatewayAuthTokens.some((token, index) => token !== authTokens[index])
   ) {
@@ -87,11 +89,10 @@ export function setAvatarGatewayOrigin(
     // its rejected credential to another saved secret.
     gatewayRequests.abort();
     gatewayRequests = new AbortController();
-    for (const reset of gatewayContextResets) {
-      reset();
-    }
+    gatewayContextResets.publish();
   }
   appGatewayOrigin = nextOrigin;
   appGatewayResourceBasePath = nextResourceBasePath;
   appGatewayAuthTokens = [...authTokens];
+  appGatewayStorageScope = storageScope;
 }

@@ -1,6 +1,8 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { pathForSession } from "../../app-session-path-builder.ts";
+import { sessionRefFromPath } from "../../app-session-route-paths.ts";
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationNavigationOptions, ApplicationContext } from "../../app/context.ts";
 import type { BoardFace } from "../board/settings.ts";
 import { catalogSessionSearch, parseCatalogSessionKey } from "./catalog-key.ts";
@@ -19,54 +21,15 @@ export const SESSION_NAVIGATION_KEY_PARAM = "__openclawSessionKey";
 export const SESSION_COMPOSER_FOCUS_PARAM = "__openclawComposerFocus";
 export const SESSION_DASHBOARD_EXPANDED_PARAM = "dashboard";
 
-export function composerDraftSearch(draft: string): string {
-  return `?${new URLSearchParams({ draft, [SESSION_COMPOSER_FOCUS_PARAM]: "1" }).toString()}`;
-}
-const SESSION_KEY_UUID_SUFFIX_RE =
-  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-
-type SessionNavigationContext<TRouteId extends string> = Pick<
-  ApplicationContext<TRouteId>,
-  "agents" | "agentSelection" | "basePath" | "gateway" | "sessions"
->;
-
-type ContextSessionNavigationTargetParams<TRouteId extends string> = {
-  context: SessionNavigationContext<TRouteId>;
+type SessionNavigationTargetOptions = {
   face: BoardFace;
   sessionKey: string;
-  agentId?: string;
-  fallbackAgentId?: never;
   basePath?: string;
-  row?: never;
-  mainKey?: never;
   shortIdLength?: number;
   exactKey?: boolean;
   preferenceDerivedFace?: boolean;
   focusComposer?: boolean;
-  dashboardExpanded?: boolean;
   navigationKey?: string;
-};
-
-type ExplicitSessionNavigationTargetParams = {
-  context?: never;
-  face: BoardFace;
-  sessionKey: string;
-  fallbackAgentId: string;
-  basePath?: string;
-  row?: Pick<GatewaySessionRow, "displayName" | "key">;
-  mainKey?: string | null;
-  shortIdLength?: number;
-  exactKey?: boolean;
-  agentId?: never;
-  preferenceDerivedFace?: boolean;
-  focusComposer?: boolean;
-  dashboardExpanded?: boolean;
-  navigationKey?: string;
-};
-
-type SessionNavigationTarget = {
-  href: string;
-  options: ApplicationNavigationOptions & { pathname: string };
 };
 
 export function isSessionKeyAddressable(sessionKey: string, globalScope: boolean): boolean {
@@ -108,6 +71,29 @@ export function resolveSessionPreferredFaceForKey<TRouteId extends string>(
   return resolveSessionPreferredFace(findUiSessionRow(context, sessionKey, agentId));
 }
 
+export function openPreferredApplicationSession(
+  context: ApplicationContext,
+  sessionKey: string,
+  agentId?: string,
+): void {
+  const face = resolveSessionPreferredFaceForKey(context, sessionKey, agentId);
+  const target = sessionNavigationTarget({
+    context,
+    face,
+    sessionKey,
+    agentId,
+    preferenceDerivedFace: true,
+    exactKey: true,
+  });
+  selectApplicationSession({
+    selection: context.agentSelection,
+    gateway: context.gateway,
+    sessionKey,
+    agentId,
+  });
+  context.navigate(face, target.options);
+}
+
 export function resolveSessionNavigationAgentId<TRouteId extends string>(
   context: Pick<ApplicationContext<TRouteId>, "agents" | "agentSelection" | "gateway">,
   agentId?: string | null,
@@ -124,8 +110,28 @@ export function resolveSessionNavigationAgentId<TRouteId extends string>(
 }
 
 export function sessionNavigationTarget<TRouteId extends string>(
-  params: ContextSessionNavigationTargetParams<TRouteId> | ExplicitSessionNavigationTargetParams,
-): SessionNavigationTarget {
+  params:
+    | (SessionNavigationTargetOptions & {
+        context: Pick<
+          ApplicationContext<TRouteId>,
+          "agents" | "agentSelection" | "basePath" | "gateway" | "sessions"
+        >;
+        agentId?: string;
+        fallbackAgentId?: never;
+        row?: never;
+        mainKey?: never;
+      })
+    | (SessionNavigationTargetOptions & {
+        context?: never;
+        fallbackAgentId: string;
+        row?: Pick<GatewaySessionRow, "displayName" | "key">;
+        mainKey?: string | null;
+        agentId?: never;
+      }),
+): {
+  href: string;
+  options: ApplicationNavigationOptions & { pathname: string };
+} {
   const context = params.context;
   const sessionKey = params.sessionKey;
   let fallbackAgentId: string;
@@ -180,11 +186,11 @@ export function sessionNavigationTarget<TRouteId extends string>(
   if (params.focusComposer) {
     navigationParams.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
-  if (params.dashboardExpanded) {
-    navigationParams.set(SESSION_DASHBOARD_EXPANDED_PARAM, "expanded");
-  }
   const navigationKey = params.navigationKey?.trim() || row?.key;
-  if (navigationKey && SESSION_KEY_UUID_SUFFIX_RE.test(navigationKey)) {
+  if (
+    navigationKey &&
+    sessionRefFromPath(pathname, basePath, mainKey ?? undefined)?.kind === "short"
+  ) {
     // Sidebar navigation already owns the full row. Carry its key only through the
     // in-app location so the short route never has to rediscover it from sessions.list.
     navigationParams.set(SESSION_NAVIGATION_KEY_PARAM, navigationKey);
@@ -193,10 +199,5 @@ export function sessionNavigationTarget<TRouteId extends string>(
   const options = serializedNavigation
     ? { pathname, search: `?${serializedNavigation}` }
     : { pathname };
-  const hrefParams = new URLSearchParams(search ?? "");
-  if (params.dashboardExpanded) {
-    hrefParams.set(SESSION_DASHBOARD_EXPANDED_PARAM, "expanded");
-  }
-  const hrefSearch = hrefParams.toString();
-  return { href: `${pathname}${hrefSearch ? `?${hrefSearch}` : ""}`, options };
+  return { href: `${pathname}${search ?? ""}`, options };
 }

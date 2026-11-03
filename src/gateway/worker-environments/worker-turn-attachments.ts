@@ -1,15 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
-import { sanitizeUntrustedFileName } from "../../infra/fs-safe-advanced.js";
 import { readPersistedMediaFacts } from "../../media/media-facts.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { readMediaBuffer } from "../../media/store.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
-import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import {
   WORKER_ATTACHMENT_DIRECTORY_PATTERN,
@@ -161,7 +161,7 @@ export async function prepareWorkerTurnAttachments(params: {
     return undefined;
   }
   const directory = `${WORKER_ATTACHMENT_DIRECTORY_PREFIX}${randomUUID()}`;
-  const deadline = Date.now() + turn.timeoutMs;
+  const deadline = performance.now() + turn.timeoutMs;
   const execute = async (
     operation: "init" | "write" | "cleanup",
     args: string[] = [],
@@ -170,8 +170,10 @@ export async function prepareWorkerTurnAttachments(params: {
     const cleanup = operation === "cleanup";
     const assertDispatchCurrent = cleanup ? assertCurrent : check;
     assertDispatchCurrent();
-    const timeoutMs = cleanup ? 5_000 : Math.min(60_000, Math.max(1, deadline - Date.now()));
-    if (!cleanup && Date.now() >= deadline) {
+    const timeoutMs = cleanup
+      ? 5_000
+      : Math.min(60_000, Math.max(1, Math.floor(deadline - performance.now())));
+    if (!cleanup && performance.now() >= deadline) {
       throw new Error("Cloud attachment transfer timed out; retry this turn.");
     }
     const result = await tunnel.runWorkspaceCommand({

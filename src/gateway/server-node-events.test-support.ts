@@ -1,110 +1,73 @@
 import { vi } from "vitest";
+import { WebSocket } from "ws";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
+import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
+import type { HealthSummary } from "./health/types.js";
+import type { NodeEventContext } from "./server-node-events-types.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
+import type { loadSessionEntryAsync as loadSessionEntryTypeAsync } from "./session-entry-load.test-support.js";
+import type { resolveGatewayModelSupportsImages } from "./session-utils.js";
+
+type ImageSupportParams = Parameters<typeof resolveGatewayModelSupportsImages>[0];
 
 export const buildSessionLookup = (
   sessionKey: string,
-  entry: {
-    agentHarnessId?: string;
-    modelSelectionLocked?: boolean;
-    sessionId?: string;
-    model?: string;
-    modelProvider?: string;
-    lastChannel?: string;
-    lastTo?: string;
-    lastAccountId?: string;
-    lastThreadId?: string | number;
-    updatedAt?: number;
-    label?: string;
-    spawnedBy?: string;
-    parentSessionKey?: string;
-  } = {},
-): ReturnType<typeof loadSessionEntryType> => ({
-  cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
+  entry: Partial<SessionEntry> & { lastChannel?: string; lastTo?: string } = {},
+): Awaited<ReturnType<typeof loadSessionEntryTypeAsync>> => ({
+  cfg: { session: { mainKey: "main" } } as OpenClawConfig,
   agentId: resolveAgentIdFromSessionKey(sessionKey, "main"),
   storePath: "/tmp/sessions.json",
-  store: {} as ReturnType<typeof loadSessionEntryType>["store"],
-  entry: {
-    agentHarnessId: entry.agentHarnessId,
-    modelSelectionLocked: entry.modelSelectionLocked,
+  store: {},
+  entry: normalizeLegacySessionEntryDelivery({
+    ...entry,
     sessionId: entry.sessionId ?? `sid-${sessionKey}`,
     updatedAt: entry.updatedAt ?? Date.now(),
-    model: entry.model,
-    modelProvider: entry.modelProvider,
-    delivery: normalizeLegacySessionEntryDelivery({
-      ...entry,
-      sessionId: entry.sessionId ?? `sid-${sessionKey}`,
-      updatedAt: entry.updatedAt ?? Date.now(),
-    } as SessionEntry).delivery,
-    label: entry.label,
-    spawnedBy: entry.spawnedBy,
-    parentSessionKey: entry.parentSessionKey,
-  },
+  }),
   canonicalKey: sessionKey,
   storeKeys: [sessionKey],
   legacyKey: undefined,
 });
 
-const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const registerApnsRegistrationMock = vi.hoisted(() => vi.fn());
-const loadOrCreateProcessDeviceIdentityMock = vi.hoisted(() =>
-  vi.fn(() => ({
-    deviceId: "gateway-device-1",
-    publicKeyPem: "public",
-    privateKeyPem: "private",
-  })),
-);
-const parseMessageWithAttachmentsMock = vi.hoisted(() => vi.fn());
-const persistInboundImagesForTranscriptMock = vi.hoisted(() => vi.fn());
-const normalizeChannelIdMock = vi.hoisted(() =>
-  vi.fn((channel?: string | null) => channel ?? null),
-);
-const updatePairedDevicePresenceMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-
 const runtimeMocks = vi.hoisted(() => ({
-  agentCommandFromIngress: ingressAgentCommandMock,
-  ApnsRegistrationPairingChangedError: class ApnsRegistrationPairingChangedError extends Error {
-    constructor() {
-      super("node pairing changed before APNs registration");
-      this.name = "ApnsRegistrationPairingChangedError";
-    }
-  },
+  agentCommandFromIngress: vi.fn().mockResolvedValue(undefined),
   deleteMediaBuffer: vi.fn(async () => {}),
-  deliverOutboundPayloads: vi.fn(async () => {}),
-  enqueueSystemEvent: vi.fn(),
+  enqueueSystemEventEntry: vi.fn(),
+  captureSessionEventTargetForHost: vi.fn(async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: `sid-${sessionKey}`,
+    generation: "node-event-test-generation",
+  })),
+  enqueueSessionEventForHost: vi.fn(() => ({
+    id: "node-event-test-receipt",
+    cancel: () => true,
+    accepted: Promise.resolve({ ok: true as const }),
+    settled: Promise.resolve({
+      status: "completed" as const,
+      executionStarted: true,
+      delivered: false,
+    }),
+  })),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
-  getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
+  getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "main" } })),
   INLINE_IMAGE_DURABLE_OMISSION_MARKER:
     "[image attachment omitted: durable managed media claim unavailable]",
-  loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
-  loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
+  loadOrCreateProcessDeviceIdentity: vi.fn(() => ({ deviceId: "gateway-device-1" })),
+  loadSessionEntry: vi.fn((sessionKey: string, _opts?: unknown) => buildSessionLookup(sessionKey)),
   upsertSessionEntryCore: vi.fn(),
-  normalizeChannelId: normalizeChannelIdMock,
-  normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
-  parseMessageWithAttachments: parseMessageWithAttachmentsMock,
-  registerApnsRegistration: registerApnsRegistrationMock,
-  requestHeartbeat: vi.fn(),
-  resolveSystemMainSessionTarget: vi.fn(() => ({
-    agentId: "ops",
-    sessionKey: "agent:ops:main",
-  })),
+  normalizeChannelId: vi.fn((channel?: string | null) => channel ?? null),
+  parseMessageWithAttachments: vi.fn(),
+  registerApnsRegistration: vi.fn(),
+  updatePairedDevicePresence: vi.fn().mockResolvedValue(true),
+  resolveSystemMainSessionTarget: vi.fn(() => ({ agentId: "ops", sessionKey: "agent:ops:main" })),
   resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
   resolveGatewayModelSupportsImages: vi.fn(
-    async ({
-      loadGatewayModelCatalog,
-      provider,
-      model,
-    }: {
-      loadGatewayModelCatalog: () => Promise<
-        Array<{ id: string; provider: string; input?: string[] }>
-      >;
-      provider?: string;
-      model?: string;
-    }) => {
+    async ({ loadGatewayModelCatalog, provider, model }: ImageSupportParams) => {
       if (!model) {
         return true;
       }
@@ -127,8 +90,10 @@ const runtimeMocks = vi.hoisted(() => ({
       model: entry?.model ?? "default-model",
     }),
   ),
-  persistInboundImagesForTranscript: persistInboundImagesForTranscriptMock,
+  persistInboundImagesForTranscript: vi.fn(),
 }));
+
+export { runtimeMocks };
 
 vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
@@ -165,40 +130,35 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   upsertSessionEntryCore: runtimeMocks.upsertSessionEntryCore,
 }));
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
-  loadOrCreateProcessDeviceIdentity: runtimeMocks.loadOrCreateProcessDeviceIdentity,
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateProcessDeviceIdentityAsync: runtimeMocks.loadOrCreateProcessDeviceIdentity,
 }));
 
 vi.mock("../infra/device-pairing.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-pairing.js")>()),
-  updatePairedDevicePresence: updatePairedDevicePresenceMock,
+  updatePairedDevicePresence: runtimeMocks.updatePairedDevicePresence,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: runtimeMocks.requestHeartbeat,
+vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/session-event-handoff.js")>()),
+  captureSessionEventTargetForHost: runtimeMocks.captureSessionEventTargetForHost,
+  enqueueSessionEventForHost: runtimeMocks.enqueueSessionEventForHost,
 }));
 
 vi.mock("../infra/push-apns.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/push-apns.js")>()),
-  ApnsRegistrationPairingChangedError: runtimeMocks.ApnsRegistrationPairingChangedError,
   registerApnsRegistration: runtimeMocks.registerApnsRegistration,
 }));
 
 vi.mock("../infra/system-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/system-events.js")>()),
-  enqueueSystemEvent: runtimeMocks.enqueueSystemEvent,
+  enqueueSystemEventEntry: runtimeMocks.enqueueSystemEventEntry,
 }));
 
 vi.mock("../media/store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../media/store.js")>()),
   deleteMediaBuffer: runtimeMocks.deleteMediaBuffer,
-}));
-
-vi.mock("../routing/session-key.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../routing/session-key.js")>()),
-  normalizeMainKey: runtimeMocks.normalizeMainKey,
 }));
 
 vi.mock("./chat-attachment-policy.js", async (importOriginal) => ({
@@ -215,9 +175,15 @@ vi.mock("./chat-attachments.js", async (importOriginal) => ({
 
 vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: runtimeMocks.loadSessionEntry,
   resolveGatewayModelSupportsImages: runtimeMocks.resolveGatewayModelSupportsImages,
   resolveSessionModelRef: runtimeMocks.resolveSessionModelRef,
+}));
+
+// mock-isolation: Node-event fixtures supply session rows without opening unrelated persistent stores.
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: vi.fn(async (params: { key: string }) =>
+    runtimeMocks.loadSessionEntry(params.key),
+  ),
 }));
 
 vi.mock("./ws-log.js", async (importOriginal) => ({
@@ -225,10 +191,45 @@ vi.mock("./ws-log.js", async (importOriginal) => ({
   formatForLog: runtimeMocks.formatForLog,
 }));
 
-export {
-  loadOrCreateProcessDeviceIdentityMock,
-  parseMessageWithAttachmentsMock,
-  persistInboundImagesForTranscriptMock,
-  updatePairedDevicePresenceMock,
-  runtimeMocks,
+const deviceProof = {
+  publicKey: "public-key",
+  signature: "signature",
+  signedAt: 1,
+  nonce: "nonce",
 };
+
+export function makeNodeClient(connId: string, nodeId: string): GatewayWsClient {
+  const socket = { readyState: WebSocket.OPEN, send: () => {} };
+  return {
+    connId,
+    usesSharedGatewayAuth: false,
+    socket: socket as unknown as GatewayWsClient["socket"],
+    connect: {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: { id: "node-host", version: "1.0.0", platform: "linux", mode: "node" },
+      device: { ...deviceProof, id: nodeId },
+    } as GatewayWsClient["connect"],
+  };
+}
+
+export function buildNodeEventContext(overrides: Partial<NodeEventContext> = {}): NodeEventContext {
+  return {
+    deps: {} as CliDeps,
+    broadcast: () => {},
+    nodeSendToSession: () => {},
+    nodeSubscribe: () => {},
+    nodeUnsubscribe: () => {},
+    broadcastVoiceWakeChanged: () => {},
+    addChatRun: () => {},
+    removeChatRun: () => undefined,
+    dedupe: new Map(),
+    agentRunSeq: new Map(),
+    getHealthCache: () => null,
+    refreshHealthSnapshot: async () => ({}) as HealthSummary,
+    loadGatewayModelCatalog: async () => [],
+    authorizeNodeSystemRunEvent: () => false,
+    logGateway: { warn: () => {} },
+    ...overrides,
+  };
+}

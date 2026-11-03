@@ -45,7 +45,7 @@ class ChatWorkingIndicatorTest {
 
   @Test
   fun newStancesUseSpecifiedCyclesAndKeyframePoses() {
-    assertEquals(6_000L, workingClawCycleMs(WorkingClawStance.Zen))
+    assertEquals(6_000L, WorkingClawStance.Zen.cycleMs)
     assertPose(
       workingClawPose(WorkingClawStance.Zen, 0.30f),
       scale = 1.08f,
@@ -61,7 +61,7 @@ class ChatWorkingIndicatorTest {
       jawRotation = 2f,
     )
 
-    assertEquals(1_200L, workingClawCycleMs(WorkingClawStance.Drummer))
+    assertEquals(1_200L, WorkingClawStance.Drummer.cycleMs)
     assertEquals(-20f, workingClawPose(WorkingClawStance.Drummer, 0.10f).jawRotation, 0.001f)
     assertPose(
       workingClawPose(WorkingClawStance.Drummer, 0.15f),
@@ -75,7 +75,7 @@ class ChatWorkingIndicatorTest {
       jawRotation = 2f,
     )
 
-    assertEquals(2_400L, workingClawCycleMs(WorkingClawStance.Peekaboo))
+    assertEquals(2_400L, WorkingClawStance.Peekaboo.cycleMs)
     assertPose(
       workingClawPose(WorkingClawStance.Peekaboo, 0.62f),
       translationYDp = 5f,
@@ -89,7 +89,7 @@ class ChatWorkingIndicatorTest {
       jawRotation = -28f,
     )
 
-    assertEquals(3_600L, workingClawCycleMs(WorkingClawStance.NodOff))
+    assertEquals(3_600L, WorkingClawStance.NodOff.cycleMs)
     assertPose(
       workingClawPose(WorkingClawStance.NodOff, 0.64f),
       rotationZ = -3f,
@@ -97,21 +97,21 @@ class ChatWorkingIndicatorTest {
       jawRotation = -6f,
     )
 
-    assertEquals(2_400L, workingClawCycleMs(WorkingClawStance.Curious))
+    assertEquals(2_400L, WorkingClawStance.Curious.cycleMs)
     assertPose(
       workingClawPose(WorkingClawStance.Curious, 0.40f),
       rotationZ = -14f,
       jawRotation = -16f,
     )
 
-    assertEquals(2_400L, workingClawCycleMs(WorkingClawStance.OmNom))
+    assertEquals(2_400L, WorkingClawStance.OmNom.cycleMs)
     assertPose(
       workingClawPose(WorkingClawStance.OmNom, 0.36f),
       translationXDp = 2.5f,
       jawRotation = 8f,
     )
 
-    assertEquals(2_400L, workingClawCycleMs(WorkingClawStance.FakeOut))
+    assertEquals(2_400L, WorkingClawStance.FakeOut.cycleMs)
     assertPose(
       workingClawPose(WorkingClawStance.FakeOut, 0.58f),
       rotationZ = 3f,
@@ -144,14 +144,13 @@ class ChatWorkingIndicatorTest {
   }
 
   @Test
-  fun ackRekeyKeepsOptimisticClockAndLocalStart() {
+  fun outputTokenUpdatesKeepClockAndLocalStart() {
     val tracker = ChatWorkingRunTracker("agent:main:main")
     val provisional =
       requireNotNull(
         tracker.resolve(
           indicatorVisible = true,
           clockKey = "message-1",
-          authoritativeRunId = "client-run",
           nowElapsedMs = 5_000L,
           outputTokens = null,
         ),
@@ -161,7 +160,6 @@ class ChatWorkingIndicatorTest {
         tracker.resolve(
           indicatorVisible = true,
           clockKey = "message-1",
-          authoritativeRunId = "server-run",
           nowElapsedMs = 8_000L,
           outputTokens = 40L,
         ),
@@ -169,7 +167,6 @@ class ChatWorkingIndicatorTest {
 
     assertEquals(provisional.clockKey, authoritative.clockKey)
     assertEquals(5_000L, authoritative.observedAtElapsedMs)
-    assertEquals("server-run", authoritative.authoritativeRunId)
     assertEquals(40L, authoritative.outputTokens)
   }
 
@@ -178,11 +175,11 @@ class ChatWorkingIndicatorTest {
     val tracker = ChatWorkingRunTracker("agent:main:main")
     val first =
       requireNotNull(
-        tracker.resolve(true, "run-1", "run-1", 7_000L, null),
+        tracker.resolve(true, "run-1", 7_000L, null),
       )
     val replacement =
       requireNotNull(
-        tracker.resolve(true, "run-2", "run-2", 9_000L, null),
+        tracker.resolve(true, "run-2", 9_000L, null),
       )
 
     assertEquals("run-1", first.clockKey)

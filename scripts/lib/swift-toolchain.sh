@@ -6,21 +6,12 @@ REQUIRED_XCODE_MAJOR=26
 REQUIRED_XCODE_MINOR=4
 
 select_xcode_toolchain() {
-  local expected_version="$1"
-  sudo xcode-select -s "/Applications/Xcode_${expected_version}.app/Contents/Developer" || return 1
-
-  local xcodebuild_version xcode_version
-  xcodebuild_version="$(xcodebuild -version)" || return 1
-  printf '%s\n' "$xcodebuild_version"
-  xcode_version="$(printf '%s\n' "$xcodebuild_version" | awk 'NR == 1 { print $2 }')"
-  if [[ "$xcode_version" != "$expected_version"* ]]; then
-    echo "error: expected Xcode ${expected_version}, got ${xcode_version}" >&2
-    return 1
-  fi
+  sudo xcode-select -s "/Applications/Xcode.app/Contents/Developer" || return 1
+  xcodebuild -version || return 1
   swift --version
 }
 
-prepare_ios_test_simulator() {
+select_ios_test_simulator() {
   local simulator_id
   simulator_id="$(
     xcrun simctl list devices available --json | node --input-type=module -e '
@@ -34,8 +25,6 @@ prepare_ios_test_simulator() {
       process.stdout.write(simulator.udid);
     '
   )" || return
-  # Finish first-boot setup before XCTest's launch deadline starts.
-  xcrun simctl bootstatus "$simulator_id" -b >&2 || return
   printf '%s\n' "$simulator_id"
 }
 
