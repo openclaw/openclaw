@@ -360,8 +360,10 @@ function pluginOriginLabel(origin: string | undefined, official?: boolean): stri
   return label ? t(label) : (origin ?? (official === false ? t("pluginConsent.community") : null));
 }
 
+/** The header names the source kind and package; this adds only a distinct spec and the pin. */
 function renderProvenance(source: PluginInspectSource | undefined) {
-  if (!source) {
+  const spec = source?.spec && source.spec !== source.packageName ? source.spec : undefined;
+  if (!source || (!spec && !source.integrity)) {
     return undefined;
   }
   const integrityLabel =
@@ -373,11 +375,7 @@ function renderProvenance(source: PluginInspectSource | undefined) {
   return (
     <>
       <div class="plugins-consent__provenance">
-        <span>
-          {[t(SOURCE_KIND_LABELS[source.kind]), source.spec ?? source.packageName]
-            .filter(Boolean)
-            .join(" · ")}
-        </span>
+        {spec ? <span>{spec}</span> : undefined}
         {source.integrity ? (
           <span title={source.integrity}>
             {integrityLabel}: <code>{source.integrity.slice(0, 20)}…</code>
@@ -430,12 +428,20 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
   const details = () => consent().details;
   const plugin = () => inspection()?.plugin;
   const fallback = () => consent().fallback;
-  const packageName = () => inspection()?.source?.packageName;
   const slug = () => consent().pluginId;
   const name = () => plugin()?.name ?? fallback().name;
   const version = () => plugin()?.version ?? fallback().version;
   const origin = () => pluginOriginLabel(plugin()?.origin, fallback().official);
-  const meta = () => [origin(), packageName()].filter(Boolean).join(" · ");
+  // Origin, source and package once, under the name: "Global · ClawHub · calendar-plus".
+  const meta = () => {
+    const source = inspection()?.source;
+    const parts = [
+      origin(),
+      source ? t(SOURCE_KIND_LABELS[source.kind]) : undefined,
+      source?.packageName,
+    ];
+    return [...new Set(parts.filter(Boolean))].join(" · ");
+  };
   const action = () =>
     props.busy ? t("pluginsPage.working") : t("pluginConsent.enableNamed", { name: name() });
   const confirmUnavailable = () =>
@@ -487,8 +493,8 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
       style={{ "--openclaw-modal-width": "min(560px, calc(100vw - 32px))" }}
       onModal-cancel={() => props.onCancel()}
     >
-      <section class="plugins-consent oc-card" data-plugin-consent={consent().intent.kind}>
-        <header class="plugins-consent__header">
+      <section class="oc-dialog plugins-consent" data-plugin-consent={consent().intent.kind}>
+        <header class="oc-dialog__header plugins-consent__header">
           <PluginArtTile
             registerIcon={props.registerIcon}
             slug={slug()}
@@ -496,42 +502,52 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
             iconUrl={props.iconUrl}
             loading={props.iconLoading}
           />
-          <div>
+          <div class="plugins-consent__identity">
             <div class="plugins-detail__title">
               <h2>{name()}</h2>
               {version() ? <span class="plugins-version">{`v${version()}`}</span> : undefined}
             </div>
             {meta() ? <p class="plugins-consent__description">{meta()}</p> : undefined}
           </div>
-        </header>
-        <Loading
-          on={receipt()}
-          fallback={
-            <p class="plugins-consent__hint" role="status">
-              {t("pluginConsent.loading")}
-            </p>
-          }
-        >
-          <Errored
-            fallback={(error, reset) => (
-              <div class="plugins-consent__error" role="alert">
-                <span>{formatUiError(error())}</span>
-                <RetryAction
-                  type="button"
-                  class="btn btn--sm oc-action oc-action-secondary"
-                  label={t("pluginsPage.tryAgain")}
-                  onRetry={() => {
-                    props.onRetry();
-                    reset();
-                  }}
-                />
-              </div>
-            )}
+          <button
+            type="button"
+            class="oc-dialog__close"
+            aria-label={t("common.close")}
+            onClick={() => props.onCancel()}
           >
-            <InspectionBody />
-          </Errored>
-        </Loading>
-        <openclaw-modal-actions class="plugins-consent__actions">
+            <Icon name="x" />
+          </button>
+        </header>
+        <div class="oc-dialog__body">
+          <Loading
+            on={receipt()}
+            fallback={
+              <p class="plugins-consent__hint" role="status">
+                {t("pluginConsent.loading")}
+              </p>
+            }
+          >
+            <Errored
+              fallback={(error, reset) => (
+                <div class="callout danger plugins-consent__error" role="alert">
+                  <span>{formatUiError(error())}</span>
+                  <RetryAction
+                    type="button"
+                    class="btn btn--sm oc-action oc-action-secondary"
+                    label={t("pluginsPage.tryAgain")}
+                    onRetry={() => {
+                      props.onRetry();
+                      reset();
+                    }}
+                  />
+                </div>
+              )}
+            >
+              <InspectionBody />
+            </Errored>
+          </Loading>
+        </div>
+        <openclaw-modal-actions class="oc-dialog__footer plugins-consent__actions">
           <button
             type="button"
             class="btn oc-action oc-action-secondary"

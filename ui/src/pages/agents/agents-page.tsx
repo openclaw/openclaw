@@ -1,4 +1,5 @@
 import { createEffect, createMemo } from "solid-js";
+import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { createAgentsPageState } from "./agents-page-state.ts";
@@ -20,7 +21,9 @@ export function AgentsPage(props: { routeData?: AgentsRouteData }) {
     <openclaw-agents-page>
       <AgentsPageHeader />
       <SettingsWorkspace>
-        <Agents {...viewProps()} />
+        <SettingsPage wide>
+          <Agents {...viewProps()} />
+        </SettingsPage>
       </SettingsWorkspace>
     </openclaw-agents-page>
   );

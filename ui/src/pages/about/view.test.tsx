@@ -1,10 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { createSignal } from "solid-js";
-import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { AboutView } from "./view.tsx";
 
@@ -141,9 +140,7 @@ it("shows Control UI and Gateway build identity with the shared settings facts",
 
 it("copies version and full commit, falling back to whichever exists", async () => {
   const writeText = vi.fn(async () => {});
-  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-  onTestFinished(() => restorePropertyDescriptor(navigator, "clipboard", clipboard));
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
   const { container, props, update } = render();
   const copy = async (index: number) => {
     writeText.mockClear();
@@ -159,6 +156,7 @@ it("copies version and full commit, falling back to whichever exists", async () 
   update({ ...props, gateway: { version: null, commit: "abcdef0", builtAt: null } });
   flush();
   expect(await copy(1)).toBe("abcdef0");
+  vi.unstubAllGlobals();
 });
 
 it("omits unknown facts and marks a disconnected Gateway unavailable", () => {
