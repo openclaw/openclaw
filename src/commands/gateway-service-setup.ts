@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDurableServiceEntrypoint } from "../daemon/durable-service-entrypoint.js";
 import type { GatewayService, GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
@@ -13,6 +14,10 @@ export async function prepareGatewayServiceInstall(params: {
   warn: DaemonInstallWarnFn;
 }) {
   const { runtimePinUpdate, ...runtime } = params.selection;
+  if (!runtime.env.OPENCLAW_WRAPPER?.trim()) {
+    // From npx or dlx, install the durable copy that the plan then points the service at.
+    await resolveDurableServiceEntrypoint(runtime.env, { install: true });
+  }
   const plan = await buildGatewayInstallPlan({
     ...runtime,
     port: params.port,

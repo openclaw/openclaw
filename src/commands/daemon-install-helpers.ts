@@ -625,7 +625,7 @@ export async function buildGatewayInstallPlan(params: {
   const wrapperPath = wrapperPointsAtGeneratedScript
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
-  const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
+  const { devMode, runtime, runtimePath, durableCli } = await resolveDaemonInstallRuntimeInputs({
     env,
     runtime: params.runtime,
     runtimeExplicit: params.runtimeExplicit,
@@ -653,7 +653,8 @@ export async function buildGatewayInstallPlan(params: {
     runtime,
     runtimePath,
     wrapperPath,
-    cliEntrypoint: params.serviceCli?.entrypoint ?? undefined,
+    // Install callers create the durable copy first; planning only reuses it.
+    cliEntrypoint: params.serviceCli?.entrypoint ?? durableCli,
     ...(params.existingCommand ? { existingCommand: params.existingCommand } : {}),
   });
   await emitNodeRuntimeWarning({

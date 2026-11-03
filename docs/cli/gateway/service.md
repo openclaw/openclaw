@@ -20,6 +20,13 @@ openclaw gateway restart
 openclaw gateway uninstall
 ```
 
+When `openclaw gateway install` runs from `npx`, `pnpm dlx`, or another
+temporary copy, it first installs the same OpenClaw version with npm into the
+`npm` folder of the state directory (`~/.openclaw/npm` by default) and points the
+service there, because the temporary copy can be deleted. `openclaw update`
+updates that copy in place. An existing service that still points into a temporary
+copy is refreshed by the next `openclaw gateway install`.
+
 Queued native service commands use elapsed-time deadlines, so system-clock
 corrections do not prematurely expire or extend their admission budgets.
 

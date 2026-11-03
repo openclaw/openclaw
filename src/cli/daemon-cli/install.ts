@@ -13,6 +13,10 @@ import { resolveFutureConfigActionBlock } from "../../config/future-version-guar
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
 import { resolveGatewayPort } from "../../config/paths.js";
+import {
+  isDisposableEntrypoint,
+  resolveDurableServiceEntrypoint,
+} from "../../daemon/durable-service-entrypoint.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { isNodeRuntime } from "../../daemon/runtime-binary.js";
 import {
@@ -30,6 +34,7 @@ import {
   sanitizeServiceInspectionError,
   ServiceStartRefusalError,
 } from "../../daemon/service-inspection-error.js";
+import { resolveServiceEntrypoint } from "../../daemon/service-layout.js";
 import { reconcileGatewayServiceDefinition } from "../../daemon/service-reconciliation.js";
 import type {
   GatewayServiceDefinitionBackupReceipt,
@@ -435,6 +440,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         if (pinChanged) {
           return "Gateway runtime selection changed; refreshing the install.";
         }
+        const currentEntrypoint = resolveServiceEntrypoint(currentCommand);
+        if (currentEntrypoint && (await isDisposableEntrypoint(currentEntrypoint))) {
+          return "Gateway service runs from a temporary npx or pnpm dlx copy that can be deleted; refreshing the install.";
+        }
         const getPlannedInstall = createLazyPromise(() =>
           buildInstallPlan({ warn: () => undefined }),
         );
@@ -582,6 +591,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     warn(warning);
   }
 
+  if (!restoreServiceCli && !wrapperPath) {
+    // From npx or dlx, install the durable copy that the plan then points the service at.
+    await resolveDurableServiceEntrypoint(installEnv, { install: true });
+  }
   const { programArguments, workingDirectory, environment, environmentValueSources } =
     await buildInstallPlan({
       runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,

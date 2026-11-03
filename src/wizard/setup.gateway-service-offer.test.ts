@@ -46,9 +46,10 @@ describe("canOfferGatewayServiceForOnboarding", () => {
     ["npx", path.join(path.sep, "home", "test", ".npm", "_npx", "abc", "bin", "openclaw")],
     ["pnpm dlx", path.join(path.sep, "home", "test", ".cache", "pnpm", "dlx", "abc", "openclaw")],
     ["a temporary directory", path.join(os.tmpdir(), "bunx-501-openclaw", "bin", "openclaw")],
-  ])("does not offer a service that would point into %s", async (_name, entrypoint) => {
+  ])("offers the service when running from %s", async (_name, entrypoint) => {
+    // Accepting installs a durable copy first, so the temporary copy can be evicted.
     process.argv = ["node", entrypoint];
-    await expect(canOfferGatewayServiceForOnboarding()).resolves.toBe(false);
+    await expect(canOfferGatewayServiceForOnboarding()).resolves.toBe(true);
   });
 
   it("does not offer a service the installer would refuse", async () => {

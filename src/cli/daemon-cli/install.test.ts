@@ -428,6 +428,25 @@ describe("runDaemonInstall", () => {
     );
   });
 
+  it("moves a loaded service off a temporary npx copy onto a durable one", async () => {
+    const npxPackage = path.join(path.sep, "home", "test", ".npm", "_npx", "abc", "node_modules");
+    loadedService({
+      programArguments: [
+        "/usr/bin/node",
+        path.join(npxPackage, "openclaw", "openclaw.mjs"),
+        "gateway",
+        "--port",
+        "18789",
+      ],
+    });
+
+    await expectReinstall();
+
+    expect(actionState.warnings).toContain(
+      "Gateway service runs from a temporary npx or pnpm dlx copy that can be deleted; refreshing the install.",
+    );
+  });
+
   it("refreshes a loaded service when its definition is missing", async () => {
     service.isLoaded.mockResolvedValue(true);
 

@@ -15,7 +15,6 @@ import {
   resolveNodeServiceIdentityEnvironment,
 } from "../../daemon/constants.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
-import { resolveDurableNodeEntrypoint } from "../../daemon/npx-service-install.js";
 import { resolveNodeProgramArguments } from "../../daemon/program-args.js";
 import {
   buildPlatformRuntimeLogHints,
@@ -252,7 +251,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const retainedRuntime = recordedRuntime?.status === "supported" ? recordedRuntime : undefined;
 
   const wrapperPath = installEnv.OPENCLAW_WRAPPER;
-  const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
+  const { devMode, runtime, runtimePath, durableCli } = await resolveDaemonInstallRuntimeInputs({
     env: installEnv,
     runtime: retainedRuntime?.runtime ?? runtimeRaw,
     runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
@@ -260,13 +259,10 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     pinnedRuntimePath,
     devMode: restoreServiceCli ? false : undefined,
     wrapperPath,
+    installDurableCli: !restoreServiceCli,
     warn,
   });
-  const cliEntrypoint =
-    restoreServiceCli?.entrypoint ??
-    (!devMode && !wrapperPath && runtime !== "standalone"
-      ? await resolveDurableNodeEntrypoint(installEnv)
-      : undefined);
+  const cliEntrypoint = restoreServiceCli?.entrypoint ?? durableCli;
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     cliEntrypoint,
     host,

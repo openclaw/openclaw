@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   resolveDaemonInstallRuntimeInputs,
@@ -57,6 +58,33 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
         runtimePath: "/custom/node",
       }),
     ).resolves.toMatchObject({ devMode });
+  });
+});
+
+describe("durable CLI for an npx copy", () => {
+  const plan = () =>
+    resolveDaemonInstallRuntimeInputs({
+      env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+      runtime: "node",
+      runtimePath: "/custom/node",
+      devMode: false,
+    });
+  beforeEach(() => {
+    process.argv = [
+      "node",
+      entrypoint(path.join(".npm", "_npx", "abc", "node_modules", "openclaw")),
+    ];
+  });
+
+  it("does not install a durable copy while planning", async () => {
+    expect((await plan()).durableCli).toBeUndefined();
+    expect(fs.existsSync(path.join(root, "state", "npm"))).toBe(false);
+  });
+
+  it("points the service at an existing durable copy instead of the npx cache", async () => {
+    const prefix = resolveNpmGlobalPrefixLayoutFromPrefix(path.join(root, "state", "npm"));
+    const durable = entrypoint(path.relative(root, path.join(prefix.globalRoot, "openclaw")));
+    expect((await plan()).durableCli).toBe(durable);
   });
 });
 
