@@ -3,7 +3,7 @@ import { onSettled, Show, untrack } from "solid-js";
 import {
   formatDocumentTitle,
   isSettingsNavigationRoute,
-  titleForRoute,
+  pageTitleForRoute,
 } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import "../components/app-topbar-solid.tsx";
@@ -459,7 +459,10 @@ export class ShellOwner
       return;
     }
     const outboxScopeHost = this.storedOutboxScopeHost(context);
-    let primaryContext = routeId === "custodian" ? askBrandLabel() : titleForRoute(routeId);
+    let primaryContext =
+      routeId === "custodian"
+        ? askBrandLabel()
+        : pageTitleForRoute(routeId, context.nativeDeviceSettings?.snapshot);
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }

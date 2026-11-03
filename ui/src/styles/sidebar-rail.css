@@ -749,13 +749,6 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   flex: 0 1 auto;
 }
 
-.sidebar-session-owner-filter .picker-select__label {
-  color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 550;
-  letter-spacing: -0.005em;
-}
-
 .sidebar-session-owner-filter .picker-select__chevron {
   margin-inline-start: -2px;
   color: var(--muted);
