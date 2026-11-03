@@ -360,6 +360,7 @@ describe("buildOllamaBaseUrlSsrFPolicy", () => {
     "http://[::ffff:169.254.169.254]",
     "http://100.100.100.200",
     "http://[fd00:ec2::254]",
+    "http://[fe80::1]",
   ])("rejects empty, invalid, metadata, or link-local base URL %s", (url) => {
     expect(buildOllamaBaseUrlSsrFPolicy(url)).toBeUndefined();
   });

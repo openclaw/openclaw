@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { isCloudMetadataIpAddress, isLinkLocalIpAddress } from "@openclaw/net-policy/ip";
 import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
@@ -73,11 +72,31 @@ const ollamaModelShowInfoCache = createStaleWhileRevalidateCache<OllamaModelShow
 const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
 
 function isOllamaBlockedBaseHost(hostname: string): boolean {
-  return (
-    OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(hostname) ||
-    isLinkLocalIpAddress(hostname) ||
-    isCloudMetadataIpAddress(hostname)
-  );
+  const host = hostname
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/gu, "");
+  if (
+    OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(host) ||
+    host === "100.100.100.200" ||
+    host === "fd00:ec2::254" ||
+    host.endsWith(":a9fe:a9fe")
+  ) {
+    return true;
+  }
+  const mapped = host.match(/^(?:.*:)?(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u);
+  if (mapped) {
+    const octets = mapped.slice(1).map((part) => Number(part));
+    if (octets.every((part) => part <= 255) && octets[0] === 169 && octets[1] === 254) {
+      return true;
+    }
+    if (octets.join(".") === "100.100.100.200") {
+      return true;
+    }
+  }
+  // fe80::/10, including a zone id. URL hostname may include brackets.
+  const first = host.split("%")[0]?.split(":")[0] ?? "";
+  return /^fe[89ab][0-9a-f]$/u.test(first);
 }
 
 export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
