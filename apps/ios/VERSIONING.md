@@ -246,8 +246,16 @@ stdout/stderr byte, stdout/stderr EOF, parent-observed child completion, complet
 output collection, and result handling (status validation and JSON decoding).
 It retains byte counts and exit status, without command arguments or output.
 These parent-observed timings can include scheduler delay; child completion is
-not an exact kernel exit timestamp. The probe adds no inventory queries or
-artifact writes and leaves exclusivity checks enabled.
+not an exact kernel exit timestamp. A query still running after five seconds
+also gets two targeted child CPU snapshots around one one-second native stack
+sample at 10-millisecond intervals. CPU snapshots cover only the inventory
+process, not CoreSimulator services; their difference covers the sampling window,
+not the whole query. Only bounded frame counts, depths, and symbols survive
+sanitization; raw reports are temporary and deleted. Each CPU probe has a
+one-second deadline and the sampler has a three-second deadline. Unavailable
+diagnostics preserve the inventory result. Sampling briefly suspends the child,
+and `observerJoinMs` records any additional wait for diagnostic completion.
+The probe adds no inventory queries and leaves exclusivity checks enabled.
 
 ## Apple bundle mapping
 

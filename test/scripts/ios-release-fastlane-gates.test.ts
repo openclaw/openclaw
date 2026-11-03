@@ -1795,6 +1795,68 @@ end
     }
   });
 
+  it("keeps stalled native command reports private and reaps timed-out diagnostic children", () => {
+    const source = String.raw`
+require "json"
+require "time"
+require ARGV.fetch(0)
+diagnostics = ScreenshotDiagnostics.new {}
+diagnostics.define_singleton_method(:diagnostic_command) do |command, output:, timeout:|
+  if command.first == "/bin/ps"
+    File.write(output, "  1-02:03:04.50 R< /PRIVATE/native/simctl\n")
+  else
+    File.write(command.last, <<~REPORT)
+      Process: simctl [123] PRIVATE-ARGUMENT
+      Path: /PRIVATE/native/simctl
+      Call graph:
+          10 Thread_123 DispatchQueue_1: PRIVATE-QUEUE
+            10 start  (in dyld) + 1 [0x123]
+              10 _dispatch_semaphore_wait_slow  (in libdispatch.dylib) + 2 [0x456]
+                10 PRIVATE/CONTENT  (in image) + 3 [0x789]
+      Total number in stack (recursive counted multiple, when >=5):
+      Binary Images: /PRIVATE/binary
+    REPORT
+  end
+  "succeeded"
+end
+waiter = Struct.new(:pid) { def alive?; true; end }.new(123)
+facts = diagnostics.send(:inventory_stall_probe, waiter)
+command = diagnostics.method(:diagnostic_command)
+diagnostics.define_singleton_method(:diagnostic_command) do |args, **options|
+  args.first == "/bin/ps" ? "timed-out" : command.call(args, **options)
+end
+without_cpu = diagnostics.send(:inventory_stall_probe, waiter)
+diagnostics.define_singleton_method(:diagnostic_command) { |*args, **kwargs| raise Errno::ENOENT }
+unavailable = diagnostics.send(:inventory_stall_probe, waiter)
+native = ScreenshotDiagnostics.new {}
+spawn = Process.method(:spawn)
+pid = nil
+Process.define_singleton_method(:spawn) { |*args, **options| pid = spawn.call(*args, **options) }
+outcome = native.send(:diagnostic_command, ["/bin/sleep", "60"], output: File::NULL, timeout: 0)
+alive = begin Process.kill(0, pid); true; rescue Errno::ESRCH; false; end
+puts JSON.generate({ facts: facts, withoutCpu: without_cpu, unavailable: unavailable, timeout: outcome, pid: pid, alive: alive })
+`;
+    const helper = path.join(path.dirname(fastfilePath), "screenshot_diagnostics.rb");
+    const result = spawnSync("ruby", ["-e", source, helper], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toMatch(/PRIVATE|0x123|0x456|0x789|DispatchQueue|Binary Images/);
+    const row = JSON.parse(result.stdout);
+    expect(row.facts.outcome).toBe("collected");
+    expect(row.facts.before).toEqual({ cpuMs: 93784500, state: "R<" });
+    expect(row.facts.after).toEqual(row.facts.before);
+    expect(row.facts.frames).toEqual([
+      { thread: 1, depth: 6, samples: 10, symbol: "start" },
+      { thread: 1, depth: 8, samples: 10, symbol: "_dispatch_semaphore_wait_slow" },
+    ]);
+    expect(row.unavailable.outcome).toBe("unavailable");
+    expect(row.withoutCpu.outcome).toBe("collected");
+    expect(row.withoutCpu.before).toBeNull();
+    expect(row.withoutCpu.frames).toEqual(row.facts.frames);
+    expect(row.timeout).toBe("timed-out");
+    expect(row.pid).toBeGreaterThan(0);
+    expect(row.alive).toBe(false);
+  });
+
   it("saves bounded startup and crash facts without raw log, path, or process arguments", () => {
     const source = `
 require "json"
