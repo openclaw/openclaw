@@ -27,6 +27,7 @@ export function DraftMobileHeader(props: {
       active
       title={t("newSession.title")}
       titlePending={false}
+      titleHidden
       incognito={false}
       navDrawerOpen={props.shell.navDrawerOpen}
       panelsOpen={false}
