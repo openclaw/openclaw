@@ -63,6 +63,53 @@ function captureAuthority(
 }
 
 describe("cron handler inference binding persistence", () => {
+  it.for(["isolated", "session:agent:main:service-target"] as const)(
+    "captures a stored account through the plugin service for %s",
+    async (target, { fixture }) => {
+      const job = await fixture.addThroughService({
+        ...createParams(),
+        wakeMode: "next-heartbeat",
+        agentId: "main",
+        sessionTarget: target,
+        payload: { kind: "agentTurn", message: "Service account capture" },
+        delivery: { mode: "none" },
+        schedule: { kind: "cron", expr: "0 2 * * *" },
+      });
+      const stored = await fixture.reload();
+      expect(stored.id).toBe(job.id);
+      expect(stored.inferenceBinding).toMatchObject({
+        provider: "openai",
+        profileId: platformId,
+        runtime: "openclaw",
+        source: "auto",
+      });
+      expect((await fixture.resolveAuth(stored.inferenceBinding!)).apiKey).toBe(
+        "synthetic-platform-key",
+      );
+    },
+  );
+
+  it("refuses a service's explicit personal account without a human caller", async ({
+    fixture,
+  }) => {
+    const personal = await fixture.personalAccount();
+    await expect(
+      fixture.addThroughService({
+        ...createParams(),
+        wakeMode: "next-heartbeat",
+        agentId: "main",
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "Personal selection",
+          model: `openai/gpt-4.1@${personal.profileId}`,
+        },
+        delivery: { mode: "none" },
+        schedule: { kind: "cron", expr: "0 2 * * *" },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("replaces a stored account with an explicit native CLI login without replacing the job", async ({
     fixture,
   }) => {
