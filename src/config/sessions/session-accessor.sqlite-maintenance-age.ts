@@ -351,22 +351,22 @@ export function recordSessionEntryMaintenanceAgeFact(
       }
     }
   }
-  // Certified keys support indexed namespaces; pending aliases retain the canonical decoder.
-  // Older maintenance readers have no pending projection and keep their full row path.
-  const dashboardRows = hasCanonicalSessionValidationProjection(database)
-    ? queries.dashboards(undefined)
-    : queries.activity(undefined);
-  for (const row of dashboardRows) {
-    if (
-      !isDashboardKey(row.session_key) ||
-      shouldPreserveMaintenanceEntry({ key: row.session_key, entry: undefined })
-    ) {
-      continue;
+  const dashboardAge = maintenance.archiveDashboardAfterMs;
+  if (dashboardAge != null && dashboardAge > 0) {
+    // Certified keys support indexed namespaces; pending aliases retain the canonical decoder.
+    // Older maintenance readers have no pending projection and keep their full row path.
+    const dashboardRows = hasCanonicalSessionValidationProjection(database)
+      ? queries.dashboards(undefined)
+      : queries.activity(undefined);
+    for (const row of dashboardRows) {
+      if (
+        !isDashboardKey(row.session_key) ||
+        shouldPreserveMaintenanceEntry({ key: row.session_key, entry: undefined })
+      ) {
+        continue;
+      }
+      next.at = Math.min(next.at, nextAgeAt(readActivityAt(row), dashboardAge, plannedAt));
     }
-    next.at = Math.min(
-      next.at,
-      nextAgeAt(readActivityAt(row), maintenance.archiveDashboardAfterMs, plannedAt),
-    );
   }
   const recentAge = maintenance.preserveRecentMs;
   if (recentAge != null && recentAge > 0) {
