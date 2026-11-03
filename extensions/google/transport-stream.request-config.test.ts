@@ -27,6 +27,7 @@ it("extends the owned generation config without copying or sharing it between re
       maxTokens: 64,
       temperature: 0.25,
       topP: 0.4,
+      seed: 7,
       stop: ["END"],
     });
     const second = buildGoogleGenerativeAiParams(model, context, { maxTokens: 128 });
@@ -37,6 +38,7 @@ it("extends the owned generation config without copying or sharing it between re
       maxOutputTokens: 64,
       temperature: 0.25,
       topP: 0.4,
+      seed: 7,
       stopSequences: ["END"],
     });
     expect(second.generationConfig).toEqual({ maxOutputTokens: 128 });

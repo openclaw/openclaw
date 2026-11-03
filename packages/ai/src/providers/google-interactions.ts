@@ -572,6 +572,7 @@ export const streamSimpleGoogleInteractions: StreamFunction<
   return streamGoogleInteractions(model, context, {
     ...base,
     ...(typeof record.topP === "number" ? { topP: record.topP } : {}),
+    ...(typeof record.seed === "number" ? { seed: record.seed } : {}),
     thinking: buildGoogleInteractionsSimpleThinking(model, options),
     ...(toolChoice ? { toolChoice } : {}),
     ...(videoMetadata !== undefined ? { videoMetadata } : {}),
