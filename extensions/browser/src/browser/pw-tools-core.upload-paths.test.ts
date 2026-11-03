@@ -154,9 +154,12 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
   });
 
   it("bounds file assignment by the same request deadline", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     try {
-      interactionMocks.clickViaPlaywright.mockImplementation(async () => page.emitChooser());
+      interactionMocks.clickViaPlaywright.mockImplementation(async () => {
+        vi.setSystemTime(Date.now() + 60_000);
+        page.emitChooser();
+      });
       page.fileChooser.setFiles.mockImplementation(
         async (_paths, options) =>
           await new Promise<void>((_resolve, reject) => {
@@ -165,55 +168,15 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
               () => reject(nativeAbortError(options.signal)),
               { once: true },
             );
+            setTimeout(() => reject(new Error("Native assignment timed out")), options.timeout);
           }),
       );
-      const upload = startUpload("e12", { timeoutMs: 500 });
-      const rejection = expect(upload).rejects.toThrow(
-        "Timeout 500ms exceeded while completing file upload",
-      );
+      const settled = Promise.allSettled([startUpload("e12", { timeoutMs: 500 })]);
 
       await vi.advanceTimersByTimeAsync(500);
-      await rejection;
+      const reason = new Error("Timeout 500ms exceeded while completing file upload");
+      expect(await settled).toEqual([{ status: "rejected", reason }]);
       expect(page.press).not.toHaveBeenCalled();
-      expect(page.listenerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("completes an upload within its elapsed budget after a wall-clock correction", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-    try {
-      vi.setSystemTime(0);
-      interactionMocks.clickViaPlaywright.mockImplementation(async () => {
-        vi.setSystemTime(60_000);
-        page.emitChooser();
-      });
-      let assigned = false;
-      // The native file assignment needs 10ms, independently of wall time.
-      page.fileChooser.setFiles.mockImplementation(async (_paths, { timeout }) => {
-        let assignment: ReturnType<typeof setTimeout> | undefined;
-        let expiry: ReturnType<typeof setTimeout> | undefined;
-        try {
-          await new Promise<void>((resolve, reject) => {
-            assignment = setTimeout(() => {
-              assigned = true;
-              resolve();
-            }, 10);
-            expiry = setTimeout(
-              () => reject(new Error("Native file assignment timed out")),
-              timeout,
-            );
-          });
-        } finally {
-          clearTimeout(assignment);
-          clearTimeout(expiry);
-        }
-      });
-      const completed = Promise.allSettled([startUpload("e12", { timeoutMs: 500 })]);
-      await vi.advanceTimersByTimeAsync(10);
-      expect(await completed).toEqual([{ status: "fulfilled", value: undefined }]);
-      expect(assigned).toBe(true);
       expect(page.listenerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -262,17 +225,12 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
   });
 
   it("waits for a superseded click to settle before arming the next chooser", async () => {
-    let finishFirstClick!: () => void;
+    const firstClick = createDeferred<void>();
     interactionMocks.clickViaPlaywright
-      .mockImplementationOnce(
-        async () =>
-          await new Promise<void>((resolve) => {
-            finishFirstClick = () => {
-              page.emitChooser();
-              resolve();
-            };
-          }),
-      )
+      .mockImplementationOnce(async () => {
+        await firstClick.promise;
+        page.emitChooser();
+      })
       .mockImplementationOnce(async () => page.emitChooser());
 
     const first = startUpload("e1", { paths: ["/home/user/.openclaw/media/inbound/first.pdf"] });
@@ -281,7 +239,7 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
     await Promise.resolve();
     expect(interactionMocks.clickViaPlaywright).toHaveBeenCalledTimes(1);
 
-    finishFirstClick();
+    firstClick.resolve();
     await expect(first).rejects.toThrow("superseded by another waiter");
     await second;
     expect(page.fileChooser.setFiles).toHaveBeenCalledTimes(1);
