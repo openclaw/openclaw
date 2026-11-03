@@ -14,8 +14,10 @@ export const M_POLL_START = "m.poll.start" as const;
 const M_POLL_RESPONSE = "m.poll.response" as const;
 const M_POLL_END = "m.poll.end" as const;
 
-const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
-const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
+// Outbound polls use the MSC3381 unstable names: Element Web and Element X both render them,
+// while Element X (matrix-rust-sdk) shows `m.poll.start` as an unsupported event.
+export const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
+export const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
 const ORG_POLL_END = "org.matrix.msc3381.poll.end" as const;
 
 const POLL_EVENT_TYPES = [
@@ -330,9 +332,11 @@ export function buildPollStartContent(poll: PollInput): PollStartContent {
   const fallbackText = `${normalized.question}\n${normalized.options.map((option, idx) => `${idx + 1}. ${option}`).join("\n")}`;
 
   return {
-    [M_POLL_START]: {
+    [ORG_POLL_START]: {
       question: buildTextContent(normalized.question),
-      kind: isMultiple ? "m.poll.undisclosed" : "m.poll.disclosed",
+      kind: isMultiple
+        ? "org.matrix.msc3381.poll.undisclosed"
+        : "org.matrix.msc3381.poll.disclosed",
       max_selections: normalized.maxSelections,
       answers,
     },
