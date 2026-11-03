@@ -1181,6 +1181,11 @@ def sh(command, *arguments, **options)
     # CI observed bootstatus exiting 0 after CoreSimulator shut the Watch down mid-boot.
     device["state"] = @scenario == "boot-ended" && device.fetch("name").include?("Apple Watch") ? "Shutdown" : "Booted"
     raise "boot failed" if @scenario == "boot-failure" || (@scenario == "watch-boot-failure" && device.fetch("name").include?("Apple Watch"))
+  elsif args[0, 3] == ["xcrun", "simctl", "spawn"] && args[4] == "launchctl"
+    device = @owned.fetch(args[3])
+    raise "modified inactive simulator" unless device.fetch("state") == "Booted"
+    raise "modified Watch services" if device.fetch("name").include?("Apple Watch")
+    raise "Shortcuts preparation failed" if @scenario == "shortcuts-failure"
   elsif args[0, 3] == ["xcrun", "simctl", "shutdown"]
     raise "cleanup failed" if @scenario == "capture-cleanup-failure" || @scenario == "cleanup-failure" || (@scenario == "watch-cleanup-failure" && @owned.fetch(args[3]).fetch("name").include?("Apple Watch"))
     @owned.fetch(args[3])["state"] = "Shutdown"
@@ -1293,7 +1298,7 @@ def sh(command, *arguments, **options)
   end
 end
 
-results = %w[combined watch-unrelated-runtime watch-staging watch-staging-empty watch-staging-retained watch-staging-rejected watch-staging-unverified watch-staging-ambiguous unavailable-staged unavailable-staged-rescan-timeout unavailable-package-missing watch-maintenance watch-runtime-missing diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-deleting unavailable-deletion-natural unavailable-deletion-reregistered unavailable-deletion-stuck unavailable-deletion-retained unavailable-deletion-delayed unavailable-ambiguous unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
+results = %w[combined shortcuts shortcuts-failure watch-unrelated-runtime watch-staging watch-staging-empty watch-staging-retained watch-staging-rejected watch-staging-unverified watch-staging-ambiguous unavailable-staged unavailable-staged-rescan-timeout unavailable-package-missing watch-maintenance watch-runtime-missing diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-deleting unavailable-deletion-natural unavailable-deletion-reregistered unavailable-deletion-stuck unavailable-deletion-retained unavailable-deletion-delayed unavailable-ambiguous unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
@@ -1323,6 +1328,7 @@ results = %w[combined watch-unrelated-runtime watch-staging watch-staging-empty 
     ENV["HOME"] = root
     ENV["OPENCLAW_SNAPSHOT_DIAGNOSTICS"] = scenario == "diagnostics" ? "1" : "0"
     ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] = scenario.start_with?("startup-probe") ? "1" : "0"
+    ENV["OPENCLAW_SNAPSHOT_DISABLE_SHORTCUTS"] = scenario.start_with?("shortcuts") ? "1" : "0"
     ENV["OPENCLAW_IOS_RESOURCE_PHASE_PATH"] = File.join(root, "resource-phase")
     logs = File.join(ios_root, "build", "SnapshotLogs")
     FileUtils.mkdir_p(logs)
@@ -1364,6 +1370,7 @@ results = %w[combined watch-unrelated-runtime watch-staging watch-staging-empty 
       admissions: @admissions,
       lifecycle: @commands.select { |args| args[0, 2] == ["xcrun", "simctl"] && %w[create bootstatus shutdown delete].include?(args[2]) }.map { |args| args.drop(2) },
       repairCommands: @commands.select { |args| args[0, 3] == ["xcrun", "simctl", "runtime"] || args[0, 2] == ["xcodebuild", "-downloadPlatform"] },
+      shortcutsCommands: @commands.select { |args| args[0, 3] == ["xcrun", "simctl", "spawn"] && args[4] == "launchctl" }.map { |args| args.drop(3) },
       watchCreates: @watch_creates,
       pngs: Dir[File.join(ios_root, "fastlane", "screenshots", "en-US", "*.png")].length,
       xcresults: Dir[File.join(ios_root, "build", "SnapshotTestResults", "*.xcresult")].length,
@@ -1406,6 +1413,7 @@ puts JSON.generate(results)
       }[];
       lifecycle: string[][];
       repairCommands: string[][];
+      shortcutsCommands: string[][];
       watchCreates: number;
       admissions: number[];
     }[];
@@ -1442,6 +1450,23 @@ puts JSON.generate(results)
       error: null,
       installed: null,
       pngs: 8,
+    });
+    expect(row("combined").shortcutsCommands).toEqual([]);
+    expect(row("shortcuts")).toMatchObject({ error: null, pngs: 9, owned: [] });
+    expect(row("shortcuts").shortcutsCommands).toEqual(
+      [1, 2].flatMap((id) =>
+        ["disable", "bootout"].map((verb) => [
+          `00000000-0000-0000-0000-${String(id).padStart(12, "0")}`,
+          "launchctl",
+          verb,
+          "user/foreground/com.apple.siriactionsd",
+        ]),
+      ),
+    );
+    expect(row("shortcuts-failure")).toMatchObject({
+      error: "Shortcuts preparation failed",
+      pngs: 0,
+      owned: [],
     });
     expect(row("combined").diagnostics).toBeNull();
     expect(row("combined").observations).toEqual([]);

@@ -165,6 +165,12 @@ and 13-inch iPad, and captures the Apple Watch screenshot. It does not generate
 release notes, archive an IPA, or access signing assets or App Store credentials.
 Both upload operations remain restricted to `main`.
 
+The screenshot-only workflow's temporary `shortcuts_probe` option disables only
+`siriactionsd` in each disposable iPhone and iPad after boot, stopping its background
+Shortcuts action indexing. It leaves Watch and asset downloads unchanged. The option
+defaults to off; release and qualification runs retain stock simulators. Locally,
+`OPENCLAW_SNAPSHOT_DISABLE_SHORTCUTS=1 pnpm ios:screenshots` selects the same experiment.
+
 Capture creates a fresh simulator for each selected device type and runtime,
 then shuts down and deletes that exact simulator before starting the next one.
 An already running simulator stops the command before capture; shut it down

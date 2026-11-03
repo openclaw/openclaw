@@ -1,0 +1,3 @@
+25
+# Reuse the production Fastlane lifecycle fixture to prove the probe stays off by
+# default, touches only both disposable iOS devices, and cleans up on failure.

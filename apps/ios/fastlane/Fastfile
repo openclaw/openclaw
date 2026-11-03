@@ -454,6 +454,15 @@ def with_screenshot_simulator(template = nil, watch_name: nil, diagnostics: nil)
         end
       end
     end
+    if !watch_name && ENV["OPENCLAW_SNAPSHOT_DISABLE_SHORTCUTS"] == "1"
+      screenshot_phase(diagnostics, "shortcuts-disable", device: name, udid: udid) do
+        # siriactionsd owns BackgroundShortcutRunner's first-boot action indexing.
+        # These overrides die with our disposable device; asset and keyboard services stay stock.
+        target = "user/foreground/com.apple.siriactionsd"
+        sh("xcrun", "simctl", "spawn", udid, "launchctl", "disable", target)
+        sh("xcrun", "simctl", "spawn", udid, "launchctl", "bootout", target)
+      end
+    end
     if ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] == "1"
       screenshot_phase(diagnostics, "simulator-idle", device: name, udid: udid) { sleep(120) }
       require_exclusive_screenshot_simulator!(udid, diagnostics)

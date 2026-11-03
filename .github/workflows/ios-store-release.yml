@@ -27,6 +27,10 @@ on:
         description: Observe idle host and iPhone simulator before screenshots (temporary, no upload)
         type: boolean
         default: false
+      shortcuts_probe:
+        description: Disable Shortcuts indexing on disposable iOS screenshot simulators (temporary, no upload)
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -130,6 +134,7 @@ jobs:
           OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
           OPENCLAW_IOS_RESOURCE_DIAGNOSTICS: ${{ (inputs.resource_diagnostics || inputs.startup_probe) && '1' || '0' }}
           OPENCLAW_SNAPSHOT_STARTUP_PROBE: ${{ inputs.startup_probe && '1' || '0' }}
+          OPENCLAW_SNAPSHOT_DISABLE_SHORTCUTS: ${{ inputs.shortcuts_probe && '1' || '0' }}
           OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ inputs.startup_probe && 'iphone' || '' }}
           OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ inputs.startup_probe && '1' || '0' }}
         run: |
