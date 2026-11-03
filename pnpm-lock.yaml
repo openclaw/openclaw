@@ -222,7 +222,7 @@ patchedDependencies:
   baileys@7.0.0-rc14: c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded
   chrome-devtools-mcp@1.11.0: c2e391b196607620c519f04eb1563dc4a8f01aebed3b70bd77e6635ae03a5c9a
   ghostty-web@0.4.0: d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524
-  matrix-js-sdk@43.0.0: f19760bc134418beaf4119ce88c4344800c6b2932f379b40c38c4ebdb652f82d
+  matrix-js-sdk@43.0.0: 823022214a1466879aba6c60460809768e76f747411fd95c8a99d56096100f48
   minizlib@3.1.0: 9669b7a5b10b7831ff19c6066787f9dbed0dca18685d6ea8a17bad8282c3f39c
   playwright-core@1.64.1: eedf680682a6840d82c6ad530a60875857aa8c0372785acf8e8e5df9c2e3ac16
   proper-lockfile@4.1.2: ef83b3d51ecb27f8b06d2a3660d509c3da303d7e1d2074712b0ecc2f6256b7cf
@@ -1659,7 +1659,7 @@ importers:
         version: 15.0.3
       matrix-js-sdk:
         specifier: 43.0.0
-        version: 43.0.0(patch_hash=f19760bc134418beaf4119ce88c4344800c6b2932f379b40c38c4ebdb652f82d)
+        version: 43.0.0(patch_hash=823022214a1466879aba6c60460809768e76f747411fd95c8a99d56096100f48)
       music-metadata:
         specifier: 12.2.3
         version: 12.2.3(supports-color@10.2.2)
@@ -16752,7 +16752,7 @@ snapshots:
 
   matrix-events-sdk@0.0.1: {}
 
-  matrix-js-sdk@43.0.0(patch_hash=f19760bc134418beaf4119ce88c4344800c6b2932f379b40c38c4ebdb652f82d):
+  matrix-js-sdk@43.0.0(patch_hash=823022214a1466879aba6c60460809768e76f747411fd95c8a99d56096100f48):
     dependencies:
       '@babel/runtime': 8.0.7
       '@matrix-org/matrix-sdk-crypto-wasm': 18.9.0
