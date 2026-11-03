@@ -202,7 +202,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
     );
     expect(patches()).toHaveLength(0);
     expect(source.channels.state.configEdits.telegram).toHaveLength(3);
-    expect(text(page, ".channels-detail__status")).toBe("Unsaved changes");
+    expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe("Unsaved changes");
 
     profileButton(page, "Reload").click();
     await waitForSolid(() => expect(source.channels.state.configEdits.telegram).toBeUndefined());
@@ -232,7 +232,9 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
     expect(JSON.parse(params.raw)).toEqual({
       channels: { telegram: { dmPolicy: "pairing", allowFrom: ["111"] } },
     });
-    await waitForSolid(() => expect(text(page, ".channels-detail__status")).toBe("Saved"));
+    await waitForSolid(() =>
+      expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe("Saved"),
+    );
   });
 
   it("still saves next to a change elsewhere that the edits don't touch", async () => {
@@ -259,7 +261,9 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
         telegram: { dmPolicy: "pairing", groups: { "-1001": { requireMention: false } } },
       },
     });
-    await waitForSolid(() => expect(text(page, ".channels-detail__status")).toBe("Saved"));
+    await waitForSolid(() =>
+      expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe("Saved"),
+    );
     expect(alertText(page)).toBeNull();
   });
 
@@ -286,7 +290,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
       }
       gateway.emit({ phase: "connected" });
       await waitForSolid(() => {
-        expect(text(page, ".channels-detail__status")).toBe(status);
+        expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe(status);
         expect(alertText(page)).toBe(alert);
       });
       expect(patches()).toHaveLength(1);
