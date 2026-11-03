@@ -21,7 +21,24 @@
 }
 
 .agents-page-menu {
-  display: none;
+  display: inline-flex;
+  flex: none;
+}
+
+.btn.agents-page-menu__trigger {
+  width: 33px;
+  height: 33px;
+  padding: 0;
+}
+
+.agents-page-menu__trigger > .oc-menu-item__label {
+  display: contents;
+}
+
+.agents-page-menu__trigger svg {
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 
 .agent-file-tabs {
@@ -1167,58 +1184,14 @@
     min-width: 0;
   }
 
-  .agents-toolbar-actions {
-    justify-content: space-between;
-  }
-
-  .agents-toolbar-actions .agents-toolbar-secondary {
-    display: none;
-  }
-
-  .agents-page-menu {
-    display: inline-flex;
-    flex: none;
-  }
-
   .btn.agents-page-menu__trigger {
     width: 44px;
     height: 44px;
-    padding: 0;
   }
 
-  .agents-page-menu__trigger > .oc-menu-item__label {
-    display: contents;
-  }
-
-  .agents-page-menu__trigger svg {
-    display: block;
-    width: 14px;
-    height: 14px;
-  }
-
-  /* With the menu in the floating header, New agent has the row to itself. */
-  .shell--floating-header .page-header-actions:has(> .agents-toolbar-actions),
-  .shell--floating-header .agents-toolbar-actions {
-    flex: 1 1 100%;
-    width: 100%;
-  }
-
-  .shell--floating-header .agents-toolbar-actions > :has(.agents-create-btn),
-  .shell--floating-header .agents-toolbar-actions .agents-create-btn {
-    flex: 1;
-    width: 100%;
-  }
-
-  /* Alone on its row, New agent needs the regular button shape to read as an action. */
-  .agents-toolbar-actions .agents-create-btn.btn--ghost {
-    border-color: var(--border);
-    background: var(--btn-bg, var(--bg-elevated));
-    color: var(--text);
-  }
-
-  :root[data-theme-mode="light"] .agents-toolbar-actions .agents-create-btn.btn--ghost {
-    border-color: var(--input);
-    background: var(--bg);
+  /* With the menu in the floating header, no row is left above the tabs. */
+  .page-header-actions:has(> .agents-toolbar-actions):not(:has(.agents-page-menu)) {
+    display: none;
   }
 }
 
