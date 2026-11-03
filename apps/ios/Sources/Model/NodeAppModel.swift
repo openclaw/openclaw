@@ -1128,7 +1128,6 @@ final class NodeAppModel {
         let enabled = UserDefaults.standard.bool(forKey: "voiceWake.enabled")
         self.voiceWake.setEnabled(enabled)
         self.talkMode.attachGateway(self.operatorGateway)
-        refreshOperatorAdminScopeFromStore()
         let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
         self.setTalkEnabled(talkEnabled)
         self.locationService.setAuthorizationChangeHandler { [weak self] snapshot in
@@ -4122,6 +4121,13 @@ extension NodeAppModel {
         guard !self.isLocalGatewayFixtureEnabled,
               self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
         else { return }
+        guard let route = await self.operatorGateway.currentRoute() else { return }
+        let scopes = await self.operatorGateway.currentOperatorScopes(ifCurrentRoute: route)
+        guard await self.operatorGateway.currentRoute() == route,
+              !self.isLocalGatewayFixtureEnabled,
+              self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
+              self.activeGatewayConnectConfig?.ingressAuthorization?.isCurrent() ?? true
+        else { return }
         self.operatorTalkConnectionGeneration &+= 1
         let talkConnectionGeneration = self.operatorTalkConnectionGeneration
         self.operatorTalkHydrationGeneration = talkConnectionGeneration
@@ -4130,7 +4136,7 @@ extension NodeAppModel {
                 self.operatorTalkHydrationGeneration = nil
             }
         }
-        self.setOperatorConnected(true)
+        self.setOperatorConnected(true, scopes: scopes ?? [])
         await self.refreshDesktopObserveAvailability(
             stableID: stableID,
             routeGeneration: routeGeneration)
@@ -4968,14 +4974,14 @@ extension NodeAppModel {
             deviceAuthGatewayID: deviceAuthGatewayID)
     }
 
-    func setOperatorConnected(_ connected: Bool) {
+    func setOperatorConnected(_ connected: Bool, scopes: Set<String> = []) {
         let changed = self.operatorConnected != connected
         self.operatorConnected = connected
         if !connected {
             self.isDesktopObserveAvailable = false
         }
         self.operatorStatusText = connected ? "Connected" : "Offline"
-        self.refreshOperatorAdminScopeFromStore()
+        self.hasOperatorAdminScope = connected && scopes.contains("operator.admin")
         guard connected else {
             guard changed else { return }
             Task { [weak self] in
@@ -5016,32 +5022,6 @@ extension NodeAppModel {
               await self.operatorGateway.currentRoute(ifGatewayID: stableID) == route
         else { return }
         self.isDesktopObserveAvailable = supported
-    }
-
-    func refreshOperatorAdminScopeFromStore() {
-        guard let config = activeGatewayConnectConfig else {
-            self.hasOperatorAdminScope = false
-            return
-        }
-        guard config.ingressAuthorization?.isCurrent() ?? true else {
-            self.hasOperatorAdminScope = false
-            return
-        }
-        let profile = config.nodeOptions.deviceIdentityProfile
-        let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
-        let bindingStore = GatewayAccessDeviceAuthBindingStore.shared
-        let stored = bindingStore.storedDeviceAuth(
-            role: "operator",
-            gatewayID: gatewayID,
-            profile: profile)
-        let scopes = bindingStore.authorizedScopes(
-            entry: stored,
-            principal: config.ingressAuthorization?.principal,
-            gatewayID: gatewayID,
-            role: "operator",
-            profile: profile)
-        self.hasOperatorAdminScope = config.nodeOptions.allowStoredDeviceAuth &&
-            scopes.contains("operator.admin")
     }
 }
 
@@ -5114,8 +5094,7 @@ extension NodeAppModel {
         self.connectedGatewayID = ScreenshotFixtureMode.gatewayID
         self.activeGatewayConnectConfig = nil
         self.gatewayConnected = true
-        self.setOperatorConnected(true)
-        self.hasOperatorAdminScope = true
+        self.setOperatorConnected(true, scopes: ["operator.admin"])
         self.configureLocalGatewayFixtureSession(.appScreenshots)
         self.talkMode.enterScreenshotFixtureMode()
     }

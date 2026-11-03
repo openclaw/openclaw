@@ -67,6 +67,8 @@ and Gateway permissions are unchanged.
 
 Open **Settings** in the sidebar to use the same Dashboard settings pages as the
 web and macOS apps. A connected operator session with `operator.admin` is required.
+Access comes from the current connection's accepted scopes, including when
+authenticated ingress does not issue a reusable Gateway token.
 The toolbar's **Gateway** button opens the native connection screen, including
 setup, paired Gateways, manual connection, and advanced connection options.
 The sidebar footer also provides Gateway access: **Add Gateway** when none are

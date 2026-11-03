@@ -90,9 +90,16 @@ enum GatewayChannelDashboardAuth {
         case .password:
             guard let password = context.password?.trimmedNonEmpty else { throw CancellationError() }
             credential = (["password": password], nil)
-        case .deviceToken, .bootstrapToken, .none:
+        case .deviceToken, .bootstrapToken:
             guard let token = context.httpResourceBearer?.trimmedNonEmpty else { throw CancellationError() }
             credential = (["deviceToken": token], token)
+        case .none:
+            // Authenticated ingress can accept this socket without issuing a reusable Gateway token.
+            if let token = context.httpResourceBearer?.trimmedNonEmpty {
+                credential = (["deviceToken": token], token)
+            } else {
+                credential = ([:], nil)
+            }
         }
 
         let fields = GatewayDeviceAuthPayload.Fields(

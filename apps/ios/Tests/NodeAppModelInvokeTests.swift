@@ -9219,7 +9219,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
     }
 
-    @Test @MainActor func `operator scopes use the active gateway token`() throws {
+    @Test @MainActor func `stored operator scopes request permissions without granting disconnected authority`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -9265,8 +9265,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             token: "operator-token",
             scopes: ["operator.read", "operator.admin", "operator.approvals"],
             gatewayID: authenticationOwnerID)
-        appModel.refreshOperatorAdminScopeFromStore()
-        #expect(appModel.hasOperatorAdminScope == true)
+        #expect(appModel.hasOperatorAdminScope == false)
         #expect(appModel._test_shouldRequestStoredOperatorAdminScope(gatewayID: authenticationOwnerID))
         #expect(appModel._test_shouldRequestStoredOperatorApprovalScope(
             gatewayID: authenticationOwnerID,
@@ -9282,7 +9281,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             deviceId: identity.deviceId,
             role: "operator",
             gatewayID: authenticationOwnerID)
-        appModel.refreshOperatorAdminScopeFromStore()
         #expect(appModel.hasOperatorAdminScope == false)
     }
 

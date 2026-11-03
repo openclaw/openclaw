@@ -495,6 +495,7 @@ final class SettingsHubVisualProofTests: XCTestCase {
 
         let gateway = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [], tls: true)
         defer { gateway.stop() }
+        gateway.acceptedOperatorScopes = ["operator.read", "operator.admin"]
         let bodyMarker = "Clawsweeper ingress settings fixture"
         let html = """
         <!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
@@ -566,102 +567,113 @@ final class SettingsHubVisualProofTests: XCTestCase {
             load: { request, operation in try await operation(request) })
 
         let identity = try XCTUnwrap(DeviceIdentityStore.loadOrCreatePersisted(profile: .primary))
-        let operatorToken = "synthetic-settings-operator-\(UUID().uuidString)"
-        defer {
-            DeviceAuthStore.clearToken(
-                deviceId: identity.deviceId,
-                role: "operator",
-                gatewayID: stableID,
-                profile: .primary)
-        }
-        XCTAssertTrue(DeviceAuthStore.storeTokenPersisted(
-            deviceId: identity.deviceId,
-            role: "operator",
-            token: operatorToken,
-            scopes: ["operator.read", "operator.admin"],
-            gatewayID: stableID,
-            profile: .primary))
-        XCTAssertEqual(
-            DeviceAuthStore.loadToken(
-                deviceId: identity.deviceId,
-                role: "operator",
-                gatewayID: stableID,
-                profile: .primary)?.token,
-            operatorToken)
-        let bindingStore = GatewayAccessDeviceAuthBindingStore.shared
-        let storedOperatorAuth = try XCTUnwrap(
-            bindingStore.storedDeviceAuth(role: "operator", gatewayID: stableID, profile: .primary),
-            "The synthetic operator token must be visible to the shared native-auth store")
-        XCTAssertEqual(storedOperatorAuth.entry.token, operatorToken)
-        guard bindingStore.bindGatewayIssuedToken(
-            principal: principal,
-            gatewayID: stableID,
-            role: "operator",
-            profile: .primary,
-            persistedRoles: ["operator"])
-        else {
-            throw NSError(
-                domain: "SettingsHubVisualProofTests",
-                code: 1,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "The synthetic operator token could not be bound to the verified Access principal",
-                ])
-        }
-
+        XCTAssertNil(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId, role: "operator", gatewayID: stableID, profile: .primary))
         let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
-        model.activeGatewayConnectConfig = config
-        model.setOperatorConnected(true)
-        guard model.isOperatorGatewayConnected, model.hasOperatorAdminScope else {
-            throw NSError(
-                domain: "SettingsHubVisualProofTests",
-                code: 2,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "The synthetic fixture must satisfy the existing connected operator-admin admission gate",
-                ])
-        }
-        let appearanceModel = AppAppearanceModel()
-        let gatewayController = GatewayConnectionController(appModel: model, startDiscovery: false)
-        let sessionURL = try XCTUnwrap(SessionDashboardScreen.dashboardURL(
-            config: config, sessionKey: "agent:main:native-proof"))
-        let desktopURL = try XCTUnwrap(ControlUIHubPage.desktop(source: nil, session: nil).url(config: config))
-        let terminalURL = try XCTUnwrap(ControlUIHubPage.terminal.url(config: config))
-        let entryPoints: [(String, URL, AnyView)] = [
-            ("settings-hub", expectedURL, AnyView(SettingsHubScreen(navigationPath: .constant([]))
-                    .environment(model)
-                    .environment(appearanceModel)
-                    .environment(gatewayController)
-                    .preferredColorScheme(.light))),
-            ("dashboard-page", expectedURL, AnyView(DashboardPageScreen(path: "settings", title: "Settings")
-                    .environment(model)
-                    .environment(appearanceModel)
-                    .environment(gatewayController)
-                    .preferredColorScheme(.light))),
-            ("session-dashboard", sessionURL, AnyView(SessionDashboardScreen(
-                sessionKey: "agent:main:native-proof", agentId: "main")
-                .environment(model)
-                .preferredColorScheme(.light))),
-            ("desktop", desktopURL, AnyView(ControlUIHubScreen(page: .desktop(source: nil, session: nil))
-                    .environment(model)
-                    .preferredColorScheme(.light))),
-            ("terminal", terminalURL, AnyView(ControlUIHubScreen(page: .terminal)
-                    .environment(model)
-                    .preferredColorScheme(.light))),
-        ]
-
-        var failures: [String] = []
-        for (name, pageURL, rootView) in entryPoints {
-            do {
-                try await self.assertIngressDashboardLoaded(
-                    rootView: rootView,
-                    expectedURL: pageURL,
-                    bodyMarker: bodyMarker,
-                    gateway: gateway,
-                    attachmentName: "settings-ingress-\(name)")
-            } catch {
-                failures.append("\(name): \(error)")
+        var proofStage = "foreground admission"
+        do {
+            // Match OpenClawApp's initial foreground delivery before its Gateway controller connects.
+            model.setScenePhase(.active)
+            XCTAssertFalse(model.isBackgrounded)
+            // Trusted-proxy operator admission can grant admin without issuing a reusable device token.
+            model.applyGatewayConnectConfig(config)
+            proofStage = "waiting for native operator admission"
+            try await waitForDashboardCondition { model.isOperatorGatewayConnected }
+            proofStage = "reading admitted native route"
+            let admittedRoute = await model.operatorSession.currentRoute()
+            let operatorRoute = try XCTUnwrap(admittedRoute)
+            proofStage = "reading accepted native scopes"
+            let acceptedScopes = await model.operatorSession.currentOperatorScopes(ifCurrentRoute: operatorRoute)
+            XCTAssertEqual(acceptedScopes, Set(["operator.read", "operator.admin"]))
+            XCTAssertNil(DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId, role: "operator", gatewayID: stableID, profile: .primary))
+            proofStage = "projecting accepted admin scope into Settings"
+            guard model.isOperatorGatewayConnected, model.hasOperatorAdminScope else {
+                throw NSError(
+                    domain: "SettingsHubVisualProofTests",
+                    code: 2,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "An accepted native admin hello must enable Settings without a persisted device token",
+                    ])
             }
+            let appearanceModel = AppAppearanceModel()
+            let gatewayController = GatewayConnectionController(appModel: model, startDiscovery: false)
+            let sessionURL = try XCTUnwrap(SessionDashboardScreen.dashboardURL(
+                config: config, sessionKey: "agent:main:native-proof"))
+            let desktopURL = try XCTUnwrap(ControlUIHubPage.desktop(source: nil, session: nil).url(config: config))
+            let terminalURL = try XCTUnwrap(ControlUIHubPage.terminal.url(config: config))
+            let entryPoints: [(String, URL, AnyView)] = [
+                ("settings-hub", expectedURL, AnyView(SettingsHubScreen(navigationPath: .constant([]))
+                        .environment(model)
+                        .environment(appearanceModel)
+                        .environment(gatewayController)
+                        .preferredColorScheme(.light))),
+                ("dashboard-page", expectedURL, AnyView(DashboardPageScreen(path: "settings", title: "Settings")
+                        .environment(model)
+                        .environment(appearanceModel)
+                        .environment(gatewayController)
+                        .preferredColorScheme(.light))),
+                ("session-dashboard", sessionURL, AnyView(SessionDashboardScreen(
+                    sessionKey: "agent:main:native-proof", agentId: "main")
+                    .environment(model)
+                    .preferredColorScheme(.light))),
+                ("desktop", desktopURL, AnyView(ControlUIHubScreen(page: .desktop(source: nil, session: nil))
+                        .environment(model)
+                        .preferredColorScheme(.light))),
+                ("terminal", terminalURL, AnyView(ControlUIHubScreen(page: .terminal)
+                        .environment(model)
+                        .preferredColorScheme(.light))),
+            ]
+
+            var failures: [String] = []
+            for (name, pageURL, rootView) in entryPoints {
+                proofStage = "loading \(name)"
+                do {
+                    try await self.assertIngressDashboardLoaded(
+                        rootView: rootView,
+                        expectedURL: pageURL,
+                        bodyMarker: bodyMarker,
+                        gateway: gateway,
+                        attachmentName: "settings-ingress-\(name)")
+                } catch {
+                    failures.append("\(name): \(error)")
+                }
+            }
+            XCTAssertTrue(failures.isEmpty, failures.joined(separator: "; "))
+
+            proofStage = "disconnecting admitted admin route"
+            model.disconnectGateway()
+            await model.waitForGatewaySessionResetIfNeeded()
+            XCTAssertFalse(model.hasOperatorAdminScope)
+            XCTAssertFalse(model.isOperatorGatewayConnected)
+
+            gateway.acceptedOperatorScopes = ["operator.read"]
+            model.applyGatewayConnectConfig(config)
+            proofStage = "waiting for limited operator admission"
+            try await waitForDashboardCondition { model.isOperatorGatewayConnected }
+            proofStage = "reading admitted limited route"
+            let limitedRoute = await model.operatorSession.currentRoute()
+            let limitedOperatorRoute = try XCTUnwrap(limitedRoute)
+            let limitedScopes = await model.operatorSession.currentOperatorScopes(ifCurrentRoute: limitedOperatorRoute)
+            XCTAssertEqual(limitedScopes, Set(["operator.read"]))
+            XCTAssertFalse(model.hasOperatorAdminScope)
+            XCTAssertFalse(SettingsHubScreen.usesDashboard(
+                isOperatorConnected: model.isOperatorGatewayConnected,
+                hasOperatorAdminScope: model.hasOperatorAdminScope,
+                isDemoMode: false,
+                isScreenshotMode: false))
+            XCTAssertNil(DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId, role: "operator", gatewayID: stableID, profile: .primary))
+        } catch {
+            XCTFail("Native Settings proof failed at \(proofStage); " +
+                "taskCancelled=\(Task.isCancelled), operatorConnected=\(model.isOperatorGatewayConnected), " +
+                "admin=\(model.hasOperatorAdminScope), errorType=\(type(of: error))")
+            model.disconnectGateway()
+            await model.waitForGatewaySessionResetIfNeeded()
+            throw error
         }
-        XCTAssertTrue(failures.isEmpty, failures.joined(separator: "; "))
+        model.disconnectGateway()
+        await model.waitForGatewaySessionResetIfNeeded()
     }
 
     @MainActor

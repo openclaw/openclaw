@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OpenClawProtocol
 import Synchronization
@@ -131,6 +132,7 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let challengeCapabilities: [String]
     private let connectError: [String: Any]?
+    private let onConnectSent: (@Sendable () -> Void)?
     private var _state: URLSessionTask.State = .suspended
     private var resumeCount = 0
     private var connectRequestId: String?
@@ -154,7 +156,8 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         challengeCapabilities: [String] = [],
-        connectError: [String: Any]? = nil)
+        connectError: [String: Any]? = nil,
+        onConnectSent: (@Sendable () -> Void)? = nil)
     {
         self.helloAuth = helloAuth
         self.helloMethods = helloMethods
@@ -164,6 +167,7 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         self.challenge = challenge
         self.challengeCapabilities = challengeCapabilities
         self.connectError = connectError
+        self.onConnectSent = onConnectSent
     }
 
     var state: URLSessionTask.State {
@@ -221,6 +225,7 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
                 self.connectDevice = device
                 self.waiters.resumeSatisfied()
             }
+            self.onConnectSent?()
         }
     }
 
@@ -556,6 +561,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let challengeCapabilities: [String]
     private let connectError: [String: Any]?
+    private let onConnectSent: (@Sendable () -> Void)?
     let effectiveTLSFingerprintSHA256: String?
     private var tasks: [FakeGatewayWebSocketTask] = []
     private var requests: [URLRequest] = []
@@ -571,7 +577,8 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         challengeCapabilities: [String] = [],
         connectError: [String: Any]? = nil,
-        effectiveTLSFingerprintSHA256: String? = nil)
+        effectiveTLSFingerprintSHA256: String? = nil,
+        onConnectSent: (@Sendable () -> Void)? = nil)
     {
         self.helloAuth = helloAuth
         self.helloMethods = helloMethods
@@ -582,6 +589,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
         self.challengeCapabilities = challengeCapabilities
         self.connectError = connectError
         self.effectiveTLSFingerprintSHA256 = effectiveTLSFingerprintSHA256
+        self.onConnectSent = onConnectSent
     }
 
     func waitForTasks(count: Int) async {
@@ -625,7 +633,8 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
                 helloDelayNanoseconds: self.helloDelayNanoseconds,
                 challenge: self.challenge,
                 challengeCapabilities: self.challengeCapabilities,
-                connectError: self.connectError)
+                connectError: self.connectError,
+                onConnectSent: self.onConnectSent)
             self.tasks.append(task)
             self.waiters.resumeSatisfied()
             return WebSocketTaskBox(task: task)
@@ -3523,6 +3532,59 @@ struct GatewayNodeSessionTests {
         #expect(auth["token"] == nil)
         #expect(auth["deviceToken"] == nil)
 
+        await gateway.disconnect()
+    }
+
+    @Test(.stateDirectoryIsolated, arguments: [false, true])
+    func `credential-free issuance replaces only the retained token observed before connect`(
+        newerWrite: Bool) async throws
+    {
+        let identity = DeviceIdentityStore.loadOrCreate()
+        let gatewayID = "native-ingress-repair"
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId, role: "node", token: "retained-node-token", gatewayID: gatewayID)
+        let session = FakeGatewayWebSocketSession(
+            helloAuth: ["deviceToken": "fresh-node-token", "role": "node", "scopes": []],
+            onConnectSent: {
+                if newerWrite {
+                    // This separate writer lands after auth selection and before the issued hello.
+                    _ = DeviceAuthStore.storeToken(
+                        deviceId: identity.deviceId, role: "node", token: "newer-node-token", gatewayID: gatewayID)
+                }
+            })
+        let gateway = GatewayNodeSession()
+        do {
+            try await gateway.connectForTest(
+                testURL("wss://ingress.example.invalid"),
+                options: nodeConnectOptions(
+                    includeDeviceIdentity: true, allowStoredDeviceAuth: false, deviceAuthGatewayID: gatewayID),
+                session: session)
+
+            let task = try #require(session.latestTask())
+            #expect(try #require(task.latestConnectAuth()).isEmpty)
+            let device = try #require(task.latestConnectDevice())
+            #expect(device["id"] as? String == identity.deviceId)
+            #expect(device["nonce"] as? String == "nonce-1")
+            #expect((device["signedAt"] as? NSNumber)?.int64Value == 1_800_000_000_000)
+            let signatureText = try #require(device["signature"] as? String)
+                .replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+            let signature = try #require(Data(base64Encoded: signatureText +
+                    String(repeating: "=", count: (4 - signatureText.count % 4) % 4)))
+            let key = try Curve25519.Signing
+                .PublicKey(rawRepresentation: #require(Data(base64Encoded: identity.publicKey)))
+            let expectedPayload = "v2|\(identity.deviceId)|openclaw-ios-test|node|node||1800000000000||nonce-1"
+            #expect(key.isValidSignature(signature, for: Data(expectedPayload.utf8)))
+
+            let stored = try #require(DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId, role: "node", gatewayID: gatewayID))
+            #expect(stored.token == (newerWrite ? "newer-node-token" : "fresh-node-token"))
+            let roles = await gateway.currentDeviceAuthRoles()
+            #expect(roles.received == ["node"])
+            #expect(roles.persisted == (newerWrite ? [] : ["node"]))
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
         await gateway.disconnect()
     }
 

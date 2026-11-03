@@ -726,8 +726,8 @@ extension GatewayChannelActor {
         let explicitToken = self.token?.trimmedNonEmpty
         let explicitBootstrapToken = self.bootstrapToken?.trimmedNonEmpty
         let explicitPassword = self.password?.trimmedNonEmpty
-        let storedEntry: DeviceAuthEntry? = if options.includeDeviceIdentity, options.allowStoredDeviceAuth,
-                                               let deviceId
+        let observedEntry: DeviceAuthEntry? = if options.includeDeviceIdentity, options.allowsDeviceAuthPersistence,
+                                                 let deviceId
         {
             DeviceAuthStore.loadToken(
                 deviceId: deviceId,
@@ -737,6 +737,8 @@ extension GatewayChannelActor {
         } else {
             nil
         }
+        // Fresh ingress may replace a retained credential without presenting it as authority.
+        let storedEntry = options.allowStoredDeviceAuth ? observedEntry : nil
         let storedToken = storedEntry?.token
         let storedScopes = storedEntry?.scopes ?? []
         let requestedScopesExceedStoredToken = Self.requestedScopesExceedStoredToken(
@@ -788,8 +790,8 @@ extension GatewayChannelActor {
             selected.observedTokens = DeviceAuthStore.observeTokens(
                 deviceId: deviceId,
                 gatewayID: options.deviceAuthGatewayID)
-        } else if let storedToken {
-            selected.observedTokens[options.role] = storedToken
+        } else if let observedToken = observedEntry?.token {
+            selected.observedTokens[options.role] = observedToken
         }
         return selected
     }
