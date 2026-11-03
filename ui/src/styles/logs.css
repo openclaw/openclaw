@@ -143,7 +143,7 @@ main.content:where(.content--logs-page) .content-header {
     display: contents;
   }
 
-  /* The description reads as the title's subtitle, with no gap held between them. */
+  /* The stream starts right under the description. */
   main.content.content--logs-page .content-header + * {
     margin-top: 0;
   }
@@ -155,11 +155,6 @@ main.content:where(.content--logs-page) .content-header {
     flex-direction: column;
     height: auto;
     min-height: 0;
-  }
-
-  /* Without the section heading there is nothing for the description to pull toward. */
-  .content.content--logs-page .settings-section__desc {
-    margin-top: 0;
   }
 
   .content.content--logs-page .settings-workspace--fill-height .logs-card {

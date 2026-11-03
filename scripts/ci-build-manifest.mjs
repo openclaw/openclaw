@@ -745,7 +745,7 @@ const uiWebkitOwners = [
   "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
-  "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
+  "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*}.{ts,tsx}",
   "ui/src/lib/solid-bridge.ts",
   "ui/src/lib/solid-bridge-view.tsx",
   "ui/src/lib/presentation.ts",

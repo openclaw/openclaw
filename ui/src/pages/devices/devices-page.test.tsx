@@ -831,7 +831,7 @@ describe("DevicesPage gateway lifecycle", () => {
       t("devices.inventory.rotateWithheldNote"),
     );
     expect(document.body.querySelector(".secret-reveal__code")).toBeNull();
-    expect(document.body.querySelector(".chat-copy-btn")).toBeNull();
+    expect(document.body.querySelector("openclaw-modal-dialog .chat-copy-btn")).toBeNull();
     expect(dialogButton(t("common.close")).className).toBe("btn secret-reveal__dismiss");
     dialogButton(t("common.close")).click();
     await expectNoModal();

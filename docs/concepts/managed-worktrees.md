@@ -234,7 +234,7 @@ Preparation logs include `templateDetails` with the backend, selection or failur
 
 The `checkout` phase includes its child phases; do not add it to `templateApply`. Sub-phases separate registration metadata and inspection, commit preparation, clone admission estimates, destination preparation, marker replacement, index location/copy/refresh, prompt publication, template release, and warm-slot acquisition/application. The clone-byte estimate is a disk-admission allowance, not measured bytes written.
 
-The `provision` phase includes ignored-file selection (`provisionInspect`), safe file copying (`provisionCopy`), and repository script execution (`setup`). Selection includes the Git worker queue; copying includes per-file eligibility and mutation safety checks. `provisionCopy` is absent when selection finds no files. Source custody waits and disk admission also occur inside `provision`; `diskAdmission` accumulates space checks across the entire preparation, so it is not exclusively a provisioning sub-phase. These timings do not log paths or setup output.
+The `provision` phase includes ignored-file selection (`provisionInspect`), safe file copying (`provisionCopy`), and repository script execution (`setup`). Selection includes the Git worker queue; copying includes per-file eligibility and mutation safety checks. Copying runs in a filesystem worker so other sessions remain responsive; the new worktree waits for copying to finish before becoming ready. `provisionCopy` is absent when selection finds no files. Source custody waits and disk admission also occur inside `provision`; `diskAdmission` accumulates space checks across the entire preparation, so it is not exclusively a provisioning sub-phase. These timings do not log paths or setup output.
 
 Private Git index copies for template checkouts prefer native copy-on-write, including on APFS, and fall back to independent byte copies when cloning is unavailable. Safety snapshots use Git's read-only status and cached file metadata to identify changes. Clean checkouts reuse the committed tree without building a private snapshot index; changed checkouts hash only selected paths. Hidden index flags do not exclude edits from snapshots.
 
@@ -411,6 +411,8 @@ Add `.worktreeinclude` at the source repository root to copy selected ignored, u
 .env.local
 fixtures/generated/**
 ```
+
+The manifest is read from the actual source checkout and does not need to be committed. Without it, provisioning copies no ignored files; there are no default include patterns. Broad patterns can select build outputs and caches, so include only files the new checkout needs.
 
 Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes and access/modification times at the filesystem’s supported precision. This keeps the timestamp ordering of prepared build inputs and outputs instead of making every copied file look newly written. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
 

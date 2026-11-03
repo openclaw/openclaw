@@ -40,6 +40,7 @@ import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { git } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
+import { copyProvisionedPaths } from "./provisioned-copy.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
 import * as provisionedSnapshots from "./provisioned-snapshot-store.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
@@ -235,7 +236,7 @@ describe("ManagedWorktreeService provisioned state", () => {
     ).toHaveLength(0);
     expect(
       stats.mock.calls.filter(([target]) => target === path.join(dependencies, "settings.local")),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     expect(await fs.readFile(path.join(destination, ".env.local"), "utf8")).toBe(
       "destination-owned\n",
     );
@@ -248,7 +249,9 @@ describe("ManagedWorktreeService provisioned state", () => {
         ? Promise.reject(unreadable)
         : lstat(target, options),
     );
-    await expect(provisionIncludedFiles(repo, destination)).resolves.toEqual([]);
+    await expect(
+      copyProvisionedPaths(repo, destination, ["dependencies/package/settings.local"], {}),
+    ).resolves.toEqual([]);
   });
 
   it("preserves modification times when provisioning prepared build inputs and outputs", async () => {
