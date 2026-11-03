@@ -3,7 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { showToast } from "../toast.ts";
 import { configSecretFields } from "./config-secret-fields.ts";
 
-vi.mock("../toast.ts", () => ({ showToast: vi.fn() }));
+vi.mock(import("../toast.ts"), async (actual) => ({ ...(await actual()), showToast: vi.fn() }));
 
 function fixture() {
   const routerListeners = new Set<(state: { location: { pathname: string } }) => void>();

@@ -84,6 +84,10 @@ const loaders = {
     ),
   userGitHubConnections: () =>
     import("./user-github-connections.worker.js").then((m) => m.userGitHubConnectionOperations),
+  "githubPublications.personalRestart": () =>
+    import("../gateway/github-personal-publication-store.worker.js").then(
+      ({ personalPublicationRestartOperations }) => personalPublicationRestartOperations,
+    ),
   githubPublications: () =>
     import("./github-publication.worker.js").then((m) => m.publicationOperations),
   userBackground: async () =>
@@ -215,5 +219,6 @@ export type RegisteredStateWorkerOperations = WorkerOperationsFromLoaders<typeof
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<
   RegisteredStateWorkerOperations,
-  WorkerWriteOperationContext
+  WorkerWriteOperationContext,
+  keyof typeof loaders
 >(loaders);

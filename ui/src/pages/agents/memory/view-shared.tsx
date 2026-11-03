@@ -38,24 +38,6 @@ export function formatCompactDateTime(value: string): string {
   });
 }
 
-export function DreamingAction(props: {
-  label: string;
-  disabled: boolean;
-  busy?: boolean;
-  onClick: (event: Event) => void;
-}) {
-  return (
-    <button
-      class="btn btn--subtle btn--sm"
-      disabled={props.disabled}
-      aria-busy={props.busy ? "true" : undefined}
-      onClick={(event) => props.onClick(event)}
-    >
-      {props.label}
-    </button>
-  );
-}
-
 export function DiaryEmpty(props: { message: string; hint?: string; children?: JSX.Element }) {
   return (
     <div class="dreams-diary__empty">

@@ -23,7 +23,7 @@ suite.define(() => {
     },
     { query: "font", destination: "Language and text", target: "#settings-appearance-typography" },
     {
-      query: "Chat prose",
+      query: "Chat font",
       destination: "Language and text",
       target: "#settings-appearance-typography",
     },
@@ -45,8 +45,10 @@ suite.define(() => {
           await typography.scrollIntoViewIfNeeded();
           await expect(typography).toBeInViewport();
           const typographySection = page.locator(".settings-section").filter({ has: typography });
-          await expect(typographySection.getByText("Interface", { exact: true })).toBeVisible();
-          await expect(typographySection.getByText("Chat prose", { exact: true })).toBeVisible();
+          await expect(
+            typographySection.getByText("Interface font", { exact: true }),
+          ).toBeVisible();
+          await expect(typographySection.getByText("Chat font", { exact: true })).toBeVisible();
           await typographySection.scrollIntoViewIfNeeded();
           if (captureUiProof) {
             await page.screenshot({ path: path.join(artifacts, "typography-present.png") });

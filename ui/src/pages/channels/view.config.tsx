@@ -27,9 +27,9 @@ function resolveSchemaNode(schema: JsonSchema | null, path: string[]): JsonSchem
 
 const EXTRA_CHANNEL_FIELDS = ["groupPolicy", "streamMode", "dmPolicy"] as const;
 
-const channelConfigFormId = (channelId: string) => `channel-config-${channelId}`;
+export const channelConfigFormId = (channelId: string) => `channel-config-${channelId}`;
 
-function isSavingChannelConfig(channelId: string, props: ChannelsProps) {
+export function isSavingChannelConfig(channelId: string, props: ChannelsProps) {
   return (
     props.savingChannel === channelId || props.mutationBusy?.config || props.config.configSaving
   );
@@ -177,7 +177,9 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
       edits() ?? [],
     ),
   );
-  const extraFields = () => EXTRA_CHANNEL_FIELDS.filter((field) => field in value());
+  // A field the form already edits isn't worth repeating as text below it.
+  const extraFields = () =>
+    EXTRA_CHANNEL_FIELDS.filter((field) => field in value() && !node()?.properties?.[field]);
   const unsupported = createMemo(() => new Set(analysis().unsupportedPaths));
   const saving = () =>
     params.props.savingChannel === params.channelId ||
@@ -191,7 +193,7 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
     >
       <form
         id={channelConfigFormId(params.channelId)}
-        class="settings-row settings-row--stacked"
+        class="channels-detail__form"
         novalidate
         onSubmit={(event) => {
           event.preventDefault();

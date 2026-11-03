@@ -1,5 +1,7 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
+import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   LearnMoreLink,
@@ -54,20 +56,35 @@ function AddProvider(props: ModelProvidersViewProps) {
           }
         }}
       >
-        <div class="model-setup-wizard" data-models-key-dialog>
-          <div class="model-setup-wizard__header">
-            <h2>{provider()?.displayName ?? props.addProviderId}</h2>
+        <div class="oc-dialog model-setup-wizard" data-models-key-dialog>
+          <div class="oc-dialog__header">
+            <h2 class="oc-dialog__title">
+              <ProviderBrandIcon provider={props.addProviderId} class="model-providers__icon" />{" "}
+              {provider()?.displayName ?? props.addProviderId}
+            </h2>
+            <button
+              class="oc-dialog__close"
+              type="button"
+              aria-label={t("common.close")}
+              disabled={busy()}
+              onClick={() => props.onAddProviderToggle()}
+            >
+              <Icon name="x" />
+            </button>
+            <div class="oc-dialog__description">
+              <p>{t("modelProviders.credentials.label", { agent: props.credentialAgentLabel })}</p>
+            </div>
           </div>
-          <div class="model-setup-wizard__body">
-            <p>{t("modelProviders.credentials.label", { agent: props.credentialAgentLabel })}</p>
+          <div class="oc-dialog__body model-setup-wizard__body">
             <ApiKeyInput
               value={props.addProviderKey}
               disabled={disabled()}
+              labelOnly
               onInput={props.onAddProviderKeyChange}
             />
             {renderMutationMessage(props.messages.add)}
           </div>
-          <openclaw-modal-actions class="model-setup-wizard__footer">
+          <openclaw-modal-actions class="oc-dialog__footer model-setup-wizard__footer">
             <button class="btn" disabled={busy()} onClick={() => props.onAddProviderToggle()}>
               {t("common.cancel")}
             </button>
@@ -111,6 +128,7 @@ function ModelReadiness(props: ModelProvidersViewProps) {
                 />
                 <button
                   class="btn primary"
+                  data-models-connect
                   disabled={configMutationDisabled(props) || props.loginBusy}
                   title={props.mutationBlockedReason ?? ""}
                   onClick={() => props.onConnectProvider()}
@@ -297,7 +315,10 @@ function ProviderAccess(props: ModelProvidersViewProps) {
           <button type="button" class="btn btn--sm btn--ghost" onClick={() => props.onOpenUsage()}>
             {t("modelProviders.viewUsage")}
           </button>
-          {props.providerScope}
+          {/* The setup prompt above already offers this action until a model is usable. */}
+          <Show when={props.configuredModels.some((model) => model.available !== false)}>
+            {props.providerScope}
+          </Show>
           <RefreshButton
             class="model-providers__refresh-button"
             label={refreshLabel()}

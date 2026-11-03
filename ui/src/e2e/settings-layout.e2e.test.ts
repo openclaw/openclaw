@@ -576,6 +576,91 @@ suite.define(() => {
     }
   });
 
+  it("keeps wide page bodies on the title's axis at every width", async () => {
+    const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      for (const { route, surface } of [
+        { route: "agents", surface: ".agents-layout" },
+        { route: "logs", surface: ".logs-card" },
+        { route: "lobsterdex", surface: ".lobsterdex-page" },
+      ] as const) {
+        const pathname = pathForRoute(route);
+        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { pathname, routeId: route });
+        await page.locator(surface).first().waitFor();
+        for (const width of [1440, 1100, 820]) {
+          await page.setViewportSize({ height: 900, width });
+          await expect
+            .poll(
+              () =>
+                page.evaluate((selector) => {
+                  const title = document.querySelector<HTMLElement>(".content-header .page-title");
+                  const body = document.querySelector<HTMLElement>(selector);
+                  return title && body
+                    ? Math.round(
+                        body.getBoundingClientRect().left - title.getBoundingClientRect().left,
+                      )
+                    : null;
+                }, surface),
+              { message: `${route} at ${width}` },
+            )
+            .toBe(0);
+        }
+        await page.setViewportSize({ height: 900, width: 1440 });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps Memory on one column across its tabs", async () => {
+    const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      const pathname = pathForRoute("memory");
+      await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+      await waitForControlUiRoute(page, { pathname, routeId: "memory" });
+      for (const tab of ["Overview", "Memories", "Dreams", "Settings"]) {
+        await page.locator(".memory-page").getByRole("tab", { name: tab, exact: true }).click();
+        for (const width of [1440, 820]) {
+          await page.setViewportSize({ height: 900, width });
+          await expect
+            .poll(
+              () =>
+                page.evaluate(() => {
+                  const title = document.querySelector<HTMLElement>(".content-header .page-title");
+                  const column = document.querySelector<HTMLElement>(
+                    ".memory-page__panel .settings-page",
+                  );
+                  if (!title || !column) {
+                    return null;
+                  }
+                  const box = column.getBoundingClientRect();
+                  return {
+                    offset: Math.round(
+                      box.left +
+                        Number.parseFloat(getComputedStyle(column).paddingLeft) -
+                        title.getBoundingClientRect().left,
+                    ),
+                    fitsColumn: box.width <= 760,
+                  };
+                }),
+              { message: `${tab} at ${width}` },
+            )
+            .toEqual({ offset: 0, fitsColumn: true });
+        }
+        await page.setViewportSize({ height: 900, width: 1440 });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps Automations search above one tab-and-action row", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
@@ -877,7 +962,7 @@ suite.define(() => {
 
         if (route === "cloud-workers") {
           expect(await page.locator(".page-subtitle").count()).toBe(0);
-          await page.locator(".cloud-environments__advanced > summary").click();
+          await page.locator(".settings-disclosure > summary").click();
         }
 
         const titleDescriptionPairs = page.locator(
