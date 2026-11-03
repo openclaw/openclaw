@@ -1,6 +1,7 @@
 export const FAILOVER_REASONS = [
   "auth",
   "auth_permanent",
+  "session_authority",
   "format",
   "rate_limit",
   "overloaded",
