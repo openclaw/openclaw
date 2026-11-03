@@ -15,6 +15,14 @@ const definitionList = "<dl><dt>Region</dt><dd>EMEA</dd><dt>Units</dt><dd>120</d
 const definitionText = "Region\nEMEA\nUnits\n120";
 
 describe("web-fetch-utils", () => {
+  it("preserves literal HTML text without reparsing Markdown syntax", async () => {
+    const html =
+      '<p>Use <code>[report](draft)</code> and <code>![alt](image.png)</code>.</p><p>Type `value` exactly.</p><p># Ticket 42</p><p>1. Version</p><h2>Heading</h2><ul><li>Item</li></ul><p>Read <a href="/guide">guide</a>.</p>';
+    await expect(extractText(html)).resolves.toBe(
+      "Use [report](draft) and ![alt](image.png).\nType `value` exactly.\n# Ticket 42\n1. Version\n\nHeading\n\nItem\nRead guide.",
+    );
+  });
+
   it("removes complete balanced link destinations without leaking URL suffixes", async () => {
     const markdown =
       "Read [Cassini](https://example.com/a_(b(c))) and ![diagram](images/a_(b).png).";

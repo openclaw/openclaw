@@ -22,6 +22,16 @@ async function extractArticle(html: string, extractMode: "text" | "markdown" = "
 }
 
 describe("web readability extractor", () => {
+  it("preserves literal HTML text selected by Readability", async () => {
+    const extracted = await extractArticle(
+      SAMPLE_HTML.replace(
+        "<article>",
+        "<article><p>Use <code>[report](draft)</code> and <code>![alt](image.png)</code> literally.</p>",
+      ),
+    );
+    expect(extracted.text).toContain("Use [report](draft) and ![alt](image.png) literally.");
+  });
+
   it.each([
     ["", "/next", "/article#top"],
     ['<base target="_blank" />', "/next", "/article#top"],
