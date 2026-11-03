@@ -15,7 +15,7 @@ import type {
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { CapabilityIcon, PLUGIN_CAPABILITY_FAMILIES } from "./capability-icons.tsx";
+import { pluginCapabilityIcons } from "./capability-icons.tsx";
 import { formatCompactCount } from "./catalog-results.tsx";
 import { ExtensionIcon } from "./extension-icons.tsx";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.tsx";
@@ -408,11 +408,13 @@ function renderPluginDeclaredCapabilities(
 ): JSX.Element {
   return renderPluginCapabilitySection(
     t("pluginsPage.detailCapabilities"),
-    PLUGIN_CAPABILITY_FAMILIES.filter((family) => contracts?.[family]?.length).map((family) => ({
-      icon: () => <CapabilityIcon family={family} />,
-      name: t(`pluginsPage.capabilityFamilies.${family}.name`),
-      description: t(`pluginsPage.capabilityFamilies.${family}.description`),
-    })),
+    Object.entries(pluginCapabilityIcons)
+      .filter(([family]) => contracts?.[family]?.length)
+      .map(([family, icon]) => ({
+        icon,
+        name: t(`pluginsPage.capabilityFamilies.${family}.name`),
+        description: t(`pluginsPage.capabilityFamilies.${family}.description`),
+      })),
   );
 }
 
