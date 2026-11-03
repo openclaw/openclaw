@@ -268,16 +268,17 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 /* The page headline adopts the column of the page below it; without this the
    shell caps headers at 1120px while narrow pages use a 760px column, leaving
-   the title floating left of the content. */
-.shell--settings .content.content--settings-page .content-header,
-.content.content--settings-page .content-header--settings {
+   the title floating left of the content. A header nested in that column
+   belongs to its panel and is already inset. */
+.shell--settings .content.content--settings-page .content-header:where(:not(.settings-page *)),
+.content.content--settings-page .content-header--settings:where(:not(.settings-page *)) {
   max-width: 760px;
   margin-inline: auto;
   padding-inline: var(--space-4);
 }
 
-.shell--settings .content.content--settings-wide .content-header,
-.content.content--settings-wide .content-header--settings {
+.shell--settings .content.content--settings-wide .content-header:where(:not(.settings-page *)),
+.content.content--settings-wide .content-header--settings:where(:not(.settings-page *)) {
   max-width: 1120px;
 }
 

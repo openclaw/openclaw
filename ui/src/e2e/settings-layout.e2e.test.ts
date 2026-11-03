@@ -576,6 +576,46 @@ suite.define(() => {
     }
   });
 
+  it("keeps wide page bodies on the title's axis at every width", async () => {
+    const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      for (const { route, surface } of [
+        { route: "agents", surface: ".agents-layout" },
+        { route: "logs", surface: ".logs-card" },
+        { route: "lobsterdex", surface: ".lobsterdex-page" },
+      ] as const) {
+        const pathname = pathForRoute(route);
+        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { pathname, routeId: route });
+        await page.locator(surface).first().waitFor();
+        for (const width of [1440, 1100, 820]) {
+          await page.setViewportSize({ height: 900, width });
+          await expect
+            .poll(
+              () =>
+                page.evaluate((selector) => {
+                  const title = document.querySelector<HTMLElement>(".content-header .page-title");
+                  const body = document.querySelector<HTMLElement>(selector);
+                  return title && body
+                    ? Math.round(
+                        body.getBoundingClientRect().left - title.getBoundingClientRect().left,
+                      )
+                    : null;
+                }, surface),
+              { message: `${route} at ${width}` },
+            )
+            .toBe(0);
+        }
+        await page.setViewportSize({ height: 900, width: 1440 });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps Automations search above one tab-and-action row", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
