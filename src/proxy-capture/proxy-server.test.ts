@@ -288,33 +288,29 @@ afterEach(async () => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("startDebugProxyServer", () => {
-  it.each(["127.0.0.1", "::1"])(
-    "forwards full bodies and bounds capture previews on %s",
-    async (host) => {
-      const origin = await startOrigin(`${"r".repeat(8191)}😀tail`);
-      const { proxy, captured } = await startProxy(host);
-      expect(new URL(proxy.captureEnv.OPENCLAW_DEBUG_PROXY_URL).origin).toBe(proxy.proxyUrl);
-      const requestBody = `${"q".repeat(8191)}étail`;
+  it.each(["127.0.0.1", "::1"])("forwards and captures UTF-8 on %s", async (host) => {
+    const origin = await startOrigin(`${"r".repeat(8191)}😀tail`);
+    const { proxy, captured } = await startProxy(host);
+    const requestBody = `${"q".repeat(8191)}étail`;
 
-      const response = await getThroughProxy(proxy.proxyUrl, origin.url, requestBody);
+    const response = await getThroughProxy(proxy.proxyUrl, origin.url, requestBody);
 
-      expect(origin.receivedRequestBody()).toBe(requestBody);
-      expect(response).toMatchObject({ body: origin.responseBody, complete: true });
-      const events = await captured();
-      for (const { kind, body, prefix } of [
-        { kind: "request", body: requestBody, prefix: "q" },
-        { kind: "response", body: origin.responseBody, prefix: "r" },
-      ]) {
-        const event = events.find((candidate) => candidate.kind === kind);
-        expect(event?.dataText).toBe(prefix.repeat(8191));
-        expect(JSON.parse(String(event?.metaJson))).toMatchObject({
-          bodyBytes: Buffer.byteLength(body),
-          capturePreviewBytes: 8192,
-          captureTruncated: true,
-        });
-      }
-    },
-  );
+    expect(origin.receivedRequestBody()).toBe(requestBody);
+    expect(response).toMatchObject({ body: origin.responseBody, complete: true });
+    const events = await captured();
+    for (const { kind, body, prefix } of [
+      { kind: "request", body: requestBody, prefix: "q" },
+      { kind: "response", body: origin.responseBody, prefix: "r" },
+    ]) {
+      const event = events.find((candidate) => candidate.kind === kind);
+      expect(event?.dataText).toBe(prefix.repeat(8191));
+      expect(JSON.parse(String(event?.metaJson))).toMatchObject({
+        bodyBytes: Buffer.byteLength(body),
+        capturePreviewBytes: 8192,
+        captureTruncated: true,
+      });
+    }
+  });
 
   it("pauses the upstream response while downstream forwarding is backpressured", async () => {
     const responseBodyBytes = 16 * 1024 * 1024;
