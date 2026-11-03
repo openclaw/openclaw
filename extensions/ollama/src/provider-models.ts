@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isCloudMetadataIpAddress, isLinkLocalIpAddress } from "@openclaw/net-policy/ip";
 import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
@@ -71,6 +72,14 @@ const ollamaModelShowInfoCache = createStaleWhileRevalidateCache<OllamaModelShow
 });
 const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
 
+function isOllamaBlockedBaseHost(hostname: string): boolean {
+  return (
+    OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(hostname) ||
+    isLinkLocalIpAddress(hostname) ||
+    isCloudMetadataIpAddress(hostname)
+  );
+}
+
 export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
@@ -80,7 +89,7 @@ export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   if (
     !parsed ||
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
-    OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname)
+    isOllamaBlockedBaseHost(parsed.hostname)
   ) {
     return undefined;
   }

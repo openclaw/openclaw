@@ -351,10 +351,16 @@ describe("buildOllamaBaseUrlSsrFPolicy", () => {
     });
   });
 
-  it.each(["", "ftp://ollama.example.com", "not-a-url", "http://metadata.google.internal"])(
-    "rejects empty, invalid or blocked base URL %s",
-    (url) => {
-      expect(buildOllamaBaseUrlSsrFPolicy(url)).toBeUndefined();
-    },
-  );
+  it.each([
+    "",
+    "ftp://ollama.example.com",
+    "not-a-url",
+    "http://metadata.google.internal",
+    "http://169.254.169.254",
+    "http://[::ffff:169.254.169.254]",
+    "http://100.100.100.200",
+    "http://[fd00:ec2::254]",
+  ])("rejects empty, invalid, metadata, or link-local base URL %s", (url) => {
+    expect(buildOllamaBaseUrlSsrFPolicy(url)).toBeUndefined();
+  });
 });
