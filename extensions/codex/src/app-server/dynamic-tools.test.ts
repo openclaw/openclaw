@@ -1533,7 +1533,7 @@ describe("Codex tool operator hints", () => {
       await writeFile(outside, "original\n");
       const tools = createOpenClawCodingTools({
         workspaceDir: root,
-        config: {},
+        config: { tools: { exec: { applyPatch: { workspaceOnly: true } } } },
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: true,
@@ -1557,8 +1557,6 @@ describe("Codex tool operator hints", () => {
       const hint = "workspace-contained by configuration";
       // Host root escapes carry model-visible cwd rebinding guidance (#184901).
       const message = `Path escapes sandbox root (${root}): ${outside}. Keep patch paths within the bound root. For an authorized task in another repository, ask the parent to respawn the worker with sessions_spawn and cwd set to that repository. Changing exec workdir does not rebind file tools.`;
-      expect(logError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(hint));
-      expect(JSON.stringify(logError.mock.calls)).not.toContain(outside);
       expect(toCodexDynamicToolProtocolResponse(response)).toEqual({
         contentItems: inputText(message),
         success: false,
@@ -1568,6 +1566,8 @@ describe("Codex tool operator hints", () => {
         result: expect.objectContaining({ content: [{ type: "text", text: message }] }),
         isError: true,
       });
+      expect(logError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(hint));
+      expect(JSON.stringify(logError.mock.calls)).not.toContain(outside);
       expect(JSON.stringify(onAgentToolResult.mock.calls)).not.toContain(hint);
       await expect(readFile(outside, "utf8")).resolves.toBe("original\n");
     });

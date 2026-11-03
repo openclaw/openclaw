@@ -15,7 +15,9 @@ import {
 } from "solid-js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/index.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { ScopeUpgradeOwner } from "../../app/device-scope-upgrade-owner.runtime.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { ScopeUpgradeActions, scopeUpgradeText } from "../../components/scope-upgrade-actions.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -35,15 +37,16 @@ import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accoun
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import "../../components/solid/viewer-facepile.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
+import "../../components/solid/viewer-facepile.tsx";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import "../../styles/profile.css";
 import { uploadsEnabled } from "../../lib/uploads.ts";
+import "../../styles/profile.css";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
+import { DiscordIdentity } from "./discord-identity.tsx";
 import { ModelAccounts } from "./model-accounts.tsx";
 import { PersonalInstructions } from "./personal-instructions.tsx";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
@@ -79,6 +82,10 @@ function accessSummary(scopes: readonly string[] | null) {
 
 export function ProfilePage() {
   const context = useApplication();
+  const upgrade = projectOwner(context.scopeUpgrade, (source) =>
+    source.state.phase === "hidden" ? null : source.state,
+  );
+  onSettled(() => context.scopeUpgrade.activate(ScopeUpgradeOwner));
   const agents = projectOwner(context.agents, (source) => source.state.agentsList);
   const identities = projectOwner(context.agentIdentity, (source) => source);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
@@ -188,6 +195,10 @@ export function ProfilePage() {
   const connected = () => view().connected && view().client !== null;
   const hasPresentation = () =>
     connected() || view().connectionScopes !== null || view().selfUser !== null;
+  // Reveal the lower sections with the profile, before its preferences finish loading.
+  const initialIdentityPending = () =>
+    view().ownProfile === null &&
+    (view().identityLoading || (view().connected && !view().identityReady));
   const agent = () => {
     const list = agents.read();
     const id = list?.defaultId ?? "main";
@@ -357,6 +368,9 @@ export function ProfilePage() {
                     }
                   />
                 </Show>
+                <Show when={!isOwnerProfile()}>
+                  <DiscordIdentity />
+                </Show>
                 <SettingsRow
                   title={t("profilePage.identity.githubAccount")}
                   description={
@@ -465,10 +479,14 @@ export function ProfilePage() {
           <Show when={view().connected}>
             <button
               class="btn profile-refresh"
+              data-refresh-label={t("common.refresh")}
+              data-refreshing-label={t("common.refreshing")}
               disabled={!view().identityReady || view().identityLoading || identityBusy() !== null}
               onClick={() => state.refreshManually()}
             >
-              {view().identityLoading ? t("common.refreshing") : t("common.refresh")}
+              <Show when={view().identityLoading} fallback={<span>{t("common.refresh")}</span>}>
+                <span>{t("common.refreshing")}</span>
+              </Show>
             </button>
           </Show>
         </section>
@@ -515,6 +533,27 @@ export function ProfilePage() {
                     </button>
                   }
                 />
+                <Show when={upgrade.read()}>
+                  {(current) => (
+                    <SettingsRow
+                      title={t("profilePage.access.adminRequest")}
+                      description={
+                        current().phase === "available"
+                          ? t("profilePage.access.adminRequestHint")
+                          : scopeUpgradeText(current())
+                      }
+                      stackedOnNarrow
+                      control={
+                        <ScopeUpgradeActions
+                          state={current()}
+                          onRequest={() => context.scopeUpgrade.request()}
+                          onRetry={() => context.scopeUpgrade.retry()}
+                          onCancel={() => context.scopeUpgrade.cancel()}
+                        />
+                      }
+                    />
+                  )}
+                </Show>
                 <details class="settings-row settings-row--stacked">
                   <summary>{t("profilePage.access.details")}</summary>
                   <SettingsRow
@@ -539,39 +578,42 @@ export function ProfilePage() {
                 </details>
               </SettingsSection>
             </div>
-            <Errored
-              fallback={(error, reset) => (
-                <>
-                  <div class="callout danger" role="alert">
-                    {formatUiError(error())}{" "}
-                    <button
-                      class="btn btn--sm"
-                      onClick={() => {
-                        state.refreshManually();
-                        reset();
-                      }}
-                    >
-                      {t("common.retry")}
-                    </button>
-                  </div>
-                  <IdentityContent pending={false} />
-                </>
-              )}
-            >
-              <Loading on={latest(identityScope)} fallback={<IdentityContent pending={true} />}>
-                {(latest(identityRead), null)}
-                <IdentityContent pending={isPending(identityRead)} />
-              </Loading>
-            </Errored>
+            <Show when={!initialIdentityPending()} fallback={<IdentityContent pending={true} />}>
+              <Errored
+                fallback={(error, reset) => (
+                  <>
+                    <div class="callout danger" role="alert">
+                      {formatUiError(error())}{" "}
+                      <button
+                        class="btn btn--sm"
+                        onClick={() => {
+                          state.refreshManually();
+                          reset();
+                        }}
+                      >
+                        {t("common.retry")}
+                      </button>
+                    </div>
+                    <IdentityContent pending={false} />
+                  </>
+                )}
+              >
+                <Loading on={latest(identityScope)} fallback={<IdentityContent pending={true} />}>
+                  {(latest(identityRead), null)}
+                  <IdentityContent pending={isPending(identityRead)} />
+                </Loading>
+              </Errored>
+            </Show>
           </Show>
           <PersonalInstructions
             hidden={
+              initialIdentityPending() ||
               !hasPresentation() ||
               view().context.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities !==
                 true
             }
           />
-          <Show when={hasPresentation()}>
+          <Show when={hasPresentation() && !initialIdentityPending()}>
             <ModelAccounts
               target={state.modelAccountsTarget}
               personLabel={

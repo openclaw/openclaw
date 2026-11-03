@@ -90,18 +90,14 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
 }
 
 function unquote(value: string): string {
+  const doc = parseDocument(value, { prettyErrors: false });
+  if (doc.errors.length === 0 && isScalar(doc.contents) && typeof doc.contents.value === "string") {
+    return doc.contents.value;
+  }
   if (value.length >= 2) {
     const f = value.charCodeAt(0);
     const l = value.charCodeAt(value.length - 1);
     if (f === 34 || f === 39) {
-      const doc = parseDocument(value, { prettyErrors: false });
-      if (
-        doc.errors.length === 0 &&
-        isScalar(doc.contents) &&
-        typeof doc.contents.value === "string"
-      ) {
-        return doc.contents.value;
-      }
       // Preserve the tolerant handling of malformed, hand-authored quoted values.
       return f === l ? value.slice(1, -1) : value;
     }

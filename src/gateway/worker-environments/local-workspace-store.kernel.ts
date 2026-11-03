@@ -8,6 +8,7 @@ import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { localWorkspaceDigestBytes } from "./local-workspace-cas.js";
 import {
+  currentLocalWorkspaceSweepEpoch,
   readLocalWorkspaceSourcePaths,
   readLocalWorkspaceSweepCandidates,
 } from "./local-workspace-cas.kernel.js";
@@ -44,7 +45,18 @@ export function mutateLocalWorkspaceProjection(
   db: EngineConnection,
   id: string,
   mutation: LocalWorkspaceMutation,
+  preparationEpoch?: number,
 ) {
+  // A stalled preparation can be collected before its root is published. Reject
+  // before any row change; the next reconciliation prepares the live files again.
+  if (
+    preparationEpoch !== undefined &&
+    preparationEpoch < currentLocalWorkspaceSweepEpoch(db) - 1
+  ) {
+    throw new Error(
+      "Local workspace preparation expired during cleanup; retry the session. Both workspaces were preserved.",
+    );
+  }
   // Mutation admission must not materialize manifests or recovery packs.
   const current = tableExists(db, table)
     ? executeSqliteQueryTakeFirstSync(

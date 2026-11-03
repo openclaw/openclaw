@@ -33,6 +33,8 @@ export type Plan = {
   record: LoadedRecord;
   records?: LoadedRecord[];
   source?: SourceIdentity;
+  /** Records an undone supersession restores; publishing them lifts their supersession guards. */
+  restored?: string[];
 };
 export type Prepared = {
   requiredDescriptors?: Record<string, string>;
@@ -49,6 +51,13 @@ export type Prepared = {
   };
   lifecycle?: CorrectInput | WithdrawInput;
   merge?: { operation: "merge" | "unmerge"; targetId: string; reason: string; report: MergeReport };
+  extract?: { targetId: string; reason: string };
+  supersede?: {
+    operation: "supersede" | "unsupersede";
+    by: string;
+    reason: string;
+    impact?: Receipt["impact"];
+  };
   annotation?: boolean;
   annotationReferences?: string[];
   metadataOnly?: boolean;
@@ -63,3 +72,9 @@ export type Row = {
   receipt: string;
 };
 export type PublicationHook = (stage: string) => void;
+/** A page-budget rejection before acceptance; operations that write page prose return its receipt. */
+export class PageBudgetError extends Error {
+  constructor(readonly receipt: Receipt) {
+    super(receipt.message);
+  }
+}

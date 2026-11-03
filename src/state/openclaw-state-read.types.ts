@@ -22,8 +22,8 @@ import type { ConversationRef } from "../infra/outbound/session-binding.types.js
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import type { UpdateRunAdmissionReadCommand } from "../infra/update-run-admission.types.js";
 import type { UpdateRunListInput } from "../infra/update-run-read.kernel.js";
-import type { UpdateRunReconciliationInput } from "../infra/update-run-reconciliation.types.js";
 import type { PluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { PluginStateReadCommand } from "../plugin-state/plugin-state-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -79,7 +79,7 @@ export type OpenClawStateReadCommand =
   | { type: "capture.readOnlyBlob"; blobId: string }
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
-  | { type: "claws.inventory" }
+  | { type: "templates.inventory" }
   | { type: "gatewayOwnerLease.read"; schemaMaintenance: boolean }
   | AcpSessionReadCommand
   | SqliteWorkerCommand<McpOAuthReadOnlyOperations>
@@ -180,10 +180,11 @@ export type OpenClawStateReadCommand =
   | { type: "updateRuns.get"; runId: string }
   | { type: "updateRuns.list"; input: UpdateRunListInput }
   | { type: "updateRuns.interruptedCandidate" }
-  | { type: "updateRuns.reconciliationCandidates"; input: UpdateRunReconciliationInput }
-  | { type: "updateRuns.reconciliationCandidate"; runId: string }
+  | UpdateRunAdmissionReadCommand
   | { type: "updateRuns.status" }
   | { type: "updateRuns.historyStatus" }
+  | { type: "updateRuns.pluginCohortRecoveries" }
+  | { type: "updateRuns.pluginSnapshotCollection" }
   | { type: "worktrees.cleanupState" }
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "nodeHost.config" }

@@ -144,6 +144,48 @@ describe("chat pane session menu boundary", () => {
     );
   });
 
+  it("opens a read-only workspace menu without probing branches", async () => {
+    const request = vi.fn(async (_method: string) => ({}));
+    const { pane } = createTestChatPane({
+      client: createGatewayBrowserClientFixture({ request }),
+    });
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["system.info", "worktrees.branches"],
+      ["operator.read"],
+    );
+    await pane.loadHeaderMenuData(
+      { key: "agent:main:current", kind: "direct", spawnedCwd: "/workspace" },
+      "/workspace",
+      true,
+    );
+    expect(request.mock.calls.filter(([method]) => method === "worktrees.branches")).toHaveLength(
+      0,
+    );
+  });
+
+  it("does not send the prior workspace after reconnecting during picker loading", async () => {
+    const request = vi.fn(async (_method: string) => ({}));
+    const { pane } = createTestChatPane({
+      client: createGatewayBrowserClientFixture({ request }),
+    });
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods([
+      "system.info",
+      "worktrees.branches",
+    ]);
+    const connected = { ...pane.context.gateway.snapshot };
+    const loading = pane.loadHeaderMenuData(
+      { key: "agent:main:current", kind: "direct", spawnedCwd: "/workspace" },
+      "/workspace",
+      true,
+    );
+    pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting", hello: null });
+    pane.applyGatewaySnapshot(connected);
+    await loading;
+    expect(request.mock.calls.filter(([method]) => method === "worktrees.branches")).toHaveLength(
+      0,
+    );
+  });
+
   it("discovers nested sessions before the header archive choice", async () => {
     const modal = createModalDialogTestFixture();
     const row: GatewaySessionRow = {
@@ -573,38 +615,52 @@ describe("chat pane session menu boundary", () => {
     },
   );
 
-  it("forks through the shared session organizer flow and selects the new session", async () => {
-    const create = vi.fn(async () => "agent:main:forked");
-    const sessions = createSessionCapabilityFixture({
-      create,
-      state: { error: null },
-    });
-    const { pane } = createTestChatPane({ sessions });
-    Object.assign(pane.context.gateway.snapshot.hello?.features ?? {}, {
-      methods: ["sessions.patch", "sessions.create"],
-    });
-    const onPaneSessionChange = vi.fn();
-    pane.onPaneSessionChange = onPaneSessionChange;
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-      hasActiveRun: true,
-    } satisfies GatewaySessionRow;
+  it.each([false, true])(
+    "forks owned conversations through the organizer (active=%s)",
+    async (active) => {
+      const create = vi.fn(async () => "agent:main:forked");
+      const sessions = createSessionCapabilityFixture({
+        create,
+        state: { error: null },
+      });
+      const { pane } = createTestChatPane({ sessions });
+      pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+        ["sessions.create"],
+        ["operator.sessions.write"],
+      );
+      const onPaneSessionChange = vi.fn();
+      pane.onPaneSessionChange = onPaneSessionChange;
+      const session = {
+        key: "agent:main:current",
+        kind: "direct",
+        updatedAt: 0,
+        hasActiveRun: active,
+        sharingRole: "owner",
+      } satisfies GatewaySessionRow;
 
-    await runPaneHeaderAction(pane, { kind: "fork" }, session);
+      await runPaneHeaderAction(pane, { kind: "fork" }, session);
 
-    expect(create).toHaveBeenCalledWith(
-      {
-        parentSessionKey: session.key,
-        fork: true,
-        forkFrom: "last-completed",
-        agentId: "main",
-      },
-      { signal: expect.any(AbortSignal) },
-    );
-    expect(onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:forked");
-  });
+      expect(create).toHaveBeenCalledWith(
+        {
+          parentSessionKey: session.key,
+          fork: true,
+          ...(active ? { forkFrom: "last-completed" } : {}),
+          agentId: "main",
+        },
+        { signal: expect.any(AbortSignal) },
+      );
+      expect(onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:forked");
+      if (!active) {
+        pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+          ["sessions.create"],
+          ["operator.sessions.read"],
+        );
+        create.mockClear();
+        await runPaneHeaderAction(pane, { kind: "fork" }, session);
+        expect(create).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each([
     { action: { kind: "toggle-pin" }, patch: { pinned: true }, current: "replacement" },

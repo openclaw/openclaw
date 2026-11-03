@@ -128,6 +128,29 @@ describe("AppSidebar footer identity menu", () => {
     expect(support?.getAttribute("href")).toBe("https://community.openclaw.ai/");
   });
 
+  it("keeps one account avatar and photo while the open menu rebuilds", async () => {
+    const avatarUrl = "/api/users/self/avatar?v=1";
+    const { gateway, dom, open } = await mountIdentity();
+    await dom.update({ connected: true, canPairDevice: false });
+    const user = { id: "self", name: "Ada", email: "ada@example.test", avatarUrl };
+    gateway.publish({ selfUser: user });
+    await dom.update();
+    await open();
+    const photo = () => dom.query<HTMLImageElement>(".sidebar-identity-menu__avatar img");
+    const mounted = photo();
+    expect(mounted?.getAttribute("src")).toBe(avatarUrl);
+
+    await dom.update({ canPairDevice: true });
+    await waitForSolid(() => {
+      expect(dom.query(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(false);
+    });
+    gateway.publish({ selfUser: { ...user, name: "Ada Lovelace" } });
+    await waitForSolid(() => {
+      expect(dom.query(".sidebar-identity-menu__name")?.textContent).toBe("Ada Lovelace");
+    });
+    expect(photo()).toBe(mounted);
+  });
+
   it("wraps between Profile and the footer while reconnecting", async () => {
     const { dom, open } = await mountIdentity();
     await dom.update({ connected: true, canPairDevice: false, connectionStatus: "reconnecting" });

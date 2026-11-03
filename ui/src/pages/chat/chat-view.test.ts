@@ -339,53 +339,31 @@ describe("chat history pagination", () => {
   it("keeps earlier history discoverable and retryable until the transcript is exhausted", () => {
     const onShowEarlier = vi.fn();
     const container = createComposerContainer();
-    renderChatInto(container, {
-      historyPagination: { hasMore: true, loading: false, onShowEarlier },
-    });
-
-    const button = requireElement(
-      container,
-      ".chat-history-boundary__action",
-      "earlier history action",
-    ) as HTMLButtonElement;
-    expect(button.textContent).toContain("Show earlier");
-    expect(button.getAttribute("aria-label")).toBe("Show earlier");
-    expect(button.getAttribute("aria-busy")).toBe("false");
-    expect(button.disabled).toBe(false);
-    expect(button.closest(".chat-thread")).not.toBeNull();
-    button.click();
-    expect(onShowEarlier).toHaveBeenCalledOnce();
-
-    renderChatInto(container, {
-      historyPagination: { hasMore: true, loading: true, onShowEarlier },
-    });
-    const loadingButton = requireElement(
-      container,
-      ".chat-history-boundary__action",
-      "loading earlier history action",
-    ) as HTMLButtonElement;
-    expect(loadingButton.textContent?.trim()).toBe("Loading earlier…");
-    expect(loadingButton.getAttribute("aria-label")).toBe("Loading earlier…");
-    expect(loadingButton.getAttribute("aria-busy")).toBe("true");
-    expect(loadingButton.getAttribute("aria-disabled")).toBe("true");
-    expect(loadingButton.closest(".chat-history-boundary--loading")).not.toBeNull();
-    loadingButton.click();
-    expect(onShowEarlier).toHaveBeenCalledOnce();
-
-    renderChatInto(container, {
-      historyPagination: { hasMore: true, loading: false, onShowEarlier },
-    });
-    const retryButton = requireElement(
-      container,
-      ".chat-history-boundary__action",
-      "retry earlier history action",
-    ) as HTMLButtonElement;
-    expect(retryButton.textContent?.trim()).toBe("Show earlier");
-    expect(retryButton.getAttribute("aria-label")).toBe("Show earlier");
-    expect(retryButton.getAttribute("aria-busy")).toBe("false");
-    expect(retryButton.disabled).toBe(false);
-    retryButton.click();
-    expect(onShowEarlier).toHaveBeenCalledTimes(2);
+    for (const [loading, connected, clicks] of [
+      [false, false, 0],
+      [true, true, 0],
+      [false, true, 1],
+    ] as const) {
+      renderChatInto(container, {
+        historyPagination: { hasMore: true, loading, connected, onShowEarlier },
+      });
+      const button = requireElement(
+        container,
+        ".chat-history-boundary__action",
+        "earlier history action",
+      ) as HTMLButtonElement;
+      expect(button.querySelector('[role="status"]')?.textContent?.trim()).toBe("Show earlier");
+      expect(button.getAttribute("aria-label")).toBe("Show earlier");
+      expect(button.getAttribute("aria-busy")).toBe(String(loading));
+      expect(button.disabled).toBe(false);
+      expect(button.closest(".chat-thread")).not.toBeNull();
+      if (loading) {
+        expect(button.getAttribute("aria-disabled")).toBe("true");
+        expect(button.closest(".chat-history-boundary--loading")).not.toBeNull();
+      }
+      button.click();
+      expect(onShowEarlier).toHaveBeenCalledTimes(clicks);
+    }
 
     renderChatInto(container);
     expect(container.querySelector(".chat-history-boundary")).toBeNull();
@@ -858,7 +836,7 @@ describe("chat transcript rendering", () => {
         );
       }
       expect(mixedAnnouncement).toBe(
-        "settings.toml: Not sent. Rejected by the local attachment allowlist. Send a supported file type. Partial result",
+        "settings.toml: Not sent. This file type cannot be attached here. If it is saved in this session, download it from Files, or ask for a ZIP containing the original file. Partial result",
       );
     },
   );
@@ -2427,29 +2405,7 @@ describe("chat attachment picker", () => {
     expect(rangeDrop.defaultPrevented).toBe(true);
   });
 
-  it("registers a large paste before an immediate send", () => {
-    let attachments: ChatAttachment[] = [];
-    const onSend = vi.fn(() => {
-      expect(attachments).toHaveLength(1);
-    });
-    const container = renderChatView({
-      draft: "Review the attachment",
-      attachments,
-      getAttachments: () => attachments,
-      onAttachmentsChange: (next) => {
-        attachments = next;
-      },
-      onSend,
-    });
-    const textarea = getComposerTextarea(container);
-    const pastedText = `large paste ${"x".repeat(1100)}`;
-    textarea.dispatchEvent(createPasteEvent(pastedText));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-
-    expect(onSend).toHaveBeenCalledOnce();
-  });
-
-  it("preserves a large paste when a dropped file finishes later", async () => {
+  it("keeps a dropped file independent of native text paste", async () => {
     const readers: FileReader[] = [];
     const readAsDataUrl = vi
       .spyOn(FileReader.prototype, "readAsDataURL")
@@ -2471,11 +2427,13 @@ describe("chat attachment picker", () => {
     });
 
     try {
-      textarea.dispatchEvent(createPasteEvent(pastedText));
+      const paste = createPasteEvent(pastedText);
+      textarea.dispatchEvent(paste);
+      expect(paste.defaultPrevented).toBe(false);
       chat.dispatchEvent(dropEvent);
 
       expect(readers).toHaveLength(1);
-      expect(attachments).toHaveLength(1);
+      expect(attachments).toHaveLength(0);
       Object.defineProperty(readers[0], "result", {
         configurable: true,
         value: `data:application/pdf;base64,${btoa("%PDF-1.4\n")}`,
@@ -2484,27 +2442,26 @@ describe("chat attachment picker", () => {
         new ProgressEvent("load"),
       );
 
-      await waitForFast(() => expect(attachments).toHaveLength(2));
-      expect(attachments.map((attachment) => attachment.fileName)).toEqual([
-        expect.stringMatching(/^pasted-text-\d+\.txt$/u),
-        "brief.pdf",
-      ]);
+      await waitForFast(() => expect(attachments).toHaveLength(1));
+      expect(attachments.map((attachment) => attachment.fileName)).toEqual(["brief.pdf"]);
     } finally {
       readAsDataUrl.mockRestore();
     }
   });
 
   it("keeps the agent-aware placeholder with pasted text, files, images, and comments", () => {
-    let pastedTextAttachments: ChatAttachment[] = [];
-    const pasteTarget = renderChatView({
-      draft: "Review the attachment",
-      getAttachments: () => pastedTextAttachments,
-      onAttachmentsChange: (next) => {
-        pastedTextAttachments = next;
-      },
-    });
-    const textarea = getComposerTextarea(pasteTarget);
-    textarea.dispatchEvent(createPasteEvent(`large paste ${"x".repeat(1100)}`));
+    const pastedTextAttachments = [
+      registerChatAttachmentPayload({
+        attachment: {
+          id: "retained-paste",
+          fileName: "pasted-text-123.txt",
+          mimeType: "text/plain",
+          origin: "paste",
+        },
+        dataUrl: `data:text/plain;base64,${btoa("retained pasted text")}`,
+        file: new File(["retained pasted text"], "pasted-text-123.txt", { type: "text/plain" }),
+      }),
+    ];
 
     const namedLikePaste = registerChatAttachmentPayload({
       attachment: {
@@ -2643,10 +2600,6 @@ describe("chat welcome", () => {
   function renderWelcome(params: {
     assistantAvatar: string | null;
     assistantAvatarUrl?: string | null;
-    sessions?: SessionsListResult | null;
-    sessionKey?: string;
-    sessionHost?: { assistantAgentId?: string | null } | null;
-    onOpenSession?: (sessionKey: string) => void;
     modelSetupRequired?: boolean;
     onModelSetup?: () => void;
   }) {
@@ -2715,7 +2668,6 @@ describe("chat welcome", () => {
         ...(canSend
           ? {
               disabledBanner: createChatModelSetupBanner(onModelSetup),
-              modelSetupRequired: true,
             }
           : {}),
         onSend,
@@ -2729,54 +2681,12 @@ describe("chat welcome", () => {
       send.click();
       expect(onSend).toHaveBeenCalledTimes(canSend ? 1 : 0);
       if (canSend) {
-        expect(container.querySelector(".agent-chat__welcome--setup")).not.toBeNull();
+        expect(container.querySelector(".agent-chat__welcome")).toBeNull();
         container.querySelector<HTMLButtonElement>(".agent-chat__disabled-banner button")?.click();
         expect(onModelSetup).toHaveBeenCalledOnce();
       }
     },
   );
-
-  it("lists recent user chats instead of suggestions when any exist", () => {
-    const opened: string[] = [];
-    const container = renderWelcome({
-      assistantAvatar: null,
-      assistantAvatarUrl: null,
-      sessionKey: "agent:main:dashboard:current",
-      sessions: createSessionsResultFromRows([
-        {
-          key: "agent:main:dashboard:current",
-          kind: "direct",
-          updatedAt: 50,
-          label: "Current chat",
-        },
-        {
-          key: "agent:main:dashboard:older",
-          kind: "direct",
-          updatedAt: 10,
-          label: "Older chat",
-          pinned: true,
-          pinnedAt: 5,
-        },
-        {
-          key: "agent:main:discord:group:g-1456",
-          kind: "group",
-          channel: "discord",
-          updatedAt: 90,
-        },
-        { key: "agent:main:dashboard:newer", kind: "direct", updatedAt: 40, label: "Newer chat" },
-      ]),
-      onOpenSession: (key) => opened.push(key),
-    });
-
-    expect(container.querySelector(".agent-chat__suggestion")).toBeNull();
-    const rows = [...container.querySelectorAll<HTMLButtonElement>(".agent-chat__recent")];
-    expect(
-      rows.map((row) => row.querySelector(".agent-chat__recent-name")?.textContent?.trim()),
-    ).toEqual(["Newer chat", "Older chat"]);
-
-    itemAt(rows, 0, "recent session row").click();
-    expect(opened).toEqual(["agent:main:dashboard:newer"]);
-  });
 
   it("retains the draft composer when secondary welcome content fades", () => {
     const composer = document.createElement("textarea");

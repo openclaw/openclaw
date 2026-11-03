@@ -7,6 +7,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { create as createSessionRow, type Lookup } from "./session-row-projection-record.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import * as sessionStoreKeys from "./session-store-key.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
@@ -16,6 +17,7 @@ function placementReadView() {
     isCurrent(): boolean;
     getPolicyConfig(): SessionRowReadView["state"]["policyConfig"];
   } = {
+    ...createSessionRowProjectionFixture({ cfg: {}, store: {} }),
     physicalPaths: (locator) => [locator],
     state: {
       cfg: {},
