@@ -691,7 +691,10 @@ Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
 not depend on an open browser tab. Subagent completion hooks persist terminal
 outcomes immediately. Agent attempt hooks consult the linked session state:
 finishing a model attempt does not move a card into `review` or `blocked` while
-its run is still active. A recovery sweep runs once per minute and reads only the
+its run is still active. If the session is still settling, the active service
+re-reads it with a short backoff for about three seconds; once it is inactive,
+the card reflects the finished attempt. Service retirement cancels these retries.
+A recovery sweep runs once per minute and reads only the
 sessions linked to active cards, sharing each read across cards with the same link.
 Settled cards stop polling unless they retain pending lifecycle state. Provisional
 Workboard links share one configured-agent roster per sweep and check exact candidates; ambiguous

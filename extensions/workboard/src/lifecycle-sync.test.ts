@@ -595,25 +595,30 @@ describe("Workboard lifecycle service", () => {
     vi.useFakeTimers();
   });
   afterEach(() => vi.useRealTimers());
-  it("uses the active service reader from prepared hooks across replacement", async () => {
-    const original = managedService(async () => lifecycleSnapshot());
-    const readReplacement = vi.fn(async () => lifecycleSnapshot());
-    const replacement = managedService(readReplacement);
-    const preparedReader = vi.fn(async () => lifecycleSnapshot());
-    const prepared = managedService(preparedReader);
-    const readPrepared = () => prepared.readSessions({ sessionKey: "agent:main:card" });
-    const context = serviceContext();
-    await original.start(context);
-    await expect(readPrepared()).resolves.toEqual(lifecycleSnapshot());
+  it("discards an in-flight agent-end read when the service owner is replaced", async () => {
+    const sessionKey = "agent:main:retired-agent-end";
+    const card = await createLinkedCard(store, { status: "running", sessionKey });
+    const entered = Promise.withResolvers<void>();
+    const result = Promise.withResolvers<LifecycleSnapshot>();
+    const readOriginal = vi.fn(async () => {
+      entered.resolve();
+      return await result.promise;
+    });
+    const original = managedService(readOriginal);
+    const replacement = managedService(async () => lifecycleSnapshot());
+    const prepared = managedService(async () => {
+      throw new Error("prepared caller reader used");
+    });
+    await original.start(serviceContext());
+    const pending = prepared.onAgentEnd({ success: true }, { sessionKey });
+    await entered.promise;
     original.stop();
-    await replacement.start(context);
-    original.stop();
-    await expect(readPrepared()).resolves.toEqual(lifecycleSnapshot());
-    expect(readReplacement).toHaveBeenCalledOnce();
-    expect(preparedReader).not.toHaveBeenCalled();
-    replacement.stop();
-    await expect(readPrepared()).resolves.toEqual({ sessions: [], complete: false });
-    expect(readReplacement).toHaveBeenCalledOnce();
+    await replacement.start(serviceContext());
+    result.resolve(lifecycleSnapshot(lifecycleSession(sessionKey, "done", card.updatedAt + 1)));
+    await pending;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect((await store.get(card.id))?.status).toBe("running");
+    expect(readOriginal).toHaveBeenCalledOnce();
   });
 
   it.each(["interval", "plugin reload"] as const)(

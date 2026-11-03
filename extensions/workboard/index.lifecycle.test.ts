@@ -48,6 +48,7 @@ function registerGeneration(
   const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
   const { registerGatewayMethod, invoke: rpc } = createGatewayMethodCapture();
   let gatewayStart: Parameters<typeof captured.api.on<"gateway_start">>[1] = () => {};
+  let agentEnd: Parameters<typeof captured.api.on<"agent_end">>[1] = () => {};
   let gatewayStop: Parameters<typeof captured.api.on<"gateway_stop">>[1] = () => {};
   register({
     ...captured.api,
@@ -58,6 +59,8 @@ function registerGeneration(
     on: (name, handler) => {
       if (name === "gateway_start") {
         gatewayStart = handler as typeof gatewayStart;
+      } else if (name === "agent_end") {
+        agentEnd = handler as typeof agentEnd;
       } else if (name === "gateway_stop") {
         gatewayStop = handler as typeof gatewayStop;
       }
@@ -100,7 +103,7 @@ function registerGeneration(
     });
   };
   return Object.assign(
-    { cleanup: retire, start, ...mocks, expectCall, expectCards },
+    { cleanup: retire, start, ...mocks, expectCall, expectCards, agentEnd },
     {
       tools: () =>
         registerTool.mock.calls.flatMap(
@@ -193,4 +196,47 @@ it.each(["internal", "injected"] as const)(
       await using reopened = openStore();
       expect((await reopened.listBoards()).boards).toContainEqual(expect.objectContaining(board));
     }),
+);
+
+it.each([true, false])("settles a linked card after agent_end (success=%s)", (success) =>
+  withStateDirEnv("workboard-deferred-agent-end-", async () => {
+    vi.useFakeTimers();
+    using clock = { [Symbol.dispose]: () => vi.useRealTimers() };
+    await using store = openStore();
+    const sessionKey = "agent:worker:subagent:workboard-delayed";
+    const card = await store.create({ title: "Delayed worker", status: "running", sessionKey });
+    const settledAt = Date.now() + 1_000;
+    await using prepared = registerGeneration();
+    await using generation = registerGeneration((api) =>
+      plugin.register({
+        ...api,
+        runtime: {
+          ...api.runtime,
+          gateway: {
+            ...api.runtime.gateway,
+            isAvailable: async () => true,
+            // The Gateway request contract lets the caller select the response type.
+            request: async <T>() =>
+              ({
+                session: {
+                  key: sessionKey,
+                  status: "running",
+                  hasActiveRun: Date.now() < settledAt,
+                  updatedAt: card.updatedAt + 1,
+                },
+              }) as T,
+          },
+        },
+      }),
+    );
+    await generation.start();
+    await prepared.agentEnd({ messages: [], success }, { sessionKey });
+    await vi.waitFor(
+      async () => {
+        expect((await store.get(card.id))?.status).toBe(success ? "review" : "blocked");
+      },
+      { timeout: 5_000, interval: 100 },
+    );
+    expect(generation.warn).not.toHaveBeenCalled();
+  }),
 );
