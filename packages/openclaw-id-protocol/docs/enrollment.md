@@ -153,9 +153,11 @@ This avoids adding loopback origins to Discovery's CORS policy.
 
 For mail addressing, the browser binds D with a separate non-extractable mailbox-only peer
 proof key W. W is not added to its owner certificate, membership, or tunnel admission.
-Discovery's optional `OpenClaw-Owner-Certificate` header checks the local D's certificate
-(signature, `approve_device`, validity window) and that D is one of the current owner device keys
-in the claw's K_gw-signed snapshot for the current binding, for the claw's owner account. This
+Discovery's optional `OpenClaw-Owner-Certificate` header names the request's own D (the
+certificate's `device_pub` must equal the signing device). Discovery then requires D in the
+`owner_devices` of the claw's K_gw-signed snapshot for the current binding, with
+`approve_device` among the caps listed there, for the claw's owner account. It does not trust
+the certificate's own caps, signature or window: the snapshot is the authority. This
 lets a local certificate with no peer keys read owner mail. It does not grant
 membership or give an account session owner-device authority.
 

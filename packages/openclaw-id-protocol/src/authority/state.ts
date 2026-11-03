@@ -4,6 +4,7 @@
 import { bytesToHex } from "../bytes.js";
 import type { Ed25519PublicKey, IrohEndpointKey, KeyFingerprint } from "../keys.js";
 import type {
+  OwnerCapability,
   InviteCapBody,
   MemberRole,
   MembershipSnapshotBody,
@@ -27,6 +28,11 @@ export type OwnerApprover = "root" | KeyFingerprint;
 /** An owner device on this claw's allowlist. */
 export type OwnerDeviceRecord = {
   cert: SignedStatement<"OwnerDeviceCert">;
+  /**
+   * Capabilities the Gateway granted: the certificate's caps, accepted only within its signer's
+   * recorded caps (R may grant any). Signing checks and the snapshot read these, not the cert.
+   */
+  caps: OwnerCapability[];
   /** Who signed its certificate: R, or an owner device listed here at the time. */
   approved_by: OwnerApprover;
   /** Last tunnel admission of any of its peer keys (or when it was added), unix seconds. */
@@ -225,10 +231,7 @@ export function activeOwnerDevices(state: AuthorityState, now: UnixSeconds): Own
 /** The current owner set as a verifier lookup: an active device's capabilities, by key. */
 export function ownerLookup(state: AuthorityState, now: UnixSeconds): OwnerDeviceLookup {
   const caps = new Map(
-    activeOwnerDevices(state, now).map((record) => [
-      record.cert.body.device_pub,
-      record.cert.body.caps,
-    ]),
+    activeOwnerDevices(state, now).map((record) => [record.cert.body.device_pub, record.caps]),
   );
   return (devicePub) => caps.get(devicePub);
 }
@@ -278,7 +281,12 @@ export function snapshotBody(
     claw_id: state.claw_id,
     seq: state.seq,
     binding_seq: bindingSeq,
-    owner_device_keys: [...new Set(active.map((record) => record.cert.body.device_pub))].toSorted(),
+    owner_devices: active
+      .map((record) => ({
+        device_pub: record.cert.body.device_pub,
+        caps: [...record.caps].toSorted(),
+      }))
+      .toSorted((a, b) => a.device_pub.localeCompare(b.device_pub)),
     owner_peer_keys: [
       ...new Set(active.flatMap((record) => record.cert.body.peer_keys)),
     ].toSorted(),
