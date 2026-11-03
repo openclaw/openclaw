@@ -6,6 +6,20 @@ read_when:
 title: "Usage tracking"
 ---
 
+## Account-scoped quotas
+
+The account-aware `models.authStatus` response includes an optional
+`usage.authProfileId` when the Gateway knows which saved credential supplied the
+measurement. This is account attribution, not a credential or a new
+account-selection setting. The general `usage.status` response omits this
+profile identity.
+
+The chat composer joins quota facts to the session’s selected auth profile, never
+to the first response for a provider. Automatic account selection, measurements
+without attribution, and conflicting account measurements show **Quota account
+unknown** instead of guessing. Model pickers and account summaries likewise do
+not borrow a plan name measured for another account.
+
 ## What it is
 
 - Pulls provider usage/quota directly from each provider's usage endpoint. No estimated provider billing; only provider-reported plan names, quota windows, balances, spend, budgets, daily cost history, token/model attribution, or account-state summaries.

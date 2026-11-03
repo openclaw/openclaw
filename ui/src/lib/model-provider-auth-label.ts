@@ -1,6 +1,7 @@
 import type { ModelAuthStatusProvider } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { registerModelControlsEnglish } from "../i18n/locales/en-model-controls.ts";
+import { providerUsageForAccount } from "./model-auth.ts";
 
 registerModelControlsEnglish();
 
@@ -54,7 +55,9 @@ export function describeModelProviderAuth(
       kind: "subscription",
       label:
         active?.displayName ||
-        (subscriptionCount === 1 ? provider.usage?.plan : undefined) ||
+        (subscriptionCount === 1
+          ? providerUsageForAccount(provider, account?.profileId)?.plan
+          : undefined) ||
         t("chat.modelControls.subscription"),
       detail: account?.email,
     };

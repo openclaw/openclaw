@@ -229,15 +229,13 @@ export function ChatComposerContextPanel(
   props: ContextNoticeProps & {
     model: ReturnType<typeof getContextNoticeViewModel>;
     currentGroup: ProviderQuotaGroup | undefined;
+    quotaUnknown: boolean;
     open: boolean;
   },
 ) {
   // Plan-billed sessions hide dollar estimates: subscription usage is bounded
   // by the plan windows below, and per-token math would misread as real spend.
-  // Billing mode is provider-level: session rows do not record which auth
-  // profile served the run, so a provider with both an API key and a
-  // subscription resolves to subscription display (per-run credential
-  // attribution is #102807).
+  // Only an account-matched plan suppresses the session cost estimate.
   const showCosts = () => !props.currentGroup;
   const usageHref = () => `${normalizeBasePath(props.providerUsage?.basePath ?? "")}/usage`;
   const formatStat = (value: number | null) =>
@@ -333,6 +331,11 @@ export function ChatComposerContextPanel(
       </Show>
       <Show when={props.currentGroup}>
         {(group) => <QuotaGroup group={group()} usageHref={usageHref()} />}
+      </Show>
+      <Show when={props.quotaUnknown}>
+        <p class="context-usage__stats" role="status">
+          {t("chat.composer.contextUsage.quotaAccountUnknown")}
+        </p>
       </Show>
     </section>
   );

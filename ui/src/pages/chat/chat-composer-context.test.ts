@@ -7,18 +7,34 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelAuthStatusProvider } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
+import {
+  createComposerControlsFixture,
+  renderComposerFixture,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
 import { ContextNotice } from "./components/chat-composer-context.tsx";
 
 type ComposerOverrides = Parameters<typeof renderComposerFixture>[0];
 
 function renderComposer({
   session,
+  authProfileId,
   ...overrides
 }: ComposerOverrides & {
   session?: Partial<GatewaySessionRow>;
+  authProfileId?: string | null;
 } = {}) {
+  const controls = createComposerControlsFixture();
+  controls.model.accountSelection = {
+    kind: "shared",
+    label: "Selected account",
+    authProfileId: authProfileId ?? session?.modelProvider ?? "openai",
+  };
+  if (authProfileId === null) {
+    controls.model.accountSelection = { kind: "automatic", label: "Automatic" };
+  }
   const container = renderComposerFixture({
+    composerControls: controls,
     ...(session ? { selectedSession: sessionRow(session) } : {}),
     ...overrides,
   }).container;
@@ -61,6 +77,7 @@ function planProvider(
     profiles: [{ profileId: provider, type: options.type ?? "oauth", status: "ok" }],
     usage: {
       providerId: provider,
+      authProfileId: provider,
       windows: windows.map(([label, usedPercent, resetAt]) => ({ label, usedPercent, resetAt })),
       ...options.usage,
     },
@@ -327,6 +344,50 @@ describe("renderChatComposer context usage", () => {
 
     session.modelProvider = undefined;
     expect(providerNames(renderComposer(composerProps as never))).toEqual(["codex"]);
+  });
+
+  it("selects the authoritative account regardless of response order", () => {
+    const first = planProvider("openai", "OpenAI", [["Week", 10]], {
+      usage: { authProfileId: "openai:one", accountEmail: "first@example.test" },
+    });
+    const second = planProvider("openai", "OpenAI", [["Week", 80]], {
+      usage: { authProfileId: "openai:two", accountEmail: "second@example.test" },
+    });
+    for (const providers of [
+      [first, second],
+      [second, first],
+    ]) {
+      const container = renderComposer({
+        session: { modelProvider: "openai" },
+        authProfileId: "openai:two",
+        providerUsage: planUsage(providers),
+      });
+      expect(container.textContent).toContain("second@example.test");
+      expect(container.textContent).toContain("80%");
+      expect(container.textContent).not.toContain("first@example.test");
+    }
+  });
+
+  it("does not guess a quota account from provider response order", () => {
+    const first = planProvider("openai", "OpenAI", [["Week", 10]], {
+      usage: { accountEmail: "first@example.test" },
+    });
+    const second = planProvider("openai", "OpenAI", [["Week", 80]], {
+      usage: { accountEmail: "second@example.test" },
+    });
+    for (const providers of [
+      [first, second],
+      [second, first],
+    ]) {
+      const container = renderComposer({
+        session: { modelProvider: "openai", contextTokens: 200_000, totalTokens: 10_000 },
+        authProfileId: null,
+        providerUsage: planUsage(providers),
+      });
+      expect(container.textContent).toContain("Quota account unknown");
+      expect(container.textContent).not.toContain("first@example.test");
+      expect(container.textContent).not.toContain("second@example.test");
+    }
   });
 
   it("keeps context, token, and cost details when only unrelated plan usage exists", () => {
