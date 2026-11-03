@@ -99,16 +99,16 @@ function coerceFormString(value: string, type: string | undefined) {
   return value;
 }
 
-function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
+export function coerceConfigFormValues(value: unknown, schema: JsonSchema): unknown {
   if (value === null || value === undefined) {
     return value;
   }
 
   if (schema.allOf && schema.allOf.length > 0) {
     const { allOf, ...baseSchema } = schema;
-    let next: unknown = coerceFormValues(value, baseSchema);
+    let next: unknown = coerceConfigFormValues(value, baseSchema);
     for (const segment of allOf) {
-      next = coerceFormValues(next, segment);
+      next = coerceConfigFormValues(next, segment);
     }
     return next;
   }
@@ -125,7 +125,7 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
 
     if (variants.length === 1) {
       const variant = variants[0];
-      return variant ? coerceFormValues(value, variant) : value;
+      return variant ? coerceConfigFormValues(value, variant) : value;
     }
     if (typeof value === "string") {
       // Editors commit branch-validated types (including boolean literals),
@@ -147,7 +147,7 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
         (variantType === "object" && isRecord(value)) ||
         (variantType === "array" && Array.isArray(value))
       ) {
-        return coerceFormValues(value, variant);
+        return coerceConfigFormValues(value, variant);
       }
     }
     return value;
@@ -168,7 +168,7 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     return Object.fromEntries(
       Object.entries(value).flatMap(([key, val]) => {
         const propSchema = Object.hasOwn(props, key) ? props[key] : additional;
-        const coerced = propSchema ? coerceFormValues(val, propSchema) : val;
+        const coerced = propSchema ? coerceConfigFormValues(val, propSchema) : val;
         return coerced === undefined ? [] : [[key, coerced]];
       }),
     );
@@ -178,11 +178,13 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     if (Array.isArray(items)) {
       return value.map((item, index) => {
         const itemSchema = index < items.length ? items[index] : undefined;
-        return itemSchema ? coerceFormValues(item, itemSchema) : item;
+        return itemSchema ? coerceConfigFormValues(item, itemSchema) : item;
       });
     }
     return items
-      ? value.map((item) => coerceFormValues(item, items)).filter((item) => item !== undefined)
+      ? value
+          .map((item) => coerceConfigFormValues(item, items))
+          .filter((item) => item !== undefined)
       : value;
   }
   return value;
@@ -205,7 +207,7 @@ export function configFormForSubmit(state: RuntimeConfigState): Record<string, u
   }
   const schema = isRecord(state.configSchema) ? (state.configSchema as JsonSchema) : null;
   const form = schema
-    ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
+    ? (coerceConfigFormValues(state.configForm, schema) as Record<string, unknown>)
     : state.configForm;
   // The draft original is include-resolved source; raw only describes the root file.
   return pruneEmptyConfigForm(form, state.configFormOriginal);
