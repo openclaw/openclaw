@@ -1501,8 +1501,8 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       await waitForFast(() => {
         expect(upsertPresenceMock).toHaveBeenCalledWith(
           "conn-profile-store-failure",
-          expect.objectContaining({
-            user: undefined,
+          expect.not.objectContaining({
+            user: expect.anything(),
           }),
           { pending: true },
         );

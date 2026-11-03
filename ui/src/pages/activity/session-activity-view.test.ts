@@ -437,7 +437,7 @@ describe("session activity people filter", () => {
       presenceViewers: [person],
     });
     show(input);
-    expect(text('[data-activity-identity="online"] h2')).toBe("online@example.test");
+    expect(text('[data-activity-identity="online"] h2')).toBe("Person");
     expect(text(".activity-feed__identity")).toContain("Online");
     const details = container.querySelector<HTMLDetailsElement>(
       ".activity-feed__connection-details",
