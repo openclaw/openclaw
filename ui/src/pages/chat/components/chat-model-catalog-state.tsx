@@ -105,7 +105,7 @@ export function ChatModelCatalogState(props: ChatModelCatalogStateProps) {
     const checking = Boolean(state.pendingProviders?.length);
     // A usable catalog refreshes in the search field without moving the model rows.
     if (
-      (status === "ready" && props.hasSelectableOptions && !checking) ||
+      (status === "ready" && props.hasOptions && !checking) ||
       (props.hasOptions && (status === "loading" || (status === "ready" && checking)))
     ) {
       return undefined;

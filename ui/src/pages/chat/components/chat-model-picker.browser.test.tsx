@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { focusChatComposerFromKeydown } from "../chat-pane-shared.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
@@ -130,8 +130,9 @@ it("opens during activation and preserves filter focus and query across catalog 
   expect(search.value).toBe("beta");
   expect(composer.value).toBe("Keep this draft");
   expect(option("example/alpha")).toBeNull();
+  // Windowed results publish after the sheet's layout measurement.
+  await waitForSolid(() => expect(option("example/beta")).toMatchObject({ hidden: false }));
   const beta = option("example/beta");
-  expect(beta).toMatchObject({ hidden: false });
   expect(beta.checkVisibility()).toBe(true);
   beta.focus();
   expect(document.activeElement).toBe(beta);

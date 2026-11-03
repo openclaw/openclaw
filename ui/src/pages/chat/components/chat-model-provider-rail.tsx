@@ -2,6 +2,7 @@ import { createMemo, createSignal, For } from "solid-js";
 import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../../lib/reactive/platform.ts";
 import { createTabList } from "../../../lib/tabs.ts";
 import { ChatModelProviderIcon } from "./chat-model-picker-options.tsx";
 import { loadModelProviderOrder, saveModelProviderOrder } from "./model-provider-order.ts";
@@ -14,6 +15,7 @@ export function ChatModelProviderRail(props: {
   onSelect: (provider: string) => void;
   onSetup?: () => void;
 }) {
+  const horizontal = createMediaQuery("(max-width: 640px)");
   const [order, setOrder] = createSignal(loadModelProviderOrder());
   const providers = createMemo(() => [
     ...order().filter((id) => props.providers.includes(id)),
@@ -71,7 +73,7 @@ export function ChatModelProviderRail(props: {
         class="chat-controls__provider-rail"
         role="tablist"
         aria-label={t("chat.selectors.model")}
-        aria-orientation="vertical"
+        aria-orientation={horizontal() ? "horizontal" : "vertical"}
       >
         <For each={items()} keyed={(item) => item.id}>
           {(item) => (

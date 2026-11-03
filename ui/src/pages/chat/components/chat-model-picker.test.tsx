@@ -323,3 +323,63 @@ it("persists keyboard rail order without moving the selected provider and opens 
   ).toBe("second");
   localStorage.clear();
 });
+
+it.each(["missing-auth", "auth-failed"] as const)(
+  "keeps %s rows inert with one provider recovery action",
+  async (unavailableReason) => {
+    const onModelSetup = vi.fn();
+    const onModelSelect = vi.fn(async () => {});
+    const { container } = mountPicker({
+      open: true,
+      modelOptions: [
+        option("openai", "one", { disabled: true, unavailableReason }),
+        option("openai", "two", { disabled: true, unavailableReason }),
+      ],
+      modelCatalogState: { hasSnapshot: true, status: "ready" },
+      onModelSetup,
+      onModelSelect,
+    });
+    await waitForMenu(container);
+    const rows = [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.disabled)).toBe(true);
+    rows[0]!.click();
+    expect(onModelSetup).not.toHaveBeenCalled();
+    expect(onModelSelect).not.toHaveBeenCalled();
+    expect(container.querySelectorAll("[data-chat-model-auth-state] button")).toHaveLength(1);
+    container.querySelector<HTMLButtonElement>("[data-chat-model-auth-state] button")!.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
+    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
+  },
+);
+
+it("renders the Claude login command as code and omits the redundant empty restriction note", async () => {
+  const view = mountPicker({
+    open: true,
+    modelOptions: [
+      option("anthropic", "claude", {
+        agentRuntimeId: "claude-cli",
+        disabled: true,
+        unavailableReason: "missing-auth",
+      }),
+    ],
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+  });
+  await waitForMenu(view.container);
+  expect(view.container.querySelector("[data-chat-model-auth-state] code")?.textContent).toBe(
+    "claude auth login",
+  );
+  view.update(
+    pickerProps({
+      open: true,
+      modelOptions: [],
+      modelCatalogState: {
+        hasSnapshot: true,
+        status: "ready",
+        modelSelectionPolicy: { restricted: true, defaultModel: null },
+      },
+    }),
+  );
+  expect(view.container.textContent).toContain("No models are permitted by your administrator.");
+  expect(view.container.querySelector("[data-chat-model-policy]")).toBeNull();
+});
