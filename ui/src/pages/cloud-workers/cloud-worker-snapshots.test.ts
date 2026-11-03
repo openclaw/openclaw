@@ -586,7 +586,7 @@ it.each([
     });
     const surface = labeled
       ? await waitForSolid(() => sheet(page))
-      : expectDefined(page.querySelector(".cloud-environments__advanced"), "Advanced");
+      : expectDefined(page.querySelector(".settings-disclosure"), "Advanced");
     await waitForSolid(() => expect(button(surface, action).disabled).toBe(false));
     if (state !== "provisioning") {
       expect(surface.textContent).toContain("Worker cleanup failed");

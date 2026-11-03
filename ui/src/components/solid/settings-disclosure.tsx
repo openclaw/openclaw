@@ -5,6 +5,7 @@ import { Icon } from "./icon.tsx";
 /**
  * One disclosure for settings: a row that opens to more rows in the same group.
  * `quiet` is for details inside a surrounding group: a muted row with indented subrows.
+ * `sections` opens whole settings sections below the row, since a group can't hold other groups.
  */
 export function SettingsDisclosure(props: {
   id?: string;
@@ -13,17 +14,27 @@ export function SettingsDisclosure(props: {
   description?: JSX.Element;
   open?: boolean;
   quiet?: boolean;
+  sections?: boolean;
   onToggle?: JSX.EventHandler<HTMLDetailsElement, Event>;
   children?: JSX.Element;
 }) {
   return (
     <details
       id={props.id}
-      class={["settings-disclosure", { "settings-group": !props.quiet }, props.class]}
+      class={[
+        "settings-disclosure",
+        { "settings-group": !props.quiet && !props.sections },
+        props.class,
+      ]}
       open={props.open}
       onToggle={(event) => props.onToggle?.(event)}
     >
-      <summary class="settings-row settings-row--nav settings-disclosure__summary">
+      <summary
+        class={[
+          "settings-row settings-row--nav settings-disclosure__summary",
+          { "settings-group": props.sections },
+        ]}
+      >
         <div class="settings-row__text">
           <span class={props.quiet ? "settings-row__desc" : "settings-row__title"}>
             {props.title}
@@ -38,7 +49,13 @@ export function SettingsDisclosure(props: {
           </span>
         </div>
       </summary>
-      {props.quiet ? <div class="settings-subrows">{props.children}</div> : props.children}
+      {props.sections ? (
+        <div class="settings-stack settings-disclosure__sections">{props.children}</div>
+      ) : props.quiet ? (
+        <div class="settings-subrows">{props.children}</div>
+      ) : (
+        props.children
+      )}
     </details>
   );
 }
