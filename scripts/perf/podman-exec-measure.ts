@@ -161,7 +161,8 @@ const state = await import(source("src/state/openclaw-state-db.ts"));
 (await import(source("src/config/runtime-snapshot.ts"))).setRuntimeConfigSnapshot(config);
 state.openOpenClawStateDatabase();
 const { resolveSandboxConfigForAgent } = await import(source("src/agents/sandbox/config.ts"));
-const { createPodmanSandboxBackend } = await import(source("src/agents/sandbox/docker-backend.ts"));
+const { createPodmanSandboxBackend }: typeof import("../../src/agents/sandbox/docker-backend.ts") =
+  await import(source("src/agents/sandbox/docker-backend.ts"));
 const { spawnCommand } = await import(source("src/process/exec.ts"));
 const readCalls = () =>
   fs
