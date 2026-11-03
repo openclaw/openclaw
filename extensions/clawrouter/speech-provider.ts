@@ -274,9 +274,13 @@ export function buildClawRouterSpeechProvider(
         requestHeaders: headers,
       });
       if (gradium) {
-        const mime = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+        const mime = response.headers.get("content-type")?.trim().toLowerCase();
+        const encoding = response.headers.get("content-encoding")?.trim().toLowerCase();
         if (
           response.status !== 200 ||
+          response.redirected ||
+          response.headers.has("content-range") ||
+          (encoding !== undefined && encoding !== "identity") ||
           mime !== (responseFormat === "wav" ? "audio/wav" : "audio/ogg")
         ) {
           void response.body?.cancel().catch(() => undefined);

@@ -579,10 +579,12 @@ const GRADIUM_WAV = Buffer.from(
   "UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YRAAAAAAAAAAAAAAAAAAAAAAAAAA",
   "base64",
 );
+// Published PR454 synthetic transport fixture; not decoder/playback or live inference proof.
+const GRADIUM_OPUS = Buffer.from("OggS\0synthetic OpusHead transport fixture", "utf8");
 function respondGradium(res: ServerResponse, request: Request) {
   const body = (request.body.body ?? request.body) as Record<string, unknown>;
   res.setHeader("content-type", body.output_format === "opus" ? "audio/ogg" : "audio/wav");
-  res.end(body.output_format === "wav" ? GRADIUM_WAV : Buffer.from([1, 2, 3, 4]));
+  res.end(body.output_format === "wav" ? GRADIUM_WAV : GRADIUM_OPUS);
 }
 
 describe("ClawRouter native Gradium speech", () => {
@@ -593,7 +595,7 @@ describe("ClawRouter native Gradium speech", () => {
         success: true,
         outputFormat: "opus",
         voiceCompatible: true,
-        audioBuffer: Buffer.from([1, 2, 3, 4]),
+        audioBuffer: GRADIUM_OPUS,
       });
       expect(
         await textToSpeechTelephony({
@@ -693,32 +695,41 @@ describe("ClawRouter native Gradium speech", () => {
     });
   });
 
-  it.each(["partial-status", "truncated", "oversized", "redirect"] as const)(
-    "rejects %s binary delivery through TTS",
-    async (failure) => {
-      await withFixture(
-        async (fixture) => {
-          const cfg = selectGradium(fixture);
-          expect((await fixture.tts({ cfg })).success).toBe(false);
-          expect(fixture.requests).toHaveLength(1);
-        },
-        (res) => {
-          res.setHeader("content-type", "audio/wav");
-          if (failure === "partial-status") res.statusCode = 206;
-          if (failure === "truncated") {
-            res.setHeader("content-length", GRADIUM_WAV.length + 1);
-            res.setHeader("connection", "close");
-          }
-          if (failure === "oversized") res.setHeader("content-length", 16 * 1024 * 1024 + 1);
-          if (failure === "redirect") {
-            res.statusCode = 307;
-            res.setHeader("location", "/replayed-speech");
-          }
-          res.end(GRADIUM_WAV);
-        },
-      );
-    },
-  );
+  it.each([
+    "partial-status",
+    "truncated",
+    "oversized",
+    "redirect",
+    "range",
+    "mime-parameters",
+    "encoding",
+  ] as const)("rejects %s binary delivery through TTS", async (failure) => {
+    await withFixture(
+      async (fixture) => {
+        const cfg = selectGradium(fixture);
+        expect((await fixture.tts({ cfg })).success).toBe(false);
+        expect(fixture.requests).toHaveLength(1);
+      },
+      (res) => {
+        res.setHeader("content-type", "audio/wav");
+        if (failure === "partial-status") res.statusCode = 206;
+        if (failure === "range") res.setHeader("content-range", "bytes 0-15/100");
+        if (failure === "mime-parameters")
+          res.setHeader("content-type", "audio/wav; codecs=unknown");
+        if (failure === "encoding") res.setHeader("content-encoding", "gzip");
+        if (failure === "truncated") {
+          res.setHeader("content-length", GRADIUM_WAV.length + 1);
+          res.setHeader("connection", "close");
+        }
+        if (failure === "oversized") res.setHeader("content-length", 16 * 1024 * 1024 + 1);
+        if (failure === "redirect") {
+          res.statusCode = 307;
+          res.setHeader("location", "/replayed-speech");
+        }
+        res.end(GRADIUM_WAV);
+      },
+    );
+  });
 
   it.each([{ model: "gradium/fake-model" }, { speed: 1.2 }, { instructions: "whisper" }])(
     "rejects unsupported native settings before submission (%j)",
