@@ -625,12 +625,6 @@ export function ChatModelPickerPanel(panel: {
                             >
                               {renderRow(`heading:target:${id()}`, () => (
                                 <div class="chat-controls__provider-heading">
-                                  <span
-                                    class="chat-controls__provider-icon chat-controls__target-icon"
-                                    aria-hidden="true"
-                                  >
-                                    <Icon name="terminal" />
-                                  </span>
                                   <span>{group().label}</span>
                                 </div>
                               ))}
