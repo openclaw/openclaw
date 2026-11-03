@@ -288,6 +288,14 @@ async function discoverForSetup(
   }
 }
 
+/** A successful empty model list still proves that the external service is reachable. */
+export async function detectLlamaServerSetupAvailability(
+  ctx: ProviderAppGuidedSetupContext,
+  server: LlamaServerIdentity = LLAMA_CPP_SERVER,
+): Promise<boolean> {
+  return (await discoverForSetup(ctx, server)) !== null;
+}
+
 /** Read-only discovery for the guided local-provider setup ladder. */
 export async function detectLlamaServerSetup(
   ctx: ProviderAppGuidedSetupContext,

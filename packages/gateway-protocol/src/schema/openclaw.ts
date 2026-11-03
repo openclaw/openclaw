@@ -338,6 +338,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
         label: NonEmptyString,
         hint: Type.Optional(Type.String()),
         actionLabel: Type.Optional(NonEmptyString),
+        /** Positive service observation, not app installation or model readiness. Omission is unknown. */
+        serviceReachable: Type.Optional(Type.Literal(true)),
         icon: Type.Optional(SetupInferenceHttpsUrl),
         website: Type.Optional(SetupInferenceHttpsUrl),
       }),

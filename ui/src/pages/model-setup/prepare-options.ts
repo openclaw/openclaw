@@ -25,6 +25,17 @@ export function preparedModelActivation(option: ModelSetupPrepareOption, modelRe
   };
 }
 
+export function hasReachableModelSetupService(
+  result: SystemAgentSetupDetectResult,
+  option: { id: string; brandId?: string },
+): boolean {
+  return (result.prepareOptions ?? []).some(
+    (choice) =>
+      choice.serviceReachable === true &&
+      (choice.brandId ?? choice.id) === (option.brandId ?? option.id),
+  );
+}
+
 export function listModelSetupPrepareOptions(
   result: SystemAgentSetupDetectResult,
 ): ModelSetupPrepareOption[] {
@@ -33,6 +44,7 @@ export function listModelSetupPrepareOptions(
       !result.candidates.some(
         (candidate) =>
           candidate.credentials !== false &&
+          !(choice.serviceReachable && candidate.kind === "existing-model") &&
           (candidate.kind === providerAutoSetupKind(choice.id) ||
             candidate.modelRef.startsWith(`${choice.brandId ?? choice.id}/`)),
       ),

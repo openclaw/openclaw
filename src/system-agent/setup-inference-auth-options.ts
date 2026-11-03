@@ -141,6 +141,8 @@ export function listSetupInferenceInstallOptions(
 
 export type SetupInferencePrepareOption = SetupInferenceOptionPresentation & {
   actionLabel?: string;
+  /** Positive service observation, not app installation or model readiness. Omission is unknown. */
+  serviceReachable?: true;
 };
 
 export function supportsSetupTextInference(

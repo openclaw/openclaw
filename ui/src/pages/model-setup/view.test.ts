@@ -60,6 +60,62 @@ describe("renderModelSetup", () => {
     delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
+  it("offers setup for a reachable service without repeating its install suggestion", () => {
+    const option = {
+      id: "llama-app",
+      brandId: "llama-app",
+      label: "Llama app",
+      serviceReachable: true as const,
+    };
+    const onStartPrepare = vi.fn();
+    const result = {
+      ...ready,
+      configuredModel: undefined,
+      setupComplete: false,
+      prepareOptions: [option],
+      authOptions: [{ ...option, kind: "install" as const, featured: false }],
+      recommendedInstalls: [{ ...option, hint: "Install Llama", website: "https://llama.app/" }],
+    };
+    const view = props({ page: { phase: "ready", result }, onStartPrepare });
+    const container = mount(view);
+    const row = container.querySelector('[data-prepare-choice="llama-app"]')!;
+    expect(text(row)).toContain("Service found. Set up a model to continue.");
+    const button = row.querySelector<HTMLButtonElement>("button")!;
+    expect(button.textContent?.trim()).toBe("Set up");
+    expect(container.querySelector('[data-auth-choice="llama-app"]')).toBeNull();
+    expect(container.querySelector('[data-recommended-install="llama-app"]')).toBeNull();
+    button.click();
+    expect(onStartPrepare).toHaveBeenCalledWith(option);
+    renderSetup(
+      { ...view, page: { phase: "ready", result: { ...result, authOptions: [] } } },
+      container,
+    );
+    expect(container.querySelector("[data-recommended-install]")).toBeNull();
+    renderSetup(
+      {
+        ...view,
+        page: { phase: "ready", result: { ...result, authOptions: [], prepareOptions: [] } },
+      },
+      container,
+    );
+    expect(container.querySelector('[data-recommended-install="llama-app"]')).not.toBeNull();
+    renderSetup(
+      {
+        ...view,
+        page: {
+          phase: "ready",
+          result: {
+            ...result,
+            prepareOptions: [{ id: option.id, brandId: option.brandId, label: option.label }],
+          },
+        },
+      },
+      container,
+    );
+    expect(text(container)).not.toContain("Service found.");
+    expect(container.querySelector('[data-auth-choice="llama-app"]')).not.toBeNull();
+  });
+
   it("shows detected authentication without credential values", () => {
     const detail = "logged in · ChatGPT account · alex@example.com";
     const secret = "synthetic-private-token";

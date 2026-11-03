@@ -155,7 +155,9 @@ it("accepts additive presentation metadata and older results without installs", 
       { ...authOption, kind: "install" },
       { ...authOption, kind: "custom" },
     ],
-    prepareOptions: [{ ...brandedOption, hint: "Server", actionLabel: "Connect" }],
+    prepareOptions: [
+      { ...brandedOption, hint: "Server", actionLabel: "Connect", serviceReachable: true },
+    ],
     recommendedInstalls: [{ ...brandedOption, hint: "Run locally" }],
     nativeSessionCatalogs: [{ pluginId: "codex", label: "Sessions", detail: "Discover" }],
     nativeSessionCatalogPreferenceRequired: true,
@@ -179,6 +181,8 @@ it("accepts additive presentation metadata and older results without installs", 
       prepareOptions: undefined,
     },
   );
+  detect.rejects({ ...result, prepareOptions: [{ ...brandedOption, serviceReachable: false }] });
+  detect.accepts({ ...result, prepareOptions: [brandedOption] });
   detect.rejects({
     ...result,
     recommendedInstalls: [{ ...result.recommendedInstalls[0], website: "http://example.test" }],

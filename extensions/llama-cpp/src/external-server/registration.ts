@@ -25,13 +25,15 @@ export function createLlamaServerAuthMethod(server: LlamaServerIdentity): Provid
       methodId: "existing-server",
     },
     appGuidedSetup: {
+      detectAvailability: async (ctx) =>
+        (await import("./setup.js")).detectLlamaServerSetupAvailability(ctx, server),
       detect: async (ctx) => (await import("./setup.js")).detectLlamaServerSetup(ctx, server),
       prepare: async (ctx) => (await import("./setup.js")).prepareLlamaServerSetup(ctx, server),
     },
     run: async (ctx) => {
       if (app) {
         await ctx.prompter.note(
-          "Get Llama app at https://llama.app/, choose and download a model in the app, and enable its API server. Then connect to an address this Gateway can reach. OpenClaw does not install the app or manage its model cache.",
+          "Open Llama app and choose a model. Download one in the app if needed, then return here to connect. OpenClaw does not install the app or manage its model cache.",
           "Set up Llama app",
         );
       }

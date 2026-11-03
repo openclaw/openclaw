@@ -25,7 +25,11 @@ import { renderModelSetupLoading } from "./loading-view.tsx";
 import { renderProviderIcon } from "./model-setup-icon-loader.tsx";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
 import { NativeModelSetupView } from "./native-model-setup.tsx";
-import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
+import {
+  hasReachableModelSetupService,
+  listModelSetupPrepareOptions,
+  type ModelSetupPrepareOption,
+} from "./prepare-options.ts";
 import { manualProviderName, ManualProviderPicker } from "./provider-picker.tsx";
 import { ModelSetupSuccessDialog } from "./success-dialog.tsx";
 import type { ModelSetupViewProps } from "./view-types.ts";
@@ -40,7 +44,10 @@ const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers"
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
 
 function EmptyState(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult }) {
-  const installs = () => props.result.recommendedInstalls ?? [];
+  const installs = () =>
+    (props.result.recommendedInstalls ?? []).filter(
+      (option) => !hasReachableModelSetupService(props.result, option),
+    );
   const visible = () => {
     props.revision?.();
     return (
@@ -83,6 +90,10 @@ function SetupActionRow(props: {
   option: AuthOption | ModelSetupPrepareOption;
 }) {
   const groupLabel = () => ("kind" in props.option ? props.option.groupLabel : undefined);
+  const hint = () =>
+    !("kind" in props.option) && props.option.serviceReachable
+      ? t("modelSetup.prepare.serviceFound")
+      : props.option.hint;
   const actionLabel = () => {
     const option = props.option;
     return "kind" in option
@@ -93,7 +104,9 @@ function SetupActionRow(props: {
               ? "modelSetup.signIn.custom"
               : "modelSetup.signIn.verify",
         )
-      : (option.actionLabel ?? t("modelSetup.prepare.ollamaButton"));
+      : option.serviceReachable
+        ? t("modelSetup.prepare.setUp")
+        : (option.actionLabel ?? t("modelSetup.prepare.ollamaButton"));
   };
   return (
     <div
@@ -108,8 +121,8 @@ function SetupActionRow(props: {
           <Show when={groupLabel()}>
             <div class="muted">{groupLabel()}</div>
           </Show>
-          <Show when={props.option.hint}>
-            <div class="muted">{props.option.hint}</div>
+          <Show when={hint()}>
+            <div class="muted">{hint()}</div>
           </Show>
         </div>
       </div>
@@ -136,6 +149,10 @@ function SignIn(props: ModelSetupViewProps & { result: SystemAgentSetupDetectRes
   const options = createMemo(() =>
     (props.result.authOptions ?? [])
       .filter((option) => !props.embedded || !props.credentialChoices?.includes(option.id))
+      .filter(
+        (option) =>
+          option.kind !== "install" || !hasReachableModelSetupService(props.result, option),
+      )
       .toSorted((a, b) => a.label.localeCompare(b.label)),
   );
   const featured = createMemo(() =>

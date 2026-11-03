@@ -523,6 +523,10 @@ it("detects and rechecks Llama without changing installed llama.cpp or its prima
     },
   };
   const before = JSON.stringify(config);
+  const empty = successfulDiscovery("http://127.0.0.1:9931");
+  empty.models = [];
+  discoverMock.mockResolvedValueOnce(empty);
+  await expect(guided.detectAvailability?.({ config, env: {} })).resolves.toBe(true);
   const detected = await guided.detect({ config, env: {} });
   expect(detected?.modelRef).toBe("llama-app/" + MODEL_ID);
   const prepared = await guided.prepare({ config, env: {}, modelRef: "llama-app/" + MODEL_ID });
@@ -536,7 +540,7 @@ it("detects and rechecks Llama without changing installed llama.cpp or its prima
   await expect(
     guided.prepare({ config, env: {}, modelRef: "llama-app/missing" }),
   ).resolves.toBeNull();
-  expect(discoverMock).toHaveBeenCalledTimes(3);
+  expect(discoverMock).toHaveBeenCalledTimes(4);
   expectDiscovery({
     server: LLAMA_APP_SERVER,
     baseUrl: "http://127.0.0.1:9931",

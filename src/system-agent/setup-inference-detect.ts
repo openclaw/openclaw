@@ -266,8 +266,26 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
               if (!method?.appGuidedSetup) {
                 return null;
               }
+              const guided = method.appGuidedSetup;
+              const availability = (async () => {
+                try {
+                  const reachable = await guided.detectAvailability?.({ ...context, signal });
+                  signal.throwIfAborted();
+                  const option = manual.prepareOptions.find(
+                    (entry) => entry.id === choice.choiceId,
+                  );
+                  if (reachable && option) {
+                    // This operation owns the options shared by partial and completed results.
+                    option.serviceReachable = true;
+                  }
+                } catch (error) {
+                  setupInferenceLog.debug(
+                    `App-guided availability failed for ${choice.choiceId}: ${formatErrorMessage(error)}`,
+                  );
+                }
+              })();
               try {
-                const candidate = await method.appGuidedSetup.detect({ ...context, signal });
+                const candidate = await guided.detect({ ...context, signal });
                 signal.throwIfAborted();
                 if (!candidate) {
                   return null;
@@ -301,6 +319,8 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
                   `App-guided discovery failed for ${choice.choiceId}: ${formatErrorMessage(error)}`,
                 );
                 return null;
+              } finally {
+                await availability;
               }
             },
           );

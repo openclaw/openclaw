@@ -102,7 +102,11 @@ it.each([false, true])(
               detail: "fixture available",
               credentials: true,
             });
-            expect((await work).candidates).toEqual(failed ? [] : [candidate]);
+            const detected = await work;
+            expect(detected.candidates).toEqual(failed ? [] : [candidate]);
+            expect(detected.prepareOptions?.find((option) => option.id === id)).toMatchObject({
+              serviceReachable: true,
+            });
             expect(phases).toEqual(["detect", "dispose"]);
             expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
             expect(process.listenerCount(releaseEvent)).toBe(0);

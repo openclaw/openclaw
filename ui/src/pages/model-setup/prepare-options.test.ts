@@ -47,14 +47,27 @@ describe("model setup prepare options", () => {
   });
 
   it.each([
-    { credentials: true, kind: "provider-auto:other-choice", id: "lmstudio-local", count: 0 },
-    { credentials: false, kind: "provider-auto:lmstudio", id: "lmstudio", count: 1 },
+    {
+      credentials: true,
+      kind: "provider-auto:other-choice",
+      id: "lmstudio-local",
+      count: 0,
+      serviceReachable: undefined,
+    },
+    {
+      credentials: false,
+      kind: "provider-auto:lmstudio",
+      id: "lmstudio",
+      count: 1,
+      serviceReachable: undefined,
+    },
+    { credentials: true, kind: "existing-model", id: "lmstudio", count: 1, serviceReachable: true },
   ] as const)(
     "offers preparation only without usable credentials (credentials=$credentials)",
-    ({ credentials, kind, id, count }) => {
+    ({ credentials, kind, id, count, serviceReachable }) => {
       const result = detection(
         [candidate(kind, "lmstudio/qwen3-8b-instruct", credentials)],
-        [{ id, brandId: "lmstudio", label: "LM Studio" }],
+        [{ id, brandId: "lmstudio", label: "LM Studio", serviceReachable }],
       );
       expect(listModelSetupPrepareOptions(result)).toHaveLength(count);
       expect(findPreparedModelCandidate(result, id)).toBeUndefined();
