@@ -24,7 +24,7 @@ const closers: Array<() => void | Promise<void>> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     try {
-      await Promise.all(closers.splice(0).map((close) => close()));
+      await Promise.all(closers.splice(0).map(async (close) => close()));
     } finally {
       vi.restoreAllMocks();
       cleanup();
