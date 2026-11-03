@@ -296,6 +296,10 @@ openclaw browser snapshot
 openclaw browser snapshot --urls
 ```
 
+Page-text extraction through the browser API counts its character budget in UTF-16
+code units. If a limit falls inside a surrogate pair, extraction omits the whole
+pair rather than returning a broken character; the result remains truncated.
+
 Screenshot:
 
 ```bash
