@@ -83,10 +83,13 @@ export function projectChatSystemNotice(
   );
   const pendingSummaryKey = pending && noticeKind?.pendingSummaryKeys?.[pending.status];
   const summaryKey = pendingSummaryKey ?? noticeKind?.summaryKey;
-  const text = summaryKey
-    ? t(summaryKey)
-    : extractTextCached(item.message)?.replace(/^\[System\] /u, "");
-  if (!text?.trim()) {
+  const text =
+    summaryKey === null
+      ? ""
+      : summaryKey
+        ? t(summaryKey)
+        : (extractTextCached(item.message)?.replace(/^\[System\] /u, "") ?? "");
+  if (!text.trim() && summaryKey !== null) {
     return pendingItems;
   }
   return [
