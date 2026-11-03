@@ -413,6 +413,24 @@ def create_watch_screenshot_simulator(name)
   end
 end
 
+# Temporary, screenshot-only experiment. Watch and all upload operations stay stock.
+SCREENSHOT_COMPARISON_KEPT = "widgets,siri,icloud,store,pim,web,health,photos,apps,messaging,connectivity,telemetry,other".freeze
+
+def record_screenshot_comparison!(template, udid, stage)
+  profile = ENV["OPENCLAW_SNAPSHOT_COMPARISON_PROFILE"]
+  sh("simslim", "verify", udid, "--except", SCREENSHOT_COMPARISON_KEPT) if profile == "search-family"
+  status = JSON.parse(sh("simslim", "status", udid, "--dropped", "--json", log: false))
+  expected = profile == "search-family" ? 13 : 0
+  UI.user_error!("Unexpected screenshot comparison profile: #{status}") unless status.fetch("managedDisabled") == expected
+  directory = File.join(ios_root, "build", "SnapshotComparison")
+  FileUtils.mkdir_p(directory)
+  path = File.join(directory, "#{template.fetch('name')}-#{stage}")
+  File.write("#{path}.json", JSON.pretty_generate({
+    "profile" => profile, "device" => template, "udid" => udid, "status" => status
+  }))
+  File.write("#{path}-disabled.txt", sh("xcrun", "simctl", "spawn", udid, "launchctl", "print-disabled", "system", log: false))
+end
+
 def with_screenshot_simulator(template = nil, watch_name: nil, diagnostics: nil)
   require_idle_screenshot_simulators!
   # A deleted simulator can leave the host busy with first-launch work.
@@ -435,7 +453,13 @@ def with_screenshot_simulator(template = nil, watch_name: nil, diagnostics: nil)
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       inventory_started = nil
       begin
+        if !watch_name && ENV["OPENCLAW_SNAPSHOT_COMPARISON_PROFILE"] == "search-family"
+          UI.user_error!("Comparison candidate must start Shutdown.") unless available_simulator_devices.find { |device| device.fetch("udid") == udid }.fetch("state") == "Shutdown"
+          # SimSlim writes the offline overrides and performs the first boot.
+          sh("simslim", "on", udid, "--except", SCREENSHOT_COMPARISON_KEPT)
+        end
         sh("xcrun", "simctl", "bootstatus", udid, "-b")
+        record_screenshot_comparison!(template, udid, "before") if !watch_name && ENV["OPENCLAW_SNAPSHOT_COMPARISON_PROFILE"]
         inventory_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         require_exclusive_screenshot_simulator!(udid, diagnostics)
       ensure
@@ -452,6 +476,11 @@ def with_screenshot_simulator(template = nil, watch_name: nil, diagnostics: nil)
       require_exclusive_screenshot_simulator!(udid, diagnostics)
     end
     result = yield udid, template
+    if !watch_name && ENV["OPENCLAW_SNAPSHOT_COMPARISON_PROFILE"]
+      screenshot_phase(diagnostics, "profile-verify-after-capture", device: name, udid: udid) do
+        record_screenshot_comparison!(template, udid, "after")
+      end
+    end
     require_exclusive_screenshot_simulator!(udid, diagnostics)
     result
   ensure
@@ -2485,6 +2514,21 @@ platform :ios do
 
   desc "Generate repeatable iOS screenshots for App Store metadata"
   lane :screenshots do |options|
+    ENV.delete("OPENCLAW_SNAPSHOT_COMPARISON_PROFILE") if ENV["OPENCLAW_SNAPSHOT_COMPARISON_PROFILE"] == ""
+    if (profile = ENV["OPENCLAW_SNAPSHOT_COMPARISON_PROFILE"])
+      UI.user_error!("Unknown screenshot comparison profile.") unless %w[stock search-family].include?(profile)
+      UI.user_error!("Comparison requires all screenshot devices.") if ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] == "1" ||
+        ENV["OPENCLAW_SNAPSHOT_DEVICE_FAMILY"].to_s != "" || ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"
+      directory = File.join(ios_root, "build", "SnapshotComparison")
+      FileUtils.rm_rf(directory)
+      FileUtils.mkdir_p(directory)
+      File.write(File.join(directory, "host.json"), JSON.pretty_generate({
+        "profile" => profile, "source" => sh("git", "rev-parse", "HEAD", log: false).strip,
+        "xcode" => sh("xcodebuild", "-version", log: false).strip,
+        "runtimes" => JSON.parse(sh("xcrun", "simctl", "list", "runtimes", "--json", log: false)),
+        "architecture" => RbConfig::CONFIG.fetch("host_cpu"), "simslim" => sh("simslim", "--version", log: false).strip
+      }))
+    end
     prepare_screenshot_project(options)
 
     output_directory = File.join(ios_root, "fastlane", "screenshots")
