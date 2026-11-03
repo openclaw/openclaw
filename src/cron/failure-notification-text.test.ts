@@ -42,13 +42,27 @@ describe("cronFailureDetailLines", () => {
     expect(cronFailureDetailLines(undefined, detail)).toEqual([expected]);
   });
 
-  it("renders a closed agent-stall recovery cause", () => {
+  it("renders agent-stall recovery cause with recovery guidance", () => {
     expect(
       cronFailureDetailLines(undefined, {
         kind: "agent-stall",
         classification: "blocked_tool_call",
       }),
-    ).toEqual(["Cause: blocked_tool_call"]);
+    ).toEqual([
+      "Cause: blocked_tool_call",
+      "The agent was blocked waiting on a tool call that made no progress.",
+      "Review the tool's permissions and any blocked invocation, then rerun the automation.",
+    ]);
+  });
+
+  it("falls back to generic guidance for an unknown agent-stall classification", () => {
+    expect(
+      cronFailureDetailLines(undefined, { kind: "agent-stall", classification: "other_cause" }),
+    ).toEqual([
+      "Cause: other_cause",
+      "The agent run was stopped because its session became stuck.",
+      "Check the automation history for details, then rerun if appropriate.",
+    ]);
   });
 
   it("labels script failures by their producer", () => {
