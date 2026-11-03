@@ -182,7 +182,7 @@ suite.define(() => {
       await page.getByRole("alert").filter({ hasText: "Your draft is preserved" }).waitFor();
       expect(await page.getByLabel("SKILL.md", { exact: true }).inputValue()).toBe(draft);
       const form = page.locator("form.skill-library-dialog");
-      expect(await form.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(
+      expect(await form.evaluate((element) => element.clientWidth > 0 && element.scrollWidth <= element.clientWidth + 1)).toBe(
         true,
       );
       page.once("dialog", (dialog) => {
@@ -199,7 +199,7 @@ suite.define(() => {
       expect(
         await importer
           .locator(".oc-dialog__body")
-          .evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+          .evaluate((element) => element.clientWidth > 0 && element.scrollWidth <= element.clientWidth + 1),
       ).toBe(true);
       await importer.getByLabel("Skill name", { exact: true }).fill("abandoned-import");
       await importer.locator('input[name="library-import-files"]').setInputFiles({
