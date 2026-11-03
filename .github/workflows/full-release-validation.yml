@@ -187,7 +187,8 @@ jobs:
     name: Resolve target ref
     # Hosted admission delays compound along this serial release path.
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 10
+    # Allow degraded GitHub Git operations without cancelling the FRV.
+    timeout-minutes: 15
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
       release_tag: ${{ steps.release_inputs.outputs.release_tag }}
@@ -771,13 +772,30 @@ jobs:
             .toString('latin1').split('\0').filter(record =>
               /^(?:package\.json|apps\/android\/version\.json|extensions\/[^/]+\/(?:package\.json|README\.md)|packages\/[^/]+\/package\.json)$/.test(record.slice(record.indexOf('\t') + 1)));
           if (records.length > 4096) throw new Error('publication metadata count exceeds limit');
-          let bytes = 0;
-          for (const record of records) {
+          const oids = records.map(record => {
             const tab = record.indexOf('\t');
             const header = record.slice(0, tab), path = record.slice(tab + 1);
             const [mode, type, oid] = header.split(' ');
             new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(path, 'latin1'));
             if (!['100644', '100755'].includes(mode) || type !== 'blob') throw new Error('publication metadata must be regular committed files');
+            return oid;
+          });
+          // The target is a blob:none checkout, so each missing blob read below would be its own
+          // lazy promisor fetch. Fetch them in one batch with git's own lazy-fetch arguments first;
+          // if that fails, the reads below still fall back to lazy fetches.
+          const missing = oids.length === 0 ? [] : git('rev-list', '--objects', '--no-walk', '--missing=print', ...new Set(oids))
+            .toString().split('\n').filter(line => line.startsWith('?')).map(line => line.slice(1));
+          if (missing.length > 0) {
+            try {
+              execFileSync('git', ['--no-replace-objects', '-C', root, '-c', 'fetch.negotiationAlgorithm=noop', 'fetch', 'origin',
+                '--no-tags', '--no-write-fetch-head', '--recurse-submodules=no', '--filter=blob:none', '--stdin'],
+                { timeout: 120000, input: `${missing.join('\n')}\n`, stdio: ['pipe', 'ignore', 'pipe'] });
+            } catch (error) {
+              console.log(`::warning::Batched publication metadata prefetch failed; falling back to per-blob fetches: ${error.message}`);
+            }
+          }
+          let bytes = 0;
+          for (const oid of oids) {
             const size = Number(git('cat-file', '-s', oid).toString());
             if (!Number.isSafeInteger(size) || size > 16 * 1024 * 1024 || (bytes += size) > 64 * 1024 * 1024) throw new Error('publication metadata byte limit exceeded');
             git('cat-file', 'blob', oid);
