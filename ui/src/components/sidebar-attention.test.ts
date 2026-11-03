@@ -145,6 +145,26 @@ describe("model auth attention", () => {
     expect(item?.inlineAction?.label).toBe(action);
     expect(item?.detail).toContain(status);
   });
+  it.each([
+    ["setup_inactive", "Sign in"],
+    [undefined, "Review account"],
+  ] as const)("handles mixed account inventory with reason %s", (reasonCode, action) => {
+    const snapshot = authStatus(1);
+    snapshot.providers = [
+      {
+        provider: "openai",
+        displayName: "OpenAI",
+        status: "expired",
+        profiles: [
+          { profileId: "openai:a-key", type: "api_key", status: "missing", reasonCode },
+          { profileId: "openai:z-login", type: "oauth", status: "expired" },
+        ],
+      },
+    ];
+    const item = authItems("main", snapshot)[0];
+    expect(item?.inlineAction?.label).toBe(action);
+    expect(item?.meta?.context).toBe(reasonCode ? "openai:z-login" : "main");
+  });
   it("keeps identical provider warnings distinct across agents", () => {
     expect(authItems("main")[0]?.signature).toBe("agent:main\nopenai");
     expect(authItems("writer")[0]?.signature).toBe("agent:writer\nopenai");

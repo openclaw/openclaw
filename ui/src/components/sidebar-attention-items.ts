@@ -62,9 +62,13 @@ export function buildSidebarAttentionEntries(params: {
       ? `agent:${params.modelAuthAgentId}\n${provider.provider}`
       : provider.provider;
     const fact = `${provider.displayName}: ${provider.status}`;
-    const profile = provider.profiles.find(
+    const profiles = provider.profiles.filter((profile) => profile.reasonCode !== "setup_inactive");
+    const failed = profiles.find(
       (candidate) => candidate.status === "expired" || candidate.status === "missing",
     );
+    // Inventory includes excluded credentials; mixed types cannot identify the failing auth method.
+    const profile =
+      failed && profiles.every((candidate) => candidate.type === failed.type) ? failed : undefined;
     const scope = profile?.profileId ?? params.modelAuthAgentId?.trim();
     const status = t(
       profile?.type === "oauth"
