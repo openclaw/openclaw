@@ -1,5 +1,6 @@
 import type { WebSocket } from "ws";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { PairedDeviceTokenIdentity } from "../../infra/device-pairing-core.types.js";
 import type { SystemPresence } from "../../infra/system-presence.js";
 import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
@@ -93,6 +94,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     isLocalClient?: true;
     /** Device key W of a connection relayed by the OpenClaw ID tunnel child; never from wire params. */
     openclawIdPeerKey?: string;
+    /** Membership-role ceiling of an OpenClaw ID member's connection; never from wire params. */
+    openclawIdRolePolicy?: GatewayOperatorRoleDefinition;
     /** Authenticated Control UI operator ingress; never accepted from wire params. */
     authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */

@@ -44,6 +44,7 @@ describe("saved device-token bindings at Gateway start", () => {
     const service = createOpenClawIdService({
       getConfig: () => ({ enabled: false }),
       getStateDir: () => "/nonexistent/openclaw-id-test",
+      getGatewayServer: () => undefined,
       log: { info: () => {}, warn: () => {} },
       createAuthority: async () => {
         await gate;

@@ -195,6 +195,11 @@ export function resolveOperatorRolePolicy(
   if (actor?.kind === "system") {
     return undefined;
   }
+  // An OpenClaw ID member's membership role caps its connection, independently of named roles.
+  const openclawIdRolePolicy = client?.internal?.openclawIdRolePolicy;
+  if (openclawIdRolePolicy) {
+    return openclawIdRolePolicy;
+  }
   const authority = client?.internal?.operatorRunAuthority;
   if (actor?.kind === "operator" && authority) {
     assertAdmittedRunOperatorAuthority(authority);

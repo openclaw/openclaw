@@ -25,6 +25,7 @@ import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
+import { openclawIdTunnelRolePolicy } from "./openclaw-id/tunnel-principal.js";
 import {
   GatewayOperatorAccessDeniedError,
   hasGatewayOperatorAccessPolicies,
@@ -68,7 +69,18 @@ export async function checkAuthenticatedHttpUserProfile(
   params: Parameters<typeof resolveAuthenticatedHttpUserProfile>[0],
 ): Promise<HttpUserProfileAuthResult> {
   try {
-    return { ok: true, profile: await resolveAuthenticatedHttpUserProfile(params) };
+    const profile = await resolveAuthenticatedHttpUserProfile(params);
+    // OpenClaw ID members are capped by their membership role on every HTTP surface.
+    const openclawIdRolePolicy =
+      params.authResult.method === "trusted-proxy"
+        ? openclawIdTunnelRolePolicy(params.authResult.openclawId)
+        : undefined;
+    return {
+      ok: true,
+      profile: openclawIdRolePolicy
+        ? { ...profile, operatorRolePolicy: openclawIdRolePolicy }
+        : profile,
+    };
   } catch (error) {
     return failedHttpProfileAuthentication(error);
   }
@@ -178,6 +190,9 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
         authenticatedUserId,
         authMethod: params.authResult.method,
         rolesConfigured,
+        openclawIdOwner:
+          params.authResult.method === "trusted-proxy" &&
+          params.authResult.openclawId?.kind === "owner",
       })
     ) {
       try {
