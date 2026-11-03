@@ -149,7 +149,7 @@ suite.define(() => {
       expect(await docsLink.getAttribute("href")).toBe(
         "https://docs.openclaw.ai/gateway/cloud-workers",
       );
-      await page.locator(".cloud-environments__advanced > summary").click();
+      await page.locator(".settings-disclosure > summary").click();
       await gateway.waitForRequest("environments.list");
       const socketCount = await gateway.getSocketCount();
       await page.getByText("No cloud worker profiles are configured.", { exact: true }).waitFor();
@@ -321,7 +321,7 @@ suite.define(() => {
       const gateway = await workerGateway(page, "retry-initial");
 
       await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
-      await page.locator(".cloud-environments__advanced > summary").click();
+      await page.locator(".settings-disclosure > summary").click();
       await page.getByRole("button", { name: "Add profile" }).click();
       const editor = page.locator(".settings-section", {
         has: page.getByRole("heading", { name: "Add profile", exact: true }),
@@ -446,7 +446,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
-        await page.locator(".cloud-environments__advanced > summary").click();
+        await page.locator(".settings-disclosure > summary").click();
         const row = pendingRow(page);
         await exactButton(row, "Edit: pending").click();
         const editor = page.locator(".settings-section", {
@@ -518,7 +518,7 @@ suite.define(() => {
           .toEqual(savedConfig);
         expect(await gateway.getRequests("config.set")).toHaveLength(0);
         await page.goBack();
-        await page.locator(".cloud-environments__advanced > summary").click();
+        await page.locator(".settings-disclosure > summary").click();
         await row.getByText(description, { exact: false }).waitFor();
 
         await exactButton(row, "Delete: pending").click();
@@ -568,7 +568,7 @@ suite.define(() => {
                 },
         });
         await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
-        await page.locator(".cloud-environments__advanced > summary").click();
+        await page.locator(".settings-disclosure > summary").click();
         const row = pendingRow(page);
         await exactButton(row, "Delete: pending").click();
         const confirmation = await waitForConfirmModal(page);
@@ -652,7 +652,7 @@ suite.define(() => {
       await workerGateway(page, "read-only", {}, { operatorScopes: ["operator.read"] });
 
       await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
-      await page.locator(".cloud-environments__advanced > summary").click();
+      await page.locator(".settings-disclosure > summary").click();
       await page
         .getByText("Administrator access is required to manage cloud worker profiles.", {
           exact: true,

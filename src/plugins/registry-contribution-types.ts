@@ -343,14 +343,14 @@ export type MemoryPluginCapability = {
  */
 export type LearnMedium = "skills" | "memory";
 
-export type LearnGuidance = {
+type LearnGuidance = {
   /** Lines for the /learn prompt body. */
   lines: readonly string[];
   /** Reference blocks the host appends after the closing instruction, each after a blank line. */
   appendix?: readonly string[];
 };
 
-export type LearnSubcommandContext = {
+type LearnSubcommandContext = {
   /** Text after the subcommand name. */
   args: string;
   config: OpenClawConfig;
@@ -361,7 +361,7 @@ export type LearnSubcommandContext = {
 };
 
 /** A reply without a model turn, or the prompt that replaces this turn's user message. */
-export type LearnSubcommandResult = { text: string } | { prompt: string };
+type LearnSubcommandResult = { text: string } | { prompt: string };
 
 export type LearnSubcommand = {
   /** The word after /learn, matched case-insensitively. */

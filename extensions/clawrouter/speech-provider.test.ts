@@ -9,7 +9,18 @@ import { describe, expect, it } from "vitest";
 
 const AUDIO = Buffer.from([0x49, 0x44, 0x33, 1, 2, 3]);
 type Request = { url: string; auth?: string; body: Record<string, unknown> };
+type Catalog = {
+  model: string;
+  routeKind: "unified" | "native" | "manifest";
+  eligible: boolean;
+  requestFormat: string;
+  responseFormat: string;
+  route?: string;
+};
 type Fixture = {
+  catalog: Catalog;
+  catalogRequests: string[];
+
   cfg: OpenClawConfig;
   home: string;
   requests: Request[];
@@ -22,7 +33,11 @@ const withoutKey = (cfg: OpenClawConfig): OpenClawConfig => ({
   ...cfg,
   models: {
     providers: {
-      clawrouter: { baseUrl: cfg.models?.providers?.clawrouter?.baseUrl ?? "", models: [] },
+      clawrouter: {
+        baseUrl: cfg.models?.providers?.clawrouter?.baseUrl ?? "",
+        models: [],
+        request: { allowPrivateNetwork: true },
+      },
     },
   },
 });
@@ -38,9 +53,69 @@ async function withFixture(
   await withTempHome(
     async (home) => {
       const requests: Request[] = [];
+      const catalogRequests: string[] = [];
+      const catalog: Catalog = {
+        model: "tts-1",
+        routeKind: "unified",
+        eligible: true,
+        requestFormat: "openai.audio_speech",
+        responseFormat: "audio.binary",
+      };
       await withServer(
         (req, res) => {
           void (async () => {
+            if (req.url === "/v1/catalog") {
+              catalogRequests.push(req.headers.authorization ?? "");
+              const route =
+                catalog.route ??
+                (catalog.routeKind === "unified"
+                  ? "/v1/audio/speech"
+                  : catalog.routeKind === "native"
+                    ? "/v1/native/openai/v1/audio/speech"
+                    : "/v1/proxy/openai/speech");
+              res.setHeader("content-type", "application/json");
+              res.end(
+                JSON.stringify({
+                  version: "clawrouter.client-catalog.v1",
+                  providers: [
+                    {
+                      id: "openai",
+                      allowed: true,
+                      executable: true,
+                      nativeBaseUrl: "/v1/native/openai",
+                      routes: [
+                        {
+                          endpoint: "speech",
+                          path: "/v1/audio/speech",
+                          methods: ["POST"],
+                          requestFormat: catalog.requestFormat,
+                          responseFormat: catalog.responseFormat,
+                        },
+                      ],
+                      models: [
+                        {
+                          id: "openai/" + catalog.model,
+                          upstream: catalog.model,
+                          capabilities: ["audio.speech"],
+                        },
+                      ],
+                      offers: [
+                        {
+                          endpoint: "speech",
+                          modelId: "openai/" + catalog.model,
+                          routeKind: catalog.routeKind,
+                          route,
+                          transport: "http",
+                          eligible: catalog.eligible,
+                          affordability: "request-dependent",
+                        },
+                      ],
+                    },
+                  ],
+                }),
+              );
+              return;
+            }
             let text = "";
             for await (const chunk of req) {
               text += chunk;
@@ -61,7 +136,14 @@ async function withFixture(
             plugins: { allow: ["clawrouter"], entries: { clawrouter: { enabled: true } } },
             agents: { defaults: { voiceModel: "clawrouter/openai/tts-1" } },
             models: {
-              providers: { clawrouter: { baseUrl, apiKey: "fixture-router", models: [] } },
+              providers: {
+                clawrouter: {
+                  baseUrl,
+                  apiKey: "fixture-router",
+                  models: [],
+                  request: { allowPrivateNetwork: true },
+                },
+              },
             },
             tts: { providers: { clawrouter: {} } },
           };
@@ -69,6 +151,8 @@ async function withFixture(
             cfg,
             home,
             requests,
+            catalog,
+            catalogRequests,
             tts: (options = {}) =>
               synthesizeSpeech({
                 text: "Hello from ClawRouter",
@@ -97,6 +181,81 @@ function speech(cfg: OpenClawConfig) {
 }
 
 describe("ClawRouter native speech", () => {
+  it.each(["native", "manifest"] as const)(
+    "runs a catalog-selected %s offer through actual TTS",
+    async (routeKind) => {
+      await withFixture(async ({ cfg, catalog, catalogRequests, requests, tts }) => {
+        catalog.routeKind = routeKind;
+        catalog.model = "gpt-4o-mini-tts";
+        const result = await tts({
+          cfg: {
+            ...cfg,
+            agents: { defaults: {} },
+            tts: {
+              provider: "clawrouter",
+              providers: {
+                clawrouter: {
+                  model: "openai/gpt-4o-mini-tts",
+                  voice: "coral",
+                  instructions: "Speak softly",
+                },
+              },
+            },
+          },
+        });
+        expect(result).toMatchObject({ success: true, audioBuffer: AUDIO });
+        expect(catalogRequests).toEqual(["Bearer fixture-router"]);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toMatchObject({
+          url:
+            routeKind === "native"
+              ? "/v1/native/openai/v1/audio/speech"
+              : "/v1/proxy/openai/speech",
+          auth: "Bearer fixture-router",
+          body:
+            routeKind === "manifest"
+              ? {
+                  body: {
+                    model: "gpt-4o-mini-tts",
+                    input: "Hello from ClawRouter",
+                    voice: "coral",
+                    instructions: "Speak softly",
+                    response_format: "mp3",
+                  },
+                }
+              : {
+                  model: "gpt-4o-mini-tts",
+                  input: "Hello from ClawRouter",
+                  voice: "coral",
+                  instructions: "Speak softly",
+                  response_format: "mp3",
+                },
+        });
+      });
+    },
+  );
+
+  it("refreshes grants and refuses unsupported formats or credential-bearing destinations before synthesis", async () => {
+    await withFixture(async ({ cfg, request, catalog, requests, catalogRequests }) => {
+      const provider = speech(cfg);
+      await provider.synthesize(request({ instructions: "tts-1 cannot accept this" }));
+      expect(requests[0]?.body).not.toHaveProperty("instructions");
+      catalog.eligible = false;
+      await expect(provider.synthesize(request())).rejects.toThrow("no eligible supported offer");
+      catalog.eligible = true;
+      catalog.requestFormat = "future.speech";
+      await expect(provider.synthesize(request())).rejects.toThrow("no eligible supported offer");
+      catalog.requestFormat = "openai.audio_speech";
+      catalog.responseFormat = "application.json";
+      await expect(provider.synthesize(request())).rejects.toThrow("no eligible supported offer");
+      catalog.responseFormat = "audio.binary";
+      catalog.route = "https://untrusted.example/audio/speech";
+      await expect(provider.synthesize(request())).rejects.toThrow("no eligible supported offer");
+      expect(catalogRequests).toHaveLength(5);
+      expect(requests).toHaveLength(1);
+    });
+  });
+
   it("selects the qualified voice model through native TTS, without a chat provider selection", async () => {
     await withFixture(async ({ tts, requests }) => {
       const result = await tts();
@@ -352,8 +511,8 @@ describe("ClawRouter native speech", () => {
     await withFixture(async ({ cfg, request, requests }) => {
       const provider = speech(cfg);
       for (const [config, message] of [
-        [{ model: "tts-1" }, "supports only openai/tts-1"],
-        [{ voice: "unknown" }, "Invalid ClawRouter tts-1 voice"],
+        [{ model: "tts-1" }, "requires a qualified OpenAI speech model"],
+        [{ voice: "unknown" }, "Invalid ClawRouter OpenAI speech voice"],
         [{ speed: 0 }, "speed must be between 0.25 and 4"],
         [{ responseFormat: "json" }, "Invalid ClawRouter speech responseFormat"],
       ] as const) {

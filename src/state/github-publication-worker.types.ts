@@ -77,9 +77,7 @@ type Mutation<Row> =
   | ({ operation: "claim" } & Execution<Row>)
   | (GitHubPublicationEffectTransition & Execution<Row>)
   | { operation: "report"; requestId: string };
-export type PersonalPublicationMutation =
-  | Mutation<PersonalPublicationRow>
-  | { operation: "restart"; instanceId: string };
+export type PersonalPublicationMutation = Mutation<PersonalPublicationRow>;
 export type RepositoryPublicationMutation =
   | Mutation<RepositoryPublicationRow>
   | {
