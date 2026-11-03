@@ -1164,7 +1164,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         const initialPresence = upsertPresenceMock.mock.calls.find(
           ([key]) => key === "conn-github-identity-detached",
         )?.[1];
-        expect(initialPresence).not.toHaveProperty("user");
+        expect(initialPresence).toHaveProperty("user", undefined);
         expect(harness.registeredProfileId).toBeUndefined();
         expect(harness.socketSend.mock.invocationCallOrder[0]).toBeLessThan(
           sync.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -1461,7 +1461,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       const presence = upsertPresenceMock.mock.calls.find(
         ([key]) => key === "conn-github-identity-failure",
       )?.[1];
-      expect(presence).not.toHaveProperty("user");
+      expect(presence).toHaveProperty("user", undefined);
       expect(harness.refreshConnectedUserProfile).not.toHaveBeenCalled();
     });
   });
