@@ -1106,10 +1106,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
   width: 220px;
 }
 
-.settings-row__control input.settings-input:not(.picker-select__search) {
-  text-align: right;
-}
-
 /* Lone value inputs share one width so stacked rows in a group read as a
    grid instead of ragged right-aligned fields. A percentage guard cannot work
    here (the shrink-to-fit control resolves 100% circularly); the fixed width
