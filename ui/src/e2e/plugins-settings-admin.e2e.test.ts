@@ -427,7 +427,11 @@ suite.define(() => {
         expect(await gateway.getRequests("config.set")).toHaveLength(0);
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         await gateway.deferNext("config.patch");
-        await page.getByRole("button", { name: `Save: ${label}`, exact: true }).click();
+        await page
+          .locator(".plugin-editor__row")
+          .filter({ has: apiKey })
+          .getByRole("button", { name: /^Save: /u })
+          .click();
         const save = await gateway.waitForRequest("config.patch");
         expect(JSON.parse(String(asRecord(save.params).raw))).toEqual({
           plugins: {
