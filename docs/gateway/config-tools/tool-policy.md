@@ -214,10 +214,13 @@ inspection. Patterns that already cover both names, such as `*` or `*image*`,
 remain unchanged.
 
 Personal-library authoring uses its own `skill_library` tool, separate from
-`skill_workshop`. If a policy names `skill_workshop` in an allow, `alsoAllow`,
-or deny list, `openclaw doctor --fix` adds `skill_library` beside it so the
-policy keeps covering personal authoring. Patterns that already cover both
-names remain unchanged.
+`skill_workshop`. Once, for a config written before the split, `openclaw doctor --fix`
+adds `skill_library` beside `skill_workshop` in allow, `alsoAllow`, and deny lists so
+the policy keeps covering personal authoring. Patterns that already cover both names
+remain unchanged. A `tools.gatewayPolicy` that allowed `skill_workshop` gains
+`skill_library` with only the personal-library actions its `skill_workshop` action list
+permitted. Doctor then records `meta.migrations.skillLibraryToolSplit: true`, which config
+writes also record, and never changes tool policy for the split again.
 
 ## `tools.gatewayPolicy`
 

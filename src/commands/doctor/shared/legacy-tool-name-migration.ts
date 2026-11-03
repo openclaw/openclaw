@@ -79,10 +79,18 @@ function visitLegacyToolName(
   migration: LegacyToolNameMigration,
   migrate: boolean,
   matchedPaths: string[],
+  include: (listPath: string[]) => boolean,
 ): void {
   if (Array.isArray(value)) {
     for (const [index, entry] of value.entries()) {
-      visitLegacyToolName(entry, [...path, String(index)], migration, migrate, matchedPaths);
+      visitLegacyToolName(
+        entry,
+        [...path, String(index)],
+        migration,
+        migrate,
+        matchedPaths,
+        include,
+      );
     }
     return;
   }
@@ -97,6 +105,7 @@ function visitLegacyToolName(
   for (const key of listKeys) {
     const list = value[key];
     if (
+      !include([...path, key]) ||
       !(migrate
         ? migrateLegacyToolNameList(list, migration)
         : hasLegacyToolNameList(list, migration))
@@ -107,7 +116,7 @@ function visitLegacyToolName(
   }
 
   for (const [key, entry] of Object.entries(value)) {
-    visitLegacyToolName(entry, [...path, key], migration, migrate, matchedPaths);
+    visitLegacyToolName(entry, [...path, key], migration, migrate, matchedPaths, include);
   }
 }
 
@@ -117,16 +126,18 @@ export function findLegacyToolNamePaths(
   path: string[] = [],
 ): string[] {
   const matchedPaths: string[] = [];
-  visitLegacyToolName(value, path, migration, false, matchedPaths);
+  visitLegacyToolName(value, path, migration, false, matchedPaths, () => true);
   return matchedPaths;
 }
 
+/** `include` limits repair to the policy lists it accepts, by config path. */
 export function migrateLegacyToolNamePolicies(
   value: unknown,
   migration: LegacyToolNameMigration,
   path: string[] = [],
+  include: (listPath: string[]) => boolean = () => true,
 ): string[] {
   const matchedPaths: string[] = [];
-  visitLegacyToolName(value, path, migration, true, matchedPaths);
+  visitLegacyToolName(value, path, migration, true, matchedPaths, include);
   return matchedPaths;
 }

@@ -1,9 +1,9 @@
 import type { LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
+import { materializeSkillLibraryToolSplit } from "../../../config/skill-library-tool-split-migration.js";
 import {
   findLegacyToolNamePaths,
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
   migrateLegacyToolNamePolicies,
-  SKILL_LIBRARY_TOOL_SPLIT_MIGRATION,
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "./legacy-tool-name-migration.js";
 import { TOOL_POLICY_ROOTS } from "./legacy-tool-policy-scopes.js";
@@ -17,14 +17,33 @@ const TOOL_NAME_MIGRATIONS = [
     id: "tools.view-image-name",
     migration: IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
   },
-  {
-    id: "tools.skill-library-split",
-    migration: SKILL_LIBRARY_TOOL_SPLIT_MIGRATION,
-  },
 ] as const;
 
-export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TOOL_NAMES =
-  TOOL_NAME_MIGRATIONS.map<LegacyConfigMigrationSpec>((migration) => ({
+/** One-shot: once `meta.migrations.skillLibraryToolSplit` is recorded, policy stays as authored. */
+const SKILL_LIBRARY_TOOL_SPLIT: LegacyConfigMigrationSpec = {
+  id: "tools.skill-library-split",
+  legacyRules: TOOL_POLICY_ROOTS.map((root) => ({
+    path: [root],
+    message:
+      'Tool policies cover skill_workshop but not the new skill_library tool for personal-library authoring; run "openclaw doctor --fix" to keep equivalent access.',
+    match: (_value, config) =>
+      materializeSkillLibraryToolSplit(structuredClone(config)).paths.some(
+        (path) => path.split(".")[0] === root,
+      ),
+  })),
+  apply: (raw, changes) => {
+    const migrated = materializeSkillLibraryToolSplit(raw);
+    // Marker-only conversion is stamped by the config writer, not an unrelated Doctor repair.
+    if (migrated.changes.length === 0) {
+      return;
+    }
+    Object.assign(raw, migrated.config);
+    changes.push(...migrated.changes);
+  },
+};
+
+export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TOOL_NAMES = [
+  ...TOOL_NAME_MIGRATIONS.map<LegacyConfigMigrationSpec>((migration) => ({
     id: migration.id,
     legacyRules: TOOL_POLICY_ROOTS.map((root) => ({
       path: [root],
@@ -42,4 +61,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TOOL_NAMES =
         `Migrated legacy ${migration.migration.legacyName} policy coverage to ${migration.migration.canonicalName} in ${paths.join(", ")}.`,
       );
     },
-  }));
+  })),
+  SKILL_LIBRARY_TOOL_SPLIT,
+];
