@@ -82,6 +82,26 @@ describe("readResponseText", () => {
   });
 
   it.each([
+    '<!-- <meta charset="windows-1252"> -->',
+    '<!-- <meta charset="windows-1252"> --!>',
+    '<!-- <meta http-equiv="Content-Type" content="text/html; charset=windows-1252"> -->',
+    '<!-- <?xml version="1.0" encoding="windows-1252"?> -->',
+  ])("ignores charset declarations in document comments: %s", async (comment) => {
+    const text = `${comment}<meta charset="utf-8"><p>café 日本 😀</p>`;
+    await expectDecoded(new TextEncoder().encode(text), "text/html", text);
+  });
+
+  it("keeps comment markers inside quoted attribute values literal", async () => {
+    const text = '<meta name="description" content="<!--"><meta charset="windows-1252"><p>café</p>';
+    await expectDecoded(Buffer.from(text, "latin1"), "text/html", text);
+  });
+
+  it("ignores metadata in a comment extending past the scan limit", async () => {
+    const text = '<!-- <meta charset="windows-1252">' + " ".repeat(4096) + "café -->";
+    await expectDecoded(new TextEncoder().encode(text), "text/html", text);
+  });
+
+  it.each([
     [
       '<?xml version="1.0" encoding="utf-16"?><rss><title>café</title></rss>',
       "application/rss+xml",
