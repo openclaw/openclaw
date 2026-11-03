@@ -19,7 +19,9 @@ const runtime = vi.hoisted(() => ({
   disposeMaterialized: vi.fn(async () => undefined),
 }));
 
+// mock-isolation: Each case supplies its own runtime config without touching disk state.
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => runtime.cfg }));
+// mock-isolation: Same isolated config for readers that import the IO owner directly.
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtime.cfg }));
 // mock-isolation: Core tools stay inert; only configured MCP resolution is exercised.
 vi.mock("../agents/openclaw-tools.js", () => ({
@@ -31,7 +33,9 @@ vi.mock("../agents/openclaw-tools.js", () => ({
     },
   ],
 }));
+// mock-isolation: Tool construction helpers stay inert outside the invocation path.
 vi.mock("../agents/agent-tools.js", () => ({ resolveToolLoopDetectionConfig: () => ({}) }));
+// mock-isolation: Hooks pass arguments through so policy, not hooks, decides each case.
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: async ({ params }: { params: Record<string, unknown> }) => ({
     blocked: false,
