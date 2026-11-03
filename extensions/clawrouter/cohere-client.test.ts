@@ -35,6 +35,7 @@ function catalog(eligible = true, format = "openai.chat_completions") {
             id: MODEL,
             upstream: "command-a-plus-05-2026",
             capabilities: ["llm.chat"],
+            supportedReasoningEfforts: ["none", "high"],
             input: ["text", "image"],
           },
         ],
@@ -90,9 +91,7 @@ describe("ClawRouter Cohere compatibility client", () => {
         reasoning: true,
         baseUrl: "https://router.example/v1/native/cohere/compatibility/v1",
         compat: {
-          supportsStore: false,
-          supportsUsageInStreaming: false,
-          maxTokensField: "max_tokens",
+          supportsReasoningEffort: true,
         },
       });
       let wire: Record<string, unknown> | undefined;

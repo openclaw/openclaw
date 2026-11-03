@@ -18,8 +18,8 @@ the route. The service still checks current policy and compound budgets at dispa
 Cohere chat discovery requires a key-scoped native offer whose declared request
 and response format is `openai.chat_completions`. It uses that offer's exact
 compatibility route, with the upstream model ID. Native and routed clients share
-the Cohere instruction-role and tool-choice policy and inherit the bundled native
-model's compatible wire settings. A native-v2-only catalog does not enable this
+the Cohere instruction-role, tool-choice, and compatible wire-field policy.
+Reasoning efforts remain owned by the router catalog. A native-v2-only catalog does not enable this
 client transport; v2 routing and billed usage remain owned by the router.
 
 Capability discovery joins eligible HTTP offers from the selected key's catalog

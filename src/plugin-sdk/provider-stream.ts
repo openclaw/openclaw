@@ -137,6 +137,14 @@ export function buildProviderStreamFamilyHooks(
             }
             // Cohere chooses tools when omitted; its Compatibility API does not accept tool_choice.
             delete payload.tool_choice;
+            // Native catalog rows already declare these fields. Apply the same wire contract
+            // to credential-scoped routing catalogs without borrowing another route's facts.
+            if (payload.max_tokens === undefined && payload.max_completion_tokens !== undefined) {
+              payload.max_tokens = payload.max_completion_tokens;
+            }
+            delete payload.max_completion_tokens;
+            delete payload.store;
+            delete payload.stream_options;
           }),
       };
     case "google-thinking":

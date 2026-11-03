@@ -377,7 +377,6 @@ function buildRoutedModel(
     },
     reasoning:
       supportedReasoningEfforts !== undefined ||
-      (provider.id === "cohere" && nativeFacts?.compat?.supportsReasoningEffort === true) ||
       /(?:claude-|gemini-|gpt-5|gpt-oss|deepseek-v|reasoner|glm-5|grok-4|minimax-m)/u.test(
         qualifiedId,
       ),
