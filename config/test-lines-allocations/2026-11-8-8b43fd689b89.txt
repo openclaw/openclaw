@@ -1,0 +1,6 @@
+56
+# LOCAL 2026.11.8 row 169; source 8b43fd689b89ff6f8f30a37dfa718d4a4e56b4f5.
+# Plugin OAuth availability regression (+56 LF) with catalog-owned callback extraction; replacement only, no credit for the superseded candidate.
+# Reviewed private composition: 1db01204ebca2ee31072ad5cba8962eaf44e1b8e.
+# Exact net test LF including matching helper/support files; no scalar baseline or coverage reduction.
+# Apply only with this reviewed source composition; do not duplicate existing or folded credit.

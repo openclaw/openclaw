@@ -34,7 +34,6 @@ import {
 import {
   hasMalformedSecretInputSyntax,
   resolveSecretRefReadOnlyAvailability,
-  resolveStoredCredentialReadOnlyAvailability,
 } from "./auth-profiles/read-only-availability.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import { getRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
@@ -52,6 +51,11 @@ import {
 } from "./auth-profiles/usage-state.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { createCliRuntimeModelAuthEvaluator } from "./model-auth-availability.cli-runtime.js";
+import {
+  createProfileCredentialAvailability,
+  modeAllowed,
+  type AuthTarget,
+} from "./model-auth-availability.profile-credential.js";
 import { createRuntimeCredentialOverlay } from "./model-auth-availability.runtime-overlay.js";
 import type {
   ModelAuthAvailability,
@@ -114,6 +118,7 @@ const EXTERNAL_CLI_REFRESH_PROVIDER_IDS = new Set(
 );
 
 type CreateModelAuthAvailabilityResolverParams = {
+  canRefreshProviderOAuth?: (provider: string) => boolean;
   evaluatePluginAuth?: (
     provider: string,
     ref: ModelAuthAvailabilityRef,
@@ -145,9 +150,6 @@ type CreateModelAuthAvailabilityResolverParams = {
   ) => ReadonlySet<string> | undefined;
 };
 
-type AuthTarget = ModelAuthAvailabilityRef & {
-  authRequirement?: ProviderModelRouteAuthRequirement;
-};
 type AuthSourceEvaluation = Pick<
   ModelAuthAvailabilityEvaluation,
   | "availability"
@@ -157,25 +159,6 @@ type AuthSourceEvaluation = Pick<
   | "unavailableReason"
   | "unavailableUntil"
 >;
-
-function modeAllowed(
-  provider: string,
-  target: AuthTarget,
-  mode: string | undefined,
-  authFlow?: string,
-): boolean {
-  const policy = resolveProviderModelAuthPolicy({
-    provider,
-    mode,
-    authFlow,
-    api: target.api ?? undefined,
-    baseUrl: typeof target.baseUrl === "string" ? target.baseUrl : undefined,
-  });
-  return (
-    policy.compatible &&
-    (!target.authRequirement || policy.authRequirement === target.authRequirement)
-  );
-}
 
 function normalizeModelIdForProvider(provider: string, modelId: string): string | undefined {
   const trimmed = splitTrailingAuthProfile(modelId).model;
@@ -277,9 +260,14 @@ export function createModelAuthAvailabilityResolver(
     const normalized = normalizeProviderIdForAuth(provider);
     return aliasMap[normalized] ?? normalized;
   };
-  // Refresh authority follows exact profiles marked by the external-auth
-  // lifecycle. Provider-wide authority could bless an unrelated stale profile.
-  const externalCliRefreshProfileIds = new Set(external.map((profile) => profile.profileId));
+  const resolvedProfileAvailability = createProfileCredentialAvailability({
+    cfg: params.cfg,
+    env,
+    now,
+    hydratedProfileIds: runtimeCredentials.hydratedProfileIds,
+    externalCliRefreshProfileIds: external.map((profile) => profile.profileId),
+    canRefreshProviderOAuth: params.canRefreshProviderOAuth,
+  });
   const providerInput = (provider: string) =>
     resolveProviderConfigSecretInput(params.cfg, provider, sourceConfig);
   const prepareAuthTarget = (provider: string, ref: ModelAuthAvailabilityRef): AuthTarget => {
@@ -409,36 +397,6 @@ export function createModelAuthAvailabilityResolver(
         now,
       }).eligible
     );
-  };
-  const resolvedProfileAvailability = (
-    provider: string,
-    profileId: string,
-    credential: AuthProfileCredential,
-    target: AuthTarget,
-  ): ModelAuthAvailability => {
-    if (
-      !modeAllowed(
-        provider,
-        target,
-        credential.type,
-        credential.type === "oauth" ? credential.authFlow : undefined,
-      )
-    ) {
-      return false;
-    }
-    if (runtimeCredentials.hydratedProfileIds.has(profileId)) {
-      return (
-        credential.type !== "token" || credential.expires === undefined || credential.expires > now
-      );
-    }
-    return resolveStoredCredentialReadOnlyAvailability({
-      credential,
-      cfg: params.cfg,
-      env,
-      now,
-      canRefreshOAuth:
-        provider === OPENAI_PROVIDER_ID || externalCliRefreshProfileIds.has(profileId),
-    });
   };
   const profileInCooldown = (profileId: string, target: AuthTarget) => {
     const cooldownModel = target.modelId
