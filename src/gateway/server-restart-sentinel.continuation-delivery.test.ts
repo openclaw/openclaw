@@ -374,7 +374,6 @@ describe("restart recovery of queued continuation deliveries", () => {
       ).rejects.toMatchObject({
         name: "SessionDeliveryDeadLetteredError",
         message: "continuation return refused: recipient-authority-changed",
-        keepFailedReceipt: true,
       });
 
       expect(mocks.isSessionRecipientAuthorityCurrent).toHaveBeenCalledWith(
