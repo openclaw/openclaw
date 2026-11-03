@@ -20,7 +20,7 @@ fs.mkdirSync(evidence, { recursive: true });
 const root = fs.realpathSync(fs.mkdtempSync(path.join(process.env.RUNNER_TEMP, "local-auth-")));
 const binary = path.join(repository, "dist/OpenClaw.app/Contents/MacOS/OpenClaw");
 assert.ok(fs.existsSync(binary));
-const candidate = "3481ca33a1bf69a445814f0c620e12719c78f947";
+const candidate = "8149b98130829cb7d83ec153c9bc9355bcc7cc64";
 const revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 assert.equal(
   execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim(),
@@ -49,10 +49,13 @@ function sanitized(value: string): string {
     .replaceAll(root, "<fixture>")
     .replaceAll(repository, "<candidate>")
     .replaceAll(harnessRepository, "<harness>");
-  for (const secret of syntheticValues)
+  for (const secret of syntheticValues) {
     result = result.replaceAll(secret, "<synthetic-credential>");
+  }
   for (const privateValue of runnerNames) {
-    if (privateValue) result = result.replaceAll(privateValue, "<runner>");
+    if (privateValue) {
+      result = result.replaceAll(privateValue, "<runner>");
+    }
   }
   return result;
 }
@@ -127,7 +130,9 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
     "LANG",
     "RUNNER_TRACKING_ID",
   ]) {
-    if (process.env[key] !== undefined) env[key] = process.env[key];
+    if (process.env[key] !== undefined) {
+      env[key] = process.env[key];
+    }
   }
   Object.assign(env, {
     HOME: home,
@@ -176,7 +181,9 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
     : {
         GW_PROOF_CREDENTIAL: typedToken || suppressed ? otherCredential : credential,
       };
-  if (shorthand || suppressed) durableEnv.OPENCLAW_GATEWAY_TOKEN = credential;
+  if (shorthand || suppressed) {
+    durableEnv.OPENCLAW_GATEWAY_TOKEN = credential;
+  }
   fs.writeFileSync(
     path.join(state, ".env"),
     Object.entries(durableEnv)
@@ -283,7 +290,9 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
       } catch {
         /* A service still starting has no HTTP listener yet. */
       }
-      if (ready) break;
+      if (ready) {
+        break;
+      }
       await delay(1_000);
     }
     result.serviceReady = ready;
@@ -361,6 +370,7 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
         (exit) => ({ exit }),
         (error: unknown) => ({ error }),
       );
+      const phaseFailures: unknown[] = [];
       try {
         // Require a protected RPC on the native app's own authenticated connection.
         const deadline = Date.now() + 60_000;
@@ -383,12 +393,21 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
               !message.includes("client=openclaw-macos ") ||
               !message.includes("mode=ui ") ||
               !message.includes(`auth=${surface}`)
-            )
+            ) {
               continue;
-            const connection = /client connected conn=([a-f0-9-]+)/.exec(message)?.[1];
-            if (!connection) continue;
+            }
+            // Stable emits the authenticated connect event with a shortened ID;
+            // newer builds emit a full-ID client-connected event instead.
+            const connection =
+              /client connected conn=([a-f0-9-]+)/.exec(message)?.[1] ??
+              (message.startsWith("← connect ")
+                ? /\bconn=([a-f0-9]+…[a-f0-9]+)/.exec(message)?.[1]
+                : undefined);
+            if (!connection) {
+              continue;
+            }
             const short =
-              connection.length > 12
+              !connection.includes("…") && connection.length > 12
                 ? `${connection.slice(0, 8)}…${connection.slice(-4)}`
                 : connection;
             if (
@@ -400,7 +419,9 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
               break;
             }
           }
-          if (!connected) await delay(1_000);
+          if (!connected) {
+            await delay(1_000);
+          }
         }
         assert.ok(
           connected,
@@ -434,19 +455,53 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
           })
         ).ok;
         assert.equal(phaseResult.serviceHealthy, true);
+      } catch (error) {
+        phaseResult.failure = sanitized(String(error));
+        phaseFailures.push(error);
       } finally {
         controller.abort();
         const outcome = await app;
         if ("error" in outcome) {
           const error = outcome.error;
           if (!(error instanceof Error) || !("code" in error) || error.code !== "ABORT_ERR") {
-            throw error;
+            phaseResult.appFailure = sanitized(String(error));
+            phaseFailures.push(error);
+          } else {
+            phaseResult.appExit = "stopped-after-observation";
           }
-          phaseResult.appExit = "stopped-after-observation";
         } else {
           phaseResult.appExit = outcome.exit;
         }
         phaseResult.finishedAt = new Date().toISOString();
+        // Native Logger output goes to unified logging, not stdout. Capture it
+        // on the disposable account so early socket retirement is diagnosable.
+        try {
+          phaseResult.nativeLogExit = await command(
+            `${name}-${phase}-native-log`,
+            "/usr/bin/log",
+            [
+              "show",
+              "--last",
+              "90s",
+              "--style",
+              "json",
+              "--debug",
+              "--info",
+              "--predicate",
+              'process == "OpenClaw"',
+            ],
+            env,
+            { timeoutMs: 30_000 },
+          );
+        } catch (error) {
+          phaseResult.nativeLogError = sanitized(String(error));
+          if (hasUnjoinedWork(error)) {
+            phaseFailures.push(error);
+          }
+        }
+      }
+      if (phaseFailures.length) {
+        throw new AggregateError(phaseFailures, `${name} ${phase} observation failed`);
       }
     }
     result.serviceStatusExit = await cli("status", ["gateway", "status", "--json", "--no-probe"]);
@@ -482,9 +537,13 @@ async function observe(scenario: Scenario, port: number): Promise<void> {
       }
     }
     result.cleanupSucceeded = cleanupSucceeded;
-    if (!cleanupSucceeded) failures.push(new Error("An owned native fixture did not clean up"));
+    if (!cleanupSucceeded) {
+      failures.push(new Error("An owned native fixture did not clean up"));
+    }
   }
-  if (failures.length) throw new AggregateError(failures, `${name} native fixture failed`);
+  if (failures.length) {
+    throw new AggregateError(failures, `${name} native fixture failed`);
+  }
 }
 
 try {
