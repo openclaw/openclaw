@@ -27,6 +27,7 @@ import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import {
   assertBrowserNavigationAllowed,
+  assertChromeMcpNavigationAllowed,
   assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
   requiresInspectableBrowserNavigationRedirectsForUrl,
@@ -393,7 +394,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       adoptValidatedTab(await withTabOwnership(tab, opts), { ...opts, label: normalizedLabel });
 
     if (capabilities.usesChromeMcp) {
-      await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+      await assertChromeMcpNavigationAllowed({ url, ...ssrfPolicyOpts });
       assertChromeMcpCdpTransportAllowed(profile, cdpPolicy);
       const { openChromeMcpTab } = await getChromeMcpModule();
       const cdpTimeouts = getRemoteCdpActionTimeouts();
