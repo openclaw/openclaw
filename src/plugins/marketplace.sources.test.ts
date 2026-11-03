@@ -45,7 +45,8 @@ function expectNoNetwork() {
   expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
 }
 
-vi.mock("./install.js", () => ({
+vi.mock("./install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install.js")>()),
   installPluginFromPath: (...args: unknown[]) => installPluginFromPathMock(...args),
 }));
 
@@ -58,7 +59,8 @@ vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../process/exec.js", () => ({
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
