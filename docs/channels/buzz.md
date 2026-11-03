@@ -438,6 +438,13 @@ Membership is checked against the latest received roster when context is used.
 If the same identity leaves and rejoins before then, its previously authorized
 messages can remain in the window. Leaving does not erase conversation history.
 
+### Thread sessions
+
+Each Buzz reply thread has its own session, identified by its root event ID.
+Top-level messages keep the room session. A new thread starts without the room
+transcript or a room-level `/model` override; select a model in the thread or
+configure the agent defaults. Existing room sessions remain available.
+
 ### Reply placement
 
 Buzz keeps automatic replies threaded by default (`channels.buzz.replyToMode: "all"`).

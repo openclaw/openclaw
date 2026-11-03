@@ -465,7 +465,13 @@ export function readSessionTranscriptBoundedActiveContextCore(
     const dependencyCandidates = Array.from(
       iterateSqliteQuerySync(
         projection.database.db,
-        selectActiveTranscriptEventRows(projection.database)
+        db
+          .selectFrom("session_transcript_active_events as active")
+          // SQLite never reorders CROSS JOIN: filter active metadata before exact
+          // payload lookups without materializing another temporary metadata table.
+          .crossJoin("transcript_events as event")
+          .whereRef("event.session_id", "=", "active.session_id")
+          .whereRef("event.seq", "=", "active.event_seq")
           .select([
             "active.event_seq",
             dependencyNavigation.as("navigation_json"),

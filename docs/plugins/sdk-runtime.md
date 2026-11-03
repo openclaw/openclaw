@@ -114,6 +114,7 @@ Every `api.runtime` namespace and the page that documents it.
 | `api.runtime.modelAuth`          | [Model helpers](/plugins/sdk-runtime/models#api-runtime-modelauth)              |
 | `api.runtime.state`              | [State and system](/plugins/sdk-runtime/state-and-system#api-runtime-state)     |
 | `api.runtime.channel`            | [Channel helpers](/plugins/sdk-runtime/channel#api-runtime-channel)             |
+| `api.runtime.skills`             | [Skill usage](#skill-usage)                                                     |
 
 ### Read-only session forks
 
@@ -200,6 +201,8 @@ stored session's conversation with tools, for example a reviewer that records
 what it learned. The fork is a hidden agent turn over a bounded copy of the
 session, read through one completed transcript entry. It never writes the source
 transcript, never appears in the Control UI, and yields to foreground work.
+In an `agent_end` hook, `ctx.sessionKey` and `ctx.completedTurn` name the
+finished turn to fork.
 
 ```typescript
 const result = await api.runtime.subagent.runForkedTurn({
@@ -208,7 +211,7 @@ const result = await api.runtime.subagent.runForkedTurn({
   prompt: "Review this conversation and record one reusable note.",
   tools: ["my_plugin_note"], // tools this plugin registered
   runId: `my-plugin-review:${reviewId}`, // optional; unique per run
-  timeoutMs: 120_000, // optional; capped at 120 seconds
+  timeoutMs: 120_000, // optional; defaults to 120 seconds
   signal, // optional cancellation
   onSettled: async (outcome) => {
     // Runs inside the fork's Gateway work admission: a graceful restart waits for it.
@@ -256,6 +259,32 @@ if (result.status === "refused") {
   before `onSettled`; once it is no longer live, the call rejects and
   `onSettled` does not run. A plugin reload waits for in-flight forks and their
   `onSettled` to finish before it replaces the registration.
+
+## Skill usage
+
+Core records one use per demonstrated skill read, keyed by the canonical
+`SKILL.md` path. `api.runtime.skills` reads those counters and lets a plugin
+tool report a skill read that core cannot see, such as a tool that shows a
+skill's instructions itself.
+
+```ts
+const { tracked, usage } = await api.runtime.skills.readUsage({
+  skillFiles: ["/home/me/.openclaw/workspace/skills/deploy/SKILL.md"],
+});
+const deploy = usage.get("/home/me/.openclaw/workspace/skills/deploy/SKILL.md");
+// deploy?.useCount, deploy?.lastUsedAtMs
+```
+
+- `readUsage` keys results by the paths you pass; core canonicalizes them for
+  the lookup. A file without recorded use has no entry.
+- `tracked` is `false` when this process does not persist skill use (for
+  example, outside the Gateway). Treat a missing entry as unknown, not unused.
+- `recordUsed({ skillFile, skillName, skillSource? })` records one read of an
+  absolute `SKILL.md` path from inside a tool's `execute`. Core takes run,
+  session, and agent attribution from the executing tool call, so a plugin
+  cannot attribute use to another run. It returns `false` outside a live tool
+  execution, including from work that continues after the call settled, and
+  throws for a relative or non-`SKILL.md` path.
 
 ## Storing runtime references
 
