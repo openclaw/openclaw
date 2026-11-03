@@ -220,7 +220,7 @@ it.each([
 ])(
   "expires $name previews by URL while coalescing fragment variants",
   async ({ name, ttl, result }) => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const fetch = mockFetch((url) =>
       url.endsWith("/favicon.ico") || name === "unavailable"
         ? missing()
@@ -326,4 +326,33 @@ it("does no work while disabled, including cached previews; disabling during HTM
   expect(fetch).toHaveBeenCalledTimes(1);
   expect(await load("/metadata#fragment", () => enabled)).toEqual({});
   expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it("ages preview cache entries by elapsed time across a wall-clock correction", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), ms);
+    return controller.signal;
+  });
+  encode.mockResolvedValue({ data: PNG });
+  const fetch = mockFetch((url) =>
+    url.endsWith("/favicon.ico")
+      ? missing()
+      : html('<head><meta property="og:title" content="clocked"></head>'),
+  );
+  expect(await load("/clocked")).toEqual({ title: "clocked" });
+  expect(fetch).toHaveBeenCalledTimes(2); // page + favicon
+
+  // Correct the wall clock backward while real elapsed time advances: the cache
+  // window is process-local elapsed time, so a wall-clock step must not extend it.
+  vi.setSystemTime(Date.now() - 60_000);
+  vi.advanceTimersByTime(1_000);
+  expect(await load("/clocked")).toEqual({ title: "clocked" });
+  expect(fetch).toHaveBeenCalledTimes(2); // still fresh on elapsed time
+
+  // Advance past the one-hour success TTL on the shared clock; the entry expires.
+  vi.advanceTimersByTime(60 * 60_000);
+  expect(await load("/clocked")).toEqual({ title: "clocked" });
+  expect(fetch).toHaveBeenCalledTimes(4); // refetched
 });
