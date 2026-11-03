@@ -11,6 +11,10 @@ import {
 } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import {
+  resolveProviderEntryApiKeyBinding,
+  resolveProviderEntryApiKeyProfileReference,
+} from "../agents/model-auth-provider-config.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
@@ -25,6 +29,7 @@ import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.
 import type { ProviderUsageAuthToken } from "../plugins/provider-runtime.types.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { resolveProviderAuthEnvVarCandidatesCore } from "../secrets/provider-env-vars.js";
+import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { isOAuthOnlyUsageProvider } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
@@ -117,17 +122,94 @@ function prepareProviderApiKeyCandidates(params: ProviderApiKeyCandidatesParams)
 }
 
 /**
- * A saved credential writes its profile id into provider config (for example
- * `deepseek:manual`); usage must resolve that binding to the stored secret instead of
- * sending the id as a bearer token. Bare keys and non-matching values stay literal.
+ * A saved credential writes its profile id into provider config. Config candidates must be
+ * classified by the shared provider-entry owner so a binding is only used for the provider
+ * that owns it, and eligibility stays with the profile order that also gates other candidates.
  */
-function resolveConfigApiKeyBinding(candidates: string[], store: AuthProfileStore) {
-  const bindingId = candidates[0];
-  const profile = bindingId === undefined ? undefined : store.profiles[bindingId];
-  if (!profile || (profile.type !== "api_key" && profile.type !== "token")) {
+function resolveConfiguredBindingCandidate(
+  params: ProviderApiKeyCandidatesParams,
+  candidates: string[],
+  store: AuthProfileStore,
+  profileIds: readonly string[],
+): void {
+  const raw = candidates[0];
+  if (raw === undefined) {
     return;
   }
-  return { bindingId, profile };
+  for (const provider of normalizeProviderIds(params.providerIds)) {
+    const reference = resolveProviderEntryApiKeyProfileReference({
+      cfg: params.state.cfg,
+      provider,
+      store,
+    });
+    if (reference.kind === "none" || reference.kind === "marker" || reference.kind === "literal") {
+      continue;
+    }
+    // Incompatible, expired, disabled, or otherwise unusable bindings must never be sent
+    // as a token; failing closed falls back to the remaining credential candidates.
+    const usable = reference.kind === "profile" && profileIds.includes(reference.profileId);
+    if (!usable || reference.kind !== "profile") {
+      candidates.shift();
+      return;
+    }
+    const value = normalizeSecretInput(
+      reference.credential.type === "api_key"
+        ? reference.credential.key
+        : "token" in reference.credential
+          ? reference.credential.token
+          : undefined,
+    );
+    if (value && !isNonSecretApiKeyMarker(value)) {
+      candidates[0] = value;
+    } else {
+      candidates.shift();
+    }
+    return;
+  }
+}
+
+async function resolveAsyncConfiguredBindingCandidate(
+  params: ProviderApiKeyCandidatesParams,
+  candidates: string[],
+  store: AuthProfileStore,
+): Promise<void> {
+  if (candidates[0] === undefined) {
+    return;
+  }
+  for (const provider of normalizeProviderIds(params.providerIds)) {
+    let binding: Awaited<ReturnType<typeof resolveProviderEntryApiKeyBinding>>;
+    try {
+      binding = await resolveProviderEntryApiKeyBinding({
+        cfg: params.state.cfg,
+        provider,
+        store,
+        agentDir: params.state.agentDir,
+        signal: params.state.signal,
+      });
+    } catch (error) {
+      params.state.signal?.throwIfAborted();
+      // Secret-surface failures must surface; other classification failures fail closed.
+      if (error instanceof SecretSurfaceUnavailableError) {
+        throw error;
+      }
+      candidates.shift();
+      return;
+    }
+    if (binding.kind === "none" || binding.kind === "literal") {
+      continue;
+    }
+    if (binding.kind === "profile-resolved") {
+      const value = normalizeSecretInput(binding.auth.apiKey);
+      if (value && !isNonSecretApiKeyMarker(value)) {
+        candidates[0] = value;
+      } else {
+        candidates.shift();
+      }
+      return;
+    }
+    candidates.shift();
+    return;
+  }
 }
 
 function resolveLegacyProviderApiKeyCandidatesFromConfigAndStore(
@@ -148,17 +230,7 @@ function resolveLegacyProviderApiKeyCandidatesFromConfigAndStore(
   if (!store) {
     return candidates;
   }
-  const binding = resolveConfigApiKeyBinding(candidates, store);
-  if (binding) {
-    const value = normalizeSecretInput(
-      binding.profile.type === "api_key" ? binding.profile.key : binding.profile.token,
-    );
-    if (value && !isNonSecretApiKeyMarker(value)) {
-      candidates[0] = value;
-    } else {
-      candidates.shift();
-    }
-  }
+  resolveConfiguredBindingCandidate(params, candidates, store, profileIds);
   const credentials = profileIds
     .map((id) => store.profiles[id])
     .filter((profile) => profile?.type === "api_key" || profile?.type === "token");
@@ -183,28 +255,7 @@ async function resolveProviderApiKeyCandidatesFromConfigAndStore(
   if (!store) {
     return candidates;
   }
-  const binding = resolveConfigApiKeyBinding(candidates, store);
-  if (binding) {
-    try {
-      const resolved = await resolveApiKeyForProfile({
-        cfg: params.state.cfg,
-        store,
-        profileId: binding.bindingId,
-        agentDir: params.state.agentDir,
-      });
-      params.state.signal?.throwIfAborted();
-      const value = normalizeSecretInput(resolved?.apiKey);
-      if (value && !isNonSecretApiKeyMarker(value)) {
-        candidates[0] = value;
-      } else {
-        candidates.shift();
-      }
-    } catch {
-      params.state.signal?.throwIfAborted();
-      // An unusable binding must not be sent as a bearer token.
-      candidates.shift();
-    }
-  }
+  await resolveAsyncConfiguredBindingCandidate(params, candidates, store);
   for (const profileId of dedupeProfileIds(profileIds)) {
     const credential = store.profiles[profileId];
     if (!credential || (credential.type !== "api_key" && credential.type !== "token")) {

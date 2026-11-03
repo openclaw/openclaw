@@ -124,6 +124,58 @@ describe("provider usage auth boundary", () => {
     ]);
   });
 
+  it("never resolves a binding owned by another provider", async () => {
+    // A binding for openai must not send its secret to deepseek's usage endpoint.
+    seed({ "openai:manual": { type: "api_key", provider: "openai", key: "openai-secret" } }, {});
+    resolveKey.mockResolvedValue({ apiKey: "openai-secret", provider: "openai" });
+    let candidates: string[] | undefined;
+    resolvePlugin.mockImplementationOnce(async ({ context }) => {
+      candidates = await context.resolveApiKeyCandidatesFromConfigAndStore?.({});
+      return candidates?.[0] ? { token: candidates[0] } : undefined;
+    });
+
+    const auths = await resolveProviderAuths({
+      providers: ["deepseek"],
+      env: {},
+      config: { models: { providers: { deepseek: { apiKey: "openai:manual" } } } },
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(candidates ?? []).not.toContain("openai-secret");
+    expect(candidates?.[0]).not.toBe("openai:manual");
+    expect(auths).toEqual([]);
+  });
+
+  it("does not return an ineligible legacy binding's raw token", async () => {
+    // Profile order excludes the expired token; the legacy synchronous path must agree.
+    seed(
+      {
+        "deepseek:expired": {
+          type: "token",
+          provider: "deepseek",
+          token: "expired-token",
+          expires: 1,
+        },
+      },
+      { deepseek: [] },
+    );
+    let legacy: string[] | undefined;
+    resolvePlugin.mockImplementationOnce(async ({ context }) => {
+      legacy = (await context.resolveApiKeyFromConfigAndStore?.({})) ?? [];
+      return undefined;
+    });
+
+    await resolveProviderAuths({
+      providers: ["deepseek"],
+      env: {},
+      config: { models: { providers: { deepseek: { apiKey: "deepseek:expired" } } } },
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(legacy ?? []).not.toContain("expired-token");
+    expect(legacy ?? []).not.toContain("deepseek:expired");
+  });
+
   it("resolves a saved profile binding written into provider config", async () => {
     // The Models save flow writes the profile id, not the secret, into provider config.
     const profileId = "deepseek:manual";
