@@ -14,7 +14,7 @@ a signed statement that the consumer verifies against its own state:
 
 | Data Discovery serves                      | Signed by                          | Verified by                                             | Against                                                     |
 | ------------------------------------------ | ---------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------- |
-| ServerBinding (in the descriptor)          | R or an owner device (`bind`)      | loader / transport hook                                 | the client pin {fp(R), claw_id, binding_seq}                |
+| ServerBinding (in the descriptor)          | R only                             | loader / transport hook                                 | the client pin {fp(R), claw_id, binding_seq}                |
 | MembershipSnapshot                         | K_gw                               | relay admission (Discovery itself), clients for listing | K_gw of the verified binding                                |
 | InviteRedemption (mailbox)                 | invitee's D_I + invite proof       | Gateway                                                 | registered invite (proof key, expiry, audience, single use) |
 | R-signed statements, Revocations (mailbox) | R / owner device                   | Gateway                                                 | pinned root and the claw's current owner devices            |
