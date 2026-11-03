@@ -10,7 +10,13 @@ function shouldPause(details?: unknown): boolean {
 }
 
 describe("shouldPauseGatewayReconnect", () => {
-  it.each(["AUTH_IDENTITY_HEADER_REQUIRED"])("pauses reconnect for %s", (code) => {
+  it.each([
+    "AUTH_IDENTITY_HEADER_REQUIRED",
+    "OPERATOR_ACCESS_DENIED",
+    "CONTROL_UI_ORIGIN_NOT_ALLOWED",
+    "AUTH_TOKEN_NOT_CONFIGURED",
+    "AUTH_PASSWORD_NOT_CONFIGURED",
+  ])("pauses reconnect for %s", (code) => {
     expect(shouldPause({ code })).toBe(true);
   });
 
@@ -38,7 +44,7 @@ describe("shouldPauseGatewayReconnect", () => {
     ).toBe(false);
   });
 
-  it.each([{}, { code: "SOME_FUTURE_CODE" }])(
+  it.each([{}, { code: "SOME_FUTURE_CODE" }, { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" }])(
     "keeps reconnect active for recoverable details",
     (details) => {
       expect(shouldPause(details)).toBe(false);

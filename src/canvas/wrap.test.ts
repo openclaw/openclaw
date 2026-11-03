@@ -1,7 +1,46 @@
 import { createHash } from "node:crypto";
 import { runInNewContext } from "node:vm";
 import { expect, it, vi } from "vitest";
-import { buildWidgetDocument } from "./wrap.js";
+import { buildWidgetDocument, WIDGET_SIZE_CONFIRMATION_HTML } from "./wrap.js";
+
+it("confirms current widget height on each parent chat-host notification", () => {
+  const postMessage = vi.fn();
+  const parent = { postMessage };
+  let height = 120;
+  let receive: (event: unknown) => void = () => {};
+  runInNewContext(WIDGET_SIZE_CONFIRMATION_HTML.slice(8, -9), {
+    window: { parent },
+    document: {
+      body: {
+        get scrollHeight() {
+          return height;
+        },
+        get offsetHeight() {
+          return height;
+        },
+        getBoundingClientRect: () => ({ height }),
+      },
+    },
+    addEventListener: (_type: string, handler: typeof receive) => {
+      receive = handler;
+    },
+  });
+  receive({ source: parent, data: { type: "openclaw:widget-chat-host" } });
+  expect(postMessage).not.toHaveBeenCalled();
+  const data = { type: "openclaw:widget-chat-host", measure: true };
+  receive({ source: {}, data });
+  expect(postMessage).not.toHaveBeenCalled();
+  receive({ source: parent, data });
+  height = 80;
+  receive({ source: parent, data });
+  receive({ source: parent, data });
+  expect(postMessage.mock.calls).toEqual(
+    [120, 80, 80].map((reportedHeight) => [
+      { type: "openclaw:widget-size", height: reportedHeight },
+      "*",
+    ]),
+  );
+});
 
 const messagePrefix = "x".repeat(499);
 const sourcePrefix = "s".repeat(199);

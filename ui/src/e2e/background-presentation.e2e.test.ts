@@ -121,6 +121,12 @@ suite.define(() => {
               };
             });
           };
+          const readWritingSurface = async () => {
+            await page.locator(".chat-group.assistant").waitFor();
+            await page.locator(".chat-thread").hover({ position: { x: 16, y: 16 } });
+            await page.mouse.wheel(0, -1_000_000);
+            await page.getByText("Keep the writing surface solid.", { exact: true }).waitFor();
+          };
           await page.goto(suite.server.baseUrl + "new");
           await expect.poll(async () => (await newPageGeometry()).fade).toBeGreaterThan(0);
           for (const viewport of [
@@ -140,8 +146,8 @@ suite.define(() => {
             expect(g.mask).not.toBe("none");
             expect(g.composerBackground).toMatch(/^rgb\(/);
             if (viewport.width === 390) {
-              expect(g.composerLeft - g.canvasLeft).toBeCloseTo(20, 0);
-              expect(g.canvasRight - g.composerRight).toBeCloseTo(20, 0);
+              expect(g.composerLeft - g.canvasLeft).toBeCloseTo(16, 0);
+              expect(g.canvasRight - g.composerRight).toBeCloseTo(16, 0);
             }
             expect(g.bodyWidth).toBeLessThanOrEqual(g.width);
           }
@@ -197,7 +203,7 @@ suite.define(() => {
             await page
               .locator(".sidebar-region__background openclaw-session-background img")
               .waitFor({ state: "visible" });
-            await page.getByText("Keep the writing surface solid.", { exact: true }).waitFor();
+            await readWritingSurface();
             const surfaces = await page.evaluate(() => {
               const bg = document
                 .querySelector(".sidebar-region__background")!
@@ -304,7 +310,7 @@ suite.define(() => {
           preference = { ...preference, showInSessions: false };
           await sync();
           await page.goto(suite.server.baseUrl + "chat");
-          await page.getByText("Keep the writing surface solid.", { exact: true }).waitFor();
+          await readWritingSurface();
           expect(await page.locator(".sidebar-region__background img").count()).toBe(0);
           expect(
             await page

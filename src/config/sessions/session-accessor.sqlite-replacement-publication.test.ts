@@ -120,6 +120,50 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("publishes full replacement snapshots without returning unused historical rows", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { scope, write, read } = setup("replacement-reply-payload");
+    const skillsSnapshot = { prompt: "synthetic saved instructions ".repeat(1024), skills: [] };
+    write(makeEntry("replacement-reply-payload", { label: "before", skillsSnapshot }));
+    const replies: unknown[] = [];
+    const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
+    const stop = sessionChanges.subscribeFacts((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        publications.push(readPreparedSessionEntryChange(change, scope.sessionKey));
+      }
+    });
+    delivery.afterResult = (result) => {
+      replies.push(result);
+    };
+    try {
+      const result = await applySessionEntryExactReplacements({
+        ...scope,
+        sessionKeys: [scope.sessionKey],
+        update: ([row]) => ({
+          result: "replacement result",
+          replacements: [
+            { sessionKey: scope.sessionKey, entry: { ...row!.entry, label: "after" } },
+          ],
+        }),
+      });
+      expect(result).toBe("replacement result");
+      expect(read()).toMatchObject({ label: "after", skillsSnapshot });
+      expect(publications).toEqual([
+        expect.objectContaining({
+          entry: expect.objectContaining({ label: "after" }),
+          fullEntry: expect.objectContaining({ label: "after", skillsSnapshot }),
+        }),
+      ]);
+      expect(replies).toEqual([
+        { maintenancePlans: expect.any(Array), publication: expect.any(Object) },
+      ]);
+    } finally {
+      delivery.afterResult = undefined;
+      stop();
+    }
+  });
+});
+
 it.each(["full entry", "write token", "receipt"])(
   "invalidates an unchanged publication missing its %s",
   async (missing) => {

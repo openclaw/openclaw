@@ -11,7 +11,10 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { throwIfAborted } from "./abort.js";
 import { createChannelHandler } from "./deliver-channel.js";
-import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
+import type {
+  DeliverOutboundPayloadsParams,
+  InternalDeliverOutboundPayloadsParams,
+} from "./deliver-contracts.js";
 import { applyMessageSendingHook, applyReplyPayloadSendingHook } from "./deliver-hooks.js";
 import {
   buildPayloadSummary,
@@ -20,6 +23,7 @@ import {
   resolveChannelHandlerParams,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
+import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import {
   createOutboundPayloadPlan,
   createOutboundPayloadPlanWithAdmittedReasoning,
@@ -32,6 +36,36 @@ import {
 } from "./prepared-batch.js";
 import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
 import { createReplyToDeliveryPolicy, normalizeOutboundReplyFacts } from "./reply-policy.js";
+
+export function prepareGuardedReasoningDelivery(
+  input: InternalDeliverOutboundPayloadsParams,
+): ReadonlySet<number> {
+  // Fix the source lane before modifiers can replace a payload or its private metadata.
+  const reasoningPayloadIndexes = new Set([
+    ...(input.reasoningPayloadIndexes ?? []),
+    ...input.payloads.flatMap((payload, index) =>
+      payload.isReasoning === true &&
+      getReplyPayloadMetadata(payload)?.reasoningVisibilityOwner !== undefined
+        ? [index]
+        : [],
+    ),
+  ]);
+  if (
+    reasoningPayloadIndexes.size > 0 &&
+    (input.skipQueue !== true ||
+      input.deliveryQueueId !== undefined ||
+      input.deliveryIntentId ||
+      input.deliveryCompletion ||
+      input.completionRetention ||
+      input.reusePendingDeliveryIntent)
+  ) {
+    throw new PlatformMessageNotDispatchedError("Guarded reasoning requires live-only delivery", {
+      cause: undefined,
+      retryable: false,
+    });
+  }
+  return reasoningPayloadIndexes;
+}
 
 class OutboundPayloadPreparationError extends Error {
   constructor(error: unknown) {
@@ -180,7 +214,7 @@ export async function prepareStructuredOutboundPayloadBatch(
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasModifyingHooks = hasReplyPayloadSendingHooks || hasMessageSendingHooks;
   const { resolveCurrentReplyTo } = createReplyToDeliveryPolicy(params);
-  const sessionKeyForHooks = params.mirror?.sessionKey ?? params.session?.key;
+  const sessionKeyForHooks = params.session?.key;
   const modifiers = [
     {
       changedKey: "replyHookChanged",

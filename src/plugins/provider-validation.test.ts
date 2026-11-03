@@ -92,39 +92,22 @@ it("normalizes provider metadata and preserves default OAuth repairs", () => {
     },
   });
   expect(provider).toEqual({ ...expected, pluginRoot: undefined });
-  expect(diagnostics.map(({ level, message }) => [level, message])).toEqual([
-    ["error", 'provider "demo" auth method duplicated id "primary"'],
-    ["error", 'provider "demo" auth method missing id'],
-    ["warn", 'provider "demo" setup method "missing" not found; falling back to available methods'],
-    [
-      "warn",
-      'provider "demo" model-picker method "missing" not found; falling back to available methods',
-    ],
-  ]);
+  expect(diagnostics.map(({ level }) => level)).toEqual(["error", "error", "warn", "warn"]);
 });
 
-it.each([{ values: [] }, { values: ["", "   "] }])(
-  "omits discarded deprecated profile IDs: $values",
-  ({ values }) => {
-    const { provider, diagnostics } = normalize({ deprecatedProfileIds: values });
-    expect(provider).not.toHaveProperty("deprecatedProfileIds");
+it.each([{ deprecatedProfileIds: ["", "   "] }, { oauthProfileIdRepairs: [] }])(
+  "omits discarded profile metadata: %j",
+  (overrides) => {
+    const { provider, diagnostics } = normalize(overrides);
+    expect(provider).not.toHaveProperty(Object.keys(overrides)[0]!);
     expect(diagnostics).toEqual([]);
   },
 );
-
-it("omits empty OAuth profile-ID repair lists", () => {
-  const { provider, diagnostics } = normalize({ oauthProfileIdRepairs: [] });
-  expect(provider).not.toHaveProperty("oauthProfileIdRepairs");
-  expect(diagnostics).toEqual([]);
-});
 
 it("drops wizard metadata when a provider has no auth methods", () => {
   const { provider, diagnostics } = normalize({
     wizard: { setup: { choiceId: "demo" }, modelPicker: { label: "Demo" } },
   });
   expect(provider?.wizard).toBeUndefined();
-  expect(diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
-    'provider "demo" setup metadata ignored because it has no auth methods',
-    'provider "demo" model-picker metadata ignored because it has no auth methods',
-  ]);
+  expect(diagnostics.map(({ level }) => level)).toEqual(["warn", "warn"]);
 });

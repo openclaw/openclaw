@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-MODE="${1:?expected deterministic or live}"
+MODE="${1:?expected deterministic, consent or live}"
 IMAGE_NAME="$(docker_e2e_resolve_image openclaw-muse-e2e OPENCLAW_MUSE_E2E_IMAGE)"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 CONTAINER="openclaw-muse-${MODE}-$$"
@@ -36,14 +36,14 @@ if [ "$MODE" = live ]; then
   docker_e2e_docker_cmd exec --user root "$CONTAINER" bash -c 'apt-get update -qq && apt-get install -y --no-install-recommends curl'
 fi
 docker_e2e_docker_run_cmd exec "$CONTAINER" bash scripts/e2e/lib/muse-runtime/setup.sh "$MODE"
-if [ "$MODE" = deterministic ]; then
+if [ "$MODE" != live ]; then
   docker_e2e_docker_cmd network disconnect bridge "$CONTAINER"
 fi
 docker_e2e_docker_run_cmd exec "$CONTAINER" bash -c '
   export NPM_CONFIG_PREFIX="$HOME/.npm-global"
   export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"
   if [ "$1" = live ] && [ "$OPENCLAW_MUSE_LIVE_AUTH" = device ]; then unset META_API_KEY; fi
-  if [ "$1" = deterministic ]; then export META_API_KEY=fixture-meta-key; fi
+  if [ "$1" != live ]; then export META_API_KEY=fixture-meta-key; fi
   root="$(npm root -g)/openclaw"
   node scripts/e2e/lib/muse-runtime/"$1".mjs "$root"
 ' bash "$MODE"

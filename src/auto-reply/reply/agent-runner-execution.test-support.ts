@@ -15,6 +15,7 @@ import {
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { getRawExecuteAgentTurnForTest } from "./agent-runner-execution-admission.test-support.js";
@@ -196,13 +197,10 @@ vi.mock("../../globals.js", async (importOriginal) => ({
 
 vi.mock("../../infra/agent-events.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/agent-events.js")>();
-  const emitAgentEvent = vi.fn((...args: Parameters<typeof actual.emitAgentEvent>) =>
-    actual.emitAgentEvent(...args),
-  );
   return {
     ...actual,
     clearAgentRunContext: vi.fn(),
-    emitAgentEvent,
+    emitAgentEvent: vi.fn(actual.emitAgentEvent),
     registerAgentRunContext: vi.fn(),
   };
 });
@@ -306,12 +304,11 @@ vi.mock("./reply-media-paths.js", async (importOriginal) => ({
 export async function getExecuteAgentTurnForTest() {
   const execute = await getRawExecuteAgentTurnForTest();
   return async (...args: Parameters<typeof execute>) => {
-    const execution = await execute(...args);
-    const outcome = execution.outcome;
+    const { runId, outcome } = await execute(...args);
     if (outcome.kind === "settled") {
       return {
         kind: "success" as const,
-        runId: execution.runId,
+        runId,
         runResult: outcome.result,
         fallbackProvider: outcome.resolved.provider,
         fallbackModel: outcome.resolved.model,
@@ -463,9 +460,7 @@ export function expectRecordFields(
   record: Record<string, unknown>,
   fields: Record<string, unknown>,
 ) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
+  expectObjectFields(record, fields);
 }
 
 export function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
@@ -506,11 +501,7 @@ export function expectBlockReplyCall(
   expectMockCallArgFields(onBlockReply, index, "block reply payload", fields);
 }
 
-/**
- * Session-store paths reach production resolution, which derives a real agent
- * SQLite file from the store's directory. A shared /tmp path would therefore
- * open the machine-wide agent database and make unrelated suites depend on it.
- */
+// Production derives an agent SQLite file from this directory; never share /tmp across suites.
 export function makeTestSessionStorePath(): string {
   return path.join(
     useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-agent-execution-store-"),
@@ -535,10 +526,7 @@ export function createAgentTurnExecutionDefaults() {
 }
 
 export function createRunAgentTurnParams(followupRun: FollowupRun): AgentTurnParams {
-  return {
-    ...createMinimalRunAgentTurnParams({ followupRun }),
-    commandBody: "hello",
-  };
+  return { ...createMinimalRunAgentTurnParams({ followupRun }), commandBody: "hello" };
 }
 
 export function createMinimalRunAgentTurnParams(

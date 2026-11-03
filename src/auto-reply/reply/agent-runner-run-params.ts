@@ -1,12 +1,12 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  modelFallbackOverrideFromAvailability,
-  resolveModelFallbackAvailability,
-} from "../../agents/agent-scope.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
+import {
+  modelFallbackOverrideFromAvailability,
+  resolveModelFallbackAvailability,
+} from "../../agents/model-selection-config.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import {
   findConfiguredProviderModel,
@@ -56,6 +56,7 @@ export function resolveModelFallbackOptions(
     cfg: config,
     agentId: run.agentId,
     sessionKey: run.sessionKey,
+    selectedModel: { provider: run.provider, model: run.model },
     modelSelectionLocked: run.modelSelectionLocked,
     ...(automation
       ? {
@@ -64,6 +65,7 @@ export function resolveModelFallbackOptions(
             cfg: config,
             job: automation.job,
             agentId: run.agentId,
+            selectedModel: { provider: run.provider, model: run.model },
             ...automation.modelFallbackPolicy,
           }),
         }
@@ -98,6 +100,7 @@ export function buildRunEntrySelection(
     requestedRouteResolution: selection.requestedRouteResolution,
     agentDir: selection.agentDir,
     fallbacksOverride: selection.fallbacksOverride,
+    cyberAccessProgram: run.cyberAccessProgram,
     userLockedAuthProfileId: run.scheduledAutomation
       ? run.scheduledAutomation.job.inferenceBinding?.source === "user"
         ? run.scheduledAutomation.job.inferenceBinding.profileId
@@ -216,8 +219,6 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
     toolsAllow: turn.opts?.toolsAllow,
     disableTools: turn.opts?.disableTools,
-    forceRestartSafeTools: turn.opts?.forceRestartSafeTools,
-    forceCodeModeTools: turn.opts?.forceCodeModeTools,
     bootstrapContextMode: turn.opts?.bootstrapContextMode,
     bootstrapContextRunKind: params.bootstrapContextRunKind,
     images: params.currentTurnImages.images,

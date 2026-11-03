@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as targetPaths from "./session-sqlite-target-paths.js";
 import {
   assertSessionStoreReadCandidate as assertCandidate,
+  captureSessionStoreReadCandidate,
   isSessionStoreReadCandidateCurrent as isCurrent,
 } from "./session-store-read-candidates.js";
 import { captureSessionStoreWriteCandidates as captureWrites } from "./session-store-target-inventory.js";
@@ -15,6 +16,27 @@ const canonicalAlias = "/tmp/runneradmin/openclaw-agent.sqlite";
 const redirectedAlias = "/tmp/replacement/openclaw-agent.sqlite";
 
 afterEach(() => vi.restoreAllMocks());
+
+test.runIf(process.platform !== "win32")(
+  "resolves an exact selected candidate once and rejects retargeting on the next assertion",
+  () => {
+    const root = tempDirs.make("session-store-candidate-work-");
+    const original = path.join(root, "original.sqlite");
+    const replacement = path.join(root, "replacement.sqlite");
+    const alias = path.join(root, "alias.sqlite");
+    fs.writeFileSync(original, "original");
+    fs.writeFileSync(replacement, "replacement");
+    fs.symlinkSync(original, alias);
+    const candidate = captureSessionStoreReadCandidate(alias);
+    const realpath = vi.spyOn(fs.realpathSync, "native");
+    expect(assertCandidate(alias, [candidate])).toBe(fs.realpathSync(original));
+    expect(realpath.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(1);
+    realpath.mockRestore();
+    fs.unlinkSync(alias);
+    fs.symlinkSync(replacement, alias);
+    expect(() => assertCandidate(alias, [candidate])).toThrow(/outside captured discovery custody/);
+  },
+);
 
 function mockRealpath(from: string, to: string) {
   vi.spyOn(fs.realpathSync, "native").mockImplementation((pathname) =>

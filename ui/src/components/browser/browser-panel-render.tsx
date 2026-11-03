@@ -22,52 +22,6 @@ registerEnglishCatalog(registerBrowserEnglish);
 export type BrowserPanelDock = "bottom" | "right";
 type ControllerProps = { controller: BrowserPanel };
 
-function HeaderActions(
-  props: ControllerProps & {
-    dock: BrowserPanelDock;
-    onDockChange: (dock: BrowserPanelDock) => void;
-    onClose: () => void;
-  },
-) {
-  const activeUrl = createMemo(
-    () =>
-      props.controller.native.activeTab?.url ||
-      props.controller.view?.metrics?.url ||
-      props.controller.view?.url ||
-      props.controller.urlDraft,
-  );
-  return (
-    <div class="rail-header__actions bp-actions">
-      <span class="bp-dock-modes" role="group" aria-label={t("browser.title")}>
-        <openclaw-tooltip
-          prop:content={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
-        >
-          <PanelIconButton
-            class="rail-header__action bp-icon"
-            label={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
-            icon={<Icon name={props.dock === "bottom" ? "panelRightOpen" : "panelBottomOpen"} />}
-            onClick={() => props.onDockChange(props.dock === "bottom" ? "right" : "bottom")}
-          />
-        </openclaw-tooltip>
-      </span>
-      <PanelIconButton
-        class="rail-header__action bp-icon"
-        label={t("browser.openExternal")}
-        icon={<Icon name="externalLink" />}
-        newTab
-        disabled={!activeUrl()}
-        onClick={() => props.controller.openExternal()}
-      />
-      <PanelIconButton
-        class="rail-header__action bp-icon"
-        label={t("browser.close")}
-        icon={<Icon name="x" />}
-        onClick={() => props.onClose()}
-      />
-    </div>
-  );
-}
-
 function AnnotateBar(props: ControllerProps) {
   return (
     <div class="bp-annotatebar">
@@ -394,6 +348,46 @@ export function BrowserPanelChrome(
     !props.controller.native.activeTab &&
     !props.controller.view &&
     Boolean(props.controller.errorText);
+  function HeaderActions() {
+    const activeUrl = createMemo(
+      () =>
+        props.controller.native.activeTab?.url ||
+        props.controller.view?.metrics?.url ||
+        props.controller.view?.url ||
+        props.controller.urlDraft,
+    );
+    return (
+      <div class="rail-header__actions bp-actions">
+        <span class="bp-dock-modes" role="group" aria-label={t("browser.title")}>
+          <openclaw-tooltip
+            prop:content={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
+          >
+            <PanelIconButton
+              class="rail-header__action bp-icon"
+              label={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
+              icon={<Icon name={props.dock === "bottom" ? "panelRightOpen" : "panelBottomOpen"} />}
+              onClick={() => props.onDockChange(props.dock === "bottom" ? "right" : "bottom")}
+            />
+          </openclaw-tooltip>
+        </span>
+        <PanelIconButton
+          class="rail-header__action bp-icon"
+          label={t("browser.openExternal")}
+          icon={<Icon name="externalLink" />}
+          newTab
+          disabled={!activeUrl()}
+          onClick={() => props.controller.openExternal()}
+        />
+        <PanelIconButton
+          class="rail-header__action bp-icon"
+          label={t("browser.close")}
+          icon={<Icon name="x" />}
+          onClick={() => props.onClose()}
+        />
+      </div>
+    );
+  }
+
   return (
     <section
       class={["bp", `bp--${props.embedded ? "embedded" : props.dock}`]}
@@ -410,14 +404,7 @@ export function BrowserPanelChrome(
       {rendersTabStrip() ? (
         <header class="rail-header bp-header">
           <BrowserTabs />
-          {!props.embedded ? (
-            <HeaderActions
-              controller={props.controller}
-              dock={props.dock}
-              onDockChange={props.onDockChange}
-              onClose={props.onClose}
-            />
-          ) : null}
+          {!props.embedded ? <HeaderActions /> : null}
         </header>
       ) : null}
       <BrowserToolbar

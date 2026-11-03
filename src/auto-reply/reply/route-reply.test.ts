@@ -191,7 +191,7 @@ describe("routeReply", () => {
       expect(delivery.deliveryIntentId).toBeUndefined();
       expect(delivery.completionRetention).toBeUndefined();
       expect(delivery.reusePendingDeliveryIntent).toBeUndefined();
-      expect(delivery.mirror).toBeUndefined();
+      expect(delivery.onDeliveredPayload).toBeUndefined();
       expect(isReplyReasoningVisible(lastDeliveryPayload())).toBe(true);
       delivery.assertDirectAdapterHandoff?.();
       expect(assertCurrent).toHaveBeenCalledOnce();
@@ -410,7 +410,7 @@ describe("routeReply", () => {
     expect(lastDeliveryPayload()).toMatchObject(expected);
   });
 
-  it("preserves delivery and mirror ownership for global", async () => {
+  it("preserves the producing agent and session for global", async () => {
     await routeTestReply(
       { text: "hi" },
       {
@@ -421,16 +421,8 @@ describe("routeReply", () => {
         groupId: "channel:C123",
       },
     );
-    expect(lastDelivery()).toMatchObject({
-      session: { agentId: "finance" },
-      mirror: {
-        agentId: "finance",
-        sessionKey: "global",
-        text: "hi",
-        isGroup: true,
-        groupId: "channel:C123",
-      },
-    });
+    expect(lastDelivery()).toMatchObject({ session: { agentId: "finance", key: "global" } });
+    expect(lastDelivery()).not.toHaveProperty("mirror");
   });
 
   it.each([

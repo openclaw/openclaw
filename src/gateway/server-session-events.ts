@@ -567,6 +567,7 @@ async function handleTranscriptUpdateBroadcast(
             ? prepareSessionEventProjection(projection, read, {
                 ancestors,
                 encodeMessage: true,
+                reuseEnvelope: true,
                 omitMessage,
               })
             : undefined,
@@ -615,6 +616,7 @@ async function handleTranscriptUpdateBroadcast(
             prepareSessionProjection: prepareSessionEventProjection(projection, read, {
               ancestors,
               encodeMessage: true,
+              reuseEnvelope: true,
               omitMessage,
               controlUiOnly: true,
             }),

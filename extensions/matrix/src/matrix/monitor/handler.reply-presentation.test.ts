@@ -209,7 +209,6 @@ describe("matrix monitor handler reply presentation", () => {
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
 
       const reasoning: ReplyPayload = { text: "Reasoning:\nCheck the inputs", isReasoning: true };
-      await options.onBlockReplyQueued?.(reasoning, { assistantMessageIndex: 0 });
       await deliver(reasoning, { kind: "block" });
       expect(sendMessageMatrixMock).toHaveBeenCalledExactlyOnceWith(
         "!room:example.org",
@@ -247,26 +246,22 @@ describe("matrix monitor handler reply presentation", () => {
     }
   });
 
-  it.each(["unbound", "denied", "revoked", "unavailable"] as const)(
+  it.each(["denied", "unavailable"] as const)(
     "suppresses typed reasoning when core visibility is %s while delivering the answer",
     async (policy) => {
       const capturedDeliver = createDeferred<DeliverFn>();
-      let visible = policy === "revoked";
       const { handler } = createMatrixHandlerTestHarness({
         cfg: {
           agents: { defaults: { reasoningDefault: "on" } },
           channels: { matrix: { dm: { allowFrom: ["*"] } } },
         },
         streaming: "off",
-        isReasoningVisible:
-          policy === "unbound"
-            ? () => false
-            : () => {
-                if (policy === "unavailable") {
-                  throw new Error("Plugin runtime is no longer active");
-                }
-                return visible;
-              },
+        isReasoningVisible: () => {
+          if (policy === "unavailable") {
+            throw new Error("Plugin runtime is no longer active");
+          }
+          return false;
+        },
         createReplyDispatcherWithTyping: (params) => {
           capturedDeliver.resolve((params as { deliver: DeliverFn }).deliver);
           return {
@@ -278,7 +273,6 @@ describe("matrix monitor handler reply presentation", () => {
         },
         dispatchInboundMessage: async () => {
           const deliver = await capturedDeliver.promise;
-          visible = false;
           await deliver({ text: "Hidden reasoning", isReasoning: true }, { kind: "block" });
           await deliver({ text: "Visible answer" }, { kind: "final" });
           return { queuedFinal: true, counts: { final: 1, block: 1, tool: 0 } };

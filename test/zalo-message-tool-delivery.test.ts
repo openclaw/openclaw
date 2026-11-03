@@ -39,7 +39,7 @@ function send(message: string, media: string, assertDirectAdapterHandoff: () => 
     action: "send",
     params: { channel: "zalo", to: "dm-chat", message, media },
     skipQueue: true,
-    suppressTranscriptMirror: true,
+    callerRecordsDestinationHistory: true,
     assertDirectAdapterHandoff,
   });
 }

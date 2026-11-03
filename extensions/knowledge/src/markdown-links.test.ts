@@ -1,12 +1,14 @@
-import { expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { connections } from "./connections.js";
-import { markdown, extractLinks, resolveLinks, wikiHref } from "./markdown-links.js";
+import { markdown, resolveLinks } from "./markdown-links.js";
+import { effectiveRecord } from "./merge.js";
 import type { Envelope, LoadedRecord } from "./model.js";
 import { recordPath } from "./record-path.js";
-import { useTestTempDirs } from "./test-support.js";
+import { afterTest, useTestTempDirs } from "./test-support.js";
 import type { ScanResult } from "./vault.js";
 
 const tempDirs = useTestTempDirs();
+beforeEach(() => afterTest(() => vi.restoreAllMocks()));
 const record = (
   id: string,
   title: string,
@@ -29,14 +31,75 @@ const record = (
   metadata: { aliases: [], lifecycle: "active", ...extra } as Envelope,
 });
 
+it("keeps a live record's link parse warm across unrelated document churn", () => {
+  const source = record("live", "Live", "people/live.md", "[[live cache owner]]");
+  const candidates = [source];
+  resolveLinks(source, candidates);
+  for (let index = 0; index < 20_001; index++) {
+    resolveLinks(record(`other-${index}`, "Other", "people/other.md", `churn ${index}`), []);
+  }
+  const lexer = vi.spyOn(markdown, "lexer");
+  resolveLinks({ ...source }, candidates);
+  expect(lexer).not.toHaveBeenCalled();
+  source.body = "[[changed cache owner]]";
+  expect(resolveLinks(source, candidates)).toEqual([
+    { href: "#wiki=changed%20cache%20owner", status: "missing" },
+  ]);
+  expect(lexer).toHaveBeenCalledOnce();
+});
+
+it("shares link extraction with merged projections before their first parse", () => {
+  const source = record("source", "Source", "people/source.md", "[[Target]]", {
+    dependencies: ["old-target"],
+  });
+  const target = record("target", "Target", "people/target.md");
+  const redirects = new Map([["old-target", "target"]]);
+  const candidates = [target];
+  const lexer = vi.spyOn(markdown, "lexer");
+  expect(resolveLinks(effectiveRecord(source, redirects), candidates)).toEqual([
+    { href: "#wiki=Target", status: "resolved", id: "target" },
+  ]);
+  resolveLinks(effectiveRecord(source, redirects), candidates);
+  resolveLinks(source, candidates);
+  expect(lexer).toHaveBeenCalledOnce();
+  const projection = effectiveRecord(source, redirects);
+  expect(resolveLinks({ ...projection, body: "[[Changed]]" }, candidates)).toEqual([
+    { href: "#wiki=Changed", status: "missing" },
+  ]);
+  expect(resolveLinks(source, candidates)).toEqual([
+    { href: "#wiki=Target", status: "resolved", id: "target" },
+  ]);
+});
+
+it("revalidates unsettled files while reusing links only for unchanged bytes", async () => {
+  const { cp, readFile, writeFile } = await import("node:fs/promises");
+  const { SampleVault } = await import("./vault.js");
+  const { sampleVaultRoot } = await import("./plugin-files.js");
+  const root = tempDirs.make("knowledge-unsettled-links-");
+  await cp(sampleVaultRoot(), root, { recursive: true });
+  const cache: import("./vault.js").ScanCache = {};
+  const vault = new SampleVault(root, { visibility: "sample" }, false, undefined, cache);
+  vi.spyOn(Date, "now").mockReturnValue(0);
+  const lexer = vi.spyOn(markdown, "lexer");
+  const first = await vault.scan();
+  lexer.mockClear();
+  expect(await vault.scan()).not.toBe(first);
+  expect(lexer).not.toHaveBeenCalled();
+  const file = root + "/people/alex-rivera.md";
+  await writeFile(file, (await readFile(file, "utf8")) + "\n[[New missing target]]\n");
+  const changed = await vault.scan();
+  expect(changed.issues.some((issue) => issue.message.includes("New%20missing%20target"))).toBe(
+    true,
+  );
+  expect(lexer).toHaveBeenCalledOnce();
+});
+
 it("Markdown tokenization excludes code, escapes, HTML, images and generated backlinks", () => {
   const body =
     '[Alex](../people/alex.md) [[Alex|A]]\n\n`[[Code]]`\n\n```md\n[[Fence]]\n```\n\n    [[Indent]]\n\n\\[[Escape]]\n\n<a href="people/html.md">HTML</a> ![image](people/image.md)\n\n<!-- backlinks:start -->\n[[Generated]]\n<!-- backlinks:end -->\n\n[ref][person]\n\n[person]: people/alex.md';
-  expect(extractLinks(body)).toStrictEqual([
-    "../people/alex.md",
-    wikiHref("Alex"),
-    "people/alex.md",
-  ]);
+  expect(
+    resolveLinks(record("source", "Source", "source.md", body), []).map(({ href }) => href),
+  ).toStrictEqual(["../people/alex.md", "#wiki=Alex", "people/alex.md"]);
 });
 it("comments are invisible while code examples and other HTML stay escaped", () => {
   const source =
@@ -48,22 +111,34 @@ it("comments are invisible while code examples and other HTML stay escaped", () 
   expect(rendered).toMatch(/&lt;!-- fenced example --&gt;/);
   expect(rendered).toMatch(/&lt;!-- escaped example --&gt;/);
   expect(rendered).toMatch(/&lt;script&gt;unsafe/);
-  expect(extractLinks(source)).toStrictEqual([]);
+  expect(
+    resolveLinks(record("source", "Source", "source.md", source), []).map(({ href }) => href),
+  ).toStrictEqual([]);
 });
 
 it("backlink markers inside code do not suppress subsequent authored links", () => {
-  expect(extractLinks("```html\n<!-- backlinks:start -->\n```\n\n[[Alex]]")).toStrictEqual([
-    wikiHref("Alex"),
-  ]);
+  expect(
+    resolveLinks(
+      record("source", "Source", "source.md", "```html\n<!-- backlinks:start -->\n```\n\n[[Alex]]"),
+      [],
+    ).map(({ href }) => href),
+  ).toStrictEqual(["#wiki=Alex"]);
 });
 it("links in one block longer than the regexp backtracking cap are still found", () => {
   // About 120,000 lines without a blank line; JavaScriptCore stops matching one
   // paragraph after roughly 49,000 lines.
   const lines = "Capacity needle paragraph with Unicode é.\n".repeat(120_000);
-  expect(extractLinks(`[[Start]]\n${lines}see [end](end.md) and\n\`[[code]]\``)).toStrictEqual([
-    wikiHref("Start"),
-    "end.md",
-  ]);
+  expect(
+    resolveLinks(
+      record(
+        "source",
+        "Source",
+        "source.md",
+        `[[Start]]\n${lines}see [end](end.md) and\n\`[[code]]\``,
+      ),
+      [],
+    ).map(({ href }) => href),
+  ).toStrictEqual(["#wiki=Start", "end.md"]);
 });
 it("current path, title, alias and old ID paths resolve; ambiguity never chooses an arbitrary target", () => {
   const alex = record("a", "Alex Rivera", "people/alex-rivera.md", "", { aliases: ["Alex"] }),
@@ -154,13 +229,25 @@ it("real scans expose scoped link resolutions and diagnostics without invalidati
   await cp(sampleVaultRoot(), root, { recursive: true });
   const file = root + "/people/alex-rivera.md";
   const before = await readFile(file, "utf8");
-  await writeFile(file, before + "\n[[Missing page]] [self](alex-rivera.md)\n");
+  await writeFile(
+    root + "/people/alex-rivera#v2.md",
+    before.replaceAll("sample_person_alex", "sample_person_hash").replaceAll("Alex", "Hashed"),
+  );
+  const appended =
+    "\n[[Missing page]] [self](alex-rivera.md) [hash](alex-rivera%23v2.md) [hash-fragment](alex-rivera%23v2.md#Details)\n";
+  await writeFile(file, before + appended);
   const vault = new SampleVault(root),
     detail = await inspectRecord(vault, { id: "sample_person_alex" });
   expect(detail.record!.valid).toBeTruthy();
   expect(detail.links!.some((l) => l.status === "missing")).toBeTruthy();
   expect(detail.issues.some((i) => i.code === "missing-link")).toBeTruthy();
   expect(detail.links!.some((l) => l.id === "sample_person_alex")).toBeTruthy();
+  expect(detail.links!.filter((l) => l.href.startsWith("alex-rivera%23")).map((l) => l.id)).toEqual(
+    ["sample_person_hash", "sample_person_hash"],
+  );
+  expect(
+    connections(await vault.scan(), { id: "sample_person_hash", direction: "backlinks" }).total,
+  ).toBe(1);
   await rename(file, root + "/people/alex-renamed.md");
   const changed = await inspectRecord(vault, { id: "sample_person_alex" });
   expect(changed.record!.path).toBe("people/alex-renamed.md");

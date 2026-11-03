@@ -455,20 +455,20 @@ export function resolveReadOnlyChannelPluginsForConfig(
 
 export async function listReadOnlyChannelPluginsForConfigAsync(
   cfg: OpenClawConfig,
-  options?: ReadOnlyChannelPluginOptions,
-): Promise<ChannelPlugin[]> {
-  return (await resolveReadOnlyChannelPluginsForConfigAsync(cfg, options)).plugins;
-}
-
-async function resolveReadOnlyChannelPluginsForConfigAsync(
-  cfg: OpenClawConfig,
   options: ReadOnlyChannelPluginOptions = {},
-): Promise<ReadOnlyChannelPluginResolution> {
+): Promise<ChannelPlugin[]> {
   const context = resolveReadOnlyChannelContext(cfg, options);
+  const loadedChannelPlugins = listChannelPlugins();
+  const loadedChannelIds = new Set(loadedChannelPlugins.map((plugin) => plugin.id));
+  // Registered channels are already included; saved auth cannot add them to this inventory.
+  const discoveryRecords = context.manifestRecords.filter((record) =>
+    record.channels.some((channelId) => !loadedChannelIds.has(channelId)),
+  );
   const listConfiguredIds = (config: OpenClawConfig) =>
     listConfiguredChannelIdsForReadOnlyScopeAsync({
       config,
       ...context,
+      manifestRecords: discoveryRecords,
       includePersistedAuthState: options.includePersistedAuthState,
     });
   const configuredChannelIds = uniqueStrings([
@@ -477,7 +477,13 @@ async function resolveReadOnlyChannelPluginsForConfigAsync(
       ? []
       : await listConfiguredIds(context.activationSourceConfig)),
   ]).filter(isSafeManifestChannelId);
-  return resolveReadOnlyChannelPluginsFromIds(cfg, options, context, configuredChannelIds);
+  return resolveReadOnlyChannelPluginsFromIds(
+    cfg,
+    options,
+    context,
+    configuredChannelIds,
+    loadedChannelPlugins,
+  ).plugins;
 }
 
 function resolveReadOnlyChannelContext(cfg: OpenClawConfig, options: ReadOnlyChannelPluginOptions) {
@@ -529,10 +535,10 @@ function resolveReadOnlyChannelPluginsFromIds(
   options: ReadOnlyChannelPluginOptions,
   context: ReturnType<typeof resolveReadOnlyChannelContext>,
   configuredChannelIds: string[],
+  loadedChannelPlugins = listChannelPlugins(),
 ): ReadOnlyChannelPluginResolution {
   const { activationSourceConfig, workspaceDir, env, manifestRecords } = context;
   const includeSetupFallbackPlugins = options.includeSetupFallbackPlugins === true;
-  const loadedChannelPlugins = listChannelPlugins();
   const bundledManifestRecords = manifestRecords.filter(
     (plugin) => plugin.origin === "bundled" && plugin.channels.length > 0,
   );

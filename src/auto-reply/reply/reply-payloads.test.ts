@@ -87,6 +87,15 @@ describe("filterMessagingToolMediaDuplicates", () => {
       { text: "gallery", mediaUrls: [a, c] },
     ],
     [
+      "dedupes both lowercase media fields while preserving unsent media",
+      {
+        mediaUrl: "https://example.test/one.png",
+        mediaUrls: ["https://example.test/two.png", "https://example.test/three.png"],
+      },
+      ["https://example.test/one.png", "https://example.test/two.png"],
+      { mediaUrl: undefined, mediaUrls: ["https://example.test/three.png"] },
+    ],
+    [
       "preserves delivery operations",
       { mediaUrl: photo, delivery },
       [photo],

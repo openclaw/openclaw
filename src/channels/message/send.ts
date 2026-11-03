@@ -21,6 +21,7 @@ import {
   type OutboundDeliveryIntent,
 } from "../../infra/outbound/deliver.js";
 import type { ConversationDeliveryTarget } from "../../infra/outbound/delivery-completion.js";
+import type { DeliveryMirror } from "../../infra/outbound/mirror.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { normalizeOutboundReplyFacts } from "../../infra/outbound/reply-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -48,6 +49,8 @@ export type DurableMessageBatchSendParams = Omit<
   /** @deprecated Use `signal`. */
   abortSignal?: AbortSignal;
   previousReceipt?: MessageReceipt;
+  /** @deprecated Destination history is automatic; removed in the next Plugin SDK major. */
+  mirror?: DeliveryMirror;
 };
 
 type DurableMessageSuppressionReason =
@@ -274,6 +277,7 @@ async function withMessageSendContext<T>(
           ...deliveryParams,
           // Public SDK callers cannot select a private conversation storage target.
           conversationDeliveryTarget,
+          sessionGeneration: undefined,
           payloads: rendered.payloads,
           renderedBatchPlan: rendered.plan,
           queuePolicy,

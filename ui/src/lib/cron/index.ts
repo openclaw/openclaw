@@ -310,6 +310,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       delivery,
       failureAlert,
     };
+    if (editingJob && form.ownerProfileId && form.ownerProfileId !== editingJob.ownerProfileId) {
+      job.ownerProfileId = form.ownerProfileId;
+    }
     if (schedule) {
       job.schedule = schedule;
     }
@@ -425,8 +428,10 @@ async function updateCronJobDefinition(
 
 // Mutations reload the list and scheduler status so both canonical views stay current.
 async function reloadCronJobsSnapshot(state: CronState) {
-  await loadCronJobsPage(state, { tableFilters: true });
-  await loadCronStatus(state);
+  await Promise.all([
+    loadCronJobsPage(state, { tableFilters: true, refresh: true }),
+    loadCronStatus(state),
+  ]);
 }
 
 export async function toggleCronJob(

@@ -315,19 +315,25 @@ export function createReplyDispatcher(
       payload.isReasoning === true &&
       getReplyPayloadMetadata(payload)?.reasoningVisibilityOwner !== undefined;
     const outcome = normalizeReplyPayloadOutcome(payload, {
-      responsePrefix: options.responsePrefix,
-      responsePrefixContext:
-        options.responsePrefixContextProvider?.() ?? options.responsePrefixContext,
-      transformReplyPayload: options.transformReplyPayload,
-      conversationContext: conversationContextsByDispatcher.get(dispatcher),
-      onHeartbeatStrip: options.onHeartbeatStrip,
-      onSkip: notifySkip
-        ? (reason) =>
-            options.onSkip?.(payload, {
-              ...buildReplyDispatchRuntimeInfo(payload, kind),
-              reason,
-            })
-        : undefined,
+      preserveLeadingSourceBoundary:
+        kind === "block" && getReplyPayloadMetadata(payload)?.streamedSourceBoundary === true,
+      ...(getReplyPayloadMetadata(payload)?.replyDispatcherNormalizationOwner === dispatcher
+        ? { prepared: true }
+        : {
+            responsePrefix: options.responsePrefix,
+            responsePrefixContext:
+              options.responsePrefixContextProvider?.() ?? options.responsePrefixContext,
+            transformReplyPayload: options.transformReplyPayload,
+            conversationContext: conversationContextsByDispatcher.get(dispatcher),
+            onHeartbeatStrip: options.onHeartbeatStrip,
+            onSkip: notifySkip
+              ? (reason) =>
+                  options.onSkip?.(payload, {
+                    ...buildReplyDispatchRuntimeInfo(payload, kind),
+                    reason,
+                  })
+              : undefined,
+          }),
     });
     return boundReasoning && outcome.kind === "deliver" && outcome.payload.isReasoning !== true
       ? {
@@ -522,10 +528,7 @@ export function createReplyDispatcher(
     deliveryOutcomeTrackers.delete(payload);
     const fallback = undeliveredFallbacks.get(payload);
     undeliveredFallbacks.delete(payload);
-    const normalizedPrimary =
-      getReplyPayloadMetadata(payload)?.replyDispatcherNormalizationOwner === dispatcher
-        ? ({ kind: "deliver", payload } as const)
-        : normalizeForDispatch(kind, payload, true);
+    const normalizedPrimary = normalizeForDispatch(kind, payload, true);
     const normalizedFallback =
       fallback &&
       !(normalizedPrimary.kind === "suppress" && normalizedPrimary.reason === "channel_transform")

@@ -371,6 +371,7 @@
         "src/cli/cli-process-diagnostics.test-support.cjs",
         "scripts/perf/async-context-probe.cjs",
         "scripts/perf/gateway-ui-rpc-preload.mjs",
+        "scripts/perf/session-delete-phases-loader.mjs",
         "scripts/perf/sqlite-reply-census-preload.mjs"
       ],
       "rules": {
@@ -471,6 +472,13 @@
       ],
       "rules": {
         "max-lines": ["error", { "max": 1000, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/agents/agent-command.live-model-switch.test.ts"],
+      "rules": {
+        // expectations updated for equal-primary saved selections keeping configured fallbacks; #185496
+        "max-lines": ["error", { "max": 3736, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {

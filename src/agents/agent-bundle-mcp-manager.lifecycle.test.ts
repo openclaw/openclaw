@@ -26,6 +26,7 @@ import {
 } from "./agent-bundle-mcp-manager.test-support.js";
 import type { SessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
+import * as sessionMcpConfig from "./agent-bundle-mcp-runtime-config.js";
 import {
   SESSION_MCP_RUNTIME_MANAGER_KEY,
   type CreateSessionMcpRuntime,
@@ -35,7 +36,6 @@ import type {
   SessionMcpRuntime,
   SessionMcpRuntimeLease,
 } from "./agent-bundle-mcp-types.js";
-import * as embeddedMcp from "./embedded-agent-mcp.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
@@ -131,32 +131,29 @@ afterEach(async () => {
 });
 
 describe("MCP manager creation ownership", () => {
-  it("prepares static MCP declarations once per acquisition and observes changed config", async () => {
-    const load = vi.spyOn(embeddedMcp, "loadEmbeddedAgentMcpConfig");
+  it("prepares static MCP config once per acquisition and observes changed config", async () => {
+    using load = vi.spyOn(sessionMcpConfig, "loadSessionMcpConfig");
     const factory = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
     const manager = createManager(factory);
     const input = {
       ...params,
       cfg: { mcp: { servers: { fixture: { command: "true" } } } },
     };
-    try {
-      const first = await manager.acquire(input);
-      first.releaseLease();
-      expect(load).toHaveBeenCalledTimes(1);
-      const second = await manager.acquire(input);
-      second.releaseLease();
-      expect(second.runtime).toBe(first.runtime);
-      expect(load).toHaveBeenCalledTimes(2);
 
-      input.cfg.mcp.servers.fixture.command = "changed";
-      const changed = await manager.acquire(input);
-      changed.releaseLease();
-      expect(changed.runtime).not.toBe(first.runtime);
-      expect(changed.runtime.configFingerprint).not.toBe(first.runtime.configFingerprint);
-      expect(load).toHaveBeenCalledTimes(3);
-    } finally {
-      load.mockRestore();
-    }
+    const first = await manager.acquire(input);
+    first.releaseLease();
+    expect(load).toHaveBeenCalledTimes(1);
+    const second = await manager.acquire(input);
+    second.releaseLease();
+    expect(second.runtime).toBe(first.runtime);
+    expect(load).toHaveBeenCalledTimes(2);
+
+    input.cfg.mcp.servers.fixture.command = "changed";
+    const changed = await manager.acquire(input);
+    changed.releaseLease();
+    expect(changed.runtime).not.toBe(first.runtime);
+    expect(changed.runtime.configFingerprint).not.toBe(first.runtime.configFingerprint);
+    expect(load).toHaveBeenCalledTimes(3);
   });
 
   it("evicts the idle LRU at capacity and reconnects its session on reuse", async () => {

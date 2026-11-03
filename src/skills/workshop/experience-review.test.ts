@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAdmittedRunActiveAssertion as activeAssertion } from "../../agents/admitted-run-context.js";
 import { runWithAgentToolSourceExecutionScope as withSource } from "../../agents/agent-tool-source-execution-guard.js";
@@ -10,6 +11,7 @@ import {
   completePromptCacheObservation,
 } from "../../agents/embedded-agent-runner/prompt-cache-observability.js";
 import { beginOpenAIObservation } from "../../agents/embedded-agent-runner/prompt-cache-observability.test-support.js";
+import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import {
   clearTestEmbeddedRun,
   createEmbeddedRunHandle,
@@ -28,15 +30,18 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { readSqliteDatabaseScopedWriteTokensForPath } from "../../infra/sqlite-database-admission.js";
+import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { WorkshopChange } from "./changes.kernel.js";
+import { workshopPluginConfig } from "./config.test-support.js";
+import { scheduleSkillExperienceReview } from "./experience-review-default.js";
+import * as experienceReview from "./experience-review.js";
 import { runSkillExperienceReview } from "./experience-review.js";
 import { createExperienceReviewCandidate } from "./experience-review.test-support.js";
 import { createWorkshopSkill, writeWorkshopSkillFile } from "./library.js";
-import type { runSkillWorkshopReview } from "./review-run.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 const mocks = vi.hoisted(() => ({
@@ -89,7 +94,9 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-type ReviewParams = Parameters<typeof runSkillWorkshopReview>[0];
+type ReviewParams = RunEmbeddedAgentParams & {
+  preparedRunAdmission: NonNullable<RunEmbeddedAgentParams["preparedRunAdmission"]>;
+};
 const completedReview = { meta: { durationMs: 1 } };
 function observe(sessionId: string) {
   beginOpenAIObservation({ sessionId });
@@ -146,6 +153,34 @@ it("yields an in-flight review when interactive work starts", async () => {
     }
   });
   await expect(runSkillExperienceReview(candidate)).rejects.toThrow("yielded to foreground");
+});
+
+it("holds Gateway drain until the notice of committed changes settles", async () => {
+  const committed: WorkshopChange = {
+    id: "c1",
+    agentId: "main",
+    skillName: "actual-budget-operations",
+    action: "patch",
+    actor: "review",
+    summary: "tightened reconciliation step",
+    createdAtMs: 1,
+  };
+  const noticeStarted = createDeferred();
+  const noticeRelease = createDeferred();
+  mocks.listWorkshopChanges.mockResolvedValue([committed]);
+  mocks.runEmbeddedAgent.mockResolvedValue(completedReview);
+  mocks.postWorkshopChangeNotice.mockImplementationOnce(async () => {
+    noticeStarted.resolve();
+    await noticeRelease.promise;
+  });
+
+  const review = runSkillExperienceReview(candidate);
+  await noticeStarted.promise;
+  // A graceful restart waits while root work is active; the model run has already ended.
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+  noticeRelease.resolve();
+  await review;
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
 });
 
 it("announces changes committed before the review run failed", async () => {
@@ -296,6 +331,60 @@ it.each([
       });
       expect(event.channel).toBeUndefined();
       expect(event.costUsd).toBe(0);
+    }
+  },
+);
+
+it("hosts a managed-worktree session's review in its recorded canonical workspace", async () => {
+  const canonicalWorkspaceDir = path.join(state.workspaceDir, "canonical");
+  const worktreeCandidate = await createExperienceReviewCandidate(
+    "worktree-review",
+    [{ role: "user", content: prompt, timestamp: 1 }],
+    { workspaceDir: state.workspaceDir, modelId: "gpt-test", canonicalWorkspaceDir },
+  );
+  const prepared = await experienceReview.prepareSkillExperienceReviewCandidate(
+    worktreeCandidate,
+    worktreeCandidate.config,
+  );
+  expect(prepared?.ctx.workspaceDir).toBe(canonicalWorkspaceDir);
+});
+
+it.each(["off", "tool-policy"] as const)(
+  "admits a due review under the current config, so %s refuses it",
+  async (restriction) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const schedule = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const prepare = vi.spyOn(experienceReview, "prepareSkillExperienceReviewCandidate");
+      expect(
+        await experienceReview.prepareSkillExperienceReviewCandidate(candidate, candidate.config),
+      ).toEqual({ ...candidate, config: candidate.config });
+      prepare.mockClear();
+      scheduleSkillExperienceReview({
+        event: { messages: [], success: true, modelIterations: 10 },
+        ctx: {
+          ...candidate.ctx,
+          sessionKey: candidate.source.sessionKey,
+          agentId: candidate.source.agentId,
+          toolNames: ["skill_workshop"],
+        },
+        config: candidate.config,
+        source: candidate.source,
+      });
+      await vi.waitFor(() => expect(schedule).toHaveBeenCalledWith(expect.any(Function), 30_000));
+      const current =
+        restriction === "off"
+          ? workshopPluginConfig({ autonomous: { mode: "off" } }, candidate.config)
+          : { ...candidate.config, tools: { ...candidate.config.tools, deny: ["skill_workshop"] } };
+      setRuntimeConfigSnapshot(current);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+      expect(prepare.mock.calls[0]?.[1]).toBe(current);
+      await expect(prepare.mock.results[0]?.value).resolves.toBeUndefined();
+      expect(mocks.runEmbeddedAgent).not.toHaveBeenCalled();
+    } finally {
+      schedule.mockRestore();
+      vi.useRealTimers();
     }
   },
 );

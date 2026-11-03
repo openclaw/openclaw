@@ -1,33 +1,66 @@
 // Run only on an authorized benchmark host; prepare and measure in separate scopes.
+// Repeated owner proof (Linux or macOS, 48 MiB synthetic payload):
+//   node --import ./scripts/tsx.mjs scripts/perf/managed-git-maintenance-measure.ts --mode prepare --packs 1536 --promisor-packs 1257 --blobs-per-pack 1 --state-dir <new-directory>
+//   node --import ./scripts/tsx.mjs scripts/perf/managed-git-maintenance-measure.ts --mode measure --passes 3 --state-dir <prepared-directory>
+// Each pass starts a fresh maintenance owner, retains its production budgets, and
+// reports elapsed time and monotonic pack counts. The final check reads every blob.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createCipheriv, createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { Session } from "node:inspector/promises";
+import { loadavg } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 const { values } = parseArgs({
   options: {
     mode: { type: "string", default: "measure" },
     policy: { type: "string", default: "candidate" },
+    "owner-module": { type: "string" },
+    allocations: { type: "boolean" },
+    "workspace-files": { type: "string", default: "62000" },
     "state-dir": { type: "string" },
     packs: { type: "string", default: "32" },
+    "promisor-packs": { type: "string", default: "0" },
+    passes: { type: "string", default: "1" },
     "blobs-per-pack": { type: "string", default: "128" },
     consolidate: { type: "boolean" },
     help: { type: "boolean" },
   },
 });
 if (values.help) {
-  console.log(`Synthetic managed Git maintenance, Linux/GNU time required:
+  console.log(`Synthetic managed Git maintenance, Linux/GNU time or macOS/BSD time:
   node --import ./scripts/tsx.mjs scripts/perf/managed-git-maintenance-measure.ts --mode prepare --state-dir <new-directory>
   node --import ./scripts/tsx.mjs scripts/perf/managed-git-maintenance-measure.ts --mode measure --state-dir <prepared-directory>
 Prepare creates 32 indexed packs × 128 blobs × 32 KiB (128 MiB), sequentially.
 --packs and --blobs-per-pack may reduce the fixture; payload is capped at 128 MiB.
-Measure invokes the real hourly maintenance owner, records GNU time's largest-process
-RSS and Git trace2 children, then verifies retained objects.
+Measure invokes the real hourly maintenance owner, records time's largest-process
+RSS and Git trace2 children, then verifies every retained fixture blob.
+--passes N (default 1) creates a fresh owner for each consecutive pass and reports
+each pass's elapsed time and pack counts, asserting that pack counts never increase.
+For repeated bounded convergence use --packs 1536 --blobs-per-pack 1 at prepare
+time and --passes 3 at measure time (48 MiB payload).
+Add --promisor-packs 1257 at prepare time for mixed promisor/ordinary pack groups;
+markers are added only after generation, to the first N packs in filename order.
 Use --policy baseline or --policy candidate (default) at prepare time to compare
 the existing owner with and without the managed project repository policy.
 Use a fresh fixture for each run; measurement consumes its fragmented layout.
+Index-heavy backlog (three overlapping promisor packs, remaining singleton packs):
+  node --import ./scripts/tsx.mjs scripts/perf/managed-git-maintenance-measure.ts --mode prepare-backlog --packs 1500 --blobs-per-pack 700000 --state-dir <new-directory>
+  node --import ./scripts/tsx.mjs scripts/perf/managed-git-maintenance-measure.ts --mode measure-backlog --passes 3 --state-dir <prepared-directory>
+Each large index is about 19.6 MB; a pair exceeds the former 32 MiB batch limit.
+The fixture shares deterministic 16-byte blobs and adds a unique blob per pack.
+Reads include warmup plus five A/A pairs before and after real owner maintenance;
+owner time reports process-tree CPU/RSS. Add --allocations for a separate sampled
+JavaScript allocation pass; leave it off for timing. Retention checks every shared
+and unique added blob, then runs full fsck. The checkout has 62000 tracked 18KiB files
+(1.14GB), with one dirty file; --workspace-files may reduce this for a smoke test.
+--mode augment-backlog adds this workspace to an older unaugmented backlog fixture.
+The workspace adds one pack to the requested fragmented pack count.
+Optional --owner-module <path> selects a frozen owner module for baseline proof;
+its imports must resolve to the original dependencies. Use a fresh fixture for each arm.
 Dependency-free native Git MIDX probe (Linux/GNU time or macOS/BSD time):
   node scripts/perf/managed-git-maintenance-measure.ts --mode prepare-midx --packs 32 --blobs-per-pack 65536 --state-dir <new-directory>
   node scripts/perf/managed-git-maintenance-measure.ts --mode measure-midx --state-dir <prepared-directory>
@@ -43,14 +76,25 @@ MemoryMax, and low CPU/IO priority. RSS is not an aggregate process-tree bound.`
 }
 assert(values["state-dir"], "--state-dir must name a task-owned synthetic fixture");
 assert(
-  ["prepare", "measure", "owner", "prepare-midx", "measure-midx"].includes(values.mode),
+  [
+    "prepare",
+    "measure",
+    "owner",
+    "prepare-midx",
+    "measure-midx",
+    "prepare-backlog",
+    "augment-backlog",
+    "measure-backlog",
+    "owner-backlog",
+  ].includes(values.mode),
   "invalid --mode",
 );
 assert(["baseline", "candidate"].includes(values.policy), "invalid --policy");
 const nativeMidx = values.mode.endsWith("-midx");
+const backlog = values.mode.endsWith("-backlog");
 assert(
-  process.platform === "linux" || (nativeMidx && process.platform === "darwin"),
-  "The owner benchmark requires Linux; native MIDX probes also support macOS",
+  process.platform === "linux" || process.platform === "darwin",
+  "The benchmark requires Linux or macOS",
 );
 const root = path.resolve(values["state-dir"]);
 const repo = path.join(root, "repository");
@@ -58,10 +102,20 @@ const marker = path.join(root, "fixture.json");
 const trace = path.join(root, "maintenance.trace.jsonl");
 const summary = path.join(root, "maintenance.json");
 const packCount = Number(values.packs);
+const promisorPackCount = Number(values["promisor-packs"]);
+const passCount = Number(values.passes);
 const blobsPerPack = Number(values["blobs-per-pack"]);
-const blobBytes = nativeMidx ? 16 : 32 * 1024;
-const payloadBytes = packCount * blobsPerPack * blobBytes;
+const blobBytes = nativeMidx || backlog ? 16 : 32 * 1024;
+const payloadBytes = (backlog ? blobsPerPack + packCount : packCount * blobsPerPack) * blobBytes;
 assert(Number.isSafeInteger(packCount) && packCount >= 16, "--packs must be an integer >=16");
+assert(
+  Number.isSafeInteger(promisorPackCount) &&
+    promisorPackCount >= 0 &&
+    promisorPackCount <= packCount,
+  "--promisor-packs must be an integer between 0 and --packs",
+);
+assert(!nativeMidx || promisorPackCount === 0, "Promisor packs require the owner benchmark");
+assert(Number.isSafeInteger(passCount) && passCount >= 1, "--passes must be a positive integer");
 assert(
   Number.isSafeInteger(blobsPerPack) && blobsPerPack >= 1,
   "--blobs-per-pack must be positive",
@@ -105,6 +159,10 @@ const packs = async () =>
   (await fs.readdir(path.join(repo, ".git", "objects", "pack"))).filter((name) =>
     name.endsWith(".pack"),
   ).length;
+const promisorPacks = async () =>
+  (await fs.readdir(path.join(repo, ".git", "objects", "pack"))).filter((name) =>
+    name.endsWith(".promisor"),
+  ).length;
 async function checkDirty() {
   if (process.platform !== "linux") {
     return;
@@ -114,7 +172,9 @@ async function checkDirty() {
   assert(Number.isFinite(dirtyKiB) && dirtyKiB < 2 * 1024 * 1024, "Host Dirty exceeds 2 GiB");
 }
 
-if (values.mode === "prepare" || values.mode === "prepare-midx") {
+if (values.mode === "prepare-backlog") {
+  await prepareBacklog();
+} else if (values.mode === "prepare" || values.mode === "prepare-midx") {
   await checkDirty();
   await fs.mkdir(root); // Refuse existing directories rather than overwrite another fixture.
   for (const directory of [repo, process.env.HOME!, process.env.TMPDIR!]) {
@@ -177,6 +237,13 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
     objects.push(...(await git(["ls-tree", "-r", "--format=%(objectname)", "HEAD"])).split("\n"));
   }
   assert.equal(await packs(), packCount);
+  if (promisorPackCount > 0) {
+    const directory = path.join(repo, ".git", "objects", "pack");
+    const names = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack")).toSorted();
+    for (const name of names.slice(0, promisorPackCount)) {
+      await fs.writeFile(path.join(directory, name.replace(/\.pack$/, ".promisor")), "");
+    }
+  }
   if (nativeMidx) {
     const inventory = await git(["count-objects", "-v"]);
     assert.equal(Number(/^in-pack: (\d+)$/m.exec(inventory)?.[1]), packCount * blobsPerPack);
@@ -206,6 +273,7 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
     version: 1,
     policy: values.policy,
     packs: packCount,
+    promisorPacks: promisorPackCount,
     blobBytes,
     payloadBytes,
     ...(nativeMidx ? { nativeMidx: true, objectCount: packCount * blobsPerPack } : {}),
@@ -218,17 +286,26 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
     version: number;
     policy: string;
     packs: number;
+    promisorPacks?: number;
     blobBytes: number;
     payloadBytes: number;
     objects: string[];
     nativeMidx?: boolean;
     objectCount?: number;
+    sharedObjects?: number;
   } = JSON.parse(await fs.readFile(marker, "utf8"));
   assert.equal(fixture.version, 1);
   if (!nativeMidx) {
     assert.equal(await packs(), fixture.packs, "Use a fresh prepared fixture for each run");
+    assert.equal(
+      await promisorPacks(),
+      fixture.promisorPacks ?? 0,
+      "Fixture promisor count changed",
+    );
   }
-  if (values.mode === "measure-midx") {
+  if (values.mode === "augment-backlog") {
+    console.log(JSON.stringify(await augmentBacklogWorkspace()));
+  } else if (values.mode === "measure-midx") {
     assert(fixture.nativeMidx, "Use a prepare-midx fixture");
     await checkDirty();
     const packDirectory = path.join(repo, ".git", "objects", "pack");
@@ -397,45 +474,105 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
         2,
       ),
     );
-  } else if (values.mode === "owner") {
-    const { createWorktreeGitMaintenance } =
-      await import("../../src/agents/worktrees/git-maintenance.js");
+  } else if (values.mode === "owner" || values.mode === "owner-backlog") {
+    const { createWorktreeGitMaintenance } = await import(
+      values["owner-module"]
+        ? pathToFileURL(path.resolve(values["owner-module"])).href
+        : "../../src/agents/worktrees/git-maintenance.js"
+    );
     const { WorktreeGcProgress } = await import("../../src/agents/worktrees/gc-progress.js");
     const { closeOpenClawStateDatabaseAsync } =
       await import("../../src/state/openclaw-state-db.js");
-    const progress = new WorktreeGcProgress();
     process.env.GIT_TRACE2_EVENT = trace;
+    const inspector = values.allocations ? new Session() : undefined;
+    if (inspector) {
+      inspector.connect();
+      await inspector.post("HeapProfiler.startSampling", {
+        samplingInterval: 32768,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
+    }
     const started = performance.now();
+    const cpuStarted = process.cpuUsage();
+    const passes = [];
     try {
-      await createWorktreeGitMaintenance(process.env)({ progress });
-      assert.equal(progress.result.issueCount, 0, JSON.stringify(progress.result.issues));
-      assert.equal(progress.result.gitMaintenance?.stage, "completed");
-      await fs.writeFile(summary, JSON.stringify({ elapsedMs: performance.now() - started }));
+      for (let pass = 1; pass <= passCount; pass++) {
+        await checkDirty();
+        const packsBefore = await packs();
+        const promisorPacksBefore = await promisorPacks();
+        const progress = new WorktreeGcProgress();
+        const passStarted = performance.now();
+        await createWorktreeGitMaintenance(process.env)({ progress });
+        const elapsedMs = performance.now() - passStarted;
+        assert.equal(progress.result.issueCount, 0, JSON.stringify(progress.result.issues));
+        assert.equal(progress.result.gitMaintenance?.stage, "completed");
+        const packsAfter = await packs();
+        const promisorPacksAfter = await promisorPacks();
+        assert(packsAfter <= packsBefore, `Pass ${pass} increased the synthetic pack count`);
+        assert(promisorPacksAfter <= promisorPacksBefore, `Pass ${pass} increased promisor packs`);
+        passes.push({
+          pass,
+          elapsedMs,
+          hostLoad: loadavg(),
+          packsBefore,
+          packsAfter,
+          promisorPacksBefore,
+          promisorPacksAfter,
+        });
+        await fs.writeFile(
+          summary,
+          JSON.stringify({ elapsedMs: performance.now() - started, passes }),
+        );
+      }
     } finally {
+      let sampledAllocationBytes: number | undefined;
+      if (inspector) {
+        const { profile } = await inspector.post("HeapProfiler.stopSampling");
+        inspector.disconnect();
+        const allocated = (node: typeof profile.head): number =>
+          node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
+        sampledAllocationBytes = allocated(profile.head);
+      }
+      await fs.writeFile(
+        summary,
+        JSON.stringify({
+          elapsedMs: performance.now() - started,
+          cpu: process.cpuUsage(cpuStarted),
+          sampledAllocationBytes,
+          passes,
+        }),
+      );
       delete process.env.GIT_TRACE2_EVENT;
       await closeOpenClawStateDatabaseAsync();
     }
   } else {
     await checkDirty();
     await fs.writeFile(trace, "");
+    const beforeReads = backlog ? await measureReads("before", fixture.objects) : undefined;
     const timeOutput = path.join(root, "maintenance.time.txt");
     await run("/usr/bin/time", [
-      "-v",
+      ...(process.platform === "darwin" ? ["-l", "-p"] : ["-v"]),
       "-o",
       timeOutput,
       process.execPath,
       ...process.execArgv,
       path.resolve(process.argv[1]!),
       "--mode",
-      "owner",
+      backlog ? "owner-backlog" : "owner",
+      ...(values.allocations ? ["--allocations"] : []),
+      ...(values["owner-module"] ? ["--owner-module", path.resolve(values["owner-module"])] : []),
       "--state-dir",
       root,
+      "--passes",
+      String(passCount),
     ]);
     const timing = await fs.readFile(timeOutput, "utf8");
-    const peakProcessRssKiB = Number(
-      /Maximum resident set size \(kbytes\):\s+(\d+)/.exec(timing)?.[1],
-    );
-    assert(peakProcessRssKiB > 0, "GNU time did not report peak RSS");
+    const peakProcessRssKiB =
+      process.platform === "darwin"
+        ? Number(/(\d+)\s+maximum resident set size/.exec(timing)?.[1]) / 1024
+        : Number(/Maximum resident set size \(kbytes\):\s+(\d+)/.exec(timing)?.[1]);
+    assert(peakProcessRssKiB > 0, "time did not report peak RSS");
     const childCommands: Record<string, number> = {};
     for (const line of (await fs.readFile(trace, "utf8")).trim().split("\n")) {
       if (!line) {
@@ -447,6 +584,7 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
         childCommands[command] = (childCommands[command] ?? 0) + 1;
       }
     }
+    const afterReads = backlog ? await measureReads("after", fixture.objects) : undefined;
     const packsAfter = await packs();
     assert(packsAfter < fixture.packs, "The owner did not consolidate the fixture");
     const retained = await git(
@@ -457,17 +595,39 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
     for (const [index, line] of retained.split("\n").entries()) {
       assert.equal(line, `${fixture.objects[index]} blob ${fixture.blobBytes}`);
     }
+    if (backlog) {
+      assert(fixture.sharedObjects !== undefined);
+      const shared = Array.from({ length: fixture.sharedObjects }, (_, index) => {
+        const bytes = Buffer.alloc(16);
+        bytes.writeUInt32LE(index);
+        return createHash("sha1").update("blob 16\0").update(bytes).digest("hex");
+      });
+      const checked = await git(
+        ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+        `${shared.join("\n")}\n`,
+      );
+      assert.equal(checked, shared.map((oid) => `${oid} blob 16`).join("\n"));
+    }
     await git(["fsck", "--full", "--no-dangling"]);
     console.log(
       JSON.stringify(
         {
           ...JSON.parse(await fs.readFile(summary, "utf8")),
+          platform: process.platform,
+          hostLoad: loadavg(),
           policy: fixture.policy,
+          gitVersion: await run("git", ["--version"]),
+          resource: parseTiming(timing),
+          beforeReads,
+          afterReads,
           peakProcessRssKiB,
           packsBefore: fixture.packs,
           packsAfter,
+          promisorPacksBefore: fixture.promisorPacks ?? 0,
+          promisorPacksAfter: await promisorPacks(),
           payloadBytes: fixture.payloadBytes,
           verifiedBlobs: fixture.objects.length,
+          verifiedSharedBlobs: fixture.sharedObjects,
           childCommands,
         },
         null,
@@ -475,4 +635,241 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
       ),
     );
   }
+}
+
+function parseTiming(timing: string) {
+  return {
+    userSeconds: Number(
+      (process.platform === "darwin"
+        ? /^user\s+([\d.]+)/m
+        : /User time \(seconds\):\s+([\d.]+)/
+      ).exec(timing)?.[1],
+    ),
+    systemSeconds: Number(
+      (process.platform === "darwin"
+        ? /^sys\s+([\d.]+)/m
+        : /System time \(seconds\):\s+([\d.]+)/
+      ).exec(timing)?.[1],
+    ),
+    peakProcessRssKiB:
+      process.platform === "darwin"
+        ? Number(/(\d+)\s+maximum resident set size/.exec(timing)?.[1]) / 1024
+        : Number(/Maximum resident set size \(kbytes\):\s+(\d+)/.exec(timing)?.[1]),
+  };
+}
+
+async function measureReads(phase: string, objects: string[]) {
+  const lookups = objects.toSorted((a, b) =>
+    createHash("sha256")
+      .update(a)
+      .digest("hex")
+      .localeCompare(createHash("sha256").update(b).digest("hex")),
+  );
+  const operations = [
+    { name: "status", args: ["status", "--porcelain", "--untracked-files=no"] },
+    { name: "diff-stat", args: ["diff", "--stat", "HEAD"] },
+    { name: "rev-parse", args: ["rev-parse", "HEAD"] },
+    {
+      name: "cat-file",
+      args: ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+      input: `${lookups.join("\n")}\n`,
+    },
+  ];
+  const samples = [];
+  for (const operation of operations) {
+    const expected = await git(operation.args, operation.input);
+    if (operation.name === "cat-file") {
+      assert.equal(expected, lookups.map((oid) => `${oid} blob 16`).join("\n"));
+    }
+    for (let pair = 0; pair < 5; pair++) {
+      for (const control of ["A", "A2"]) {
+        const timingPath = path.join(root, "read.time.txt");
+        const started = performance.now();
+        const result = await run(
+          "/usr/bin/time",
+          [
+            ...(process.platform === "darwin" ? ["-l", "-p"] : ["-v"]),
+            "-o",
+            timingPath,
+            "git",
+            "-C",
+            repo,
+            ...operation.args,
+          ],
+          operation.input,
+        );
+        const elapsedMs = performance.now() - started;
+        assert.equal(result, expected);
+        samples.push({
+          phase,
+          operation: operation.name,
+          pair,
+          control,
+          elapsedMs,
+          ...parseTiming(await fs.readFile(timingPath, "utf8")),
+        });
+      }
+    }
+  }
+  return samples;
+}
+
+async function prepareBacklog() {
+  await checkDirty();
+  await fs.mkdir(root);
+  for (const directory of [repo, process.env.HOME!, process.env.TMPDIR!]) {
+    await fs.mkdir(directory, { recursive: true });
+  }
+  await git(["init", "--initial-branch=main", "--object-format=sha1"]);
+  for (const [key, value] of [
+    ["gc.auto", "0"],
+    ["maintenance.auto", "false"],
+    ["fastimport.unpackLimit", "0"],
+    ["pack.threads", "1"],
+  ]) {
+    await git(["config", "--local", key!, value!]);
+  }
+  const directory = path.join(repo, ".git", "objects", "pack");
+  const shared: string[] = [];
+  const commands: Buffer[] = [];
+  for (let index = 0; index < blobsPerPack; index++) {
+    const bytes = Buffer.alloc(16);
+    bytes.writeUInt32LE(index);
+    shared.push(createHash("sha1").update("blob 16\0").update(bytes).digest("hex"));
+    commands.push(Buffer.from("blob\ndata 16\n"), bytes, Buffer.from("\n"));
+  }
+  commands.push(Buffer.from("done\n"));
+  await git(["fast-import", "--quiet", "--done"], Buffer.concat(commands));
+  commands.length = 0;
+  const seedPacks = await fs.readdir(directory);
+  const objects = shared.filter(
+    (_, index) => index % Math.max(1, Math.floor(blobsPerPack / 4096)) === 0,
+  );
+  for (let index = 0; index < 3; index++) {
+    const bytes = Buffer.alloc(16, index + 1);
+    const oid = await git(["hash-object", "-w", "--stdin"], bytes);
+    objects.push(oid);
+    const hash = await git(
+      ["pack-objects", "--window=0", "--threads=1", path.join(directory, "pack")],
+      `${shared.join("\n")}\n${oid}\n`,
+    );
+    await fs.writeFile(path.join(directory, `pack-${hash}.promisor`), "");
+  }
+  for (const name of seedPacks) {
+    await fs.rm(path.join(directory, name));
+  }
+  for (let index = 3; index < packCount; index++) {
+    const bytes = Buffer.alloc(16);
+    bytes.writeUInt32LE(index);
+    bytes.writeUInt32LE(1, 4);
+    const oid = createHash("sha1").update("blob 16\0").update(bytes).digest("hex");
+    objects.push(oid);
+    const suffix =
+      index === packCount - 1
+        ? "commit refs/heads/main\ncommitter Synthetic <synthetic@example.invalid> 1700000000 +0000\ndata 7\nfixture\nM 100644 :1 fixture.bin\n\ndone\n"
+        : "done\n";
+    await git(
+      ["fast-import", "--quiet", "--done"],
+      Buffer.concat([Buffer.from("blob\nmark :1\ndata 16\n"), bytes, Buffer.from(`\n${suffix}`)]),
+    );
+  }
+  await git(["prune-packed"]);
+  await git(["checkout", "--force", "main"]);
+  assert.equal(await packs(), packCount);
+  const { insertRegistryWorktree } = await import("../../src/agents/worktrees/registry.js");
+  const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
+  try {
+    await insertRegistryWorktree(process.env, {
+      id: "synthetic-maintenance",
+      name: "synthetic-maintenance",
+      repoFingerprint: "synthetic-maintenance",
+      repoRoot: repo,
+      path: repo,
+      branch: "main",
+      baseRef: "main",
+      ownerKind: "manual",
+      createdAt: 1700000000000,
+      lastActiveAt: 1700000000000,
+    });
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+  }
+  const fixture = {
+    version: 1,
+    policy: values.policy,
+    packs: packCount,
+    promisorPacks: 3,
+    blobBytes: 16,
+    payloadBytes,
+    objects,
+    backlog: true,
+    sharedObjects: blobsPerPack,
+  };
+  await fs.writeFile(marker, `${JSON.stringify(fixture)}\n`);
+  await augmentBacklogWorkspace();
+  const complete: typeof fixture = JSON.parse(await fs.readFile(marker, "utf8"));
+  const inventory = [];
+  for (const name of (await fs.readdir(directory)).filter((entry) => entry.endsWith(".pack"))) {
+    inventory.push({
+      name,
+      bytes: (await fs.stat(path.join(directory, name))).size,
+      indexBytes: (await fs.stat(path.join(directory, name.replace(/\.pack$/, ".idx")))).size,
+    });
+  }
+  console.log(
+    JSON.stringify({
+      mode: values.mode,
+      ...complete,
+      objects: objects.length,
+      largest: inventory.toSorted((a, b) => b.indexBytes - a.indexBytes).slice(0, 3),
+      totalPackBytes: inventory.reduce((sum, pack) => sum + pack.bytes, 0),
+      totalIndexBytes: inventory.reduce((sum, pack) => sum + pack.indexBytes, 0),
+    }),
+  );
+}
+
+async function augmentBacklogWorkspace() {
+  const fixture: {
+    packs: number;
+    objects: string[];
+    workspaceFiles?: number;
+    workspaceBytes?: number;
+  } = JSON.parse(await fs.readFile(marker, "utf8"));
+  assert.equal(fixture.workspaceFiles, undefined, "Workspace already prepared");
+  const count = Number(values["workspace-files"]);
+  assert(
+    Number.isSafeInteger(count) && count > 0 && count <= 62000,
+    "--workspace-files must be 1..62000",
+  );
+  const bytes = Buffer.alloc(18 * 1024, "synthetic workspace line\n");
+  bytes[bytes.length - 1] = 10;
+  const parent = await git(["rev-parse", "HEAD"]);
+  const filePath = (index: number) =>
+    `workspace/${String(Math.floor(index / 1000)).padStart(3, "0")}/file-${String(index).padStart(5, "0")}.txt`;
+  const changes = Array.from(
+    { length: count },
+    (_, index) => `M 100644 :1 ${filePath(index)}\n`,
+  ).join("");
+  await git(
+    ["fast-import", "--quiet", "--done"],
+    Buffer.concat([
+      Buffer.from(`blob\nmark :1\ndata ${bytes.length}\n`),
+      bytes,
+      Buffer.from(
+        `\ncommit refs/heads/main\ncommitter Synthetic <synthetic@example.invalid> 1700000001 +0000\ndata 9\nworkspace\nfrom ${parent}\ndeleteall\n${changes}\ndone\n`,
+      ),
+    ]),
+  );
+  await git(["checkout", "--force", "main"]);
+  await fs.appendFile(path.join(repo, filePath(0)), "changed\n");
+  fixture.packs = await packs();
+  fixture.workspaceFiles = count;
+  fixture.workspaceBytes = count * bytes.length + 8;
+  await fs.writeFile(marker, `${JSON.stringify(fixture)}\n`);
+  return {
+    mode: "workspace",
+    packs: fixture.packs,
+    workspaceFiles: count,
+    workspaceBytes: fixture.workspaceBytes,
+  };
 }

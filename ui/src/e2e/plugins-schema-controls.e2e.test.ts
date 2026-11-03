@@ -90,10 +90,8 @@ suite.define(() => {
         });
         await search.waitFor();
         const editor = page.locator(".plugin-editor__control");
-        const choice = editor.getByRole("radio", {
-          name: JSON.stringify({ a: 2, b: 2 }),
-          exact: true,
-        });
+        const choice = JSON.stringify({ a: 2, b: 2 });
+        const select = editor.locator("select");
         await editor.first().waitFor();
         if (json) {
           const input = editor.locator("textarea");
@@ -101,13 +99,13 @@ suite.define(() => {
           await input.fill(JSON.stringify(after));
           await input.press("Tab");
         } else {
-          await choice.click();
+          await select.selectOption({ label: choice });
         }
         const write = await gateway.waitForRequest("config.set");
         expect(JSON.parse(String(asRecord(write.params).raw))).toEqual(pluginConfig(after));
         // A captured request precedes the Gateway reply; reload only after
         // the existing writer has acknowledged and retained the saved value.
-        await page.locator(".settings-save-indicator--saved").waitFor();
+        await page.getByRole("button", { name: "Apply changes", exact: true }).waitFor();
         await page.reload();
         await search.waitFor();
         if (json) {
@@ -115,7 +113,7 @@ suite.define(() => {
             .poll(async () => JSON.parse(await editor.locator("textarea").inputValue()))
             .toEqual(after);
         } else {
-          await expect.poll(() => choice.isChecked()).toBe(true);
+          await expect.poll(() => select.locator("option:checked").textContent()).toBe(choice);
         }
       });
     },

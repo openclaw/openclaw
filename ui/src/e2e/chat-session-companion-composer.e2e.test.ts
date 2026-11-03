@@ -67,6 +67,31 @@ function composerHeight(composer: Locator) {
 }
 
 suite.define(() => {
+  it("sends a picked image without a written question", async () => {
+    await withSideChat(async (gateway, composer, page) => {
+      const side = page.locator("openclaw-chat-session-rail");
+      const fileName = "image-only.png";
+      const image =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      await side.locator(".agent-chat__photo-input").setInputFiles({
+        name: fileName,
+        mimeType: "image/png",
+        buffer: Buffer.from(image, "base64"),
+      });
+      await side.locator('.chat-attachment-thumb[aria-busy="false"] img').waitFor();
+      expect(await composer.inputValue()).toBe("");
+      const send = side.getByRole("button", { name: "Ask", exact: true });
+      await expect.poll(() => send.isEnabled()).toBe(true);
+      await send.click();
+      expect((await gateway.waitForRequest(ask)).params).toMatchObject({
+        question: "What does this image show?",
+        attachments: [{ mimeType: "image/png", fileName, content: image }],
+      });
+      await side.getByText("The next step is ready.", { exact: true }).waitFor();
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
+    });
+  });
+
   it("previews and sends a Side chat image, then retries without consuming the next draft", async () => {
     await withSideChat(async (gateway, composer, page) => {
       const side = page.locator("openclaw-chat-session-rail");

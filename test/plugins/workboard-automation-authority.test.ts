@@ -26,6 +26,10 @@ import { createGatewayMethodRegistry } from "../../src/gateway/methods/registry.
 import type { GatewayRequestHandler } from "../../src/gateway/server-methods/types.js";
 import { createContext } from "../../src/gateway/server-plugin-in-process-dispatch.test-support.js";
 import { dispatchTrustedPluginGatewayMethod } from "../../src/gateway/server-plugins.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../src/infra/diagnostic-events.js";
 import type { PluginHookHandlerMap } from "../../src/plugins/hook-types.js";
 import { bindPluginRegistryRuntime } from "../../src/plugins/registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry.js";
@@ -190,6 +194,8 @@ it.each(["agent_end", "subagent_ended"] as const)(
       },
       operationalRunInstance: createOperationalRunInstanceRef(runId),
     });
+    const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
     try {
       await request("workboard.boards.upsert", { id: "planning", automationJobId: job.id });
       const { card } = await request<{ card: WorkboardCard }>("workboard.cards.create", {
@@ -246,6 +252,7 @@ it.each(["agent_end", "subagent_ended"] as const)(
       expect(enqueue).toHaveBeenCalledOnce();
       expect(warn).not.toHaveBeenCalled();
     } finally {
+      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
       admission.close();
       await handle.stop();
       cron.stop();

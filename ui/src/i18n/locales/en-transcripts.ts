@@ -16,6 +16,7 @@ const enTranscripts = {
     beforeFilter: "Started before",
     filterHint:
       "Search titles, source IDs, saved summaries, and transcript text. Dates use UTC. Provider, account, and agent IDs are exact matches. Source meeting URLs and private source metadata are not searched.",
+    filterHintShort: "Dates use UTC. IDs must match exactly.",
     filter: "Filter",
     clearFilters: "Clear filters",
     pagination: "Transcript pages",

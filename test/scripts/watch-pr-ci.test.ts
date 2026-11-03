@@ -46,6 +46,7 @@ const calls = fs.readFileSync(callsPath, "utf8").trim().split("\\n").filter(Bool
 fs.appendFileSync(callsPath, JSON.stringify(args) + "\\n");
 let value;
 ${body}
+if (args.includes("--include")) process.stdout.write("HTTP/2 200 OK\\r\\n\\r\\n");
 console.log(JSON.stringify(value));
 `;
 }
@@ -477,8 +478,12 @@ describe("watch-pr-ci", () => {
 case "$1 $2" in
   "browse "*) printf 'https://github.com/openclaw/openclaw\\n' ;;
   "api --hostname")
+    if [ "$4" = "repos/openclaw/openclaw/actions/runs/201" ]; then
+      printf 'HTTP/2 200 OK\\r\\n\\r\\n{"id":201,"head_sha":"${sha}","run_attempt":1,"status":"completed","conclusion":"success"}\\n'
+      exit 0
+    fi
     if [ "$4" != "repos/openclaw/openclaw/pulls/42" ]; then exit 2; fi
-    printf '{"state":"open","mergeable":true,"head":{"sha":"${sha}"}}\\n'
+    printf '{"state":"open","html_url":"https://github.com/openclaw/openclaw/pull/42","mergeable":true,"head":{"sha":"${sha}"}}\\n'
     ;;
   "api --method")
     case " $* " in
@@ -529,14 +534,15 @@ if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
-  value = { state: "open", mergeable: true, head: { sha: ${JSON.stringify(sha)} } };
+  value = { state: "open", html_url: "https://github.com/openclaw/openclaw/pull/42", mergeable: true, head: { sha: ${JSON.stringify(sha)} } };
 } else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) {
   value = { workflow_runs: [{ id: 201 }] };
 } else if (args[0] === "run" && args[1] === "view") {
   value = { status: "queued", conclusion: null };
-  if (args[args.indexOf("--json") + 1].includes("jobs")) {
-    value = ${JSON.stringify({ status: "queued", conclusion: null, jobs })};
-  }
+} else if (args.includes("repos/openclaw/openclaw/actions/runs/201")) {
+  value = { id: 201, head_sha: "${sha}", run_attempt: 1, status: "queued", conclusion: null };
+} else if (args.some(arg => arg.includes("/attempts/1/jobs?"))) {
+  value = ${JSON.stringify({ total_count: jobs?.length, jobs })};
 } else {
   throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 }
@@ -649,7 +655,7 @@ if (args[0] === "browse") {
     console.error("HTTP 429 Too Many Requests");
     process.exit(1);
   }
-  value = { state: "open", merged_at: null, mergeable: true, head: { sha: "${sha}" },
+  value = { state: "open", html_url: "https://" + ${JSON.stringify(host)} + "/" + ${JSON.stringify(repo)} + "/pull/42", merged_at: null, mergeable: true, head: { sha: "${sha}" },
     ...(${phase === "attach"} || reads > 0 ? ${JSON.stringify(patch)} : {}) };
 } else if (${slowQuota} && args.includes("rate_limit")) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 650);
@@ -659,6 +665,9 @@ if (args[0] === "browse") {
   value = { workflow_runs: [{ id: 201 }] };
 } else if (args[0] === "run" && args[1] === "view") {
   value = { status: "completed", conclusion: "success" };
+} else if (args.includes("repos/" + ${JSON.stringify(repo)} + "/actions/runs/201")) {
+  if (args[args.indexOf("--hostname") + 1] !== ${JSON.stringify(host)}) throw new Error("wrong run API host");
+  value = { id: 201, head_sha: "${sha}", run_attempt: 1, status: "completed", conclusion: "success" };
 } else {
   throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 }
@@ -1494,12 +1503,18 @@ if (args[0] === "browse") {
 }
 else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
   if (${slowWatchPr} && calls.some((call) => call.includes("repos/openclaw/openclaw/pulls/42"))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
-  value = { state: pr.state.toLowerCase(), mergeable: pr.mergeable, head: { sha: pr.headRefOid } };
+  value = { state: pr.state.toLowerCase(), html_url: "https://github.com/openclaw/openclaw/pull/42", mergeable: pr.mergeable, head: { sha: pr.headRefOid } };
 }
 else if (args[0] === "run" && args[1] === "view") {
   if (${slowFinalRun} && calls.some((call) => call[0] === "run" && call[1] === "view")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
   value = runs.find((run) => String(run.id) === args[2]);
 }
+else if (${completion === "ci-run"} && args.some(arg => /[/]actions[/]runs[/][0-9]+$/.test(arg)) && args.includes("--include")) {
+  if (${slowFinalRun}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+  const runId = Number(args.find(arg => /[/]actions[/]runs[/][0-9]+$/.test(arg)).split("/").at(-1));
+  value = { ...runs.find(run => run.id === runId), run_attempt: 1 };
+}
+else if (${completion === "ci-run"} && args.some(arg => arg.includes("/attempts/1/jobs?"))) value = { total_count: 0, jobs: [] };
 else if (${completion !== "ci-run"} && args[0] === "api" && args[1] === "graphql") {
   if (args.some((arg) => arg.includes("checkRunCountsByState"))) pr.statusCheckRollup.contexts = {};
   value = { data: { repository: { pullRequest: pr } } };

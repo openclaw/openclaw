@@ -278,6 +278,34 @@ suite.define(() => {
             docId: documentId,
           });
           expect(proxy.boardRequests).toEqual(["ticket"]);
+          const confirmations: number[] = [];
+          for (let index = 0; index < 2; index++) {
+            confirmations.push(
+              await outer.evaluate(
+                (frame: HTMLIFrameElement) =>
+                  new Promise<number>((resolve) => {
+                    const receive = (event: MessageEvent<{ type?: string; height?: unknown }>) => {
+                      if (
+                        event.source !== frame.contentWindow ||
+                        event.data?.type !== "openclaw:widget-size" ||
+                        typeof event.data.height !== "number"
+                      ) {
+                        return;
+                      }
+                      window.removeEventListener("message", receive);
+                      resolve(event.data.height);
+                    };
+                    window.addEventListener("message", receive);
+                    frame.contentWindow!.postMessage(
+                      { type: "openclaw:widget-chat-host", measure: true },
+                      new URL(frame.src).origin,
+                    );
+                  }),
+              ),
+            );
+          }
+          expect(confirmations[0]).toBeGreaterThan(0);
+          expect(confirmations[1]).toBe(confirmations[0]);
           for (const widget of [inline, board]) {
             await click(widget, "Toggle details");
             await widget.getByText("Additional community details").waitFor();

@@ -1,17 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 
-function resolveRoute(
-  target: string,
-  options: Partial<Parameters<typeof resolveMattermostOutboundSessionRoute>[0]> = {},
-) {
-  const route = resolveMattermostOutboundSessionRoute({
-    cfg: {},
-    agentId: "main",
-    accountId: "acct-1",
-    target,
-    ...options,
-  });
+type RouteOptions = Partial<Parameters<typeof resolveMattermostOutboundSessionRoute>[0]>;
+const defaults = { cfg: {}, agentId: "main", accountId: "acct-1" };
+const sessionKey = (path: string) => `agent:main:mattermost:${path}`;
+
+function resolveRoute(target: string, options: RouteOptions = {}) {
+  const route = resolveMattermostOutboundSessionRoute({ ...defaults, target, ...options });
   if (!route) {
     throw new Error("Expected Mattermost route");
   }
@@ -30,10 +25,10 @@ describe("mattermost session route", () => {
     expect(
       resolveRoute("mattermost:channel:chan123", {
         replyToId: "explicit-root",
-        currentSessionKey: "agent:main:mattermost:channel:chan123:thread:root-post",
+        currentSessionKey: sessionKey("channel:chan123:thread:root-post"),
       }),
     ).toMatchObject({
-      sessionKey: "agent:main:mattermost:channel:chan123:thread:explicit-root",
+      sessionKey: sessionKey("channel:chan123:thread:explicit-root"),
       threadId: "explicit-root",
     });
   });
@@ -50,34 +45,22 @@ describe("mattermost session route", () => {
     expect(route.threadId).toBeUndefined();
   });
 
-  it.each(["directory", "session"] as const)(
-    "keys a private channel as group from %s",
-    (source) => {
-      const route = resolveRoute(
-        "mattermost:channel:priv123",
-        source === "directory"
-          ? { resolvedTarget: { to: "channel:priv123", kind: "group", source: "directory" } }
-          : { currentSessionKey: "agent:main:mattermost:group:priv123:thread:root-post" },
-      );
-      expect(route).toMatchObject({
-        peer: { kind: "group", id: "priv123" },
-        chatType: "group",
-        from: "mattermost:group:priv123",
-        to: "channel:priv123",
-        baseSessionKey: "agent:main:mattermost:group:priv123",
-      });
-      if (source === "session") {
-        expect(route).toMatchObject({
-          sessionKey: "agent:main:mattermost:group:priv123:thread:root-post",
-          threadId: "root-post",
-        });
-      }
-    },
-  );
+  it("keys a private channel as group from the current session", () => {
+    const currentSessionKey = sessionKey("group:priv123:thread:root-post");
+    expect(resolveRoute("mattermost:channel:priv123", { currentSessionKey })).toMatchObject({
+      peer: { kind: "group", id: "priv123" },
+      chatType: "group",
+      from: "mattermost:group:priv123",
+      to: "channel:priv123",
+      baseSessionKey: sessionKey("group:priv123"),
+      sessionKey: currentSessionKey,
+      threadId: "root-post",
+    });
+  });
 
   it.each([
-    ["unrelated peer", "agent:main:mattermost:group:other:thread:root-post", undefined],
-    ["directory override", "agent:main:mattermost:group:pub999:thread:stale-root", "channel"],
+    ["unrelated peer", sessionKey("group:other:thread:root-post"), undefined],
+    ["directory override", sessionKey("group:pub999:thread:stale-root"), "channel"],
     [
       "embedded route",
       "agent:main:other:group:peer:mattermost:group:pub999:thread:root-post",

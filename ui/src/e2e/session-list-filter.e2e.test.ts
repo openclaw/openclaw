@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Page } from "playwright";
 import { expect, it, onTestFinished } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -75,12 +76,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       sessionKey: "unknown",
       methodResponses: {
-        "agents.list": {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main" }, { id: "writer" }],
-        },
+        "agents.list": makeBootRoster({ agents: [{ id: "main" }, { id: "writer" }] }),
         "sessions.list": sessionList([row("agent:main:visible", visibleLabel)]),
       },
     });

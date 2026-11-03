@@ -21,6 +21,12 @@ const MicrophoneMenu = lazy(() => import("./chat-composer-microphone-menu.tsx"),
   export: "MicrophoneMenu",
 });
 
+// The device affordance and microphone hint share one pointer-intent window.
+const MICROPHONE_HOVER_DELAY_MS = 250;
+const microphoneHoverStyle = {
+  "--chat-microphone-reveal-delay": `${MICROPHONE_HOVER_DELAY_MS}ms`,
+};
+
 type ChatRunControlsProps = ReturnType<typeof createChatComposerContext>["runControlsProps"];
 
 export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
@@ -169,8 +175,11 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return (
-    <span class={["chat-talk-control", { "chat-talk-control--holding": holding() }]}>
-      <openclaw-tooltip prop:content={tooltip()}>
+    <span
+      class={["chat-talk-control", { "chat-talk-control--holding": holding() }]}
+      style={microphoneHoverStyle}
+    >
+      <openclaw-tooltip prop:content={tooltip()} prop:delay={MICROPHONE_HOVER_DELAY_MS}>
         <button
           class={[
             "chat-send-btn",
@@ -285,12 +294,12 @@ export function renderChatAbortActionSolid(
   return (
     <>
       {props.canAbort ? (
-        <openclaw-tooltip prop:content={t("chat.runControls.stop")}>
+        <openclaw-tooltip prop:content={t("chat.runControls.stopWithShortcut")}>
           <button
             class="chat-send-btn chat-send-btn--stop"
             ref={primaryPointerDownRef(() => props.onPrimaryActionPointerDown)}
             onClick={() => props.onAbort?.()}
-            aria-label={t("chat.runControls.stopGenerating")}
+            aria-label={t("chat.runControls.stop")}
           >
             <Icon name="stop" />
             <span class="agent-chat__control-label">{t("chat.runControls.stop")}</span>
@@ -445,8 +454,11 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
     <>
       {props.voiceActive && props.onToggleVoice ? (
         <>
-          <span class="chat-talk-control chat-talk-control--active">
-            <openclaw-tooltip prop:content={t("chat.composer.stopVoiceInput")}>
+          <span class="chat-talk-control chat-talk-control--active" style={microphoneHoverStyle}>
+            <openclaw-tooltip
+              prop:content={t("chat.composer.stopVoiceInput")}
+              prop:delay={MICROPHONE_HOVER_DELAY_MS}
+            >
               <button
                 class={[
                   "chat-send-btn chat-send-btn--voice-live",

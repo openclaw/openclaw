@@ -195,13 +195,6 @@ describe("prepared reply routing", () => {
       },
     },
     {
-      name: "mirror",
-      overrides: {
-        skipQueue: true,
-        mirror: { sessionKey: "agent:main:test", agentId: "main", text: "private thought" },
-      },
-    },
-    {
       name: "completion",
       overrides: {
         skipQueue: true,

@@ -23,42 +23,39 @@ let configImportId = 0;
 const toRepoPath = (filePath: string) => filePath.replaceAll("\\", "/");
 
 export async function listVitestConfigTestFiles(
-  configPath: string,
+  configPath: string | VitestConfig,
   includeFile?: string,
 ): Promise<string[]> {
-  const config = await withEnvAsync({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }, async () => {
-    const previousArgv = process.argv;
-    process.argv = [previousArgv[0] ?? "node", previousArgv[1] ?? "vitest"];
-    try {
-      const configUrl = pathToFileURL(path.resolve(process.cwd(), configPath));
-      // Focused runs may have cached a CLI-narrowed default config before the audit clears argv.
-      configUrl.searchParams.set("openclaw-vitest-ownership-audit", String(configImportId++));
-      const mod = (await import(configUrl.href)) as Record<string, unknown>;
-      const defaultConfig = (mod.default ?? {}) as VitestConfig;
-      const factory = Object.entries(mod).find(
-        ([name, value]) =>
-          name !== "default" && /^create.*VitestConfig$/u.test(name) && typeof value === "function",
-      )?.[1] as VitestConfigFactory | undefined;
-      return defaultConfig.test?.projects
-        ? defaultConfig
-        : (factory?.(process.env) ?? defaultConfig);
-    } finally {
-      process.argv = previousArgv;
-    }
-  });
-  return listConfigTestFiles(config, includeFile);
-}
-
-async function listConfigTestFiles(config: VitestConfig, includeFile?: string): Promise<string[]> {
+  const config =
+    typeof configPath === "string"
+      ? await withEnvAsync({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }, async () => {
+          const previousArgv = process.argv;
+          process.argv = [previousArgv[0] ?? "node", previousArgv[1] ?? "vitest"];
+          try {
+            const configUrl = pathToFileURL(path.resolve(process.cwd(), configPath));
+            // Focused runs may have cached a CLI-narrowed default config before the audit clears argv.
+            configUrl.searchParams.set("openclaw-vitest-ownership-audit", String(configImportId++));
+            const mod = (await import(configUrl.href)) as Record<string, unknown>;
+            const defaultConfig = (mod.default ?? {}) as VitestConfig;
+            const factory = Object.entries(mod).find(
+              ([name, value]) =>
+                name !== "default" &&
+                /^create.*VitestConfig$/u.test(name) &&
+                typeof value === "function",
+            )?.[1] as VitestConfigFactory | undefined;
+            return defaultConfig.test?.projects
+              ? defaultConfig
+              : (factory?.(process.env) ?? defaultConfig);
+          } finally {
+            process.argv = previousArgv;
+          }
+        })
+      : configPath;
   const testConfig = config.test ?? {};
   if (testConfig.projects) {
     const projects = [];
     for (const project of testConfig.projects) {
-      projects.push(
-        ...(typeof project === "string"
-          ? await listVitestConfigTestFiles(project, includeFile)
-          : await listConfigTestFiles(project, includeFile)),
-      );
+      projects.push(...(await listVitestConfigTestFiles(project, includeFile)));
     }
     return projects;
   }

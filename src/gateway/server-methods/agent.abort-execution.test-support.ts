@@ -23,10 +23,8 @@ const mocks = getAgentTestMocks();
 const sessionKey = "agent:main:main";
 type Cancellation = { action: "chat.abort" | "/stop"; lateFailure?: boolean; staleKey?: boolean };
 
-async function checkCancellation(
-  { action, lateFailure, staleKey }: Cancellation,
-  signal: AbortSignal,
-) {
+async function checkCancellation(cancellation: Cancellation, signal: AbortSignal) {
+  const { action, lateFailure, staleKey } = cancellation;
   prime();
   const finishRun = createDeferred();
   const context = makeContext();
@@ -36,10 +34,6 @@ async function checkCancellation(
   let capturedSignal: AbortSignal | undefined;
   mocks.agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
     capturedSignal = opts.abortSignal;
-    const entry = getRpcSource(runId);
-    if (entry?.input.abortSignal === opts.abortSignal) {
-      acceptedEntry = entry;
-    }
     await finishRun.promise;
     if (lateFailure) {
       throw new Error("late provider failure");
@@ -55,8 +49,8 @@ async function checkCancellation(
       { message: "hi", agentId: "main", sessionKey, idempotencyKey: runId },
       { context, reqId: runId, client },
     );
-    const active = requireValue(acceptedEntry, "active run missing");
-    expect(getRpcSource(runId)).toBe(active);
+    const active = (acceptedEntry = requireValue(getRpcSource(runId), "active run missing"));
+    expect(capturedSignal).toBe(active.input.abortSignal);
     if (staleKey) {
       expect(active.input.target?.sessionKey).toBe(sessionKey);
     } else {
@@ -95,8 +89,7 @@ async function checkCancellation(
   expect(getRpcSource(runId)).toBeUndefined();
   if (lateFailure) {
     const terminal = context.dedupe.get(`agent:${runId}`);
-    expect(terminal?.ok).toBe(true);
-    expect(terminal?.error).toBeUndefined();
+    expect([terminal?.ok, terminal?.error]).toEqual([true, undefined]);
     expectRecordFields(terminal?.payload, { runId, status: "timeout", summary: "aborted" });
   }
 }

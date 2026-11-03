@@ -45,29 +45,6 @@ describe("ClawRouter managed gateway contract", () => {
     instances.push(instance);
     // Test Gateways skip process locks; target this listener instead of offline catalog fallback.
     instance.env.OPENCLAW_GATEWAY_PORT = String(instance.port);
-    // The fake server stands in for ClawRouter's declared endpoint, just as in
-    // clawrouter-catalog-discovery.e2e.test.ts. Keep native catalog policy intact.
-    const bundledPlugin = new URL("../dist/extensions/clawrouter/", import.meta.url);
-    const fixtureRoot = path.join(instance.stateDir, "bundled-plugins");
-    const fixturePlugin = path.join(fixtureRoot, "clawrouter");
-    await fs.mkdir(fixturePlugin, { recursive: true });
-    const manifest = JSON.parse(
-      await fs.readFile(new URL("openclaw.plugin.json", bundledPlugin), "utf8"),
-    );
-    manifest.modelCatalog.providers.clawrouter.baseUrl = router.baseUrl;
-    await Promise.all([
-      fs.writeFile(path.join(fixturePlugin, "openclaw.plugin.json"), JSON.stringify(manifest)),
-      fs.copyFile(new URL("package.json", bundledPlugin), path.join(fixturePlugin, "package.json")),
-      ...["index", "capability-catalog"].map((entry) =>
-        // Re-export the real bundled entry so its imports keep their original base.
-        fs.writeFile(
-          path.join(fixturePlugin, `${entry}.js`),
-          `export { default } from ${JSON.stringify(new URL(`${entry}.js`, bundledPlugin).href)};\n`,
-        ),
-      ),
-    ]);
-    instance.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixtureRoot;
-    instance.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     const logFile = path.join(instance.stateDir, "clawrouter.log");
     const cliOutput: string[] = [];
     const cli = async (args: string[]) => {
@@ -129,9 +106,10 @@ describe("ClawRouter managed gateway contract", () => {
     const gatewayReadiness = await waitForGatewayReadiness(instance);
     expect(gatewayReadiness).toMatchObject({ ready: true, failing: [] });
 
-    expect(
+    const listedModels = JSON.parse(
       await cli(["models", "list", "--all", "--provider", "clawrouter", "--refresh", "--json"]),
-    ).toContain(MODEL_REF);
+    );
+    expect(listedModels.models).toEqual([expect.objectContaining({ key: MODEL_REF })]);
 
     const probe = await cli([
       "models",

@@ -210,7 +210,7 @@ describe("authenticated GitHub identity sync", () => {
   it.each([
     { provider: "tailscale", name: 123, initial: "Provider Ada", expected: "Provider Ada" },
     { provider: "access", name: 123, initial: "Provider Ada", expected: "Provider Ada" },
-    { provider: "access", name: undefined, initial: undefined, expected: null },
+    { provider: "access", name: undefined, initial: undefined, expected: "Ada" },
   ])(
     "preserves $provider display fallback $expected without extra requests",
     async ({ provider, name, initial, expected }) => {

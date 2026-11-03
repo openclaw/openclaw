@@ -9,6 +9,7 @@ type EnglishCatalog = TranslationMap & {
   execApproval: TranslationMap & { labels: TranslationMap; scope: TranslationMap };
   sessionProgressCard: TranslationMap & {
     refresh: TranslationMap;
+    runtime: TranslationMap;
     activity: TranslationMap;
     outcome: TranslationMap;
     status: TranslationMap;
@@ -95,7 +96,6 @@ type EnglishCatalog = TranslationMap & {
       systemNotice: TranslationMap &
         Record<
           | "guardian"
-          | "restartRecovery"
           | "automationRecovery"
           | "gatewayRestarted"
           | "cliHarnessContext"
@@ -231,7 +231,6 @@ type EnglishCatalog = TranslationMap & {
       | "workspaceLabel"
       | "branchLabel"
       | "runsOn"
-      | "machineLabel"
       | "machineCpu"
       | "machineMemory"
       | "more"
@@ -282,6 +281,7 @@ type EnglishCatalog = TranslationMap & {
       | "withMoreParticipants"
       | "snoozeWakes"
       | "snoozeTomorrowTime"
+      | "snoozeTomorrow"
       | "user"
       | "assistant"
       | "opensAsDashboard"
@@ -291,6 +291,8 @@ type EnglishCatalog = TranslationMap & {
       | "unsentDraft"
       | "noArchivedSessions"
       | "status"
+      | "all"
+      | "snoozed"
       | "statusLive"
       | "statusIdle"
       | "statusUnknown"
@@ -307,7 +309,6 @@ type EnglishCatalog = TranslationMap & {
       | "approvalsNeedApproval"
       | "attentionMore"
       | "runFailedReason"
-      | "childRunFailedReason"
       | "runErrorTimedOut"
       | "runErrorUnknown"
       | "attentionRequired"
@@ -362,8 +363,8 @@ const startupEnglish = {
       "This view is unavailable. Check that its plugin is installed, enabled, and allowed for your account. Reload the conversation after installing or updating the plugin.",
     dashboardTitle: "Session dashboard",
     customPluginsDisabled: "Custom plugin UI is off",
-    customPluginsEnableHint: "Enable Custom plugin UI in Labs.",
-    openLabs: "Open Labs",
+    customPluginsEnableHint:
+      "Disabled by the Gateway configuration. An administrator can enable native plugin UI.",
     surface: {},
   },
   capacityMeter: {},
@@ -389,6 +390,7 @@ const startupEnglish = {
     connected: "Connected",
     refresh: "Refresh",
     retry: "Retry",
+    helpFor: "Help for {section}",
     staleData: "Showing stale data.",
     reload: "Reload",
     reset: "Reset",
@@ -415,6 +417,7 @@ const startupEnglish = {
     expandedTable: "Expanded table",
     closeTable: "Close expanded table",
     resizeSplitView: "Resize split view",
+    resizeMessageWidth: "Resize message width",
     delete: "Delete",
     remove: "Remove",
     dismiss: "Dismiss",
@@ -450,7 +453,6 @@ const startupEnglish = {
     publicKey: "Public Key",
     probeOk: "Connection check passed",
     probeFailed: "Connection check failed",
-    reloadConfig: "Reload Config",
     multiSelect: {
       addCustom: "Add “{value}”",
       noMatches: "No matches",
@@ -510,7 +512,6 @@ const startupEnglish = {
     workspaceLabel: "Workspace",
     branchLabel: "Branch",
     runsOn: "Runs on {providerId} · {profileId}",
-    machineLabel: "Machine",
     machineCpu: "{cpu} vCPU",
     machineMemory: "{memory} GB",
     more: "+{count} more",
@@ -520,6 +521,7 @@ const startupEnglish = {
     checks: {},
   },
   sessionProgressCard: {
+    runtime: {},
     composerTitle: "Task progress",
 
     clearFailed: "Could not clear saved progress card.",
@@ -569,6 +571,7 @@ const startupEnglish = {
     staleTitle: "This view could not load",
     staleSubtitle:
       "Some interface files could not be downloaded. Check your connection, then reload.",
+    bootDraftRecovery: "Copy the draft below before clearing it and reloading.",
     reloading: "Reloading…",
     retry: "Retry",
     stylesFailed: "Styles failed to load, so the page may look broken.",
@@ -721,6 +724,7 @@ const startupEnglish = {
     withMoreParticipants: "+{count} more",
     snoozeWakes: "Wakes {time}",
     snoozeTomorrowTime: "tomorrow {time}",
+    snoozeTomorrow: "Tomorrow",
     user: "User",
     assistant: "Assistant",
     opensAsDashboard: "Opens as dashboard",
@@ -730,6 +734,8 @@ const startupEnglish = {
     unsentDraft: "Unsent draft",
     noArchivedSessions: "No archived sessions.",
     status: "Status",
+    all: "All",
+    snoozed: "Snoozed",
     statusLive: "Live",
     statusIdle: "Idle",
     statusUnknown: "Unknown",
@@ -746,7 +752,6 @@ const startupEnglish = {
     approvalsNeedApproval: "{count} requests need approval",
     attentionMore: "+{count} more",
     runFailedReason: "Run failed: {reason}",
-    childRunFailedReason: "Child session {label} failed: {reason}",
     runErrorTimedOut: "Timed out",
     runErrorUnknown: "Unknown error",
     attentionRequired: "Session needs attention",
@@ -754,6 +759,7 @@ const startupEnglish = {
     provider: "Provider",
     lastActive: "Last active {time}",
     activeRun: "Active run",
+    backgroundWorkRunning: "Background work running",
     subagentsWorking: "Subagents working",
     showChildSessions: "Show {count} child sessions for {session}",
     hideChildSessions: "Hide {count} child sessions for {session}",
@@ -815,11 +821,8 @@ const startupEnglish = {
     context: {},
     identity: {},
     overview: {
-      title: {},
-      subtitle: {},
       selectedSkills: "{count} selected",
-      allSkills: "all skills",
-      unsavedConfig: {},
+      allSkills: "All skills",
       modelSelection: {},
       primaryModel: {},
       primaryModelDefault: {},
@@ -918,6 +921,9 @@ const startupEnglish = {
       sectionLabel: "Gateway",
       menuLabel: "Gateway: {gateway}",
       primaryTag: "primary",
+      configReadOnly: "Gateway configuration is read-only.",
+      configReadOnlyHint:
+        "To make changes, update the configuration file or deployment settings for this Gateway.",
       setPrimary: "Set as primary…",
       openSettings: "Gateway settings",
       connected: "Connected",
@@ -1043,7 +1049,7 @@ const startupEnglish = {
     plugins: "Plugins",
     skillWorkshop: "Skill workshop",
     devices: "Devices",
-    claws: "Claws",
+    templates: "Templates",
     cloudWorkers: "Cloud environments",
     chat: "Chat",
     dashboards: "Dashboards",
@@ -1198,8 +1204,6 @@ const startupEnglish = {
     },
     toolSearch: {},
 
-    customPluginUi: {},
-
     hostDesktop: {},
     workerDesktop: {},
   },
@@ -1231,6 +1235,13 @@ const startupEnglish = {
       running: "Running sessions",
       total: "Total sessions",
       name: "Name",
+    },
+    menu: {
+      label: "Actions for {name}",
+      pin: "Pin to sidebar",
+      unpin: "Unpin from sidebar",
+      openNewTab: "Open activity in new tab",
+      copyLink: "Copy activity link",
     },
     active: "Active",
     onlineActive: "Online · Active",
@@ -1305,6 +1316,7 @@ const startupEnglish = {
       chooseAvatar: "Choose image",
       displayName: "Display name",
       linkedEmails: "Linked emails",
+      attribution: "Attribution",
     },
     modelAccounts: {},
   },
@@ -1406,7 +1418,6 @@ const startupEnglish = {
     common: {
       emptyValue: "—",
       unknown: "unknown",
-      atLeast: "≥ {value}",
       approx: "≈ {value}",
     },
     loading: {
@@ -1426,30 +1437,7 @@ const startupEnglish = {
       less: "Less",
       more: "More",
     },
-    providerUsage: {
-      title: "Provider plans & billing",
-      subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
-      stalled: "Provider usage did not finish loading. Refresh to retry.",
-      unavailable: "Provider usage is unavailable; the last request failed. Refresh to retry.",
-      balance: "Balance",
-      spend: "Usage",
-      budget: "Budget",
-      today: "Today",
-      last7Days: "7 days",
-      lastDays: "{count} days",
-      dailyCost: "Daily provider cost",
-      requests: "{count} requests",
-      inputTokens: "{count} input",
-      cacheTokens: "{count} cache",
-      outputTokens: "{count} output",
-      topModels: "Top models",
-      costCategories: "Cost categories",
-      remaining: "{percent}% left",
-      resets: "Resets {date}",
-      exhausted: "{label} is used up.",
-      checkFailed: "Check failed",
-      exhaustedUntil: "{label} is used up until {date}.",
-    },
+    providerUsage: {},
     presets: {},
     scope: {},
     filters: {},
@@ -1545,7 +1533,7 @@ const startupEnglish = {
       automationEnabled: "Enabled",
     },
     agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
-    historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
+    historyRequestTimedOut: "Couldn’t load the conversation in time. Try again.",
     clawhub: {},
     modelAccounts: {
       section: "Account",
@@ -1563,7 +1551,7 @@ const startupEnglish = {
       retrying: "Retrying…",
       retryingIn: "Retrying in {seconds}s",
       tryingFallback: "Trying fallback model…",
-      failedTitle: "Unable to finish this reply",
+      failedTitle: "Couldn’t finish this reply",
       failedRepeatCount: "{count} times",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
@@ -1588,6 +1576,23 @@ const startupEnglish = {
     waitingOnSubagents: "Waiting on subagents",
     waitingForMessage: "Waiting for a message",
     waitingOnSubagent: "Waiting on {name}",
+    waitingOnSessions: "Waiting on {count} sessions",
+    sessionsNeedInputOne: "1 needs your input",
+    sessionsNeedInput: "{count} need your input",
+    sessionsPaused: "{count} paused",
+    sessionPausedNote: "{name} is paused",
+    sessionsPausedNote: "{count} sessions are paused",
+    handoffResumed: "Resumed · {duration} later",
+    handoffSessionsOne: "1 session",
+    handoffSessions: "{count} sessions",
+    handoffSessionStatus: {
+      attention: "Needs your input",
+      paused: "Paused",
+      running: "Running",
+      failed: "Failed",
+      stopped: "Stopped",
+      done: "Done",
+    },
     subagentsRunning: "{count} subagents running",
     subagentsRunningOne: "1 subagent running",
     startupStatus: {
@@ -1601,7 +1606,7 @@ const startupEnglish = {
       preparingCloudEnvironment: "Preparing cloud environment…",
       savingSnapshot: "Saving snapshot…",
       preparingContext: "Preparing this turn…",
-      waitingForTurn: "Waiting for turn to start…",
+      waitingForTurn: "Waiting for turn to start",
       memoryFlushing: "Saving conversation memory…",
       startingModel: "Waiting for a response",
       waitingForLocalModel: "Waiting for the local model to respond",
@@ -1682,6 +1687,7 @@ const startupEnglish = {
       dismissError: "Dismiss error",
       exitFocusMode: "Exit focus mode",
       scrollToLatest: "Scroll to latest",
+      skipToComposer: "Skip to message composer",
     },
     markdown: {
       truncated: "… truncated ({total} chars, showing first {shown}).",
@@ -1729,16 +1735,8 @@ const startupEnglish = {
     incognitoExpiredBody:
       "Incognito sessions last for 24 hours or until the Gateway restarts. Your unsent input stays in this tab.",
     newIncognitoSession: "New Incognito session",
-    restartRecoveryTitle: "This task was interrupted by a restart.",
-    restartRecoveryDisabled: "Your transcript is safe. Resume to continue in this session.",
-    restartRecoveryNewSession:
-      "This provider cannot safely resume tool work here. Your transcript can continue in a new session.",
-    resumeSession: "Resume",
-    resumeInNewSession: "Resume in new session",
-    resumingSession: "Resuming…",
     systemNotice: {
       guardian: {},
-      restartRecovery: {},
       automationRecovery: {},
       gatewayRestarted: {},
       cliHarnessContext: {},
@@ -1748,7 +1746,6 @@ const startupEnglish = {
     skillLearned: {},
     progressLabels: {},
     turnRecap: {
-      doneIn: "Done in {duration}",
       tokens: "{count} output tokens",
       tokensOne: "1 output token",
     },
@@ -1759,9 +1756,8 @@ const startupEnglish = {
       loading: "Loading skills…",
     },
     splitView: {
-      chooseConversation: "Choose a conversation",
-      missingOwner:
-        "Select this pane, then choose Home or a conversation in the sidebar to restore it.",
+      chooseConversation: "Choose a session",
+      missingOwner: "Select this pane, then choose Home or a session in the sidebar to restore it.",
       open: "Open split view",
       splitRight: "Split right",
       splitDown: "Split down",
@@ -1794,7 +1790,6 @@ const startupEnglish = {
       menuFilters: "Filters",
       menuDisplay: "Display",
       hideEmpty: "Hide empty",
-      activeFilterCount: "Active filters: {count}",
       sortSessions: "Filter & sort",
       sessionSources: "Session sources",
       showAllSessions: "Show all sessions",
@@ -1811,7 +1806,7 @@ const startupEnglish = {
     runControls: {
       newSession: "New session",
       newSessionWorktree: "New session in worktree",
-      exportChat: "Export chat",
+      exportChat: "Export conversation",
       queue: "Queue",
       queueMessage: "Queue message",
       stop: "Stop",
@@ -1841,6 +1836,7 @@ const startupEnglish = {
       unattributedSender: "Message",
       toolSender: "Tool",
       errorSender: "Error",
+      agentName: "Agent",
     },
     mediaPlayer: {},
     youtube: {},
@@ -1944,7 +1940,7 @@ const startupEnglish = {
       modelLocked: "Locked",
       modelLockedLabel: "Model selection controlled for this session",
       lockedSessionModel: "Session model",
-      thinkingLevel: "Chat thinking level",
+      thinkingLevel: "Effort",
     },
     permissions: {},
     toolCards: {

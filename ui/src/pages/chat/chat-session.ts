@@ -18,7 +18,7 @@ import {
 import {
   normalizeChatFastModeInput,
   resolveChatModelOverrideValue,
-  resolveChatModelSelectState,
+  resolveChatModelSelectValues,
 } from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -359,7 +359,7 @@ export async function switchChatModel(
   // A newer intent retires even a confirmation for a previous selection.
   const selection = claimChatModelSelection(host, targetSessionKey);
   const { ownsSelection, agentScope } = selection;
-  const { currentOverride, defaultModel } = resolveChatModelSelectState({
+  const { currentOverride, defaultModel } = resolveChatModelSelectValues({
     activeSession: activeRow,
     agentDefaultModel,
     modelSelectionPolicy: host.chatModelSelectionPolicy,
@@ -420,14 +420,15 @@ export async function switchChatModel(
       });
       if (nextValue && nextValue !== currentValue && nextRuntime?.local !== true && hasHistory) {
         const { showConfirmDialog } = await import("../../components/confirm-dialog.ts");
-        const displayLookup = buildCatalogDisplayLookup(host.chatModelCatalog);
+        const nextLabel =
+          nextEntry?.name.trim() ||
+          formatCatalogChatModelDisplayFromLookup(
+            nextValue,
+            buildCatalogDisplayLookup(host.chatModelCatalog),
+          );
         const confirmed = await showConfirmDialog({
-          title: t("chat.modelControls.switchTitle", {
-            new: formatCatalogChatModelDisplayFromLookup(nextValue, displayLookup),
-          }),
-          message: t("chat.modelControls.switchWarning", {
-            current: formatCatalogChatModelDisplayFromLookup(currentValue, displayLookup),
-          }),
+          title: t("chat.modelControls.switchTitle", { new: nextLabel }),
+          message: t("chat.modelControls.switchWarning", { new: nextLabel }),
           confirmLabel: t("chat.modelControls.switchConfirm"),
           skipPreference: {
             label: t("chat.modelControls.dontAskAgain"),

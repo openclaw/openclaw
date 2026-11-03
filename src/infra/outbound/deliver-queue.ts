@@ -1,9 +1,10 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 // Owns durable queue admission and hands stable custody to the execution loop.
-import { getReplyPayloadMetadata, readAskUserQuestionId } from "../../auto-reply/reply-payload.js";
+import { readAskUserQuestionId } from "../../auto-reply/reply-payload.js";
 import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type { ChannelMessageDeferredDeliveryAdmissionResult } from "../../channels/message/types.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -14,7 +15,10 @@ import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { runWithQuestionChannelDeliveries } from "../question-channel-runtime.js";
 import { throwIfAborted } from "./abort.js";
-import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
+import {
+  resolveOutboundChannelMessageAdapter,
+  resolveOutboundChannelPluginAsync,
+} from "./channel-resolution.js";
 import { prepareDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
 import { resolveOutboundDurableFinalDeliverySupport } from "./deliver-channel.js";
 import type {
@@ -24,6 +28,7 @@ import type {
 import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
 import { buildPayloadSummary } from "./deliver-payload.js";
 import {
+  prepareGuardedReasoningDelivery,
   prepareOutboundPayloadBatch,
   prepareStructuredOutboundPayloadBatch,
 } from "./deliver-prepare.js";
@@ -33,11 +38,7 @@ import {
 } from "./deliver-queue-admission.js";
 import { deliverOutboundPayloadsWithQueueCleanup } from "./deliver-queue-execute.js";
 import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
-import {
-  PlatformMessageNotDispatchedError,
-  type OutboundDeliveryResult,
-  type OutboundPayloadDeliveryOutcome,
-} from "./deliver-types.js";
+import type { OutboundDeliveryResult, OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import { markDurableDeliveryQueued } from "./delivery-completion.js";
 import { startDeliveryProducerLease } from "./delivery-queue-lease.js";
 import {
@@ -158,31 +159,7 @@ async function runOutboundDeliveryWithIntent(
   input: InternalDeliverOutboundPayloadsParams,
   prepare: typeof prepareOutboundPayloadBatch,
 ): Promise<OutboundDeliveryResult[]> {
-  // Fix the source lane before modifiers can replace a payload or its private metadata.
-  const reasoningPayloadIndexes = new Set([
-    ...(input.reasoningPayloadIndexes ?? []),
-    ...input.payloads.flatMap((payload, index) =>
-      payload.isReasoning === true &&
-      getReplyPayloadMetadata(payload)?.reasoningVisibilityOwner !== undefined
-        ? [index]
-        : [],
-    ),
-  ]);
-  if (
-    reasoningPayloadIndexes.size > 0 &&
-    (input.skipQueue !== true ||
-      input.deliveryQueueId !== undefined ||
-      input.deliveryIntentId ||
-      input.deliveryCompletion ||
-      input.completionRetention ||
-      input.reusePendingDeliveryIntent ||
-      input.mirror)
-  ) {
-    throw new PlatformMessageNotDispatchedError("Guarded reasoning requires live-only delivery", {
-      cause: undefined,
-      retryable: false,
-    });
-  }
+  const reasoningPayloadIndexes = prepareGuardedReasoningDelivery(input);
   const { replyToId, replyToMode, ...currentParams } = input;
   const reply = normalizeOutboundReplyFacts({ reply: input.reply, replyToId, replyToMode });
   const params = {
@@ -283,11 +260,12 @@ async function deliverWithProducerLease(
 }
 
 async function runOutboundDeliveryWithQueue(
-  params: InternalDeliverOutboundPayloadsParams,
+  initialParams: InternalDeliverOutboundPayloadsParams,
   prepare: typeof prepareOutboundPayloadBatch,
   stableIntentClaimHeld: boolean,
   stablePreparationOwner?: StableDeliveryPreparationOwner,
 ): Promise<OutboundDeliveryResult[]> {
+  let params = initialParams;
   const auditStartedAt = Date.now();
   const { channel, to, payloads } = params;
   const assertDeliveryCurrent = (): void => {
@@ -321,9 +299,8 @@ async function runOutboundDeliveryWithQueue(
         channel,
         to,
         accountId: params.accountId,
-        sessionKeyForInternalHooks: params.mirror?.sessionKey ?? params.session?.key,
-        isGroup: params.mirror?.isGroup,
-        groupId: params.mirror?.groupId,
+        sessionKeyForInternalHooks: params.session?.key,
+        isGroup: params.session?.conversationType === "group",
         runId: params.replyPayloadSendingHook?.runId,
         logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
       });
@@ -367,6 +344,23 @@ async function runOutboundDeliveryWithQueue(
     if (admission.status === "permanent_rejection") {
       emitPreQueueFailure();
       throw new Error(admission.reason);
+    }
+  }
+  if (!params.skipQueue && params.accountId === undefined) {
+    const plugin = await resolveOutboundChannelPluginAsync({
+      channel,
+      cfg: params.cfg,
+      agentId: params.session?.agentId,
+      allowBootstrap: true,
+      assertCurrent: assertDeliveryCurrent,
+    });
+    assertDeliveryCurrent();
+    if (plugin) {
+      // Queue custody retains this sender even if the configured default changes before retry.
+      params = {
+        ...params,
+        accountId: resolveChannelDefaultAccountId({ plugin, cfg: params.cfg }),
+      };
     }
   }
   const queuePolicy = params.queuePolicy ?? "best_effort";

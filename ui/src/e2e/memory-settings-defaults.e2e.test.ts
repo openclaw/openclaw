@@ -50,7 +50,6 @@ async function expectQuery(advanced: Locator, section: Locator) {
   await expect
     .poll(() => advanced.evaluate((element) => (element as HTMLDetailsElement).open))
     .toBe(true);
-  await section.locator("summary").filter({ hasText: "Query" }).click();
   expect(await section.getByRole("spinbutton").inputValue()).toBe("6");
 }
 
@@ -155,7 +154,7 @@ suite.define(() => {
       expect(saved).not.toHaveProperty("plugins.entries.memory-core.config.dreaming.frequency");
       await expect
         .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Saved");
+        .toContain("Apply changes");
 
       await page.reload();
       await expect.poll(() => engineRow.textContent()).toContain("Default: OpenClaw Memory");

@@ -82,7 +82,7 @@ export async function forkSqlitePrivateSnapshotInProcess(
     return runWithSqliteCleanup({ release: releaseSource }, "Private SQLite snapshot fork", () => {
       const current = captureSqlitePrivateSnapshotFamily(pathname, family.root);
       if (current?.main !== family.main || current?.wal !== family.wal) {
-        throw new SqliteSourceChangedError(`Retained SQLite snapshot changed: ${pathname}`);
+        throw new SqliteSourceChangedError("retained-snapshot-changed");
       }
       directory = createSqliteSnapshotStagingDirectorySync(stagingRoot);
       const destination = path.join(directory, "database.sqlite.partial");

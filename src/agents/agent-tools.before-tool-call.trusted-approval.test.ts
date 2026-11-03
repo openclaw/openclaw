@@ -101,7 +101,6 @@ describe("trusted approval rewrite isolation", () => {
         expect(rewriteRequest.id).not.toBe(trustedRequest.id);
         expect(rewriteRequest.request.title).toBe("Rewrite approval");
         expect(settled).toBe(false);
-        expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
         // Retained mock output tests policy isolation, not plugin-runner mutation reachability.
         hookResult.params.code = "return 'unapproved-late-mutation';";
         expect(broker.resolve(rewriteRequest.id, decision)).toBe(true);

@@ -24,6 +24,7 @@ export type WizardViewProps = {
   doneAction?: { label: string; disabled?: boolean; onClick: () => void };
   cancellationNotice?: string | null;
   cancellationFeedback?: JSX.Element;
+  signInIcon?: JSX.Element;
   value: unknown;
   onValueChange: (value: unknown) => void;
   onAnswer: (value: unknown, includeValue?: boolean) => void;
@@ -48,7 +49,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   createPendingFocus(
     () =>
       props.state.phase === "step"
-        ? props.state.step.id
+        ? `${props.state.step.id}:${props.busy || props.state.busy ? "busy" : "ready"}:${props.state.validationError ?? ""}`
         : `${displayPhase()}:${Boolean(props.doneAction)}`,
     {
       requested: () => true,
@@ -61,6 +62,22 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   const copy = () => WIZARD_COPY[props.mode];
   const canCancel = () => displayPhase() === "starting" || displayPhase() === "step";
   const stepState = () => (props.state.phase === "step" ? props.state : undefined);
+  // Cancel sits beside a primary action. Alone in a footer it would only repeat the close button.
+  const stepHasPrimary = () => {
+    const current = stepState();
+    if (!current) {
+      return false;
+    }
+    const { type, options } = current.step;
+    return (
+      type === "confirm" ||
+      type === "multiselect" ||
+      type === "note" ||
+      type === "action" ||
+      (type === "text" && !current.externalAuthInput) ||
+      (type === "select" && (options?.length ?? 0) <= 2)
+    );
+  };
   // A retiring step still renders action settlement before its controls dispose.
   const retainedStep = createMemo(
     (previous: ReturnType<typeof stepState>) => stepState() ?? previous,
@@ -82,7 +99,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
       >
         <div
           class={[
-            "model-setup-wizard",
+            "oc-dialog model-setup-wizard",
             {
               "model-setup-wizard--auth": props.mode === "auth",
               "model-setup-wizard--done": displayPhase() === "done",
@@ -102,11 +119,23 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
             </button>
           </Show>
           <Show when={displayPhase() !== "done" && !signInStep()}>
-            <div class="model-setup-wizard__header">
-              <h2>{props.state.authLabel || stepState()?.step.title || t(copy().titleKey)}</h2>
+            <div class="oc-dialog__header">
+              <h2 class="oc-dialog__title">
+                {props.state.authLabel || stepState()?.step.title || t(copy().titleKey)}
+              </h2>
+              <button
+                ref={autofocusRef}
+                type="button"
+                class="oc-dialog__close"
+                autofocus={displayPhase() !== "step"}
+                aria-label={t(canCancel() ? "common.cancel" : "common.close")}
+                onClick={() => (canCancel() ? props.onCancel() : props.onClose())}
+              >
+                <Icon name="x" />
+              </button>
             </div>
           </Show>
-          <div class="model-setup-wizard__body">
+          <div class="oc-dialog__body model-setup-wizard__body">
             <For
               each={[
                 props.refreshWarning,
@@ -188,7 +217,8 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                         presentation="model-setup"
                         step={state().step}
                         externalAuthInput={state().externalAuthInput}
-                        providerId={state().authChoice}
+                        signInIcon={props.signInIcon}
+                        brandId={props.state.authBrandId}
                         providerLabel={props.state.authLabel}
                         value={props.value}
                         busy={props.busy || state().busy}
@@ -204,7 +234,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                             : undefined
                         }
                         leadingAction={
-                          signInStep() ? undefined : (
+                          signInStep() || !stepHasPrimary() ? undefined : (
                             <button type="button" class="btn" onClick={() => props.onCancel()}>
                               {t("common.cancel")}
                             </button>
@@ -233,16 +263,16 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
               </Match>
             </Switch>
           </div>
-          <Show when={displayPhase() !== "step"}>
-            <openclaw-modal-actions class="model-setup-wizard__footer">
+          <Show when={displayPhase() === "done"}>
+            <openclaw-modal-actions class="oc-dialog__footer model-setup-wizard__footer">
               <button
                 ref={autofocusRef}
                 type="button"
                 class="btn"
-                autofocus={displayPhase() !== "done" || !props.doneAction}
-                onClick={() => (canCancel() ? props.onCancel() : props.onClose())}
+                autofocus={!props.doneAction}
+                onClick={() => props.onClose()}
               >
-                {t(canCancel() ? "common.cancel" : "common.close")}
+                {t("common.close")}
               </button>
               <Show when={displayPhase() === "done" && props.doneAction}>
                 {(action) => (

@@ -44,6 +44,8 @@ you only need an issued ClawRouter key.
     `plugins.allow`, add `clawrouter` to that list before enabling it. For a
     custom deployment, set `models.providers.clawrouter.baseUrl` to the
     ClawRouter origin; the default is `https://clawrouter.openclaw.ai`.
+    Live and retained model catalogs must come from that configured origin.
+    Static capability declarations remain scoped to their declared endpoints.
 
   </Step>
   <Step title="List granted models">
@@ -68,6 +70,23 @@ you only need an issued ClawRouter key.
 
   </Step>
 </Steps>
+
+## Utility model
+
+When `agents.defaults.utilityModel` is unset, a ClawRouter primary model uses a
+small model from the same vendor for short internal tasks such as titles,
+progress narration, Activity recaps, Side chat, and composer predictions:
+
+| Primary model vendor       | Automatic utility model                 |
+| -------------------------- | --------------------------------------- |
+| `clawrouter/openai/...`    | `clawrouter/openai/gpt-6-luna`          |
+| `clawrouter/anthropic/...` | `clawrouter/anthropic/claude-haiku-5-5` |
+
+OpenClaw selects it only when your key's model catalog lists it. Other vendors,
+and keys without that grant, keep the behavior of having no automatic utility
+model. GPT-6 Luna is text-only through ClawRouter, so Side chat questions with
+images need an image-capable `utilityModel`. An explicit `utilityModel`, or
+`""` to disable utility routing, always wins.
 
 ## Decision models
 

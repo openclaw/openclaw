@@ -54,6 +54,64 @@ describeControlUiE2e("Plugin overview", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
 
+  it("gives failed plugin actions shared callout padding and space before capabilities", async () => {
+    const message =
+      "Another plugin or config operation is already running; retry when it completes.";
+    const disabled = { ...calendarPlugin, enabled: false, state: "disabled" as const };
+    const { page, gateway } = await setup({
+      "plugins.list": inventory([disabled]),
+      "plugins.inspect": { ...calendarInspection, plugin: disabled },
+      "plugins.setEnabled": { __mockError: { code: "UNAVAILABLE", message } },
+    });
+    await page.goto(server.baseUrl + "settings/plugins/calendar-plus");
+    await role(page, "button", "Enable Calendar Plus").click();
+    await gateway.waitForRequest("plugins.setEnabled");
+    const alert = page.locator(
+      '.plugin-catalog-detail__panel > .plugins-row-message[role="alert"]',
+    );
+    await alert.getByText(message, { exact: true }).waitFor();
+    const artifactDir =
+      process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1"
+        ? createControlUiE2eArtifactDir("plugin-action-alert")
+        : undefined;
+    for (const width of [1440, 393]) {
+      await page.setViewportSize({ width, height: 1000 });
+      if (artifactDir) {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".plugin-catalog-detail"),
+          [alert],
+          { animations: "disabled" },
+        );
+        writeFileSync(path.join(artifactDir, `alert-${width}.png`), frame.png);
+      }
+      await expect
+        .poll(async () => {
+          const geometry = await alert.evaluate((element) => {
+            const style = getComputedStyle(element);
+            const next = element.nextElementSibling;
+            return {
+              paddingTop: Number.parseFloat(style.paddingTop),
+              paddingBottom: Number.parseFloat(style.paddingBottom),
+              gap: next
+                ? next.getBoundingClientRect().top - element.getBoundingClientRect().bottom
+                : 0,
+              contained: element.scrollWidth <= element.clientWidth,
+            };
+          });
+          expect(geometry.paddingTop).toBeGreaterThanOrEqual(14);
+          expect(geometry.paddingBottom).toBeGreaterThanOrEqual(14);
+          expect(geometry.gap).toBeGreaterThanOrEqual(16);
+          return geometry.contained;
+        })
+        .toBe(true);
+    }
+    expect((await gateway.getRequests("plugins.setEnabled"))[0]?.params).toEqual({
+      pluginId: "calendar-plus",
+      enabled: true,
+    });
+  });
+
   it.each(["fresh", "refresh"] as const)(
     "initializes direct catalog Settings on %s entry with editable fields and permissions",
     async (entry) => {
@@ -344,9 +402,9 @@ describeControlUiE2e("Plugin overview", () => {
     expect(await content(".plugin-metadata__repository")).toContain("Acme/calendar");
     expect(await content(".plugin-catalog-detail__readme")).toContain("README_TAIL");
     expect(await page.locator(".plugin-capabilities h2").allTextContents()).toEqual([
-      "Skills1",
-      "Tools2",
-      "MCP Server1",
+      "Skills",
+      "Tools",
+      "MCP Server",
     ]);
     await page.getByRole("button", { name: /calendar_search/ }).click();
     await page.getByRole("dialog", { name: "calendar_search" }).waitFor();
@@ -366,6 +424,15 @@ describeControlUiE2e("Plugin overview", () => {
     expect(modalBounds!.height).toBeLessThanOrEqual(804);
     await captureScreenshot(page, "overview-tool-mobile.png", "viewport");
     const body = page.locator(".plugin-tool-preview__body");
+    // Inputs lead, so a long description never pushes them out of the first view.
+    expect(
+      await body.evaluate(
+        (element) =>
+          element.scrollTop === 0 &&
+          element.querySelector(".plugin-tool-preview__parameters")!.getBoundingClientRect()
+            .bottom <= element.getBoundingClientRect().bottom,
+      ),
+    ).toBe(true);
     await body.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });

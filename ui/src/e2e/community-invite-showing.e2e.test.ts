@@ -4,6 +4,7 @@ import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fi
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
+import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI community card E2E",
@@ -44,15 +45,8 @@ suite.define(() => {
           const card = page.locator(".community-invite-card");
           const close = card.getByRole("button", { name: "Dismiss and don't show again" });
           await close.waitFor();
-          const firstWindowRow = page.locator(".sidebar-session-window > [aria-setsize]").first();
-          for (let index = 0; index < 3; index += 1) {
-            const visibleCount = Number(await firstWindowRow.getAttribute("aria-setsize"));
-            await page.getByRole("button", { name: "Show more", exact: true }).click();
-            // Offscreen rows are virtualized; the set size records the published page.
-            await expect
-              .poll(async () => Number(await firstWindowRow.getAttribute("aria-setsize")))
-              .toBeGreaterThan(visibleCount);
-          }
+          // Home is outside the paged task list.
+          await expandSidebarSessions(page.locator(".sidebar-shell__body"), sessions.length - 1);
           const list = page.locator(".sidebar-shell__body");
           const lastSession = page.locator('[data-session-key="agent:main:task-31"]');
           await expect

@@ -1,33 +1,17 @@
-import type {
-  SessionTranscriptDeliveryMirror,
-  SubagentCompletionDirectDeliveryMirror,
-} from "../../config/sessions/transcript-mirror.js";
-import type { SkillWorkshopChangeNotice } from "../../shared/skill-workshop-change-notice.js";
+import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript-mirror.js";
 
 /**
- * Transcript append data emitted after an outbound send completes.
+ * @deprecated Confirmed sends record destination history automatically; removed in the next
+ * Plugin SDK major. Accepted for source compatibility and otherwise ignored.
  */
-export type OutboundMirror = {
+export type DeliveryMirror = {
   sessionKey: string;
   agentId?: string;
   text?: string;
   mediaUrls?: string[];
   idempotencyKey?: string;
   expectedSessionId?: string;
-  deliveryMirror?:
-    | SessionTranscriptDeliveryMirror
-    | SubagentCompletionDirectDeliveryMirror
-    | SkillWorkshopChangeNotice;
-  /** Queue transcript bookkeeping behind the requester without delaying the send. */
-  deferToSessionLane?: boolean;
-};
-
-/**
- * Delivery-layer mirror data with optional group/channel correlation metadata.
- */
-export type DeliveryMirror = OutboundMirror & {
-  /** Whether this message is being sent in a group/channel context */
+  deliveryMirror?: SessionTranscriptDeliveryMirror;
   isGroup?: boolean;
-  /** Group or channel identifier for correlation with received events */
   groupId?: string;
 };

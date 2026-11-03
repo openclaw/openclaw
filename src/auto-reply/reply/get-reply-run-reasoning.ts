@@ -23,6 +23,11 @@ export function prepareReplyRunReasoningVisibility(
   opts: PreparedReplyRunAdmission["context"]["params"]["opts"],
 ) {
   return opts?.reasoningVisibilityEnabled && opts.registerReasoningVisibilityCleanup && sessionKey
-    ? createReplyReasoningVisibility(buildReplyRunReasoningParams(state, sessionKey))
+    ? createReplyReasoningVisibility(buildReplyRunReasoningParams(state, sessionKey)).then(
+        (visibility) => {
+          opts.registerReasoningVisibilityCleanup?.(visibility.releaseDispatch);
+          return visibility;
+        },
+      )
     : undefined;
 }

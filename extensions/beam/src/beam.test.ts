@@ -83,7 +83,9 @@ describe("Beam receiver", () => {
       );
       expect(transcript.items.find((item) => item.type === "agentMessage")?.sender).toBeUndefined();
     }
-    expect((await upload(sampleUpload({ uploaderProfileId: "forged-profile" }))).status).toBe(400);
+    for (const field of ["uploaderProfileId", "publisherProfileId"]) {
+      expect((await upload(sampleUpload({ [field]: "forged-profile" }))).status).toBe(400);
+    }
     expect((await store.get(sampleUpload().beamId))?.uploaderProfileId).toBeUndefined();
   });
 
@@ -132,6 +134,7 @@ describe("Beam receiver", () => {
             receivedAt,
             createdAt: second ? 600 : 100,
             uploaderProfileId: profileId,
+            publisherProfileId: second ? "publisher-600" : "publisher-100",
           };
         }
         expect(await store.get(body.beamId)).toEqual(expected);
@@ -150,15 +153,54 @@ describe("Beam receiver", () => {
     }
   });
 
-  it("requires operator.write before reading the upload body", async () => {
+  it("accepts a verified restricted Visitor publisher over HTTP", async () => {
+    const store = memoryStore();
+    let profileId = "guest-publisher";
+    const endpoint = await serve(store, {
+      resolveClient: () => ({
+        clientIp: "127.0.0.1",
+        scopes: ["operator.sessions.write"],
+        profileId,
+        visitorGrant: { assertCurrent() {} },
+      }),
+    });
+    const response = await postUpload(endpoint);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, canView: true });
+    expect(await store.get(sampleUpload().beamId)).toMatchObject({
+      publisherProfileId: "guest-publisher",
+      uploaderProfileId: "guest-publisher",
+    });
+    profileId = "another-publisher";
+    const refusal = await postUpload(endpoint);
+    expect(refusal.status).toBe(403);
+    expect(await refusal.json()).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("new Beam ID"),
+    });
+  });
+
+  it.each([
+    { scopes: ["operator.read"] },
+    { scopes: ["operator.sessions.write"] },
+    { scopes: ["operator.sessions.write"], profileId: "guest" },
+    {
+      scopes: ["operator.sessions.read"],
+      profileId: "guest",
+      visitorGrant: { assertCurrent() {} },
+    },
+  ])("denies insufficient publisher authority before reading the body: %j", async (client) => {
     const store = memoryStore();
     const endpoint = await serve(store, {
-      resolveClient: () => ({ clientIp: "127.0.0.1", scopes: ["operator.read"] }),
+      resolveClient: () => ({ clientIp: "127.0.0.1", ...client }),
     });
     const response = await postUpload(endpoint);
 
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ ok: false, error: "operator.write is required" });
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("active verified Visitor"),
+    });
     expect(store.values.size).toBe(0);
   });
 
@@ -259,6 +301,48 @@ it("retries a rejected terminal upload through the real loopback receiver", asyn
 });
 
 describe("Beam session catalog", () => {
+  it.each([
+    { language: "German", titles: ["München", "Mu\u0308nchen"] },
+    { language: "Korean", titles: ["한국어", "\u1112\u1161\u11ab\u1100\u116e\u11a8\u110b\u1165"] },
+  ])(
+    "finds canonically equivalent $language titles without rewriting snapshots",
+    async ({ titles }) => {
+      const { keyedStore, store, close } = persistentBeamTestStore();
+      const endpoint = await serve(store);
+      const catalog = createBeamSessionCatalog(store);
+      const uploads = titles.map((title, index) =>
+        sampleUpload({ beamId: index === 0 ? catalogParams.threadId : otherBeamId, title }),
+      );
+
+      try {
+        for (const upload of uploads) {
+          expect((await postUpload(endpoint, upload)).status).toBe(200);
+        }
+        const expected = uploads.map(({ beamId, title }) => ({ threadId: beamId, name: title }));
+        for (const query of [...titles, " ClAuDe "]) {
+          const [host] = await catalog.list({ agentId: "main", search: query });
+          expect(host?.sessions).toHaveLength(2);
+          expect(host?.sessions).toEqual(
+            expect.arrayContaining(expected.map((session) => expect.objectContaining(session))),
+          );
+        }
+        const [absent] = await catalog.list({ agentId: "main", search: "missing title" });
+        expect(absent?.sessions).toEqual([]);
+
+        const entries = await keyedStore.entries();
+        expect(entries).toHaveLength(2);
+        for (const upload of uploads) {
+          expect(entries.find(({ key }) => key === upload.beamId)?.value).toMatchObject(upload);
+          await expect(
+            catalog.read({ ...catalogParams, threadId: upload.beamId }),
+          ).resolves.toMatchObject({ threadId: upload.beamId, label: upload.title });
+        }
+      } finally {
+        await close();
+      }
+    },
+  );
+
   it("permanently deletes only known gateway sessions and allows re-upload", async () => {
     const { store, close } = persistentBeamTestStore();
     const endpoint = await serve(store);

@@ -1,6 +1,7 @@
 // Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
+import { model as makeCatalogModel } from "../agents/model-catalog-fixtures.test-support.js";
 import { normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
@@ -605,16 +606,7 @@ describe("plugin metadata snapshot", () => {
           demo: {
             api: "openai-completions",
             baseUrl: "http://127.0.0.1",
-            models: [
-              {
-                id: "latest",
-                name: "Latest",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                maxTokens: 1024,
-              },
-            ],
+            models: [makeCatalogModel("latest", "Latest")],
           },
         },
       },

@@ -26,7 +26,7 @@ import {
 import { READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { isSessionCreatorProfile } from "./session-creator.js";
+import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   SessionRowFactsPending,
@@ -168,7 +168,7 @@ function withControlUiTaskPrTarget(
   target: ControlUiSessionPrTarget | undefined,
   projection: SessionRowProjection,
   root: EntryRow,
-  getAllows: () => ReturnType<typeof createSessionListEntryFilter>,
+  getAllows: Parameters<typeof prepareTaskPublicationSessions>[2],
   ownerProfileId?: string,
 ): ControlUiSessionPrTarget | undefined {
   if (!target || root.entry.incognito || isIncognitoSessionKey(root.key)) {
@@ -197,6 +197,10 @@ function withControlUiTaskPrTarget(
 }
 
 export type ControlUiSessionPrRead = () => Promise<ControlUiSessionPrTarget | undefined>;
+
+/** Passive sidebar audiences share a receipt-only cell beside the full session target. */
+export const receiptsOnlyTargetIdentity = (identity: string) =>
+  JSON.stringify([identity, "receipts-only"]);
 
 /** Background facts use the Gateway's current row owner, never a completed caller's grant. */
 export async function prepareControlUiSessionPrServiceTarget(
@@ -378,7 +382,17 @@ export function createControlUiSessionPrRead(params: {
         (isIncognitoSessionKey(selected.key)
           ? projection.needsMembershipPreparation()
           : projection.sharingTargetState(query).status !== "ready") ||
-        createSessionListEntryFilter({ cfg, client })?.(selected.key, selected.entry) === false
+        createSessionListEntryFilter({
+          cfg,
+          client,
+          // Private rows retain their prepared memory authority, outside resident membership.
+          membership: isIncognitoSessionKey(selected.key)
+            ? undefined
+            : projection.readMembership({
+                ...query,
+                storePath: selected.storeTarget.storePath,
+              }),
+        })?.(selected.key, selected.entry) === false
       ) {
         return undefined;
       }
@@ -462,7 +476,23 @@ export function createControlUiSessionPrRead(params: {
         projectedTarget,
         projection,
         current,
-        () => createSessionListEntryFilter({ cfg: getRuntimeConfig(), client }),
+        () => {
+          const cfg = getRuntimeConfig();
+          const isCreator = prepareSessionCreatorProfile(profileInput ?? actorProfile);
+          return (row) =>
+            createSessionListEntryFilter(
+              {
+                cfg,
+                client,
+                membership: projection.readMembership({
+                  key: row.key,
+                  agentId: row.agentId,
+                  storePath: row.storeTarget.storePath,
+                }),
+              },
+              isCreator,
+            )?.(row.key, row.entry) !== false;
+        },
         actorProfile,
       );
       return target
@@ -533,7 +563,7 @@ export function createControlUiSessionPrRead(params: {
             ...(params.taskReceiptsOnly
               ? {
                   taskReceiptsOnly: true,
-                  identity: JSON.stringify([target.target.identity, "receipts-only"]),
+                  identity: receiptsOnlyTargetIdentity(target.target.identity),
                 }
               : {}),
             assertCurrent: () => {

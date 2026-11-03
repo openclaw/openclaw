@@ -19,6 +19,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
+import { withProjectCheckoutLifecycle } from "../../projects/project-checkout.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
@@ -236,6 +237,52 @@ describe("worktree Git maintenance", () => {
     expect(await missing()).toBe(0);
   });
 
+  it("resumes past an over-budget worktree after restart without losing later staged objects", async () => {
+    const { root, repo, worktree } = await fixture("repair-resume");
+    const remote = path.join(root, "remote.git");
+    await git(remote, "config", "uploadpack.allowAnySHA1InWant", "true");
+    const input = "staged object on a later worktree\n";
+    const missing = await requireGit(remote, ["hash-object", "-w", "--stdin"], { input });
+    await requireGit(repo, ["hash-object", "-w", "--stdin"], { input });
+    await git(
+      worktree.path,
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      `100644,${missing},staged.txt`,
+    );
+    await fs.writeFile(path.join(worktree.path, "staged.txt"), "unstaged contents\n");
+    const indexPath = path.resolve(
+      worktree.path,
+      await git(worktree.path, "rev-parse", "--git-path", "index"),
+    );
+    const index = await fs.readFile(indexPath);
+    await fs.unlink(path.join(repo, ".git", "objects", missing.slice(0, 2), missing.slice(2)));
+    await git(repo, "config", "remote.origin.promisor", "true");
+    await git(repo, "config", "remote.origin.partialclonefilter", "blob:none");
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const execute = gitExec.executeGitCommand;
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      const result = await execute(cwd, args, options);
+      // Model an expensive primary checkout inventory using the real Git result;
+      // the deadline must not keep later linked indexes from ever being repaired.
+      if (cwd === repo && args[0] === "rev-list") {
+        now += 300_001;
+      }
+      return result;
+    });
+    const first = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ retryDeferred: true, progress: first });
+    expect(first.result.outcome).toBe("partial");
+    expect((await runGit(repo, ["cat-file", "-e", missing], offlineGit)).code).not.toBe(0);
+    await stateDatabase.closeOpenClawStateDatabaseAsync();
+    await createWorktreeGitMaintenance(env)({ retryDeferred: true });
+    expect(await requireGit(repo, ["cat-file", "blob", missing], offlineGit)).toBe(input.trim());
+    expect(await fs.readFile(indexPath)).toEqual(index);
+    expect(await read(worktree.path, "staged.txt")).toBe("unstaged contents\n");
+  });
+
   it("repairs stale pack lookup without rebuilding a repository-wide index", async () => {
     const repo = await initRepo(tempDirs.make("worktree-stale-pack-index-"));
     const packDirectory = path.join(repo, ".git", "objects", "pack");
@@ -288,7 +335,8 @@ describe("worktree Git maintenance", () => {
     const records = await registryReads.readRegistryWorktrees(env);
     await stateDatabase.closeOpenClawStateDatabaseAsync();
     vi.spyOn(registryReads, "readRegistryWorktrees").mockResolvedValue(records);
-    let now = Date.now();
+    // Advance the scheduler without putting the host ahead of the real lease worker.
+    let now = Date.now() - 3 * WORKTREE_GC_INTERVAL_MS;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const maintain = createWorktreeGitMaintenance(env);
     const controller = new AbortController();
@@ -492,6 +540,59 @@ describe("worktree Git maintenance", () => {
     });
     await fs.access(packs[2]!);
     expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+  });
+
+  it.each([
+    { label: "index", packBytes: 240_000_000, indexBytes: 20_000_000 },
+    { label: "pack", packBytes: 5_600_000_000, indexBytes: 20_000_000 },
+  ])(
+    "consolidates a backlog exceeding the old $label budget",
+    async ({ packBytes, indexBytes }) => {
+      const repo = await initRepo(tempDirs.make("worktree-backlog-"));
+      const { objects, packs: stems } = await packBlobs(repo, [
+        "backlog-a",
+        "backlog-b",
+        "backlog-c",
+      ]);
+      await git(repo, "prune-packed");
+      await register(repo, "backlog", { branch: "main" });
+      const stat = fs.stat;
+      const paths = new Set(stems.map((stem) => path.join(packsPath(repo), stem)));
+      // Admission sees production-sized metadata; Git still verifies real fixture objects.
+      vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        const result = await stat(...args);
+        const name = String(args[0]);
+        if (result && paths.has(name.replace(/\.(pack|idx)$/, ""))) {
+          result.size = name.endsWith(".pack") ? packBytes : indexBytes;
+        }
+        return result;
+      });
+      const progress = new WorktreeGcProgress();
+      await createWorktreeGitMaintenance(env)({ progress });
+      expect(progress.result.gitMaintenance).toMatchObject({
+        stage: "completed",
+        packsBefore: 3,
+        packsAfter: 1,
+      });
+      expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+    },
+  );
+
+  it("skips a busy project without suspending or consuming its hourly maintenance slot", async () => {
+    const repo = await initRepo(tempDirs.make("worktree-busy-maintenance-"));
+    await packBlobs(repo, ["busy-a", "busy-b", "busy-c"]);
+    await register(repo, "busy-maintenance", { branch: "main" });
+    const maintain = createWorktreeGitMaintenance(env);
+    await withProjectCheckoutLifecycle(repo, { env }, async () => {
+      const progress = new WorktreeGcProgress();
+      await maintain({ progress });
+      expect(await packNames(repo)).toHaveLength(3);
+      expect(progress.result.issues).toEqual([
+        expect.objectContaining({ stage: "git-maintenance", outcome: "deferred" }),
+      ]);
+    });
+    await maintain({});
+    expect(await packNames(repo)).toHaveLength(1);
   });
 
   it("retains a replacement that is already an input and a pack pinned during publication", async () => {

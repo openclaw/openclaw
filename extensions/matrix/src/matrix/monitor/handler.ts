@@ -443,6 +443,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             delivery: {
               observeMessageSent: true,
               preparePayload: prepareMatrixReplyPayload,
+              durable: replyDispatcher.durable,
               deliver: deliverReply,
               onError: (err, info) => onReplyError(err, info as Parameters<typeof onReplyError>[1]),
             },
@@ -459,15 +460,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               disableBlockStreaming: !blockStreamingEnabled,
               onPartialReply: draftStream
                 ? (payload) => draftController.onPartialReply(payload.text ?? "")
-                : undefined,
-              onBlockReplyQueued: draftStream
-                ? (payload, context) => {
-                    if (payload.isCompactionNotice === true || payload.isReasoning === true) {
-                      return false;
-                    }
-                    draftController.queueDraftBlockBoundary(payload, context);
-                    return false;
-                  }
                 : undefined,
               // Reset draft boundary bookkeeping on assistant message
               // boundaries so post-tool blocks stream from a fresh

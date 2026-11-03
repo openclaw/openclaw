@@ -1,10 +1,13 @@
 // Executes normalized outbound payloads against the selected channel transport.
+import { randomUUID } from "node:crypto";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { isReplyReasoningVisible } from "../../auto-reply/reply/reasoning-visibility-state.js";
 import { payloadRequiresDurablePayloadTransport } from "../../channels/message/capabilities.js";
 import { resolveReceiptSourceId } from "../../channels/message/receipt.js";
 import { renderPresentationForDelivery } from "../../channels/plugins/outbound/presentation-delivery.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import {
@@ -29,7 +32,6 @@ import {
   resolveChannelHandlerParams,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
-import { mirrorDeliveredPayloads } from "./deliver-transcript.js";
 import {
   OutboundDeliveryError,
   type OutboundDeliveryResult,
@@ -318,8 +320,17 @@ export async function deliverOutboundPayloadsCore(
   for (const outcome of payloadOutcomes) {
     params.onPayloadDeliveryOutcome?.(outcome);
   }
-  const deliveredMirrorPayloads: NormalizedOutboundPayload[] = [];
-  const recordDeliveredPayload = (payloadSummary: NormalizedOutboundPayload): void => {
+  // Retries of one queued delivery reuse its identity, so history is written once.
+  const transcriptDeliveryId =
+    params.transcriptDeliveryId ??
+    params.deliveryQueueId ??
+    params.deliveryIntentId ??
+    randomUUID();
+  const recordDeliveredPayload = async (
+    payload: ReplyPayload,
+    payloadSummary: NormalizedOutboundPayload,
+    payloadIndex: number,
+  ): Promise<void> => {
     // Post-send observers are bookkeeping only. Never turn an identified
     // platform delivery into a retryable failure if an observer misbehaves.
     try {
@@ -331,13 +342,16 @@ export async function deliverOutboundPayloadsCore(
         error: formatErrorMessage(error),
       });
     }
-    if (params.mirror) {
-      deliveredMirrorPayloads.push(payloadSummary);
-    }
+    await recordConfirmedTranscript({
+      params,
+      payload,
+      payloadIndex,
+      deliveryId: transcriptDeliveryId,
+      threadId: preparedTarget.threadId,
+    });
   };
   // `policyKey` is a diagnostics-only fallback; never use it for hook correlation.
-  const diagnosticSessionKey =
-    params.mirror?.sessionKey ?? params.session?.key ?? params.session?.policyKey;
+  const diagnosticSessionKey = params.session?.key ?? params.session?.policyKey;
   for (const [deliveryPayloadIndex, preparedEntry] of acceptedEntries.entries()) {
     // A rejected adapter has no final return; never match its progress or
     // suppression disposition to a later logical payload.
@@ -473,7 +487,8 @@ export async function deliverOutboundPayloadsCore(
       const deliveryTarget = () =>
         deliveryHandler.buildTargetRef({ threadId: preparedTarget.threadId });
       const beforeCount = results.length;
-      let mirroredPayload = payloadSummary;
+      let deliveredPayload: ReplyPayload = effectivePayload;
+      let deliveredSummary = payloadSummary;
       let mediaMessageIds: { first?: string; last?: string } | undefined;
       if (
         deliveryHandler.sendPayload &&
@@ -525,7 +540,8 @@ export async function deliverOutboundPayloadsCore(
           );
         }
         await sendTextChunks(deliveryHandler, fallbackText, sendOverrides);
-        mirroredPayload = { ...payloadSummary, text: fallbackText, mediaUrls: [] };
+        deliveredPayload = { text: fallbackText };
+        deliveredSummary = { ...payloadSummary, text: fallbackText, mediaUrls: [] };
       } else {
         // Media observers use final adapter identities, not intermediate progress
         // results that may also remain in the reconciled delivery list.
@@ -566,7 +582,11 @@ export async function deliverOutboundPayloadsCore(
           ...(incompleteReason ? { incompleteReason } : {}),
           reportedPlacement: payloadEvidence.placement.snapshot(),
         });
-        recordDeliveredPayload(mirroredPayload);
+        // A partially delivered payload cannot prove what the destination showed.
+        // Quiet reasoning is display-only; it must not become ordinary answer history.
+        if (!incompleteReason && !guardedReasoning) {
+          await recordDeliveredPayload(deliveredPayload, deliveredSummary, payloadIndex);
+        }
       } else {
         recordSuppressedPayload(
           payloadEvidence.suppressionReason ?? "adapter_returned_no_identity",
@@ -659,10 +679,62 @@ export async function deliverOutboundPayloadsCore(
       params.onError?.(err, payloadSummary);
     }
   }
-  await mirrorDeliveredPayloads({
-    delivery: params,
-    payloads: deliveredMirrorPayloads,
-  });
-
   return results;
+}
+
+// Records one confirmed payload in its destination conversation. Recording is
+// bookkeeping after an accepted send: failures become diagnostics, never retries.
+async function recordConfirmedTranscript(input: {
+  params: DeliverOutboundPayloadsCoreParams;
+  payload: ReplyPayload;
+  payloadIndex: number;
+  deliveryId: string;
+  threadId: string | number | null | undefined;
+}): Promise<void> {
+  const { params } = input;
+  if (params.skipDestinationHistory) {
+    return;
+  }
+  // An adapter that moved the send into another thread invalidates the caller's route.
+  const threadChanged =
+    input.threadId != null &&
+    String(input.threadId) !== String(params.transcriptRoute?.threadId ?? params.threadId);
+  let diagnostic: string | undefined;
+  try {
+    const result = await commitConfirmedVisibleMessage({
+      config: params.cfg,
+      channel: params.channel,
+      to: params.to,
+      accountId: params.accountId ?? undefined,
+      threadId: input.threadId ?? undefined,
+      route: threadChanged ? undefined : params.transcriptRoute,
+      producer: params.session,
+      payload: input.payload,
+      deliveryId: input.deliveryId,
+      payloadIndex: input.payloadIndex,
+      signal: params.abortSignal,
+      expectedGeneration: threadChanged ? undefined : params.transcriptExpectedGeneration,
+      provenance: params.transcriptProvenance,
+      assertCurrent: params.assertTranscriptCurrent,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+      stateDir: params.transcriptStateDir,
+    });
+    diagnostic = result.ok
+      ? result.diagnostics
+      : `result was delivered but was not added to the conversation: ${result.reason}`;
+  } catch (error) {
+    diagnostic = `result was delivered but was not added to the conversation: ${formatErrorMessage(error)}`;
+  }
+  if (!diagnostic) {
+    return;
+  }
+  log.warn(`Confirmed outbound transcript: ${diagnostic}`, {
+    channel: params.channel,
+    to: params.to,
+  });
+  try {
+    params.onTranscriptDiagnostic?.(diagnostic);
+  } catch {
+    // Diagnostics cannot make a confirmed send retryable.
+  }
 }

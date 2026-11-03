@@ -57,6 +57,7 @@ function resolveInputPlan(input: SkillsSourcePlanInput, cache: PluginCache = cre
     return resolveWorkspaceSkillSourcePlan(input.workspaceDir, {
       ...options,
       pluginSkillRoots,
+      ...(input.agentSkillsDirs ? { agentSkillsDirs: input.agentSkillsDirs } : {}),
     });
   });
 }
@@ -126,10 +127,11 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
         sourceReads.set(environmentKey, batch);
       }
       const sources = readWorkspaceSkillSources(sourceRequest, batch);
-      const entries = mergeSkillRecords(sources.entries, key, []);
+      // Fingerprints need precedence winners, not collision diagnostics.
+      const entries = mergeSkillRecords(sources.entries, key, false);
       appendLowerPrecedenceSkillRecords(
         entries,
-        mergeSkillRecords(sources.executionEntries, key, []),
+        mergeSkillRecords(sources.executionEntries, key, false),
         () => {},
       );
       // Generated plugin links are shared outputs; watch their canonical sources instead.

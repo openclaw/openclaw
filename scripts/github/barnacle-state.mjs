@@ -10,8 +10,6 @@ const PROTECTED = new Set([
   "hold",
   "in-progress",
   "clawsweeper:queueable-fix",
-  "clawsweeper:source-repro",
-  "clawsweeper:fix-shape-clear",
   "no-stale",
   "bad-barnacle",
   "p0",

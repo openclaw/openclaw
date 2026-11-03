@@ -15,6 +15,10 @@ import {
   releaseSessionControllerClaim,
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
+import {
+  captureSessionControllerStop,
+  stopSession,
+} from "../../sessions/session-controller.stop.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
@@ -282,7 +286,7 @@ describe("durable reasoning visibility", () => {
     }
   });
 
-  it.each(["controller-cancel", "restart-clear"] as const)(
+  it.each(["controller-cancel", "restart-stop"] as const)(
     "revokes only the completed source and joins pending adoption (%s)",
     async (route) => {
       resetGatewayWorkAdmission();
@@ -313,12 +317,21 @@ describe("durable reasoning visibility", () => {
       );
       const close = vi.spyOn(owner, "close");
       const admission = admitFollowupRunLifecycle(queued);
+      let restartStop: ReturnType<typeof stopSession> | undefined;
       try {
         await entered.promise;
         if (route === "controller-cancel") {
           expect(abortSessionControllerInput(input, new Error("source cancelled"))).toBe(true);
         } else {
           markGatewayRestartDraining();
+          expect(isReplyReasoningVisible(payload)).toBe(true);
+          expect(close).not.toHaveBeenCalled();
+          restartStop = stopSession({
+            source: "restart",
+            capture: captureSessionControllerStop({ inputs: [input] }),
+          });
+          expect(restartStop.queuedCancelled).toBe(1);
+          expect(restartStop.activeCancelled).toBe(0);
         }
         expect(isReplyReasoningVisible(payload)).toBe(false);
         expect(close).toHaveBeenCalledOnce();
@@ -328,6 +341,8 @@ describe("durable reasoning visibility", () => {
         release.resolve();
         await admission;
         await settlement;
+        await restartStop?.completed;
+        await restartStop?.settled;
         expect(onSettled).toHaveBeenCalledOnce();
         completeFollowupRunLifecycle(queued);
         retireSessionControllerInput(input);
@@ -338,6 +353,8 @@ describe("durable reasoning visibility", () => {
         await admission.catch(() => {});
         retireSessionControllerInput(input);
         await settlement.catch(() => {});
+        await restartStop?.completed.catch(() => {});
+        await restartStop?.settled.catch(() => {});
         resetGatewayWorkAdmission();
       }
     },

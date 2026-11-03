@@ -199,15 +199,17 @@ export function sanitizeChatHistoryContentBlock(
   if (preserveExactToolPayload && Array.isArray(entry.content)) {
     // Some transcripts carry both nested output blocks and their joined text.
     // Keep one representation, and apply the same media privacy rules recursively.
-    const text = entry.content
-      .flatMap((item) => {
-        const value = readRecord(item)?.text;
-        return typeof value === "string" ? [value] : [];
-      })
-      .join("\n");
-    if (entry.text === text) {
-      delete entry.text;
-      changed = true;
+    if (typeof entry.text === "string") {
+      const text = entry.content
+        .flatMap((item) => {
+          const value = readRecord(item)?.text;
+          return typeof value === "string" ? [value] : [];
+        })
+        .join("\n");
+      if (entry.text === text) {
+        delete entry.text;
+        changed = true;
+      }
     }
     const content = entry.content.map((item) =>
       sanitizeChatHistoryContentBlock(item, {
@@ -500,7 +502,16 @@ export function sanitizeChatHistoryMessage(
       readRecord(entry.details)?.errorKind === "state_contention"
         ? { errorKind: "state_contention", diagnostic: STATE_CONTENTION_DIAGNOSTIC }
         : undefined;
-    const projectedDetails = conflictDetails ?? toolResultDetails?.details ?? runFailureDetails;
+    const modelChange =
+      entry.role === "custom" && entry.customType === "session-model-change"
+        ? readRecord(entry.details)
+        : undefined;
+    const modelChangeDetails =
+      typeof modelChange?.from === "string" && typeof modelChange.to === "string"
+        ? { from: modelChange.from, to: modelChange.to }
+        : undefined;
+    const projectedDetails =
+      conflictDetails ?? toolResultDetails?.details ?? runFailureDetails ?? modelChangeDetails;
     if (projectedDetails) {
       entry.details = projectedDetails;
     } else {
@@ -530,19 +541,14 @@ export function sanitizeChatHistoryMessage(
     role === "assistant" && !shouldPreserveAssistantControlReplyText(entry);
 
   const projectText = (text: string) => {
+    const res = truncateChatHistoryText(text, maxChars, preserveExactToolPayload, resultMaxChars);
     const controlStripped = stripAssistantMedia
-      ? stripAssistantMediaDirectivesForDisplay(text, managedMedia.urls)
-      : text;
-    changed ||= controlStripped !== text;
-    const res = truncateChatHistoryText(
-      controlStripped,
-      maxChars,
-      preserveExactToolPayload,
-      resultMaxChars,
-    );
+      ? stripAssistantMediaDirectivesForDisplay(res.text, managedMedia.urls)
+      : res.text;
+    changed ||= controlStripped !== res.text;
     changed ||= res.truncated;
     truncated ||= res.truncated;
-    return res.text;
+    return controlStripped;
   };
   if (typeof entry.content === "string") {
     entry.content = projectText(entry.content);

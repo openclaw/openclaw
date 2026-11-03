@@ -77,6 +77,7 @@ export function createAgentTurnPresentation(params: {
   const sanitizeStreamingText = (
     text: string | undefined,
     errorContext: boolean,
+    preserveLeadingSourceBoundary = false,
   ): { text?: string; skip: boolean } => {
     if (!text) {
       return { skip: true };
@@ -85,7 +86,11 @@ export function createAgentTurnPresentation(params: {
       params.turn.sessionCtx.agentText ?? params.turn.sessionCtx.BodyForAgent;
     const sanitized = errorContext
       ? renderUserFacingText(text, { errorContext: true, conversationContext, streaming: true })
-      : sanitizeUserFacingText(text, { conversationContext, streaming: true });
+      : sanitizeUserFacingText(text, {
+          conversationContext,
+          streaming: true,
+          preserveLeadingSourceBoundary,
+        });
     return sanitized.trim() ? { text: sanitized, skip: false } : { skip: true };
   };
 
@@ -94,7 +99,11 @@ export function createAgentTurnPresentation(params: {
     if (classified.skip || !classified.text) {
       return classified;
     }
-    return sanitizeStreamingText(classified.text, Boolean(payload.isError));
+    return sanitizeStreamingText(
+      classified.text,
+      Boolean(payload.isError),
+      getReplyPayloadMetadata(payload)?.streamedSourceBoundary === true,
+    );
   };
 
   const preserveProgressCallbackStartOrder =
