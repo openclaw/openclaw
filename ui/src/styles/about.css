@@ -1,14 +1,17 @@
+/* The page's one moment of character: the mascot centered over the name, smaller than a hero. */
 .about-identity {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--space-4);
   min-width: 0;
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  text-align: center;
 }
 
 .about-identity__mark {
   flex: 0 0 auto;
-  width: 56px;
-  height: 56px;
+  width: 96px;
+  height: 96px;
 }
 
 .about-identity__mark svg,
@@ -18,8 +21,9 @@
 }
 
 .about-identity__clawd {
+  position: relative;
   flex: 0 0 auto;
-  width: 64px;
+  width: 112px;
   aspect-ratio: 120 / 105;
   padding: 0;
   border: 0;
@@ -29,8 +33,21 @@
   transition: transform 160ms ease;
 }
 
+.about-identity__clawd::before {
+  content: "";
+  position: absolute;
+  inset: -14% -8% -4%;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--lob-shell) 22%, transparent),
+    transparent 72%
+  );
+  pointer-events: none;
+}
+
 .about-identity__clawd:hover {
-  transform: translateY(-1px) scale(1.03);
+  transform: translateY(-2px) scale(1.02);
 }
 
 .about-identity__clawd:active {
@@ -43,6 +60,7 @@
 }
 
 .about-identity__clawd .lobster-pet__svg {
+  position: relative;
   width: 100%;
   height: 100%;
   animation: lobster-pet-breathe 3.4s ease-in-out infinite;
@@ -105,15 +123,17 @@
 }
 
 .about-identity__name {
-  margin: 0;
+  margin: var(--space-3) 0 0;
   color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
-  font-weight: 600;
-  line-height: 1.3;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
 }
 
 .about-identity__tagline {
-  margin: 2px 0 0;
+  max-width: 460px;
+  margin: 6px auto 0;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
@@ -207,5 +227,20 @@
 @media (max-width: 640px) {
   .settings-row.about-build {
     flex-wrap: nowrap;
+  }
+}
+
+@media (max-width: 560px) {
+  .about-identity__clawd {
+    width: 96px;
+  }
+
+  .about-identity__mark {
+    width: 84px;
+    height: 84px;
+  }
+
+  .about-identity__name {
+    font-size: 22px;
   }
 }
