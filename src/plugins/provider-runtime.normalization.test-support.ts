@@ -25,8 +25,8 @@ export function registerProviderNormalizationTests(getContext: () => Normalizati
       const id = change === "ID-only" || change === "replacement" ? "normalized" : MODEL.id;
       const transport =
         (owner: string): NonNullable<ProviderPlugin["normalizeTransport"]> =>
-        ({ provider, modelId, api }) => ({
-          baseUrl: `https://transport.example/${owner}/${provider}/${modelId}/${api}`,
+        ({ provider: transportProvider, modelId, api }) => ({
+          baseUrl: `https://transport.example/${owner}/${transportProvider}/${modelId}/${api}`,
         });
       const original = createDemoProvider({
         normalizeResolvedModel: ({ model }) => {
