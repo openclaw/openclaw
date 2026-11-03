@@ -45,6 +45,7 @@ export function renderPluginDetailShell(props: {
   icon?: JSX.Element;
   readme?: JSX.Element;
   sidebar?: JSX.Element;
+  recommendations?: JSX.Element;
   panel: JSX.Element;
 }): JSX.Element {
   let heading!: HTMLHeadingElement;
@@ -77,6 +78,7 @@ export function renderPluginDetailShell(props: {
       </div>
       <div class="plugin-catalog-detail__content">
         <div class="plugin-catalog-detail__main">
+          {props.recommendations}
           <section class="plugin-catalog-detail__panel">{props.panel}</section>
           {props.readme ? (
             <section class="plugin-catalog-detail__readme-section">

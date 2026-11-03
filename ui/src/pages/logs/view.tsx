@@ -17,6 +17,7 @@ import {
   Show,
 } from "solid-js";
 import type { PanelRefreshStatus as RefreshStatus } from "../../components/panel-refresh-status-state.ts";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
@@ -336,6 +337,52 @@ export function LogsView(props: LogsProps) {
   function PhoneToolbar() {
     let trigger!: HTMLButtonElement;
     let popover!: PopoverHandle;
+    const actionsMenu = () => (
+      <Loading
+        fallback={
+          <button
+            type="button"
+            class="btn logs-toolbar__button"
+            aria-label={t("gatewayLogs.moreActions")}
+            disabled
+          >
+            <Icon name="moreHorizontal" />
+          </button>
+        }
+      >
+        <Menu
+          id="logs-actions"
+          lazy
+          pointerFocus="trigger"
+          label={t("gatewayLogs.moreActions")}
+          triggerClass="btn logs-toolbar__button"
+          triggerAttributes={{ title: t("gatewayLogs.moreActions") }}
+          trigger={<Icon name="moreHorizontal" />}
+          placement="bottom-end"
+          items={[
+            {
+              id: "refresh",
+              label: loading() ? t("common.loading") : t("common.refresh"),
+              icon: <Icon name="refresh" />,
+              disabled: props.refreshDisabled || isPending(read),
+            },
+            {
+              id: "export",
+              label: exportLabel(),
+              icon: <Icon name="download" />,
+              disabled: rows().length === 0,
+            },
+          ]}
+          onSelect={(item) => {
+            if (item.id === "refresh") {
+              props.onRefresh();
+            } else {
+              exportRows();
+            }
+          }}
+        />
+      </Loading>
+    );
     return (
       <div class="logs-toolbar">
         <div class="logs-toolbar__search">
@@ -385,50 +432,7 @@ export function LogsView(props: LogsProps) {
             </Show>
           </div>
         </Popover>
-        <Loading
-          fallback={
-            <button
-              type="button"
-              class="btn logs-toolbar__button"
-              aria-label={t("gatewayLogs.moreActions")}
-              disabled
-            >
-              <Icon name="moreHorizontal" />
-            </button>
-          }
-        >
-          <Menu
-            id="logs-actions"
-            lazy
-            pointerFocus="trigger"
-            label={t("gatewayLogs.moreActions")}
-            triggerClass="btn logs-toolbar__button"
-            triggerAttributes={{ title: t("gatewayLogs.moreActions") }}
-            trigger={<Icon name="moreHorizontal" />}
-            placement="bottom-end"
-            items={[
-              {
-                id: "refresh",
-                label: loading() ? t("common.loading") : t("common.refresh"),
-                icon: <Icon name="refresh" />,
-                disabled: props.refreshDisabled || isPending(read),
-              },
-              {
-                id: "export",
-                label: exportLabel(),
-                icon: <Icon name="download" />,
-                disabled: rows().length === 0,
-              },
-            ]}
-            onSelect={(item) => {
-              if (item.id === "refresh") {
-                props.onRefresh();
-              } else {
-                exportRows();
-              }
-            }}
-          />
-        </Loading>
+        <FloatingHeaderActions fallback={actionsMenu()}>{actionsMenu()}</FloatingHeaderActions>
       </div>
     );
   }

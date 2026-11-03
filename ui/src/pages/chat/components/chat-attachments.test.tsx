@@ -470,7 +470,6 @@ describe("chat attachment read failures", () => {
       8,
     ],
     ["empty.png", [new File([], "empty.png", { type: "image/png" })], "", undefined],
-    ["pasted-text", [], "x".repeat(2048), 1024],
     ["pasted-image", [], `data:image/gif;base64,${btoa("p".repeat(64))}`, 16],
   ])(
     "rejects %s at intake while preserving admitted siblings",

@@ -51,6 +51,14 @@ suite.define(() => {
               }),
             );
           const settingsTopbar = await topbarGeometry();
+          const phoneUsageActions = width === 400 && to.routeId === "usage";
+          const settingsPill = phoneUsageActions
+            ? await page.locator(".topnav-shell__actions").boundingBox()
+            : null;
+          if (phoneUsageActions) {
+            expect(settingsPill).not.toBeNull();
+            expect(await page.locator(".usage-phone-actions__trigger").count()).toBe(0);
+          }
           await page.evaluate(() => {
             const shifts: unknown[] = [];
             const timeline: unknown[] = [];
@@ -134,6 +142,11 @@ suite.define(() => {
             window.dispatchEvent(new PopStateEvent("popstate"));
           }, to.pathname);
           await waitForControlUiRoute(page, to);
+          if (phoneUsageActions) {
+            await page
+              .locator(".topnav-shell__page-actions .usage-phone-actions__trigger")
+              .waitFor();
+          }
           await page.waitForFunction(
             () =>
               !document
@@ -161,6 +174,12 @@ suite.define(() => {
               shifts,
               timeline: await page.evaluate(() => Reflect.get(window, "__layoutShiftTimeline")),
             });
+          }
+          if (phoneUsageActions) {
+            // The pill reserves its page action before the route mounts.
+            expect(await page.locator(".topnav-shell__actions").boundingBox()).toEqual(
+              settingsPill,
+            );
           }
           expect(shifts).toEqual([]);
           expect(await topbarGeometry()).toEqual(settingsTopbar);

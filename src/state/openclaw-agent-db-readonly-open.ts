@@ -4,6 +4,7 @@ import { isMainThread } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
 import { assertEngineStoreExecutionAllowed } from "../infra/database-engine/admission-scope.js";
+import { observeConnection } from "../infra/database-engine/observation.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -212,6 +213,7 @@ export function openOpenClawAgentDatabaseReadOnly(
       registerOpenClawAgentDatabaseIdentity(selected);
       database = { agentId, db: selected, path: pathname, close };
     } else {
+      observeConnection(db);
       enableNodeSqliteKyselyStatementCache(db);
       registerOpenClawAgentDatabaseIdentity(db);
       const privatePath = isArtifactPreservingStateRead("agent", pathname)

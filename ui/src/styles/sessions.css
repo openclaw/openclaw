@@ -237,7 +237,7 @@
   height: 30px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--field-radius);
 }
 
 .session-filter-field {
@@ -397,6 +397,11 @@
   background: var(--field-bg);
 }
 
+/* "Descending" needs more than half of the narrowest phones, like a full date. */
+.oc-sheet .sessions-filter-popover__panel .sessions-filter-popover__fields--sort {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
 /* An unchecked toggle draws no check; its slot stays so the label doesn't move. */
 .oc-sheet .session-filter-check__input:not(:checked) + .session-filter-check__mark svg {
   visibility: hidden;
@@ -451,9 +456,9 @@
 }
 
 .sessions-filter-popover__panel .session-groupby__select {
+  --settings-control-height: 30px;
+
   flex: 1 1 auto;
-  background: var(--bg);
-  border-color: color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .session-groupby {
@@ -467,16 +472,6 @@
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   white-space: nowrap;
-}
-
-.session-groupby__select {
-  height: 30px;
-  padding: 0 8px;
-  color: var(--text);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  font-size: var(--control-ui-text-sm);
 }
 
 .sessions-table {
@@ -783,14 +778,9 @@
   height: 14px;
 }
 
-.session-group-select {
-  min-width: 110px;
-  padding: 6px 10px;
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
+/* Room for a one-word group at either type size, plus the select's own chrome. */
+select.session-group-select {
+  width: calc(6.5em + 44px);
 }
 
 .session-group-row__count {
@@ -941,18 +931,6 @@
 /* Phone width: toolbar in two rows, the table reads as a list that scrolls with
    the page. Keep the breakpoint in sync with PHONE_LAYOUT_QUERY in view.tsx. The
    page prefix outranks layout.mobile.css regardless of lazy stylesheet order. */
-@media (max-width: 560px) {
-  /* Too narrow for the big title; the heading stays for assistive tech. */
-  openclaw-sessions-page .hub-page-header .page-title {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-}
-
 @media (max-width: 640px) {
   openclaw-sessions-page .settings-section__heading {
     position: absolute;
@@ -1004,12 +982,6 @@
     flex: 1 1 0;
     min-width: 0;
     margin-inline-end: var(--space-1);
-  }
-
-  /* Safari collapses an unsized svg in the picker's inline-flex chevron rail. */
-  .sessions-filter-sheet .session-groupby .picker-select__chevron svg {
-    width: 16px;
-    height: 16px;
   }
 
   .sessions-search input::placeholder {
@@ -1085,51 +1057,6 @@
     .settings-section__actions
     .sessions-filter-popover__trigger.btn--icon.btn--xs.active:hover {
     color: var(--accent);
-  }
-
-  .sessions-filter-sheet .sessions-filter-popover__panel {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    line-height: normal;
-  }
-
-  .sessions-filter-sheet .sessions-filter-popover__panel > * {
-    grid-column: 1 / -1;
-    min-width: 0;
-  }
-
-  .sessions-filter-sheet .sessions-filter-popover__panel > .session-groupby--half {
-    grid-column: auto;
-  }
-
-  .sessions-filter-sheet .sessions-filter-popover__panel .session-groupby {
-    display: grid;
-    justify-content: stretch;
-    gap: 6px;
-    width: 100%;
-  }
-
-  .sessions-filter-sheet .session-groupby__label {
-    color: var(--muted);
-    font-size: 13px;
-    font-weight: 500;
-  }
-
-  .sessions-filter-sheet .session-groupby > openclaw-select-picker {
-    display: block;
-    min-width: 0;
-    max-width: none;
-  }
-
-  .sessions-filter-sheet .session-groupby .picker-select__trigger {
-    justify-content: space-between;
-    width: 100%;
-    height: var(--settings-control-height);
-    min-height: var(--settings-control-height);
-    padding-inline: var(--field-padding-inline);
-    font-size: 16px;
-    background: var(--field-bg);
-    border: 1px solid var(--field-border);
-    border-radius: var(--field-radius);
   }
 
   openclaw-sessions-page .data-table-container {

@@ -50,6 +50,7 @@ const repositoryScriptEntries = [
   "scripts/perf/backup-verify-fixture.mjs!",
   "scripts/perf/backup-verify-measure.mjs!",
   "scripts/perf/board-read-admission-measure.ts!",
+  "scripts/perf/podman-exec-measure.ts!",
   "scripts/perf/responses-policy-fingerprint-measure.ts!",
   "scripts/perf/cron-own-receipts-measure.mjs!",
   "scripts/perf/spawn-broker-shutdown-measure.ts!",
@@ -85,6 +86,9 @@ const repositoryScriptEntries = [
   "scripts/annotate-proof-image.mts!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
+  "scripts/ci-test-observations.mjs!",
+  "scripts/ci-adaptive-select.mjs!",
+  "scripts/ci-adaptive-costs.mjs!",
   // The scheduled-run execution context design invokes this development replay by path.
   "scripts/dev/cron-context-replay.mts!",
   // #183131 invokes this fresh-process cron flake workload by path.
@@ -134,6 +138,8 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-cold-load.ts!",
   // The history-depth benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-history-depth.ts!",
+  // The hosted Doctor benchmark guide invokes this opt-in CLI by path.
+  "scripts/perf/hosted-doctor-measure.mts!",
   // scripts/control-ui-retention/README.md invokes this opt-in production census.
   "scripts/control-ui-retention/retention-suite.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
@@ -194,6 +200,7 @@ const repositoryScriptEntries = [
   "scripts/perf/mcp-http-dispatcher-measure.ts!",
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
+  "scripts/perf/github-publication-snapshot-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
   // Maintained source headers invoke these standalone analysis commands by exact path.
@@ -1208,6 +1215,8 @@ const config = {
         // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
         "cc",
         "ffmpeg",
+        // sqlite-snapshot-retirement.mts inspects its btrfs fixture with this host tool.
+        "filefrag",
         "lsattr",
         "mint",
         // Muse E2E setup installs this CLI outside npm (scripts/e2e/lib/muse-runtime/setup.sh).

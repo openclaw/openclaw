@@ -310,7 +310,8 @@ export function bindPodmanSandboxEngine(
 ): SandboxContainerEngine {
   return {
     ...PODMAN_SANDBOX_ENGINE,
-    globalArgs: target.globalArgs,
+    // Native execution must not follow later CONTAINER_HOST/CONNECTION changes.
+    globalArgs: target.globalArgs.length ? target.globalArgs : ["--remote=false"],
   };
 }
 

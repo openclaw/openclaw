@@ -142,6 +142,7 @@ it.each([
 ])(
   "flushes a pending config draft before enabling and refreshes afterward$suffix",
   async ({ refreshBeforeEnable }) => {
+    await import("./settings-view.tsx");
     vi.useFakeTimers();
     let config: Record<string, unknown> = { pending: false };
     let hash = "hash-1";
