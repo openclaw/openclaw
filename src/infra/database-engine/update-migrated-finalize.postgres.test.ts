@@ -1,8 +1,9 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { getEnvironmentData } from "node:worker_threads";
-import { afterAll, beforeAll, describe, expect, it, vi, assert } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { prepareCandidateAuthorityRuntime } from "../../cli/update-cli/update-command-candidate-authority.test-support.js";
 import { withUpdateDatabaseEngine } from "../../cli/update-cli/update-command-database-engine.js";
@@ -147,7 +148,7 @@ describe.skipIf(!connection)("migrated PostgreSQL update finalization", () => {
             ).toEqual([{ name: "openclaw_engine_anchor" }]);
             const identity = anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get();
             const schema = identity?.schema;
-            assert.isString(schema);
+            assert(typeof schema === "string", "The PostgreSQL anchor must identify its schema");
             await withPostgresConnection(
               { connection: connection!, schemaPrefix: prefix },
               async (client) => {
