@@ -203,9 +203,8 @@ function resolveToolInputErrorStatus(err: unknown): number | null {
 }
 
 function resolveToolSource(tool: AnyAgentTool): "core" | "plugin" | "mcp" | "channel" {
-  const pluginMeta = getPluginToolMeta(tool);
-  if (pluginMeta) {
-    return pluginMeta.mcp ? "mcp" : "plugin";
+  if (getPluginToolMeta(tool)) {
+    return getPluginToolMeta(tool)?.mcp ? "mcp" : "plugin";
   }
   if (getChannelAgentToolMeta(tool)) {
     return "channel";
@@ -719,14 +718,15 @@ export async function invokeGatewayTool(
     }
     return await invokeGatewayToolWithSignal({ ...params, signal, releaseSessionFacts, disposals });
   } catch (error) {
-    if (!(error instanceof SessionMutationFactsUnavailableError)) {
+    const revoked = resolveToolInputErrorStatus(error) === 403;
+    if (!revoked && !(error instanceof SessionMutationFactsUnavailableError)) {
       throw error;
     }
     return {
       ok: false,
       status: 403,
       toolName: normalizeOptionalString(params.input.name ?? params.input.tool) ?? "",
-      error: { type: "tool_call_blocked", message: error.message },
+      error: { type: "tool_call_blocked", message: formatErrorMessage(error) },
     };
   } finally {
     for (const release of releaseSessionFacts) {

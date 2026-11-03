@@ -199,16 +199,36 @@ describe("tools.invoke configured MCP session policy", () => {
     });
   });
 
-  it("materializes the session's MCP tool denials", async () => {
-    await withToolsInvokeTestState({ label: "mcp-invoke-session-deny" }, async () => {
-      const mcpToolsDeny = { granola: ["delete_everything"] };
-      await storeOverrides({ mcpToolsDeny });
+  it("refuses with 403 when caller authority is revoked during discovery", async () => {
+    await withToolsInvokeTestState({ label: "mcp-invoke-revoked-discovery" }, async () => {
+      let revoked = false;
+      runtime.materialize.mockImplementationOnce(async () => {
+        revoked = true;
+        return { tools: [createMcpTool("list_meetings")], dispose: runtime.disposeMaterialized };
+      });
 
-      await invoke("granola__list_meetings", { sessionKey });
+      const outcome = await invokeGatewayTool({
+        cfg: runtime.cfg,
+        input: { name: "granola__list_meetings" },
+        senderIsOwner: true,
+        toolCallIdPrefix: "http",
+        assertInvocationCurrent: () => {
+          if (revoked) {
+            throw Object.assign(new Error("Gateway requester authority changed"), {
+              name: "ToolAuthorizationError",
+              status: 403,
+            });
+          }
+        },
+      });
 
-      expect(runtime.acquire).toHaveBeenCalledWith(
-        expect.objectContaining({ toolOverrides: { mcpToolsDeny } }),
-      );
+      expect(outcome).toMatchObject({
+        ok: false,
+        status: 403,
+        error: { type: "tool_call_blocked" },
+      });
+      expect(runtime.mcpExecute).not.toHaveBeenCalled();
+      expect(runtime.disposeMaterialized).toHaveBeenCalledOnce();
     });
   });
 
