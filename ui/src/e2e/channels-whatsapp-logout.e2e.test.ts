@@ -285,7 +285,9 @@ suite.define(() => {
     await withChannels({}, async (page, gateway) => {
       const detail = await openChannel(page);
       await detail.getByRole("button", { name: "Relink" }).waitFor();
-      const phone = field(detail, "Phone number");
+      const phone = detail
+        .locator(".settings-row", { hasText: "Phone number" })
+        .locator(".settings-row__desc");
       for (const [self, expected] of [
         [{ e164: "+4930123456", jid: "4930123456@s.whatsapp.net" }, "Germany · +49 30 123456"],
         [{ e164: "not-a-phone", jid: "account@s.whatsapp.net" }, "not-a-phone"],
@@ -299,7 +301,7 @@ suite.define(() => {
           ),
         );
         const before = await gateway.getRequests("channels.status", { probe: true });
-        await button(detail, "Refresh").click();
+        await button(detail, "Check connection").click();
         await gateway.waitForRequest("channels.status", {
           after: before.length,
           match: { probe: true },
@@ -422,14 +424,17 @@ suite.define(() => {
         const expectedFields: Record<string, string[]> = {
           googlechat: ["service-account", "url · https://chat.example.test"],
           signal: ["https://signal.example.test"],
-          telegram: ["@alpha_bot", "@work_bot", "2"],
+          telegram: ["@alpha_bot", "@work_bot"],
         };
         for (const [channelId, label] of channelEntries) {
           const detail = await openChannel(page, label);
           await expect
-            .poll(() => detail.locator("h2.settings-section__heading").textContent())
+            .poll(() => detail.locator(".oc-dialog__title").textContent())
             .toContain(label);
           await detail.getByRole("button", { name: "Check connection" }).waitFor();
+          if (channelId === "googlechat" || channelId === "signal") {
+            await detail.locator("summary", { hasText: "Details" }).click();
+          }
           for (const value of expectedFields[channelId] ?? []) {
             await detail.getByText(value, { exact: true }).waitFor();
           }
