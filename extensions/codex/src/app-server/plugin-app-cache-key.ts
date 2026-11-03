@@ -4,8 +4,10 @@
  */
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
+import { isDeepStrictEqual } from "node:util";
 import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-registration";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
+import { parse as parseSemver } from "semver";
 import {
   buildCodexAppInventoryCacheKey,
   type CodexAppInventoryCacheKeyInput,
@@ -20,6 +22,7 @@ import type {
   CodexAppServerRuntimeOptions,
   CodexAppServerStartOptions,
 } from "./config-contracts.js";
+import { isJsonObject } from "./protocol.js";
 
 const require = createRequire(import.meta.url);
 const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });
@@ -75,6 +78,79 @@ export function buildCodexAppServerRuntimeFingerprint(params: {
     appServerVersion: params.appServerVersion ?? params.runtimeIdentity?.serverVersion ?? null,
     runtimeIdentity: params.runtimeIdentity ?? null,
   });
+}
+
+/** Only the two version fields and the leading version in Codex's user agent may change. */
+export function isCodexRemoteRuntimeVersionUpgrade(previous?: string, current?: string): boolean {
+  if (!previous || !current || previous === current) {
+    return false;
+  }
+  function normalize(raw: string) {
+    const value: unknown = JSON.parse(raw);
+    if (
+      !isJsonObject(value) ||
+      value.connectionClass !== "remote" ||
+      typeof value.endpoint !== "string"
+    ) {
+      return undefined;
+    }
+    const endpoint: unknown = JSON.parse(value.endpoint);
+    if (
+      !isJsonObject(endpoint) ||
+      endpoint.transport !== "websocket" ||
+      typeof endpoint.url !== "string" ||
+      !endpoint.url ||
+      typeof endpoint.credentialFingerprint !== "string" ||
+      !/^sha256:[0-9a-f]{64}$/.test(endpoint.credentialFingerprint)
+    ) {
+      return undefined;
+    }
+    const identity = value.runtimeIdentity;
+    if (
+      !isJsonObject(identity) ||
+      !identity.codexHome ||
+      !identity.platformFamily ||
+      !identity.platformOs
+    ) {
+      return undefined;
+    }
+    const version = value.appServerVersion;
+    const agent =
+      typeof identity.userAgent === "string" &&
+      /^([^/\s]+)\/([^\s(]+)(.*)$/.exec(identity.userAgent);
+    if (
+      !agent ||
+      typeof version !== "string" ||
+      identity.serverVersion !== version ||
+      agent[2] !== version
+    ) {
+      return undefined;
+    }
+    const parsed = parseSemver(version);
+    if (!parsed) {
+      return undefined;
+    }
+    return {
+      version: parsed,
+      location: {
+        ...value,
+        appServerVersion: null,
+        runtimeIdentity: { ...identity, serverVersion: null, userAgent: [agent[1], agent[3]] },
+      },
+    };
+  }
+  try {
+    const before = normalize(previous);
+    const after = normalize(current);
+    return Boolean(
+      before &&
+      after &&
+      after.version.compare(before.version) > 0 &&
+      isDeepStrictEqual(before.location, after.location),
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Fingerprints the configured connection that owns a supervised source thread. */
