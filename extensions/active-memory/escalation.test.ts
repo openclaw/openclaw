@@ -88,6 +88,8 @@ describe("active-memory escalation", () => {
     "cosa avevamo deciso sul motto, nei mesi scorsi?",
     "Ti ricordi cosa abbiamo deciso per il server?",
     "Ieri abbiamo parlato del deploy, giusto?",
+    "Ti ricordi di Cesare?",
+    "Ti ricordi Preston?",
   ])("recognizes recall intent in %j", (message) => {
     expect(decide("escalate", message)).toBe("recall");
   });
@@ -156,7 +158,10 @@ describe("active-memory escalation", () => {
     "Was wollten wir morgen kaufen?",
     "Schreib als letztes Wort ENDE",
     "Ricordami di comprare il latte domani",
-    "Ti ricordi di mandare il rapporto?",
+    "Ti ricordi domani di mandare il rapporto?",
+    "Ti ricordi tra due mesi di chiamare Marco?",
+    "Ti ricordiamo di inviare il rapporto.",
+    "Il computer che usavo era lento.",
     "Ieri ho detto a mia madre che parto",
     "Che cosa devo comprare?",
     "Erinnerst du dich morgen daran, was mit dem Kunden besprochen werden soll?",
