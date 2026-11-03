@@ -408,8 +408,11 @@ describe("configured MCP servers on CLI turns", () => {
           // The embedded runner acquires the same owner with the turn's sender.
           const embedded = await materializeBundleMcpToolsForRun(
             await acquireSessionMcpRuntime({
-              ...{ sessionId: "embedded", workspaceDir: fixture.session.dir, cfg: config },
-              ...{ requesterSenderId: "alice", ...requester },
+              sessionId: "embedded",
+              workspaceDir: fixture.session.dir,
+              cfg: config,
+              requesterSenderId: "alice",
+              ...requester,
             }),
           );
           try {
