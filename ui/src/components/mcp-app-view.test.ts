@@ -245,7 +245,7 @@ describe("mcp-app-view localization", () => {
     await view.updateComplete;
     const dialog = confirmation(view);
     expect(dialog!.textContent).toContain("Parts library");
-    expect(dialog!.textContent).toContain("Send this message to the assistant?");
+    expect(dialog!.textContent).toContain("Send this message to the agent?");
     const previewElement = [...dialog!.querySelectorAll<HTMLElement>("[title]")].find(
       (element) => element.title === preview,
     )!;
