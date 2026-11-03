@@ -114,7 +114,13 @@ it("materializes an explicitly selected plugin source through the first-turn wor
     resolve: (candidate) => (candidate === url ? { url, name: "project" } : undefined),
     prepare: async ({ assertCurrent }) => {
       assertCurrent();
-      return { project, assertCurrent, refresh: async () => {} };
+      return {
+        project,
+        assertCurrent,
+        resolveBase: async () => {
+          throw new Error("Existing explicit refs must resolve locally");
+        },
+      };
     },
   });
   await patchSessionEntryCore(session.target, () => ({

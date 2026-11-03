@@ -7,6 +7,7 @@ import {
   type ErrorShape,
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolvePreparedWorktreeBase } from "../../agents/worktrees/base-ref.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -23,7 +24,11 @@ import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js"
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { normalizePluginRepositoryUrl as normalizeSessionProjectGitUrl } from "../../plugins/repository-source-url.js";
-import { resolveProjectDirectory } from "../../projects/project-registry.js";
+import { withProjectCheckoutLifecycle } from "../../projects/project-checkout.js";
+import {
+  resolveProjectDirectory,
+  resolveProjectRegistry,
+} from "../../projects/project-registry.js";
 import {
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
@@ -507,24 +512,67 @@ export async function prepareSessionWorkspaceForRun(params: {
         sessionRoot: root.value.sessionRoot,
       };
       if (pending) {
-        if (pending.baseRef && !pending.baseCommit) {
-          let resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
+        if (!pending.baseCommit && (pending.baseRef || preparedProject)) {
+          let selectedRef = pending.baseRef;
+          let resolved = selectedRef
+            ? await resolveSessionWorktreeBase(directory, selectedRef, signal, assertProjectCurrent)
+            : undefined;
           if (
-            !resolved.ok &&
-            resolved.error.code === ErrorCodes.INVALID_REQUEST &&
-            project?.source === "cloned" &&
-            preparedProject
+            !resolved ||
+            (!resolved.ok &&
+              resolved.error.code === ErrorCodes.INVALID_REQUEST &&
+              project?.source === "cloned")
           ) {
-            await preparedProject.refresh();
-            assertRunOwnership();
-            resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
+            if (preparedProject) {
+              const base = await preparedProject.resolveBase(selectedRef);
+              assertProjectCurrent();
+              const commit = selectedRef
+                ? await resolveSessionWorktreeBase(
+                    directory,
+                    base.commit,
+                    signal,
+                    assertProjectCurrent,
+                  )
+                : ok<string, ErrorShape>(
+                    await withProjectCheckoutLifecycle(directory, { signal }, async (lease) => {
+                      const assertCurrent = () => {
+                        lease.assertOwned();
+                        assertProjectCurrent();
+                      };
+                      const current = await resolveProjectRegistry(cfg, preparedProject.project.id);
+                      const currentRoot =
+                        current?.source === "workspace"
+                          ? await resolveProjectDirectory(current.repoRoot)
+                          : current?.repoRoot;
+                      assertCurrent();
+                      if (
+                        !current ||
+                        currentRoot !== directory ||
+                        current.source !== preparedProject.project.source
+                      ) {
+                        throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
+                      }
+                      return await resolvePreparedWorktreeBase(
+                        directory,
+                        base,
+                        lease.signal,
+                        assertCurrent,
+                      );
+                    }),
+                  );
+              selectedRef ??= base.ref;
+              resolved = commit;
+            }
           }
-          if (!resolved.ok) {
-            throw new Error(resolved.error.message);
+          assertProjectCurrent();
+          if (!resolved?.ok) {
+            throw new Error(
+              resolved?.error.message ?? "Repository base is unavailable; reselect the repository.",
+            );
           }
           // Accept once, before setup can fail: retries keep the commit while the
           // original ref remains publication metadata, never a fallback selection.
-          const next = { ...pending, baseCommit: resolved.value };
+          const next = { ...pending, baseRef: selectedRef, baseCommit: resolved.value };
           const updated = await patchSessionEntryCore(
             target,
             (current) => {

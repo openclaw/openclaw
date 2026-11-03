@@ -8,6 +8,7 @@ import {
   ProjectCloneError,
   readProjectCheckoutRemoteHead,
   refreshProjectCheckout,
+  resolveProjectCheckoutBase,
 } from "../../extensions/github-repositories/project-clone-runtime-api.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -313,3 +314,27 @@ it.each(["uncertain", "present", "absent"] as const)(
     }
   },
 );
+
+it("denies default-base Git effects when identity retires after the authenticated HEAD read", async () => {
+  let current = true;
+  const retired = new Error("checkout identity retired");
+  const command = mockGit().mockImplementation(async () => {
+    current = false;
+    return gitOutput(`ref: refs/heads/main\tHEAD\n${pinnedCommit}\tHEAD\n`);
+  });
+  await expect(
+    resolveProjectCheckoutBase(
+      { target: dirs.make("openclaw-base-identity-"), url: projectUrl },
+      {
+        token: "synthetic-base-token",
+        assertCurrent() {
+          if (!current) {
+            throw retired;
+          }
+        },
+      },
+    ),
+  ).rejects.toBe(retired);
+  expect(command).toHaveBeenCalledOnce();
+  expect(command.mock.calls[0]?.[0]).toContain("ls-remote");
+});

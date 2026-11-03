@@ -118,12 +118,13 @@ vi.mock("./project-checkout-maintenance.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./project-checkout-maintenance.js")>()),
   configureProjectCheckoutMaintenance: vi.fn(),
 }));
-// mock-isolation: environment routing must not spawn Git against synthetic checkout paths.
+// mock-isolation: environment routing must not spawn Git or resolve bases for synthetic checkouts.
 vi.mock("../../extensions/github-repositories/project-clone-runtime-api.js", () => ({
   ProjectCloneError: class extends Error {},
   cloneProjectCheckout: mocks.clone,
   refreshProjectCheckout: mocks.refresh,
   ensureProjectCheckoutCommit: vi.fn(),
+  resolveProjectCheckoutBase: mocks.forbiddenFilesystem,
 }));
 vi.mock("./project-registry.kernel.js", () => ({
   ensureProjectRegistrySchema: mocks.forbiddenSqlite,

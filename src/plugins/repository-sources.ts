@@ -69,10 +69,20 @@ export function resolvePluginRepositorySource(
       return {
         project: prepared.project,
         assertCurrent: assertPrepared,
-        async refresh() {
+        async resolveBase(ref?: string) {
           assertPrepared();
-          await prepared.refresh();
+          const base = await prepared.resolveBase(ref);
           assertPrepared();
+          if (
+            typeof base?.commit !== "string" ||
+            !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(base.commit) ||
+            typeof base.ref !== "string" ||
+            !base.ref ||
+            /[\0\r\n]/u.test(base.ref)
+          ) {
+            throw new Error("Repository source returned an invalid base; reselect the repository.");
+          }
+          return base;
         },
       };
     },

@@ -47,11 +47,20 @@ The registered source supplies:
 - `resolve(url)`: admit and normalize a supported remote URL.
 - `prepare({ url, agentId, requiredCommit, signal, assertCurrent })`: prepare a
   project and return its project identity/root, an `assertCurrent` callback, and
-  `refresh()` for a later ref lookup.
+  `resolveBase(ref?)` returning `{ commit, ref }` for host-owned worktree preparation.
+  Without a ref, observe the current remote default and hydrate its commit through
+  source transport, including a renamed default branch; return `origin/<branch>`
+  as its ref. Explicit refs are resolved locally first; the source is consulted
+  only when the chosen ref is missing. Credentials stay in the source closure.
 
 Use `createManagedProjectCheckoutV1(transport)` when the source needs managed
 clones. Its `materialize()` and `refresh()` operations reuse the existing checkout
-leases, storage layout, and project registry. The transport supplies URL
+leases, storage layout, and project registry. Its `resolveBase(project, ref, options)`
+operation holds the same checkout lease and passes current authority to the
+transport's `resolveBase({ url, target, ref }, options)`. The host independently
+verifies the returned commit locally, retains safe local-default fast-forward
+checks, and records the selected ref and immutable commit before setup. Retries
+reuse that pin without selecting or fetching a new base. The transport supplies URL
 resolution and authenticated clone, commit-fetch, and refresh operations; it does
 not choose host storage or maintain another registry. Call these operations from
 the source's managed plugin invocation so the host can bind current Gateway

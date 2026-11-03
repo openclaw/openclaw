@@ -28,6 +28,7 @@ export {
 export type {
   ManagedProjectOptions,
   ManagedProjectSourceV1,
+  ManagedProjectBaseV1,
 } from "../projects/managed-project-source.js";
 
 /** Keep checkout leases, storage, and registration with the existing host custodian. */
@@ -74,6 +75,16 @@ export function createManagedProjectCheckoutV1(source: ManagedProjectSourceV1) {
         admitted.options,
         admitted.source,
       );
+    },
+    async resolveBase(
+      project: ProjectRegistryRecord,
+      ref?: string,
+      options: ManagedProjectOptions = {},
+    ) {
+      const admitted = invocation(options);
+      const { resolveProjectCloneBase } = await import("../projects/project-clone.js");
+      admitted.options.assertCurrent();
+      return await resolveProjectCloneBase(project, ref, admitted.options, admitted.source);
     },
     async refresh(project: ProjectRegistryRecord, options: ManagedProjectOptions = {}) {
       const admitted = invocation(options);

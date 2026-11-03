@@ -83,7 +83,14 @@ test.each(
     };
     setRuntimeConfigSnapshot(selected);
     const runCommand = processExec.runCommandWithTimeout;
-    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
+    let refreshBoundary: (() => Promise<void>) | undefined;
+    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+      if (argv[0] === "git" && argv.includes("check-ref-format") && refreshBoundary) {
+        const result = await runCommand(argv, options);
+        // The next fetch must pass the production identity admission after this read settles.
+        await refreshBoundary();
+        return result;
+      }
       if (argv[0] !== "git" || !argv.some((arg) => [REPOSITORY_URL, git.endpoint].includes(arg))) {
         return runCommand(argv, options);
       }
@@ -179,14 +186,7 @@ test.each(
         return result;
       });
     } else {
-      const mkdtemp = fs.mkdtemp;
-      vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
-        const result = await mkdtemp(prefix, options);
-        if (prefix.includes("openclaw-project-fetch-")) {
-          await revoke();
-        }
-        return result;
-      });
+      refreshBoundary = revoke;
     }
     const created = await create(operation === "refresh");
     expect(reachedBoundary).toBe(true);

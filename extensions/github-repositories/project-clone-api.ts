@@ -10,6 +10,7 @@ import {
   cloneProjectCheckout,
   ensureProjectCheckoutCommit,
   refreshProjectCheckout,
+  resolveProjectCheckoutBase,
 } from "./project-clone-runtime-api.js";
 import { parseProjectGitUrl } from "./project-url-api.js";
 
@@ -38,6 +39,8 @@ function checkout(options: GitHubCheckoutOptions) {
     ensureCommit: (input, supplied) =>
       ensureProjectCheckoutCommit(input, { ...options, ...supplied }),
     refresh: (input, supplied) => refreshProjectCheckout(input, { ...options, ...supplied }),
+    resolveBase: (input, supplied) =>
+      resolveProjectCheckoutBase(input, { ...options, ...supplied }),
   });
 }
 
@@ -55,4 +58,14 @@ export async function refreshProjectClone(
 ) {
   const { signal, timeoutMs, assertCurrent } = options;
   return await checkout(options).refresh(project, { signal, timeoutMs, assertCurrent });
+}
+
+/** Resolve repository-owned base facts within the host's managed-checkout lease. */
+export async function resolveProjectCloneBase(
+  project: Parameters<ReturnType<typeof createManagedProjectCheckoutV1>["resolveBase"]>[0],
+  ref?: string,
+  options: GitHubCheckoutOptions = {},
+) {
+  const { signal, timeoutMs, assertCurrent } = options;
+  return await checkout(options).resolveBase(project, ref, { signal, timeoutMs, assertCurrent });
 }

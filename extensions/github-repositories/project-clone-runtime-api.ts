@@ -450,6 +450,132 @@ export async function ensureProjectCheckoutCommit(
   }
 }
 
+/** Resolve fresh forge-owned base facts without using ambient worktree fetch credentials. */
+export async function resolveProjectCheckoutBase(
+  input: { url: string; target: string; ref?: string },
+  options: ProjectCloneOptions = {},
+): Promise<{ commit: string; ref: string }> {
+  const command = (args: string[]) => runProjectCheckoutGit(input, options, args);
+  const verify = async (ref: string) => {
+    const result = await runProjectCheckoutGit(
+      input,
+      options,
+      [
+        "-c",
+        "core.commitGraph=false",
+        "-c",
+        "core.warnAmbiguousRefs=true",
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        `${ref === "-" ? "@{-1}" : ref}^{commit}`,
+      ],
+      { env: { GIT_NO_LAZY_FETCH: "1" } },
+    );
+    if (result.termination === "exit" && result.code !== 0) {
+      return undefined;
+    }
+    const commit = requireGitCommandOutput("git rev-parse repository base", result).trim();
+    if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(commit) || result.stderr.trim()) {
+      throw new ProjectCloneError("clone_failed", "Choose an unambiguous repository base ref.");
+    }
+    return commit;
+  };
+  if (input.ref !== undefined) {
+    const local = await verify(input.ref);
+    if (local) {
+      return { commit: local, ref: input.ref };
+    }
+    if (input.ref.startsWith("+")) {
+      throw new ProjectCloneError(
+        "clone_failed",
+        "Use a fully qualified base ref for a name starting with '+', such as refs/heads/+topic.",
+      );
+    }
+    // Remote-tracking selectors name branches, including literal leading '+' names.
+    const ref = input.ref.replace(/^(?:refs\/remotes\/)?origin\//u, "refs/heads/");
+    // A base selector is not a fetch refspec: reject destination writes and wildcards.
+    requireGitCommandOutput(
+      "git check-ref-format repository base",
+      await command(["check-ref-format", `refs/heads/${ref}`]),
+      () =>
+        new ProjectCloneError(
+          "clone_failed",
+          "Choose a branch, tag, or commit as the worktree base.",
+        ),
+    );
+    const fetch = () =>
+      runProjectCheckoutGit(
+        input,
+        { ...options, timeoutMs: options.timeoutMs ?? PROJECT_FETCH_TIMEOUT_MS },
+        [
+          "fetch",
+          "--no-auto-maintenance",
+          "--no-tags",
+          "--no-recurse-submodules",
+          "--",
+          input.url,
+          ref,
+        ],
+      );
+    const fetched = await withGitRepositoryRepair({
+      cwd: input.target,
+      result: await fetch(),
+      remote: input.url,
+      signal: options.signal,
+      assertCurrent: options.assertCurrent,
+      run: (args, commandOptions) => runProjectCheckoutGit(input, options, args, commandOptions),
+      retry: fetch,
+    });
+    if (fetched.code !== 0 || fetched.termination !== "exit") {
+      if (
+        fetched.termination === "exit" &&
+        /couldn't find remote ref|not our ref/iu.test(fetched.stderr)
+      ) {
+        throw new ProjectCloneError(
+          "clone_failed",
+          "Worktree base ref does not resolve to a commit. Choose an existing branch, tag, or commit and retry.",
+        );
+      }
+      throw classifyProjectGitFailure(fetched, "fetch", Boolean(options.token));
+    }
+    const commit = await verify("FETCH_HEAD");
+    if (!commit) {
+      throw new ProjectCloneError("clone_failed", "The fetched repository base is not a commit.");
+    }
+    return { commit, ref: input.ref };
+  }
+  // The advertised symbolic HEAD is authoritative even when its object already
+  // exists locally; a stale origin/HEAD must not hide an advanced or renamed default.
+  const advertised = await runProjectCheckoutGit(
+    input,
+    { ...options, timeoutMs: options.timeoutMs ?? PROJECT_FETCH_TIMEOUT_MS },
+    ["ls-remote", "--symref", "--", input.url, "HEAD"],
+  );
+  const stdout = requireGitCommandOutput("git ls-remote repository HEAD", advertised, (_, failed) =>
+    classifyProjectGitFailure(failed, "fetch", Boolean(options.token)),
+  );
+  const branch = /^ref: refs\/heads\/(\S+)\tHEAD\r?$/mu.exec(stdout)?.[1];
+  const commit = /^([a-f0-9]{40}(?:[a-f0-9]{24})?)\tHEAD\r?$/mu.exec(stdout)?.[1];
+  if (!branch || !commit) {
+    throw new ProjectCloneError(
+      "clone_failed",
+      "The repository did not advertise a default branch. Choose an explicit worktree base ref.",
+    );
+  }
+  await ensureProjectCheckoutCommit({ ...input, commit }, options);
+  const remoteRef = `refs/remotes/origin/${branch}`;
+  requireGitCommandOutput(
+    "git update-ref repository default",
+    await command(["update-ref", remoteRef, commit]),
+  );
+  requireGitCommandOutput(
+    "git symbolic-ref repository default",
+    await command(["symbolic-ref", "refs/remotes/origin/HEAD", remoteRef]),
+  );
+  return { commit, ref: `origin/${branch}` };
+}
+
 /** Observe only the named source branch using the same shared fetch identity as cloning. */
 export async function readProjectCheckoutRemoteHead(
   input: { url: string; target: string; branch: string },

@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RepositorySourceV1 } from "openclaw/plugin-sdk/repository-sources";
 import { readGitHubConfig } from "./config-api.js";
 import { resolveConfiguredGitHubHost } from "./host-api.js";
-import { materializeProjectClone, refreshProjectClone } from "./project-clone-api.js";
+import { materializeProjectClone, resolveProjectCloneBase } from "./project-clone-api.js";
 import { parseProjectGitUrl } from "./project-url-api.js";
 import { githubApiToken } from "./public-api.js";
 import { prepareGitHubReadIdentity } from "./tool-identity-api.js";
@@ -55,10 +55,11 @@ export function createGitHubRepositorySource(
       return {
         project: { id: project.id, repoRoot: project.repoRoot, source: project.source },
         assertCurrent,
-        async refresh() {
+        async resolveBase(ref) {
           assertCurrent();
-          await refreshProjectClone(project, options);
+          const base = await resolveProjectCloneBase(project, ref, options);
           assertCurrent();
+          return base;
         },
       };
     },

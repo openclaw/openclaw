@@ -410,7 +410,13 @@ it.each([
           async prepare(input) {
             expect(input.requiredCommit).toBe(baseCommit);
             input.assertCurrent();
-            return { project, assertCurrent: input.assertCurrent, refresh: async () => {} };
+            return {
+              project,
+              assertCurrent: input.assertCurrent,
+              async resolveBase() {
+                throw new Error("Materialization requires its accepted pinned commit");
+              },
+            };
           },
         })
       : undefined;

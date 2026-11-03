@@ -10,6 +10,7 @@ import {
   ensureProjectCheckoutCommit,
   ProjectCloneError,
   refreshProjectCheckout,
+  resolveProjectCheckoutBase,
 } from "../../extensions/github-repositories/project-clone-runtime-api.js";
 import { parseProjectGitUrl } from "../../extensions/github-repositories/project-url-api.js";
 import {
@@ -373,6 +374,76 @@ describe("project registry persistence", () => {
       { env: networkEnvs[0] },
     );
     expect(unrelatedOrigin).toMatchObject({ code: 1, stdout: "" });
+  });
+
+  it("resolves fresh authenticated defaults after advancement and rename without moving local HEAD", async ({
+    onTestFinished,
+  }) => {
+    const { source, target } = await cloneFixture();
+    const initial = await gitText(target, "rev-parse", "HEAD");
+    const url = "https://ghe.example.test/acme/private.git";
+    const token = "synthetic-base-token";
+    const runCommand = processExec.runCommandWithTimeout;
+    const network: NodeJS.ProcessEnv[] = [];
+    const command = vi.spyOn(processExec, "runCommandWithTimeout");
+    onTestFinished(() => command.mockRestore());
+    command.mockImplementation(async (argv, runOptions) => {
+      if (argv.includes(url)) {
+        expect(argv).not.toContain(token);
+        if (typeof runOptions !== "object" || !runOptions.env) {
+          throw new Error("Authenticated Git transport requires its scoped environment");
+        }
+        network.push(runOptions.env);
+      }
+      return await runCommand(
+        argv.map((arg) => (arg === url ? source : arg)),
+        runOptions,
+      );
+    });
+    for (const branch of ["main", "renamed-default"]) {
+      if (branch !== "main") {
+        await git(source, "branch", "-m", branch);
+      }
+      const commit = await commitFile(source, branch + ".txt", branch + "\n");
+      await expect(resolveProjectCheckoutBase({ url, target }, { token })).resolves.toEqual({
+        commit,
+        ref: `origin/${branch}`,
+      });
+      expect(await gitText(target, "symbolic-ref", "refs/remotes/origin/HEAD")).toBe(
+        `refs/remotes/origin/${branch}`,
+      );
+      expect(await gitText(target, "rev-parse", `origin/${branch}`)).toBe(commit);
+      expect(await gitText(target, "rev-parse", "HEAD")).toBe(initial);
+    }
+    const beforeExplicit = network.length;
+    await expect(
+      resolveProjectCheckoutBase({ url, target, ref: "HEAD" }, { token }),
+    ).resolves.toEqual({
+      commit: initial,
+      ref: "HEAD",
+    });
+    expect(network).toHaveLength(beforeExplicit);
+    for (const ref of ["refs/heads/main:refs/heads/overwritten", "+new-base"]) {
+      await expect(
+        resolveProjectCheckoutBase({ url, target, ref }, { token }),
+      ).rejects.toMatchObject({
+        failure: "clone_failed",
+      });
+    }
+    expect(network).toHaveLength(beforeExplicit);
+    await git(source, "branch", "new-base");
+    await git(source, "checkout", "-b", "+new-base");
+    const explicit = await commitFile(source, "explicit.txt", "explicit\n");
+    await expect(
+      resolveProjectCheckoutBase({ url, target, ref: "origin/+new-base" }, { token }),
+    ).resolves.toEqual({ commit: explicit, ref: "origin/+new-base" });
+    expect(network.length).toBeGreaterThan(beforeExplicit);
+    for (const env of network) {
+      expect(env.GIT_CONFIG_KEY_0).toBe("http.https://ghe.example.test/.extraHeader");
+      expect(env.GIT_CONFIG_VALUE_0).toBe(
+        `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
+      );
+    }
   });
 
   it.each(["sha256", ...(process.platform !== "win32" ? (["sha1"] as const) : [])] as const)(

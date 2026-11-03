@@ -5,6 +5,7 @@ import {
   cloneProjectCheckout,
   ensureProjectCheckoutCommit,
   refreshProjectCheckout,
+  resolveProjectCheckoutBase,
 } from "../../extensions/github-repositories/project-clone-runtime-api.js";
 import { parseProjectGitUrl } from "../../extensions/github-repositories/project-url-api.js";
 import {
@@ -21,13 +22,15 @@ function source(config: OpenClawConfig, options: Options): ManagedProjectSourceV
     ensureCommit: (input, supplied) =>
       ensureProjectCheckoutCommit(input, { ...options, ...supplied }),
     refresh: (input, supplied) => refreshProjectCheckout(input, { ...options, ...supplied }),
+    resolveBase: (input, supplied) =>
+      resolveProjectCheckoutBase(input, { ...options, ...supplied }),
   };
 }
 // Fixture construction keeps database/environment selection direct while exercising the real host custodian.
 export function materializeProjectClone(
   input: Parameters<typeof materialize>[0],
   options: Options = {},
-  transport?: ManagedProjectSourceV1,
+  transport?: Parameters<typeof materialize>[2],
 ) {
   return materialize(input, options, transport ?? source(input.cfg, options));
 }

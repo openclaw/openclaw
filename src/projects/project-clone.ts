@@ -12,7 +12,7 @@ import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import type { ManagedProjectSourceV1 } from "./managed-project-source.js";
+import type { ManagedProjectOptions, ManagedProjectSourceV1 } from "./managed-project-source.js";
 import { configureProjectCheckoutMaintenance } from "./project-checkout-maintenance.js";
 import { resolveProjectDirectory, withProjectCheckoutLifecycle } from "./project-checkout.js";
 import { ProjectCloneError } from "./project-clone-contract.js";
@@ -30,7 +30,7 @@ async function existingCanonicalProject(
   cfg: OpenClawConfig,
   canonicalUrl: string,
   options: OpenClawStateDatabaseOptions,
-  source: ManagedProjectSourceV1,
+  source: Pick<ManagedProjectSourceV1, "resolveUrl">,
 ): Promise<ProjectRegistryRecord | undefined> {
   return (await listProjectRegistry(cfg, options)).find((project) => {
     const origin = project.originUrl ? source.resolveUrl(project.originUrl) : null;
@@ -46,7 +46,10 @@ export async function materializeProjectClone(
     timeoutMs?: number;
     assertCurrent?: () => void;
   },
-  source: ManagedProjectSourceV1,
+  source: Pick<
+    ManagedProjectSourceV1,
+    "resolveUrl" | "invalidUrlMessage" | "clone" | "ensureCommit"
+  >,
 ): Promise<ProjectRegistryRecord> {
   const { cfg, gitUrl, name, requiredCommit } = input;
   const { signal, timeoutMs, assertCurrent } = options;
@@ -203,6 +206,34 @@ export async function refreshProjectClone(
   if (project.source !== "cloned") {
     return;
   }
+  await withCurrentProjectClone(project, options, (input, admitted) =>
+    source.refresh(input, admitted),
+  );
+}
+
+/** Source transport resolves facts only while the host owns the exact managed checkout. */
+export async function resolveProjectCloneBase(
+  project: ProjectRegistryRecord,
+  ref: string | undefined,
+  options: NonNullable<Parameters<typeof refreshProjectClone>[1]>,
+  source: ManagedProjectSourceV1,
+) {
+  return await withCurrentProjectClone(project, options, (input, admitted) =>
+    source.resolveBase({ ...input, ref }, admitted),
+  );
+}
+
+async function withCurrentProjectClone<T>(
+  project: ProjectRegistryRecord,
+  options: NonNullable<Parameters<typeof refreshProjectClone>[1]>,
+  run: (
+    input: { target: string; url: string },
+    options: ManagedProjectOptions & {
+      env: NodeJS.ProcessEnv;
+      assertCurrent: () => void;
+    },
+  ) => Promise<T>,
+): Promise<T> {
   const selectedProject: ProjectRegistryIdentity = {
     id: project.id,
     repoRoot: project.repoRoot,
@@ -212,7 +243,7 @@ export async function refreshProjectClone(
   const { signal, timeoutMs, assertCurrent } = options;
   const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
   const context = captureOpenClawStateWorkerContext({ path: options.path, env });
-  await withProjectCheckoutLifecycle(
+  return await withProjectCheckoutLifecycle(
     selectedProject.repoRoot,
     { path: context.admission.databasePath, env, signal },
     async (lease) => {
@@ -251,16 +282,12 @@ export async function refreshProjectClone(
         assertCurrent: assertRefreshCurrent,
       });
       // The registry owns source identity; origin can be changed inside the shared checkout.
-      await source.refresh(
+      const value = await run(
         { target: current.repoRoot, url: originUrl },
-        {
-          env,
-          signal: lease.signal,
-          timeoutMs,
-          assertCurrent: assertRefreshCurrent,
-        },
+        { env, signal: lease.signal, timeoutMs, assertCurrent: assertRefreshCurrent },
       );
       assertRefreshCurrent();
+      return value;
     },
   );
 }

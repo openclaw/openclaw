@@ -143,7 +143,20 @@ export function useRepositoryWorkspaceResultFixture() {
           });
           assertCurrent();
         }
-        return { project, assertCurrent, refresh: async () => assertCurrent() };
+        return {
+          project,
+          assertCurrent,
+          async resolveBase(ref = "HEAD") {
+            assertCurrent();
+            const commit = await requireGit(
+              origin,
+              ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`],
+              { signal, beforeRun: assertCurrent, env: { GIT_NO_LAZY_FETCH: "1" } },
+            );
+            assertCurrent();
+            return { commit, ref };
+          },
+        };
       },
     );
     await upsertSessionEntryCore(sessionTarget, {

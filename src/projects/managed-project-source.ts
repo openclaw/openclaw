@@ -4,6 +4,8 @@ export type ManagedProjectOptions = {
   assertCurrent?: () => void;
 };
 
+export type ManagedProjectBaseV1 = { commit: string; ref: string };
+
 /** Native custody supplies environment; source adapters own remote admission and transport. */
 export type ManagedProjectSourceV1 = {
   resolveUrl: (url: string) => { url: string; name: string } | null;
@@ -16,6 +18,10 @@ export type ManagedProjectSourceV1 = {
     input: { url: string; target: string; commit: string },
     options: ManagedProjectOptions & { readonly env: NodeJS.ProcessEnv; assertCurrent: () => void },
   ) => Promise<void>;
+  resolveBase: (
+    input: { url: string; target: string; ref?: string },
+    options: ManagedProjectOptions & { readonly env: NodeJS.ProcessEnv; assertCurrent: () => void },
+  ) => Promise<ManagedProjectBaseV1>;
   refresh: (
     input: { url: string; target: string },
     options: ManagedProjectOptions & { readonly env: NodeJS.ProcessEnv; assertCurrent: () => void },
