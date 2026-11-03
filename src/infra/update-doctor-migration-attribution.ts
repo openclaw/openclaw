@@ -22,6 +22,12 @@ import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 import { readMatchingUpdateDatabaseGeneration } from "./update-database-generations.js";
 import { resolveUpdateSqlitePath } from "./update-database-path.js";
 
+export class UpdateDoctorSourceChangedError extends Error {
+  constructor(pathname: string) {
+    super(`SQLite migration source changed after update capture: ${pathname}`);
+  }
+}
+
 export type UpdateDoctorMigrationCapture = {
   /** Captured SQLite sources admitted by this Doctor session. */
   openedSqlitePaths?: Set<string>;
@@ -161,6 +167,8 @@ export function hasUpdateDoctorMigrationCapture(): boolean {
 }
 
 type SqliteMigrationOptions = {
+  /** A one-shot write does not admit later schema writes to its source. */
+  oneShot?: boolean;
   retainExclusive?: boolean;
   created?: boolean;
   /** Already-open companion custody stays held through this synchronous native phase. */
@@ -297,9 +305,11 @@ function* updateSqliteMigrationSteps<T>(
       }
       assertCurrent();
       if (before === undefined || (!opened && mode === "exclusive" && before !== expected)) {
-        throw new Error(`SQLite migration source changed after update capture: ${pathname}`);
+        throw new UpdateDoctorSourceChangedError(pathname);
       }
-      capture.openedSqlitePaths?.add(key);
+      if (!options?.oneShot) {
+        capture.openedSqlitePaths?.add(key);
+      }
       if (before !== expected) {
         capture.accept(key, expected, before);
       }

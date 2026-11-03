@@ -10,9 +10,7 @@ import {
 } from "../daemon/service-inspection-error.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
@@ -97,8 +95,8 @@ async function readDoctorStop(runId: string, ledger: UpdateRunLedgerOptions) {
 /**
  * A legacy updater (through 2026.9.5) that could not inspect the managed
  * service leaves the predecessor Gateway running and then delegates Doctor to
- * this candidate. That supervised owner keeps gateway-lifecycle until its
- * service manager stops it, so Doctor can never enter maintenance. Stop it
+ * this candidate. Its service manager can retain a respawn loop even between
+ * live owner leases, so lease absence cannot establish an offline service. Stop it
  * here with this candidate's adapter and record the stopped service's identity
  * at the mutation boundary; finalization restarts the updated service.
  */
@@ -109,28 +107,17 @@ export async function stopSupervisedPredecessorGateway(
     assertCurrent: () => void;
     serviceInspectionBudget?: () => number | undefined;
     warn: (message: string) => void;
+    recordReceipt?: (
+      step: import("./update-run-record.js").UpdateRunStep,
+    ) => Promise<import("./update-run-record.js").UpdateRunRecord>;
   },
 ): Promise<boolean> {
   if (!input.repair || process.platform === "win32") {
     return false;
   }
-  let owner: ReturnType<typeof readGatewayOwnerLease>;
-  try {
-    owner = readGatewayOwnerLease({
-      env: process.env,
-      current: true,
-      openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
-    });
-  } catch {
-    return false;
-  }
-  if (owner?.state !== "live" || owner.mode !== "supervised") {
-    return false;
-  }
   params.assertCurrent();
   const runId = input.runId;
   const env = cloneEnvWithPlatformSemantics(process.env);
-  const context = captureOpenClawStateWorkerContext({ env });
   let recorded = false;
   let receipt: Promise<void> | undefined;
   const record = (state: PreManagedServiceStop) => {
@@ -139,30 +126,38 @@ export async function stopSupervisedPredecessorGateway(
     }
     const stoppedAtMs = state.stoppedAtMs ?? Date.now();
     const step = encodeReceipt(serviceIdentity(state, stoppedAtMs));
-    receipt = recordUpdateRunStepAsync(
-      runId,
-      { step, status: "completed", endedAtMs: stoppedAtMs },
-      {
-        env,
-        context,
-        assertCurrent: params.assertCurrent,
-        retainSettlement(completion) {
-          const release = registerSignalExitGate(completion);
-          void completion.then(release, release);
-        },
-      },
-    ).then((result) => {
-      if (
-        result?.runId !== runId ||
-        result.status !== "running" ||
-        !result.steps.some((stored) => stored.step === step && stored.status === "completed")
-      ) {
-        throw new UpdateCommandRecoveryPendingError(
-          "The predecessor Gateway stopped, but its update receipt was not recorded; recovery remains pending.",
-        );
-      }
-      recorded = true;
-    });
+    const receiptStep = { step, status: "completed" as const, endedAtMs: stoppedAtMs };
+    const write = () =>
+      (params.recordReceipt
+        ? params.recordReceipt(receiptStep)
+        : recordUpdateRunStepAsync(
+            runId,
+            { step, status: "completed", endedAtMs: stoppedAtMs },
+            {
+              env,
+              context: captureOpenClawStateWorkerContext({ env }),
+              assertCurrent: params.assertCurrent,
+              retainSettlement(completion) {
+                const release = registerSignalExitGate(completion);
+                void completion.then(release, release);
+              },
+            },
+          )
+      ).then((result) => {
+        if (
+          result?.runId !== runId ||
+          result.status !== "running" ||
+          !result.steps.some((stored) => stored.step === step && stored.status === "completed")
+        ) {
+          throw new UpdateCommandRecoveryPendingError(
+            "The predecessor Gateway stopped, but its update receipt was not recorded; recovery remains pending.",
+          );
+        }
+        recorded = true;
+      });
+    receipt = write();
+    const release = registerSignalExitGate(receipt);
+    void receipt.then(release, release);
     // The native callback stays synchronous; join its receipt after native cleanup below.
     void receipt.catch(() => undefined);
   };

@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { DatabaseSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
@@ -12,6 +14,52 @@ import {
   SqliteCoordinatorError,
 } from "./sqlite-lifecycle-errors.js";
 import { requestSqliteWorkerSchemaMaintenance } from "./sqlite-worker-operation-admission.js";
+
+// A schema owner may lend its native handle to nested repair phases. The lender
+// retains disposal until canonical adoption; borrowers must not open a competing connection.
+const schemaConnections = new AsyncLocalStorage<{
+  path: string;
+  database: DatabaseSync;
+  transferred?: boolean;
+}>();
+
+export function withStateDatabaseSchemaConnection<T>(
+  pathname: string,
+  database: DatabaseSync,
+  operation: () => T,
+): T {
+  const path = resolveIdentityPathViaExistingAncestorSync(pathname);
+  const lease = getStateDatabaseSchemaLease(path);
+  if (!lease) {
+    throw new Error("A shared schema connection requires its native maintenance owner.");
+  }
+  lease.assertCurrent();
+  return schemaConnections.run({ path, database }, operation);
+}
+
+export function getStateDatabaseSchemaConnection(pathname: string): DatabaseSync | undefined {
+  const shared = schemaConnections.getStore();
+  if (shared?.path !== resolveIdentityPathViaExistingAncestorSync(pathname)) {
+    return undefined;
+  }
+  const lease = getStateDatabaseSchemaLease(shared.path);
+  if (!lease) {
+    throw new Error("The shared schema connection has lost its maintenance owner.");
+  }
+  lease.assertCurrent();
+  return shared.database.isOpen ? shared.database : undefined;
+}
+
+/** The canonical state opener takes over disposal from the temporary schema lender. */
+export function takeStateDatabaseSchemaConnection(pathname: string): DatabaseSync | undefined {
+  const database = getStateDatabaseSchemaConnection(pathname);
+  const shared = schemaConnections.getStore();
+  if (!database || !shared || shared.transferred) {
+    return undefined;
+  }
+  shared.transferred = true;
+  return database;
+}
 
 export const StateSchemaMutationConflictError = resolveGlobalSingleton(
   Symbol.for("openclaw.stateSchemaMutationConflictError"),

@@ -1676,6 +1676,13 @@ capture, so writer shutdown during rollback is not mistaken for intervening writ
 The installed updater owns snapshot capture; staging a newer candidate cannot
 change that behavior in an already-running older updater.
 
+Candidate Doctor checks the managed service even between Gateway respawns, when
+no live Gateway lease is present. After stopping the service, it records the stop
+and runs SQLite repair under the same native maintenance connection while
+retaining the original update capture. Independent writes before migration still
+refuse automatic restoration; recording the stop does not establish a new
+rollback baseline. This repair must be present in the candidate Doctor.
+
 Switch channels or target a specific version:
 
 ```bash

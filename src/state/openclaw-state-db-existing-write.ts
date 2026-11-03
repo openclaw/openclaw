@@ -23,7 +23,10 @@ import {
   assertTransactionUsable,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
-import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
+import {
+  getStateDatabaseSchemaConnection,
+  withStateDatabaseSchemaMaintenance,
+} from "../infra/state-database-maintenance.js";
 import { createStateSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
@@ -180,11 +183,20 @@ function createExistingOpenClawStateWriter(
   if (isStatePostgres()) {
     return createExistingPostgresStateWriter(pathname, contract, assertSameFile);
   }
-  const db = openTrackedStateDatabase(pathname, {
-    existingOnly: true,
-    // Match Doctor: inbound dependents must fail validation, never cascade away.
-    ...(contract.recoverTaskDeliveryOrphans ? { enableForeignKeyConstraints: false } : {}),
-  });
+  const shared = getStateDatabaseSchemaConnection(pathname);
+  const db =
+    shared ??
+    openTrackedStateDatabase(pathname, {
+      existingOnly: true,
+      // Match Doctor: inbound dependents must fail validation, never cascade away.
+      ...(contract.recoverTaskDeliveryOrphans ? { enableForeignKeyConstraints: false } : {}),
+    });
+  const foreignKeys = shared ? db.prepare("PRAGMA foreign_keys").get()?.foreign_keys : undefined; // sqlite-allow-raw -- Restore the lender's connection-local policy.
+  if (shared) {
+    db.exec(
+      contract.recoverTaskDeliveryOrphans ? "PRAGMA foreign_keys=OFF" : "PRAGMA foreign_keys=ON",
+    ); // sqlite-allow-raw -- Each writer retains its existing foreign-key contract.
+  }
   const admission = createStateSchemaAdmission(
     `state.subset:${createHash("sha256")
       .update(
@@ -305,8 +317,15 @@ function createExistingOpenClawStateWriter(
     },
     close() {
       closed = true;
-      clearNodeSqliteKyselyCacheForDatabase(db);
-      closeTrackedStateDatabase(db);
+      if (shared) {
+        if (!db.isOpen) {
+          return;
+        }
+        db.exec(foreignKeys ? "PRAGMA foreign_keys=ON" : "PRAGMA foreign_keys=OFF"); // sqlite-allow-raw -- Return the borrowed handle without disposing its owner.
+      } else {
+        clearNodeSqliteKyselyCacheForDatabase(db);
+        closeTrackedStateDatabase(db);
+      }
     },
   };
 }

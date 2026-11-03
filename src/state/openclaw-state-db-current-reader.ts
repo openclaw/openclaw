@@ -8,6 +8,7 @@ import {
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable, runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { getStateDatabaseSchemaConnection } from "../infra/state-database-maintenance.js";
 import {
   getOpenClawDatabaseMaintenanceResourceScope,
   getOpenClawDatabaseMaintenanceScope,
@@ -49,12 +50,19 @@ export function createOpenClawStateCurrentWarmReader<T>(
         path: string;
         scope: ReturnType<typeof getOpenClawDatabaseMaintenanceScope>;
         read(): CurrentWarmReadResult<T>;
+        close(): void;
       }
     | undefined;
   return () => {
     return withCurrentOpenClawStateReadScope(options, (pathname) => {
       const scope = getOpenClawDatabaseMaintenanceScope();
       if (!scope?.ownsSchemaMaintenance || (bound && bound.scope !== scope)) {
+        return { available: false };
+      }
+      // A shared schema owner needs native exclusion for nested repairs. Do not
+      // pin an independent WAL reader; the caller retains its fresh snapshot fallback.
+      if (getStateDatabaseSchemaConnection(pathname)) {
+        bound?.close();
         return { available: false };
       }
       if (isStatePostgres()) {
@@ -147,6 +155,7 @@ export function createOpenClawStateCurrentWarmReader<T>(
         const reader = {
           path: pathname,
           scope,
+          close,
           read(): CurrentWarmReadResult<T> {
             if (!assertCurrent()) {
               return { available: false };
