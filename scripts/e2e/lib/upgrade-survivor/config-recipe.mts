@@ -117,6 +117,13 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
     "base",
     [
       {
+        // Personal-library authoring left skill_workshop for skill_library; the candidate
+        // must keep this pre-split allowlist covering it exactly once.
+        id: "tools-allow-skill-workshop",
+        intent: "skill-library-split",
+        argv: ["config", "set", "tools.allow", '["read","skill_workshop"]', "--strict-json"],
+      },
+      {
         id: "logging-file",
         intent: "logging",
         // Raw debug output stays in the isolated home, outside uploaded artifact roots.

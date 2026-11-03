@@ -81,17 +81,11 @@
   text-shadow: 0 1px 3px rgb(0 0 0 / 25%);
 }
 
-.channels-detail,
-.channels-wizard {
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-}
-
 .channels-detail {
   display: flex;
   flex-direction: column;
   width: 100%;
+  overflow-y: auto;
   max-height: min(85dvh, 860px, var(--openclaw-modal-height-limit));
 }
 
@@ -136,8 +130,34 @@
 }
 
 .channels-detail__footer {
+  flex-wrap: wrap;
   padding: var(--space-4);
   border-top: 1px solid var(--border);
+}
+
+.channels-detail__status {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.channels-detail__decide {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.channels-detail__feedback {
+  display: grid;
+  flex: none;
+  gap: var(--space-2);
+  max-height: 30dvh;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4) 0;
+  overflow-wrap: anywhere;
+}
+
+/* A conflict's choice drops under its message once the dialog is too narrow for both. */
+.channels-detail__feedback .settings-save-indicator {
+  flex-wrap: wrap;
 }
 
 .channels-pairing-filters {
@@ -232,47 +252,15 @@
   }
 }
 
-.channels-wizard {
-  width: min(540px, calc(100vw - 48px));
-  max-height: min(85dvh, 760px);
-}
-
-.channels-wizard__header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-4) 0;
-}
-
-.channels-wizard__heading {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.channels-wizard__heading h2 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
-  font-weight: 660;
-  letter-spacing: -0.015em;
-}
-
-.channels-wizard__heading .muted {
-  font-size: var(--control-ui-text-sm);
+.channels-wizard .oc-dialog__title .channels-tile {
+  border-radius: var(--radius-sm);
 }
 
 .channels-wizard__subtitle {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.channels-wizard__body {
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4) var(--space-4);
 }
 
 .channels-wizard__note,
@@ -282,13 +270,6 @@
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
-}
-
-.channels-wizard__note {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  background: var(--bg-elevated);
 }
 
 .channels-wizard__output--code {
@@ -308,30 +289,43 @@
 }
 
 .channels-wizard__option {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  position: relative;
+  display: grid;
   gap: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  background: var(--card);
-  text-align: left;
+  width: 100%;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  padding: var(--space-2) calc(var(--space-3) + 24px) var(--space-2) var(--space-3);
+  background: var(--bg-hover);
+  color: var(--text);
+  text-align: start;
   cursor: var(--cursor-action);
-  transition:
-    border-color var(--duration-fast) var(--ease-out),
-    background var(--duration-fast) var(--ease-out);
 }
 
-.channels-wizard__option:hover,
+.channels-wizard__option:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
 .channels-wizard__option:focus-visible {
-  border-color: var(--border-hover);
-  background: var(--bg-elevated);
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .channels-wizard__option[aria-pressed="true"] {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: var(--accent-subtle);
+  background: var(--surface-selected);
+}
+
+.channels-wizard__option-check {
+  position: absolute;
+  inset-block-start: var(--space-2);
+  inset-inline-end: var(--space-3);
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.channels-wizard__option-check svg {
+  width: 16px;
+  height: 16px;
 }
 
 .channels-wizard__option-label {
@@ -351,15 +345,6 @@
   gap: var(--space-2);
 }
 
-.channels-wizard__error {
-  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  background: var(--danger-subtle);
-  color: var(--danger);
-  font-size: var(--control-ui-text-sm);
-}
-
 .channels-wizard__qr {
   display: grid;
   gap: var(--space-2);
@@ -368,9 +353,11 @@
 }
 
 .channels-wizard__qr img {
-  width: min(260px, 70vw);
+  width: min(260px, 100%);
+  flex: none;
+  aspect-ratio: 1;
   border-radius: var(--radius-md);
-  background: var(--brand-logo-chip-bg);
+  background: var(--qr-bg);
   padding: var(--space-2);
 }
 
