@@ -618,7 +618,7 @@ suite.define(() => {
         await openAutomations(page);
         await expect.poll(() => row.textContent()).toContain(fixture.name);
         await expect.poll(() => row.textContent()).toContain("Every 1 hour");
-        expect(await row.textContent()).not.toContain(fixture.done);
+        await expect.poll(() => row.textContent()).toContain(fixture.done);
         proof.complete = true;
         proof.stage = "complete";
         await save();
