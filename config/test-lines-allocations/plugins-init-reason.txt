@@ -1,0 +1,2 @@
+# Regression tests check plugins init names an existing directory, an unknown --type and a blank id instead of the generic failure.
+34
