@@ -1,4 +1,8 @@
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  formatErrorMessage,
+  runAgentHarnessLlmInputHook,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   interruptCodexTurnAndWaitBestEffort,
   retireUnsafeCodexTurnClientBestEffort,
@@ -228,23 +232,21 @@ export async function prepareCodexAttemptTurnRequest(
           }
         : undefined;
     if (inferenceRoute) {
-      if (!usesSupervisionConnection) {
-        prompt.setParentLocalEgress();
-      }
       resourceState.releaseInferenceContext?.();
       const inferenceThread = resourceState.thread;
+      const inferenceInstructions = joinPresentSections(
+        usesSupervisionConnection
+          ? ""
+          : (buildCodexParentLocalInstructions(runtimeParams, {
+              personaInstructions: workspaceBootstrapContext.personaInstructions,
+              skillsInstructions: context.skillsInstructions,
+              memoryInstructions: workspaceBootstrapContext.memoryInstructions,
+            }) ?? ""),
+        buildCodexConversationTurnInstructions(runtimeParams, toolBridge.availableSpecs),
+      );
       const registration = await inferenceRoute.context.register({
         threadId: resourceState.thread.threadId,
-        text: joinPresentSections(
-          usesSupervisionConnection
-            ? ""
-            : (buildCodexParentLocalInstructions(runtimeParams, {
-                personaInstructions: workspaceBootstrapContext.personaInstructions,
-                skillsInstructions: context.skillsInstructions,
-                memoryInstructions: workspaceBootstrapContext.memoryInstructions,
-              }) ?? ""),
-          buildCodexConversationTurnInstructions(runtimeParams, toolBridge.availableSpecs),
-        ),
+        text: inferenceInstructions,
         signal: runAbortController.signal,
         assertCurrent: () => {
           params.hostCapabilities.assertActive();
@@ -260,6 +262,7 @@ export async function prepareCodexAttemptTurnRequest(
         },
       });
       resourceState.releaseInferenceContext = registration.release;
+      prompt.setInferenceInstructions(inferenceInstructions);
       turnStartParams.responsesapiClientMetadata = {
         ...turnStartParams.responsesapiClientMetadata,
         [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
@@ -281,6 +284,11 @@ export async function prepareCodexAttemptTurnRequest(
       assertCurrent: assertTurnCurrent,
     });
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
+    runAgentHarnessLlmInputHook({
+      event: buildLlmInputEvent(),
+      ctx: context.hookContext,
+      hookRunner: context.hookRunner,
+    });
     recordCodexTrajectoryContext(resources.trajectoryRecorder, {
       attempt: params,
       developerInstructions: joinPresentSections(
@@ -425,5 +433,5 @@ export async function prepareCodexAttemptTurnRequest(
       ? { harnessId: params.runtimePlan.observability.harnessId }
       : {}),
   });
-  return { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent, buildLlmOutputEvent };
+  return { codexModelCallDiagnostics, startCodexTurn, buildLlmOutputEvent };
 }

@@ -1257,12 +1257,14 @@ describe("runAgentHarnessAttempt", () => {
       toolsAllow: string[] | undefined;
       extraSystemPrompt: string | undefined;
       hostScopeActive: boolean;
+      policyScope: EmbeddedRunAttemptParams["pluginHarnessToolPolicyScope"];
     }> = [];
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attemptParams) => {
       received.push({
         toolsAllow: attemptParams.toolsAllow,
         extraSystemPrompt: attemptParams.extraSystemPrompt,
         hostScopeActive: isHostScopedAgentToolActive("openclaw"),
+        policyScope: attemptParams.pluginHarnessToolPolicyScope,
       });
       return createAttemptResult("codex");
     });
@@ -1304,9 +1306,24 @@ describe("runAgentHarnessAttempt", () => {
     }
 
     expect(received).toEqual([
-      { toolsAllow: ["openclaw"], extraSystemPrompt: undefined, hostScopeActive: true },
-      { toolsAllow: ["openclaw"], extraSystemPrompt: undefined, hostScopeActive: true },
-      { toolsAllow: ["openclaw"], extraSystemPrompt: undefined, hostScopeActive: true },
+      {
+        toolsAllow: ["openclaw"],
+        extraSystemPrompt: undefined,
+        hostScopeActive: true,
+        policyScope: "conversation",
+      },
+      {
+        toolsAllow: ["openclaw"],
+        extraSystemPrompt: undefined,
+        hostScopeActive: true,
+        policyScope: "conversation",
+      },
+      {
+        toolsAllow: ["openclaw"],
+        extraSystemPrompt: undefined,
+        hostScopeActive: true,
+        policyScope: "conversation",
+      },
     ]);
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
@@ -1597,12 +1614,14 @@ describe("runAgentHarnessAttempt", () => {
     const received: Array<{
       conversationToolPolicy: EmbeddedRunAttemptParams["conversationToolPolicy"];
       pluginHarnessToolPolicyRestricted: boolean | undefined;
+      pluginHarnessToolPolicyScope: EmbeddedRunAttemptParams["pluginHarnessToolPolicyScope"];
       toolsAllow: string[] | undefined;
     }> = [];
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
       received.push({
         conversationToolPolicy: attempt.conversationToolPolicy,
         pluginHarnessToolPolicyRestricted: attempt.pluginHarnessToolPolicyRestricted,
+        pluginHarnessToolPolicyScope: attempt.pluginHarnessToolPolicyScope,
         toolsAllow: attempt.toolsAllow,
       });
       return createAttemptResult("codex");
@@ -1626,11 +1645,13 @@ describe("runAgentHarnessAttempt", () => {
       {
         conversationToolPolicy: { deny: ["exec"] },
         pluginHarnessToolPolicyRestricted: true,
+        pluginHarnessToolPolicyScope: "conversation",
         toolsAllow: undefined,
       },
       {
         conversationToolPolicy: { deny: ["exec"] },
         pluginHarnessToolPolicyRestricted: true,
+        pluginHarnessToolPolicyScope: "turn",
         toolsAllow: ["Read", "Bash"],
       },
     ]);
@@ -1848,6 +1869,7 @@ describe("runAgentHarnessAttempt", () => {
       name: "empty runtime allowlist",
       policy: { toolsAllow: [] },
       restricted: true,
+      scope: "turn",
       tools: [],
       denyAll: true,
     },
@@ -1856,6 +1878,7 @@ describe("runAgentHarnessAttempt", () => {
       name: "disabled tools with wildcard",
       policy: { disableTools: true, toolsAllow: ["*"] },
       restricted: true,
+      scope: "turn",
       tools: [],
       denyAll: true,
     },
@@ -1864,19 +1887,31 @@ describe("runAgentHarnessAttempt", () => {
       name: "overlapping runtime globs",
       policy: { toolsAllow: attachToolAllowlistIntersection([], [["web_*"], ["*_search"]]) },
       restricted: true,
+      scope: "turn",
       tools: [],
+      denyAll: false,
+    },
+    {
+      name: "additive plugin grant",
+      policy: {
+        runtimePluginToolGrant: { pluginId: "grant-plugin", toolNames: ["proof_optional"] },
+      },
+      restricted: false,
+      scope: "turn",
+      tools: undefined,
       denyAll: false,
     },
     {
       name: "wildcard runtime allowlist",
       policy: { toolsAllow: ["*"] },
       restricted: false,
+      scope: "conversation",
       tools: ["*"],
       denyAll: false,
     },
   ])(
     "preserves $name semantics at plugin handoff",
-    async ({ policy, restricted, tools, denyAll }) => {
+    async ({ policy, restricted, scope, tools, denyAll }) => {
       const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
         createAttemptResult("codex"),
       );
@@ -1897,6 +1932,8 @@ describe("runAgentHarnessAttempt", () => {
       expect(runAttempt).toHaveBeenCalledTimes(1);
       const attempt = runAttempt.mock.calls[0]?.[0];
       expect(attempt?.pluginHarnessToolPolicyRestricted).toBe(restricted);
+      expect(attempt?.pluginHarnessToolPolicyScope).toBe(scope);
+      expect(attempt).not.toHaveProperty("runtimePluginToolGrant");
       expect(attempt?.toolsAllow).toEqual(tools);
       expect(attempt?.extraSystemPrompt).toContain("Existing operator note.");
       if (denyAll) {

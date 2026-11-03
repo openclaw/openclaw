@@ -36,7 +36,6 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "../provider-secret-egress.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
-import { normalizeToolPolicyName } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
@@ -44,6 +43,7 @@ import { beginContextEngineLogicalTurn } from "./context-engine-turn-begin.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import {
   assertAgentHarnessExecutionEnvironment,
+  isSystemAgentOnlyAllowlist,
   preparePluginHarnessToolPolicies,
   resolvePluginHarnessDenyAllToolPolicyPrompt,
   resolvePluginHarnessToolPolicies,
@@ -377,6 +377,7 @@ export async function runAgentHarnessAttempt(
               harness,
               nativePermissionsConsented,
               pluginAttempt.setInputAttachmentReadAllowed,
+              attemptParams.runtimePluginToolGrant !== undefined,
             );
         const effectiveAttemptParams =
           hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
@@ -551,10 +552,6 @@ async function runAgentHarnessOperation<T>(
   }
 }
 
-function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): boolean {
-  return toolsAllow?.length === 1 && normalizeToolPolicyName(toolsAllow[0] ?? "") === "openclaw";
-}
-
 function withoutInternalHarnessAuthority(
   params: EmbeddedRunAttemptParams,
   harness: AgentHarness,
@@ -628,6 +625,7 @@ async function preparePluginHarnessParams(
   harness: AgentHarness,
   nativePermissionsConsented: boolean,
   setInputAttachmentReadAllowed: (allowed: boolean) => void,
+  hasRuntimePluginToolGrant: boolean,
 ): Promise<import("./types.js").AgentHarnessAttemptParamsV2> {
   const boundary = "plugin harness handoff";
   const resolvedApiKey = params.resolvedApiKey
@@ -654,6 +652,7 @@ async function preparePluginHarnessParams(
     pluginHarnessToolPolicySafeDeniedTools:
       policies.safeDeniedToolNames.length > 0 ? policies.safeDeniedToolNames : undefined,
     pluginHarnessToolPolicyRestricted: policies.toolPolicyRestricted,
+    pluginHarnessToolPolicyScope: hasRuntimePluginToolGrant ? "turn" : policies.toolPolicyScope,
   };
   // Consented host-only runtimes must receive the unrestricted per-turn permission mode.
   const effectiveParams = nativePermissionsConsented

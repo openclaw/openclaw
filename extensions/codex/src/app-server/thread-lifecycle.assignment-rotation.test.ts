@@ -40,6 +40,7 @@ afterEach(resetThreadLifecycleTestFixtures);
 async function fixture(withProjection = false) {
   const cwd = tempDirs.make("codex-assignment-rotation-");
   const params = createParams(path.join(cwd, "session.jsonl"), cwd);
+  params.disableTools = false;
   params.agentId = "main";
   if (withProjection) {
     params.contextEngine = {

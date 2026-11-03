@@ -381,6 +381,7 @@ it.each([
         client,
         params: {
           ...createParams(sessionFile, directory),
+          disableTools: false,
           sessionId: "session-final-owner",
           sessionKey,
           agentDir,

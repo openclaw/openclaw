@@ -15,6 +15,11 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
+If Codex discards an unused native thread, the next turn starts a replacement
+through the existing thread lifecycle and logs a warning. A binding with recorded
+conversation history is preserved when its native thread cannot be found;
+OpenClaw reports the error instead of silently starting over.
+
 ## Shared output projection
 
 Codex uses the shared native harness projection owners for bounded tool output,

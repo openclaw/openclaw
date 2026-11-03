@@ -372,7 +372,7 @@ function createThreadLifecycleParams(
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel("codex"),
     thinkLevel: "medium",
-    disableTools: true,
+    disableTools: false,
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
@@ -1923,6 +1923,8 @@ describe("Codex app-server supervised branch lifecycle", () => {
       appServer: createThreadLifecycleAppServerOptions(),
       nativeCodeModeEnabled: false,
       userMcpServersEnabled: false,
+      webSearchAllowed: false,
+      persistentWebSearchAllowed: false,
       hostSystemAgentActive: true,
     };
 

@@ -67,6 +67,7 @@ export async function loadCodexAttemptNativeToolCatalog(
   // metadata yet; the lifecycle owns their transition to a normal conversation.
   if (
     binding.nativeToolPolicyRestricted === true ||
+    binding.restrictedThreadConfigFingerprint !== undefined ||
     params.ephemeral ||
     (params.appServer.start.transport !== "stdio" && params.appServer.start.transport !== "unix") ||
     params.appServer.remoteWorkspaceRoot

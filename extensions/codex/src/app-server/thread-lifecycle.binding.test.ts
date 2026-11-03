@@ -3261,6 +3261,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
     await startOrResumeThread({
       client,
+      params: {
+        ...createParams(sessionFile, workspaceDir),
+        pluginHarnessToolPolicyScope: "turn",
+      },
       dynamicTools: [createNamedDynamicTool("read"), createNamedDynamicTool("apply_patch")],
       nativeCodeModeEnabled: false,
       pluginThreadConfig: {

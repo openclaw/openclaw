@@ -38,7 +38,10 @@ import {
 import { isJsonObject, type CodexThread } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
-import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
+import {
+  fingerprintCodexThreadConfig,
+  fingerprintRestrictedThreadConfig,
+} from "./thread-fingerprints.js";
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
 import {
   buildCodexThreadRequestConfig,
@@ -65,6 +68,7 @@ type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
   params: CodexStartOrResumeThreadParams;
   binding: CodexAppServerThreadBinding;
   clientId?: string;
+  requireRestrictedThreadConfigFingerprint?: boolean;
   buildLoadedPluginThreadConfig: (
     binding: CodexAppServerThreadBinding,
   ) => Promise<CodexPluginThreadConfig | undefined>;
@@ -400,7 +404,12 @@ export async function tryReuseCodexLiveThread(
     return { kind: "rotate" };
   }
 
-  if (!binding.clientId || binding.clientId !== clientId || (ringZeroActive && !incognito)) {
+  if (
+    !binding.clientId ||
+    binding.clientId !== clientId ||
+    (params.inferenceRoute && !getCodexInferenceThread(params.client, binding.threadId)) ||
+    (ringZeroActive && !incognito)
+  ) {
     return { kind: "resume" };
   }
 
@@ -553,14 +562,6 @@ export async function tryReuseCodexLiveThread(
           ? nativeThread?.modelProvider?.trim() || binding.modelProvider
           : undefined),
     );
-    const liveThreadConfigFingerprint = incognito
-      ? retainedThread.configFingerprint
-      : fingerprintCodexThreadConfig(
-          resumeParams,
-          resumeAuthProfileId,
-          dynamicToolsFingerprint,
-          binding,
-        );
     const ephemeralPolicy = retainedThread.ephemeralPolicy;
     if (
       incognito &&
@@ -577,6 +578,35 @@ export async function tryReuseCodexLiveThread(
       preserveSubscription = true;
       throw new CodexIncognitoPolicyChangeError();
     }
+    if (
+      options.requireRestrictedThreadConfigFingerprint &&
+      (Boolean(binding.nativeToolPolicyRestricted) !== restrictedToolSurface ||
+        params.nativeCodeModeEnabled !== false ||
+        binding.restrictedThreadConfigFingerprint !==
+          fingerprintRestrictedThreadConfig(
+            resumeParams,
+            resumeAuthProfileId,
+            dynamicToolsFingerprint,
+            params.params,
+            options.hostSystemAgentActive,
+            binding,
+          ))
+    ) {
+      // Refusal must leave the original ephemeral or protected owner available.
+      preserveSubscription = true;
+      if (incognito) {
+        throw new CodexIncognitoPolicyChangeError("creation policy");
+      }
+      return { kind: "rotate" };
+    }
+    const liveThreadConfigFingerprint = incognito
+      ? retainedThread.configFingerprint
+      : fingerprintCodexThreadConfig(
+          resumeParams,
+          resumeAuthProfileId,
+          dynamicToolsFingerprint,
+          binding,
+        );
     if (!incognito && retainedThread.configFingerprint !== liveThreadConfigFingerprint) {
       // Return the same owner first: cold-resume preparation must observe native teardown
       // before releasing it, otherwise a loaded resume can silently ignore new policy.

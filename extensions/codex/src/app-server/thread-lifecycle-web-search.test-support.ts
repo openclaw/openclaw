@@ -136,6 +136,7 @@ export function registerThreadWebSearchBindingTests({
     });
     params.config = { tools: { deny: ["web_search"] } };
     params.toolsAllow = ["message"];
+    params.pluginHarnessToolPolicyScope = "conversation";
     await fixture.endTurn("thread-1");
     const restrictedBinding = await startOrResumeThread({
       client,

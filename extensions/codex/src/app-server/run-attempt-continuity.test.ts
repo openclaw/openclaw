@@ -1,5 +1,7 @@
 import path from "node:path";
-import { expect, it } from "vitest";
+import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { expect, it, vi } from "vitest";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import * as clientRuntime from "./client-runtime.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
@@ -36,10 +38,15 @@ function retainSourceAuthority(signal: AbortSignal) {
 }
 
 it("retains a protected parent through private completion and owner reentry", async () => {
+  const llmInput = vi.fn();
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "llm_input", handler: llmInput }]),
+  );
   const agentDir = path.join(tempDir, "wire-agent");
   const codexHome = resolveCodexAppServerHomeDir(agentDir);
   const rolloutPath = path.join(codexHome, "sessions", "continuity-parent.jsonl");
   let creationPolicy = "";
+  let recorded: unknown;
   const harness = createStartedThreadHarness(
     async (method, request) => {
       if (method === "account/read") {
@@ -77,6 +84,14 @@ it("retains a protected parent through private completion and owner reentry", as
       setCodexTestToolFactory(params, () => [{ ...tool }]);
       params.hostCapabilities = createCodexTestHostCapabilities({
         ...params.hostCapabilities,
+        trajectory: {
+          recordEvent: (type, data) => {
+            if (type === "context.compiled") {
+              recorded = data;
+            }
+          },
+          flush: async () => {},
+        },
         retainSourceAuthority:
           index === 2 ? () => undefined : retainSourceAuthority(new AbortController().signal),
       });
@@ -156,7 +171,15 @@ it("retains a protected parent through private completion and owner reentry", as
         index === 2 ? "Owner conversation context." : "Private completion context.",
       );
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
+      const result = await run;
+      const instructions = prepared.body.instructions;
+      if (typeof instructions !== "string") {
+        throw new Error("Expected registered inference instructions");
+      }
+      const expected = instructions.slice("Native model policy.".length + 1);
+      expect(recorded).toHaveProperty("systemPrompt", expected);
+      expect(result.systemPromptReport?.systemPrompt.chars).toBe(expected.length);
+      expect(llmInput.mock.calls.at(-1)?.[0]).toHaveProperty("systemPrompt", expected);
       expect(() => afterCompaction.assertCurrent()).toThrow();
     }
     expect(bindings[0]?.dynamicToolsFingerprint).toEqual(expect.stringMatching(/\S+/));

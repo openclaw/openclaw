@@ -45,7 +45,7 @@ vi.mock("./shared-client.js", async (importOriginal) => {
 
 function scheduledStartOptions(sessionFile: string, cwd: string) {
   return {
-    params: createParams(sessionFile, cwd),
+    params: { ...createParams(sessionFile, cwd), disableTools: false },
     cwd,
     dynamicTools: [],
     appServer: createAppServerOptions(),
@@ -141,7 +141,7 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     await retainCodexAppServerLiveThread(currentClient, "thread-sibling", releaseSibling);
     const common = {
       client: currentClient,
-      params: createParams(sessionFile, workspaceDir),
+      params: { ...createParams(sessionFile, workspaceDir), disableTools: false },
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createAppServerOptions(),
