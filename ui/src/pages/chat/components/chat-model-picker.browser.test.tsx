@@ -448,6 +448,8 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
     const clip = viewport.getBoundingClientRect();
     expect(bounds.top).toBeGreaterThanOrEqual(clip.top);
     expect(bounds.bottom).toBeLessThanOrEqual(clip.bottom);
+    const heading = container.querySelector<HTMLElement>("[data-chat-model-heading]")!;
+    expect(heading.getBoundingClientRect().top).toBe(clip.top);
     expect(rows().length).toBeLessThan(40);
   });
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
@@ -492,6 +494,12 @@ it("keeps the complete model panel above the composer", async () => {
         panel.bottom - 8,
       );
     });
+    const beta = option("example/beta");
+    const background = getComputedStyle(beta).backgroundColor;
+    const highlighted = getSearch().getAttribute("aria-activedescendant");
+    await page.getByText("Beta", { exact: true }).hover();
+    expect(getComputedStyle(beta).backgroundColor).toBe(background);
+    expect(getSearch().getAttribute("aria-activedescendant")).toBe(highlighted);
   } finally {
     container.removeAttribute("style");
   }

@@ -2214,9 +2214,9 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   text-align: left;
 }
 
-.chat-controls__inline-select-option:is(:hover, :focus-visible):not(:disabled):not(
-    [aria-disabled="true"]
-  ) {
+.chat-controls__inline-select-option:not(.chat-controls__model-option):not(
+    .chat-controls__model-more-toggle
+  ):is(:hover, :focus-visible):not(:disabled):not([aria-disabled="true"]) {
   background: var(--menu-hover);
   outline: none;
 }
@@ -2226,9 +2226,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: var(--chat-composer-menu-selected);
 }
 
-.chat-controls__inline-select-option--selected:is(:hover, :focus-visible):not(:disabled):not(
-    [aria-disabled="true"]
-  ) {
+.chat-controls__inline-select-option--selected:not(.chat-controls__model-option):is(
+    :hover,
+    :focus-visible
+  ):not(:disabled):not([aria-disabled="true"]) {
   background: var(--surface-selected-hover);
 }
 
@@ -4110,7 +4111,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   transform: translateY(var(--rail-shift, 0px));
 }
 
-.chat-controls__provider-tab:is(:hover, [aria-selected="true"]) {
+.chat-controls__provider-tab[aria-selected="true"] {
   background: var(--menu-selected);
 }
 
@@ -4235,7 +4236,9 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   border: 0;
   border-radius: 17px;
   background: var(--card);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+  box-shadow:
+    0 0 0 0.5px var(--border),
+    0 8px 16px -4px rgb(0 0 0 / 12%);
 }
 
 .chat-controls__account-popover [data-chat-account-option="manage"] {
@@ -4515,4 +4518,20 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   .chat-controls__model-option-action kbd {
     display: none;
   }
+}
+
+.chat-controls__model-virtual-row[data-chat-model-heading] {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: var(--card);
+}
+
+.chat-controls__model-search::-webkit-search-cancel-button {
+  filter: grayscale(1);
+  opacity: 0.6;
+}
+
+.chat-controls__model-option-provider .provider-brand-icon {
+  color: var(--muted);
 }

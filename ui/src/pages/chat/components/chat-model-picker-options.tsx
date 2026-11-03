@@ -14,7 +14,6 @@ import {
   type ChatModelPickerOptionProps,
   type ChatModelPickerTargetOptionProps,
 } from "./chat-model-picker-options.ts";
-import { handleModelOptionMouseEnter } from "./chat-model-picker-search-view.ts";
 import { ChatModelSearchContext, type ChatModelSearchRow } from "./chat-model-picker-search.ts";
 
 function ModelShortcut(props: { rowKey: string }) {
@@ -174,7 +173,6 @@ function ModelOptionButton(
         Boolean(props.entry.disabled && !props.presentation.resetsPin)
       }
       data-chat-model-auth-blocked={props.presentation.needsAuth ? "" : undefined}
-      onMouseEnter={handleModelOptionMouseEnter}
       onClick={(event) => {
         props.onSelect(props.entry, event);
       }}
@@ -190,13 +188,13 @@ function ModelOptionButton(
               {defaultLabel()}
             </span>
           </Show>
-          <Show when={props.presentation.modelMeta}>
-            <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
-          </Show>
           <Show when={props.entry.supportsTools === false}>
             <span class="chat-controls__model-chat-only-info" aria-hidden="true">
               <Icon name="info" />
             </span>
+          </Show>
+          <Show when={props.presentation.modelMeta}>
+            <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
           </Show>
         </span>
       </span>
@@ -254,7 +252,6 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
       aria-selected="false"
       type="button"
       disabled={props.disabled}
-      onMouseEnter={handleModelOptionMouseEnter}
       onClick={(event) => props.onSelect(props.groupId, props.entry.value, event)}
     >
       <span
