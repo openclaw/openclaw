@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import {
   buildChannelInboundEventContext,
   finalizeChannelInboundContext,
@@ -154,6 +155,27 @@ describe("buildChannelInboundEventContext", () => {
 
     expect(ctx.ChannelStructuredContext).toEqual([extra, legacy]);
     expect(Object.hasOwn(ctx, "UntrustedStructuredContext")).toBe(false);
+  });
+
+  it.each([
+    { name: "a text reply", expected: "text" },
+    {
+      name: "a photo reply",
+      media: [{ path: "/tmp/own.jpg", contentType: "image/jpeg" }],
+      expected: "image",
+    },
+    { name: "a voice reply", sourceModality: "voice" as const, expected: "voice" },
+  ])("reports $name to a photo by its own modality", ({ media, sourceModality, expected }) => {
+    const ctx = buildContext({
+      media,
+      message: { rawBody: "what is this?", sourceModality },
+      supplemental: {
+        quote: { id: "quote-1", media: [{ path: "/tmp/quote.png", contentType: "image/png" }] },
+      },
+    });
+
+    expect(ctx.media?.at(-1)?.path).toBe("/tmp/quote.png");
+    expect(buildInboundUserContextPrefix(ctx)).toContain(`"source_modality":"${expected}"`);
   });
 
   const slash = {

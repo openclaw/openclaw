@@ -314,6 +314,10 @@ export function finalizeChannelInboundContext<T extends Record<string, unknown>>
       SupplementalContext: supplemental,
       media: [...media],
       ...mediaPayload,
+      // Quote media joins the turn for inspection; a message without media of its own is still text.
+      ...(media.length > 0 && !params.media?.length
+        ? { SourceModality: originalContext.SourceModality ?? "text" }
+        : {}),
     };
     const entries: ChannelStructuredContextEntries = [];
     const extraEntries =

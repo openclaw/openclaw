@@ -1,0 +1,2 @@
+# A text-only reply to a photo reports its own source modality, not the replied photo's.
+22
