@@ -121,6 +121,66 @@ it("exports pending drafts from retired tables and legacy files, then drops the 
   });
 });
 
+it.each(["proposal", "rollback"])(
+  "keeps malformed UTF-8 %s bytes out of workspace recovery",
+  async (damaged) => {
+    const root = tempDirs.make("utf8-proposals-");
+    const stateDir = path.join(root, "state");
+    const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
+    const opsDir = path.join(root, "ops-agent");
+    const workspace = path.join(root, "workspace");
+    const config: OpenClawConfig = {
+      agents: { entries: { ops: { agentDir: opsDir, workspace } } },
+    };
+    const proposalsDir = path.join(stateDir, "skill-workshop", "proposals");
+    const skillDir = path.join(workspace, "skills", "deploy");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const opsExports = path.join(opsDir, "workshop-skills", ".archive", ".retired-proposals");
+    const writeFiles = (dir: string, files: Record<string, string>) => {
+      for (const [name, value] of Object.entries(files)) {
+        write(path.join(dir, name), value);
+      }
+    };
+    const read = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
+    const bundle = path.join(proposalsDir, "deploy-procedure-1");
+    const records = {
+      proposal: {
+        status: "pending",
+        origin: { agentId: "ops" },
+        target: { skillDir, skillFile },
+        supportFiles: [{ path: "references/notes.md", hash: sha256Hex("proposed\n") }],
+        note: "damaged",
+      },
+      rollback: {
+        targetSkillFile: skillFile,
+        previousContent: "before\n",
+        supportFiles: [
+          { path: "references/notes.md", existed: true, previousContent: "damaged\n" },
+        ],
+      },
+    };
+    writeFiles(bundle, {
+      "PROPOSAL.md": "# Deploy\n",
+      "proposal.json": JSON.stringify(records.proposal),
+      "rollback.json": JSON.stringify(records.rollback),
+    });
+    const source = path.join(bundle, `${damaged}.json`);
+    const bytes = fs.readFileSync(source);
+    bytes[bytes.indexOf("damaged")] = 0xff;
+    fs.writeFileSync(source, bytes);
+    writeFiles(skillDir, { "SKILL.md": "before\n", "references/notes.md": "proposed\n" });
+
+    const result = await retireSkillWorkshopProposals({ config, env });
+
+    expect(result).toMatchObject({ changes: [], warningDisposition: "recoverable" });
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(read(skillFile)).toBe("before\n");
+    expect(read(skillDir, "references/notes.md")).toBe("proposed\n");
+    expect(fs.readFileSync(source)).toEqual(bytes);
+    expect(fs.existsSync(opsExports)).toBe(false);
+  },
+);
+
 it("keeps legacy bundles without a provable owner, record, or draft until every bundle is exported", async () => {
   const root = tempDirs.make("openclaw-retire-legacy-proposals-");
   const stateDir = path.join(root, "state");

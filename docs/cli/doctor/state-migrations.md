@@ -423,3 +423,9 @@ copy. They do not add resources to an original capture already created by an
 older installed updater. Keep those retained copies, and do not assume an older
 capture includes newly declared external resources. A recovery copy is evidence
 for manual recovery; its existence alone does not guarantee automatic rollback.
+
+Malformed UTF-8 in legacy JSON or JSONL is left byte-for-byte unchanged rather
+than imported as replacement characters. Doctor reports the affected source;
+repair it from a trusted copy and rerun Doctor. Independent valid sources can
+still migrate. A UTF-8-only warning is recoverable, but accompanying ownership,
+structure, or write failures retain their normal migration refusal.

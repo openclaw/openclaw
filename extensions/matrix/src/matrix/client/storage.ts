@@ -288,18 +288,24 @@ export async function maybeMigrateLegacyStorage({
     return;
   }
   const syncCache = await import("./sync-cache-state.js");
-  if (!(await syncCache.readLegacyMatrixSyncCacheState(rootDir))) {
+  const { Utf8InputError } = await import("openclaw/plugin-sdk/runtime-doctor-migrations");
+  const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
+  let persisted;
+  try {
+    persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
+  } catch (error) {
+    if (!(error instanceof Utf8InputError)) {
+      throw error;
+    }
+    logger.warn?.(`${error.message} Legacy Matrix sync cache left in place: ${storagePath}`);
     return;
   }
-
-  const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
+  if (!persisted) {
+    return;
+  }
   fs.mkdirSync(rootDir, { recursive: true });
   let migrated = false;
   try {
-    const persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
-    if (!persisted) {
-      return;
-    }
     const store = getMatrixRuntime().state.openKeyedStoreV2<
       import("./sync-cache-state.js").MatrixSyncCacheRecord
     >(syncCache.openMatrixSyncCacheStoreOptions(rootDir));

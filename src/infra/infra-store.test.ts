@@ -10,6 +10,17 @@ import { defaultVoiceWakeTriggers, setVoiceWakeTriggers } from "./voicewake.js";
 
 describe("infra store", () => {
   describe("state migrations fs", () => {
+    it("refuses malformed UTF-8 without exposing replacement characters as session entries", async () => {
+      await withTempDir("openclaw-session-store-", async (dir) => {
+        const storePath = path.join(dir, "sessions.json");
+        const bytes = Buffer.from('{main:{sessionId:"damaged"}}');
+        bytes[bytes.indexOf("damaged")] = 0xff;
+        await fs.writeFile(storePath, bytes);
+        expect(readSessionStoreJson5(storePath)).toEqual({ store: {}, ok: false });
+        expect(await fs.readFile(storePath)).toEqual(bytes);
+      });
+    });
+
     it("parses JSON5 object session stores", async () => {
       await withTempDir("openclaw-session-store-", async (dir) => {
         const storePath = path.join(dir, "sessions.json");

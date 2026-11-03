@@ -31,6 +31,7 @@ import {
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
+import { Utf8InputError } from "./utf8-input.js";
 
 const LEGACY_RECORD_MAX_BYTES = 1024 * 1024;
 const DEFAULT_TRANSIENT_TTL_MS = 15 * 60 * 1000;
@@ -386,7 +387,11 @@ export function migrateLegacyManagedOutgoingImages(params: {
       );
   } catch (error) {
     warnings.push(`Failed reading legacy managed outgoing image state: ${String(error)}`);
-    return { changes, warnings };
+    return {
+      changes,
+      warnings,
+      ...(error instanceof Utf8InputError ? { warningDisposition: "recoverable" as const } : {}),
+    };
   }
 
   const nowMs = params.nowMs ?? Date.now();

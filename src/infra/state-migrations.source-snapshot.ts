@@ -307,9 +307,9 @@ export function readLegacyMigrationSourceSnapshotSync(params: {
     filePath: params.followSymlinks ? fs.realpathSync(params.sourcePath) : params.sourcePath,
     maxBytes: params.maxBytes,
   });
-  const raw = buffer.toString("utf8");
+  const raw = decodeUtf8Input(buffer, `Legacy ${params.label} source`);
   return {
-    buffer: Buffer.from(raw),
+    buffer,
     dev: exactIdentity.dev,
     ino: exactIdentity.ino,
     mtimeMs: stat.mtimeMs,

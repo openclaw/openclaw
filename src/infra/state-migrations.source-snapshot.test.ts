@@ -103,6 +103,20 @@ describe("doctor legacy migration source contract", () => {
     },
   );
 
+  it.each([{ bytes: [0xff] }, { bytes: [0xe2, 0x82] }])(
+    "rejects malformed UTF-8 before a synchronous source can be claimed: %j",
+    ({ bytes }) => {
+      const { sourcePath } = createSource();
+      const buffer = Buffer.from(bytes);
+      fs.writeFileSync(sourcePath, buffer);
+      expect(() => readLegacyMigrationSourceSnapshotSync({ sourcePath, label: "test" })).toThrow(
+        "must be valid UTF-8",
+      );
+      expect(fs.readFileSync(sourcePath)).toEqual(buffer);
+      expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["legacy.json"]);
+    },
+  );
+
   it("preserves BOM and valid replacement characters in decoded fingerprints", async () => {
     const { sourcePath, stateDir, stateRoot } = await createRootSource();
     const text = '\ufeff{"value":"合法 � 😀"}\r\n';

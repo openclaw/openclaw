@@ -789,9 +789,9 @@ describe("legacy audit recovery byte handling", () => {
     });
   });
 
-  it("uses original byte offsets when decoded audit text contains replacement characters", async () => {
+  it("preserves malformed UTF-8 audit bytes without importing replacement characters", async () => {
     await withAuditMigrationFixture(async (audit) => {
-      const { raw: rawPath, source: sourcePath } = audit.system;
+      const { source: sourcePath } = audit.system;
       const original = Buffer.concat([
         Buffer.from(
           '{"timestamp":"2026-07-03T00:00:00.000Z","operation":"gateway.restart","summary":"',
@@ -800,21 +800,11 @@ describe("legacy audit recovery byte handling", () => {
         Buffer.from('"}'),
       ]);
       await audit.write(sourcePath, original);
-
       const migrated = await audit.migrate();
-
-      expect(migrated.warnings).toEqual([]);
-      const blanked = await fs.readFile(rawPath);
-      expect(blanked).toHaveLength(original.length);
-      expect(blanked.every((byte) => byte === 0x20 || byte === 0x09)).toBe(true);
-
-      await audit.appendJsonLines(rawPath, [
-        systemAuditEvent("later", { timestamp: "2026-07-04T00:00:00.000Z" }),
-      ]);
-      const recovered = await audit.migrate();
-
-      expect(recovered.warnings).toEqual([]);
-      expect(audit.systemSummaries()).toEqual(["�", "later"]);
+      expect(migrated.warnings.join("\n")).toContain("UTF-8");
+      expect(migrated.warningDisposition).toBe("recoverable");
+      expect(await fs.readFile(sourcePath)).toEqual(original);
+      expect(audit.systemSummaries()).toEqual([]);
     });
   });
 
@@ -827,7 +817,7 @@ describe("legacy audit recovery byte handling", () => {
         Buffer.from(
           '{"timestamp":"2026-07-03T00:00:00.000Z","operation":"gateway.restart","summary":"',
         ),
-        Buffer.from([0x80]),
+        Buffer.from("é"),
         Buffer.from('"}\n'),
       ]);
       await fs.writeFile(rawPath, legacyRaw);

@@ -1228,6 +1228,13 @@ source's discovered `claimPaths` to the backup helper. It restores interrupted
 claims through the shared migration owner before
 capturing its snapshot; receipts always use the original source path.
 
+Decode legacy text with `decodeUtf8Input(bytes, sourceLabel)` from
+`openclaw/plugin-sdk/runtime-doctor-migrations` before parsing it. Lossy decoding
+can silently replace malformed bytes and persist corrupted values. A
+`Utf8InputError` means the source must remain untouched: report it as a recoverable
+warning and continue independent migrations. Preserve existing handling for
+other read, validation, and write failures.
+
 Call `importLegacyEntries({ accountId, entries })` with normalized channel/account
 identities. Each item contains an `entry` and `sources`, whose records contain
 `sourcePath`, `sha256`, and `size` from the backed-up snapshots. The host commits

@@ -4,6 +4,8 @@ import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   archiveLegacyStateSource,
+  decodeUtf8Input,
+  Utf8InputError,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -96,7 +98,9 @@ async function readLegacyMatrixCredentials(
     return null;
   }
   try {
-    const raw = JSON.parse(await fs.readFile(source.filePath, "utf8")) as unknown;
+    const raw = JSON.parse(
+      decodeUtf8Input(await fs.readFile(source.filePath), "Legacy Matrix credentials"),
+    ) as unknown;
     const createdAt =
       isRecord(raw) && typeof raw.createdAt === "string" && raw.createdAt
         ? raw.createdAt
@@ -105,7 +109,10 @@ async function readLegacyMatrixCredentials(
       isRecord(raw) ? { ...raw, createdAt } : raw,
       source.accountId,
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof Utf8InputError) {
+      throw error;
+    }
     return null;
   }
 }
@@ -116,9 +123,18 @@ async function* readLegacyMatrixSyncCacheSources(stateDir: string) {
     (name, depth) => name === MATRIX_SYNC_CACHE_FILENAME && (depth === 2 || depth === 4),
   );
   for (const storageRootDir of entries.map((entry) => path.dirname(entry.path)).toSorted()) {
-    const payload = await readLegacyMatrixSyncCacheState(storageRootDir);
+    let payload;
+    try {
+      payload = await readLegacyMatrixSyncCacheState(storageRootDir);
+    } catch (error) {
+      if (!(error instanceof Utf8InputError)) {
+        throw error;
+      }
+      yield { storageRootDir, payload: null, error };
+      continue;
+    }
     if (payload) {
-      yield { storageRootDir, payload };
+      yield { storageRootDir, payload, error: undefined };
     }
   }
 }
@@ -137,7 +153,15 @@ const matrixSyncCacheMigration: PluginDoctorStateMigration = {
     const changes: string[] = [];
     const warnings: string[] = [];
     const notices: string[] = [];
+    let utf8Warnings = 0;
     for await (const source of readLegacyMatrixSyncCacheSources(params.stateDir)) {
+      if (source.error) {
+        warnings.push(
+          `${source.error.message} Left legacy source in place: ${source.storageRootDir}`,
+        );
+        utf8Warnings++;
+        continue;
+      }
       const store = params.context.openPluginStateKeyedStore<MatrixSyncCacheRecord>(
         openMatrixSyncCacheStoreOptions(source.storageRootDir),
       );
@@ -159,7 +183,14 @@ const matrixSyncCacheMigration: PluginDoctorStateMigration = {
         );
       }
     }
-    return { changes, warnings, ...(notices.length > 0 ? { notices } : {}) };
+    return {
+      changes,
+      warnings,
+      ...(notices.length > 0 ? { notices } : {}),
+      ...(utf8Warnings > 0 && utf8Warnings === warnings.length
+        ? { warningDisposition: "recoverable" as const }
+        : {}),
+    };
   },
 };
 
@@ -215,6 +246,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const changes: string[] = [];
       const warnings: string[] = [];
       const sources = await collectLegacyMatrixCredentialSources(params);
+      let utf8Warnings = 0;
       const store = params.context.openPluginStateKeyedStore<MatrixCredentialStateRecord>({
         namespace: MATRIX_CREDENTIALS_NAMESPACE,
         maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
@@ -227,7 +259,17 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           );
           continue;
         }
-        const credentials = await readLegacyMatrixCredentials(source);
+        let credentials;
+        try {
+          credentials = await readLegacyMatrixCredentials(source);
+        } catch (error) {
+          if (!(error instanceof Utf8InputError)) {
+            throw error;
+          }
+          warnings.push(`${error.message} Left legacy source in place: ${source.filePath}`);
+          utf8Warnings++;
+          continue;
+        }
         if (!credentials) {
           warnings.push(
             `Left invalid Matrix credential legacy source in place: ${source.filePath}`,
@@ -279,7 +321,13 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         changes.push(`Migrated Matrix credentials for account ${source.accountId} to SQLite`);
         await archiveSource();
       }
-      return { changes, warnings };
+      return {
+        changes,
+        warnings,
+        ...(utf8Warnings > 0 && utf8Warnings === warnings.length
+          ? { warningDisposition: "recoverable" as const }
+          : {}),
+      };
     },
   },
   {

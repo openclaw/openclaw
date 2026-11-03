@@ -198,6 +198,36 @@ describe("meeting transcript Doctor migration", () => {
     },
   );
 
+  it.each(["metadata.json", "transcript.jsonl", "summary.json", "summary.md"])(
+    "preserves malformed UTF-8 %s without importing replacement characters",
+    async (fileName) => {
+      const h = harness();
+      const source = await h.seed("invalid-utf8", {
+        utteranceCount: fileName === "transcript.jsonl" ? 1_000 : 2,
+      });
+      const file = path.join(source, fileName);
+      const original = await fs.readFile(file);
+      const malformed = Buffer.from(original);
+      const marker = fileName === "transcript.jsonl" ? "Line 1000" : "Design review";
+      const offset = malformed.lastIndexOf(marker);
+      expect(offset).toBeGreaterThan(-1);
+      malformed[offset] = 0xff;
+      await fs.writeFile(file, malformed);
+
+      const result = await h.migrate();
+
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain(`${file} must be valid UTF-8`);
+      expect(result.warningDisposition).toBe("recoverable");
+      await expect(fs.readFile(file)).resolves.toEqual(malformed);
+      expect(h.snapshot().sessions).toEqual([]);
+      expect(h.snapshot().sources).toEqual([]);
+      await fs.writeFile(file, original);
+      expect((await h.migrate()).warnings).toEqual([]);
+      expect(await h.store.readSession("invalid-utf8")).toBeDefined();
+    },
+  );
+
   it("imports shipped dot-only session layouts into reserved SQLite selectors", async () => {
     const h = harness();
     for (const sessionId of [".", "..", "session"]) {

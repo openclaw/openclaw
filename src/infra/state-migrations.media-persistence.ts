@@ -1,12 +1,7 @@
-import fs from "node:fs";
 import path from "node:path";
 import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
-import {
-  decodeSessionArchiveBytes,
-  readSessionArchiveContentSync,
-  SESSION_ARCHIVE_ZSTD_SUFFIX,
-} from "../config/sessions/archive-compression.js";
+import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../config/sessions/archive-compression.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import {
@@ -96,6 +91,8 @@ import {
   migrateCanonicalTranscriptArchives,
 } from "./state-migrations.transcript-directives-archives.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { decodeUtf8Input, Utf8InputError } from "./utf8-input.js";
+import { resolveZstdCodec } from "./zstd-codec.js";
 
 const PREVIOUS_MEDIA_SCHEMA_VERSION = AGENT_MEDIA_SCHEMA_VERSION - 1;
 const ARCHIVE_TEMP_MARKER = ".media-retirement";
@@ -452,7 +449,14 @@ function migrateTranscriptArchive(
 ): boolean {
   const source = readRegularFileSync({ filePath });
   const compressed = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
-  const content = decodeSessionArchiveBytes(source.buffer, compressed);
+  const codec = compressed ? resolveZstdCodec() : null;
+  if (compressed && !codec) {
+    throw new Error("Cannot decode compressed transcript archive: this runtime lacks zstd support");
+  }
+  const content = decodeUtf8Input(
+    codec ? codec.decompress(source.buffer) : source.buffer,
+    filePath,
+  );
   const transformed = transformMediaArchiveContent(content, filePath);
   if (!transformed.changed) {
     return false;
@@ -470,19 +474,12 @@ function migrateTranscriptArchive(
     syncParentDir: true,
     syncTempFile: true,
     tempPrefix: `${path.basename(filePath)}${ARCHIVE_TEMP_MARKER}`,
-    beforeRename: ({ tempPath }) => {
+    beforeRename: () => {
       if (!archiveSourceMatches(filePath, source)) {
         throw new Error(`${filePath} changed before atomic media migration replacement`);
       }
-      const staged = decodeSessionArchiveBytes(fs.readFileSync(tempPath), compressed);
-      if (staged !== transformed.content) {
-        throw new Error(`${filePath} failed codec readback before replacement`);
-      }
     },
   });
-  if (readSessionArchiveContentSync(filePath) !== transformed.content) {
-    throw new Error(`${filePath} failed codec readback after replacement`);
-  }
   return true;
 }
 
@@ -645,6 +642,7 @@ export async function migrateLegacyMediaPersistence(
           resolveSqliteTranscriptArchiveDirectory({ agentId: entry.agentId, path: pathname }),
         );
         warnings.push(`Skipped agent database migration for ${pathname}: ${String(error)}`);
+        recoverableWarningCount += Number(error instanceof Utf8InputError);
         const repairHint = formatAgentDatabaseCorruptionRepairHint(entry.agentId, error);
         if (repairHint) {
           notices.push(repairHint);

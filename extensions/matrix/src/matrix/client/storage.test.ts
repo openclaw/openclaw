@@ -863,4 +863,29 @@ describe("matrix client storage paths", () => {
     });
     expect(restartedPaths.rootDir).toBe(oldStoragePaths.rootDir);
   });
+  it("retains malformed UTF-8 legacy sync cache without aborting client initialization", async () => {
+    const logger = createTestLogger();
+    setupStateDir(undefined, logger);
+    const storagePaths = await resolveDefaultStoragePaths();
+    fs.mkdirSync(storagePaths.rootDir, { recursive: true });
+    const bytes = Buffer.from(
+      JSON.stringify({
+        version: 1,
+        savedSync: {
+          nextBatch: "utf8-marker",
+          accountData: [],
+          roomsData: { join: {}, invite: {}, leave: {}, knock: {} },
+        },
+        cleanShutdown: true,
+      }),
+    );
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    fs.writeFileSync(storagePaths.storagePath, bytes);
+    await expect(maybeMigrateLegacyStorage({ storagePaths })).resolves.toBeUndefined();
+    expect(fs.readFileSync(storagePaths.storagePath)).toEqual(bytes);
+    expect(fs.existsSync(storagePaths.storagePath + ".migrated")).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("must be valid UTF-8"));
+    const store = await SqliteBackedMatrixSyncStore.create(storagePaths.rootDir);
+    expect(await store.getSavedSyncToken()).toBeNull();
+  });
 });

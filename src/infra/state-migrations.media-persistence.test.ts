@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
+import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
@@ -839,6 +840,29 @@ function createArchiveFixture(bytes: Uint8Array): {
   fs.writeFileSync(archivePath, bytes);
   return { archivePath, env };
 }
+
+it.each([false, true])(
+  "preserves malformed UTF-8 legacy archive (compressed=%s)",
+  async (compressed) => {
+    const malformed = Buffer.from(
+      '{"type":"message","message":{"role":"user","content":"bad text","MediaPath":"/media/a.png"}}\n',
+    );
+    malformed[malformed.indexOf("text")] = 0xff;
+    const bytes = compressed ? zstdCompressSync(malformed) : malformed;
+    const { archivePath, env } = createArchiveFixture(bytes);
+    const source = compressed ? `${archivePath}${SESSION_ARCHIVE_ZSTD_SUFFIX}` : archivePath;
+    if (compressed) {
+      fs.renameSync(archivePath, source);
+    }
+
+    const result = await migrateLegacyMediaPersistence({ env });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings.join("\n")).toContain(`${source} must be valid UTF-8`);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(fs.readFileSync(source)).toEqual(bytes);
+  },
+);
 
 describe("legacy media persistence NUL-tail recovery", () => {
   it("atomically removes a terminal NUL suffix from an otherwise valid archive", async () => {

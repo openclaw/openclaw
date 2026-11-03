@@ -52,6 +52,19 @@ describe("cron quarantine", () => {
     expect(preserved.jobs[0]?.raw).toBe("keep-me");
   });
 
+  it("rejects malformed UTF-8 historical quarantine without modifying its bytes", async () => {
+    const { storePath } = makeStorePath();
+    const quarantinePath = storePath.replace(/\.json$/, "-quarantine.json");
+    const bytes = Buffer.from('{"version":1,"jobs":[{"reason":"\x80","raw":"keep-me"}]}', "latin1");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(quarantinePath, bytes);
+
+    await expect(loadLegacyCronQuarantineForMigration(storePath)).rejects.toThrow(
+      "must be valid UTF-8",
+    );
+    expect(await fs.readFile(quarantinePath)).toEqual(bytes);
+  });
+
   it("preserves recovery rows when maintenance authority expires before worker dispatch", async () => {
     const { storePath } = makeStorePath();
     const retained = { sourceIndex: 0, reason: "missing-schedule", job: { id: "retained" } };

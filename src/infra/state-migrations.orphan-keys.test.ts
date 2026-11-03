@@ -103,6 +103,27 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+  it("leaves malformed UTF-8 unchanged while repairing an independent session store", async () => {
+    await withStateFixture(async ({ stateDir }) => {
+      const badPath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      writeStore(badPath, { main: { sessionId: "damaged", updatedAt: 1 } });
+      const bytes = fs.readFileSync(badPath);
+      bytes[bytes.indexOf("damaged")] = 0xff;
+      fs.writeFileSync(badPath, bytes);
+      const goodPath = opsSessionStorePath(stateDir);
+      writeStore(goodPath, { main: { sessionId: "valid", updatedAt: 1 } });
+
+      const result = await migrateFixtureState(stateDir, {
+        agents: { entries: { main: {}, ops: {} } },
+      });
+
+      expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+      expect(fs.readFileSync(badPath)).toEqual(bytes);
+      expect(readStore(goodPath)["agent:ops:main"]).toMatchObject({ sessionId: "valid" });
+      expect(readStore(goodPath).main).toBeUndefined();
+    });
+  });
+
   it("distinguishes large adjacent inodes before planning store aliases", async () => {
     await withStateFixture(async ({ tmpDir, stateDir }) => {
       const configuredStorePath = path.join(tmpDir, "configured-sessions.json");

@@ -144,6 +144,78 @@ describe("matrix doctor contract state migrations", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["credentials", "sync-cache"] as const)(
+    "retains malformed UTF-8 %s while importing a healthy account",
+    async (kind) => {
+      const stateDir = tempDirs.make("matrix-invalid-utf8-");
+      const params = createMigrationParams(stateDir);
+      const credentials = {
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "legacy-token",
+        deviceId: "DEVICE123",
+        createdAt: "2026-07-01",
+        lastUsedAt: "2026-07-02",
+      };
+      const sourcePath = (id: string) =>
+        kind === "credentials"
+          ? path.join(stateDir, "credentials", "matrix", "credentials-" + id + ".json")
+          : path.join(accountStorageRoot(stateDir, id), "bot-storage.json");
+      const filePath = sourcePath("broken");
+      const healthyPath = sourcePath("healthy");
+      for (const [pathname, marker] of [
+        [filePath, "utf8-marker"],
+        [healthyPath, "healthy-token"],
+      ]) {
+        fs.mkdirSync(path.dirname(pathname!), { recursive: true });
+        fs.writeFileSync(
+          pathname!,
+          JSON.stringify(
+            kind === "credentials"
+              ? { ...credentials, accessToken: marker }
+              : {
+                  version: 1,
+                  savedSync: {
+                    nextBatch: marker,
+                    accountData: [],
+                    roomsData: { join: {}, invite: {}, leave: {}, knock: {} },
+                  },
+                  cleanShutdown: true,
+                },
+          ),
+        );
+      }
+      const bytes = fs.readFileSync(filePath);
+      bytes[bytes.indexOf("utf8-marker")] = 0xff;
+      fs.writeFileSync(filePath, bytes);
+      const result = await migrationById(
+        kind === "credentials"
+          ? "matrix-credentials-json-to-plugin-state"
+          : "matrix-sync-cache-json-to-plugin-state",
+      ).migrateLegacyState(params);
+      expect(result.warningDisposition).toBe("recoverable");
+      expect(result.warnings).toHaveLength(1);
+      expect(fs.readFileSync(filePath)).toEqual(bytes);
+      expect(fs.existsSync(healthyPath)).toBe(false);
+      if (kind === "credentials") {
+        const store = params.context.openPluginStateKeyedStore<MatrixStoredCredentialRecord>({
+          namespace: MATRIX_CREDENTIALS_NAMESPACE,
+          maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
+          overflowPolicy: "reject-new",
+        });
+        expect(await store.lookup(matrixCredentialsStoreKey("broken"))).toBeUndefined();
+        expect(await store.lookup(matrixCredentialsStoreKey("healthy"))).toMatchObject({
+          accessToken: "healthy-token",
+        });
+      } else {
+        const broken = await SqliteBackedMatrixSyncStore.create(path.dirname(filePath));
+        const healthy = await SqliteBackedMatrixSyncStore.create(path.dirname(healthyPath));
+        expect(await broken.getSavedSyncToken()).toBeNull();
+        expect(await healthy.getSavedSyncToken()).toBe("healthy-token");
+      }
+    },
+  );
+
   it("reports crypto refusal in Doctor without auto-clearing it", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const storageRootDir = accountStorageRoot(stateDir);

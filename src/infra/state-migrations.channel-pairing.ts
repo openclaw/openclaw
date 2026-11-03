@@ -15,6 +15,7 @@ import type { PairingRequest } from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
+import { decodeUtf8Input, Utf8InputError } from "./utf8-input.js";
 
 const PAIRING_SUFFIX = "-pairing.json";
 const ALLOW_FROM_SUFFIX = "-allowFrom.json";
@@ -221,9 +222,9 @@ function normalizeLegacyPairingRequest(value: unknown): PairingRequest | null {
   return { id, code, createdAt, lastSeenAt, ...(meta && Object.keys(meta).length ? { meta } : {}) };
 }
 
-function readLegacyPairingRequests(filePath: string): PairingRequest[] | null {
+function readLegacyPairingRequests(filePath: string): PairingRequest[] | Utf8InputError | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+    const parsed = JSON.parse(decodeUtf8Input(fs.readFileSync(filePath), filePath)) as unknown;
     if (!isRecord(parsed) || !Array.isArray(parsed.requests)) {
       return null;
     }
@@ -231,8 +232,8 @@ function readLegacyPairingRequests(filePath: string): PairingRequest[] | null {
       const request = normalizeLegacyPairingRequest(entry);
       return request ? [request] : [];
     });
-  } catch {
-    return null;
+  } catch (error) {
+    return error instanceof Utf8InputError ? error : null;
   }
 }
 
@@ -253,9 +254,12 @@ function normalizeAllowEntry(channel: PairingChannel, value: unknown): string {
   return entry === "*" ? "" : entry;
 }
 
-function readLegacyAllowFrom(filePath: string, channel: PairingChannel): string[] | null {
+function readLegacyAllowFrom(
+  filePath: string,
+  channel: PairingChannel,
+): string[] | Utf8InputError | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+    const parsed = JSON.parse(decodeUtf8Input(fs.readFileSync(filePath), filePath)) as unknown;
     const values = Array.isArray(parsed)
       ? parsed
       : isRecord(parsed) && Array.isArray(parsed.allowFrom)
@@ -267,8 +271,8 @@ function readLegacyAllowFrom(filePath: string, channel: PairingChannel): string[
     return dedupePreserveOrder(
       values.map((value) => normalizeAllowEntry(channel, value)).filter(Boolean),
     );
-  } catch {
-    return null;
+  } catch (error) {
+    return error instanceof Utf8InputError ? error : null;
   }
 }
 
@@ -318,8 +322,10 @@ export function migrateLegacyChannelPairingState(params: {
     const pairingChannel = parsePairingFilename(filename);
     if (pairingChannel) {
       const requests = readLegacyPairingRequests(filePath);
-      if (!requests) {
-        warnings.push(`Legacy channel pairing file unreadable; left in place at ${filePath}`);
+      if (!Array.isArray(requests)) {
+        (requests instanceof Utf8InputError ? recoverableWarnings : warnings).push(
+          `Legacy channel pairing file unreadable; left in place at ${filePath}`,
+        );
         continue;
       }
       updateChannelPairingStateSnapshot(pairingChannel, params.env, (state) => {
@@ -361,8 +367,10 @@ export function migrateLegacyChannelPairingState(params: {
       continue;
     }
     const entries = readLegacyAllowFrom(filePath, allowTarget.target.channel);
-    if (!entries) {
-      warnings.push(`Legacy channel allowFrom file unreadable; left in place at ${filePath}`);
+    if (!Array.isArray(entries)) {
+      (entries instanceof Utf8InputError ? recoverableWarnings : warnings).push(
+        `Legacy channel allowFrom file unreadable; left in place at ${filePath}`,
+      );
       continue;
     }
     const accountId = resolveAllowFromAccountId(allowTarget.target.accountId);

@@ -78,6 +78,21 @@ afterEach(() => {
 });
 
 describe("legacy TUI last-session migration", () => {
+  it("retains malformed UTF-8 without importing replacement characters", async () => {
+    const stateDir = tempDirs.make("tui-invalid-utf8-");
+    const sourcePath = writeLegacyStore(stateDir, {
+      terminal: { sessionKey: "utf8-marker", updatedAt: 1 },
+    });
+    const bytes = fs.readFileSync(sourcePath);
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    fs.writeFileSync(sourcePath, bytes);
+    const result = migrate(stateDir);
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(fs.readFileSync(sourcePath)).toEqual(bytes);
+    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBeNull();
+  });
+
   it("runs only through explicit doctor detection and discards heartbeat pointers", async () => {
     const stateDir = tempDirs.make("openclaw-tui-migration-");
     const sourcePath = writeLegacyStore(stateDir, {

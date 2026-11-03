@@ -93,6 +93,24 @@ afterEach(async () => {
 });
 
 describe("SQLite-backed plugin model catalogs", () => {
+  it("refuses malformed UTF-8 catalogs and continues importing healthy owners", () => {
+    const agentDir = createAgentDir();
+    const source = join(agentDir, encodePluginModelCatalogRelativePath("broken"));
+    const healthyPath = join(agentDir, encodePluginModelCatalogRelativePath("healthy"));
+    mkdirSync(join(agentDir, "plugins", "broken"), { recursive: true });
+    mkdirSync(join(agentDir, "plugins", "healthy"), { recursive: true });
+    const corrupted = Buffer.from(catalogContents("broken", "synthetic-key"));
+    corrupted[corrupted.indexOf("synthetic-key")] = 0xff;
+    writeFileSync(source, corrupted);
+    const valid = catalogContents("healthy");
+    writeFileSync(healthyPath, valid);
+    const result = migrateLegacyPluginModelCatalogs({ agentDir });
+    expect(result.warnings.join("\n")).toContain("Could not read legacy provider catalog");
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, ["healthy"])).toEqual([
+      { pluginId: "healthy", contents: valid },
+    ]);
+    expect(readFileSync(source)).toEqual(corrupted);
+  });
   it("reads only named catalog rows without running migration or repair", async () => {
     const agentDir = createAgentDir();
     const zai = catalogContents("zai");

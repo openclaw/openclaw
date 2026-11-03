@@ -97,6 +97,19 @@ describe("legacy managed outgoing image migration", () => {
     await fsp.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("retains malformed UTF-8 without importing replacement characters", async () => {
+    const legacy = await writeLegacyRecord({ stateDir, overrides: { alt: "utf8-marker" } });
+    const bytes = await fsp.readFile(legacy.sourcePath);
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    await fsp.writeFile(legacy.sourcePath, bytes);
+    const result = migrate(stateDir);
+    expect(result.changes).toEqual([]);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(await fsp.readFile(legacy.sourcePath)).toEqual(bytes);
+    await expect(fsp.readFile(legacy.originalPath, "utf8")).resolves.toBe("image-bytes");
+  });
+
   it("recovers a claimed import, verifies typed metadata, and removes JSON", async () => {
     const legacy = await writeLegacyRecord({ stateDir });
     const claimPath = `${legacy.sourcePath}.doctor-importing-4242-22222222-2222-4222-8222-222222222222`;

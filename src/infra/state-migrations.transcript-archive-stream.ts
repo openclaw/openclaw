@@ -1,7 +1,7 @@
 import { PassThrough } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { StringDecoder } from "node:string_decoder";
 import { createZstdCompress, createZstdDecompress } from "node:zlib";
+import { decodeUtf8Chunks } from "./utf8-input.js";
 
 export type ArchiveLineTransform = (
   line: string,
@@ -28,7 +28,6 @@ async function* transformArchiveLineChunks(
   chunks: AsyncIterable<Buffer>,
   params: ArchiveTransformOptions,
 ): AsyncGenerator<{ bytes: Buffer; changed: boolean }> {
-  const decoder = new StringDecoder("utf8");
   let pending = "";
   let lineNumber = 0;
   let nulSuffix = false;
@@ -62,9 +61,9 @@ async function* transformArchiveLineChunks(
     return decoded.slice(0, nul);
   };
 
-  for await (const chunk of chunks) {
+  for await (const decoded of decodeUtf8Chunks(chunks, params.owner)) {
     params.signal?.throwIfAborted();
-    pending += acceptDecoded(decoder.write(Buffer.from(chunk)));
+    pending += acceptDecoded(decoded);
     let newline = pending.indexOf("\n");
     while (newline !== -1) {
       yield emitLine(pending.slice(0, newline), true);
@@ -73,7 +72,6 @@ async function* transformArchiveLineChunks(
     }
   }
   params.signal?.throwIfAborted();
-  pending += acceptDecoded(decoder.end());
   if (pending) {
     yield emitLine(pending, false);
   }

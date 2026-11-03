@@ -210,6 +210,36 @@ describe("retired Phone Control doctor migration", () => {
     }
   });
 
+  it("preserves policy and original bytes for malformed UTF-8 legacy journals", async () => {
+    const legacyPath = path.join(stateDir, "plugins", "phone-control", "armed.json");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({
+        version: 1,
+        armedAtMs: 1,
+        expiresAtMs: null,
+        removedFromDeny: ["CORRUPT"],
+      }),
+    );
+    const bytes = Buffer.from(
+      (await fs.readFile(legacyPath, "utf8")).replace("CORRUPT", "\x80"),
+      "latin1",
+    );
+    await fs.writeFile(legacyPath, bytes);
+    const cfg: OpenClawConfig = {
+      gateway: { nodes: { commands: { deny: ["operator.command"] } } },
+    };
+
+    const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
+
+    expect(result.config).toBe(cfg);
+    expect(result.cleanupSafe).toBe(false);
+    expect(result.configChanges).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining("must be valid UTF-8")]);
+    expect(await fs.readFile(legacyPath)).toEqual(bytes);
+  });
+
   it("does not touch operator-authored command entries that differ from the old seed", async () => {
     const deny = [...RETIRED_PHONE_CONTROL_SEEDED_DENY_COMMANDS, "custom.command"];
     const cfg = {

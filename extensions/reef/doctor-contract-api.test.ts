@@ -176,6 +176,87 @@ describe("Reef doctor contract", () => {
     return dir;
   }
 
+  it.each([
+    "keys.json",
+    "identity.json",
+    "setup-session.json",
+    "audit.jsonl",
+    "replay.jsonl",
+    "reviews.json",
+    "delivered.json",
+  ])("preserves malformed UTF-8 %s without importing replacement text", async (filename) => {
+    const dir = createLegacyDir();
+    const marker = "utf8-marker";
+    const review = {
+      id: marker,
+      from: "alice#1",
+      to: "bob#1",
+      direction: "outbound",
+      bodyHash: "b".repeat(64),
+      approvalDigest: "c".repeat(64),
+      verdict: {
+        decision: "review",
+        category: "ambiguous",
+        reason: marker,
+        model: "test-model",
+        policyVersion: "v1",
+      },
+    };
+    const audit = new MemoryAuditStore(new Uint8Array(32).fill(1));
+    await audit.appendEvent(marker, { id: 1 }, 10);
+    const data: Record<string, unknown> = {
+      "keys.json": { ...reefKeys(), opaque: marker },
+      "identity.json": { handle: marker, relayUrl: "https://reefwire.ai" },
+      "setup-session.json": {
+        session: marker,
+        relayUrl: "https://reefwire.ai",
+        email: "a@example.com",
+      },
+      "audit.jsonl": (await audit.entries())[0],
+      "replay.jsonl": {
+        op: "claim",
+        peer: marker,
+        id: "01JZ0000000000000000000000",
+        envelopeHash: "a".repeat(64),
+      },
+      "reviews.json": { [review.approvalDigest]: { review, approved: true } },
+      "delivered.json": [marker],
+    };
+    const bytes = Buffer.from(JSON.stringify(data[filename]));
+    const offset = bytes.indexOf(marker);
+    expect(offset).toBeGreaterThanOrEqual(0);
+    bytes[offset] = 0xff;
+    const source = path.join(dir, filename);
+    fs.writeFileSync(source, bytes);
+    const id =
+      filename === "keys.json"
+        ? "reef-keys-json-to-plugin-state"
+        : ["identity.json", "setup-session.json"].includes(filename)
+          ? "reef-registration-json-to-plugin-state"
+          : filename === "audit.jsonl"
+            ? "reef-audit-jsonl-to-plugin-state"
+            : "reef-runtime-files-to-plugin-state";
+    const result = await migrationById(id).migrateLegacyState(migrationParams());
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings.join("\n")).toContain("UTF-8");
+    expect(fs.readFileSync(source)).toEqual(bytes);
+    expect(fs.existsSync(source + ".migrated")).toBe(false);
+  });
+
+  it("retains refusal for mixed malformed UTF-8 and invalid JSON runtime sources", async () => {
+    const dir = createLegacyDir();
+    const bytes = Buffer.from([0xff]);
+    fs.writeFileSync(path.join(dir, "replay.jsonl"), bytes);
+    fs.writeFileSync(path.join(dir, "reviews.json"), "{");
+    const result = await migrationById("reef-runtime-files-to-plugin-state").migrateLegacyState(
+      migrationParams(),
+    );
+    expect(result.warnings.length).toBeGreaterThan(1);
+    expect(result.warningDisposition).toBeUndefined();
+    expect(fs.readFileSync(path.join(dir, "replay.jsonl"))).toEqual(bytes);
+    expect(fs.readFileSync(path.join(dir, "reviews.json"), "utf8")).toBe("{");
+  });
+
   it("keeps channels.reef authoritative over conflicting stray entry config", () => {
     const cfg = {
       channels: { reef: { handle: "canonical" } },
@@ -679,6 +760,9 @@ describe("Reef doctor contract", () => {
       expect.stringContaining(
         `${REEF_DELIVERED_MAX_ENTRIES + 1} delivered markers exceed plugin-state capacity`,
       ),
+    ]);
+    expect(result.warningDisposition).toBeUndefined();
+    expect(result.notices).toEqual([
       expect.stringContaining("Reef durable state migration is incomplete"),
     ]);
     for (const filePath of [replayPath, deliveredPath]) {

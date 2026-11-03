@@ -380,3 +380,50 @@ it("requires repair when a bare backend locator belongs to an agent-qualified ca
     name: resource,
   });
 });
+
+it.each(["source", "destination"] as const)(
+  "retains malformed UTF-8 %s records without changing ownership",
+  async (location) => {
+    const f = await fixture();
+    const resource = resolveAcpxSessionResource(f.claims[0]!);
+    const claim = structuredClone(f.claims[0]);
+    f.raw.future_field = { opaque: ["\ufffd", 42] };
+    await fs.writeFile(f.sourcePath, JSON.stringify(f.raw));
+    const source = await fs.readFile(f.sourcePath);
+    const targetPath = location === "source" ? f.sourcePath : f.file(resource);
+    const targetBytes = Buffer.from(
+      JSON.stringify(
+        location === "source"
+          ? f.raw
+          : {
+              ...f.raw,
+              acpx_record_id: resource,
+              name: resource,
+            },
+      ),
+    );
+    const replacement = targetBytes.indexOf(Buffer.from("\ufffd"));
+    const malformed = Buffer.concat([
+      targetBytes.subarray(0, replacement),
+      Buffer.from([0xff]),
+      targetBytes.subarray(replacement + 3),
+    ]);
+    await fs.writeFile(targetPath, malformed);
+
+    const result = await acpxSessionOwnerMigration.migrateLegacyState(f.input);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toHaveLength(location === "source" ? 1 : 2);
+    for (const warning of result.warnings) {
+      expect(warning).toContain("UTF-8");
+    }
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(await fs.readFile(targetPath)).toEqual(malformed);
+    if (location === "destination") {
+      expect(await fs.readFile(f.sourcePath)).toEqual(source);
+    }
+    expect(f.claims[0]).toEqual(claim);
+    await expect(fs.access(`${f.sourcePath}.migrated`)).rejects.toThrow();
+    await expectNoMigrationStaging(f.sourcePath);
+  },
+);

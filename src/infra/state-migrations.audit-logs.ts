@@ -54,6 +54,7 @@ import {
   LegacyMigrationMoveUnavailableError,
 } from "./state-migrations.no-replace-move.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { decodeUtf8Input, Utf8InputError } from "./utf8-input.js";
 
 export { detectLegacyAuditLogs } from "./state-migrations.audit-checkpoints.js";
 
@@ -398,7 +399,7 @@ async function migrateLegacyAuditLogSource(params: {
     }
     const prepared = prepareLegacyAuditRecords(
       params.source,
-      snapshot.raw,
+      decodeUtf8Input(snapshot.rawBytes, `Legacy ${params.source.label}`),
       sourceGeneration,
       previousCheckpoint?.recordOrdinalBase ?? 0,
     );
@@ -546,7 +547,7 @@ async function migrateLegacyAuditLogSource(params: {
     }
     const scrubbedRecords = prepareLegacyAuditRecords(
       params.source,
-      scrubbedSnapshot.raw,
+      decodeUtf8Input(scrubbedSnapshot.rawBytes, `Legacy ${params.source.label}`),
       legacyAuditSourceGenerationKey(checkpointRawRelativePath),
     );
     if (!scrubbedRecords.ok) {
@@ -700,7 +701,7 @@ export async function migrateLegacyAuditLogs(params: {
             if (error instanceof LegacyMigrationMoveUnavailableError) {
               warnings.push(formatLegacyAuditMoveWarning(error, params.stateDir));
             } else {
-              hasRefusal = true;
+              hasRefusal ||= !(error instanceof Utf8InputError);
               warnings.push(`Failed migrating ${source.label}: ${String(error)}`);
             }
             blockedLogicalSources.add(source.logicalSourcePath);

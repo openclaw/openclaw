@@ -24,6 +24,7 @@ import type {
   LegacyStateMigrationStepPlan,
   MigrationMessages,
 } from "./state-migrations.types.js";
+import { Utf8InputError } from "./utf8-input.js";
 
 type TuiLastSessionMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
@@ -100,10 +101,15 @@ function readLegacyTuiSource(sourcePath: string) {
       label: "TUI last-session",
       followSymlinks: true,
     });
-    return { ok: true as const, snapshot, records: parseLegacyTuiLastSessions(snapshot.raw) };
+    return {
+      ok: true as const,
+      snapshot,
+      records: parseLegacyTuiLastSessions(snapshot.raw),
+    };
   } catch (error) {
     return {
       ok: false as const,
+      recoverable: error instanceof Utf8InputError,
       refusal: {
         code: "step-refused",
         message: `Failed reading legacy TUI last-session state ${sourcePath}: ${String(error)}`,
@@ -120,7 +126,7 @@ export function inspectLegacyTuiLastSessionRefusal(
     return undefined;
   }
   const source = readLegacyTuiSource(detected.sourcePath);
-  return source.ok ? undefined : source.refusal;
+  return source.ok || source.recoverable ? undefined : source.refusal;
 }
 
 /** Import, verify, and remove the retired JSON store during an explicit doctor repair. */
@@ -141,7 +147,11 @@ export function migrateLegacyTuiLastSessions(params: {
   const source = readLegacyTuiSource(params.detected.sourcePath);
   if (!source.ok) {
     warnings.push(source.refusal.message);
-    return { changes, warnings };
+    return {
+      changes,
+      warnings,
+      ...(source.recoverable ? { warningDisposition: "recoverable" as const } : {}),
+    };
   }
   const { snapshot, records } = source;
 

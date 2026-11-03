@@ -84,6 +84,40 @@ describe("zalouser doctor state migration", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("retains malformed UTF-8 credentials while importing a healthy profile", async () => {
+    const legacyCredentials = { imei: "imei-1", cookie: [], userAgent: "utf8-marker" };
+    const filePath = resolveLegacyZalouserCredentialsPath("broken", env);
+    const healthyPath = resolveLegacyZalouserCredentialsPath("healthy", env);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(healthyPath, JSON.stringify(legacyCredentials));
+    const bytes = Buffer.from(JSON.stringify(legacyCredentials));
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    await fs.writeFile(filePath, bytes);
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: stateDir,
+      context: createDoctorContext(env),
+    };
+    const result = await findMigration(
+      "zalouser-credentials-json-to-plugin-state",
+    ).migrateLegacyState(params);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings).toHaveLength(1);
+    expect(await fs.readFile(filePath)).toEqual(bytes);
+    await expect(fs.access(healthyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const store = params.context.openPluginStateKeyedStore<StoredZaloCredentials>({
+      namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
+      maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    expect(await store.lookup(zalouserCredentialStoreKey("broken"))).toBeUndefined();
+    expect(await store.lookup(zalouserCredentialStoreKey("healthy"))).toMatchObject(
+      legacyCredentials,
+    );
+  });
+
   it("imports a profile credential blob into SQLite before archiving it", async () => {
     const profile = "work";
     const filePath = resolveLegacyZalouserCredentialsPath(profile, env);
