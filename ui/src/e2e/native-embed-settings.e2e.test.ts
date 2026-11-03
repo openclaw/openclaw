@@ -157,9 +157,7 @@ suite.define(() => {
             pathname: pathForRoute(destination.from),
           });
 
-          await page.goto(
-            new URL(pathForRoute(destination.route), suite.server.baseUrl).toString(),
-          );
+          await page.goto(new URL(pathForRoute(destination.route), suite.server.baseUrl).href);
           await waitForControlUiRoute(page, { routeId: destination.route });
           await header.getByRole("heading", { name: destination.title, exact: true }).waitFor();
           await header.getByRole("button", { name: "Back", exact: true }).click();
@@ -351,14 +349,16 @@ suite.define(() => {
                 .waitFor();
             }
             if (["secrets", "approvals", "debug"].includes(route)) {
-              await page.locator(".settings-table--stacked tbody td[data-label]").first().waitFor();
+              const collections = page.locator(
+                ".settings-table--stacked, .secrets-store__list, .standing-grants",
+              );
+              const rows = collections.locator('tbody td[data-label], li, [role="listitem"]');
+              await rows.first().waitFor();
               if (viewport.width <= 400) {
                 expect(
-                  await page
-                    .locator(".settings-table--stacked")
-                    .evaluateAll((tables) =>
-                      tables.every((table) => table.scrollWidth <= table.clientWidth),
-                    ),
+                  await collections.evaluateAll((collection) =>
+                    collection.every((list) => list.scrollWidth <= list.clientWidth),
+                  ),
                   route,
                 ).toBe(true);
               }
