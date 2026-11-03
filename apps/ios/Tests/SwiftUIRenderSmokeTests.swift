@@ -158,7 +158,7 @@ struct SwiftUIRenderSmokeTests {
         (.video, .transcode, .transcode),
     ] as [(OpenClawChatMediaKind, OpenClawChatPlaybackMode?, OpenClawChatPlaybackMode?)])
     @MainActor func `managed assistant media starts its artifact load with the playback route`(
-        input: (OpenClawChatMediaKind, OpenClawChatPlaybackMode?, OpenClawChatPlaybackMode?)) async throws
+        input: (OpenClawChatMediaKind, OpenClawChatPlaybackMode?, OpenClawChatPlaybackMode?)) async
     {
         let (kind, playback, expectedPlayback) = input
         let prefix = kind == .image ? "artifact_managed_image_" : "artifact_managed_media_"
