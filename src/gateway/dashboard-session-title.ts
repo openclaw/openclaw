@@ -11,6 +11,7 @@ import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { withWorktreeSourceWait } from "../agents/worktrees/allocation.js";
 import type { WorktreeSourceStage, WorktreeWaitBudget } from "../agents/worktrees/types.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -380,8 +381,9 @@ export async function prepareDashboardSessionTitle(params: {
 }): Promise<string | null> {
   try {
     // Slash drafts need prepared skill metadata so registered commands stay
-    // skill-aware; ordinary text keeps the empty-command fast path.
-    const trimmed = params.userMessage.trim();
+    // skill-aware; ordinary text keeps the empty-command fast path. Strip the
+    // inbound envelope first so timestamp-prefixed /skill drafts still prepare.
+    const trimmed = stripInboundMetadata(params.userMessage).trim();
     const skillCommands = trimmed.startsWith("/")
       ? await prepareTitleSkillCommands({
           cfg: params.cfg,
