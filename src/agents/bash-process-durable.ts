@@ -4,6 +4,7 @@ import { StringDecoder } from "node:string_decoder";
 import { resolveStateDir } from "../config/paths.js";
 import { hasErrnoCode } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -209,6 +210,7 @@ function bind(
   record: DurableProcessRecord,
   persistence: ReturnType<typeof createDurableProcessStore>,
 ): ManagedRun {
+  const broker = getSpawnBroker();
   const exit = createDeferredCore<RunExit>();
   let pending = Promise.resolve(),
     offset = 0,
@@ -216,7 +218,9 @@ function bind(
     stopConfirmed = false;
   const decoder = new StringDecoder("utf8"),
     sanitize = createStreamingBinaryOutputSanitizer();
-  const enqueue = (work: () => Promise<void>) => (pending = pending.catch(warn).then(work));
+  // Observation timers detach request context; retain only the process transport owner.
+  const enqueue = (work: () => Promise<void>) =>
+    (pending = pending.catch(warn).then(() => runWithSpawnBroker(broker, work)));
   const observeUnit = async () => {
     if (terminal) {
       return;

@@ -252,7 +252,7 @@ describe("createGatewayCloseHandler", () => {
         await vi.advanceTimersByTimeAsync(15_000);
         expect(isGatewayCleanupRetainedError(await closing)).toBe(true);
         if (owner === "session") {
-          expect(formatGatewayPendingCloseSteps()).not.toContain("session-admissions");
+          expect(formatGatewayPendingCloseSteps()).toContain("session-admissions");
         }
         expect(database.db.isOpen).toBe(true);
         expect([sdkDatabase.isOpen, preparedDatabase.isOpen]).toEqual([true, true]);

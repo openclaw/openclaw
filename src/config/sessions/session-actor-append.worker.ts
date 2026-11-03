@@ -1,4 +1,3 @@
-import { serialize } from "node:v8";
 import {
   decodeMetadataAppendEvent,
   sessionMetadataAppendNeedsReload,
@@ -226,7 +225,6 @@ export function applySessionActorAppend(
             ),
           ),
         };
-        serialize(value);
       } catch (error) {
         value.reload = {
           ok: false,

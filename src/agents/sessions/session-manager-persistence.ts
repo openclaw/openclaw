@@ -82,6 +82,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
     entry: SessionEntry | SessionLeafControl,
     appendIntent: "active-branch" | undefined,
     writeAdmission: SessionManagerAppendAdmission,
+    view: "reload" | "none",
     message?: Omit<
       NonNullable<SessionMetadataWorkerOperations["session.metadata.append"]["input"]["message"]>,
       "messageJson"
@@ -280,12 +281,16 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
                   ? { expectedMutationAt: mutationAt }
                   : {}),
               },
-              view: {
-                loadedVersion,
-                limits: this.boundedContextLimits,
-                admission,
-                questionAnswers: questionAnswers?.answers,
-              },
+              ...(view === "reload"
+                ? {
+                    view: {
+                      loadedVersion,
+                      limits: this.boundedContextLimits,
+                      admission,
+                      questionAnswers: questionAnswers?.answers,
+                    },
+                  }
+                : {}),
             },
             ...(this.persistenceHeaderPending || (initialWriter && !initialWriter.committedFence)
               ? {
@@ -373,7 +378,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           value.reload,
           outcome.failure,
           loadedVersion,
-          true,
+          view === "reload",
           value.initialModelParentId,
         );
         if (value.projectionNeedsReconcile && !outcome.failure) {
@@ -474,7 +479,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
                   ...(intent ? { appendIntent: intent } : {}),
                   ...(mutationAt !== undefined ? { expectedMutationAt: mutationAt } : {}),
                 },
-                ...(event.type !== "session"
+                ...(view === "reload" && event.type !== "session"
                   ? {
                       view: {
                         loadedVersion: this.transcriptVersion,
@@ -606,6 +611,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           canonical,
           options?.appendIntent,
           admission,
+          "none",
           message,
           options?.beforeFreshMessageCommit,
           options?.expectedMutationAt,

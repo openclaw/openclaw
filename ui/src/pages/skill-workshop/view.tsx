@@ -18,6 +18,7 @@ import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-worksh
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import "../../styles/chat/text.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
@@ -232,6 +233,13 @@ function Library(props: { view: WorkshopView; reads: WorkshopReads }) {
       : filter === "drafts"
         ? drafts().length
         : archived().length;
+  let detail: HTMLElement | undefined;
+  // Match the stacked Workshop layout, including native hosts with different navigation widths.
+  const revealDetail = () => {
+    if (window.matchMedia("(max-width: 900px)").matches) {
+      detail?.scrollIntoView({ block: "start", behavior: resolveScrollBehavior() });
+    }
+  };
   return (
     <Show
       when={
@@ -309,7 +317,7 @@ function Library(props: { view: WorkshopView; reads: WorkshopReads }) {
                     />
                   }
                 >
-                  {(skill) => <SkillRow skill={skill()} view={props.view} />}
+                  {(skill) => <SkillRow skill={skill()} view={props.view} onOpen={revealDetail} />}
                 </For>
               }
             >
@@ -318,12 +326,17 @@ function Library(props: { view: WorkshopView; reads: WorkshopReads }) {
                 keyed={(draft) => draft.id}
                 fallback={<SettingsEmpty message={t("skillWorkshop.skills.noneDrafts")} carapace />}
               >
-                {(draft) => <DraftRow draft={draft()} view={props.view} />}
+                {(draft) => <DraftRow draft={draft()} view={props.view} onOpen={revealDetail} />}
               </For>
             </Show>
           </div>
         </section>
-        <section class="sw-detail settings-group oc-settings-group">
+        <section
+          class="sw-detail settings-group oc-settings-group"
+          ref={(element) => {
+            detail = element;
+          }}
+        >
           <Show
             when={props.view().viewer}
             fallback={<SettingsEmpty message={t("skillWorkshop.viewer.pick")} carapace />}
@@ -341,7 +354,7 @@ function Library(props: { view: WorkshopView; reads: WorkshopReads }) {
   );
 }
 
-function SkillRow(props: { skill: SkillRowEntry; view: WorkshopView }) {
+function SkillRow(props: { skill: SkillRowEntry; view: WorkshopView; onOpen: () => void }) {
   const live = () => ("versions" in props.skill ? null : props.skill);
   const archived = () => ("versions" in props.skill ? props.skill : null);
   const change = createMemo(() =>
@@ -368,7 +381,10 @@ function SkillRow(props: { skill: SkillRowEntry; view: WorkshopView }) {
         type="button"
         class="sw-row__main"
         aria-current={props.view().viewer?.target.name === props.skill.name ? "true" : undefined}
-        onClick={() => props.view().onSelectSkill(props.skill.name)}
+        onClick={() => {
+          props.view().onSelectSkill(props.skill.name);
+          props.onOpen();
+        }}
       >
         <Show
           when={archived()}
@@ -430,7 +446,7 @@ function SkillRow(props: { skill: SkillRowEntry; view: WorkshopView }) {
   );
 }
 
-function DraftRow(props: { draft: SkillWorkshopDraft; view: WorkshopView }) {
+function DraftRow(props: { draft: SkillWorkshopDraft; view: WorkshopView; onOpen: () => void }) {
   const selected = () => props.view().viewer?.target.draftId === props.draft.id;
   const live = () =>
     props.view().snapshot!.list.skills.some((skill) => skill.name === props.draft.skillName);
@@ -440,7 +456,10 @@ function DraftRow(props: { draft: SkillWorkshopDraft; view: WorkshopView }) {
         type="button"
         class="sw-row__main"
         aria-current={selected() ? "true" : undefined}
-        onClick={() => props.view().onSelectDraft(props.draft.id)}
+        onClick={() => {
+          props.view().onSelectDraft(props.draft.id);
+          props.onOpen();
+        }}
       >
         <span class="sw-row__top">
           <span class="sw-row__name">{props.draft.skillName}</span>

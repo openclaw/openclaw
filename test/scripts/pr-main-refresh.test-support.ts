@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   chmodSync,
   constants as fsConstants,
   cpSync,
@@ -94,6 +95,10 @@ function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean
   git(root, "init", "-b", "main", canonical);
   configureRepository(canonical, perWorktreeConfig);
   copyPrWrapperSources(canonical);
+  const provisionSource = process.env.OPENCLAW_PR_BOOTSTRAP_PROVISION_SOURCE;
+  if (process.env.OPENCLAW_PR_BOOTSTRAP_MEASURE && provisionSource) {
+    cpSync(provisionSource, join(canonical, "scripts/pr-lib"), { recursive: true });
+  }
   cpSync(join(process.cwd(), ".github", "workflows"), join(canonical, ".github", "workflows"), {
     recursive: true,
   });
@@ -824,11 +829,56 @@ console.log(args.slice(2).join('\\n'));
     },
     run(command: string | string[], bash = "bash", from = canonical) {
       const args = typeof command === "string" ? [command, "42"] : command;
-      return spawnSync(bash, [join(from, "scripts", "pr"), ...args], {
+      const measure = process.env.OPENCLAW_PR_BOOTSTRAP_MEASURE;
+      const trace =
+        measure && process.env.OPENCLAW_PR_BOOTSTRAP_TRACE === "1"
+          ? `${measure}.git.jsonl`
+          : undefined;
+      if (trace) {
+        writeFileSync(trace, "");
+      }
+      const started = performance.now();
+      const profile = measure && process.env.OPENCLAW_PR_BOOTSTRAP_PROFILE;
+      const result = spawnSync(bash, [join(from, "scripts", "pr"), ...args], {
         cwd: from,
-        env,
+        env:
+          trace || profile
+            ? {
+                ...env,
+                ...(trace ? { GIT_TRACE2_EVENT: trace } : {}),
+                ...(profile
+                  ? { NODE_OPTIONS: `--import=${pathToFileURL(profile).href} ${env.NODE_OPTIONS}` }
+                  : {}),
+              }
+            : env,
         encoding: "utf8",
       });
+      const milliseconds = performance.now() - started;
+      if (measure) {
+        const commands: Record<string, number> = {};
+        if (trace) {
+          const events = readFileSync(trace, "utf8")
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as { event: string; name?: string });
+          for (const event of events) {
+            if (event.event === "cmd_name" && event.name) {
+              commands[event.name] = (commands[event.name] ?? 0) + 1;
+            }
+          }
+        }
+        appendFileSync(
+          measure,
+          JSON.stringify({
+            args,
+            milliseconds,
+            status: result.status,
+            commands,
+          }) + "\n",
+        );
+      }
+      return result;
     },
     shell(command: string, shellOptions: { supervised?: boolean } = {}) {
       // Sourced helpers bypass the entrypoint's Darwin heredoc protection.

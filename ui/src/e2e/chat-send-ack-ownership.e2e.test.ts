@@ -30,7 +30,7 @@ suite.define(() => {
       await exactButton(page, "Send message").click();
       const original = await gateway.waitForRequest("chat.send");
       const runId = String(asOptionalRecord(original.params)?.idempotencyKey);
-      const stop = page.getByRole("button", { name: "Stop generating" });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       await stop.waitFor();
       const progress = "Original run continues working.";
       await chat({

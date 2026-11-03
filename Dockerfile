@@ -9,6 +9,7 @@
 #
 # Build stages use full trixie; the runtime image is always trixie-slim.
 ARG OPENCLAW_RUNTIME_ASSETS=runtime-assets
+ARG OPENCLAW_INSTALLED_RUNTIME_INPUT=installed-runtime-directory-input
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="--max-old-space-size=8192"
@@ -231,10 +232,22 @@ RUN node scripts/postinstall-bundled-plugins.mjs && \
     cp scripts/lib/guard-inventory-utils.mjs /app/.runtime-bootstrap/scripts/lib/
 
 # Only installed assets and pinned helpers feed this route, never source builds.
-FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS installed-runtime-assets
-ARG OPENCLAW_EXTENSIONS
+FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS installed-runtime-directory-input
 WORKDIR /app
 COPY --from=openclaw_installed_runtime /app/ /app/
+
+# Archive recipes admit the exact artifact here, after Docker snapshots the context.
+FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS installed-runtime-archive-input
+ARG OPENCLAW_INSTALLED_RUNTIME_SHA256
+WORKDIR /app
+COPY --from=openclaw_installed_runtime /installed-runtime.tgz /tmp/installed-runtime.tgz
+RUN --network=none test "${#OPENCLAW_INSTALLED_RUNTIME_SHA256}" -eq 64 && \
+    case "$OPENCLAW_INSTALLED_RUNTIME_SHA256" in *[!0-9a-f]*) exit 1;; esac && \
+    printf "%s  /tmp/installed-runtime.tgz\n" "$OPENCLAW_INSTALLED_RUNTIME_SHA256" | sha256sum -c - && \
+    tar -xzf /tmp/installed-runtime.tgz -C / && rm /tmp/installed-runtime.tgz
+
+FROM ${OPENCLAW_INSTALLED_RUNTIME_INPUT} AS installed-runtime-assets
+ARG OPENCLAW_EXTENSIONS
 COPY pnpm-lock.yaml docker-entrypoint.mjs /app/
 RUN --network=none cp -R .runtime-bootstrap/scripts/. scripts/ && \
     mkdir -p qa && \

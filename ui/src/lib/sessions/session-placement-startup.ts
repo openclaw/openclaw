@@ -1,10 +1,10 @@
+import { GatewayPayloadLimitError } from "@openclaw/gateway-client/browser";
 import { sleepWithAbort } from "@openclaw/retry";
 import type {
   SessionPlacement,
   SessionsDispatchResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { GatewayPayloadLimitError } from "../../api/gateway-browser-socket.ts";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";

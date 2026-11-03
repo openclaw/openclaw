@@ -351,6 +351,7 @@ suite.define(() => {
       const updateIssue = updateCard(page);
       await updateIssue.waitFor();
       const dismissButton = updateIssue.locator(".sidebar-issues-panel__dismiss");
+      await updateIssue.hover();
       await dismissButton.click();
       await updateIssue.waitFor({ state: "detached" });
       await page.keyboard.press("Escape");
@@ -393,6 +394,7 @@ suite.define(() => {
       await inboxBadge.waitFor();
       await page.locator(".sidebar-issues-button").click();
       const updateIssue = updateCard(page);
+      await updateIssue.hover();
       await updateIssue.locator(".sidebar-issues-panel__dismiss").click();
       await updateIssue.waitFor({ state: "detached" });
       await page.keyboard.press("Escape");
@@ -448,6 +450,7 @@ suite.define(() => {
 
       await page.locator(".sidebar-issues-button").click();
       const scopeGuidance = page.locator('[data-attention-kind="scopeUpgrade"]');
+      await scopeGuidance.hover();
       await scopeGuidance.locator(".sidebar-issues-panel__dismiss").click();
       await scopeGuidance.waitFor({ state: "detached" });
       const updateIssue = updateCard(page);

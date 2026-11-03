@@ -19,7 +19,14 @@ const RING_RADIUS = 6.5;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 export function ContextNotice(props: ContextNoticeProps) {
-  const model = createMemo(() => getContextNoticeViewModel(props.session));
+  const model = createMemo(() =>
+    getContextNoticeViewModel(
+      props.session,
+      props.session?.totalTokens === undefined && props.session?.totalTokensFresh === undefined
+        ? props.contextUsage
+        : undefined,
+    ),
+  );
   const currentGroup = createMemo(() => {
     const currentProvider = (
       props.session?.modelProvider?.trim() || latestAssistantProvider(props.messages)
@@ -109,6 +116,14 @@ export function ContextNotice(props: ContextNoticeProps) {
         })
       : t("chat.usageRemaining");
   });
+  const tooltip = () => {
+    const context = model();
+    return context
+      ? t("chat.composer.contextUsage.percentUsed", {
+          pct: `${context.approximate ? "~" : ""}${context.pct}`,
+        })
+      : summary();
+  };
   const colors = () => {
     const context = model();
     return context ? { "--ctx-color": context.color, "--ctx-bg": context.bg } : undefined;
@@ -145,7 +160,7 @@ export function ContextNotice(props: ContextNoticeProps) {
                 ref={pickerRef.trigger}
                 class={["context-ring", { "context-ring--warning": model()?.warning }]}
                 aria-label={summary()}
-                title={t("chat.composer.contextUsage.open")}
+                title={tooltip()}
               >
                 <svg
                   class="context-ring__dial"

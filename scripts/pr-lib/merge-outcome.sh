@@ -1282,7 +1282,7 @@ merge_outcome_accept_head_drift() {
     --arg actor "$actor" --arg outcome "$expected_oid" --arg merged "$merged_head" --arg landed "$landed" \
     '.phase="merged" | .landed=$landed | .headDrift={actor:$actor,outcome:$outcome,mergedHead:$merged}')" || return 1
   echo "MERGED pushed head $merged_head (retained auto head $head) as $landed; head-drift receipt retained at $MERGE_OUTCOME_REF."
-  echo "After ownership-checked cleanup, explicitly finalize: scripts/pr merge-complete $pr $MERGE_OUTCOME_OID --confirmed-operator-completion"
+  merge_outcome_print_cleanup_guidance "$pr"
 }
 
 merge_outcome_cancel_auto() {
@@ -1560,6 +1560,14 @@ merge_complete() {
   echo "completion comment: $MERGE_COMPLETION_COMMENT_URL"
 }
 
+merge_outcome_print_cleanup_guidance() {
+  local pr="$1"
+  echo "After checking ownership and releasing the checkout's session cwd, run from the persistent checkout:"
+  printf 'scripts/pr gc --pr %s &&\n' "$pr"
+  printf '%s\n' "  pr_cleanup_outcome=\$(git rev-parse --verify refs/openclaw/pr-merge-outcomes/$pr) &&"
+  printf '%s\n' "  scripts/pr merge-complete $pr \"\$pr_cleanup_outcome\" --confirmed-operator-completion"
+}
+
 merge_outcome_resume() {
   local pr="$1" phase MERGE_COMPLETION_COMMENT_URL
   merge_outcome_reconcile "$pr" || return 1
@@ -1577,6 +1585,8 @@ merge_outcome_resume() {
     retire_pr_workflow_binding "$pr" || return 1
   else
     echo "Merge confirmed; completion pending. Recovery does not repeat comment POST or cleanup. Inspect the completion marker in PR comments and any remaining .worktrees/pr-$pr/local branches; verify their ownership before manual cleanup."
-    echo "After cleanup, explicitly finalize: scripts/pr merge-complete $pr $MERGE_OUTCOME_OID --confirmed-operator-completion"
+    if [ "$phase" != commenting ] || [ -n "$MERGE_COMPLETION_COMMENT_URL" ]; then
+      merge_outcome_print_cleanup_guidance "$pr"
+    fi
   fi
 }

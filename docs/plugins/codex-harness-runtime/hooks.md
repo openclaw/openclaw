@@ -142,6 +142,19 @@ native tool record; OpenClaw can mirror selected events but cannot rewrite
 the native thread unless Codex exposes that through app-server or native hook
 callbacks.
 
+A `before_tool_call` rewrite on a Codex `PreToolUse` event returns the
+replacement as `updatedInput` when Codex can apply it: `command` for native
+shell and `apply_patch`, or the JSON object arguments for MCP tools within the
+[size, depth, and number limits](/plugins/codex-harness-runtime/v1-support-contract).
+Codex then applies its normal approval and sandbox policy to the replacement. OpenClaw
+denies the call for any other rewrite, including extra shell fields such as
+`workdir`, other native tools, and rewrites that arrive during a report-mode
+approval, when Codex has already fixed the command.
+
+Codex keeps the last completed `updatedInput` from its `PreToolUse` hooks, so a
+separate Codex hook from another config layer can replace an OpenClaw rewrite.
+OpenClaw policy does not see that hook's input.
+
 Codex app-server report-mode `PreToolUse` events defer plugin approval to the
 matching app-server approval. If an OpenClaw `before_tool_call` hook returns
 `requireApproval` while the native payload sets `openclaw_approval_mode:

@@ -132,6 +132,50 @@ it.each(["cache", "update-tmpdir"])(
   },
 );
 
+it.each([
+  ["synchronous copy", prepareSqliteReadOnlyLocationSyncInProcess],
+  ["asynchronous copy", prepareSqliteReadOnlyCopyInProcess],
+  ["online backup", prepareSqliteReadOnlyLocationInProcess],
+] as const)("reads and cleans up a %s snapshot despite EXDEV renames", async (_mode, prepare) => {
+  const databasePath = createTempDatabasePath(
+    "CREATE TABLE probe(value); INSERT INTO probe VALUES(7);",
+  );
+  const stagingRoot = tempDirs.make("sqlite-efs-publication-");
+  const before = fs.readFileSync(databasePath);
+  vi.spyOn(fs, "renameSync").mockImplementation(() => {
+    throw Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
+  });
+  const prepared = await prepare(databasePath, stagingRoot);
+  try {
+    withDatabase(
+      prepared.location,
+      (db) => {
+        expect(db.prepare("SELECT value FROM probe").all()).toEqual([{ value: 7 }]);
+      },
+      true,
+    );
+    if (process.platform !== "win32") {
+      expect(fs.statSync(prepared.location).mode & 0o777).toBe(0o600);
+    }
+    expect(fs.readFileSync(databasePath)).toEqual(before);
+  } finally {
+    expect(await prepared.cleanupAsync()).toBe(true);
+  }
+  expect(fs.readdirSync(stagingRoot)).toEqual([]);
+});
+
+it("preserves other rename errors and removes the failed snapshot", async () => {
+  const databasePath = createTempDatabasePath("CREATE TABLE probe(value);");
+  const stagingRoot = tempDirs.make("sqlite-rename-refusal-");
+  vi.spyOn(fs, "renameSync").mockImplementation(() => {
+    throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+  });
+  await expect(prepareSqliteReadOnlyLocationInProcess(databasePath, stagingRoot)).rejects.toThrow(
+    "operation not permitted",
+  );
+  expect(fs.readdirSync(stagingRoot)).toEqual([]);
+});
+
 it.each([13, 778])(
   "retains SQLite destination write failure %i and identifies the snapshot cache",
   async (errcode) => {

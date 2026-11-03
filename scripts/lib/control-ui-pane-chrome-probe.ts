@@ -2,16 +2,33 @@
 export function installPaneChromeProbe() {
   const selectors = {
     headerTrailing: ".chat-pane__header-trailing",
+    headerIdentity: ".chat-pane__identity-actions",
+    versions: "openclaw-chat-pane-versions-menu button",
+    historyBoundary: ".chat-history-boundary__action",
+    identity: ".chat-pane__crumbs",
+    sessionTitle: ".chat-pane__session-title-text",
     composerControls: ".chat-controls__session, .chat-controls__permission-picker",
     workspace: ".chat-pane__workspace-chip",
     details: ".chat-details",
     breadcrumb: ".chat-pane__parent-session",
+    ownFooter: ".chat-group.user .chat-group-footer__meta",
     composerState: ".agent-chat__disabled-banner, .agent-chat__input",
   };
   type Region = keyof typeof selectors;
   type Signature = { nodes: number; hash: number; truncated: boolean };
-  type Frame = { at: number; regions: Record<Region, Signature>; composerHeight: number };
+  type Frame = {
+    at: number;
+    regions: Record<Region, Signature>;
+    composerHeight: number;
+    boxes: Record<Region, number[] | null>;
+    paneFacts: { transcript: boolean; archivedFooter: boolean; genericComposer: boolean };
+    identityChildren: string[];
+    boundaryLabel: string | null;
+    messageRows: number;
+    activityGroups: number;
+  };
   const frames: Frame[] = [];
+  let connectionIndicatorFrames = 0;
   const detailsFrames: Array<{ at: number; sections: unknown[] }> = [];
   let detailsSignature = "";
   const sampleDetails = (at: number) => {
@@ -20,16 +37,18 @@ export function installPaneChromeProbe() {
       .flatMap((panel) =>
         Array.from(
           panel.querySelectorAll(
-            "[data-details-group], [data-progress-card-placement='details'], [data-panel-skeleton]",
+            "section.chat-details-session, [data-details-group], [data-progress-card-placement='details'], [data-panel-skeleton]",
           ),
         ).map((section) => {
           const box = section.getBoundingClientRect();
           const panelBox = panel.getBoundingClientRect();
+          const host = panel.querySelector("openclaw-chat-details-session");
+          const facts = host ? Reflect.get(host, "props") : undefined;
           return {
             section:
               section.getAttribute("data-details-group") ??
               section.getAttribute("data-progress-card-placement") ??
-              "skeleton",
+              (section.matches("section.chat-details-session") ? "session" : "skeleton"),
             top: Math.round(box.top - panelBox.top),
             left: Math.round(box.left - panelBox.left),
             width: Math.round(box.width),
@@ -37,6 +56,16 @@ export function installPaneChromeProbe() {
             panelTop: Math.round(panelBox.top),
             panelWidth: Math.round(panelBox.width),
             height: Math.round(box.height),
+            sources: {
+              liveSession: facts?.sessionFactsReady === true,
+              cachedSession: Boolean(facts?.cachedDetails?.session),
+              cachedEnvironment: Boolean(facts?.cachedDetails?.environment),
+              creator: Boolean(facts?.selectedSession?.createdActor),
+              participantCount: facts?.selectedSession?.participantCount !== undefined,
+              worktree: Boolean(facts?.selectedSession?.worktree),
+              branch: Boolean(facts?.detailsWorkspace?.branch),
+              uncommitted: Boolean(facts?.environment?.uncommitted),
+            },
             outputCount:
               section.querySelector(".chat-details-desktop-section__count")?.textContent?.trim() ??
               null,
@@ -157,15 +186,46 @@ export function installPaneChromeProbe() {
   shiftObserver.observe({ type: "layout-shift", buffered: true });
   return {
     sample(at: number) {
+      if (
+        document
+          .querySelector(".chat-pane-cache__pane--active .chat-pane__connection-state")
+          ?.checkVisibility()
+      ) {
+        connectionIndicatorFrames++;
+      }
       sampleDetails(at);
-      if (!dirty) {
+      const root = document.querySelector(".chat-pane-cache__pane--active");
+      const boxes = Object.fromEntries(
+        regions.map((region) => {
+          const elements = root?.querySelectorAll(selectors[region]);
+          const element = region === "ownFooter" ? elements?.[elements.length - 1] : elements?.[0];
+          const box = element?.getBoundingClientRect();
+          return [region, box ? [box.x, box.y, box.width, box.height] : null];
+        }),
+      ) as Frame["boxes"];
+      const paneFacts = {
+        transcript: Array.from(root?.querySelectorAll(".chat-virtual-row .chat-text") ?? []).some(
+          (element) =>
+            Boolean(element.textContent?.trim()) &&
+            element.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
+        ),
+        archivedFooter: Boolean(root?.querySelector(".agent-chat__disabled-banner--replacement")),
+        genericComposer: Boolean(root?.querySelector(".agent-chat__input")),
+      };
+      const geometryChanged =
+        JSON.stringify([boxes, paneFacts]) !==
+        JSON.stringify([frames.at(-1)?.boxes, frames.at(-1)?.paneFacts]);
+      if (!dirty && !geometryChanged) {
         return;
       }
       dirty = false;
       const next = Object.fromEntries(
         regions.map((region) => [region, signature(region)]),
       ) as Frame["regions"];
-      if (regions.every((region) => frames.at(-1)?.regions[region].hash === next[region].hash)) {
+      if (
+        !geometryChanged &&
+        regions.every((region) => frames.at(-1)?.regions[region].hash === next[region].hash)
+      ) {
         return;
       }
       if (frames.length >= 256) {
@@ -175,6 +235,15 @@ export function installPaneChromeProbe() {
       frames.push({
         at,
         regions: next,
+        boxes,
+        paneFacts,
+        identityChildren: Array.from(
+          root?.querySelector(".chat-pane__identity-actions")?.children ?? [],
+          (element) => element.localName,
+        ),
+        boundaryLabel: root?.querySelector(".chat-history-boundary__action")?.textContent ?? null,
+        messageRows: root?.querySelectorAll("[data-message-id]").length ?? 0,
+        activityGroups: root?.querySelectorAll(".chat-activity-group").length ?? 0,
         composerHeight:
           document
             .querySelector(".chat-pane-cache__pane--active .agent-chat__composer-shell")
@@ -202,6 +271,7 @@ export function installPaneChromeProbe() {
         (shift) => firstTranscriptPaint !== null && shift.at > firstTranscriptPaint,
       );
       return {
+        connectionIndicatorFrames,
         firstTranscriptPaint,
         changesAfterContent: firstTranscriptPaint === null ? null : changes.length,
         changes,

@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -57,13 +56,10 @@ export async function replaceDreamingMarkdownFile(
     return await files.replaceReport(filePath, content, workspaceFileMode);
   }
   const mode = resolveWorkspaceCreationMode(workspaceFileMode);
-  const directoryPath = path.dirname(filePath);
-  await fs.mkdir(directoryPath, { recursive: true });
-  const dirMode = (await fs.stat(directoryPath)).mode & 0o7777;
   await replaceFileAtomic({
     filePath,
     content,
-    dirMode,
+    dirMode: "preserve",
     mode,
     preserveExistingMode: true,
     tempPrefix: `${path.basename(filePath)}.dreaming`,

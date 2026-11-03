@@ -120,7 +120,10 @@ vi.mock("node:child_process", async () => {
 });
 // mock-isolation: Windows fallback cases must not inspect or signal live gateway processes.
 vi.mock("../infra/gateway-processes.js", () => ({
-  findVerifiedGatewayListenerPidsOnPortSync: (port: number) => verifiedGatewayPids(port),
+  findVerifiedGatewayListenerPidsOnPortSync: () => {
+    throw new Error("Fallback runtime must await listener ownership inspection");
+  },
+  findVerifiedGatewayListenerPidsOnPort: async (port: number) => verifiedGatewayPids(port),
 }));
 
 const { restartScheduledTask, stopScheduledTask } = await import("./schtasks-control.js");
@@ -865,6 +868,16 @@ describe("Windows startup fallback", () => {
     );
 
     expect(await readScheduledTaskRuntime(env)).toMatchObject({ status: "running", pid: 4242 });
+  });
+
+  it("awaits listener ownership before reporting fallback runtime", async ({ env }) => {
+    taskProbe.mockReturnValue({ status: 1, stdout: "-2147024894" });
+    await writeStartupFallbackEntry(env);
+    inspectPortUsageMock.mockResolvedValue(portUsage("busy", [{ pid: 4242, command: "node.exe" }]));
+    verifiedGatewayPids.mockReturnValue([4242]);
+
+    expect(await readScheduledTaskRuntime(env)).toMatchObject({ status: "running", pid: 4242 });
+    expect(verifiedGatewayPids).toHaveBeenCalledWith(18789);
   });
 
   it("preserves gateway listeners when stopping a node", async ({ env }) => {

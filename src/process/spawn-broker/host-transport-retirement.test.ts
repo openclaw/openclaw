@@ -17,7 +17,8 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn: native.spawn,
 }));
 // mock-isolation: This fixture owns synthetic process events, not compiled worker preparation.
-vi.mock("../../infra/runtime-worker-url.js", () => ({
+vi.mock("../../infra/runtime-worker-url.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/runtime-worker-url.js")>()),
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/spawn-broker.js"),
   resolveRuntimeWorkerArgv: () => ["synthetic-spawn-broker"],
 }));

@@ -138,6 +138,18 @@ export async function withUpdateCommandRecoveryUnwind(
   if (!recoveryState.ledgerHandoffOwned) {
     // The admitted newer runtime owns canonical history after handoff. The old
     // process must not reopen a database that it may no longer understand.
+    // Successful foreground activation keeps its pair for the post-ready owner.
+    // Unwind precedes terminal preparation, so retain that same live continuation
+    // here without admitting failure compensation or Windows autostart effects.
+    const pluginCohort =
+      !failure &&
+      !recoveryState.windowsTaskAutoStartRecovery &&
+      run.completionOwner === "gateway-restart" &&
+      run.gatewayRestartRequired === true &&
+      hasDeferredUpdateCommandTerminalResult(run) &&
+      run.executorFence
+        ? { runId: run.runId, fence: run.executorFence }
+        : undefined;
     const admitRecovery = async () => {
       // A lost live context or a successful callback is not fresh-install proof.
       // Reconcile all affected state roots read-only before native compensation.
@@ -148,7 +160,7 @@ export async function withUpdateCommandRecoveryUnwind(
           continue;
         }
         paths.add(file);
-        await assertUpdateRecoveryAdmission({ env });
+        await assertUpdateRecoveryAdmission({ env, pluginCohort });
       }
     };
     try {
