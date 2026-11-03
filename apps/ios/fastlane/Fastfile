@@ -1939,6 +1939,11 @@ def run_screenshot_xcodebuild!(arguments, log_path:)
   started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   command = "source #{Shellwords.escape(File.join(repo_root, "scripts", "lib", "swift-toolchain.sh"))}; " \
     "#{shell_join(["run_apple_command_logged", log_path, "xcodebuild", *arguments])}"
+  if ENV["OPENCLAW_SNAPSHOT_DIAGNOSTICS"] == "1" && arguments.last == "test-without-building"
+    receipt = Shellwords.escape("#{log_path}.launch")
+    command = "export OPENCLAW_IOS_STARTUP_EVENTS=#{receipt}; " \
+      "printf 'shell-entered\\t%s\\t%s\\t0\\n' \"$SECONDS\" \"$$\" > #{receipt}; #{command}"
+  end
   sh("/bin/bash", "-c", command)
 ensure
   elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started

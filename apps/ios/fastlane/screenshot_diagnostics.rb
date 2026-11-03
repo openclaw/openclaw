@@ -28,6 +28,7 @@ class ScreenshotDiagnostics
       observer = Thread.new do
         loop do
           observe_startup_progress(log_path, started, event.fetch("startupProgressSeconds"))
+          observe_launch_progress(log_path, started, event)
           sleep(1)
         end
       end
@@ -43,6 +44,7 @@ class ScreenshotDiagnostics
     observer&.kill&.join
     if event
       observe_startup_progress(log_path, started, event.fetch("startupProgressSeconds")) if log_path
+      observe_launch_progress(log_path, started, event, sample: false) if log_path
       event["durationSeconds"] = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).round(2)
       event["startup"] = startup_facts(log_path) if log_path
       persist
@@ -50,6 +52,98 @@ class ScreenshotDiagnostics
   end
 
   private
+
+  def observe_launch_progress(path, started, event, sample: true)
+    launch = event["launchProgress"] ||= {}
+    parent = child = nil
+    File.foreach("#{path}.launch") do |line|
+      match = line.match(/\A(shell-entered|helper-entered|launch-requested|child-launched|child-reaped)\t(\d+)\t(\d+)\t(\d+)\n\z/)
+      next unless match
+      name, seconds, parent_pid, child_pid = match.captures
+      launch[name] ||= { "shellSeconds" => seconds.to_i, "observedSeconds" => (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).round(2) }
+      parent, child = parent_pid.to_i, child_pid.to_i if name == "child-launched"
+    end
+    return unless sample && child && !launch.key?("child-reaped") && !@startup_sample_taken
+    return unless event["deviceName"].to_s.start_with?("iPad ")
+    return if event.fetch("startupProgressSeconds").key?("commandHeader")
+    return if Process.clock_gettime(Process::CLOCK_MONOTONIC) - started - launch.fetch("child-launched").fetch("observedSeconds") < 15
+    @startup_sample_taken = true
+    event["startupSample"] = { "outcome" => "interrupted", "requestedSeconds" => (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).round(2) }
+    sample_startup_child(path, parent, child, event.fetch("startupSample"))
+  rescue SystemCallError
+    nil
+  end
+
+  def sample_startup_child(path, parent, child, result)
+    began = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    identity_path = "#{path}.identity"
+    sample_path = "#{path}.sample"
+    identity = bounded_startup_probe(["/bin/ps", "-p", child.to_s, "-o", "ppid=,comm="], identity_path, 2)
+    result["identityProbe"] = identity
+    return result["outcome"] = "identity-unavailable" unless identity == "ok"
+    actual_parent, command = File.read(identity_path, 4096).strip.split(/\s+/, 2)
+    return result["outcome"] = "identity-mismatch" unless actual_parent.to_i == parent && File.basename(command.to_s) == "xcodebuild"
+    result["parentVerified"] = true
+    result["toolKind"] = if command == "/usr/bin/xcodebuild"
+      "shim"
+    elsif command.match?(%r{\A/Applications/[^/]+\.app/Contents/Developer/usr/bin/xcodebuild\z})
+      "native"
+    else
+      "unclassified-xcodebuild"
+    end
+    result["outcome"] = bounded_startup_probe(["/usr/bin/sample", child.to_s, "1", "10", "-file", sample_path], File::NULL, 5)
+    result["frames"] = sanitized_startup_frames(sample_path) if result["outcome"] == "ok"
+  rescue SystemCallError
+    result["outcome"] = "unavailable"
+  ensure
+    result["observerPausedSeconds"] = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - began).round(2)
+    FileUtils.rm_f([identity_path, sample_path])
+  end
+
+  # The probe owns only its own process group. Its deadline never kills Xcode.
+  def bounded_startup_probe(arguments, output, seconds)
+    reaped = nil
+    child = Process.spawn(*arguments, out: output, err: File::NULL, pgroup: true)
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + seconds
+    loop do
+      reaped, status = Process.waitpid2(child, Process::WNOHANG)
+      return status.success? ? "ok" : "failed" if reaped
+      return "timeout" if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+      sleep(0.05)
+    end
+  ensure
+    if child && !reaped
+      begin
+        Process.kill("KILL", -child)
+        Process.detach(child)
+      rescue Errno::ESRCH, Errno::ECHILD
+        nil
+      end
+    end
+  end
+
+  def sanitized_startup_frames(path)
+    frames = []
+    active = false
+    thread = 0
+    File.foreach(path).take(2000).each do |line|
+      line = line.scrub
+      active = true if line == "Call graph:\n"
+      break if line.start_with?("Total number in stack")
+      next unless active
+      if line.match?(/\A\s+\d+ Thread_\d+/)
+        thread += 1
+        next
+      end
+      match = line.match(/\A([ |+!:]*)(\d+) (.+?)  \(in ([A-Za-z0-9_.+\-]+)\)/)
+      next unless match
+      indentation, count, symbol, image = match.captures
+      next unless symbol.length <= 240 && symbol.match?(/\A[+\-\[A-Za-z_$][A-Za-z0-9_$ .():<>\[\]+,\-&*#]*\z/)
+      frames << { "thread" => thread, "depth" => indentation.length, "samples" => count.to_i, "symbol" => symbol, "image" => image }
+      break if frames.length >= 80
+    end
+    frames
+  end
 
   # Temporary diagnostic: observe the existing file without piping native output.
   # These are arrival times (up to one poll late); native buffering can delay them.

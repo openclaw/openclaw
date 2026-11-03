@@ -31,12 +31,26 @@ select_ios_test_simulator() {
 run_apple_command_logged() {
   local log_path="$1"
   shift
+  if [[ -n "${OPENCLAW_IOS_STARTUP_EVENTS:-}" ]]; then
+    printf 'helper-entered\t%s\t%s\t0\n' "$SECONDS" "$$" >> "$OPENCLAW_IOS_STARTUP_EVENTS"
+  fi
   mkdir -p "$(dirname "$log_path")" || return
 
   # Simulator log forwarding can block a test's timed work when Actions stops
   # draining its pipe. Keep both descriptors on a file until the command exits.
   local exit_code=0
-  "$@" >"$log_path" 2>&1 || exit_code=$?
+  if [[ -n "${OPENCLAW_IOS_STARTUP_EVENTS:-}" ]]; then
+    # Temporary launch receipt: the observer never discovers targets globally.
+    local native_pid
+    printf 'launch-requested\t%s\t%s\t0\n' "$SECONDS" "$$" >> "$OPENCLAW_IOS_STARTUP_EVENTS"
+    "$@" <&0 >"$log_path" 2>&1 &
+    native_pid=$!
+    printf 'child-launched\t%s\t%s\t%s\n' "$SECONDS" "$$" "$native_pid" >> "$OPENCLAW_IOS_STARTUP_EVENTS"
+    wait "$native_pid" || exit_code=$?
+    printf 'child-reaped\t%s\t%s\t%s\n' "$SECONDS" "$$" "$native_pid" >> "$OPENCLAW_IOS_STARTUP_EVENTS"
+  else
+    "$@" >"$log_path" 2>&1 || exit_code=$?
+  fi
   tail -c 8192 "$log_path" || true
   printf '\n[apple-command] Exit %s; full log: %s\n' "$exit_code" "$log_path" || true
   return "$exit_code"
