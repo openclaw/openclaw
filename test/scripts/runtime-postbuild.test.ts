@@ -1309,7 +1309,6 @@ describe("previous release update compatibility", () => {
 
   function writeWindowInventory(root: string): string {
     const release = recordFixture().releases[0];
-    const output = path.join(root, "inventory.json");
     write(
       root,
       "inventory.json",
@@ -1322,7 +1321,7 @@ describe("previous release update compatibility", () => {
         ],
       }),
     );
-    return output;
+    return path.join(root, "inventory.json");
   }
 
   function serveTarball(
