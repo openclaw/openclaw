@@ -22,23 +22,89 @@ private struct ChatRecoveryRenderedOwner: View {
 }
 
 /// A rendered control reports SwiftUI's `.disabled(_:)` either as a control state or as
-/// the accessibility trait published for a disabled element.
+/// the accessibility trait published for a disabled element. Toolbar content can also be
+/// published as a `UIAccessibilityElement` a container owns instead of a `UIView`, so both
+/// forms are searched and both report their own interactivity.
 @MainActor
 private struct ChatRecoveryRenderedControl {
-    let view: UIView
+    let view: UIView?
+    let element: UIAccessibilityElement?
+
+    init(view: UIView) {
+        self.view = view
+        self.element = nil
+    }
+
+    init(element: UIAccessibilityElement) {
+        self.view = nil
+        self.element = element
+    }
+
+    var identifier: String? {
+        self.element?.accessibilityIdentifier ?? self.view?.accessibilityIdentifier
+    }
+
+    var label: String? {
+        self.element?.accessibilityLabel ?? self.view?.accessibilityLabel
+    }
 
     var isEnabled: Bool {
-        if let control = self.view as? UIControl {
+        if let element = self.element {
+            return !element.accessibilityTraits.contains(.notEnabled)
+        }
+        guard let view = self.view else { return false }
+        if let control = view as? UIControl {
             return control.isEnabled
         }
-        if self.view.isAccessibilityElement {
-            return !self.view.accessibilityTraits.contains(.notEnabled)
+        if view.isAccessibilityElement {
+            return !view.accessibilityTraits.contains(.notEnabled)
         }
-        return !self.view.subviews.contains { !Self.isEnabled($0) }
+        return !view.subviews.contains { !Self.isEnabled($0) }
+    }
+
+    /// Reaches the control whatever backs it: a `UIControl` touch event first, then the
+    /// element's own accessibility activation, then an accessible descendant's. A control
+    /// that cannot be activated fails the regression instead of silently skipping it.
+    func activate() -> Bool {
+        if let element = self.element {
+            return element.accessibilityActivate()
+        }
+        guard let view = self.view else { return false }
+        if let control = Self.firstControl(in: view) {
+            control.sendActions(for: .touchUpInside)
+            return true
+        }
+        if view.isAccessibilityElement, view.accessibilityActivate() { return true }
+        if let accessible = Self.firstAccessible(in: view), accessible.accessibilityActivate() {
+            return true
+        }
+        return false
+    }
+
+    var describe: String {
+        let kind = self.element.map { "element(\(type(of: $0)))" }
+            ?? self.view.map { "view(\(type(of: $0)))" } ?? "unknown"
+        return "\(kind) id=\(self.identifier ?? "-") label=\(self.label ?? "-") enabled=\(self.isEnabled)"
     }
 
     static func isEnabled(_ view: UIView) -> Bool {
         Self(view: view).isEnabled
+    }
+
+    private static func firstControl(in view: UIView) -> UIControl? {
+        if let control = view as? UIControl { return control }
+        for subview in view.subviews {
+            if let control = self.firstControl(in: subview) { return control }
+        }
+        return nil
+    }
+
+    private static func firstAccessible(in view: UIView) -> UIView? {
+        for subview in view.subviews {
+            if subview.isAccessibilityElement { return subview }
+            if let nested = self.firstAccessible(in: subview) { return nested }
+        }
+        return nil
     }
 }
 
@@ -152,39 +218,14 @@ final class ChatProTabRecoveryControlsTests: XCTestCase {
         hosting.view.setNeedsLayout()
         hosting.view.layoutIfNeeded()
 
-        let sidebarToggle = try XCTUnwrap(
-            Self.control(withIdentifier: "chat-recovery-sidebar-toggle", in: hosting.view),
-            "The sidebar toggle must be rendered while the gateway retries.")
-        XCTAssertTrue(
-            sidebarToggle.isEnabled,
-            "The sidebar must stay reachable so the saved gateway can be managed.")
-        let statusButton = try XCTUnwrap(
-            Self.control(withIdentifier: "chat-agent-identity", in: hosting.view),
-            "The gateway status button must be rendered while the gateway retries.")
-        XCTAssertTrue(
-            statusButton.isEnabled,
-            "The unhealthy status button advertises 'Opens Settings / Gateway' and must stay tappable.")
-        let chatActions = try XCTUnwrap(
-            Self.control(withLabel: "Chat actions", in: hosting.view),
-            "The Chat actions toolbar button must be rendered while the gateway retries.")
-        XCTAssertTrue(
-            chatActions.isEnabled,
-            "Chat actions carries the in-product Gateway settings route and must stay tappable.")
-        self.attachRenderedEvidence(
-            named: "recovery-toolbar-reachable-while-retrying",
-            window: window,
-            states: [
-                ("sidebar-toggle", sidebarToggle.isEnabled),
-                ("gateway-status-button", statusButton.isEnabled),
-                ("chat-actions", chatActions.isEnabled),
-            ])
+        let statusButton = try await self.requireRecoveryControlsReachable(in: window)
 
         // An unhealthy gateway routes the status button to Gateway settings: that is the
-        // recovery the reporter could not reach. Activate it whatever UIKit view backs the
-        // identifier, then require the route to have run — a conditional activation would let
-        // the recovery path disappear without failing the regression.
+        // recovery the reporter could not reach. Activate it whatever backs the identifier,
+        // then require the route to have run — a conditional activation would let the
+        // recovery path disappear without failing the regression.
         XCTAssertTrue(
-            Self.activate(statusButton.view),
+            statusButton.activate(),
             "The unhealthy status button must accept a native activation while the reconnect retries.")
         XCTAssertTrue(
             probe.openedSettings,
@@ -294,56 +335,121 @@ final class ChatProTabRecoveryControlsTests: XCTestCase {
         return self.composer(in: view)
     }
 
-    /// Reaches a rendered SwiftUI button whatever backs it: a toolbar button can publish an
-    /// accessibility element instead of a `UIControl`, so the control event is only the first
-    /// of three routes and a failure is reported instead of silently skipping the action.
-    private static func activate(_ view: UIView) -> Bool {
-        if let control = self.firstControl(in: view) {
-            control.sendActions(for: .touchUpInside)
-            return true
-        }
-        if view.isAccessibilityElement, view.accessibilityActivate() { return true }
-        if let element = self.firstAccessible(in: view), element.accessibilityActivate() { return true }
-        return false
+    /// Requires the three routes to Gateway settings to be rendered and reachable while the
+    /// automatic reconnect keeps retrying, and returns the unhealthy status button so the caller
+    /// can drive the recovery route itself.
+    private func requireRecoveryControlsReachable(in window: UIWindow) async throws
+        -> ChatRecoveryRenderedControl
+    {
+        let renderedSidebarToggle = await Self.renderedControl(
+            withIdentifier: "chat-recovery-sidebar-toggle",
+            in: window)
+        let sidebarToggle = try XCTUnwrap(
+            renderedSidebarToggle,
+            Self.missingControlMessage(
+                "The sidebar toggle must be rendered while the gateway retries.",
+                in: window))
+        XCTAssertTrue(
+            sidebarToggle.isEnabled,
+            "The sidebar must stay reachable so the saved gateway can be managed.")
+        let renderedStatusButton = await Self.renderedControl(
+            withIdentifier: "chat-agent-identity",
+            in: window)
+        let statusButton = try XCTUnwrap(
+            renderedStatusButton,
+            Self.missingControlMessage(
+                "The gateway status button must be rendered while the gateway retries.",
+                in: window))
+        XCTAssertTrue(
+            statusButton.isEnabled,
+            "The unhealthy status button advertises 'Opens Settings / Gateway' and must stay tappable.")
+        let renderedChatActions = await Self.renderedControl(withLabel: "Chat actions", in: window)
+        let chatActions = try XCTUnwrap(
+            renderedChatActions,
+            Self.missingControlMessage(
+                "The Chat actions toolbar button must be rendered while the gateway retries.",
+                in: window))
+        XCTAssertTrue(
+            chatActions.isEnabled,
+            "Chat actions carries the in-product Gateway settings route and must stay tappable.")
+        let inventory = XCTAttachment(string: Self.renderedInventory(in: window))
+        inventory.name = "recovery-rendered-inventory"
+        inventory.lifetime = .keepAlways
+        self.add(inventory)
+        self.attachRenderedEvidence(
+            named: "recovery-toolbar-reachable-while-retrying",
+            window: window,
+            states: [
+                ("sidebar-toggle", sidebarToggle.isEnabled),
+                ("gateway-status-button", statusButton.isEnabled),
+                ("chat-actions", chatActions.isEnabled),
+            ])
+        return statusButton
     }
 
-    private static func firstControl(in view: UIView) -> UIControl? {
-        if let control = view as? UIControl { return control }
-        for subview in view.subviews {
-            if let control = self.firstControl(in: subview) { return control }
+    /// Every rendered control in the window this regression mounted, walking the view tree and
+    /// the accessibility elements a container publishes: SwiftUI can hand a toolbar button out
+    /// as an element instead of a `UIView`, and a view-only walk misses it. Scoped to this
+    /// window on purpose — the host app renders a chat toolbar of its own, and matching that one
+    /// would measure the wrong controls.
+    private static func renderedControls(in root: UIView) -> [ChatRecoveryRenderedControl] {
+        var found: [ChatRecoveryRenderedControl] = []
+        var stack: [UIView] = [root]
+        while let view = stack.popLast() {
+            found.append(ChatRecoveryRenderedControl(view: view))
+            stack.append(contentsOf: view.subviews)
+            for case let element as UIAccessibilityElement in view.accessibilityElements ?? [] {
+                found.append(ChatRecoveryRenderedControl(element: element))
+            }
         }
-        return nil
+        return found
     }
 
-    private static func firstAccessible(in view: UIView) -> UIView? {
-        for subview in view.subviews {
-            if subview.isAccessibilityElement { return subview }
-            if let nested = self.firstAccessible(in: subview) { return nested }
-        }
-        return nil
-    }
-
-    private static func control(withIdentifier identifier: String, in root: UIView)
+    /// Bounded on purpose, like the composer walk below: a control that never appears must fail
+    /// the regression instead of hanging the suite until the lane's execution allowance kills it.
+    private static func waitForRenderedControl(
+        in window: UIView,
+        deadline: TimeInterval = 10,
+        matching matches: (ChatRecoveryRenderedControl) -> Bool) async
         -> ChatRecoveryRenderedControl?
     {
-        self.firstView(in: root) { $0.accessibilityIdentifier == identifier }
-            .map { ChatRecoveryRenderedControl(view: $0) }
-    }
-
-    private static func control(withLabel label: String, in root: UIView) -> ChatRecoveryRenderedControl? {
-        self.firstView(in: root) { $0.accessibilityLabel == label }
-            .map { ChatRecoveryRenderedControl(view: $0) }
-    }
-
-    private static func firstView(in root: UIView, where matches: (UIView) -> Bool) -> UIView? {
-        var stack = [root]
-        while let view = stack.popLast() {
-            if matches(view) {
-                return view
-            }
-            stack.append(contentsOf: view.subviews)
+        let limit = Date(timeIntervalSinceNow: deadline)
+        while true {
+            window.setNeedsLayout()
+            window.layoutIfNeeded()
+            if let match = self.renderedControls(in: window).first(where: matches) { return match }
+            if Date() >= limit { return nil }
+            try? await Task.sleep(for: .milliseconds(50))
         }
-        return nil
+    }
+
+    private static func renderedControl(withIdentifier identifier: String, in window: UIView) async
+        -> ChatRecoveryRenderedControl?
+    {
+        await self.waitForRenderedControl(in: window) { $0.identifier == identifier }
+    }
+
+    private static func renderedControl(withLabel label: String, in window: UIView) async
+        -> ChatRecoveryRenderedControl?
+    {
+        await self.waitForRenderedControl(in: window) { $0.label == label }
+    }
+
+    /// Failure message for a control the renderer did not publish: it carries the inventory of
+    /// what the window does contain, so a miss names the real hierarchy instead of only the
+    /// expectation. Evaluated through XCTUnwrap's autoclosure, so only on failure.
+    private static func missingControlMessage(_ expectation: String, in window: UIView) -> String {
+        "\(expectation)\nRendered controls:\n\(self.renderedInventory(in: window))"
+    }
+
+    /// Doubles as the failure message: when a control is missing, the run reports what the
+    /// renderer did publish instead of only what was expected.
+    private static func renderedInventory(in window: UIView) -> String {
+        self.renderedControls(in: window)
+            .filter { $0.identifier != nil || $0.label != nil }
+            .prefix(300)
+            .map(\.describe)
+            .joined(separator: "\n")
     }
 
     private static func composer(in view: UIView) -> UITextView? {
