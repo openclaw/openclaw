@@ -67,10 +67,11 @@ export async function signChange(
   signer: StatementSigner,
   target: MembershipTarget,
   seq = state.seq + 1,
+  issuedAt = WORLD_NOW - 10,
 ): Promise<SignedStatement<"MembershipChange">> {
   return signStatement(
     "MembershipChange",
-    { claw_id: state.claw_id, seq, target, issued_at: WORLD_NOW - 10 },
+    { claw_id: state.claw_id, seq, target, issued_at: issuedAt },
     signer,
   );
 }

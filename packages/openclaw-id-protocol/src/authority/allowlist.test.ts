@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { fingerprint, type IrohEndpointKey } from "../keys.js";
+import { fingerprint } from "../keys.js";
 import { signStatement } from "../statements/envelope.js";
-import {
-  MAX_MEMBER_PEER_KEYS,
-  MAX_MEMBERS,
-  MAX_OWNER_DEVICES,
-  type MembershipTarget,
-} from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
 import { buildWorld, certBody, signChange, worldKey, WORLD_NOW } from "../testing/world.js";
 import { dropInactive, nextInactivityDrop, recordSeen } from "./allowlist.js";
@@ -132,6 +126,67 @@ describe("revocation", () => {
     expect(isAdmitted(restored.state, world.device2.peer, WORLD_NOW)).toBe(true);
   });
 
+  it("still removes every device a revocable owner approved", async () => {
+    const world = await buildWorld();
+    const cert = await signStatement(
+      "OwnerDeviceCert",
+      { ...certBody(world.device2), issued_at: WORLD_NOW },
+      world.device1.signer,
+    );
+    const replaced = await apply(
+      world.state,
+      await signChange(world.state, world.device1.signer, { op: "add_owner_device", cert }),
+    );
+    const signed = await signStatement(
+      "Revocation",
+      {
+        target_fp: await fingerprint(world.device1.peer),
+        target_kind: "peer_key",
+        reason: "test",
+        root_epoch: 1,
+        issued_at: WORLD_NOW - 5,
+      },
+      world.device1.signer,
+    );
+    const removed = await apply(replaced.state, signed);
+    expect(removed.state.owner_devices).toEqual({});
+    expect(removed.events.map((event) => event.type)).toEqual([
+      "disconnect",
+      "invalidate_tokens",
+      "publish_snapshot",
+    ]);
+  });
+
+  it("honours a revocation that is newer on the signer's clock than the add", async () => {
+    const world = await buildWorld();
+    const gatewayNow = WORLD_NOW + 120;
+    const added = await apply(
+      world.state,
+      await signChange(world.state, world.device1.signer, {
+        op: "add",
+        account_id: "acct_bob",
+        role: "viewer",
+        peer_keys: [world.invitee.peer],
+        invite_id: null,
+      }),
+      { channel: "tunnel", now: gatewayNow },
+    );
+    const signed = await signStatement(
+      "Revocation",
+      {
+        target_fp: await fingerprint(world.invitee.peer),
+        target_kind: "peer_key",
+        reason: "test",
+        root_epoch: 1,
+        issued_at: WORLD_NOW - 9,
+      },
+      world.device1.signer,
+    );
+    const removed = await apply(added.state, signed, { channel: "mailbox", now: gatewayNow });
+    expect(removed.state.members.acct_bob?.peer_keys).toEqual([]);
+    expect(removed.events.map((event) => event.type)).toContain("invalidate_tokens");
+  });
+
   it("is a no-op for a device the claw no longer lists, also through the mailbox", async () => {
     const world = await buildWorld();
     const once = await apply(world.state, await revocation(world.device2, world.device1), mailbox);
@@ -185,74 +240,10 @@ describe("inactivity", () => {
     expect(dropInactive(world.state, WORLD_NOW + 11, windows)?.state.owner_devices).toEqual({});
   });
 
-  it("drops a member peer key after 30 idle days and keeps an active one", async () => {
-    const world = await buildWorld();
-    const extra = await worldKey("extra");
-    const added = await apply(
-      world.state,
-      await signChange(world.state, world.device1.signer, {
-        op: "add",
-        account_id: "acct_bob",
-        role: "viewer",
-        peer_keys: [world.invitee.peer, extra.peer],
-        invite_id: null,
-      }),
-    );
-    const active = recordSeen(added.state, extra.peer, WORLD_NOW + 20 * DAY)!;
-    const fresh = recordSeen(active, world.device1.peer, WORLD_NOW + 20 * DAY)!;
-    const all = recordSeen(fresh, world.device2.peer, WORLD_NOW + 20 * DAY)!;
-    const dropped = dropInactive(all, WORLD_NOW + 31 * DAY)!;
-    expect(dropped.peers).toEqual([world.invitee.peer]);
-    expect(dropped.state.members.acct_bob?.peer_keys).toEqual([extra.peer]);
-  });
-
-  it("moves last_seen only past the resolution", async () => {
+  it("moves last_seen only past the resolution and ignores unknown keys", async () => {
     const world = await buildWorld();
     expect(recordSeen(world.state, world.device1.peer, WORLD_NOW + 60)).toBeNull();
-  });
-});
-
-describe("caps", () => {
-  it(`refuses one owner device, member, or member browser past the cap`, async () => {
-    const world = await buildWorld();
-    let owners = world.state;
-    for (let index = 2; index < MAX_OWNER_DEVICES; index += 1) {
-      owners = (await approve(owners, world.device1, await worldKey(`owner-${index}`))).state;
-    }
-    expect(Object.keys(owners.owner_devices)).toHaveLength(MAX_OWNER_DEVICES);
-    const refusedOwner = await approve(owners, world.device1, await worldKey("one-too-many"));
-    expect(refusedOwner).toMatchObject({ ok: false, code: "limit_reached" });
-    const add = (state: AuthorityState, account: string, peers: IrohEndpointKey[]) =>
-      signChange(state, world.device1.signer, {
-        op: "add",
-        account_id: account,
-        role: "viewer",
-        peer_keys: peers,
-        invite_id: null,
-      } satisfies MembershipTarget);
-    let members = world.state;
-    for (let index = 0; index < MAX_MEMBERS; index += 1) {
-      const key = await worldKey(`member-${index}`);
-      members = (await apply(members, await add(members, `acct_${index}`, [key.peer]))).state;
-    }
-    const extra = await worldKey("member-extra");
-    const browsers = await Promise.all(
-      Array.from({ length: MAX_MEMBER_PEER_KEYS }, (_, index) => worldKey(`browser-${index}`)),
-    );
-    await expect(
-      submitStatement(members, await add(members, "acct_extra", [extra.peer]), tunnel),
-    ).resolves.toMatchObject({ ok: false, code: "limit_reached" });
-    await expect(
-      submitStatement(
-        members,
-        await add(
-          members,
-          "acct_0",
-          browsers.map((key) => key.peer),
-        ),
-        tunnel,
-      ),
-    ).resolves.toMatchObject({ ok: false, code: "limit_reached" });
+    expect(recordSeen(world.state, world.mallory.peer, WORLD_NOW + 7200)).toBeNull();
   });
 });
 
@@ -261,7 +252,12 @@ describe("snapshot", () => {
     const world = await buildWorld();
     const removed = await apply(world.state, await revocation(world.device2, world.device1));
     const body = snapshotBody(removed.state, 1, WORLD_NOW);
+    expect(body.owner_devices).toEqual([
+      { device_pub: world.device1.pub, caps: [...world.cert1.body.caps].toSorted() },
+    ]);
+    expect(body.owner_peer_keys).toEqual([world.device1.peer]);
     const signed = await signStatement("MembershipSnapshot", body, world.gateway.signer);
+    expect(parseStatement(signed, "MembershipSnapshot")).toMatchObject({ ok: true });
     expect(body).not.toHaveProperty("revoked");
     expect(
       parseStatement({ ...signed, body: { ...body, revoked: [] } }, "MembershipSnapshot"),

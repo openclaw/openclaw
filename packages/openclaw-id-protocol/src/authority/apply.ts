@@ -116,8 +116,9 @@ async function applyOwnerStatement(
 }
 
 // A current approval newer than this statement supersedes it. Re-adding a device
-// signs a new certificate, and adding a browser records that time. A captured
-// revocation must not delete that later approval. An unknown target changes nothing.
+// signs a new certificate. A browser records the signed issued_at of the add,
+// not the Gateway clock. A captured revocation must not delete that later
+// approval. An unknown target changes nothing.
 function ownerApprovalSupersedes(
   state: AuthorityState,
   fp: KeyFingerprint,
@@ -157,10 +158,10 @@ async function ownerDevicesForPeerRevocation(
       continue;
     }
     // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
+    // The freshness check already selected this owner. Every device it currently
+    // approved goes with it, including a descendant whose own certificate is newer.
     for (const each of approvalDescendants(state, fp as KeyFingerprint)) {
-      if (!ownerApprovalSupersedes(state, each, issuedAt)) {
-        found.add(each);
-      }
+      found.add(each);
     }
   }
   return [...found];
@@ -226,7 +227,13 @@ async function applyMembershipChange(
   if (body.seq !== state.seq + 1) {
     return refuse(state, "seq_conflict", `expected seq ${state.seq + 1}`);
   }
-  const result = await applyTarget({ ...state, seq: body.seq }, body.target, authority, context);
+  const result = await applyTarget(
+    { ...state, seq: body.seq },
+    body.target,
+    authority,
+    context,
+    body.issued_at,
+  );
   return result.ok ? result : { ...result, state };
 }
 
@@ -236,10 +243,11 @@ async function applyTarget(
   target: SignedStatement<"MembershipChange">["body"]["target"],
   authority: Authority,
   context: WriteContext,
+  issuedAt: UnixSeconds,
 ): Promise<AuthorityResult> {
   switch (target.op) {
     case "add":
-      return addMember(state, target, context.now);
+      return addMember(state, target, issuedAt, context.now);
     case "remove": {
       const member = state.members[target.account_id];
       if (!member) {
@@ -311,6 +319,7 @@ function applyRemovalOfPeer(state: AuthorityState, peer: IrohEndpointKey): Autho
 function addMember(
   state: AuthorityState,
   target: Extract<SignedStatement<"MembershipChange">["body"]["target"], { op: "add" }>,
+  approvedAt: UnixSeconds,
   now: UnixSeconds,
 ): AuthorityResult {
   const existing = state.members[target.account_id];
@@ -329,7 +338,7 @@ function addMember(
   const addedAt = { ...existing?.added_at };
   for (const key of target.peer_keys) {
     if (!existing?.peer_keys.includes(key)) {
-      addedAt[key] = now;
+      addedAt[key] = approvedAt;
     }
     lastSeen[key] ??= now;
   }

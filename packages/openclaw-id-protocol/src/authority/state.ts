@@ -43,7 +43,7 @@ export type OwnerDeviceRecord = {
 export type MemberRecord = {
   role: MemberRole;
   peer_keys: IrohEndpointKey[];
-  /** When each peer key was added. Tunnel admission does not move this. */
+  /** Signed issued_at of the change that added each peer key. Admission does not move this. */
   added_at: Partial<Record<IrohEndpointKey, UnixSeconds>>;
   /** Last tunnel admission per peer key (or when it was added), unix seconds. */
   last_seen: Partial<Record<IrohEndpointKey, UnixSeconds>>;
