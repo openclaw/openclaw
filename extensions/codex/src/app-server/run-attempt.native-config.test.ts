@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -197,7 +198,12 @@ describe("Codex native configuration", () => {
             items: [{ type: "agentMessage", id: "answer", text: "Completed" }],
           }),
         );
-        await expect(run).resolves.toMatchObject({ terminal: { kind: "ok" } });
+        const result = await run;
+        expect(result).toMatchObject({ terminal: { kind: "ok" } });
+        expect(result.systemPromptReport?.systemPrompt.chars).toBe(instructions.length);
+        expect(result.systemPromptReport?.systemPrompt.hash).toBe(
+          createHash("sha256").update(instructions).digest("hex"),
+        );
       } finally {
         await transport.client.closeAndWait();
       }

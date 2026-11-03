@@ -675,6 +675,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     },
     nativeHistoryProvenancePrefix,
     turnState,
+    refreshSystemPromptReport: () =>
+      Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded)),
     refreshWorkspaceReferences: (include: boolean) => {
       turnState.codexTurnPromptText = decorateCodexTurnPromptText(turnState.promptBuild, include);
       if (include !== workspaceReferencesIncluded) {

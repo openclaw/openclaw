@@ -48,6 +48,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       turnState.promptBuild.developerInstructions,
     attemptTools.configuredMcp?.diagnosticNotice,
   );
+  let reportedGeneratedInstructions = context.baseDeveloperInstructions;
   const buildDeveloperInstructionsForNativeConfig = (nativeConfig: JsonObject) => {
     const generated = context.baseDeveloperInstructions;
     const offset = developerInstructions.indexOf(generated);
@@ -56,11 +57,38 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       return developerInstructions;
     }
     const resolved = context.buildNativeDeveloperInstructions(nativeConfig);
-    return (
+    const effective =
       developerInstructions.slice(0, offset) +
       resolved +
-      developerInstructions.slice(offset + generated.length)
-    );
+      developerInstructions.slice(offset + generated.length);
+    // Update the authoritative prompt carriers as well as thread/start.
+    // Replacement clients can preflight again with a different native policy.
+    const replaceReportedPolicy = (value: string) => {
+      const index = value.indexOf(reportedGeneratedInstructions);
+      return index < 0
+        ? value
+        : value.slice(0, index) +
+            resolved +
+            value.slice(index + reportedGeneratedInstructions.length);
+    };
+    const build = turnState.promptBuild;
+    const updatedDeveloper = replaceReportedPolicy(build.developerInstructions);
+    const updatedThread =
+      build.threadDeveloperInstructions === undefined
+        ? undefined
+        : replaceReportedPolicy(build.threadDeveloperInstructions);
+    if (
+      updatedDeveloper !== build.developerInstructions ||
+      updatedThread !== build.threadDeveloperInstructions
+    ) {
+      build.developerInstructions = updatedDeveloper;
+      if (updatedThread !== undefined) {
+        build.threadDeveloperInstructions = updatedThread;
+      }
+      prompt.refreshSystemPromptReport();
+    }
+    reportedGeneratedInstructions = resolved;
+    return effective;
   };
   const {
     params,
