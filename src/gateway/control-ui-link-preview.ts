@@ -393,7 +393,10 @@ export async function loadControlUiLinkPreview(
     principals.set(scope.principal, principal);
   }
   const key = JSON.stringify([principal, scope.revision, url.href]);
-  const now = Date.now();
+  // Cache windows anchor on the process-local monotonic clock: a wall-clock
+  // correction must not extend or shorten a preview entry, and none leaves this
+  // module. Compare and write in the same clock domain.
+  const now = performance.now();
   const existing = cache.get(key);
   if (existing && existing.expiresAt > now) {
     const result = await existing.promise;
@@ -415,6 +418,7 @@ export async function loadControlUiLinkPreview(
   cache.set(key, entry);
   pruneMapToMaxSize(cache, CACHE_MAX_ENTRIES);
   const result = await entry.promise;
-  entry.expiresAt = Date.now() + (Object.keys(result).length ? SUCCESS_TTL_MS : FAILURE_TTL_MS);
+  entry.expiresAt =
+    performance.now() + (Object.keys(result).length ? SUCCESS_TTL_MS : FAILURE_TTL_MS);
   return isEnabled() ? result : {};
 }
