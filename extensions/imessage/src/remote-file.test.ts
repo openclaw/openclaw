@@ -21,7 +21,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => ({ warn: warnMock }),
 }));
 
-import { buildRemoteStagingFileName, withIMessageRemoteFile } from "./remote-file.js";
+import { withIMessageRemoteFile } from "./remote-file.js";
 
 const remoteDir = "/tmp/openclaw-imessage-0123456789abcdef0123456789abcdef";
 const use = vi.fn(async () => "sent");
@@ -137,20 +137,29 @@ it("keeps the non-ASCII attachment name for the remote copy", async () => {
 it.each([
   ["plain-report.doc", "plain-report.doc"],
   ["中文报告.doc", "中文报告.doc"],
+  ["📄.txt", "📄.txt"],
+  ["a file;$(touch nope).png", "a-file-touch-nope.png"],
   ["../escape.txt", "escape.txt"],
   ["a\\b.txt", "a-b.txt"],
   ["\u0007bell.txt", "bell.txt"],
   ["...", "attachment"],
-  ["", "attachment"],
-])("stages %j as %j", (input, expected) => {
-  expect(buildRemoteStagingFileName(input)).toBe(expected);
+])("stages %j as %j", async (input, expected) => {
+  respond({}, {}, {});
+
+  await stage({ localPath: `/gateway/${input}` });
+
+  expect(use).toHaveBeenCalledWith(`${remoteDir}/${expected}`);
 });
 
-it("keeps the extension when the staging name is too long", () => {
-  const long = `${"长".repeat(200)}.doc`;
-  const staged = buildRemoteStagingFileName(long);
-  expect(staged.length).toBeLessThanOrEqual(120);
-  expect(staged.endsWith(".doc")).toBe(true);
+it("keeps the extension and whole code points when the staging name is too long", async () => {
+  respond({}, {}, {});
+
+  await stage({ localPath: `/gateway/${"𠮷".repeat(60)}.docx` });
+
+  const staged = String(use.mock.calls[0]?.[0]).slice(remoteDir.length + 1);
+  expect(Buffer.byteLength(staged, "utf8")).toBeLessThanOrEqual(200);
+  expect(staged.endsWith(".docx")).toBe(true);
+  expect(staged.isWellFormed()).toBe(true);
 });
 
 it("cleans the token-owned parent after setup timeout", async () => {

@@ -20,32 +20,48 @@ const SSH_OPTIONS = [
   "ForwardX11=no",
 ] as const;
 const CLEANUP_TIMEOUT_MS = 10_000;
-const MAX_STAGING_NAME_CHARS = 120;
+const log = createSubsystemLogger("channels/imessage");
+const MAX_STAGING_NAME_BYTES = 200;
+// Letters, digits and combining marks from any script, plus pictographs. ASCII shell
+// metacharacters stay out because they are neither letters nor pictographs.
+const STAGING_NAME_DISALLOWED = /[^\p{L}\p{N}\p{M}\p{Extended_Pictographic}._-]+/gu;
+
+function cleanStagingSegment(value: string): string {
+  return value
+    .replace(/[\\/]+/gu, "-")
+    .replace(STAGING_NAME_DISALLOWED, "-")
+    .replace(/-{2,}/gu, "-")
+    .replace(/^[.-]+/u, "")
+    .replace(/[.-]+$/u, "");
+}
 
 /**
  * Keep the attachment's display name for the remote copy. scp receives this as one
- * argued path, so only separators and control characters are unsafe, not UTF-8;
- * collapsing non-ASCII names to hyphens delivered ".txt" to the recipient.
+ * argued path, so only separators, control characters and shell metacharacters are
+ * unsafe; collapsing non-ASCII names to hyphens delivered ".doc" to the recipient.
  */
-export function buildRemoteStagingFileName(basename: string): string {
-  const cleaned = basename
-    .replace(/[\\/]+/gu, "-")
-    // Allow letters and digits from any script; neutralise shell metacharacters,
-    // separators and control characters that a remote scp path must never carry.
-    .replace(/[^\p{L}\p{N}._-]+/gu, "-")
-    .replace(/-{2,}/gu, "-")
-    .replace(/-+(?=\.[^.]+$)/gu, "")
-    .replace(/^[.-]+/u, "")
-    .replace(/[.-]+$/u, "");
-  const safe = cleaned === "" ? "attachment" : cleaned;
-  if (safe.length <= MAX_STAGING_NAME_CHARS) {
-    return safe;
+function buildRemoteStagingFileName(basename: string): string {
+  const extension = cleanStagingSegment(path.extname(basename).slice(0, 16));
+  const stem = cleanStagingSegment(path.basename(basename, path.extname(basename))) || "attachment";
+  const suffix = extension === "" ? "" : `.${extension}`;
+  const name = `${stem}${suffix}`;
+  if (Buffer.byteLength(name, "utf8") <= MAX_STAGING_NAME_BYTES) {
+    return name;
   }
-  const extension = path.extname(safe).slice(0, 16);
-  return `${safe.slice(0, MAX_STAGING_NAME_CHARS - extension.length)}${extension}`;
+  // Cut on code points, not UTF-16 units, so a surrogate pair or emoji is never split.
+  const budget = Math.max(1, MAX_STAGING_NAME_BYTES - Buffer.byteLength(suffix, "utf8"));
+  let head = "";
+  let used = 0;
+  for (const character of stem) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (used + size > budget) {
+      break;
+    }
+    head += character;
+    used += size;
+  }
+  return `${head}${suffix}`;
 }
-
-const log = createSubsystemLogger("channels/imessage");
 
 async function runChecked(label: string, argv: string[], options: CommandOptions): Promise<void> {
   const result = await runCommandWithTimeout(argv, {
