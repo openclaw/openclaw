@@ -715,18 +715,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
   display: none;
 }
 
-.settings-disclosure__summary {
-  list-style: none;
-}
-
-.settings-disclosure__summary::-webkit-details-marker {
-  display: none;
-}
-
-.settings-disclosure[open] > .settings-disclosure__summary .settings-disclosure__chevron {
-  transform: rotate(90deg);
-}
-
 .settings-disclosure__sections {
   margin-top: var(--space-8);
 }
