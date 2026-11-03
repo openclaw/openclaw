@@ -40,7 +40,7 @@ export function planSubagentFanoutTurn(params: {
     body,
   );
   const fanoutRequiresFinalMessage =
-    /(?:visible source replies are not automatically delivered for this run|your final response is not automatically sent to this conversation for this turn)\.\s*use `?message\(action=send\)`?[\s\S]*set `?final=true`?/i.test(
+    /(?:visible source replies are not automatically delivered for this run|your final response is not automatically sent to this conversation for this turn)\.\s*(?:you must )?use `?message\(action=send\)`?[\s\S]*set `?final=true`?/i.test(
       currentFanoutInstructions,
     );
   // Delivery mode belongs to this turn's instructions, not earlier transcript

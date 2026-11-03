@@ -839,8 +839,8 @@ describe("embedded session prompt delivery", () => {
         synthetic.prepared.runtimeContextFragments?.map((fragment) => fragment.text).join("\n"),
       ).toMatch(
         turn.requireExplicitMessageTarget
-          ? /final response is not automatically sent[\s\S]*target required this turn/u
-          : /final response is not automatically sent/u,
+          ? /MUST use `message\(action=send\)`[\s\S]*target required this turn/u
+          : /MUST use `message\(action=send\)`/u,
       );
     },
   );
@@ -868,12 +868,12 @@ describe("embedded session prompt delivery", () => {
     });
     expect(cli.prepared.systemPromptText).toBe(user.prepared.systemPromptText);
     expect(cli.prepared.systemPromptText).toContain(
-      "Use `message(action=send)` for visible replies",
+      "You MUST use `message(action=send)` for visible text replies",
     );
     expect(
       cli.prepared.runtimeContextFragments?.map((fragment) => fragment.text).join("\n"),
     ).toContain(
-      "This turn's final response is delivered automatically unless a final message-tool reply has already been delivered here.",
+      "For this turn, reply normally in your final assistant message; OpenClaw delivers it to this conversation automatically. You MUST NOT also send the same reply with the message tool.",
     );
     expect(user.prepared.runtimeContextFragments).toEqual([]);
   });

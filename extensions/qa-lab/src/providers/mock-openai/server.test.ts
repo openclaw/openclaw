@@ -6,6 +6,8 @@ import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import type { StreamEvent } from "./mock-openai-contracts.js";
 import { QA_TOOL_SEARCH_SECONDARY_TARGET, readTargetFromPrompt } from "./mock-openai-tooling.js";
 import {
+  currentReplyPolicy,
+  legacyReplyPolicy,
   expectIncludes,
   expectExcludes,
   expectSlots,
@@ -1783,9 +1785,7 @@ describe("qa mock openai server", () => {
           ...(combined ? { note: "ALPHA-OK" } : {}),
         }),
       );
-      const instructions = final
-        ? "Your final response is not automatically sent to this conversation for this turn. Use `message(action=send)` for visible replies here. Use `final=false` when more work or another reply must follow. Set `final=true` for a completed reply to this conversation."
-        : "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.";
+      const instructions = final ? currentReplyPolicy : legacyReplyPolicy;
       const withInstructions = (input: unknown[]) => ({
         ...(final ? { instructions: "Follow the unrelated Codex base instructions." } : {}),
         input: [makeDeveloperInput(instructions), ...input],

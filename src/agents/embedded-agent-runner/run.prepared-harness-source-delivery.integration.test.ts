@@ -566,7 +566,7 @@ describe("prepared harness source delivery", () => {
       );
     } else {
       expect(modelVisiblePrompt).toContain(
-        "Use `message(action=send)` for visible replies. Current-turn delivery instructions override this default.",
+        "You MUST use `message(action=send)` for visible text replies. Current-turn delivery instructions override this default.",
       );
       expect(modelVisiblePrompt).toContain(
         "By default, your final response is not automatically sent to this conversation",
