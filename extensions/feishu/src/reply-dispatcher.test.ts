@@ -1838,7 +1838,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("backs off streaming retries after start() throws (HTTP 400)", async () => {
     const errorMock = vi.fn();
     let shouldFailStart = true;
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const nowSpy = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const origPush = streamingInstances.push.bind(streamingInstances);
     streamingInstances.push = (...args: StreamingSessionStub[]) => {
       const firstInstance = args[0];
