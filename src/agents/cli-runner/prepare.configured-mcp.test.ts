@@ -37,8 +37,10 @@ import {
   createTestMcpLoopbackClientGrant,
 } from "../cli-runner.test-helpers.js";
 import { createMcpProofPluginRegistry } from "../mcp-connection-resolver.test-fixtures.js";
+import { completeMcpOAuthAuthorization, startMcpOAuthAuthorization } from "../mcp-oauth.js";
 import { requesterIdentity } from "../mcp-oauth.test-harness.js";
 import { saveMcpOAuthAccessTokenForTest } from "../mcp-oauth.test-support.js";
+import { resolveMcpTransportConfig } from "../mcp-transport-config.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
 import { mockCliMcpPreparation } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
@@ -52,8 +54,45 @@ const PROBE_SERVER_INSTRUCTIONS =
 const claudeBackend = createClaudeMcpCliBackend();
 
 async function startProbeServer() {
-  const state = { calls: 0, authorizations: [] as string[] };
+  const state = {
+    calls: 0,
+    authorizations: [] as string[],
+    tokenRequests: 0,
+    beforeToken: async () => {},
+  };
   const server = await startMcpHttpFixture(async (request, response) => {
+    // Minimal authorization server so an expired requester token must refresh.
+    const origin = `http://${request.headers.host}`;
+    const oauth = request.url?.startsWith("/.well-known/oauth-protected-resource")
+      ? { resource: `${origin}/mcp`, authorization_servers: [origin] }
+      : request.url === "/.well-known/oauth-authorization-server"
+        ? {
+            issuer: origin,
+            authorization_endpoint: `${origin}/authorize`,
+            token_endpoint: `${origin}/token`,
+            registration_endpoint: `${origin}/register`,
+            response_types_supported: ["code"],
+            code_challenge_methods_supported: ["S256"],
+          }
+        : request.url === "/register"
+          ? { ...(await readMcpFixtureMessage(request)), client_id: "probe-client" }
+          : undefined;
+    if (request.url === "/token") {
+      state.tokenRequests += 1;
+      await state.beforeToken();
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({ access_token: "refreshed", refresh_token: "r2", token_type: "Bearer" }),
+      );
+      return;
+    }
+    if (oauth) {
+      response.writeHead(request.url === "/register" ? 201 : 200, {
+        "content-type": "application/json",
+      });
+      response.end(JSON.stringify(oauth));
+      return;
+    }
     if (request.method !== "POST") {
       response.writeHead(request.method === "DELETE" ? 200 : 405).end();
       return;
@@ -98,6 +137,7 @@ async function startProbeServer() {
   return {
     port: new URL(server.url).port,
     url: `${server.url}/mcp`,
+    state,
     authorizations: state.authorizations,
     get calls() {
       return state.calls;
@@ -447,4 +487,84 @@ describe("configured MCP servers on CLI turns", () => {
       expect(server.authorizations).toEqual(Array(3).fill("Bearer alice"));
     },
   );
+  it("stops a requester-scoped call when its grant ends during the token refresh", async () => {
+    const { sessionTarget } = fixture.session;
+    const server = await startProbeServer();
+    const notes = {
+      transport: "streamable-http" as const,
+      url: server.url,
+      auth: "oauth" as const,
+    };
+    const config: OpenClawConfig = {
+      session: { store: sessionTarget.storePath },
+      plugins: { enabled: false },
+      tools: { allow: ["read", "notes__*"] },
+      mcp: { servers: { notes: { ...notes, oauth: { identity: "per-requester" } } } },
+    };
+    const requester = { messageChannel: "telegram", agentAccountId: "bot", senderId: "alice" };
+    // alice signs in through the real OAuth flow, so her refresh needs no new registration.
+    const identity = requesterIdentity("notes", server.url, "alice");
+    const oauthConfig = resolveMcpTransportConfig("notes", config.mcp!.servers!.notes);
+    const redirectUrl = "http://127.0.0.1/oauth/mcp/callback";
+    await startMcpOAuthAuthorization(identity, oauthConfig as never, { redirectUrl });
+    await completeMcpOAuthAuthorization(identity, oauthConfig as never, { code: "login" });
+    const scheduler = createTestGatewayScheduler();
+    const results: unknown[] = [];
+    try {
+      await setSessionMcpRuntimeScheduler(scheduler);
+      const context = await fixture.prepare({
+        sessionKey: sessionTarget.sessionKey,
+        sessionId: sessionTarget.sessionId,
+        provider: "claude-cli",
+        model: "opus",
+        modelHasVision: false,
+        sourceReplyDeliveryMode: "automatic",
+        config,
+        ...requester,
+      });
+      try {
+        const minted = mintGrant.mock.lastCall?.[0];
+        const scoped = await resolveMcpLoopbackScopedTools({
+          cfg: config,
+          context: minted!.context,
+          admittedRunContext: context.params.admittedRunContext,
+          ...(minted!.bundledTools ? { bundledTools: minted!.bundledTools } : {}),
+        });
+        // An expired access token makes the next call refresh before any MCP request.
+        await saveMcpOAuthAccessTokenForTest(identity, "expired", -60);
+        let grantCurrent = true;
+        // The grant ends while the token request is in flight.
+        server.state.beforeToken = async () => {
+          grantCurrent = false;
+        };
+        for (const id of [1, 2]) {
+          results.push(
+            await handleMcpJsonRpc({
+              message: {
+                jsonrpc: "2.0",
+                id,
+                method: "tools/call",
+                params: { name: "notes__echo", arguments: { word: "hi" } },
+              },
+              tools: scoped.tools,
+              toolSchema: buildMcpToolSchema(scoped.tools),
+              authorizeToolCall: () => grantCurrent,
+            }),
+          );
+          grantCurrent = true;
+        }
+      } finally {
+        await context.preparedBackend.cleanup?.();
+      }
+    } finally {
+      await disposeAllSessionMcpRuntimes();
+      await scheduler.stop();
+      await server.close();
+    }
+    expect(server.state.tokenRequests).toBe(2);
+    expect(JSON.stringify(results[0])).toContain("Tool call authorization expired");
+    // The refused call never reached the server; the next current grant uses the new token.
+    expect(JSON.stringify(results[1])).toContain("probe:hi");
+    expect(server.authorizations).toEqual(["Bearer refreshed"]);
+  });
 });

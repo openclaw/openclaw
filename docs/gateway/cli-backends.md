@@ -260,10 +260,13 @@ configured server (tool calls, resource reads, prompt fetches) rechecks the turn
 grant just before it is sent. Each listed server's `initialize` instructions are
 passed to the CLI whole, in server-name order.
 Requester-scoped servers (per-requester OAuth or a plugin connection resolver) are
-listed on every turn once the session has seen their tools, and before that as their
-sign-in tool. Each call uses the current turn's verified sender. A turn without one,
-such as a completion, an automation or a subagent run, refuses the call with an
-explicit error and never uses another account.
+listed on every turn once the session has seen their tools. Before that, a
+per-requester OAuth server is listed as its sign-in tool; a resolver-based server
+appears after the first turn whose verified sender the plugin resolves. Each call
+uses the current turn's verified sender. A turn without one, such as a completion,
+an automation or a subagent run, refuses the call with an explicit error and never
+uses another account. A call also stops before any request to the server if the
+turn's grant ends while it waits, for example during an OAuth token refresh.
 
 Existing sessions that stored the implicit automatic policy also retain continuity.
 OpenClaw records the current policy when the next turn completes.
