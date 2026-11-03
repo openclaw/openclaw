@@ -275,7 +275,9 @@ function classifyOpaqueWindowsCustody(observation: WindowsCensusRow, pid: number
     return { kind: "holder" };
   }
   // Every same-account process grants limited query at any integrity level, so a
-  // denied row belongs to another account or a protected system process.
+  // denied row belongs to another account or a protected system process, as the
+  // handoff census also assumes. Accepted edge: a same-account process with a custom
+  // DACL denying that query counts as foreign; OpenClaw never launches one.
   if (observation.foreignOwner || observation.accessDenied) {
     return { kind: "not-holder" };
   }
