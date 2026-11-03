@@ -23,10 +23,23 @@ const oneCredit = {
 };
 
 function harness(overrides: Record<string, unknown> = {}) {
-  const consume = vi.fn(async () => ({ outcome: "reset" as const }));
-  const readLimits = vi.fn().mockResolvedValueOnce(blocked(oneCredit)).mockResolvedValue(recovered);
+  let consumed = false;
+  const consume = vi.fn(async () => {
+    consumed = true;
+    return { outcome: "reset" as const };
+  });
+  // First account has a real exhausted subscription limit and an earned credit.
+  // Second account also has exhausted quota, but no earned reset credit.
+  const readLimits = vi.fn(async (profileId: string) =>
+    profileId === "openai:first"
+      ? consumed
+        ? recovered
+        : blocked(oneCredit)
+      : blocked({ availableCount: 0, credits: [] }),
+  );
   const firstAvailable = vi.fn().mockResolvedValue(undefined);
   const assertCurrent = vi.fn(async () => {});
+  const isResettableBlocked = vi.fn(async () => true);
   const settle = vi.fn(async () => {});
   const claim = vi.fn(async () => ({
     status: "owned" as const,
@@ -38,6 +51,7 @@ function harness(overrides: Record<string, unknown> = {}) {
     orderedProfileIds: ["openai:first", "openai:second"],
     maxPer24Hours: 1,
     firstAvailable,
+    isResettableBlocked,
     assertCurrent,
     readLimits,
     consume,
@@ -63,20 +77,45 @@ describe("earned Codex reset-credit inventory", () => {
     expect(chooseEarnedCodexResetCredit({ ...blocked(oneCredit), rateLimits: { rateLimitReachedType: "rate_limit_reached", spendControlReached: true } }, accountId, Date.now())).toBeUndefined();
   });
 
-  it("selects known valid details but does not confuse expired or capped details with count", () => {
-    const past = Math.floor(Date.now() / 1000) - 60;
+  it("sorts verified full details by earliest expiry, preserving non-expiring credits", () => {
+    const future = Math.floor(Date.now() / 1000) + 7200;
     expect(chooseEarnedCodexResetCredit(blocked({
       availableCount: 3,
       credits: [
-        { id: "expired", resetType: "codexRateLimits", status: "available", expiresAt: past },
-        { id: "good", resetType: "codexRateLimits", status: "available", expiresAt: null },
+        { id: "never", resetType: "codexRateLimits", status: "available", expiresAt: null },
+        { id: "later", resetType: "codexRateLimits", status: "available", expiresAt: future + 3600 },
+        { id: "sooner", resetType: "codexRateLimits", status: "available", expiresAt: future },
       ],
-    }), accountId, Date.now())).toEqual({ creditId: "good" });
+    }), accountId, Date.now())).toEqual({ creditId: "sooner" });
+  });
+
+  it("uses count-only backend selection for capped details but refuses corrupt/expired rows", () => {
+    const past = Math.floor(Date.now() / 1000) - 60;
+    const future = Math.floor(Date.now() / 1000) + 3600;
     expect(chooseEarnedCodexResetCredit(blocked({
       availableCount: 3,
-      credits: [{ id: "expired", resetType: "codexRateLimits", status: "available", expiresAt: past }],
+      credits: [{ id: "known", resetType: "codexRateLimits", status: "available", expiresAt: future }],
     }), accountId, Date.now())).toEqual({});
-    expect(chooseEarnedCodexResetCredit(blocked({ availableCount: 3, credits: null }), accountId, Date.now())).toEqual({});
+    expect(chooseEarnedCodexResetCredit(blocked({
+      availableCount: 3, credits: null,
+    }), accountId, Date.now())).toEqual({});
+    expect(chooseEarnedCodexResetCredit(blocked({
+      availableCount: 2,
+      credits: [{ id: "expired", resetType: "codexRateLimits", status: "available", expiresAt: past }],
+    }), accountId, Date.now())).toBeUndefined();
+    expect(chooseEarnedCodexResetCredit(blocked({
+      availableCount: 1,
+      credits: [{ id: "broken", resetType: "codexRateLimits", status: "available" }],
+    }), accountId, Date.now())).toBeUndefined();
+  });
+
+  it("never spends earned credits when purchased monetary credits are available", () => {
+    for (const credits of [{ hasCredits: true }, { unlimited: true }]) {
+      expect(chooseEarnedCodexResetCredit(blocked(oneCredit) && {
+        ...blocked(oneCredit),
+        rateLimits: { rateLimitReachedType: "rate_limit_reached", credits },
+      }, accountId, Date.now())).toBeUndefined();
+    }
   });
 });
 
@@ -104,7 +143,7 @@ describe("earned Codex reset-credit recovery", () => {
       idempotencyKey: "key-one",
       creditId: "earned-credit",
     }));
-    expect(h.readLimits).toHaveBeenCalledTimes(2);
+    expect(h.readLimits).toHaveBeenCalledTimes(5);
     expect(h.settle).toHaveBeenCalledWith("openai:first", "attempt-one", "restored");
   });
 
@@ -120,12 +159,10 @@ describe("earned Codex reset-credit recovery", () => {
     async (outcome) => {
       const h = harness({
         consume: async () => ({ outcome }),
-        readLimits: vi.fn().mockResolvedValueOnce(blocked(oneCredit)).mockResolvedValue(blocked(oneCredit)),
+        readLimits: vi.fn(async (id: string) => id === "openai:first" ? blocked(oneCredit) : blocked({ availableCount: 0, credits: [] })),
       });
       expect(await recoverWithEarnedCodexReset(h.options)).toEqual({ status: "not-restored", outcome });
-      expect(h.options.readLimits).toHaveBeenCalledTimes(
-        outcome === "reset" || outcome === "alreadyRedeemed" ? 2 : 1,
-      );
+      expect(h.options.readLimits).toHaveBeenCalledTimes(5);
     },
   );
 
@@ -139,7 +176,7 @@ describe("earned Codex reset-credit recovery", () => {
       const h = harness(overrides);
       const result = await recoverWithEarnedCodexReset(h.options);
       expect(["uncertain", "not-eligible"]).toContain(result.status);
-      expect(h.settle).toHaveBeenCalledOnce();
+      expect(h.settle).toHaveBeenCalledTimes(result.status === "not-eligible" ? 0 : 1);
     }
   });
 
@@ -159,6 +196,67 @@ describe("earned Codex reset-credit recovery", () => {
     ]);
     expect([first.status, second.status].sort()).toEqual(["busy", "restored"]);
     expect(h.consume).toHaveBeenCalledOnce();
+  });
+
+  it("refuses to spend if a later profile is still available despite a blocked first", async () => {
+    const h = harness({
+      readLimits: async (id: string) => id === "openai:second" ? recovered : blocked(oneCredit),
+    });
+    expect(await recoverWithEarnedCodexReset(h.options)).toEqual({
+      status: "available",
+      profileId: "openai:second",
+    });
+    expect(h.claim).not.toHaveBeenCalled();
+  });
+
+  it("refuses to spend when any authorized profile has a non-quota failure", async () => {
+    const h = harness({ isResettableBlocked: async (id: string) => id !== "openai:second" });
+    expect(await recoverWithEarnedCodexReset(h.options)).toEqual({ status: "not-eligible" });
+    expect(h.claim).not.toHaveBeenCalled();
+    expect(h.consume).not.toHaveBeenCalled();
+  });
+
+  it("selects the second authorized account if the first is exhausted without earned credits", async () => {
+    let consumed = false;
+    const h = harness({
+      readLimits: async (id: string) =>
+        id === "openai:first"
+          ? blocked({ availableCount: 0, credits: [] })
+          : consumed ? recovered : blocked(oneCredit),
+      consume: async () => {
+        consumed = true;
+        return { outcome: "reset" };
+      },
+    });
+    expect(await recoverWithEarnedCodexReset(h.options)).toEqual({
+      status: "restored",
+      profileId: "openai:second",
+    });
+    expect(h.claim).toHaveBeenCalledWith("openai:second", 1);
+  });
+
+  it("on a crash retry only permits the persisted idempotency key, never a new logical spend", async () => {
+    let calls = 0;
+    const keys: string[] = [];
+    const h = harness({
+      claim: async () => ({ status: "owned", attemptId: "durable-attempt", idempotencyKey: "original-key" }),
+      consume: async (input: { idempotencyKey: string }) => {
+        keys.push(input.idempotencyKey);
+        calls++;
+        if (calls === 1) {
+          throw new Error("Gateway stopped after dispatch");
+        }
+        return { outcome: "alreadyRedeemed" };
+      },
+      readLimits: async (id: string) =>
+        id === "openai:second" ? blocked({ availableCount: 0, credits: [] })
+        : calls > 1 ? recovered : blocked(oneCredit),
+    });
+    expect(await recoverWithEarnedCodexReset(h.options)).toEqual({ status: "uncertain" });
+    expect(await recoverWithEarnedCodexReset(h.options)).toEqual({
+      status: "restored", profileId: "openai:first",
+    });
+    expect(keys).toEqual(["original-key", "original-key"]);
   });
 
   it("never widens the authorized account chain and fails closed on unavailable storage", async () => {
