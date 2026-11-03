@@ -483,16 +483,6 @@ const startupEnglish = {
     logout: "Logout",
     skipToMainContent: "Skip to main content",
   },
-  cronSchedule: {
-    at: "At {time}",
-    every: "Every {duration}",
-    onExit: "On exit: {command}",
-    event: "Event: {name}",
-    stream: "Stream: {command}",
-    cron: "Cron {expr}",
-    withCwd: "{value} (cwd: {cwd})",
-    withTimeZone: "{value} ({timeZone})",
-  },
   focus: {
     unsupported: "This focused view is not supported.",
   },

@@ -1,6 +1,7 @@
 import { resolveExactDurationParts } from "../../../src/infra/format-time/format-duration-exact.ts";
 import type { CronJob, GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { registerCronScheduleEnglish } from "../i18n/locales/en-cron-schedule.ts";
 import { resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
 import {
   formatDateMs,
@@ -10,6 +11,8 @@ import {
   formatUnknownText,
 } from "../lib/format.ts";
 import { resolveSessionContextLimit } from "./sessions/context-budget.ts";
+
+registerCronScheduleEnglish();
 
 export function formatNextRun(ms?: number | null) {
   if (!ms) {
@@ -54,30 +57,30 @@ export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
   const s = job.schedule;
   if (s.kind === "at") {
     const atMs = Date.parse(s.at);
-    return t("cronSchedule.at", { time: Number.isFinite(atMs) ? formatMs(atMs) : s.at });
+    return t("cron.scheduleLabel.at", { time: Number.isFinite(atMs) ? formatMs(atMs) : s.at });
   }
   if (s.kind === "every") {
     const duration = resolveExactDurationParts(s.everyMs)?.map(formatUnit).join(" ");
-    return t("cronSchedule.every", { duration: duration ?? t("common.na") });
+    return t("cron.scheduleLabel.every", { duration: duration ?? t("common.na") });
   }
   if (s.kind === "on-exit") {
     // on-exit jobs carry a watched command (+ optional cwd), not a cron expr;
     // without this branch they fall through and render "Cron undefined".
-    return withCwd(t("cronSchedule.onExit", { command: s.command }), s.cwd);
+    return withCwd(t("cron.scheduleLabel.onExit", { command: s.command }), s.cwd);
   }
   if (s.kind === "event") {
     const name = typeof s.options.name === "string" ? s.options.name : s.source;
-    return t("cronSchedule.event", { name });
+    return t("cron.scheduleLabel.event", { name });
   }
   if (s.kind === "stream") {
-    return withCwd(t("cronSchedule.stream", { command: s.command.join(" ") }), s.cwd);
+    return withCwd(t("cron.scheduleLabel.stream", { command: s.command.join(" ") }), s.cwd);
   }
-  const value = t("cronSchedule.cron", { expr: s.expr });
-  return s.tz ? t("cronSchedule.withTimeZone", { value, timeZone: s.tz }) : value;
+  const value = t("cron.scheduleLabel.cron", { expr: s.expr });
+  return s.tz ? t("cron.scheduleLabel.withTimeZone", { value, timeZone: s.tz }) : value;
 }
 
 function withCwd(value: string, cwd: string | undefined) {
-  return cwd ? t("cronSchedule.withCwd", { value, cwd }) : value;
+  return cwd ? t("cron.scheduleLabel.withCwd", { value, cwd }) : value;
 }
 
 export function formatCronPayload(job: CronJob) {
