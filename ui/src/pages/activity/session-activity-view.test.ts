@@ -2,6 +2,7 @@
 
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.ts";
 import type { SessionActivityPulse } from "../../../../src/shared/session-types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
@@ -375,13 +376,17 @@ describe("session activity people filter", () => {
     const opaqueId = "0123456789abcdef";
     const input = props({
       filters: { personId: privateId, query: "", time: "7d" },
-      rows: [row("Unresolved session", { id: privateId }, 1)],
+      rows: [
+        row("Unresolved session", { id: privateId }, 1),
+        row("Shared owner session", { id: GATEWAY_OWNER_PROFILE_ID }, 2),
+      ],
       presenceViewers: [profile(opaqueId, { name: " ", email: "other-private@example.test" })],
     });
     input.result!.people = [
       { identity: { type: "profile", id: privateId }, sessionCount: 1 },
       { identity: { type: "profile", id: opaqueId }, sessionCount: 1 },
       { identity: { type: "profile", id: "named" }, label: "Public person", sessionCount: 1 },
+      { identity: { type: "profile", id: GATEWAY_OWNER_PROFILE_ID }, sessionCount: 1 },
     ];
     show(input);
     const unresolved = find("[data-activity-unresolved]")!;
@@ -393,11 +398,17 @@ describe("session activity people filter", () => {
       "01234567…",
     );
     expect(find('[data-activity-person="named"]', unresolved)).toBeNull();
+    const sharedOwner = find(`[data-activity-person="${GATEWAY_OWNER_PROFILE_ID}"]`)!;
+    expect(text(".activity-feed__people-name", sharedOwner)).toBe("Shared owner");
+    expect(sharedOwner.closest("[data-activity-unresolved]")).toBeNull();
     expect(container.textContent).not.toContain("private-");
     if (phone) {
       const session = find('[data-activity-session="Unresolved session"]')!;
       expect(session.querySelector(".activity-feed__unknown-avatar")).not.toBeNull();
       expect(session.querySelector(".activity-feed__session-owner")).toBeNull();
+      expect(
+        text('[data-activity-session="Shared owner session"] .activity-feed__session-owner'),
+      ).toBe("Shared owner");
     } else {
       expect(text(".activity-feed__selected-person")).toBe("Person");
     }
