@@ -1,5 +1,4 @@
 require "open3"
-require "tempfile"
 
 # Opt-in phase and incident evidence. Resource sampling belongs to ios-resource-timeline.mjs.
 class ScreenshotDiagnostics
@@ -53,7 +52,7 @@ class ScreenshotDiagnostics
       observer = Thread.new do
         next if waiter.join(5)
 
-        sample["stallProbe"] = inventory_stall_probe(waiter)
+        sample["processCensusRequestedAt"] = request_inventory_census(sample.fetch("startedAt"))
       end
       result = waiter.value
       # Parent-observed completion can itself be delayed by runner scheduling.
@@ -85,79 +84,14 @@ class ScreenshotDiagnostics
 
   private
 
-  def inventory_stall_probe(waiter)
-    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    facts = { "outcome" => "unavailable", "startedAt" => Time.now.utc.iso8601(3) }
-    facts["before"] = inventory_child_facts(waiter.pid)
-    # A CPU probe can time out under the same load we are investigating.
-    # The live waiter still identifies the inventory child owned by this query.
-    return facts unless waiter.alive?
+  def request_inventory_census(query_started_at)
+    phase_path = ENV["OPENCLAW_IOS_RESOURCE_PHASE_PATH"]
+    return unless phase_path && !phase_path.empty?
 
-    Tempfile.create("ios-inventory-stack-") do |report|
-      facts["sampleOutcome"] = diagnostic_command(
-        ["/usr/bin/sample", waiter.pid.to_s, "1", "10", "-file", report.path],
-        output: File::NULL, timeout: 3
-      )
-      facts["frames"] = sanitized_inventory_frames(report) if report.size <= 2 * 1024 * 1024
-    end
-    facts["after"] = inventory_child_facts(waiter.pid) if waiter.alive?
-    facts["outcome"] = "collected" if facts["sampleOutcome"] == "succeeded" && facts["frames"]&.any?
-    facts
-  rescue StandardError
-    facts
-  ensure
-    facts["durationMs"] = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round(3)
-  end
-
-  def inventory_child_facts(pid)
-    Tempfile.create("ios-inventory-cpu-") do |report|
-      outcome = diagnostic_command(["/bin/ps", "-p", pid.to_s, "-o", "time=,state=,comm="], output: report.path, timeout: 1)
-      return nil unless outcome == "succeeded" && report.size <= 4096
-
-      match = report.read.match(/\A\s*(?:(\d+)-)?([\d:.]+)\s+([A-Za-z+<>=-]+)\s+(.+?)\s*\z/)
-      return nil unless match && %w[xcrun simctl].include?(File.basename(match[4]))
-
-      seconds = match[1].to_i * 86_400 + match[2].split(":").reduce(0.0) { |sum, part| sum * 60 + part.to_f }
-      { "cpuMs" => (seconds * 1000).round(3), "state" => match[3] }
-    end
-  end
-
-  def diagnostic_command(command, output:, timeout:)
-    pid = Process.spawn(*command, in: File::NULL, out: output, err: File::NULL, pgroup: true)
-    process = Process.detach(pid)
-    return "timed-out" unless process.join(timeout)
-
-    process.value.success? ? "succeeded" : "failed"
-  ensure
-    if process&.alive?
-      begin
-        Process.kill("KILL", -pid)
-      rescue Errno::ESRCH
-        nil
-      end
-      process.join
-    end
-  end
-
-  def sanitized_inventory_frames(report)
-    graph = false
-    thread = 0
-    frames = []
-    report.each_line do |line|
-      if line.start_with?("Call graph:")
-        graph = true
-        next
-      end
-      next unless graph
-      break if line.start_with?("Total number in stack", "Binary Images:")
-      thread += 1 if line.match?(/\A\s*\d+ Thread_\d+/)
-      match = line.match(/\A([ |:+!]*)(\d+) (.+?)  \(in [A-Za-z0-9_.-]+\)/)
-      next unless match && match[3].length <= 240 && match[3].match?(/\A[+\-\[A-Za-z_][A-Za-z0-9_ .():<>\[\]+\-]*\z/)
-
-      frames << { "thread" => thread, "depth" => match[1].length, "samples" => match[2].to_i, "symbol" => match[3] }
-      break if frames.length == 160
-    end
-    frames
+    File.write("#{phase_path}.process-request", query_started_at)
+    Time.now.utc.iso8601(3)
+  rescue SystemCallError
+    nil
   end
 
   def persist

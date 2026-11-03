@@ -306,6 +306,110 @@ describe("iOS resource timeline workload boundary", () => {
     },
   );
 
+  posixIt.each([false, true])(
+    "brings one census forward for duplicate inventory requests without overlapping probes (busy: %s)",
+    (busy) => {
+      const root = tempDirs.make("ios-inventory-census-");
+      const output = path.join(root, "timeline.jsonl");
+      const preload = path.join(root, "native-probes.mjs");
+      const query = "2026-11-03T01:02:03.456Z";
+      writeFileSync(
+        preload,
+        `
+        import childProcess from "node:child_process";
+        import fs from "node:fs";
+        import { syncBuiltinESMExports } from "node:module";
+        const root = ${JSON.stringify(root)};
+        const commands = [];
+        let now = 0, active = 0, maxActive = 0, requests = 0, scans = 0, held, armed = false;
+        Object.defineProperty(process, "platform", { value: "darwin" });
+        Object.defineProperty(performance, "now", { value: () => now });
+        const complete = () => {
+          if (armed && requests >= 2) fs.writeFileSync(root + "/complete", JSON.stringify({ commands, maxActive, scans }));
+        };
+        const watch = fs.watch;
+        fs.watch = (directory, callback) => watch(directory, (event, filename) => {
+          callback(event, filename);
+          if (filename?.toString() === "phase.process-request") {
+            requests += 1;
+            now += 5_000;
+            const finish = held; held = undefined; finish?.();
+            complete();
+          }
+        });
+        const timeout = globalThis.setTimeout;
+        globalThis.setTimeout = (callback, delay) => {
+          const timer = timeout(callback, delay);
+          if (delay === 15_000) {
+            armed = true;
+            if (!${busy} && scans === 1) fs.writeFileSync(root + "/ready", "ready");
+            complete();
+          }
+          return timer;
+        };
+        childProcess.execFile = (_file, args, _options, callback) => {
+          const command = args[2].split("/").at(-1);
+          commands.push(command); now += 100; active += 1; armed = false;
+          maxActive = Math.max(maxActive, active);
+          let stdout = "";
+          if (command === "vm_stat") stdout = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\\nPages free: 1.";
+          if (command === "sysctl") stdout = "1";
+          if (command === "ps") {
+            scans += 1;
+            stdout = "42 1 0:00.01 1024 R 100.0 /usr/bin/xcodebuild";
+            if (scans === 2) fs.writeFileSync(root + "/duplicate", "ready");
+          }
+          const finish = () => { active -= 1; callback(null, stdout); };
+          if (${busy} && commands.length === 1) {
+            held = finish;
+            fs.writeFileSync(root + "/ready", "ready");
+          } else queueMicrotask(finish);
+          return { kill() {} };
+        };
+        syncBuiltinESMExports();
+      `,
+      );
+      const result = run(
+        output,
+        `
+        import { existsSync, watch, writeFileSync } from "node:fs";
+        import { markIosResourcePhase } from ${moduleUrl};
+        markIosResourcePhase("screenshot-iphone-boot");
+        const root = ${JSON.stringify(root)};
+        const request = process.env.OPENCLAW_IOS_RESOURCE_PHASE_PATH + ".process-request";
+        let sent = false, duplicated = false;
+        const check = () => {
+          if (!sent && existsSync(root + "/ready")) { sent = true; writeFileSync(request, ${JSON.stringify(query)}); }
+          if (!duplicated && existsSync(root + "/duplicate")) { duplicated = true; writeFileSync(request, ${JSON.stringify(query)}); }
+          if (existsSync(root + "/complete")) { watcher.close(); process.exit(23); }
+        };
+        const watcher = watch(root, check);
+        check();
+      `,
+        {},
+        preload,
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(23);
+      const proof = JSON.parse(readFileSync(path.join(root, "complete"), "utf8"));
+      expect(proof.maxActive).toBe(1);
+      expect(proof.scans).toBe(2);
+      expect(proof.commands.slice(4)).toEqual(["ps", "vm_stat", "sysctl", "iostat"]);
+      const samples = recordsAt(output).filter((record) => record.type === "sample");
+      expect(samples).toHaveLength(2);
+      expect(samples[1]).toMatchObject({
+        phaseAtStart: "screenshot-iphone-boot",
+        processRequest: { inventoryQueryStartedAt: query, receivedAt: expect.any(String) },
+        processStartedAt: expect.any(String),
+        processCompletedAt: expect.any(String),
+        probes: { ps: { outcome: "ok" } },
+        processSummary: { count: 1, runnableCount: 1 },
+      });
+      expect(samples[1].processIntervalMs).toBeLessThan(60_000);
+      endRecord(output, 23);
+    },
+  );
+
   posixIt("retains the child's terminating signal", () => {
     const output = path.join(tempDirs.make("ios-resource-timeline-"), "timeline.jsonl");
     const result = run(output, `process.kill(process.pid, "SIGTERM");`);

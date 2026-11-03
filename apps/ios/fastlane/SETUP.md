@@ -287,7 +287,7 @@ simulator services, build parallelism, or release admission.
 
 The collector takes one serial host sample approximately every 15 seconds. It records
 host CPU counters, load, memory compression and swap activity, memory-pressure
-level, and disk activity. It samples processes at most once a minute, recording
+level, and disk activity. It normally samples processes once a minute, recording
 at most twelve top CPU/RSS process rows. Process rows
 contain PIDs, parent PIDs and roles, state, CPU time, recent CPU utilization, and RSS. Roles use a fixed
 allowlist plus bounded executable basenames from installed Apple simulator runtime
@@ -310,6 +310,17 @@ scan does not block host sampling. While its output closure is still pending,
 subsequent due scans report `pending-after-timeout` without starting another
 process. Once it closes, process polling can resume at its normal cadence with
 a fresh CPU baseline. Late probe output is discarded.
+Screenshot inventory commands still running after five seconds may bring one
+process census forward through a timestamp-only temporary request file. The same
+collector coalesces duplicate notifications and serializes the requested sample
+with regular observations. Requested samples run `ps` first, then the normal
+host probes, and reset the next process-scan deadline to one minute afterward.
+`processRequest` retains the inventory query start timestamp and request receipt
+time. `processStartedAt` and `processCompletedAt` bracket the process probe;
+its outcome still distinguishes completed, timed-out, and pending observations.
+Request delivery can be delayed, and a census received after the query ends is
+not evidence of process activity during that query. Native stack sampling is
+not part of this investigation.
 The collector never exports arguments, environment values, paths, or application
 content. Fixed phase labels correlate samples with builds, simulator startup,
 Gateway preparation, native tests, screenshots, archiving, and upload.

@@ -247,15 +247,18 @@ output collection, and result handling (status validation and JSON decoding).
 It retains byte counts and exit status, without command arguments or output.
 These parent-observed timings can include scheduler delay; child completion is
 not an exact kernel exit timestamp. A query still running after five seconds
-also gets two targeted child CPU snapshots around one one-second native stack
-sample at 10-millisecond intervals. CPU snapshots cover only the inventory
-process, not CoreSimulator services; their difference covers the sampling window,
-not the whole query. Only bounded frame counts, depths, and symbols survive
-sanitization; raw reports are temporary and deleted. Each CPU probe has a
-one-second deadline and the sampler has a three-second deadline. Unavailable
-diagnostics preserve the inventory result. Sampling briefly suspends the child,
-and `observerJoinMs` records any additional wait for diagnostic completion.
-The probe adds no inventory queries and leaves exclusivity checks enabled.
+requests a process census from the existing background timeline, using its query
+start timestamp as the correlation token. The temporary request file is adjacent
+to `OPENCLAW_IOS_RESOURCE_PHASE_PATH` with suffix `.process-request`; it contains
+only that timestamp. `processCensusRequestedAt` records a successful request, not
+successful collection. Duplicate notifications coalesce. The collector runs the
+requested census before other host probes as soon as its current observation
+finishes, then moves its next scheduled census out by a minute. Timeline samples
+retain the query token, request receipt time, and process-probe start/end times;
+delivery and sampling can still be delayed or unavailable on a starved runner.
+The query never waits for collection. `observerJoinMs` records only any wait for
+the request writer. The probe adds no inventory queries, native stack samples,
+or synchronous resource probes and leaves exclusivity checks enabled.
 
 ## Apple bundle mapping
 

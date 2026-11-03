@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  watch,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -355,6 +356,7 @@ function startTimeline(output) {
     return null;
   }
   const phaseFile = path.join(phaseDir, "phase");
+  const processRequestFile = `${phaseFile}.process-request`;
   let active = true,
     bytes = 0,
     samples = 0,
@@ -363,6 +365,10 @@ function startTimeline(output) {
     outputLimitReached = false;
   let probeStatus = {};
   let timer;
+  let watcher;
+  let collecting = false;
+  let queuedProcessRequest;
+  let lastProcessRequest;
   const pending = new Map();
   const started = performance.now();
   const cpuStart = process.cpuUsage();
@@ -397,6 +403,7 @@ function startTimeline(output) {
     if (bytes + Buffer.byteLength(line) > budget) {
       active = false;
       outputLimitReached = true;
+      watcher?.close();
       return;
     }
     try {
@@ -404,6 +411,7 @@ function startTimeline(output) {
       bytes += Buffer.byteLength(line);
     } catch {
       active = false;
+      watcher?.close();
     }
   };
   const probe = (command, args = []) =>
@@ -466,23 +474,26 @@ function startTimeline(output) {
         observation.child.kill("SIGKILL");
       }, 2_000);
     });
-  async function sample() {
+  async function sample(processRequest) {
     const at = performance.now();
     const startedAt = new Date().toISOString();
     const phaseAtStart = phase();
     probeStatus = {};
-    const vm = memory(await probe("/usr/bin/vm_stat"));
-    const pressure = await probe("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]);
-    const diskRows = disks(await probe("/usr/sbin/iostat", ["-Id"]));
     let rows = [];
     let processIntervalMs = null;
-    if (performance.now() < nextProcessAt) {
-      probeStatus.ps = { wallMs: 0, outcome: "not-due" };
-    } else {
+    let processStartedAt = null;
+    let processCompletedAt = null;
+    const observeProcesses = async () => {
+      if (!processRequest && performance.now() < nextProcessAt) {
+        probeStatus.ps = { wallMs: 0, outcome: "not-due" };
+        return;
+      }
+      processStartedAt = new Date().toISOString();
       const processOutput = await probe("/bin/ps", [
         "-axo",
         "pid=,ppid=,time=,rss=,state=,%cpu=,comm=",
       ]);
+      processCompletedAt = new Date().toISOString();
       // Intentional skips retain the CPU baseline; earlier probes may delay the next observation.
       const processAt = performance.now();
       processIntervalMs = previousProcesses.size ? Math.round(processAt - previousProcessAt) : null;
@@ -490,6 +501,16 @@ function startTimeline(output) {
       previousProcessAt = processAt;
       previousProcesses = new Map(rows.map((row) => [row.pid, row.cpuMs]));
       nextProcessAt = processAt + processSampleIntervalMs;
+    };
+    // A requested census must not wait behind three potentially slow host probes.
+    if (processRequest) {
+      await observeProcesses();
+    }
+    const vm = memory(await probe("/usr/bin/vm_stat"));
+    const pressure = await probe("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]);
+    const diskRows = disks(await probe("/usr/sbin/iostat", ["-Id"]));
+    if (!processRequest) {
+      await observeProcesses();
     }
     if (!active) {
       return;
@@ -513,6 +534,9 @@ function startTimeline(output) {
       intervalMs: samples === 1 ? null : Math.round(at - previousAt),
       sampleWallMs: Math.round(performance.now() - at),
       processIntervalMs,
+      processStartedAt,
+      processCompletedAt,
+      ...(processRequest ? { processRequest } : {}),
       probes: probeStatus,
       host: {
         cpuPercent:
@@ -554,17 +578,60 @@ function startTimeline(output) {
     previousCpu = cpu;
     previousMemory = vm;
     previousDisks = new Map(diskRows.map((disk) => [disk.device, disk]));
-    // Delayed collection skips missed slots; there is never a catch-up queue.
-    if (active) {
-      timer = setTimeout(collect, intervalMs);
-    }
   }
   const collect = () => {
-    void sample().catch(() => {
-      active = false;
-      emit({ type: "unavailable", at: new Date().toISOString() });
-    });
+    if (!active || collecting) {
+      return;
+    }
+    clearTimeout(timer);
+    collecting = true;
+    const request = queuedProcessRequest;
+    queuedProcessRequest = undefined;
+    void sample(request)
+      .catch(() => {
+        active = false;
+        watcher?.close();
+        emit({ type: "unavailable", at: new Date().toISOString() });
+      })
+      .finally(() => {
+        collecting = false;
+        if (!active) {
+          return;
+        }
+        // Coalesce requests during an observation; never overlap native probes.
+        if (queuedProcessRequest) {
+          collect();
+        } else {
+          timer = setTimeout(collect, intervalMs);
+        }
+      });
   };
+  if (process.platform === "darwin") {
+    try {
+      watcher = watch(phaseDir, (_event, filename) => {
+        if (!active || filename?.toString() !== path.basename(processRequestFile)) {
+          return;
+        }
+        try {
+          const inventoryQueryStartedAt = readFileSync(processRequestFile, "utf8");
+          if (
+            !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/u.test(inventoryQueryStartedAt) ||
+            inventoryQueryStartedAt === lastProcessRequest
+          ) {
+            return;
+          }
+          lastProcessRequest = inventoryQueryStartedAt;
+          queuedProcessRequest = { inventoryQueryStartedAt, receivedAt: new Date().toISOString() };
+          collect();
+        } catch {
+          /* Best-effort notification; ordinary collection continues. */
+        }
+      });
+      watcher.on("error", () => watcher.close());
+    } catch {
+      /* Ordinary collection remains available without request notifications. */
+    }
+  }
   emit({
     type: "start",
     at: new Date().toISOString(),
@@ -584,6 +651,7 @@ function startTimeline(output) {
     stop(code, signal) {
       active = false;
       clearTimeout(timer);
+      watcher?.close();
       for (const observation of pending.values()) {
         clearTimeout(observation.deadline);
         observation.child.kill("SIGKILL");
