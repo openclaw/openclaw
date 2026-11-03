@@ -198,7 +198,7 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
 
 function questionReplyGuidance(questions: readonly AgentHarnessUserInputQuestion[]): string {
   if (questions.length !== 1) {
-    return "Answer each question by number or question id, one answer per line.";
+    return "Reply by number or question id. Use a declared option where choices are fixed.";
   }
   const [question] = questions;
   if (!question || (question.options?.length ?? 0) === 0) {
@@ -253,20 +253,21 @@ export function buildAgentHarnessUserInputAnswers(
   }
 
   const keyed = parseKeyedAnswers(inputText);
-  // Unkeyed multi-question replies are positional. Preserve blank lines so a
-  // skipped answer cannot shift every later response onto the wrong question.
-  const fallbackLines = inputText.split(/\r?\n/).map((line) => line.trim());
-  // A single unkeyed line answers every question ("Approved all questions");
-  // positional fallback would leave the later questions empty and the gateway
-  // rejects the whole reply with "requires an answer".
-  const singleLine = keyed.size === 0 && fallbackLines.length === 1 ? (fallbackLines[0] ?? "") : "";
-  questions.forEach((question, index) => {
-    const key =
+  const keyedAnswers = questions.map(
+    (question, index) =>
       keyed.get(question.id.toLowerCase()) ??
       keyed.get(question.header.toLowerCase()) ??
       keyed.get(question.question.toLowerCase()) ??
-      keyed.get(String(index + 1));
-    const answer = key ?? fallbackLines[index] ?? singleLine;
+      keyed.get(String(index + 1)),
+  );
+  // A line bound to one question by key cannot also answer another by position.
+  const keyedLines = new Set(keyedAnswers.map((keyedAnswer) => keyedAnswer?.line));
+  // Unkeyed multi-question replies are positional. Preserve blank lines so a
+  // skipped answer cannot shift every later response onto the wrong question.
+  const fallbackLines = inputText.split(/\r?\n/).map((line) => line.trim());
+  questions.forEach((question, index) => {
+    const answer =
+      keyedAnswers[index]?.value ?? (keyedLines.has(index) ? "" : (fallbackLines[index] ?? ""));
     answers[question.id] = {
       answers: answer ? normalizeAgentHarnessUserInputAnswers(answer, question) : [],
     };
@@ -331,23 +332,20 @@ function normalizeAgentHarnessUserInputOption(
   return selected ? (selected.value ?? selected.label) : undefined;
 }
 
-function parseKeyedAnswers(inputText: string): Map<string, string> {
-  const answers = new Map<string, string>();
-  for (const line of inputText.split(/\r?\n/)) {
-    const match = line.match(/^\s*([^:=-]+?)\s*(?:[:=-]|\.)\s*(.+?)\s*$/);
+function parseKeyedAnswers(inputText: string): Map<string, { value: string; line: number }> {
+  const answers = new Map<string, { value: string; line: number }>();
+  for (const [lineIndex, line] of inputText.split(/\r?\n/).entries()) {
+    // Replies may number lines the way the prompt numbers questions ("1. Deny").
+    // Whitespace after the dot keeps decimals such as "1.5" positional.
+    const match =
+      line.match(/^\s*(\d+)\.\s+(.+?)\s*$/) ?? line.match(/^\s*([^:=-]+?)\s*[:=-]\s*(.+?)\s*$/);
     if (!match) {
       continue;
     }
-    // Users number their own reply lines ("1. Approved"); the trailing dot is
-    // punctuation, not part of the key, so strip it before binding.
-    const key = match[1]
-      ?.trim()
-      .replace(/[.,;]+$/u, "")
-      .trim()
-      .toLowerCase();
+    const key = match[1]?.trim().toLowerCase();
     const value = match[2]?.trim();
     if (key && value) {
-      answers.set(key, value);
+      answers.set(key, { value, line: lineIndex });
     }
   }
   return answers;
