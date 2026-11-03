@@ -257,7 +257,7 @@ it("sends no request for another operator's session but lets its owner reach the
                   user([
                     {
                       type: "text",
-                      text: "The conversation history before this point was compacted into the following summary:\n\n<summary>\nEarlier request summarized for review\n</summary>",
+                      text: "The conversation history before this point was compacted into the following summary. Compaction alone does not establish that the Gateway restarted or crashed; verify independent runtime evidence before attributing a gap to either.\n\n<summary>\nEarlier request summarized for review\n</summary>",
                     },
                   ]),
                   user(expect.stringContaining("[Thu 1970-01-01 00:00 UTC] Parent question")),

@@ -20,7 +20,7 @@ Built-in compaction summarizes the older history in one model request, whatever 
 
 Ordinary long tool results use a 2,000-character summary-input projection, including an explicit truncation marker. It keeps the beginning and end so terminal result codes survive. Existing diagnostic-preservation rules stay in place, and short results pass through unchanged. Text in the omitted middle can still be lost; the full result remains in the transcript.
 
-The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
+The full conversation history stays on disk. Compaction only changes what the model sees on the next turn. The summary reaches the model under a short header that says earlier history was compacted, and that compaction alone does not establish that the Gateway restarted or crashed.
 
 Compaction loads the complete current context: the latest reset or compaction boundary, its retained messages and previous summary, and the following history. Obsolete history before that window stays on disk without being loaded again, even when daily resets or `/new` keep the same session ID. The history hydration byte limit for ordinary turns does not clip compaction input; the summarizer's existing input budget still applies.
 

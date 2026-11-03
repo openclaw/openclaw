@@ -41,7 +41,7 @@ function normalizeCompactionSummaryTimestamp(timestamp: number | string): number
   return parsed ?? 0;
 }
 
-export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
+export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary. Compaction alone does not establish that the Gateway restarted or crashed; verify independent runtime evidence before attributing a gap to either.
 
 <summary>
 `;

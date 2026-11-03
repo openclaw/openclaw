@@ -197,7 +197,7 @@ it.each(["file", "sqlite"] as const)(
       "Keep the agreed task scope.",
       "Ran `check`\n```\nEarlier check failed.\n```\n\nCommand exited with code 2",
       "The following is a summary of a branch that this conversation came back from:\n\n<summary>\nPrior branch decision.</summary>",
-      "The conversation history before this point was compacted into the following summary:\n\n<summary>\nPrior task context.\n</summary>",
+      "The conversation history before this point was compacted into the following summary. Compaction alone does not establish that the Gateway restarted or crashed; verify independent runtime evidence before attributing a gap to either.\n\n<summary>\nPrior task context.\n</summary>",
     ].map((text) => ({
       type: "message",
       role: "user",
