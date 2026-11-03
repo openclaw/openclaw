@@ -79,6 +79,11 @@ succeed; Gateway invocation waits for that snapshot independently of publication
 Registration returns a synchronous handle whose optional `deferMcpToolApprovals`
 field remains undefined until policy preparation finishes.
 
+Foreground hook callbacks must name the native thread and accepted turn of the
+current run, even when warm threads reuse their hook commands and generation.
+Late callbacks cannot inherit a successor run's policy. Separately admitted
+direct children keep their existing retained authority.
+
 The cold hook CLI reads the locator without loading shared-state writer startup.
 On Node, this one-shot process uses a read-only connection with no SQLite lock
 wait; transient lock contention yields to the existing retry and deadline owner.
