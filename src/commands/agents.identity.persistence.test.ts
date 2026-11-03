@@ -1,25 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { stampConfigWriteMetadata } from "../config/io.meta.js";
 import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updateAgentConfigEntry } from "../gateway/server-methods/agents-config-mutations.js";
 import { defaultRuntime } from "../runtime.js";
-import { VERSION } from "../version.js";
 import { agentsSetIdentityCommand } from "./agents.commands.identity.js";
 
 async function avatarConfig(home: string): Promise<OpenClawConfig> {
   const image = await fs.readFile(path.resolve("extensions/nextcloud-talk/assets/icon.png"));
   return {
-    meta: {
-      lastTouchedVersion: VERSION,
-      migrations: {
-        modelPolicyAllowlist: true,
-        utilityModelSeparation: true,
-        skillWorkshopPlugin: true,
-        skillLibraryToolSplit: true,
-      },
-    },
+    meta: stampConfigWriteMetadata({}, undefined, {}, {}).meta,
     gateway: { mode: "local" },
     agents: {
       ownership: "explicit",

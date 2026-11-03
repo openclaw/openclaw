@@ -4,6 +4,7 @@ import type { ModelsListResult } from "../../../packages/gateway-protocol/src/sc
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolvePreparedModelRuntimeOwnerBySnapshot } from "../../agents/prepared-model-runtime.owner.js";
+import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 import {
   catalogAgents,
@@ -99,14 +100,7 @@ it.for([
     const token = "catalog-freshness-gateway-token";
     const cfg = {
       // A UI-only write must not also perform the fixture's first config migrations.
-      meta: {
-        migrations: {
-          modelPolicyAllowlist: true,
-          utilityModelSeparation: true,
-          skillWorkshopPlugin: true,
-          skillLibraryToolSplit: true,
-        },
-      },
+      meta: stampConfigWriteMetadata({}, undefined, {}, {}).meta,
       agents: catalogAgents(state, { modelPolicy: { allow: providers.map((id) => `${id}/*`) } }),
       plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
       gateway: { mode: "local", auth: { mode: "token", token } },

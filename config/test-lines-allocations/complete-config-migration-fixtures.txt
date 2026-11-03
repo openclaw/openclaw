@@ -1,2 +1,0 @@
-# Keep identity persistence and catalog freshness fixtures fully migrated after the skill_library split.
-2
