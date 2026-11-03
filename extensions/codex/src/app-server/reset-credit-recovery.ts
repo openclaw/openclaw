@@ -100,7 +100,8 @@ export function chooseEarnedCodexResetCredit(
       (credit.expiresAt !== null &&
         (typeof credit.expiresAt !== "number" ||
           !Number.isSafeInteger(credit.expiresAt) ||
-          credit.expiresAt <= 0))
+          credit.expiresAt <= 0 ||
+          credit.expiresAt > 8_640_000_000_000))
     ) {
       // Contradictory or corrupt details are not permission to spend.
       return undefined;
@@ -115,6 +116,9 @@ export function chooseEarnedCodexResetCredit(
   if (rows.length !== count) {
     // Count is authoritative, but these details are not complete.
     return {};
+  }
+  if (new Set(valid.map((entry) => entry.id)).size !== count) {
+    return undefined;
   }
   valid.sort((a, b) => a.expiry - b.expiry || a.id.localeCompare(b.id));
   return valid[0] ? { creditId: valid[0].id } : undefined;
@@ -147,6 +151,11 @@ async function scanAllowedProfiles(params: RecoveryOptions): Promise<ScanResult>
       return { status: "not-eligible" };
     }
     const account = params.accountId(profileId);
+    // Never redeem against an account whose native identity cannot be bound
+    // to the currently selected OAuth profile.
+    if (!account?.trim()) {
+      return { status: "not-eligible" };
+    }
     const limits = await params.readLimits(profileId, params.signal);
     await params.assertCurrent(profileId);
     if (isAuthoritativelyAvailable(limits, account)) {
