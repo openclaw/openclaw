@@ -52,6 +52,27 @@ function resolveTurnSourceTelegramOriginTarget(
   };
 }
 
+function reconcileTelegramOmittedThread(
+  turnSourceTarget: TelegramOriginTarget,
+  sessionTarget: TelegramOriginTarget,
+): TelegramOriginTarget | null {
+  if (turnSourceTarget.to !== sessionTarget.to) {
+    return null;
+  }
+  const turnThread = turnSourceTarget.threadId;
+  const sessionThread = sessionTarget.threadId;
+  if (turnThread != null && sessionThread != null) {
+    return null;
+  }
+  if (turnThread == null && sessionThread != null) {
+    return sessionTarget;
+  }
+  if (sessionThread == null && turnThread != null) {
+    return turnSourceTarget;
+  }
+  return null;
+}
+
 const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolverAsync({
   channel: "telegram",
   shouldHandleRequest: shouldHandleTelegramExecApprovalRequest,
@@ -60,6 +81,7 @@ const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolverAsync
     to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
     threadId: parseTelegramThreadId(sessionTarget.threadId),
   }),
+  reconcileDivergentTargets: reconcileTelegramOmittedThread,
 });
 
 const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolverAsync({

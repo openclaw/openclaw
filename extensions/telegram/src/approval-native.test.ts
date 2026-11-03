@@ -93,4 +93,86 @@ describe("telegram native approval adapter", () => {
 
     expect(target).toEqual({ to: chatId, threadId: 928 });
   });
+
+  it("keeps the stored forum topic when the live turn omits the thread", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const sessionKey = `agent:main:telegram:group:${chatId}:topic:928`;
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: chatId,
+            accountId: "default",
+            threadId: "928",
+          },
+        }),
+      },
+    });
+
+    const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+      cfg: { ...cfg, session: { store: storePath } },
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        ...requestTimes,
+        id: "plugin:topic-omitted",
+        request: {
+          title: "Plugin approval",
+          description: "Allow access",
+          sessionKey,
+          turnSourceChannel: "telegram",
+          turnSourceTo: `telegram:${chatId}`,
+          turnSourceAccountId: "default",
+        },
+      },
+    });
+
+    expect(target).toEqual({ to: chatId, threadId: 928 });
+  });
+
+  it("does not route a forum topic when the live turn names a different thread", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const sessionKey = `agent:main:telegram:group:${chatId}:topic:928`;
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: chatId,
+            accountId: "default",
+            threadId: "928",
+          },
+        }),
+      },
+    });
+
+    const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+      cfg: { ...cfg, session: { store: storePath } },
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        ...requestTimes,
+        id: "plugin:topic-conflict",
+        request: {
+          title: "Plugin approval",
+          description: "Allow access",
+          sessionKey,
+          turnSourceChannel: "telegram",
+          turnSourceTo: `telegram:${chatId}:topic:111`,
+          turnSourceAccountId: "default",
+        },
+      },
+    });
+
+    expect(target).toBeNull();
+  });
 });

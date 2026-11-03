@@ -168,6 +168,11 @@ export type BaseOriginResolverParams<TTarget> = {
   normalizeTargetForMatch?: NativeApprovalTargetNormalizer<TTarget>;
   /** Optional fallback target when neither turn-source nor session target resolves. */
   resolveFallbackTarget?: (request: ApprovalRequest) => TTarget | null;
+  /**
+   * When exact matching fails, recover a target whose only difference is an omitted thread.
+   * Return null when the two targets name different conversations.
+   */
+  reconcileDivergentTargets?: (turnSourceTarget: TTarget, sessionTarget: TTarget) => TTarget | null;
 };
 
 export type NativeOriginResolverParams<TTarget extends NativeApprovalTarget> =
