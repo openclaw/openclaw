@@ -572,10 +572,12 @@ it("leaves missing-model setup incomplete, then succeeds after the app owns the 
   const empty = successfulDiscovery("http://127.0.0.1:9931");
   empty.models = [];
   discoverMock.mockResolvedValue(empty);
-  await expect(method.run(ctx)).rejects.toThrow("Choose and download a model in Llama, then retry");
+  await expect(method.run(ctx)).rejects.toThrow(
+    "Choose and download a model in Llama app, then retry",
+  );
   expect(note).toHaveBeenCalledWith(
     expect.stringContaining("OpenClaw does not install"),
-    "Connect Llama",
+    "Set up Llama app",
   );
   expect(config).toEqual({});
   expectAuthUnchanged();

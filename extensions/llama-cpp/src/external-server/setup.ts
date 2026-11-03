@@ -437,7 +437,7 @@ export async function runLlamaServerSetup(
       `No ${serverName} text models were found at ${discovery.endpoint.origin}.` +
         (server.id === LLAMA_CPP_SERVER.id
           ? ""
-          : " Choose and download a model in Llama, then retry."),
+          : ` Choose and download a model in ${server.label}, then retry.`),
     );
   }
   if (persistence.kind === "remove") {
@@ -534,7 +534,7 @@ async function validateNonInteractiveDiscovery(
         : `No ${server.id === LLAMA_CPP_SERVER.id ? "llama-server" : server.label} text models were found at ${discovery.endpoint.origin}.` +
             (server.id === LLAMA_CPP_SERVER.id
               ? ""
-              : " Choose and download a model in Llama, then retry."),
+              : ` Choose and download a model in ${server.label}, then retry.`),
     );
   }
   return {

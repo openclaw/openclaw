@@ -54,7 +54,7 @@ sidebarTitle: "Setup"
         loads an idle model.
 
         To use an installed but idle model in desktop Model Setup, choose
-        **Choose connection** on the Ollama card, then **Local only**. This
+        **Set up** on the Ollama card, then **Local only**. This
         explicit setup path can prepare an eligible installed model for the live
         check without requiring it to be loaded already.
       </Step>

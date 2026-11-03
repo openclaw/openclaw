@@ -6,20 +6,22 @@ export function createLlamaServerAuthMethod(server: LlamaServerIdentity): Provid
   const app = server.id !== LLAMA_CPP_SERVER.id;
   return {
     id: "existing-server",
-    label: app ? "Llama" : "Existing llama-server",
+    label: app ? server.label : "Existing llama.cpp server",
     hint: app
-      ? "Connect to Llama (llama.app) on this Gateway or another host"
-      : "Connect to an existing local, private, or remote llama.cpp server",
+      ? "Use models from the separate Llama app (llama.app)."
+      : "Connect to a llama.cpp server you already run.",
     kind: "custom",
     wizard: {
       choiceId: app ? server.id : "llama-cpp-existing-server",
-      choiceLabel: app ? "Llama" : "Existing llama-server",
+      choiceLabel: app ? server.label : "Existing llama.cpp server",
       choiceHint: app
-        ? "Connect to Llama (llama.app)"
-        : "Connect to a llama.cpp server managed outside OpenClaw",
+        ? "Use models from the separate Llama app (llama.app)."
+        : "Connect to a llama.cpp server you already run.",
       groupId: server.id,
-      groupLabel: app ? "Llama" : "Local llama.cpp",
-      groupHint: app ? "Local models with llama.app" : "Managed or external llama.cpp server",
+      groupLabel: app ? server.label : "llama.cpp",
+      groupHint: app
+        ? "Models managed by the Llama app"
+        : "Built-in local AI or a server you already run",
       methodId: "existing-server",
     },
     appGuidedSetup: {
@@ -29,8 +31,8 @@ export function createLlamaServerAuthMethod(server: LlamaServerIdentity): Provid
     run: async (ctx) => {
       if (app) {
         await ctx.prompter.note(
-          "Get Llama at https://llama.app/, choose and download a model in the app, and enable its API server. Then connect to an address this Gateway can reach. OpenClaw does not install the app or manage its model cache.",
-          "Connect Llama",
+          "Get Llama app at https://llama.app/, choose and download a model in the app, and enable its API server. Then connect to an address this Gateway can reach. OpenClaw does not install the app or manage its model cache.",
+          "Set up Llama app",
         );
       }
       return (await import("./setup.js")).runLlamaServerSetup(ctx, server);

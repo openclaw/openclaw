@@ -27,7 +27,7 @@ export const LLAMA_CPP_SERVER: LlamaServerIdentity = {
 
 export const LLAMA_APP_SERVER: LlamaServerIdentity = {
   id: "llama-app",
-  label: "Llama",
+  label: "Llama app",
   defaultOrigin: "http://127.0.0.1:9931",
   apiKeyEnvVar: "LLAMA_APP_API_KEY",
   authMarker: "llama-app-local",

@@ -15,8 +15,9 @@ openclaw plugins install @openclaw/llama-cpp-provider
 ```
 
 Restart the Gateway after installing or updating the plugin. Interactive setup
-shows **Managed local server** and **Existing llama-server** under one
-**Local llama.cpp** group.
+shows **Built-in local AI** and **Existing llama.cpp server** under one
+**llama.cpp** group. The separate **Llama app** choice connects to
+[llama.app](https://llama.app/) rather than OpenClaw’s managed runtime.
 
 ## Configure managed text inference
 
@@ -41,7 +42,7 @@ for platform requirements, custom GGUF configuration, diagnostics, and repair.
 
 ## Connect to an existing server
 
-Choose **Existing llama-server** during setup and enter the endpoint and
+Choose **Existing llama.cpp server** during setup and enter the endpoint and
 optional API key. OpenClaw passively discovers single-model and router catalogs.
 It never installs, starts, stops, or reconfigures the external process.
 

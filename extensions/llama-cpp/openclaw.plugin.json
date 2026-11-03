@@ -84,12 +84,12 @@
       "cliOption": "--llama-cpp-embedding-only",
       "cliDescription": "Consent to managed llama.cpp embedding-only model and runtime downloads (non-interactive)",
       "appGuidedDiscovery": true,
-      "appGuidedActionLabel": "Set up model",
-      "choiceLabel": "Managed local server",
-      "choiceHint": "Choose a Qwen, Gemma, or Muse model for this Gateway's hardware and install llama.cpp",
+      "appGuidedActionLabel": "Set up",
+      "choiceLabel": "Built-in local AI",
+      "choiceHint": "Let OpenClaw download and run a model for you (powered by llama.cpp).",
       "groupId": "llama-cpp",
-      "groupLabel": "Local llama.cpp",
-      "groupHint": "Managed or external llama.cpp server"
+      "groupLabel": "llama.cpp",
+      "groupHint": "Built-in local AI or a server you already run"
     },
     {
       "provider": "llama-cpp",
@@ -97,29 +97,30 @@
       "choiceId": "llama-cpp-existing-server",
       "appGuidedDiscovery": true,
       "appGuidedSecret": true,
-      "choiceLabel": "Existing llama-server",
-      "choiceHint": "Connect to a llama.cpp server managed outside OpenClaw",
+      "choiceLabel": "Existing llama.cpp server",
+      "choiceHint": "Connect to a llama.cpp server you already run.",
       "groupId": "llama-cpp",
-      "groupLabel": "Local llama.cpp",
-      "groupHint": "Managed or external llama.cpp server",
+      "groupLabel": "llama.cpp",
+      "groupHint": "Built-in local AI or a server you already run",
       "optionKey": "llamaServerApiKey",
       "cliFlag": "--llama-server-api-key",
       "cliOption": "--llama-server-api-key <key>",
-      "cliDescription": "llama-server API key"
+      "cliDescription": "llama-server API key",
+      "appGuidedActionLabel": "Set up"
     },
     {
       "provider": "llama-app",
       "method": "existing-server",
       "choiceId": "llama-app",
       "appGuidedDiscovery": true,
-      "appGuidedActionLabel": "Connect Llama",
+      "appGuidedActionLabel": "Set up",
       "website": "https://llama.app/",
       "appGuidedSecret": true,
-      "choiceLabel": "Llama",
-      "choiceHint": "Connect to Llama (llama.app)",
+      "choiceLabel": "Llama app",
+      "choiceHint": "Use models from the separate Llama app (llama.app).",
       "groupId": "llama-app",
-      "groupLabel": "Llama",
-      "groupHint": "Local models with llama.app"
+      "groupLabel": "Llama app",
+      "groupHint": "Models managed by the Llama app"
     }
   ],
   "contracts": {
