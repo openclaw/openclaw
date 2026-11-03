@@ -2,10 +2,12 @@
 // epoch before its record is written. An incognito session has no durable recipient authority, so
 // its election fails visibly and elects nothing; a durable session's election binds its epoch.
 // Real: the continue_work tool, the agent runner's post-turn seam, the chain reservation, the
-// custody store, the authority capture, the next turn's system-event drain and the incognito memory
-// owner, bound around each turn as the Gateway's incognito dispatch binds it. Observed only: the
-// operator custody the Gateway hands an operator's tool call, through its release.
+// custody store, the authority capture, the next turn's reply admission and system-event drain,
+// and the incognito memory owner, bound around each turn as the Gateway's incognito dispatch binds
+// it. Observed only: the operator custody the Gateway hands an operator's tool call, through its
+// release, and the context the next turn hands its model loop.
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createContinueWorkTool } from "../../agents/tools/continue-work-tool.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
@@ -23,8 +25,16 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { scheduleReplyContinuation } from "../reply/agent-runner-continuation-schedule.js";
 import { createReplyContinuationController } from "../reply/agent-runner-continuation.js";
+import type { runReplyAgent } from "../reply/agent-runner-run.js";
 import { createTestFollowupRun } from "../reply/agent-runner.test-fixtures.js";
-import { drainFormattedSystemEvents } from "../reply/session-system-events.js";
+import { parseInlineSessionDirectives } from "../reply/directive-handling.parse.js";
+import { prepareReplyRunAdmission } from "../reply/get-reply-run-admission.js";
+import { prepareReplyRunContext } from "../reply/get-reply-run-context.js";
+import { executePreparedReplyRun } from "../reply/get-reply-run-execute.js";
+import { finalizeInboundContext } from "../reply/inbound-context.js";
+import { createModelSelectionStateFixture } from "../reply/model-selection.test-support.js";
+import { prepareReplyConversation } from "../reply/prompt-session-context.js";
+import { createTypingController } from "../reply/typing.js";
 import { resetContinuationCustodyProjection } from "./custody/custody-projection.js";
 import { hydrateContinuationCustody, listContinuationRecords } from "./custody/custody-store.js";
 import { extractContinuationSignal } from "./signal.js";
@@ -32,6 +42,28 @@ import type { ContinueWorkRequest } from "./types.js";
 import { resetContinuationWorkDispatchForTests } from "./work-dispatch.js";
 import { decodeWorkState } from "./work-flow-state.js";
 
+const runReplyAgentMock = vi.hoisted(() =>
+  vi.fn(async (_params: Parameters<typeof runReplyAgent>[0]) => ({ text: "ok" })),
+);
+// The model loop is the next turn's edge; its runtime loaders stay light.
+vi.mock("../reply/get-reply-run-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../reply/get-reply-run-helpers.js")>()),
+  loadAgentRunnerRuntime: async () => ({ runReplyAgent: runReplyAgentMock }),
+  loadEmbeddedAgentRuntime: async () => ({
+    preemptAndDrainEmbeddedHeartbeatRun: async () => "not-heartbeat",
+    resolveActiveEmbeddedRunBySessionFile: () => undefined,
+  }),
+  loadSessionUpdatesRuntime: async () => ({
+    ensureSkillSnapshot: async ({ sessionEntry }: { sessionEntry: SessionEntry }) => ({
+      sessionEntry,
+    }),
+  }),
+}));
+// Credential edge: no auth profile store is involved in the next turn's admission.
+vi.mock("../../agents/auth-profiles/session-override.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/session-override.js")>()),
+  resolveSessionAuthSelection: vi.fn(async () => undefined),
+}));
 const operatorReleases = vi.hoisted(() => [] as Array<() => void>);
 // The Gateway hands each operator continue_work call its policy custody; only its release is observed.
 vi.mock("../../gateway/server-plugin-in-process-authority.js", async (importOriginal) => ({
@@ -43,9 +75,9 @@ vi.mock("../../gateway/server-plugin-in-process-authority.js", async (importOrig
   },
 }));
 
-// The exact prompt line, timestamp aside.
+// The exact line the next run's context carries, timestamp aside.
 const SCHEDULING_FAILED =
-  /^System: \[[^\]]+\] \[continuation\] continue_work scheduling failed; the reserved chain budget remains fail-closed\.$/u;
+  /^System: \[[^\]]+\] \[continuation\] continue_work scheduling failed; the reserved chain budget remains fail-closed\.$/mu;
 const cfg = { agents: { defaults: { continuation: { enabled: true } }, entries: { main: {} } } };
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
@@ -119,15 +151,86 @@ async function electThroughTurn(sessionKey: string, storePath: string, entry: Se
 }
 
 const workRecords = async () => await listContinuationRecords({ kinds: ["work"] });
-/** The system-event text the session's next turn takes into its prompt. */
-const nextTurnEvents = async (sessionKey: string) =>
-  await drainFormattedSystemEvents({
+
+/** The session's next user turn, through reply admission; returns the context its run receives. */
+async function nextTurnContext(sessionKey: string, storePath: string, entry: SessionEntry) {
+  const body = "status?";
+  const ctx = finalizeInboundContext({
+    SessionKey: sessionKey,
+    Provider: "webchat",
+    ChatType: "direct",
+    Body: body,
+    RawBody: body,
+    CommandBody: body,
+    BodyStripped: body,
+  });
+  const root = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "next-turn");
+  const context = await prepareReplyRunContext({
+    ctx,
+    sessionCtx: ctx,
+    conversation: prepareReplyConversation({ ctx, sessionEntry: entry }),
+    sessionEntry: entry,
     cfg,
     agentId: "main",
-    sessionKey,
-    isMainSession: false,
+    agentDir: path.join(root, "agent"),
+    agentCfg: {},
+    sessionCfg: {},
+    commandAuthorized: true,
+    command: {
+      surface: "webchat",
+      channel: "webchat",
+      ownerList: [],
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      rawBodyNormalized: body,
+      commandBodyNormalized: body,
+    },
+    allowTextCommands: true,
+    directives: parseInlineSessionDirectives(body),
+    defaultActivation: "always",
+    modelState: createModelSelectionStateFixture({
+      agentCfg: {},
+      provider: "anthropic",
+      model: "claude",
+    }),
+    provider: "anthropic",
+    model: "claude",
+    typing: createTypingController({}),
+    defaultModel: "claude",
+    timeoutMs: 30_000,
     isNewSession: false,
+    resetTriggered: false,
+    systemSent: true,
+    sessionKey,
+    sessionId: entry.sessionId,
+    storePath,
+    sessionStore: { [sessionKey]: entry },
+    workspaceDir: path.join(root, "workspace"),
+    abortedLastRun: false,
+    resolvedThinkLevel: "off",
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolvedElevatedLevel: "off",
+    elevatedEnabled: false,
+    elevatedAllowed: false,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
   });
+  if (context.kind !== "ready") {
+    throw new Error("Expected a prepared reply context");
+  }
+  const admission = await prepareReplyRunAdmission(context);
+  if (admission.kind !== "ready") {
+    throw new Error("Expected a ready reply admission");
+  }
+  runReplyAgentMock.mockClear();
+  await executePreparedReplyRun(admission, () => cfg);
+  const [run] = runReplyAgentMock.mock.calls.at(-1) ?? [];
+  if (!run) {
+    throw new Error("Expected the next turn to reach the agent runner");
+  }
+  return run.followupRun.currentInboundContext?.text ?? "";
+}
 
 it("fails an incognito session's continue_work election visibly and elects nothing", async () => {
   await withState(async (env) => {
@@ -149,10 +252,7 @@ it("fails an incognito session's continue_work election visibly and elects nothi
         electThroughTurn(sessionKey, binding.path, entry),
       );
 
-      // The session's next turn, bound as the first, drains the notice into its prompt; the
-      // capture's refusal is its cause.
-      const drained = await runWithSessionActorStorage(binding, () => nextTurnEvents(sessionKey));
-      expect(drained).toEqual(expect.stringMatching(SCHEDULING_FAILED));
+      // The capture's refusal is the failure's cause.
       expect(runtimeLog).toHaveBeenCalledWith(
         expect.stringMatching(
           /continue_work scheduling failed after durable reservation .*Incognito collaboration command requires its dedicated owner/u,
@@ -171,6 +271,11 @@ it("fails an incognito session's continue_work election visibly and elects nothi
         .read({ agentId: "main", path: binding.path })
         ?.readSession(sessionKey, authority)?.entry;
       expect(stored?.continuationChainCount).toBe(1);
+      // The session's next turn, bound as the first, gives its run the notice.
+      const nextContext = await runWithSessionActorStorage(binding, () =>
+        nextTurnContext(sessionKey, binding.path, entry),
+      );
+      expect(nextContext).toMatch(SCHEDULING_FAILED);
     } finally {
       await binding.actor.release();
     }
@@ -185,13 +290,10 @@ it("binds a durable session's continue_work election to its recipient-authority 
     await accessor.upsertSessionEntryCore(scope, entry);
     expect(await workRecords()).toHaveLength(0);
 
-    await electThroughTurn(
-      sessionKey,
-      resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      entry,
-    );
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+    await electThroughTurn(sessionKey, storePath, entry);
 
-    expect(await nextTurnEvents(sessionKey)).toBeUndefined();
+    expect(await nextTurnContext(sessionKey, storePath, entry)).not.toContain("[continuation]");
     const [record, ...others] = await workRecords();
     expect(record && others).toEqual([]);
     // Insert-if-absent: returns the epoch the election captured.
