@@ -434,8 +434,9 @@ all request text.
 The extension returns a sensitive `onepassword://` approval link. The plugin keeps
 it in Gateway memory, never in the tool result, model context, transcript, logs,
 or durable request storage. The chat stores only the request ID and a non-secret
-summary. Open the conversation in the **OpenClaw Control UI** and select **Approve
-in 1Password** on the computer with your Nightly 1Password app. The prompt closes
+summary. Open the conversation in the **OpenClaw Control UI** and select **Open
+1Password** on the computer with your Nightly 1Password app. The private card
+shows the task goal, requested websites, and the reason for each login. The prompt closes
 after two minutes. Native plugin UI uses the Gateway's authenticated same-origin
 HTTPS or trusted-loopback connection; no Labs switch is required for this bundled
 plugin.
@@ -448,7 +449,10 @@ never claim that they delivered an approval link. Do not ask the model to copy o
 reconstruct it.
 
 Selecting the approval button records when it opened and starts one Gateway-owned
-status checker. Select **Refresh status** after deciding to see the latest result.
+status checker. The card updates automatically while waiting and shows the prompt's
+two-minute countdown. **Open again** reopens the same prompt without starting another
+checker or extending the deadline. If the app is not installed on this computer,
+select **1Password isn’t on this computer** for the next step.
 Explicitly telling the agent that you opened or approved the prompt remains a
 fallback. There are no checks for five seconds; checks then run every two seconds to 30 seconds, every five
 seconds to one minute, and every ten seconds to two minutes, then stop. Rate

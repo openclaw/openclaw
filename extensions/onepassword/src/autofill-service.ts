@@ -481,7 +481,14 @@ export class AutofillService {
 
   /** Private native-view hydration. Reading never acknowledges or polls a request. */
   async approval(id: string, scope: string, authority: AutofillAuthority) {
-    const record = await this.request(id, scope, authority);
+    let record = await this.request(id, scope, authority);
+    const checker = this.checkers.get(id);
+    // The window's final read joins the existing checker, never starts a second
+    // 1Password check or reports expiry while its last response is still in flight.
+    if (checker && record.openedAt !== undefined && this.clock.now() >= record.openedAt + 120_000) {
+      await checker;
+      record = await this.request(id, scope, authority);
+    }
     const connection = await this.options.stores.connections.lookup(record.connectionPath);
     this.assertCurrent(authority);
     if (!connection || sha256Hex(connection.integrationKey) !== record.integrationKeyFingerprint) {

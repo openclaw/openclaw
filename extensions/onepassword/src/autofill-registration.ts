@@ -113,7 +113,12 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
         const scope = JSON.stringify([target.sessionKey, target.sessionId]);
         const snapshot = await service.approval(input.requestId, scope, authority);
         authority.assertCurrent();
-        if (input.action !== "opened" || snapshot.state !== "pending" || !snapshot.appLink) {
+        if (
+          input.action !== "opened" ||
+          snapshot.state !== "pending" ||
+          !snapshot.appLink ||
+          snapshot.openedAt !== undefined
+        ) {
           return snapshot;
         }
         const owner = scheduler;
@@ -158,11 +163,9 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
           service.forgetApprovalLink(input.requestId);
           throw new AutofillError("operationFailed");
         }
-        return {
-          state: "pending",
-          guidance:
-            "Checking for your decision for up to two minutes. Refresh status after approving.",
-        };
+        const opened = await service.approval(input.requestId, scope, authority);
+        authority.assertCurrent();
+        return opened;
       } catch (error) {
         return {
           state: "error",

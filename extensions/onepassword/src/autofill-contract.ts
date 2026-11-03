@@ -24,6 +24,18 @@ export type AccessRequestStatus = {
   resolved: Array<{ entryId?: string; reference: string }>;
 };
 
+/** Private viewer projection: request metadata and an ephemeral native-app link, never credentials. */
+export type AutofillApprovalSnapshot = {
+  state: string;
+  appLink?: string;
+  expiresAt?: number;
+  openedAt?: number;
+  deadline?: number;
+  goal?: string;
+  entries?: Array<{ domain: string; reason?: string; granted?: boolean }>;
+  code?: string;
+};
+
 /** Adapter must enable Agentic Mode and exclusively lock the tab during fill. */
 export interface AgenticAutofillExtension {
   readiness?(): Promise<ExtResult<{ status: "ready" }>>;

@@ -84,6 +84,8 @@ function fixture() {
 it("requires current real Control UI admin and admitted session access before hydrating", async () => {
   const f = fixture();
   const hydrate = vi.spyOn(AutofillService.prototype, "approval").mockResolvedValue({
+    goal: "Sign in",
+    entries: [],
     state: "pending",
     appLink: "onepassword://synthetic-private",
     expiresAt: 600_000,
@@ -125,7 +127,9 @@ it("requires current real Control UI admin and admitted session access before hy
 
 it("starts a single service-owned checker from the click with retained authority, not the completed RPC", async () => {
   const f = fixture();
-  vi.spyOn(AutofillService.prototype, "approval").mockResolvedValue({
+  const hydrate = vi.spyOn(AutofillService.prototype, "approval").mockResolvedValue({
+    goal: "Sign in",
+    entries: [],
     state: "pending",
     appLink: "onepassword://synthetic-private",
     expiresAt: 600_000,
@@ -193,6 +197,17 @@ it("starts a single service-owned checker from the click with retained authority
   expect(await f.handler(f.options)).toEqual({ state: "error", code: "operationFailed" });
   expect(forget).toHaveBeenCalledTimes(2);
   expect(f.retained.release).toHaveBeenCalledTimes(3);
+  const scheduled = scheduler.schedule.mock.calls.length;
+  const acknowledged = opened.mock.calls.length;
+  hydrate.mockResolvedValueOnce({
+    state: "pending",
+    appLink: "onepassword://synthetic-private",
+    openedAt: 1000,
+    deadline: 121_000,
+  });
+  expect(await f.handler(f.options)).toMatchObject({ openedAt: 1000 });
+  expect(scheduler.schedule).toHaveBeenCalledTimes(scheduled);
+  expect(opened).toHaveBeenCalledTimes(acknowledged);
   await service.stop?.(serviceContext);
 });
 
@@ -200,7 +215,13 @@ it("rechecks the viewer after awaited hydration before returning the private URL
   const f = fixture();
   vi.spyOn(AutofillService.prototype, "approval").mockImplementationOnce(async () => {
     f.options.hasCurrentClientAuthority = () => false;
-    return { state: "pending", appLink: "onepassword://synthetic-private", expiresAt: 600_000 };
+    return {
+      goal: "Sign in",
+      entries: [],
+      state: "pending",
+      appLink: "onepassword://synthetic-private",
+      expiresAt: 600_000,
+    };
   });
   const result = await f.handler(f.options);
   expect(result).toEqual({ state: "error", code: "gatewayOwnerRequired" });

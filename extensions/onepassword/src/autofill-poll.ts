@@ -24,7 +24,8 @@ export function nextAutofillPollDelay(elapsedMs: number): number | null {
   if (elapsedMs < 60_000) {
     return 5_000;
   }
-  return elapsedMs < 120_000 ? 10_000 : null;
+  // Include the window boundary instead of abandoning the remaining partial interval.
+  return elapsedMs < 120_000 ? Math.min(10_000, 120_000 - elapsedMs) : null;
 }
 
 /** One invocation-bound checker; callers coalesce by connection + request before entering. */

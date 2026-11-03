@@ -1,3 +1,4 @@
+import type { AutofillApprovalSnapshot } from "./autofill-contract.js";
 import type { AutofillClock } from "./autofill-poll.js";
 import type { AutofillRequest } from "./autofill-service.js";
 
@@ -36,25 +37,35 @@ export class AutofillApprovalLinks {
   }
 
   /** Project a view only after the service has authorized its request and live connection. */
-  snapshot(record: AutofillRequest) {
+  snapshot(record: AutofillRequest): AutofillApprovalSnapshot {
     this.prune();
     const id = record.request.id;
+    const metadata = {
+      goal: record.request.goal,
+      entries: record.request.entries.map((entry) => ({
+        domain: new URL(entry.parameters.website).hostname,
+        reason: entry.reason,
+        granted: record.status.resolved.some((grant) => grant.entryId === entry.id),
+      })),
+    };
     if (record.status.state !== "pending") {
       this.forget(id);
-      return { state: record.status.state };
+      return { ...metadata, state: record.status.state };
     }
     const link = this.links.get(id);
     if (!link) {
-      return { state: "unavailable" };
+      return { ...metadata, state: "unavailable" };
     }
-    if (record.openedAt !== undefined) {
-      return {
-        state: record.status.state,
-        guidance: record.pollingEnded
-          ? "Polling stopped after two minutes. Tell the agent when you have approved; it can check once more."
-          : "Waiting for your decision. Refresh status after approving in 1Password.",
-      };
+    const deadline = record.openedAt === undefined ? undefined : record.openedAt + 120_000;
+    if (deadline !== undefined && deadline <= this.clock.now()) {
+      return { ...metadata, state: "expired" };
     }
-    return { state: record.status.state, appLink: link.appLink, expiresAt: link.expiresAt };
+    return {
+      ...metadata,
+      state: record.status.state,
+      appLink: link.appLink,
+      expiresAt: link.expiresAt,
+      ...(deadline !== undefined ? { openedAt: record.openedAt, deadline } : {}),
+    };
   }
 }

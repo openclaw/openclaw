@@ -592,6 +592,8 @@ it("hydrates a private link without polling, rejects other sessions, and expires
     state: "pending",
     appLink: "onepassword://synthetic-private-link",
     expiresAt: 600_000,
+    goal: "Download an invoice",
+    entries: [{ domain: "example.com", reason: "Download the invoice", granted: false }],
   });
   expect(s.extension.getAccessRequestStatus).not.toHaveBeenCalled();
   expect(JSON.stringify(await s.requests.entries())).not.toContain("onepassword://");
@@ -599,7 +601,9 @@ it("hydrates a private link without polling, rejects other sessions, and expires
     code: "requestNotFound",
   });
   s.advance(600_000);
-  expect(await s.service.approval("request", "chat", authority)).toEqual({ state: "unavailable" });
+  expect(await s.service.approval("request", "chat", authority)).toMatchObject({
+    state: "unavailable",
+  });
 });
 
 it("invalidates private views on reload, connection replacement, and authority loss", async () => {
@@ -607,7 +611,9 @@ it("invalidates private views on reload, connection replacement, and authority l
   await s.connect();
   await s.service.requestLogins(input, "chat", authority);
   s.service.clearApprovalLinks();
-  expect(await s.service.approval("request", "chat", authority)).toEqual({ state: "unavailable" });
+  expect(await s.service.approval("request", "chat", authority)).toMatchObject({
+    state: "unavailable",
+  });
   await s.service.requestLogins(input, "chat", authority);
   await expect(
     s.service.approval("request", "chat", {
@@ -629,6 +635,11 @@ it("records the actual click before polling starts and schedules from that momen
   s.advance(1000);
   await s.service.noteApprovalOpened("request", "chat", authority);
   expect((await s.requests.lookup("request"))?.openedAt).toBe(1000);
+  expect(await s.service.approval("request", "chat", authority)).toMatchObject({
+    appLink: "onepassword://synthetic-private-link",
+    openedAt: 1000,
+    deadline: 121_000,
+  });
   expect((await s.service.checkStatus("request", "chat", false, authority)).guidance).toContain(
     "was opened",
   );
@@ -636,7 +647,10 @@ it("records the actual click before polling starts and schedules from that momen
   s.advance(2000);
   await s.service.checkStatus("request", "chat", true, authority);
   expect(s.delays).toEqual([3000]);
-  expect(await s.service.approval("request", "chat", authority)).toEqual({ state: "resolved" });
+  expect(await s.service.approval("request", "chat", authority)).toMatchObject({
+    state: "resolved",
+    entries: [{ domain: "example.com", granted: true }],
+  });
 });
 
 it("makes a failed background checker unavailable instead of showing indefinite pending", async () => {
@@ -645,5 +659,51 @@ it("makes a failed background checker unavailable instead of showing indefinite 
   await s.service.requestLogins(input, "chat", authority);
   await s.service.noteApprovalOpened("request", "chat", authority);
   s.service.forgetApprovalLink("request");
-  expect(await s.service.approval("request", "chat", authority)).toEqual({ state: "unavailable" });
+  expect(await s.service.approval("request", "chat", authority)).toMatchObject({
+    state: "unavailable",
+  });
+});
+
+it("keeps the real approval window open through its final check and joins that result without another checker", async () => {
+  const s = setup();
+  await s.connect();
+  await s.service.requestLogins(input, "chat", authority);
+  const boundary = Promise.withResolvers<void>();
+  const final =
+    Promise.withResolvers<
+      Awaited<ReturnType<AgenticAutofillExtension["getAccessRequestStatus"]>>
+    >();
+  s.extension.getAccessRequestStatus.mockImplementation(async () => {
+    if (s.delays.reduce((sum, delay) => sum + delay, 0) === 120_000) {
+      boundary.resolve();
+      return final.promise;
+    }
+    expect(await s.service.approval("request", "chat", authority)).toMatchObject({
+      state: "pending",
+      deadline: 120_000,
+    });
+    return { success: true, result: { path: "status", state: "pending", resolved: [] } };
+  });
+  const checker = s.service.checkStatus("request", "chat", true, authority);
+  // Settle the signal even on the old early-exhaustion bug, so the regression fails
+  // on the schedule assertion rather than hanging on a fabricated final response.
+  void checker.then(() => boundary.resolve());
+  await boundary.promise;
+  const view = s.service.approval("request", "chat", authority);
+  try {
+    expect(s.delays.reduce((sum, delay) => sum + delay, 0)).toBe(120_000);
+    expect(s.extension.getAccessRequestStatus).toHaveBeenCalledTimes(26);
+  } finally {
+    final.resolve({
+      success: true,
+      result: {
+        path: "status",
+        state: "resolved",
+        resolved: [{ entryId: "entry", reference: "synthetic-final-reference" }],
+      },
+    });
+  }
+  await checker;
+  expect(await view).toMatchObject({ state: "resolved", entries: [{ granted: true }] });
+  expect(s.extension.getAccessRequestStatus).toHaveBeenCalledTimes(26);
 });

@@ -150,7 +150,7 @@ export function createAutofillTool(
               { requestId: request.requestId },
               {
                 version: 1,
-                summary: `1Password approval requested for ${request.entries.map((entry) => new URL(entry.website).origin.slice(0, 256)).join(", ")}. Approval requires the OpenClaw Control UI; approve with the button shown there on a computer with 1Password. Text-only channels do not receive approval links.`,
+                summary: `1Password approval requested for ${request.entries.map((entry) => new URL(entry.website).hostname).join(", ")}. Open the approval card in OpenClaw’s Control UI.`,
               },
             );
           }
