@@ -1,2 +1,2 @@
-388
-# Current/legacy Node/Bun creator-death custody and observer-stop transport regressions, with existing consumer fixtures migrated to their owner boundary, plus real package-replacement, retained native-code cleanup, per-command staging reuse, and inherited command cancellation proof.
+404
+# Current/legacy Node/Bun creator-death custody and observer-stop transport regressions, with existing consumer fixtures migrated to their owner boundary, plus real package-replacement, retained native-code cleanup, per-command staging reuse, and inherited command cancellation proof, and an ancestry-safe external-service fixture.
