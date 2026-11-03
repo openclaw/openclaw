@@ -23,7 +23,10 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
       }),
     })
     .parse(api.pluginConfig).agenticAutofill;
-  const extension = new BrowserAutofillExtension(config);
+  const extension = new BrowserAutofillExtension({
+    ...config,
+    warn: (message) => api.logger.warn(message),
+  });
   const service = new AutofillService({
     stores: {
       connections: api.runtime.state.openKeyedStoreV2<AutofillConnection>({

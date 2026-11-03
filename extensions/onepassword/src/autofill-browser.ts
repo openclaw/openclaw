@@ -102,7 +102,12 @@ export class BrowserAutofillExtension implements AgenticAutofillExtension {
   private closed = false;
 
   constructor(
-    private readonly options: { extensionPath?: string; browserProfile?: string },
+    private readonly options: {
+      extensionPath?: string;
+      browserProfile?: string;
+      /** Host diagnostics only; browser-host errors never carry tokens or keys. */
+      warn?: (message: string) => void;
+    },
     private readonly register: (
       request: BrowserExtensionRequest,
     ) => Promise<BrowserExtensionRegistration> = registerBrowserExtension,
@@ -129,8 +134,10 @@ export class BrowserAutofillExtension implements AgenticAutofillExtension {
         } else {
           this.registration = registration;
         }
-      } catch {
-        // Missing files, old versions, and running profiles share a safe actionable diagnostic.
+      } catch (error) {
+        // Missing files, old versions, and running profiles share a safe actionable diagnostic;
+        // the operator log keeps the concrete cause.
+        this.warn("registration", error);
       }
     })();
     await this.starting;
@@ -177,8 +184,9 @@ export class BrowserAutofillExtension implements AgenticAutofillExtension {
       return initialized
         ? await run(session)
         : { success: false, error: { code: "extensionNotReady" } };
-    } catch {
+    } catch (error) {
       // Never retry an uncertain worker call, especially a fill or request creation.
+      this.warn("attachment", error);
       if (attachment) {
         attachment.retired = true;
         if (this.session === attachment) {
@@ -194,6 +202,12 @@ export class BrowserAutofillExtension implements AgenticAutofillExtension {
         await session?.close().catch(() => {});
       }
     }
+  }
+
+  private warn(stage: string, error: unknown): void {
+    // Credentials travel only as worker call arguments, never in host error text.
+    const detail = error instanceof Error ? error.message : "unknown error";
+    this.options.warn?.(`1Password Agentic Autofill browser ${stage} failed: ${detail}`);
   }
 
   private assertCurrent(authority?: AutofillAuthority): void {
