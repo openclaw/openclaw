@@ -149,6 +149,38 @@ type DiagnosticsOtelState = {
   retireExporterRoutes?: (preserveFailures?: boolean) => void;
 };
 
+// The OTLP exporters retry a refused connection for up to their own `timeoutMillis` (10s by
+// default) before `shutdown()` settles, which outlasts the gateway's plugin-services shutdown
+// grace and holds the process open. Nothing can be delivered once the collector is gone, so bound
+// the final flush and keep the timeout visible as a shutdown failure.
+const PROVIDER_SHUTDOWN_DEADLINE_MS = 1_500;
+
+export async function settleStopsWithinDeadline(
+  label: string,
+  stops: Array<(() => void | Promise<void>) | null | undefined>,
+  deadlineMs = PROVIDER_SHUTDOWN_DEADLINE_MS,
+): Promise<unknown[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<unknown[]>((resolve) => {
+    timer = setTimeout(
+      () => resolve([new Error(`${label} shutdown exceeded ${deadlineMs}ms`)]),
+      deadlineMs,
+    );
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([
+      Promise.allSettled(stops.map((stop) => Promise.resolve().then(() => stop?.()))).then(
+        (results) =>
+          results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+      ),
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function createDiagnosticsOtelService(): OpenClawPluginService {
   let state: DiagnosticsOtelState = {};
   let preserveExporterRoutesOnNextStop = false;
@@ -170,11 +202,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       current.stopActiveTrustedSpans,
       current.unregisterOwnedSdkRuntime,
     );
-    const providerFailures = await settle(
+    const providerFailures = await settleStopsWithinDeadline("diagnostics-otel provider", [
       () => current.logProvider?.shutdown(),
       () => current.traceProvider?.shutdown(),
       () => current.meterProvider?.shutdown(),
-    );
+    ]);
     failures.push(...providerFailures);
     if (!options?.preserveExporterRoutes) {
       current.retireExporterRoutes?.(providerFailures.length > 0);
