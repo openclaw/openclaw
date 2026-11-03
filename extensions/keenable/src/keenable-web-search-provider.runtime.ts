@@ -97,7 +97,7 @@ export async function executeKeenableWebSearchProviderTool(
     return {
       error: "missing_keenable_api_key",
       message:
-        "web_search (keenable) needs a Keenable API key. Set KEENABLE_API_KEY in the Gateway environment, or configure plugins.entries.keenable.config.webSearch.apiKey.",
+        "web_search (keenable) needs a Keenable API key (free signup includes 100k requests/month). Set KEENABLE_API_KEY in the Gateway environment, or configure plugins.entries.keenable.config.webSearch.apiKey.",
       docs: "https://docs.openclaw.ai/tools/keenable-search",
     };
   }

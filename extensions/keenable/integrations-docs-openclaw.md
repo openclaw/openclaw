@@ -65,6 +65,11 @@ Requires OpenClaw **2026.6.8** or newer.
 
 ### Add an API key
 
+The official OpenClaw plugin uses Keenable’s **authenticated** Search API, so an API
+key is required. Signup is free (no credit card): every organization gets
+**100,000 free search/fetch requests per month** before paid usage. See
+[Pricing](https://keenable.ai/pricing) and [Credits](/credits).
+
 ```bash
 openclaw configure --section web
 ```
@@ -72,7 +77,7 @@ openclaw configure --section web
 Or set `KEENABLE_API_KEY` in the Gateway environment (for example `~/.openclaw/.env`). Create a key in the [console](https://app.keenable.ai/console); see [Authentication](/authentication).
 
 <Note>
-Set `KEENABLE_API_KEY` to authenticate — this removes the hourly request cap. Without a key, calls run on the shared public tier at [lower rate limits](/rate-limits).
+This plugin does not use Keenable’s keyless public pool (~1,000 req/hour per IP). Use an API key so searches count against your org’s free monthly allowance and [rate limits](/rate-limits) for keyed traffic (10 RPS per org).
 </Note>
 
 OpenClaw sends the required `X-Keenable-Title` header on every request (default `OpenClaw`; override with `plugins.entries.keenable.config.webSearch.appTitle`).
@@ -114,7 +119,7 @@ On OpenClaw, Exa, Firecrawl, Parallel, and Keenable are all **official search-pr
 
 ## Legacy `@keenable/openclaw-search`
 
-An earlier third-party plugin (`@keenable/openclaw-search`, ClawHub `keenable/openclaw-search`) registered a Keenable provider before OpenClaw shipped the official bundled plugin. **New installs should use `@openclaw/keenable-plugin`.** The legacy package targeted keyless public search endpoints; the official plugin uses the authenticated `/v1/search` API when `KEENABLE_API_KEY` (or plugin config) is set.
+An earlier third-party plugin (`@keenable/openclaw-search`, ClawHub `keenable/openclaw-search`) registered a Keenable provider before OpenClaw shipped the official bundled plugin. **New installs should use `@openclaw/keenable-plugin`.** The legacy package could call keyless public search endpoints; the official plugin always uses authenticated `/v1/search` with your API key (including the free **100k requests/month** tier).
 ```
 
 **Integrations index blurb** (for `integrations.md` table row):

@@ -129,7 +129,7 @@ whitespace. For example, `SearXNG` selects the existing `searxng` provider.
     AI-synthesized answers with citations via xAI web grounding.
   </Card>
   <Card title="Keenable" icon="search" href="/tools/keenable-search">
-    Agent-oriented web search with rich snippets, site filters, and pro or realtime modes.
+    Agent-oriented web search with rich snippets and filters; 100k free searches per month with a free API key.
   </Card>
   <Card title="Kimi" icon="moon" href="/tools/kimi-search">
     Structured results via Moonshot's search endpoint, with titles, URLs, and snippets.
@@ -169,7 +169,7 @@ whitespace. For example, `SearXNG` selects the existing `searxng` provider.
 | [Firecrawl](/tools/firecrawl)                    | Structured snippets                                | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                     |
 | [Gemini](/tools/gemini-search)                   | AI-synthesized + citations                         | --                                               | `GEMINI_API_KEY`                                                                        |
 | [Grok](/tools/grok-search)                       | AI-synthesized + citations                         | --                                               | xAI OAuth, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey`              |
-| [Keenable](/tools/keenable-search)               | Structured snippets with long excerpts             | Site, publish/index dates, point-in-time, mode   | `KEENABLE_API_KEY`                                                                      |
+| [Keenable](/tools/keenable-search)               | Structured snippets with long excerpts             | Site, publish/index dates, point-in-time, mode   | `KEENABLE_API_KEY` (100k free requests/mo; [pricing](https://keenable.ai/pricing))      |
 | [Kimi](/tools/kimi-search)                       | Structured results with titles, URLs, and snippets | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`                                                     |
 | [MiniMax Search](/tools/minimax-search)          | Structured snippets                                | Region (`global` / `cn`)                         | `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` / `MINIMAX_OAUTH_TOKEN`              |
 | [Ollama Web Search](/tools/ollama-search)        | Structured snippets                                | --                                               | None for signed-in local hosts; `OLLAMA_API_KEY` for direct `https://ollama.com` search |

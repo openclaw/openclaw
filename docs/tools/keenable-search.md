@@ -19,7 +19,22 @@ not the legacy third-party `@keenable/openclaw-search` package).
 On OpenClaw, Keenable is a first-class managed provider in the same category as
 [Exa](/tools/exa-search), [Firecrawl](/tools/firecrawl), and
 [Parallel](/tools/parallel-search): install an `@openclaw/*-plugin`, set
-`tools.web.search.provider`, and optionally add an API key.
+`tools.web.search.provider`, and add a Keenable API key.
+
+## Pricing and free tier
+
+Keenable meters **authenticated** search and fetch calls in
+[credits](https://docs.keenable.ai/credits). Each organization gets
+**100,000 free requests per month** (no credit card required to sign up and
+create a key). Free allowance resets monthly; paid usage only starts after that
+pool is used. See [Keenable pricing](https://keenable.ai/pricing).
+
+The OpenClaw plugin calls the authenticated Search API (`/v1/search`) with
+`KEENABLE_API_KEY`, so normal `web_search` usage counts against your org’s free
+monthly pool (typically one credit per search for `search.pro` or
+`search.realtime`). Keenable also offers a separate **keyless public pool**
+(~1,000 requests/hour per IP) for MCP and other clients; this plugin does not
+use that path.
 
 ## Install plugin
 
@@ -32,10 +47,14 @@ on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#app
 
 ## Get an API key
 
+An API key is **required** for the Keenable provider in OpenClaw. Creating one is
+free and unlocks the monthly **100k-request** allowance (not the keyless public
+pool).
+
 <Steps>
   <Step title="Create an account">
-    Sign up at [keenable.ai](https://keenable.ai/) and create an API key from your
-    dashboard.
+    Sign up at [keenable.ai](https://keenable.ai/) (no credit card required) and
+    create an API key from your [console](https://app.keenable.ai/console).
   </Step>
   <Step title="Store the key">
     Set `KEENABLE_API_KEY` in the Gateway environment, or configure via:
@@ -137,6 +156,7 @@ Maximum snippet length in characters (180-10000).
 - [Web search overview](/tools/web)
 - [Keenable OpenClaw integration](https://docs.keenable.ai/integrations/openclaw) (Keenable docs)
 - [Keenable API docs](https://docs.keenable.ai/)
+- [Keenable pricing](https://keenable.ai/pricing) and [credits](https://docs.keenable.ai/credits)
 - [Search API reference](https://docs.keenable.ai/api-reference/search)
 
 ## Keenable docs maintenance
