@@ -115,21 +115,83 @@ async function applyOwnerStatement(
   );
 }
 
+// A current approval newer than this statement supersedes it. Re-adding a device
+// signs a new certificate, and adding a browser records that time. A captured
+// revocation must not delete that later approval. An unknown target changes nothing.
+function ownerApprovalSupersedes(
+  state: AuthorityState,
+  fp: KeyFingerprint,
+  issuedAt: UnixSeconds,
+): boolean {
+  const issued = state.owner_devices[fp]?.cert.body.issued_at;
+  return issued !== undefined && issued > issuedAt;
+}
+
+function memberPeerApprovalSupersedes(
+  state: AuthorityState,
+  key: IrohEndpointKey,
+  issuedAt: UnixSeconds,
+): boolean {
+  for (const member of Object.values(state.members)) {
+    if (!member.peer_keys.includes(key)) {
+      continue;
+    }
+    const added = member.added_at[key];
+    return added !== undefined && added > issuedAt;
+  }
+  return false;
+}
+
+async function ownerDevicesForPeerRevocation(
+  state: AuthorityState,
+  target: KeyFingerprint,
+  issuedAt: UnixSeconds,
+): Promise<KeyFingerprint[]> {
+  const found = new Set<KeyFingerprint>();
+  for (const [fp, record] of Object.entries(state.owner_devices)) {
+    if (record.cert.body.issued_at > issuedAt) {
+      continue;
+    }
+    const peerFps = await Promise.all(record.cert.body.peer_keys.map((key) => fingerprint(key)));
+    if (!peerFps.includes(target)) {
+      continue;
+    }
+    // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
+    for (const each of approvalDescendants(state, fp as KeyFingerprint)) {
+      if (!ownerApprovalSupersedes(state, each, issuedAt)) {
+        found.add(each);
+      }
+    }
+  }
+  return [...found];
+}
+
 // Removes the revoked key now. An owner device goes with every device it approved
 // (computed from approved_by); a peer key leaves its member, or takes its owner device
-// (and that device's approvals) with it. An unknown target changes nothing.
+// (and that device's approvals) with it. An unknown or superseded target changes nothing.
 async function applyRevocation(
   state: AuthorityState,
   revocation: SignedStatement<"Revocation">,
 ): Promise<AuthorityResult> {
+  const issuedAt = revocation.body.issued_at;
   const target = revocation.body.target_fp;
+  if (
+    revocation.body.target_kind === "owner_device" &&
+    ownerApprovalSupersedes(state, target, issuedAt)
+  ) {
+    return applied(state);
+  }
   const devices =
     revocation.body.target_kind === "owner_device"
       ? approvalDescendants(state, target)
-      : await ownerDevicesWithPeer(state, target);
+      : await ownerDevicesForPeerRevocation(state, target, issuedAt);
   const owners = withoutOwnerDevices(state, devices);
   const memberPeers =
-    revocation.body.target_kind === "peer_key" ? await memberPeersWithFp(state, target) : [];
+    revocation.body.target_kind === "peer_key"
+      ? (await memberPeersWithFp(state, target)).filter(
+          (key) => !memberPeerApprovalSupersedes(state, key, issuedAt),
+        )
+      : [];
   const removed = [...new Set([...owners.peers, ...memberPeers])];
   if (devices.length === 0 && memberPeers.length === 0) {
     return applied(state);
@@ -139,22 +201,6 @@ async function applyRevocation(
     { type: "invalidate_tokens", peer_keys: removed },
     { type: "publish_snapshot" },
   ]);
-}
-
-// Every owner device (with the devices it approved) that holds a peer key with this fingerprint.
-async function ownerDevicesWithPeer(
-  state: AuthorityState,
-  target: KeyFingerprint,
-): Promise<KeyFingerprint[]> {
-  const found = new Set<KeyFingerprint>();
-  for (const [fp, record] of Object.entries(state.owner_devices)) {
-    const peerFps = await Promise.all(record.cert.body.peer_keys.map((key) => fingerprint(key)));
-    if (peerFps.includes(target)) {
-      // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
-      approvalDescendants(state, fp as KeyFingerprint).forEach((each) => found.add(each));
-    }
-  }
-  return [...found];
 }
 
 // Member peer keys whose fingerprint is `target`.
@@ -280,10 +326,19 @@ function addMember(
     );
   }
   const lastSeen = { ...existing?.last_seen };
+  const addedAt = { ...existing?.added_at };
   for (const key of target.peer_keys) {
+    if (!existing?.peer_keys.includes(key)) {
+      addedAt[key] = now;
+    }
     lastSeen[key] ??= now;
   }
-  const member: MemberRecord = { role: target.role, peer_keys: peerKeys, last_seen: lastSeen };
+  const member: MemberRecord = {
+    role: target.role,
+    peer_keys: peerKeys,
+    added_at: addedAt,
+    last_seen: lastSeen,
+  };
   if (target.invite_id === null) {
     return applied({ ...state, members: { ...state.members, [target.account_id]: member } }, [
       { type: "publish_snapshot" },

@@ -149,7 +149,10 @@ nothing else. There are no certificate chains and no list of revoked keys.
   member browser, or the owner device holding it (with its approvals). `revoke_device` removes
   one member browser; `remove` removes a member. The Gateway disconnects the removed keys and
   invalidates their device tokens. Nothing is remembered: a later Revocation of a key the
-  claw no longer lists changes nothing.
+  claw no longer lists changes nothing. A revocation older than the owner device certificate
+  currently listed for that fingerprint also changes nothing, and a peer-key revocation older
+  than the time that browser was added changes nothing. Re-approval is not undone by a
+  captured revocation.
 - **Inactivity.** The Gateway records `last_seen` per owner device and per member browser
   whenever the tunnel admits it (at most once an hour). Owner devices unused for 90 days and
   member browsers unused for 30 days are dropped (Gateway config

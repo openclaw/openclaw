@@ -73,6 +73,12 @@ export function withoutMemberPeerKeys(
       {
         ...member,
         peer_keys: member.peer_keys.filter((key) => !remove.has(key)),
+        added_at: Object.fromEntries(
+          Object.entries(member.added_at).filter(
+            // SAFETY: added_at is keyed by IrohEndpointKey; Object.entries widens keys to string.
+            ([key]) => !remove.has(key as IrohEndpointKey),
+          ),
+        ),
         last_seen: Object.fromEntries(
           Object.entries(member.last_seen).filter(
             // SAFETY: last_seen is keyed by IrohEndpointKey; Object.entries widens keys to string.
