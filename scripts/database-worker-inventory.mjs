@@ -2301,7 +2301,7 @@ const reviewedOperations = new Map([
           "markPersonalGitHubPublicationReportedInDatabase",
         ],
         evidence:
-          "Only state/github-publication.worker.ts personalMutation restart/report calls these kernels. Native confirmation and reporting adapters retain their separate SQL and existing classification.",
+          "Only github-personal-publication-store.worker.ts githubPublications.personalRestart and state/github-publication.worker.ts personalMutation report call these respective kernels. Native confirmation and reporting adapters retain their separate SQL and existing classification.",
       },
       {
         tier: "T2",
