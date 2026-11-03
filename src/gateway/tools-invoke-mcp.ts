@@ -10,6 +10,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { sessionMutationForbiddenError } from "./session-mutation-authorization-error.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 
@@ -51,10 +52,10 @@ export type InvocationMcpTools = {
 type AcquireInvocationMcpToolsParams = {
   toolName: string;
   /**
-   * Gateway tool names already resolved for this caller. A requested name among them never
-   * connects MCP; MCP names colliding with them get the suffixes tools.effective advertises.
+   * Lists the caller's Gateway tool names before request-specific narrowing; MCP names colliding
+   * with them get the suffixes tools.effective advertises. Called only when a server owns the name.
    */
-  reservedToolNames: readonly string[];
+  listReservedToolNames: () => Promise<readonly string[]>;
   cfg: OpenClawConfig;
   workspaceDir: string;
   agentId: string;
@@ -103,10 +104,7 @@ function resolveOtherServerDenials(params: AcquireInvocationMcpToolsParams): str
 export async function acquireInvocationMcpTools(
   params: AcquireInvocationMcpToolsParams,
 ): Promise<InvocationMcpTools | undefined> {
-  if (
-    params.reservedToolNames.includes(params.toolName) ||
-    !params.toolName.includes(TOOL_NAME_SEPARATOR)
-  ) {
+  if (!params.toolName.includes(TOOL_NAME_SEPARATOR)) {
     return undefined;
   }
   const otherServerDenials = resolveOtherServerDenials(params);
@@ -114,6 +112,8 @@ export async function acquireInvocationMcpTools(
     return undefined;
   }
   const { signal } = params;
+  signal.throwIfAborted();
+  const reservedToolNames = await params.listReservedToolNames();
   signal.throwIfAborted();
   const sessionPolicy = await prepareSessionMcpOverridesCheck(params);
   const mcp = await import("../agents/agent-bundle-mcp-tools.js");
@@ -148,7 +148,7 @@ export async function acquireInvocationMcpTools(
       return await mcp.materializeBundleMcpToolsForRun({
         ...lease,
         agentId: params.agentId,
-        reservedToolNames: params.reservedToolNames,
+        reservedToolNames,
       });
     });
     // Retirement closes transports first, so an abandoned call cannot outlive its request.
@@ -184,4 +184,47 @@ export async function acquireInvocationMcpTools(
     signal.removeEventListener("abort", onAbort);
     await abortRetirement;
   }
+}
+
+type ResolveInvocationTools<T extends { tools: AnyAgentTool[] }> = (
+  disablePluginTools: boolean,
+  overrides?: { gatewayRequestedTools?: string[]; bundledTools?: readonly AnyAgentTool[] },
+) => Promise<T>;
+
+/**
+ * Resolves the caller's Gateway tools for `toolName` (core-only first for core names), then,
+ * when none holds the name, the owning configured MCP server's tools through the same policy.
+ * MCP names colliding with the caller's unnarrowed Gateway inventory get the suffixes
+ * tools.effective advertises, so a discovered `server__tool-2` stays invocable.
+ */
+export async function resolveToolsWithInvocationMcp<T extends { tools: AnyAgentTool[] }>(params: {
+  toolName: string;
+  knownCoreTool: boolean;
+  resolveTools: ResolveInvocationTools<T>;
+  mcp: Omit<AcquireInvocationMcpToolsParams, "toolName" | "listReservedToolNames">;
+}): Promise<{ resolved: T; mcpUnavailable?: string }> {
+  const holdsName = ({ tools }: T) => tools.some(({ name }) => name === params.toolName);
+  let resolved = await params.resolveTools(params.knownCoreTool);
+  if (params.knownCoreTool && !holdsName(resolved)) {
+    resolved = await params.resolveTools(false);
+  }
+  if (holdsName(resolved)) {
+    return { resolved };
+  }
+  const mcpTools = await acquireInvocationMcpTools({
+    ...params.mcp,
+    toolName: params.toolName,
+    // Discovery reserves the inventory before any request-specific plugin narrowing.
+    listReservedToolNames: async () =>
+      (await params.resolveTools(false, { gatewayRequestedTools: [] })).tools.map(
+        ({ name }) => name,
+      ),
+  });
+  if (!mcpTools) {
+    return { resolved };
+  }
+  resolved = await params.resolveTools(false, { bundledTools: mcpTools.tools });
+  // MCP App views opened by this call keep only the tools this caller's policy admitted.
+  mcpTools.restrictAppTools?.(resolved.tools.filter((tool) => getPluginToolMeta(tool)?.mcp));
+  return { resolved, mcpUnavailable: mcpTools.unavailable };
 }

@@ -70,7 +70,7 @@ import {
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
-import { acquireInvocationMcpTools } from "./tools-invoke-mcp.js";
+import { resolveToolsWithInvocationMcp } from "./tools-invoke-mcp.js";
 import {
   areGatewayUploadsEnabled,
   assertGatewayUploadsEnabled,
@@ -497,50 +497,45 @@ async function invokeGatewayToolWithSignal(
     sessionEntry,
     sessionWorkspace,
   );
-  const resolveTools = (disablePluginTools: boolean, bundledTools?: readonly AnyAgentTool[]) =>
-    resolveGatewayScopedTools({
-      cfg: params.cfg,
-      sessionKey,
-      sessionId: sessionEntry?.sessionId,
-      sessionPermissionPolicy,
-      preparedSessionWorkspaceDir: sessionWorkspace,
-      agentId: selectedAgentId,
-      messageProvider: params.messageChannel,
-      accountId: params.accountId,
-      agentTo: params.agentTo,
-      agentThreadId: params.agentThreadId,
-      approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-      senderIsOwner: params.senderIsOwner,
-      clientCaps: params.clientCaps,
-      conversationReadOrigin,
-      allowGatewaySubagentBinding: true,
-      allowMediaInvokeCommands: true,
-      surface: "http",
-      assertInvocationCurrent,
-      assertInputCommitAllowed,
-      disablePluginTools,
-      gatewayRequestedTools,
-      bundledTools,
-    });
-
-  let { agentId, tools, workspaceDir } = await resolveTools(knownCoreTool);
-  if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
-    ({ agentId, tools, workspaceDir } = await resolveTools(false));
-  }
-  const mcpTools = await acquireInvocationMcpTools({
+  // Gateway tools resolve first; a configured MCP server connects only for a name none holds.
+  const { resolved, mcpUnavailable } = await resolveToolsWithInvocationMcp({
     toolName,
-    cfg: params.cfg,
-    workspaceDir: sessionWorkspace,
-    agentId: selectedAgentId,
-    session: { key: sessionKey, entry: sessionEntry },
-    reservedToolNames: tools.map((candidate) => candidate.name),
-    owner: { disposals: params.disposals, sessionChecks },
-    signal: params.signal,
+    knownCoreTool,
+    resolveTools: (disablePluginTools, overrides) =>
+      resolveGatewayScopedTools({
+        cfg: params.cfg,
+        sessionKey,
+        sessionId: sessionEntry?.sessionId,
+        sessionPermissionPolicy,
+        preparedSessionWorkspaceDir: sessionWorkspace,
+        agentId: selectedAgentId,
+        messageProvider: params.messageChannel,
+        accountId: params.accountId,
+        agentTo: params.agentTo,
+        agentThreadId: params.agentThreadId,
+        approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+        senderIsOwner: params.senderIsOwner,
+        clientCaps: params.clientCaps,
+        conversationReadOrigin,
+        allowGatewaySubagentBinding: true,
+        allowMediaInvokeCommands: true,
+        surface: "http",
+        assertInvocationCurrent,
+        assertInputCommitAllowed,
+        disablePluginTools,
+        gatewayRequestedTools,
+        ...overrides,
+      }),
+    mcp: {
+      cfg: params.cfg,
+      workspaceDir: sessionWorkspace,
+      agentId: selectedAgentId,
+      session: { key: sessionKey, entry: sessionEntry },
+      owner: { disposals: params.disposals, sessionChecks },
+      signal: params.signal,
+    },
   });
-  if (mcpTools) {
-    ({ agentId, tools, workspaceDir } = await resolveTools(false, mcpTools.tools));
-    mcpTools.restrictAppTools?.(tools.filter((candidate) => getPluginToolMeta(candidate)?.mcp));
-  }
+  const { agentId, tools, workspaceDir } = resolved;
   const requestedAgentId = normalizeOptionalString(params.input.agentId);
   if (requestedAgentId && agentId && selectedAgentId !== agentId) {
     return failure(
@@ -551,8 +546,8 @@ async function invokeGatewayToolWithSignal(
   }
   const tool = tools.find((candidate) => candidate.name === toolName);
   if (!tool) {
-    if (mcpTools?.unavailable) {
-      return failure(500, "tool_error", mcpTools.unavailable);
+    if (mcpUnavailable) {
+      return failure(500, "tool_error", mcpUnavailable);
     }
     return failure(404, "not_found", `Tool not available: ${toolName}`);
   }

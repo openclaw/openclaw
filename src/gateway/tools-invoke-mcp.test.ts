@@ -17,21 +17,32 @@ const runtime = vi.hoisted(() => ({
   materialize: vi.fn(),
   retire: vi.fn(async () => true),
   disposeMaterialized: vi.fn(async () => undefined),
-  extraCoreToolNames: [] as string[],
+  pluginToolNames: [] as string[],
 }));
 
 // mock-isolation: Each case supplies its own runtime config without touching disk state.
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => runtime.cfg }));
 // mock-isolation: Same isolated config for readers that import the IO owner directly.
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtime.cfg }));
-// mock-isolation: Core tools stay inert; only configured MCP resolution is exercised.
+// Like the real factory, a nonempty explicit allowlist loads only plugins owning those tools.
+// mock-isolation: Core and plugin tools stay inert; an empty allowlist loads every plugin.
 vi.mock("../agents/openclaw-tools.js", () => ({
-  createOpenClawToolsAsync: async () =>
-    ["session_status", ...runtime.extraCoreToolNames].map((name) => ({
-      name,
-      parameters: { type: "object", properties: {} },
-      execute: runtime.coreExecute,
-    })),
+  createOpenClawToolsAsync: async (options?: { pluginToolAllowlist?: string[] }) => [
+    { name: "session_status", parameters: { type: "object" }, execute: runtime.coreExecute },
+    ...runtime.pluginToolNames
+      .filter((name) => {
+        const allowlist = options?.pluginToolAllowlist ?? [];
+        return allowlist.length === 0 || allowlist.includes(name);
+      })
+      .map((name) => {
+        const tool = { name, parameters: { type: "object" }, execute: runtime.coreExecute };
+        setPluginToolMeta(tool as unknown as AnyAgentTool, {
+          pluginId: "collide",
+          optional: false,
+        });
+        return tool;
+      }),
+  ],
 }));
 // mock-isolation: Tool construction helpers stay inert outside the invocation path.
 vi.mock("../agents/agent-tools.js", () => ({ resolveToolLoopDetectionConfig: () => ({}) }));
@@ -86,7 +97,7 @@ const storeOverrides = async (toolOverrides: SessionToolOverrides | undefined) =
 beforeEach(() => {
   vi.clearAllMocks();
   runtime.diagnostics = undefined;
-  runtime.extraCoreToolNames = [];
+  runtime.pluginToolNames = [];
   runtime.cfg = {
     agents: { entries: { main: {} } },
     mcp: {
@@ -176,9 +187,9 @@ describe("tools.invoke configured MCP tools", () => {
     });
   });
 
-  it("invokes the collision-suffixed name that discovery advertises", async () => {
+  it("invokes the suffixed name discovery advertises for a plugin-tool collision", async () => {
     await withToolsInvokeTestState({ label: "mcp-invoke-collision" }, async () => {
-      runtime.extraCoreToolNames = ["granola__list_meetings"];
+      runtime.pluginToolNames = ["granola__list_meetings"];
       runtime.materialize.mockImplementationOnce(
         async ({ reservedToolNames }: { reservedToolNames: readonly string[] }) => ({
           tools: [
