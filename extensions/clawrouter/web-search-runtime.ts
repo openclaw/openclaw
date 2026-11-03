@@ -85,7 +85,10 @@ export async function searchClawRouter(
     {
       method: codec.method,
       headers,
-      body: "body" in request ? JSON.stringify(request.body) : undefined,
+      body:
+        "body" in request
+          ? JSON.stringify(offer.routeKind === "manifest" ? { body: request.body } : request.body)
+          : undefined,
       signal: execution?.signal,
     },
     timeoutMs(),

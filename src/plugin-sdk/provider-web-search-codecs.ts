@@ -66,15 +66,17 @@ export const nativeWebSearchCodecs = {
               (score): score is number => typeof score === "number" && Number.isFinite(score),
             )
           : [];
-        return {
-          title: wrapped(string(entry.title)),
-          url,
-          description: wrapped(description),
-          published: string(entry.publishedDate) || undefined,
-          siteName: resolveSiteName(url) || undefined,
-          ...(summary ? { summary: wrapped(summary) } : {}),
-          ...(highlightScores.length ? { highlightScores } : {}),
-        };
+        return Object.assign(
+          {
+            title: wrapped(string(entry.title)),
+            url,
+            description: wrapped(description),
+            published: string(entry.publishedDate) || undefined,
+            siteName: resolveSiteName(url) || undefined,
+          },
+          summary ? { summary: wrapped(summary) } : {},
+          highlightScores.length ? { highlightScores } : {},
+        );
       });
     },
   },
@@ -94,14 +96,16 @@ export const nativeWebSearchCodecs = {
         const excerpts = filterStringEntries(entry.excerpts).map((text) =>
           wrapWebContent(text, "web_search"),
         );
-        return {
-          title: wrapped(string(entry.title)),
-          url,
-          description: excerpts.join("\n\n"),
-          siteName: resolveSiteName(url) || undefined,
-          ...(published ? { published } : {}),
-          ...(excerpts.length ? { excerpts } : {}),
-        };
+        return Object.assign(
+          {
+            title: wrapped(string(entry.title)),
+            url,
+            description: excerpts.join("\n\n"),
+            siteName: resolveSiteName(url) || undefined,
+          },
+          published ? { published } : {},
+          excerpts.length ? { excerpts } : {},
+        );
       });
     },
   },

@@ -189,69 +189,70 @@ describe("registered ClawRouter web search over HTTP", () => {
         },
       })!;
 
-  it.each(fixtures.flatMap((entry) => ["native", "manifest"].map((kind) => ({ ...entry, kind }))))(
-    "executes $id through the advertised $kind model-less offer",
-    async (entry) => {
-      routeKind = entry.kind;
-      format = `${entry.id}.search`;
-      const result = await tool().execute({ query: "synthetic query", count: 2 });
-      expect(result).toMatchObject({
-        provider: "clawrouter",
-        count: 1,
-        results: [
-          {
-            url: "https://example.com/search",
-            title: expect.stringContaining("Synthetic result"),
-            [entry.field]: expect.stringContaining("Fixture snippet"),
-          },
-        ],
-      });
+  it.each(
+    fixtures.flatMap((entry) =>
+      ["native", "manifest"].map((kind) => Object.assign({}, entry, { kind })),
+    ),
+  )("executes $id through the advertised $kind model-less offer", async (entry) => {
+    routeKind = entry.kind;
+    format = `${entry.id}.search`;
+    const result = await tool().execute({ query: "synthetic query", count: 2 });
+    expect(result).toMatchObject({
+      provider: "clawrouter",
+      count: 1,
+      results: [
+        {
+          url: "https://example.com/search",
+          title: expect.stringContaining("Synthetic result"),
+          [entry.field]: expect.stringContaining("Fixture snippet"),
+        },
+      ],
+    });
+    expect(result.results).toEqual([
+      expect.objectContaining({
+        [entry.field]: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
+      }),
+    ]);
+    if (entry.id === "exa") {
       expect(result.results).toEqual([
         expect.objectContaining({
-          [entry.field]: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
+          summary: expect.stringContaining("Fixture summary"),
+          highlightScores: [0.8],
+          published: "2026-01-01",
         }),
       ]);
-      if (entry.id === "exa") {
-        expect(result.results).toEqual([
-          expect.objectContaining({
-            summary: expect.stringContaining("Fixture summary"),
-            highlightScores: [0.8],
-            published: "2026-01-01",
-          }),
-        ]);
-      }
-      if (entry.id === "parallel") {
-        expect(result.results).toEqual([
-          expect.objectContaining({
-            excerpts: [expect.stringContaining("Fixture snippet")],
-            published: "2026-01-01",
-          }),
-        ]);
-      }
-      const route =
-        entry.kind === "native"
-          ? `/v1/native/${entry.id}${entry.path}`
-          : `/v1/proxy/${entry.id}/search`;
-      expect(calls).toEqual([
-        {
-          path: "/v1/catalog",
-          method: "GET",
-          auth: "Bearer synthetic-router-key",
-          body: undefined,
-        },
-        {
-          path: `${route}${entry.query ? `?${entry.query}` : ""}`,
-          method: entry.method,
-          auth: "Bearer synthetic-router-key",
-          body: entry.body,
-        },
+    }
+    if (entry.id === "parallel") {
+      expect(result.results).toEqual([
+        expect.objectContaining({
+          excerpts: [expect.stringContaining("Fixture snippet")],
+          published: "2026-01-01",
+        }),
       ]);
-      expect(calls.at(-1)?.upstreamAuth).toBeUndefined();
-      expect(authRuntime.resolveApiKeyForProvider).toHaveBeenCalledWith(
-        expect.objectContaining({ provider: "clawrouter" }),
-      );
-    },
-  );
+    }
+    const route =
+      entry.kind === "native"
+        ? `/v1/native/${entry.id}${entry.path}`
+        : `/v1/proxy/${entry.id}/search`;
+    expect(calls).toEqual([
+      {
+        path: "/v1/catalog",
+        method: "GET",
+        auth: "Bearer synthetic-router-key",
+        body: undefined,
+      },
+      {
+        path: `${route}${entry.query ? `?${entry.query}` : ""}`,
+        method: entry.method,
+        auth: "Bearer synthetic-router-key",
+        body: entry.body && entry.kind === "manifest" ? { body: entry.body } : entry.body,
+      },
+    ]);
+    expect(calls.at(-1)?.upstreamAuth).toBeUndefined();
+    expect(authRuntime.resolveApiKeyForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "clawrouter" }),
+    );
+  });
 
   it("rejects mismatched native formats and methods before dispatch", async () => {
     format = "brave.search";
