@@ -57,6 +57,8 @@ During first-run **Model Setup**, reloading the browser resumes an unfinished pr
 
 If a provider rejects a text reply, the wizard returns keyboard focus to that field so you can correct it without clicking back. Your draft is kept, and sensitive replies remain masked.
 
+Channel setup also restores focus to a rejected text field while preserving its draft and masking, unless you have moved focus to another control while the reply was pending.
+
 ## Environment identity
 
 When you run several Gateways, set `gateway.controlUi.environment` to distinguish their browser tabs and windows:
