@@ -23,6 +23,7 @@ const activeFoundation = {
   outputModalities: ["TEXT"],
   responseStreamingSupported: true,
   modelLifecycle: { status: "ACTIVE" },
+  inferenceTypesSupported: ["ON_DEMAND"] as string[] | undefined,
 };
 
 function foundation(
@@ -238,6 +239,39 @@ it.each([
     expectModel(models, profileId, { ...expected, ...profileFields });
   },
 );
+
+it.each([
+  [["ON_DEMAND"], true],
+  [["INFERENCE_PROFILE"], false],
+  [["PROVISIONED"], false],
+  [["ON_DEMAND", "PROVISIONED"], true],
+  [["ON_DEMAND", "INFERENCE_PROFILE"], true],
+  [[], true],
+  [undefined, true],
+] as const)("lists bare foundation IDs with inference types %j: %s", async (types, listed) => {
+  const summary = foundation(undefined, {
+    inferenceTypesSupported: types ? [...types] : undefined,
+  });
+  const ids = (await discoverFixture([summary])).map((model) => model.id);
+  expect(ids).toEqual(listed ? [summary.modelId] : []);
+});
+
+it("inherits profile capabilities from foundations hidden for missing on-demand support", async () => {
+  const baseId = "openai.gpt-6.1-sol";
+  const models = await discoverFixture(
+    [
+      foundation(baseId, {
+        modelName: "GPT Reasoning",
+        providerName: "openai",
+        inputModalities: ["TEXT", "IMAGE"],
+        inferenceTypesSupported: ["INFERENCE_PROFILE"],
+      }),
+    ],
+    [profile(`us.${baseId}`, [baseId])],
+  );
+  expect(models.map((model) => model.id)).toEqual([`us.${baseId}`]);
+  expectFields(models[0], { reasoning: true, input: ["text", "image"] });
+});
 
 it("aborts stalled Bedrock model discovery requests", async () => {
   vi.useFakeTimers();
