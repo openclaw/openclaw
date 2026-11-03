@@ -3,6 +3,7 @@ import { expect, test, vi, type Mock } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
+import type { EmbeddedAgentRunResult } from "../agents/embedded-agent-runner.js";
 import { resolveCommandReplyExpectation } from "../agents/reply-completion.js";
 import type * as CronDelivery from "../cron/delivery.js";
 import { loadCronStore } from "../cron/store.js";
@@ -51,23 +52,36 @@ export function registerCronRepairCases(
     const { runPreparedCliAgent } = await import("../agents/cli-runner.js");
     const execution = await import("../agents/cli-runner/execute.runtime.js");
     // Replace external CLI I/O only: the real policy, enforcement, and settlement
-    // consume the options produced by public RPC.
+    // consume the options produced by public RPC and by trusted scheduler admission.
     const cliOutput = vi
       .spyOn(execution, "executePreparedCliRun")
       .mockResolvedValue({ text: "NO_REPLY", rawText: "NO_REPLY" });
+    const runCli = async (
+      run: Pick<
+        Parameters<typeof runPreparedCliAgent>[0]["params"],
+        "sessionKey" | "runId" | "prompt" | "inputProvenance" | "terminalReplyExpectation"
+      >,
+    ): Promise<{ result?: EmbeddedAgentRunResult; error?: unknown }> => {
+      const context = buildPreparedCliRunContext({
+        workspaceDir: caseDir,
+        sessionKey: run.sessionKey,
+        runId: run.runId,
+        backend: { sessionMode: "none" },
+      });
+      context.params = { ...context.params, ...run };
+      return runPreparedCliAgent(context).then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+    };
     const publicOutcome = createDeferred<{ error?: unknown }>();
     const publicRunId = "public-cron-repair-provenance";
     const { request, run } = await startCronClient();
     await prepareGatewayReplyRuntimeForTest({ force: true });
     agentCommandMock.mockImplementation(async (command: AgentCommandOpts) => {
-      const context = buildPreparedCliRunContext({
-        workspaceDir: caseDir,
+      const outcome = await runCli({
         sessionKey: command.sessionKey,
-        runId: command.runId,
-        backend: { sessionMode: "none" },
-      });
-      context.params = {
-        ...context.params,
+        runId: command.runId ?? publicRunId,
         prompt: command.message,
         inputProvenance: command.inputProvenance,
         terminalReplyExpectation: resolveCommandReplyExpectation({
@@ -76,20 +90,22 @@ export function registerCronRepairCases(
           messageChannel: command.messageChannel ?? command.channel,
           opts: command,
         }),
-      };
-      try {
-        const result = await runPreparedCliAgent(context);
-        publicOutcome.resolve({});
-        return { meta: result.meta, payloads: [] };
-      } catch (error) {
-        publicOutcome.resolve({ error });
-        throw error;
+      });
+      publicOutcome.resolve(outcome);
+      if (!outcome.result) {
+        throw outcome.error;
       }
+      return { meta: outcome.result.meta, payloads: [] };
     });
-    // The scheduler's repair is a host system turn in the owner conversation.
-    const repairStarted = createDeferred();
-    const repairTurn = installCronRepairTurn(async () => {
-      repairStarted.resolve();
+    // The scheduler's repair is a host system turn in the owner conversation; its model
+    // call meets the same CLI completion enforcement with the expectation admission chose.
+    const repairOutcome = createDeferred<{ result?: EmbeddedAgentRunResult; error?: unknown }>();
+    const repairTurn = installCronRepairTurn(async (params) => {
+      const outcome = await runCli(params);
+      repairOutcome.resolve(outcome);
+      if (!outcome.result) {
+        throw outcome.error;
+      }
       return "NO_REPLY";
     });
     try {
@@ -120,7 +136,9 @@ export function registerCronRepairCases(
       const jobId = expectCronJobIdFromResponse(added);
       await run(jobId);
       await run(jobId);
-      await withinTest(repairStarted.promise, signal);
+      expect(await withinTest(repairOutcome.promise, signal)).toMatchObject({
+        result: { meta: { terminalReply: { disposition: "silent" } } },
+      });
       expect(repairTurn.context()).toMatchObject({
         SessionKey: ownerSessionKey,
         InputProvenance: { kind: "internal_system", sourceTool: "cron_failure_repair" },
@@ -131,7 +149,7 @@ export function registerCronRepairCases(
           stored.jobs.find((job) => job.id === jobId)?.state.failureAlertIncident?.repair,
         ).toMatchObject({ settledAtMs: expect.any(Number) });
       });
-      expect(cliOutput).toHaveBeenCalledOnce();
+      expect(cliOutput).toHaveBeenCalledTimes(2);
       expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
     } finally {
       cliOutput.mockRestore();
