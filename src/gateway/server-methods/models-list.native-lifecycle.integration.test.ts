@@ -2,7 +2,11 @@ import { createServer } from "node:http";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
@@ -58,6 +62,8 @@ it.for([false, true])(
     let failedProviderCatalog = true;
     let nativeRequested = createDeferred();
     let nativeReleased = createDeferred();
+    const providerRequested = createDeferred();
+    const providerReleased = createDeferred();
     const nativeRow = (id: string, name: string) => ({
       provider,
       id,
@@ -90,7 +96,8 @@ it.for([false, true])(
         void nativeReleased.promise.then(() => response.end(JSON.stringify(nativeRows())));
       } else if (request.url === "/provider/models" || request.url === "/other/models") {
         if (failedProviderCatalog && request.url === "/provider/models") {
-          response.writeHead(503).end();
+          providerRequested.resolve();
+          void providerReleased.promise.then(() => response.writeHead(503).end());
           return;
         }
         response.end(JSON.stringify([{ id: "provider-account", name: "Provider account model" }]));
@@ -237,6 +244,9 @@ it.for([false, true])(
         expect(nativeRequests()).toHaveLength(0);
         const firstReads = await Promise.all([list(), list()]);
         await withinTest(nativeRequested.promise, signal);
+        if (!withProviderCredentials) {
+          await withinTest(providerRequested.promise, signal);
+        }
         const beforeReads = requests.length;
         // Ordinary and prepared-only reads return saved rows while discovery is held.
         const pending = [...firstReads, ...(await Promise.all([preparedList(), preparedList()]))];
@@ -251,8 +261,29 @@ it.for([false, true])(
         await published((result) => available(result) === true);
         expect((await list()).models).toContainEqual(model("harness-host-row"));
         if (!withProviderCredentials) {
-          // Cold startup discovers the full catalog independently of native readiness.
-          await published((result) => !result.pendingProviders?.includes(provider));
+          // Native readiness can clear pendingProviders before full discovery publishes.
+          const firstPublication = createDeferred();
+          const discovery = published((result) => {
+            firstPublication.resolve();
+            return (
+              result.providerOutcomes?.some(
+                (outcome) => outcome.provider === provider && outcome.status === "unavailable",
+              ) === true
+            );
+          });
+          await withinTest(
+            awaitGateBeforeSettlement(
+              firstPublication.promise,
+              discovery,
+              "Catalog publication settled before its first read",
+            ),
+            signal,
+          );
+          providerReleased.resolve();
+          expect((await discovery).providerOutcomes ?? []).toContainEqual({
+            provider,
+            status: "unavailable",
+          });
           expect(requests.toSorted()).toEqual(["/native/models", "/provider/models"]);
           // Gateway refresh can return a pending snapshot before discovery publishes.
           const refresh = () =>
@@ -337,9 +368,11 @@ it.for([false, true])(
         expect(requests).toHaveLength(settledRequests);
       } finally {
         nativeReleased.resolve();
+        providerReleased.resolve();
       }
     } finally {
       nativeReleased.resolve();
+      providerReleased.resolve();
     }
   },
 );

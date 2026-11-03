@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,7 @@ import type {
   Vitest,
 } from "vitest/node";
 import { readProcessCgroupV2Snapshot, readProcessMemoryCapacity } from "./process-memory.mts";
+import { resolveRepoRoot } from "./repo-root.mjs";
 import { detectVitestHostInfo } from "./vitest-local-scheduling.mts";
 
 function writeReceipt(kind: string, value: unknown) {
@@ -41,6 +43,9 @@ function moduleKey(spec: TestSpecification) {
 // Opt in through Vitest's existing --reporter option. Observe the resolved
 // process and native events without changing test selection or pool policy.
 export default class VitestResourceReporter implements Reporter {
+  private invocation = "";
+  private readonly repositoryRoot = resolveRepoRoot(import.meta.url);
+  private dependencyRoot = "";
   private started = 0;
   private resourceStarted = 0;
   private cpu = process.cpuUsage();
@@ -96,6 +101,10 @@ export default class VitestResourceReporter implements Reporter {
   }
 
   onInit(ctx: Vitest) {
+    this.dependencyRoot = path
+      .relative(this.repositoryRoot, ctx.config.root)
+      .split(path.sep)
+      .join("/");
     clearTimeout(this.diagnosticTimer);
     this.diagnosticTimer = undefined;
     this.diagnosticPath = undefined;
@@ -116,10 +125,25 @@ export default class VitestResourceReporter implements Reporter {
   }
 
   onTestRunStart(specs: readonly TestSpecification[]) {
+    this.invocation = randomUUID();
     this.started = performance.now();
     this.cpu = process.cpuUsage();
     this.queued.clear();
     this.active.clear();
+    writeReceipt("inventory", {
+      version: 1,
+      dependencyRoot: this.dependencyRoot,
+      invocation: this.invocation,
+      runtime: process.versions.bun ? "bun" : "node",
+      runtimeVersion: process.versions.bun ?? process.version,
+      platform: process.platform,
+      arch: process.arch,
+      files: specs.map((spec) => ({
+        project: spec.project.name,
+        pool: spec.pool,
+        file: path.relative(this.repositoryRoot, spec.moduleId).split(path.sep).join("/"),
+      })),
+    });
     this.diagnosticPath = undefined;
     const diagnosticParent = process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR?.trim();
     if (diagnosticParent) {
@@ -217,11 +241,23 @@ export default class VitestResourceReporter implements Reporter {
     const spec = module.toTestSpecification();
     const key = moduleKey(spec);
     const { importDurations: _imports, ...diagnostic } = module.diagnostic();
+    const cases = { passed: 0, failed: 0, skipped: 0, pending: 0 };
+    for (const test of module.children.allTests()) {
+      const state = test.result().state;
+      if (state === "passed" || state === "failed" || state === "skipped") {
+        cases[state]++;
+      } else {
+        cases.pending++;
+      }
+    }
     writeReceipt("module", {
+      invocation: this.invocation,
+      observationFile: path.relative(this.repositoryRoot, spec.moduleId).split(path.sep).join("/"),
       project: module.project.name,
       pool: spec.pool,
       file: module.relativeModuleId,
       state: module.state(),
+      cases,
       queuedEventAtMs: this.queued.get(key) ?? null,
       endEventAtMs: performance.now() - this.started,
       // Native environment/prepare values can repeat for reused workers;
@@ -236,6 +272,7 @@ export default class VitestResourceReporter implements Reporter {
   onTestRunEnd(modules: readonly TestModule[], errors: readonly unknown[], reason: string) {
     this.writeDiagnostic(reason);
     writeReceipt("run", {
+      invocation: this.invocation,
       reason,
       files: modules.length,
       unhandledErrors: errors.length,
