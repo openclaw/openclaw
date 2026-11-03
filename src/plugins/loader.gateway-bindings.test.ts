@@ -9,6 +9,17 @@ import {
   GatewayOperatorAccessDeniedError,
   resolveGatewayOperatorAccessAuthority as resolveAccess,
 } from "../gateway/operator-access-policy.js";
+import {
+  RepositoryPublicationFailureError,
+  RepositoryPublicationRequesterUnavailableError,
+} from "../gateway/repository-publication-errors.js";
+import {
+  createRepositoryPublicationGitTransfer,
+  type RepositoryPublicationGitTransfer,
+} from "../gateway/repository-publication-git-transfer.js";
+import { createGatewayRequestContext } from "../gateway/server-request-context.js";
+import { makeContextParams } from "../gateway/server-request-context.test-support.js";
+import type { WorkerWorkspaceSyncRequest } from "../gateway/worker-environments/tunnel-contract.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -31,13 +42,20 @@ import {
 import { bindPluginRegistryRuntime, getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
+  createRepositoryCheckoutTransfer,
+  type RepositoryCheckoutTransfer,
+} from "./repository-checkout-transfer.js";
+import {
   clearActivePluginRegistry,
   getActivePluginRegistry,
   setActivePluginRegistry,
 } from "./runtime.js";
+import { captureGatewayContextResolver } from "./runtime/gateway-context-binding.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
+  getGatewayContextLifetime,
+  withPluginRuntimeGatewayContextResolver,
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import * as sdkAlias from "./sdk-alias.js";
@@ -317,3 +335,164 @@ it.each(["missing manifest", "registration failure", "disabled", "loaded"] as co
     });
   },
 );
+
+it("preserves private Gateway ownership through a native public SDK consumer", async () => {
+  await withOpenClawTestState({ label: "loader-native-gateway-owner" }, async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "gateway-service-owner-probe",
+      filename: "index.cjs",
+      body: `const { captureNativeGitHubServiceHost, performNativeGitHubPublicationGit, NativeGitHubPublicationRequesterUnavailableError } = require("openclaw/plugin-sdk/native-github-publication-host");
+const { performRepositoryCheckout } = require("openclaw/plugin-sdk/repository-sources");
+module.exports = { id: "gateway-service-owner-probe", register(api) {
+  api.registerTool({ name: "gateway_service_owner_probe", description: "Read the bound service lifetime",
+    parameters: { type: "object", properties: {} },
+    async execute(_id, { transfer, checkout, requesterUnavailable }) {
+      const host = captureNativeGitHubServiceHost();
+      if (!host) throw new Error("Expected the bound Gateway service");
+      host.assertCurrent();
+      if (!host.publicationAvailable) throw new Error("Expected the bound workspace publication host");
+      if (requesterUnavailable) throw new NativeGitHubPublicationRequesterUnavailableError();
+      if (transfer) await performNativeGitHubPublicationGit(transfer, {
+        httpAuthorization: "Bearer synthetic-publication",
+        assertCurrent: host.assertCurrent,
+      });
+      if (checkout) await performRepositoryCheckout(checkout, {
+        token: "synthetic-checkout",
+        assertCurrent: host.assertCurrent,
+        start: async (run) => { host.assertCurrent(); return await run(); },
+      });
+      return { content: [], details: host.identity };
+    }
+  });
+} };`,
+    });
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id: plugin.id,
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+      contracts: { tools: ["gateway_service_owner_probe"] },
+    });
+    const config = pluginFixtureConfig(plugin);
+    const registry = loadPluginRegistryHandle({ config });
+    expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
+    const params = makeContextParams();
+    const { createWorkspacePublicationHost } =
+      await import("../gateway/workspace-publication-provider.js");
+    const { createWorkerSessionPlacementStore } =
+      await import("../gateway/worker-environments/placement-store.js");
+    const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+    const { loadWorkerPlacementSessionRuntimeModule } =
+      await import("../gateway/server-worker-placement-startup.js");
+    const publicationHost = createWorkspacePublicationHost({
+      placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
+      scheduler: params.runtime.scheduler,
+      getCommittedRuntimeConfig: () => config,
+      loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
+      managedByPlacement: true,
+      warn() {},
+    });
+    params.runtime.workspacePublicationHost = publicationHost;
+    const context = createGatewayRequestContext(params);
+    context.resolveGatewayContext = () => context;
+    const lifetime = getGatewayContextLifetime(context.resolveGatewayContext);
+    const wrapper = expectDefined(
+      captureGatewayContextResolver(context.resolveGatewayContext),
+      "captured Gateway wrapper",
+    );
+    const read = (
+      transfer?: RepositoryPublicationGitTransfer,
+      checkout?: RepositoryCheckoutTransfer,
+      requesterUnavailable = false,
+    ) =>
+      withPluginRuntimeGatewayContextResolver(wrapper, async () => {
+        const tool = registry.tools[0]?.factory({ config });
+        if (!tool || Array.isArray(tool)) {
+          throw new Error("Expected one Gateway service owner probe tool");
+        }
+        return await tool.execute("owner-probe", { transfer, checkout, requesterUnavailable });
+      });
+    try {
+      await publicationHost.ready;
+      const retained = (await read()).details;
+      expect(retained).toBe(lifetime.signal);
+      const denied = read(undefined, undefined, true);
+      await expect(denied).rejects.toBeInstanceOf(RepositoryPublicationRequesterUnavailableError);
+      await expect(denied).rejects.toBeInstanceOf(RepositoryPublicationFailureError);
+      let dispatches = 0;
+      const accept = () =>
+        createRepositoryPublicationGitTransfer(
+          async (authorization, assertCurrent) => {
+            assertCurrent();
+            expect(authorization).toBe("Bearer synthetic-publication");
+            dispatches++;
+            return "bound-publication-result";
+          },
+          () => lifetime.signal.throwIfAborted(),
+        );
+      const accepted = accept();
+      await read(accepted.transfer);
+      expect(accepted.result()).toBe("bound-publication-result");
+      expect(dispatches).toBe(1);
+      await expect(read(accepted.transfer)).rejects.toThrow("no longer available");
+      expect(dispatches).toBe(1);
+      const checkoutRequest: WorkerWorkspaceSyncRequest = {
+        sessionId: "native-sdk-checkout",
+        generation: 1,
+        source: {
+          kind: "repository",
+          url: "https://github.com/synthetic/repository.git",
+          branch: "proof/checkout",
+        },
+      };
+      let checkouts = 0;
+      const acceptCheckout = () =>
+        createRepositoryCheckoutTransfer(
+          {
+            async syncWorkspace(request) {
+              request.authorize?.();
+              expect(request).toMatchObject({
+                ...checkoutRequest,
+                source: { ...checkoutRequest.source, gitToken: "synthetic-checkout" },
+              });
+              checkouts++;
+              return {
+                mode: "repository",
+                remoteWorkspaceDir: "/worker/native-sdk-checkout",
+                manifestRef: "prepared-checkout",
+                baseCommit: "a".repeat(40),
+                baseManifestRef: "base-checkout",
+              };
+            },
+          },
+          checkoutRequest,
+          () => lifetime.signal.throwIfAborted(),
+        );
+      const checkout = acceptCheckout();
+      await read(undefined, checkout.transfer);
+      expect(checkout.result()).toMatchObject({
+        remoteWorkspaceDir: "/worker/native-sdk-checkout",
+        manifestRef: "prepared-checkout",
+      });
+      expect(checkouts).toBe(1);
+      await expect(read(undefined, checkout.transfer)).rejects.toThrow("no longer available");
+      expect(checkouts).toBe(1);
+      const cancelled = accept();
+      const cancelledCheckout = acceptCheckout();
+      lifetime.abort(new Error("Gateway closed"));
+      expect(lifetime.signal.aborted).toBe(true);
+      await expect(read(cancelled.transfer)).rejects.toThrow("Gateway closed");
+      expect(() => cancelled.result()).toThrow("did not dispatch");
+      expect(dispatches).toBe(1);
+      await expect(read(undefined, cancelledCheckout.transfer)).rejects.toThrow("Gateway closed");
+      expect(() => cancelledCheckout.result()).toThrow("did not dispatch");
+      expect(checkouts).toBe(1);
+    } finally {
+      lifetime.abort();
+      try {
+        await publicationHost.close();
+      } finally {
+        await params.runtime.scheduler.stop();
+      }
+    }
+  });
+});

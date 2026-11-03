@@ -1,3 +1,4 @@
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 /** One accepted Git operation. Plugins supply credentials without receiving or replacing the command. */
 class PublicationGitTransfer {
   readonly #dispatch: (credential: PublicationGitCredential) => Promise<void>;
@@ -14,6 +15,11 @@ class PublicationGitTransfer {
     await transfer.#dispatch(credential);
   }
 }
+// SDK source transforms and native chunks consume the same private transfer brand.
+const SharedPublicationGitTransfer = resolveGlobalSingleton(
+  Symbol.for("openclaw.repositoryPublicationGitTransfer"),
+  () => PublicationGitTransfer,
+);
 export type RepositoryPublicationGitTransfer = PublicationGitTransfer;
 type PublicationGitCredential = { httpAuthorization: string; assertCurrent(): void };
 
@@ -23,7 +29,7 @@ export function createRepositoryPublicationGitTransfer<T>(
   assertCurrent: () => void,
 ) {
   let result: { value: T } | undefined;
-  const transfer = new PublicationGitTransfer(async (credential) => {
+  const transfer = new SharedPublicationGitTransfer(async (credential) => {
     const assertLive = () => {
       assertCurrent();
       credential.assertCurrent();
@@ -47,5 +53,5 @@ export async function performRepositoryPublicationGit(
   transfer: RepositoryPublicationGitTransfer,
   credential: PublicationGitCredential,
 ): Promise<void> {
-  await PublicationGitTransfer.execute(transfer, credential);
+  await SharedPublicationGitTransfer.execute(transfer, credential);
 }

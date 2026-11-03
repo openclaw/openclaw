@@ -2,6 +2,7 @@ import type {
   WorkerTunnelHandle,
   WorkerWorkspaceSyncRequest,
 } from "../gateway/worker-environments/tunnel-contract.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type CheckoutCredential = {
   token?: string;
@@ -24,6 +25,11 @@ class CheckoutTransfer {
     await transfer.#dispatch(credential);
   }
 }
+// SDK source transforms and native chunks consume the same private transfer brand.
+const SharedCheckoutTransfer = resolveGlobalSingleton(
+  Symbol.for("openclaw.repositoryCheckoutTransfer"),
+  () => CheckoutTransfer,
+);
 export type RepositoryCheckoutTransfer = CheckoutTransfer;
 
 /** The host binds target and current authority; a source supplies only effect-scoped credentials. */
@@ -33,7 +39,7 @@ export function createRepositoryCheckoutTransfer(
   assertCurrent: () => void,
 ) {
   let result: Awaited<ReturnType<WorkerTunnelHandle["syncWorkspace"]>> | undefined;
-  const transfer = new CheckoutTransfer(async (credential) => {
+  const transfer = new SharedCheckoutTransfer(async (credential) => {
     const assertLive = () => {
       assertCurrent();
       credential.assertCurrent();
@@ -68,5 +74,5 @@ export async function performRepositoryCheckout(
   transfer: RepositoryCheckoutTransfer,
   credential: CheckoutCredential,
 ): Promise<void> {
-  await CheckoutTransfer.execute(transfer, credential);
+  await SharedCheckoutTransfer.execute(transfer, credential);
 }

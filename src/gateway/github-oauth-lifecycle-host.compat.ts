@@ -2,11 +2,16 @@ import {
   getCanonicalGatewayContextResolver,
   getGatewayContextLifetime,
 } from "../plugins/runtime/gateway-context-binding.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { LegacyGitHubOAuthService } from "./github-oauth-lifecycle-host.types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 // Only a lookup projection lives here. The plugin's canonical record owns state and cleanup.
-const legacyOAuthReaders = new WeakMap<AbortSignal, () => LegacyGitHubOAuthService | undefined>();
+// The native SDK installer and source host getter share this exact-Gateway projection.
+const legacyOAuthReaders = resolveGlobalSingleton(
+  Symbol.for("openclaw.legacyGitHubOAuthReaders"),
+  () => new WeakMap<AbortSignal, () => LegacyGitHubOAuthService | undefined>(),
+);
 
 export function bindLegacyGitHubOAuthReader(
   owner: AbortSignal,

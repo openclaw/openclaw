@@ -1,8 +1,13 @@
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { RepositoryPublicationHostBinding } from "./repository-publication-contract.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 // Composition binds one existing host; the public Gateway context does not grant provider installation.
-const publicationHosts = new WeakMap<GatewayRequestContext, RepositoryPublicationHostBinding>();
+// Native SDK imports and the host loader must see the same exact-context binding.
+const publicationHosts = resolveGlobalSingleton(
+  Symbol.for("openclaw.workspacePublicationHosts"),
+  () => new WeakMap<GatewayRequestContext, RepositoryPublicationHostBinding>(),
+);
 // The current native wire names are retained while workspace transaction custody stays host-owned.
 const workspacePublicationMethods = new Set([
   "sessions.github.action",

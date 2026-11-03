@@ -1,12 +1,13 @@
 import { execFile } from "node:child_process";
 import { channel } from "node:diagnostics_channel";
 import { mkdir, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ViteDevServer } from "vite";
-import { expect, it, vi } from "vitest";
+import { expect, inject, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.ts";
 import { GatewayClient } from "../../../src/gateway/client.ts";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.ts";
@@ -46,6 +47,8 @@ const branch = "proof/coordination-no-published-pr";
 const execFileAsync = promisify(execFile);
 const live = process.env.OPENCLAW_TASK_PR_LIVE_GITHUB === "1";
 const foregroundReadinessTimeoutMs = 30_000;
+// The outer Vitest namespace survives both Gateway homes and joins native module work before cleanup.
+const transformCacheHome = path.join(os.tmpdir(), "task-pr-loader-cache");
 const suite = createControlUiE2eSuite({
   name: "Delegated task PRs through a real Gateway",
   startServerBeforeBrowser: true,
@@ -200,14 +203,29 @@ suite.define(() => {
           label: "task-pr-live",
           layout: "home",
           env: {
+            XDG_CACHE_HOME: transformCacheHome,
             GH_TOKEN: undefined,
             GITHUB_TOKEN: undefined,
             OPENCLAW_GATEWAY_PASSWORD: undefined,
             OPENCLAW_GATEWAY_TOKEN: undefined,
             ...deviceGatewayEnv,
+            OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
           },
         });
+        const uiRoot =
+          inject("controlUiE2ePrebuiltAssets")?.root ?? inject("controlUiE2eBuildRoot");
+        if (!uiRoot) {
+          throw new Error("Task PR browser proof requires the canonical Control UI build");
+        }
         const port = await getFreePort();
+        proxy = await createGatewayProxy(state.workspaceDir, {
+          "/": gatewayProxyRoute(port, viewerEmail),
+        });
+        await proxy.listen();
+        const proxyUrl = proxy.resolvedUrls?.local[0];
+        if (!proxyUrl) {
+          throw new Error("Task PR fixture proxy has no loopback URL");
+        }
         const viewer = ensureProfileForEmail(viewerEmail);
         setUserProfileRole(viewer.id, "reader");
         const trustedProxy = {
@@ -218,6 +236,13 @@ suite.define(() => {
           userHeader: "x-forwarded-user",
         };
         await state.writeConfig({
+          plugins: {
+            allow: ["github-repositories"],
+            load: {
+              paths: [path.resolve(import.meta.dirname, "../../../extensions/github-repositories")],
+            },
+            entries: { "github-repositories": { enabled: true } },
+          },
           agents: {
             defaults: { workspace: state.workspaceDir, model: { primary: "openai/gpt-4.1" } },
             entries: { main: {} },
@@ -236,7 +261,7 @@ suite.define(() => {
               },
             },
             auth: { mode: "trusted-proxy", trustedProxy },
-            controlUi: { enabled: false, allowedOrigins: [new URL(suite.server.baseUrl).origin] },
+            controlUi: { enabled: true, root: uiRoot, allowedOrigins: [new URL(proxyUrl).origin] },
           },
         });
         await seedTask(state, viewer.id);
@@ -293,20 +318,10 @@ suite.define(() => {
           startGatewayServer(port, {
             auth: { mode: "trusted-proxy", trustedProxy },
             bind: "loopback",
-            controlUiEnabled: false,
+            controlUiEnabled: true,
             sidecarStartup: "defer",
           });
         gateway = await start();
-        proxy = await createGatewayProxy(state.workspaceDir, {
-          "/": gatewayProxyRoute(port, viewerEmail),
-        });
-        await proxy.listen();
-        const proxyUrl = proxy.resolvedUrls?.local[0];
-        if (!proxyUrl) {
-          throw new Error("Task PR fixture proxy has no loopback URL");
-        }
-        const browserGatewayUrl = new URL(proxyUrl);
-        browserGatewayUrl.protocol = "ws:";
         // Browser WebSocket traffic is never replaced: only external GitHub HTTP is fixture-backed.
         for (const stage of ["initial", "restarted"] as const) {
           const stageStartedAt = performance.now();
@@ -396,13 +411,8 @@ suite.define(() => {
                   }
                 });
               });
-              const url = new URL(controlUiSessionUrl(suite.server.baseUrl, selectedKey));
-              url.hash = new URLSearchParams({ gatewayUrl: browserGatewayUrl.href }).toString();
-              await page.goto(url.href);
-              await page
-                .locator("openclaw-gateway-url-confirmation")
-                .getByRole("button", { name: "Switch to " + browserGatewayUrl.host, exact: true })
-                .click();
+              // Native plugin assets and their Gateway share the browser origin.
+              await page.goto(controlUiSessionUrl(proxyUrl, selectedKey));
               await waitForControlUiRoute(page, { routeId: "chat" });
               const row = page.locator(
                 '.sidebar-recent-session[data-session-key="' + parentKey + '"]',
@@ -534,9 +544,8 @@ suite.define(() => {
                   .catch(() => undefined);
                 throw error;
               } finally {
-                // On red, show the same parent hovercard rather than a transient loading shell.
-                await activate();
-                if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+                // A failed assertion retains its original state; capture must not retry activation.
+                if (activated && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
                   const frame = await takeControlUiScreenshotFrame(
                     page,
                     card,
@@ -561,13 +570,8 @@ suite.define(() => {
                 await page.addInitScript(() =>
                   localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]"),
                 );
-                const url = new URL(controlUiSessionUrl(suite.server.baseUrl, selectedKey));
-                url.hash = new URLSearchParams({ gatewayUrl: browserGatewayUrl.href }).toString();
-                await page.goto(url.href);
-                await page
-                  .locator("openclaw-gateway-url-confirmation")
-                  .getByRole("button", { name: "Switch to " + browserGatewayUrl.host, exact: true })
-                  .click();
+                // Native plugin assets and their Gateway share the browser origin.
+                await page.goto(controlUiSessionUrl(proxyUrl, selectedKey));
                 await waitForControlUiRoute(page, { routeId: "chat" });
                 const badge = page.locator(
                   '.sidebar-recent-session[data-session-key="' +
@@ -649,11 +653,13 @@ suite.define(() => {
           label: "task-pr-authority",
           layout: "home",
           env: {
+            XDG_CACHE_HOME: transformCacheHome,
             GH_TOKEN: undefined,
             GITHUB_TOKEN: undefined,
             OPENCLAW_GATEWAY_PASSWORD: undefined,
             OPENCLAW_GATEWAY_TOKEN: undefined,
             ...deviceGatewayEnv,
+            OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
           },
         });
         const ownerEmail = "task-authority-owner@example.test";
@@ -736,6 +742,13 @@ suite.define(() => {
           userHeader: "x-forwarded-user",
         };
         await state.writeConfig({
+          plugins: {
+            allow: ["github-repositories"],
+            load: {
+              paths: [path.resolve(import.meta.dirname, "../../../extensions/github-repositories")],
+            },
+            entries: { "github-repositories": { enabled: true } },
+          },
           agents: {
             defaults: { workspace: state.workspaceDir, model: { primary: "openai/gpt-4.1" } },
             entries: { main: {} },

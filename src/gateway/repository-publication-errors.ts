@@ -1,12 +1,13 @@
 import type { GitHubPublicationSelectionRejectedErrorDetails } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 export type RepositoryPublicationFailure = Pick<
   Extract<SessionGitHubPublicationResult, { status: "failed" }>,
   "code" | "nextAction"
 >;
 export class RepositoryPublicationAuthorityLostError extends Error {}
 /** An owner observed a definitive failure; probe unavailability is not such a failure. */
-export class RepositoryPublicationFailureError extends Error {
+class RepositoryPublicationFailureError extends Error {
   constructor(
     message: string,
     readonly failure: RepositoryPublicationFailure,
@@ -15,7 +16,14 @@ export class RepositoryPublicationFailureError extends Error {
     super(message);
   }
 }
-export class RepositoryPublicationRequesterUnavailableError extends RepositoryPublicationFailureError {
+// Native SDK imports and source hosts must classify the same definitive failure hierarchy.
+const SharedRepositoryPublicationFailureError = resolveGlobalSingleton(
+  Symbol.for("openclaw.repositoryPublicationFailureError"),
+  () => RepositoryPublicationFailureError,
+);
+type SharedRepositoryPublicationFailureError = RepositoryPublicationFailureError;
+export { SharedRepositoryPublicationFailureError as RepositoryPublicationFailureError };
+class RepositoryPublicationRequesterUnavailableError extends SharedRepositoryPublicationFailureError {
   constructor() {
     super("The original GitHub publication requester is no longer authorized.", {
       code: "identity_changed",
@@ -24,7 +32,14 @@ export class RepositoryPublicationRequesterUnavailableError extends RepositoryPu
     });
   }
 }
-export class RepositoryPublicationChangePermissionError extends RepositoryPublicationFailureError {
+const SharedRepositoryPublicationRequesterUnavailableError = resolveGlobalSingleton(
+  Symbol.for("openclaw.repositoryPublicationRequesterUnavailableError"),
+  () => RepositoryPublicationRequesterUnavailableError,
+);
+type SharedRepositoryPublicationRequesterUnavailableError =
+  RepositoryPublicationRequesterUnavailableError;
+export { SharedRepositoryPublicationRequesterUnavailableError as RepositoryPublicationRequesterUnavailableError };
+export class RepositoryPublicationChangePermissionError extends SharedRepositoryPublicationFailureError {
   constructor() {
     super("Publishing GitHub workflow changes requires full operator write permission.", {
       code: "github_rejected",
