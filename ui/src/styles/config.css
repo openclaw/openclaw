@@ -929,96 +929,43 @@ div.mcp-server-form__actions {
   margin-bottom: 20px;
 }
 
-.config-accordion-group {
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-md);
-  margin-bottom: 4px;
-  overflow: hidden;
-  transition: border-color var(--duration-fast) var(--ease-out);
-}
-
-.config-accordion-group:hover {
-  border-color: var(--border);
-}
-
-.config-accordion-group__header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 12px 16px;
-  font-size: 0.8125rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  color: var(--text-strong);
-  background: color-mix(in srgb, var(--bg-elevated) 50%, var(--card) 50%);
-  border: none;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.config-accordion-group__header:hover,
-.config-accordion-group__header--active {
-  background: var(--bg-hover);
-}
-
-.config-accordion-group__icon {
-  display: flex;
-  align-items: center;
-  color: var(--accent);
-  opacity: 0.7;
-}
-
-.config-accordion-group__chevron {
-  margin-left: auto;
-  opacity: 0.35;
+.config-accordion-group__header .settings-row__chevron {
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
-.config-accordion-group__chevron--open {
+.config-accordion-group__header[aria-expanded="true"] .settings-row__chevron {
   transform: rotate(90deg);
 }
 
 .config-accordion-group__items {
-  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  padding: 4px 0;
-  background: var(--card);
+  padding-block-end: var(--space-2);
 }
 
-.config-accordion-group__item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 9px 16px 9px 40px;
-  font-size: 0.8125rem;
-  font-weight: 450;
+/* Sections are children of their category: inset under its title, with the
+   sidebar's rounded row and selected fill so square themes stay square. */
+.config-accordion-nav .config-accordion-group__item {
+  width: calc(100% - 2 * var(--space-4));
+  min-height: 36px;
+  margin-inline: var(--space-4);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+}
+
+.config-accordion-nav .config-accordion-group__item .settings-row__title {
   color: var(--muted);
-  background: none;
-  border: none;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
+  font-weight: 400;
 }
 
-.config-accordion-group__item:hover {
-  background: var(--bg-hover);
-  color: var(--text);
+.config-accordion-nav .config-accordion-group__item--active {
+  background: var(--surface-selected);
 }
 
-.config-accordion-group__item--active {
-  color: var(--accent);
-  font-weight: 600;
+.config-accordion-nav .config-accordion-group__item--active:hover {
+  background: var(--surface-selected-hover);
 }
 
-.config-accordion-group__item-icon {
-  display: flex;
-  align-items: center;
-  opacity: 0.45;
-}
-
-.config-accordion-group__item-icon svg {
-  width: 14px;
-  height: 14px;
+.config-accordion-nav .config-accordion-group__item--active .settings-row__title {
+  color: var(--text-strong);
 }
 
 @media (max-width: 900px) {
