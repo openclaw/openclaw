@@ -207,6 +207,34 @@ suite.define(() => {
     );
   });
 
+  it("searches the embedded settings list and clears a search with no results", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, serviceWorkers: "block" },
+      async ({ page }) => {
+        await installNativeEmbed(page, { platform: "ios", formFactor: "phone" });
+        await installMockGateway(page, { operatorScopes: ["operator.admin", "operator.read"] });
+        await page.goto(new URL("settings", suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { routeId: "settings" });
+        const list = page.locator(".settings-embed-list");
+        const search = list.getByRole("searchbox", { name: "Search settings", exact: true });
+        expect(
+          await search.evaluate((input) => Number.parseFloat(getComputedStyle(input).fontSize)),
+        ).toBeGreaterThanOrEqual(16);
+        await search.fill("zzzz");
+        await list.getByRole("button", { name: "Clear settings search" }).last().click();
+        expect(await search.inputValue()).toBe("");
+        await search.fill("appearance");
+        await list.locator('a[href="/settings/appearance"]').click();
+        await waitForControlUiRoute(page, { routeId: "appearance" });
+        await page.locator(".native-embed-header__back").click();
+        await waitForControlUiRoute(page, { routeId: "settings" });
+        await list.locator('a[href="/settings/appearance"]').waitFor();
+        expect(await search.inputValue()).toBe("appearance");
+        expect(await list.locator('a[href="/settings/channels"]').count()).toBe(0);
+      },
+    );
+  });
+
   it("keeps native device capability visibility and overrides native web chrome", async () => {
     await suite.withPage(
       { viewport: { width: 375, height: 812 }, hasTouch: true, serviceWorkers: "block" },

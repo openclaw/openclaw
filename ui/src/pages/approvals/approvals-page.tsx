@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import {
   For,
   Loading,
@@ -41,47 +40,14 @@ import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ApprovalErrorNotice } from "./approval-error-notice.tsx";
 import { HistoryRow } from "./approval-history-row.tsx";
+import { GrantRow } from "./standing-grant-row.tsx";
 
 registerEnglishCatalog(registerApprovalsEnglish);
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
 
-function grantStateLabel(grant: ExecApprovalStandingGrant, nowMs: number): string {
-  if (grant.revokedAtMs !== null) {
-    return t("standingGrants.stateRevoked");
-  }
-  if (grant.expiresAtMs !== null && grant.expiresAtMs <= nowMs) {
-    return t("standingGrants.stateExpired");
-  }
-  if (grant.expiresAtMs !== null) {
-    const days = Math.max(1, Math.ceil((grant.expiresAtMs - nowMs) / 86_400_000));
-    return t("standingGrants.stateExpiresIn", { count: String(days) });
-  }
-  return t("standingGrants.stateUntilRevoked");
-}
-
 const APPROVAL_HISTORY_REQUIRED_SCOPE = "operator.approvals";
 const APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
-
-function EmptyRow(props: { columns: number; label: string }) {
-  return (
-    <tr>
-      <td colspan={props.columns} class="data-table-empty-cell">
-        <div class="data-table-empty-state" role="status" aria-live="polite">
-          {props.label}
-        </div>
-      </td>
-    </tr>
-  );
-}
-
-function Cell(props: { labelKey: string; value: JSX.Element; mono?: boolean }) {
-  return (
-    <td class={{ mono: props.mono }} data-label={t(props.labelKey)}>
-      {props.value}
-    </td>
-  );
-}
 
 export function ApprovalsPage() {
   const context = useApplication();
@@ -452,40 +418,6 @@ export function ApprovalsPage() {
     }
   }
 
-  function GrantRow(props: { grant: ExecApprovalStandingGrant }) {
-    const revokeLabel = () =>
-      t(
-        revokeSaving() && view().revokingGrantId === props.grant.grantId
-          ? "standingGrants.revoking"
-          : "standingGrants.revoke",
-      );
-    return (
-      <tr>
-        <Cell
-          labelKey="standingGrants.columns.automation"
-          value={props.grant.cronJobName ?? props.grant.cronJobId}
-        />
-        <Cell labelKey="standingGrants.columns.command" value={props.grant.command} mono />
-        <Cell labelKey="standingGrants.columns.uses" value={props.grant.useCount} />
-        <td data-label={t("standingGrants.columns.state")} aria-live="polite">
-          {grantStateLabel(props.grant, Date.now())}
-        </td>
-        <td>
-          {props.grant.revokedAtMs === null &&
-          (props.grant.expiresAtMs === null || props.grant.expiresAtMs > Date.now()) ? (
-            <button
-              class="btn btn--sm"
-              aria-label={`${revokeLabel()}: ${props.grant.cronJobName ?? props.grant.cronJobId} — ${props.grant.command}`}
-              disabled={revokeSaving() || !view().connected}
-              onClick={() => void revokeGrant(props.grant.grantId)}
-            >
-              {revokeLabel()}
-            </button>
-          ) : null}
-        </td>
-      </tr>
-    );
-  }
   return (
     <openclaw-approvals-page>
       <SettingsPageHeader
@@ -522,47 +454,32 @@ export function ApprovalsPage() {
                 description={t("standingGrants.description")}
                 notice={<ApprovalErrorNotice error={view().grantsError} />}
               >
-                <div class="data-table-container">
-                  <table
-                    class="data-table standing-grants-table settings-table--stacked"
-                    role="table"
-                    aria-labelledby="standing-grants-title"
-                  >
-                    <thead>
-                      <tr>
-                        <th scope="col">{t("standingGrants.columns.automation")}</th>
-                        <th scope="col">{t("standingGrants.columns.command")}</th>
-                        <th scope="col">{t("standingGrants.columns.uses")}</th>
-                        <th scope="col">{t("standingGrants.columns.state")}</th>
-                        <th scope="col">
-                          <span class="sr-only">{t("standingGrants.revoke")}</span>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <Loading
-                        on={requestGeneration()}
-                        fallback={<EmptyRow columns={5} label={t("approvalHistory.unknown")} />}
-                      >
-                        {readGrants()}
-                        {view().grants.length === 0 ? (
-                          <EmptyRow
-                            columns={5}
-                            label={t(
-                              view().grantsLoaded
-                                ? "standingGrants.empty"
-                                : "approvalHistory.unknown",
-                            )}
+                <Loading
+                  on={requestGeneration()}
+                  fallback={<SettingsEmpty message={t("approvalHistory.unknown")} />}
+                >
+                  {readGrants()}
+                  {view().grants.length === 0 ? (
+                    <SettingsEmpty
+                      message={t(
+                        view().grantsLoaded ? "standingGrants.empty" : "approvalHistory.unknown",
+                      )}
+                    />
+                  ) : (
+                    <ul class="standing-grants" aria-labelledby="standing-grants-title">
+                      <For each={view().grants} keyed={(grant) => grant.grantId}>
+                        {(grant) => (
+                          <GrantRow
+                            grant={grant()}
+                            revoking={revokeSaving() && view().revokingGrantId === grant().grantId}
+                            disabled={revokeSaving() || !view().connected}
+                            onRevoke={() => void revokeGrant(grant().grantId)}
                           />
-                        ) : (
-                          <For each={view().grants} keyed={(grant) => grant.grantId}>
-                            {(grant) => <GrantRow grant={grant()} />}
-                          </For>
                         )}
-                      </Loading>
-                    </tbody>
-                  </table>
-                </div>
+                      </For>
+                    </ul>
+                  )}
+                </Loading>
               </SettingsSection>
               <SettingsSection
                 title={<span id="approval-history-title">{t("standingGrants.historyTitle")}</span>}
