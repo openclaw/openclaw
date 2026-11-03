@@ -40,19 +40,21 @@ struct ShareGatewayTransportTests {
                 extraHeadersProvider: { try ShareGatewayRelaySettings.currentCustomHeaders(for: loaded) },
                 onConnected: {}, onDisconnected: { _ in },
                 onInvoke: { BridgeInvokeResponse(id: $0.id, ok: false) })
+            await gateway.disconnect()
             #expect(scenario == "accepted")
             #expect(server.roles == ["node"])
             #expect(server.requests.first?.headers["x-share-service"] == "fixture-secret")
         } catch {
+            await gateway.disconnect()
             #expect(scenario != "accepted")
             #expect(server.roles.isEmpty)
             if scenario == "wrong-pin" {
                 #expect(server.requests.isEmpty)
             } else {
-                #expect(server.requests.first?.headers["x-share-service"] == nil)
+                let request = try #require(server.requests.first)
+                #expect(request.headers["x-share-service"] == nil)
             }
         }
-        await gateway.disconnect()
     }
 
     @Test @MainActor
