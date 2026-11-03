@@ -7,6 +7,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isReportableUpdateRun } from "../shared/update-outcome.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -1664,6 +1665,13 @@ describe("update-startup", () => {
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
     expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
     expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
+    expect(runUpdateFailureTriageMock).not.toHaveBeenCalled();
+    const run = listUpdateRuns()[0]!;
+    expect(run).toMatchObject({
+      status: "skipped",
+      reason: "managed-service-handoff-unavailable",
+    });
+    expect(isReportableUpdateRun(run)).toBe(false);
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
     expect(getUpdateAvailable()).toMatchObject({ latestVersion: "2.0.0-beta.1" });
     expect((await readRestartSentinel())?.payload).toMatchObject({
