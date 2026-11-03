@@ -281,7 +281,7 @@ try {
       }
       answer();
     } else if (route.startsWith("compare/") && route.endsWith("...main")) {
-      assert.equal(route, "compare/" + "b".repeat(40) + "...main");
+      assert.equal(route, "compare/" + state.authority.toolingSha + "...main");
       answer({ status: "identical" });
     } else if (route === "actions/runs/42") {
       answer({

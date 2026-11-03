@@ -50,7 +50,7 @@ describe("release publication state", () => {
           : Response.json({
               name: "openclaw",
               versions: { "2026.9.4": { name: "openclaw", version: "2026.9.4" } },
-              "dist-tags": { latest: "2026.9.4", beta: "2026.9.4" },
+              "dist-tags": { latest: version, beta: version },
             });
       }),
     );

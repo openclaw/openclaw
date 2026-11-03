@@ -27,13 +27,19 @@ import {
 } from "./release-stable.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
-const fixture = () => {
+const fixture = (state?: ReturnType<typeof phaseState>) => {
   const scratch = join(REPO_ROOT, ".tmp");
   mkdirSync(scratch, { recursive: true });
-  return releaseFixture(directories.make(".release-stable-test-", scratch));
+  const release = releaseFixture(directories.make(".release-stable-test-", scratch));
+  if (state) {
+    release.seed(state);
+  }
+  return release;
 };
 const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const mainSha = () => step("git", ["rev-parse", "origin/main"], CUT_SHA);
+const jsonStep = (bin: FakeStep["bin"], match: string[], value: unknown) =>
+  step(bin, match, JSON.stringify(value));
 
 function newCut(packageVersion = RELEASE, missing = ""): FakeStep[] {
   return [
@@ -443,7 +449,6 @@ describe("release:stable CLI", () => {
       );
     },
   );
-
 
   it("refuses a live process lock before touching state and replaces a stale lock", () => {
     const release = fixture();
@@ -892,7 +897,6 @@ describe("release:stable CLI", () => {
       expect(release.readState().publish.npmVisibleAt).toBeUndefined();
     },
   );
-
 
   it("retries GET requests immediately when retry backoff is zero", () => {
     const release = fixture();
