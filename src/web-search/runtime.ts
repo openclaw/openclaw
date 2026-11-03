@@ -401,7 +401,6 @@ function selectWebSearchCandidates(
 }
 
 type WebSearchConfigurationParams = ResolveWebSearchDefinitionParams & {
-  authStore?: AuthProfileStore;
   resolveAuthProfileStoreSource?: () => boolean;
 };
 
@@ -530,7 +529,11 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
     context,
   );
   if (candidates.length === 0) {
-    throw new Error("web_search is disabled or no provider is available.");
+    throw new Error(
+      params.sandboxed
+        ? "web_search is unavailable. Enable or select a bundled or verified official search provider for sandboxed agents."
+        : "web_search is disabled or no provider is available.",
+    );
   }
   const allowFallback = !hasExplicitWebSearchSelection({
     search,
