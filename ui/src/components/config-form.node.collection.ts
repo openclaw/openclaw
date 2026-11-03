@@ -7,7 +7,7 @@ import {
   requiredPropertyKeys,
 } from "./config-form.array-items.ts";
 import { canApplyObjectCandidate, isObjectPropertyNameValid } from "./config-form.constraints.ts";
-import { configChildRenderOptions } from "./config-form.node.shared.ts";
+import { configChildRenderOptions, isSecretRefObject } from "./config-form.node.shared.ts";
 import type { ConfigNodeRenderParams } from "./config-form.node.shared.ts";
 import {
   hasConfigSearchCriteria as hasSearchCriteria,
@@ -33,6 +33,10 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
       Boolean(entry[1]),
     );
   const requiredKeys = requiredPropertyKeys(schema);
+  // A SecretRef's redacted id is a reference, so its parts never become replaceable secrets.
+  const secretRefOptions = isSecretRefObject(objectValue)
+    ? { secretFields: undefined, replaceStoredSecrets: undefined }
+    : {};
 
   const sorted = entries.toSorted((left, right) => {
     const leftOrder = hintForPath([...path, left[0]], hints)?.order ?? 0;
@@ -81,6 +85,7 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
         sourceIdentity: inherited ? undefined : objectValue[propertyKey],
         controlIdentity: params.controlIdentity ?? objectValue,
         searchCriteria: childSearchCriteria,
+        ...secretRefOptions,
         onPatch: patchObjectChild,
       }) satisfies ConfigNodeRenderParams;
     }),

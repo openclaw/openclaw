@@ -11,6 +11,7 @@ import { showToast } from "../toast.ts";
 import type { ConfigPatchAck } from "./config-draft-model.ts";
 import { buildSecretFieldPatch, secretRowMatchesSavedList } from "./config-secret-field-patch.ts";
 import { resolveEditableSnapshotConfig } from "./config-state-model.ts";
+import { storedSecretSource, type StoredSecretSource } from "./stored-secret-source.ts";
 
 type ConfigPath = Array<string | number>;
 
@@ -38,9 +39,10 @@ function savedValue(snapshot: ConfigSnapshot | null | undefined, path: ConfigPat
 }
 
 /**
- * Whether a held edit may still go out. A stored secret, or a ${VAR} the field wasn't showing when
- * typing began, can arrive from elsewhere while the edit is held; Save never writes over either.
- * Undefined means the snapshot can't tell yet, and the edit waits.
+ * Whether a held edit may still go out. Only a stored secret proven to be plain text in the file is
+ * written over. A reference, or a ${VAR} the field wasn't showing when typing began, can arrive
+ * from elsewhere while the edit is held; Save never writes over either. Undefined means the
+ * snapshot can't tell yet, and the edit waits.
  */
 function canWriteOver(
   snapshot: ConfigSnapshot | null | undefined,
@@ -52,12 +54,17 @@ function canWriteOver(
     return undefined;
   }
   if (saved === REDACTED_SENTINEL) {
-    return false;
+    return storedSecretSource(snapshot, path).kind === "literal";
   }
   return !(typeof saved === "string" && saved.includes("${") && saved !== baseline);
 }
 
-export type ConfigSecretFields = {
+/** What a form may do with the stored secret at a path. */
+export type StoredSecretSources = {
+  source: (path: ConfigPath) => StoredSecretSource;
+};
+
+export type ConfigSecretFields = StoredSecretSources & {
   read: (path: ConfigPath) => string | undefined;
   hold: (path: ConfigPath, text: string, label: string) => void;
   release: (path: ConfigPath) => void;
@@ -113,6 +120,14 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
       }
     }
   };
+  // A stored secret's source can change with the saved config, so fields re-read it.
+  let seenSnapshot = runtime.state.configSnapshot;
+  runtime.subscribe(() => {
+    if (runtime.state.configSnapshot !== seenSnapshot) {
+      seenSnapshot = runtime.state.configSnapshot;
+      notify();
+    }
+  });
   // Draft rows that moved or vanished would put the value on another saved row.
   const rowsMatch = (path: ConfigPath) => {
     const base = resolveEditableSnapshotConfig(runtime.state.configSnapshot);
@@ -210,6 +225,7 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
     return { ok: false as const, error: "" };
   };
   return {
+    source: (path) => storedSecretSource(runtime.state.configSnapshot, path),
     read(path) {
       syncScope();
       return entries.get(fieldKey(path))?.text;

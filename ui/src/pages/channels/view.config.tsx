@@ -6,6 +6,7 @@ import { schemaType, type JsonSchema } from "../../components/config-form.shared
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { formatChannelExtraValue, resolveChannelConfigValue } from "../../lib/channels/index.ts";
 import { humanize, localizedHintForPath } from "../../lib/config-form-utils.ts";
+import { storedSecretSource } from "../../lib/config/stored-secret-source.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { applyChannelConfigEdits } from "./channel-config-draft.ts";
 import type { ChannelsProps } from "./view.types.ts";
@@ -232,6 +233,10 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
                         disabled: disabled(),
                         showLabel: false,
                         maskSensitive: true,
+                        replaceStoredSecrets: {
+                          source: (path) =>
+                            storedSecretSource(params.props.config.configSnapshot, path),
+                        },
                         onPatch: (path, next) =>
                           params.props.onConfigPatch(params.channelId, path, next),
                       }}

@@ -39,11 +39,28 @@ const schema = configSchema(
   },
 );
 
-async function openForm(page: Page) {
+const storedConfig = { logging: { level: "info", apiToken: "__OPENCLAW_REDACTED__" } };
+const storedSnapshot = {
+  ...snapshot,
+  config: storedConfig,
+  sourceConfig: storedConfig,
+  runtimeConfig: storedConfig,
+  parsed: storedConfig,
+  raw: JSON.stringify(storedConfig),
+};
+// What the Gateway sends when the file holds "Bearer ${TOKEN}": redacted like plaintext, no text.
+const templateSnapshot = { ...storedSnapshot, raw: null };
+const includeSnapshot = {
+  ...storedSnapshot,
+  parsed: { logging: { $include: "./logging.json5" } },
+  raw: JSON.stringify({ logging: { $include: "./logging.json5" } }),
+};
+
+async function openForm(page: Page, current: Record<string, unknown> = snapshot) {
   const gateway = await installMockGateway(page, {
     featureMethods: [...defaultControlUiFeatureMethods, "config.patch", "config.set"],
     methodResponses: {
-      "config.get": snapshot,
+      "config.get": current,
       "config.schema": schema,
       "config.set": { ok: true, config, hash: "base" },
       "config.patch": { ok: true, config, hash: "base" },
@@ -116,6 +133,70 @@ suite.define(() => {
       expect(await token.boundingBox()).toEqual(savingField);
       expect(await row.boundingBox()).toEqual(rowBefore);
     });
+  });
+
+  it("replaces a stored secret on Save, and leaves it alone on Cancel", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { gateway, token } = await openForm(page, storedSnapshot);
+      const save = page.getByRole("button", { name: "Save: Api Token", exact: true });
+      expect(await token.inputValue()).toBe("");
+      expect(await token.getAttribute("readonly")).toBeNull();
+      expect(await token.getAttribute("placeholder")).toBe("••••••••");
+      const reveal = page.getByRole("button", { name: "Reveal value", exact: true });
+      expect(await reveal.count()).toBe(0);
+
+      await token.fill(PARTIAL);
+      expect(await token.getAttribute("type")).toBe("password");
+      await reveal.click();
+      expect(await token.getAttribute("type")).toBe("text");
+      expect(await token.inputValue()).toBe(PARTIAL);
+      await page.getByRole("button", { name: "Cancel: Api Token", exact: true }).click();
+      await expect.poll(() => reveal.count()).toBe(0);
+      await token.fill(PARTIAL);
+      expect(await token.getAttribute("type")).toBe("password");
+      await page.getByRole("button", { name: "Cancel: Api Token", exact: true }).click();
+      await expect.poll(() => save.count()).toBe(0);
+      expect(await token.inputValue()).toBe("");
+      await token.fill(PARTIAL);
+      await token.fill("");
+      await expect.poll(() => save.count()).toBe(0);
+      await page.waitForTimeout(1200);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
+
+      await token.fill(PARTIAL);
+      await gateway.deferNext("config.patch");
+      await save.click();
+      const request = await gateway.waitForRequest("config.patch");
+      expect(JSON.parse((request.params as { raw: string }).raw)).toEqual({
+        logging: { apiToken: PARTIAL },
+      });
+      await gateway.resolveDeferred("config.patch", {
+        ok: true,
+        config: storedConfig,
+        hash: "next",
+      });
+      await page.getByRole("status").filter({ hasText: "Saved" }).first().waitFor();
+      expect(await token.inputValue()).toBe("");
+      expect(await token.getAttribute("readonly")).toBeNull();
+    });
+  });
+
+  it("keeps a stored secret read-only when the file holds a template or an include", async () => {
+    for (const current of [templateSnapshot, includeSnapshot]) {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const { gateway, token } = await openForm(page, current);
+        expect(await token.getAttribute("readonly")).not.toBeNull();
+        await token.click();
+        await page.keyboard.type(PARTIAL);
+        await page.keyboard.press("Enter");
+        expect(await token.inputValue()).toBe("");
+        expect(await page.getByRole("button", { name: "Save: Api Token" }).count()).toBe(0);
+        await page.waitForTimeout(1200);
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+      });
+    }
   });
 
   it("keeps the edit when Save is refused, and when leaving the page", async () => {
