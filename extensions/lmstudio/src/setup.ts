@@ -39,7 +39,7 @@ import {
   LMSTUDIO_DEFAULT_MODEL_ID,
   LMSTUDIO_PROVIDER_ID as PROVIDER_ID,
 } from "./defaults.js";
-import { discoverLmstudioModels, fetchLmstudioModels } from "./models.fetch.js";
+import { discoverLmstudioDynamicModels, fetchLmstudioModels } from "./models.fetch.js";
 import {
   mapLmstudioWireModelsToConfig,
   type LmstudioModelWire,
@@ -858,12 +858,12 @@ export async function prepareLmstudioDynamicModel(
     env: process.env,
     providerHeaders: ctx.providerConfig?.headers,
   });
-  const discoveredModels = await discoverLmstudioModels({
+  const discoveredModels = await discoverLmstudioDynamicModels(
+    ctx.providerConfig?.request?.allowPrivateNetwork,
     baseUrl,
-    apiKey: apiKey ?? "",
+    apiKey ?? "",
     headers,
-    quiet: true,
-  });
+  );
   const model = discoveredModels.find((candidate) => candidate.id === ctx.modelId);
   if (!model) {
     return undefined;

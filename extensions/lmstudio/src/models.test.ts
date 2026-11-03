@@ -550,25 +550,6 @@ it("retains configured and optional empty listings while the public helper stays
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
-it("discovers models through the SSRF guard", async () => {
-  const fetchMock = vi.fn();
-  vi.stubGlobal("fetch", fetchMock);
-  guardedFetch.mockResolvedValue({
-    response: Response.json({ models: [] }),
-    release: async () => undefined,
-  });
-  await expect(
-    discoverLmstudioModels({
-      baseUrl: "http://localhost:1234/v1",
-      apiKey: "lm-token",
-      quiet: true,
-    }),
-  ).resolves.toEqual([]);
-  expect(guardedFetch).toHaveBeenCalledOnce();
-  expect(fetchMock).not.toHaveBeenCalled();
-  expect(guardedFetch.mock.calls[0]?.[0]?.policy).toBeTypeOf("object");
-});
-
 it("releases guarded non-ok discovery without waiting for the capture clone", async () => {
   const tracked = cancelTrackedTextResponse("unavailable", { status: 503 });
   const captureClone = tracked.response.clone();

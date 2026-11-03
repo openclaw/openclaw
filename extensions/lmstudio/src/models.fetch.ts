@@ -185,13 +185,15 @@ export async function discoverLmstudioModels(params: {
     apiKey: params.apiKey,
     headers: params.headers,
     fetchImpl: params.fetchImpl,
-    // Same policy embeddings use. An absent policy would skip the guard and follow redirects.
-    ssrfPolicy: resolveEmbeddingProviderSsrFPolicy({
-      provider: LMSTUDIO_PROVIDER_ID,
-      api: "openai-completions",
-      baseUrl: params.baseUrl,
-      allowPrivateNetwork: params.allowPrivateNetwork ?? true,
-    }),
+    // An undefined resolution means "no private allow". Keep a policy object so
+    // discovery still uses the guard instead of platform fetch.
+    ssrfPolicy:
+      resolveEmbeddingProviderSsrFPolicy({
+        provider: LMSTUDIO_PROVIDER_ID,
+        api: "openai-completions",
+        baseUrl: params.baseUrl,
+        allowPrivateNetwork: params.allowPrivateNetwork ?? true,
+      }) ?? {},
   });
   const quiet = params.quiet;
   if (!fetched.reachable || (fetched.status !== undefined && fetched.status >= 400)) {
@@ -210,6 +212,21 @@ export async function discoverLmstudioModels(params: {
 
   params.onListedModels?.(fetched.models);
   return mapLmstudioWireModels(fetched.models, "runtime");
+}
+
+export function discoverLmstudioDynamicModels(
+  allowPrivateNetwork: boolean | undefined,
+  baseUrl: string,
+  apiKey: string,
+  headers?: Record<string, string>,
+): Promise<ModelDefinitionConfig[]> {
+  return discoverLmstudioModels({
+    baseUrl,
+    apiKey,
+    headers,
+    allowPrivateNetwork,
+    quiet: true,
+  });
 }
 
 type LmstudioModelLoadParams = {
