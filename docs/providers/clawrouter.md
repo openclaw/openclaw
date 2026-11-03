@@ -574,3 +574,34 @@ prevent model calls or the existing `/v1/usage` snapshot.
     OpenClaw usage and status surfaces.
   </Card>
 </CardGroup>
+
+## OpenCode proxy session identity
+
+For catalog-selected OpenCode Console and Go Chat, Responses, and Messages
+routes, OpenClaw carries the effective conversation identity in
+`x-clawrouter-session-id`. Explicit `x-opencode-session` headers are matched
+case-insensitively: caller headers take precedence over model headers, followed
+by the automatic conversation session ID. Conflicting case variants and invalid
+identities fail before dispatch. The value must match the existing router
+attribution grammar (`A-Z`, `a-z`, digits, `. _ ~ : / + @ = -`) and contain at most
+256 characters after trimming.
+
+Native session overrides are removed from both SDK header carriers. Static
+router and legacy session headers cannot turn an absent identity into a shared
+session. Console calls without an identity leave it absent; the Worker creates
+a distinct standalone nonce. Go retains the native hook's host-provided turn ID
+fallback when that hook runs. No client-generated global session or per-turn
+random replacement is added to a conversation.
+
+This header is attribution, not authorization. The Worker derives the upstream
+session handle from the authenticated caller, selected provider, original grant
+and credential lineage. Reusing the conversation identity with another caller
+or grant cannot authorize that grant or reuse its upstream session. The client
+continues to send only its selected proxy credential, without borrowing an
+OpenCode or Anthropic key or impersonating the OpenCode client.
+
+The bridge uses the existing transport-turn and streaming hooks, including
+simple completions. It changes no catalog models, prices, limits, or provider
+activation. Google/Gemini and WebSocket OpenCode session transports remain
+unqualified. Actual client-plus-Worker qualification is required before enabling
+new native offers; SDK fixtures alone do not establish grant binding.
