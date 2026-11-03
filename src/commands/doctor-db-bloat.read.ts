@@ -34,13 +34,28 @@ function isSqliteStoredPageSize(pageSize: number): boolean {
 }
 
 /**
+ * Returns the -wal sidecar size, 0 when absent, or null when it cannot be read.
+ * Null means "unknown" and callers must treat the WAL as active.
+ */
+function readWalSidecarBytes(pathname: string): number | null {
+  try {
+    return fs.statSync(`${pathname}-wal`, { throwIfNoEntry: false })?.size ?? 0;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Reads bloat stats from the 100-byte SQLite header without opening the database.
  * The three values this check reports (page size, freelist count, auto-vacuum mode)
  * all live in the header, so a raw read avoids the size-scaled snapshot copy and the
  * sidecar creation risk that motivates it. Returns null on any doubt — including
  * non-SQLite files, truncated headers, and torn reads mid page-1 write — so callers
- * fall back to the snapshot path. In WAL databases the freelist count is the
- * last-checkpointed value, which is acceptable staleness for a bloat heuristic.
+ * fall back to the snapshot path. WAL-mode files answer from the header only when
+ * their -wal sidecar is absent or empty; uncheckpointed WAL frames can hold committed
+ * freelist changes the header cannot see (page 1 is only rewritten at checkpoints),
+ * so a non-empty sidecar falls back to the snapshot path where the PRAGMA answer
+ * preserves the reclaimable-bytes contract.
  */
 async function readSqliteBloatStatsFromHeader(
   pathname: string,
@@ -69,6 +84,16 @@ async function readSqliteBloatStatsFromHeader(
   const storedPageSize = header.getUint16(16, false);
   if (!isSqliteStoredPageSize(storedPageSize)) {
     return null;
+  }
+  // Header offsets 18/19 hold the file-format write/read versions: 1 = rollback
+  // journal, 2 = WAL. A WAL file with a non-empty sidecar may carry committed
+  // freelist changes in uncheckpointed frames, so its header count is stale in
+  // either direction; an absent or empty sidecar means the header is current.
+  if (header.getUint8(18) !== 1 || header.getUint8(19) !== 1) {
+    const walBytes = readWalSidecarBytes(pathname);
+    if (walBytes === null || walBytes > 0) {
+      return null;
+    }
   }
   const pageSize = storedPageSize === 1 ? 65536 : storedPageSize;
   const freelistCount = header.getUint32(36, false);

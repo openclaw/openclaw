@@ -138,9 +138,9 @@ it("answers reporting-size files from the header without preparing a snapshot", 
   });
   const results = await readSqliteDatabaseBloat({ path: pathname, env: {} });
   expect(results).toHaveLength(1);
-  expect(results[0].stats.fileBytes).toBe(BLOAT_MIN_FILE_BYTES);
-  expect(results[0].stats.freeBytes).toBeGreaterThan(0);
-  expect(results[0].stats.incrementalAutoVacuum).toBe(false);
+  expect(results[0]?.stats.fileBytes).toBe(BLOAT_MIN_FILE_BYTES);
+  expect(results[0]?.stats.freeBytes).toBeGreaterThan(0);
+  expect(results[0]?.stats.incrementalAutoVacuum).toBe(false);
   expect(prepare).not.toHaveBeenCalled();
 });
 
@@ -166,10 +166,12 @@ it.each([
   });
   const results = await readSqliteDatabaseBloat({ path: pathname, env: {} });
   expect(results).toHaveLength(1);
-  expect(results[0].stats.incrementalAutoVacuum).toBe(incremental);
+  expect(results[0]?.stats.incrementalAutoVacuum).toBe(incremental);
 });
 
-it("answers a WAL-mode reporting-size file from the header without changing source artifacts", async () => {
+it("answers a WAL-mode file with nothing uncheckpointed from the header without changing source artifacts", async () => {
+  // createPaddedDatabase closes its writer, so the checkpoint leaves the sidecar
+  // absent or empty and the header freelist count is current.
   const pathname = createPaddedDatabase({
     label: "doctor-bloat-header-wal-",
     pageSize: 4096,
@@ -181,8 +183,50 @@ it("answers a WAL-mode reporting-size file from the header without changing sour
   const before = await Promise.all(family.map((member) => sha256File(member)));
   const results = await readSqliteDatabaseBloat({ path: pathname, env: {} });
   expect(results).toHaveLength(1);
-  expect(results[0].stats.freeBytes).toBeGreaterThan(0);
+  expect(results[0]?.stats.freeBytes).toBeGreaterThan(0);
   expect(await Promise.all(family.map((member) => sha256File(member)))).toEqual(before);
+});
+
+it("falls back to the snapshot path for a WAL file with uncheckpointed committed frames", async () => {
+  const pathname = path.join(tempDirs.make("doctor-bloat-header-wal-live-"), "database.sqlite");
+  // Build the reporting-size body and a committed freelist in rollback mode first:
+  // the header then holds the pre-WAL freelist count the reader must not trust.
+  const seed = openNodeSqliteDatabase(pathname);
+  try {
+    seed.exec("CREATE TABLE payload(value)");
+    const insert = seed.prepare("INSERT INTO payload VALUES (?)");
+    for (let index = 0; index < 300; index += 1) {
+      insert.run("x".repeat(2000));
+    }
+    seed.exec("DELETE FROM payload WHERE rowid < 290");
+  } finally {
+    seed.close();
+  }
+  fs.truncateSync(pathname, BLOAT_MIN_FILE_BYTES);
+  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(() => {
+    throw new Error("controlled preparation failure");
+  });
+  const database = openNodeSqliteDatabase(pathname);
+  try {
+    // The writer stays open across the inspection so the committed freelist change
+    // lives only in uncheckpointed WAL frames.
+    database.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0");
+    database.exec("DELETE FROM payload WHERE rowid = 290");
+    const header = fs.readFileSync(pathname);
+    const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+    expect(view.getUint8(18)).toBe(2);
+    expect(view.getUint8(19)).toBe(2);
+    const headerFreelist = view.getUint32(36, false);
+    const liveFreelist = Number(database.prepare("PRAGMA freelist_count").get()?.freelist_count);
+    expect(liveFreelist).toBeGreaterThan(headerFreelist);
+    expect(fs.statSync(`${pathname}-wal`).size).toBeGreaterThan(0);
+
+    const results = await readSqliteDatabaseBloat({ path: pathname, env: {} });
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(results).toEqual([]);
+  } finally {
+    database.close();
+  }
 });
 
 it("falls back to snapshot preparation when the header magic does not validate", async () => {
