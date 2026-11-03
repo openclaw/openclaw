@@ -56,8 +56,20 @@ export function resolveLatestUnresolvedUserRequest(params: {
     ? params.pathEntries.findIndex((entry) => entry.id === requestEntryId)
     : -1;
   const admittedEntry = params.pathEntries[admittedIndex];
+  const previousBoundaryIndex = params.pathEntries.findLastIndex(
+    (entry) => entry.type === "compaction" || entry.type === "reset",
+  );
+  // Recovery hydrates only the current semantic window. A processed input can
+  // already be summarized; unprocessed input must still be present verbatim.
+  const requestWasCompacted = Boolean(
+    requestEntryId &&
+    !admittedEntry &&
+    !params.preserveFromEntryId &&
+    params.pathEntries[previousBoundaryIndex]?.type === "compaction",
+  );
   if (
     requestEntryId &&
+    !requestWasCompacted &&
     (!admittedEntry || params.getMessageFromEntry(admittedEntry)?.role !== "user")
   ) {
     return err(
@@ -65,9 +77,10 @@ export function resolveLatestUnresolvedUserRequest(params: {
     );
   }
   const latestInput = params.contextMessages.findLast((message) => message.role === "user");
+  const requestStartIndex = requestWasCompacted ? previousBoundaryIndex + 1 : admittedIndex;
   const requestMessages =
-    admittedIndex >= 0
-      ? params.pathEntries.slice(admittedIndex).flatMap((entry) => {
+    requestStartIndex >= 0
+      ? params.pathEntries.slice(requestStartIndex).flatMap((entry) => {
           const message = params.getMessageFromEntry(entry);
           return message ? [message] : [];
         })
@@ -78,7 +91,9 @@ export function resolveLatestUnresolvedUserRequest(params: {
   return ok(
     params.requestState
       ? (extractLatestUserRequest(requestMessages) ??
-          (hasRequestInput ? undefined : params.previousLatestUnresolvedUserRequest))
+          (hasRequestInput && !requestWasCompacted
+            ? undefined
+            : params.previousLatestUnresolvedUserRequest))
       : undefined,
   );
 }

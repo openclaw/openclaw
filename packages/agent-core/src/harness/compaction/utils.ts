@@ -282,7 +282,7 @@ function readPersistedSender(message: PersistedSenderCarrier) {
  * conversation label. Keep this shared with token accounting: adding a label
  * to the prompt without charging it can make bounded compaction overflow.
  */
-export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
+function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
   const sender = readPersistedSender(message);
   return sender ? ` sender=${JSON.stringify(sender)}` : "";
 }
@@ -696,4 +696,35 @@ export function serializeConversationWithinBudget(
     }
   }
   return { text: parts.join(ENTRY_SEPARATOR), omittedEntries, trimmedEntries };
+}
+
+export function removeGeneratedCompactionSection(
+  summary: string | undefined,
+  section: string,
+): string | undefined {
+  if (!summary) {
+    return summary;
+  }
+  if (summary.startsWith(section)) {
+    return summary.slice(section.length);
+  }
+  const delimitedSection = `\n\n${section}`;
+  const sectionIndex = summary.indexOf(delimitedSection);
+  return sectionIndex < 0
+    ? summary
+    : `${summary.slice(0, sectionIndex)}\n\n${summary.slice(sectionIndex + delimitedSection.length)}`;
+}
+
+/** Authoritative request owners clear stale model-written asks without rewriting other sections. */
+export function clearCompactionPendingAskSection(summary: string): string {
+  const heading = /^## Pending user asks[ \t]*$/mu.exec(summary);
+  if (!heading) {
+    return summary;
+  }
+  const contentStart = heading.index + heading[0].length;
+  const remaining = summary.slice(contentStart + 1);
+  const nextHeading = /^##[ \t]+\S.*$/mu.exec(remaining);
+  return `${summary.slice(0, contentStart)}\nNone.${
+    nextHeading ? `\n${remaining.slice(nextHeading.index)}` : ""
+  }`;
 }

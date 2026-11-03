@@ -20,6 +20,8 @@ Built-in compaction summarizes the older history in one model request, whatever 
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
+Recovery keeps a bounded copy of the active human request in the summary, including across repeated compactions after its original message leaves the current context. Internal updates retain their source labels without replacing that request; newer human steering can update it. An independent internal run does not revive completed human work. An admitted input that has not been processed must remain intact.
+
 For direct OpenAI API-key sessions, the `/responses/compact` endpoint can return
 a canonical window of retained messages followed by an encrypted checkpoint.
 OpenClaw preserves that entire window, including retained assistant messages,

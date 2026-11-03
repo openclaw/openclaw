@@ -15,12 +15,14 @@ import { formatSplitTurnSourceAsk, resolveLatestUnresolvedUserRequest } from "./
 import { runSummarizationCompletion } from "./summarization-completion.js";
 import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
 import {
+  clearCompactionPendingAskSection,
+  removeGeneratedCompactionSection,
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
   type FileOperations,
   formatFileOperations,
-  formatPersistedSenderSuffix,
+  formatCompactionUserLabel,
   getCompactionContent,
   mergeSummaryFileOperations,
   stringifyCompactionValue,
@@ -263,8 +265,8 @@ export function estimateTokens(message: AgentMessage): number {
     }
     case "user": {
       chars = countContentChars(message.content);
-      // serializeConversation projects this exact persisted-sender suffix.
-      chars += estimateStringChars(formatPersistedSenderSuffix(message));
+      // Charge the same source and sender label projected into the summary input.
+      chars += estimateStringChars(formatCompactionUserLabel(message)) - "User".length;
       break;
     }
     case "custom":
@@ -724,7 +726,9 @@ export function prepareCompaction(
     messagesToSummarize,
     turnPrefixMessages,
     isSplitTurn: cutPoint.isSplitTurn,
-    ...(requestState ? { requestState } : {}),
+    ...(requestState
+      ? { requestState: latestUnresolvedUserRequest ? ("unresolved" as const) : ("none" as const) }
+      : {}),
     ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
     tokensBefore,
     previousSummary,
@@ -859,23 +863,31 @@ function previousSummaryWithoutFileOperations(
     ? `## Latest unresolved user request\n${JSON.stringify(previousRequest)}\n\n`
     : "";
   const summaryWithoutRequest =
-    previousRequestSection && previousSummary?.includes(previousRequestSection)
-      ? previousSummary.replace(previousRequestSection, "")
+    preparation.requestState !== undefined && previousRequestSection
+      ? removeGeneratedCompactionSection(previousSummary, previousRequestSection)
       : previousSummary;
+  const reconciledSummary =
+    preparation.requestState === "none" && summaryWithoutRequest
+      ? clearCompactionPendingAskSection(summaryWithoutRequest)
+      : summaryWithoutRequest;
   const previousFileOperations = previousSummaryDetails
     ? formatFileOperations(previousSummaryDetails.readFiles, previousSummaryDetails.modifiedFiles)
     : "";
-  return previousFileOperations && summaryWithoutRequest?.endsWith(previousFileOperations)
-    ? summaryWithoutRequest.slice(0, -previousFileOperations.length)
-    : summaryWithoutRequest;
+  return previousFileOperations && reconciledSummary?.endsWith(previousFileOperations)
+    ? reconciledSummary.slice(0, -previousFileOperations.length)
+    : reconciledSummary;
 }
 
 function finalizeCompaction(
   preparation: CompactionPreparation,
-  historySummary: string,
+  inputHistorySummary: string,
   latestContext: string,
   requiredContext = "",
 ): Result<CompactionResult, CompactionError> {
+  const historySummary =
+    preparation.requestState === "none"
+      ? clearCompactionPendingAskSection(inputHistorySummary)
+      : inputHistorySummary;
   const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
   const fileOperations = formatFileOperations(readFiles, modifiedFiles);
   // Required prefix content survives fitting; only the history and split-turn context shrink.

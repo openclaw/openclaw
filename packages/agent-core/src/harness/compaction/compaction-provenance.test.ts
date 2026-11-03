@@ -3,7 +3,13 @@ import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, StreamFn } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import { buildSessionContext } from "../session/session.js";
-import { compact, generateSummary, prepareCompaction } from "./compaction.js";
+import {
+  compact,
+  estimateTokens,
+  generateSummary,
+  prepareCompaction,
+  serializeConversation,
+} from "./compaction.js";
 import {
   createCompactionModel as createSummaryModel,
   createContextUsage,
@@ -36,6 +42,34 @@ function createCapturingSummaryStream() {
 }
 
 describe("compaction sender provenance", () => {
+  it.each([
+    { metadata: { provenance: { kind: "external_user" } }, label: "User" },
+    { metadata: { provenance: { kind: "realtime_voice", sourceChannel: "talk" } }, label: "User" },
+    { metadata: { provenance: null }, label: "Unknown-origin input" },
+    { metadata: { provenance: {} }, label: "Unknown-origin input" },
+    { metadata: { provenance: "unparsed" }, label: "Unknown-origin input" },
+    { metadata: { provenance: { kind: "realtime_voice" } }, label: "Unknown-origin input" },
+    {
+      metadata: { provenance: { kind: "realtime_voice", sourceChannel: "other" } },
+      label: "Unknown-origin input",
+    },
+    {
+      metadata: { provenance: { kind: "external_user" }, synthetic: true as const },
+      label: "Synthetic input",
+    },
+    {
+      metadata: { provenance: { kind: "external_user" }, operatorMessage: { turnScoped: true } },
+      label: "Operator input",
+    },
+  ])("labels and budgets recorded source $metadata", ({ metadata, label }) => {
+    const message = Object.assign(
+      { role: "user" as const, content: "data", timestamp: 1 },
+      metadata,
+    );
+    expect(serializeConversation([message])).toBe("[" + label + "]: data");
+    expect(estimateTokens(message)).toBe(Math.ceil((4 + label.length - "User".length) / 4));
+  });
+
   it.each([
     { name: "custom", summaryPrompt: { kind: "custom" as const, instructions: "Custom format." } },
     { name: "turn-prefix", summaryPrompt: { kind: "turn-prefix" as const } },

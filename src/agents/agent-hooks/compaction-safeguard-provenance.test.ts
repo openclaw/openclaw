@@ -105,7 +105,7 @@ it.each(["unresolved", "none"] as const)(
     if (!prepared.ok || !prepared.value) {
       throw new Error("expected a compactable history");
     }
-    summarizeHistory.mockResolvedValue(structuredSummary());
+    summarizeHistory.mockResolvedValue(structuredSummary({ asks: staleAsk }));
     const { result } = await runCompaction(
       qualitySession({ recentTurnsPreserve: 0, qualityGuardMaxRetries: 0 }),
       compactionEvent({

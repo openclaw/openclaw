@@ -10,6 +10,7 @@ import {
   SUMMARY_TRUNCATED_MARKER,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
+  clearCompactionPendingAskSection,
   computeFileLists,
   extractCurrentCompactionUserRequest,
   extractCompactionMessageText as extractMessageText,
@@ -632,6 +633,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       preparation.turnPrefixMessages ?? [],
     );
     const latestUnresolvedUserRequest = preparation.latestUnresolvedUserRequest;
+    const reconcileRequestSelection = (summary: string) =>
+      preparation.requestState !== undefined && !latestUnresolvedUserRequest
+        ? clearCompactionPendingAskSection(summary)
+        : summary;
     if (!containsRealConversation([...baseMessagesToSummarize, ...baseTurnPrefixMessages])) {
       // Safety net for a preparation that dropped real conversation from the
       // range it covers: summarize that boundary-scoped range instead. It is
@@ -812,7 +817,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               messages: baseMessagesToSummarize,
               recentTurnsPreserve,
             });
-            const finalized = await finalizeSummaryText(providerResult, {
+            const finalized = await finalizeSummaryText(reconcileRequestSelection(providerResult), {
               splitTurnSection: preparation.isSplitTurn
                 ? buildSplitTurnContextSection(turnPrefixMessages)
                 : undefined,
@@ -946,6 +951,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   previousSummary,
                 })
               : buildStructuredFallbackSummary(previousSummary);
+
+          historySummary = reconcileRequestSelection(historySummary);
 
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const splitTurnFocusLabel = "Additional context from /compact";
