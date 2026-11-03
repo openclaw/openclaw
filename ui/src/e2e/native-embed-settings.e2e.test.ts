@@ -316,10 +316,13 @@ suite.define(() => {
               expect(await page.locator('openclaw-search-page [role="alert"]').count()).toBe(0);
             }
             if (route === "devices") {
-              await page.locator(".device-entry__details summary").first().click();
-              await page.locator(".device-token-table tbody td").first().waitFor();
+              await page.locator("details.device-entry > summary").first().click();
+              await page
+                .locator("details.device-entry[open] .device-entry__facts")
+                .first()
+                .waitFor();
             }
-            if (["devices", "secrets", "approvals", "debug"].includes(route)) {
+            if (["secrets", "approvals", "debug"].includes(route)) {
               await page.locator(".settings-table--stacked tbody td[data-label]").first().waitFor();
               if (viewport.width <= 400) {
                 expect(

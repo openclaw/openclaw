@@ -146,6 +146,10 @@ Rebuild indexes, related blocks, dashboards, and the compiled query/prompt snaps
 
 If `render.createDashboards` is enabled, compile also refreshes report pages.
 
+Page names use the frontmatter `title`, then the first level-one heading outside
+code blocks, then the filename. Comments inside fenced code blocks do not become
+page names; inline code in a real heading remains part of its name.
+
 ### `wiki lint`
 
 Lint the vault and write a report covering:

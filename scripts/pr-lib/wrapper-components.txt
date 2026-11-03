@@ -157,6 +157,7 @@ packages/normalization-core/src/utf16-slice.ts
 packages/plugin-package-contract/package.json
 packages/plugin-package-contract/src/categories.ts
 packages/plugin-package-contract/src/index.ts
+packages/plugin-package-contract/src/recommended-prompts.ts
 packages/retry/package.json
 packages/retry/src/index.ts
 packages/session-url-contract/package.json
@@ -808,6 +809,7 @@ src/config/sessions/transcript-store-identity.ts
 src/config/sessions/transcript-target-binding.ts
 src/config/sessions/version.ts
 src/config/shell-env-expected-keys.ts
+src/config/skill-library-tool-split-migration.ts
 src/config/skill-workshop-plugin-migration.ts
 src/config/source-value-projection.ts
 src/config/state-dir.ts
@@ -1166,6 +1168,7 @@ src/infra/private-directory-creation.ts
 src/infra/private-mode.ts
 src/infra/private-store-file.ts
 src/infra/process-env.ts
+src/infra/process-exit-cleanup.ts
 src/infra/prototype-keys.ts
 src/infra/restart-stale-pids.ts
 src/infra/retry-attempt-errors.ts
@@ -1340,6 +1343,12 @@ src/infra/thread-disk-io.ts
 src/infra/test-runtime-env.ts
 src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
+src/infra/update-candidate-io.ts
+src/infra/update-candidate-state.diagnostics.ts
+src/infra/update-candidate-state.inspection.ts
+src/infra/update-candidate-state.process.ts
+src/infra/update-candidate-state.result.ts
+src/infra/update-candidate-state.sizes.ts
 src/infra/update-capture-space.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
@@ -1387,15 +1396,21 @@ src/infra/update-rehearsal-paths.ts
 src/infra/update-result-claim.ts
 src/infra/update-result-payload.ts
 src/infra/update-run-activation.ts
+src/infra/restart-sentinel-store.ts
+src/infra/update-run-activity.ts
+src/infra/update-run-admission.read.ts
+src/infra/update-run-admission.types.ts
 src/infra/update-run-admission.ts
 src/infra/update-run-codec.ts
 src/infra/update-run-gateway-stop.ts
 src/infra/update-run-legacy-expiry.ts
 src/infra/update-run-limits.ts
 src/infra/update-run-driver-schema.ts
+src/infra/update-run-driver.ts
 src/infra/update-run-read-admission.ts
 src/infra/update-run-read.kernel.ts
 src/infra/update-run-record.ts
+src/infra/update-run-reconciliation.read.ts
 src/infra/update-run-recovery-keys.ts
 src/infra/update-run-recovery-native-schema.ts
 src/infra/update-run-recovery-package-schema.ts
@@ -1411,6 +1426,7 @@ src/infra/update-run-write.ts
 src/infra/update-runtime-path-index.ts
 src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
+src/infra/update-state-inspection-protocol.ts
 src/infra/update-step-identity.ts
 src/infra/warning-filter.ts
 src/infra/windows-appcontainer-spawn.ts
@@ -1674,6 +1690,7 @@ src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
+src/plugins/plugin-bundled-reload.ts
 src/plugins/plugin-instance-iterator.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-lifecycle-lease-identity.ts
@@ -2000,6 +2017,7 @@ src/state/openclaw-agent-db-close.ts
 src/state/openclaw-agent-db-contract.ts
 src/state/openclaw-agent-db-discovery-paths.ts
 src/state/openclaw-agent-db-disposal.ts
+src/state/openclaw-agent-creation-operations-schema.ts
 src/state/openclaw-agent-db-engine.ts
 src/state/openclaw-agent-db-existing-write.ts
 src/state/openclaw-agent-db-identity.ts
@@ -2068,6 +2086,7 @@ src/state/openclaw-agent-session-snapshots-migration.ts
 src/state/openclaw-agent-session-snapshots-schema.ts
 src/state/openclaw-agent-session-transcript-archive-schema.ts
 src/state/openclaw-agent-standing-intents-schema.ts
+src/state/openclaw-agent-storage-migration.ts
 src/state/openclaw-agent-storage-schema.ts
 src/state/openclaw-agent-text-search-migration.ts
 src/state/openclaw-agent-trajectory-storage-migration.ts
@@ -2105,6 +2124,7 @@ src/state/openclaw-state-db-cron-delivery-migration.ts
 src/state/openclaw-state-db-cron-identity-migration.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
+src/state/openclaw-state-db-engine-input.ts
 src/state/openclaw-state-db-engine.ts
 src/state/openclaw-state-db-existing-schema.ts
 src/state/openclaw-state-db-existing-write.ts
@@ -2153,6 +2173,7 @@ src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts
 src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
+src/state/openclaw-state-db-task-delivery-recovery-preservation.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
 src/state/openclaw-state-db-transaction.ts
 src/state/openclaw-state-postgres-admission.ts
@@ -2854,6 +2875,7 @@ src/plugins/worker-retention.ts
 src/plugins/worker-retention.types.ts
 src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
+src/shared/pending-promises.ts
 src/shared/state-lease-loss.ts
 src/shared/weak-owner-map.ts
 src/status/utility-model-warnings.ts
@@ -2868,6 +2890,7 @@ src/process/spawn-broker/worker-sender.ts
 src/process/spawn-broker/worker.ts
 src/state/openclaw-agent-schema-inspection.worker.ts
 src/state/openclaw-state-ownership.worker.ts
+src/state/openclaw-state-db-removal-exclusion.ts
 src/infra/schema-migration-diagnostics.ts
 src/canvas/wrap.ts
 src/plugin-sdk/widget-html.ts

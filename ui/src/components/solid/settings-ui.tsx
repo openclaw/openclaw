@@ -3,6 +3,7 @@ import { children, For, onSettled, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { liveChecked } from "../../lib/reactive/live-checked.ts";
 import { Icon } from "./icon.tsx";
 import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
 import "../tooltip.ts";
@@ -289,11 +290,10 @@ function ToggleControl(
   return (
     <span class="settings-toggle">
       <input
-        ref={(element) => props.inputRef?.(element)}
+        ref={[liveChecked(() => props.checked), (element) => props.inputRef?.(element)]}
         class="settings-toggle__input"
         type="checkbox"
         role="switch"
-        checked={props.checked}
         disabled={props.disabled}
         aria-disabled={props.saving ? "true" : undefined}
         aria-label={props.inputLabel}

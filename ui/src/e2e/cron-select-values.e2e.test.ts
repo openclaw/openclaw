@@ -66,13 +66,18 @@ suite.define(() => {
                 : '[data-test-id="cron-new-task"]',
             )
             .click();
+          if (narrow && mode === "edit") {
+            // Include validation help when exercising a wrapped edit footer.
+            await page.locator("#cron-name").fill("");
+            await page.locator(".cron-submit-reason").waitFor({ state: "visible" });
+          }
           await page.evaluate(() => document.fonts.ready);
           if (narrow) {
             const footer = page.locator(".cron-editor-actions");
             const originalHeight = await footer.evaluate(
               (element) => element.getBoundingClientRect().height,
             );
-            await page.setViewportSize({ width: 390, height: 707 });
+            await page.setViewportSize({ width: mode === "edit" ? 320 : 390, height: 707 });
             await expect
               .poll(() => footer.evaluate((element) => element.getBoundingClientRect().height))
               .toBeGreaterThan(originalHeight);
