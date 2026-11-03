@@ -47,6 +47,7 @@ import { isXaiProviderId } from "./provider-id.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { resolveXaiTransport } from "./provider-routing.js";
+import { buildXaiReplayPolicy } from "./replay-policy.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import {
   readPluginCodeExecutionConfig,
@@ -300,6 +301,8 @@ function createLazyCodeExecutionTool(ctx: OpenClawPluginToolContext) {
   );
 }
 
+const xaiReplayFamilyHooks = buildProviderReplayFamilyHooks({ family: "openai-compatible" });
+
 function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
   if (!canExposeXaiBilledTool(ctx, resolveEffectiveXSearchConfig, isXSearchEnabled)) {
     return null;
@@ -416,7 +419,8 @@ export default defineSingleProviderPluginEntry({
         return { provider: buildXaiProvider("openai-responses", authMode) };
       },
     },
-    ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
+    ...xaiReplayFamilyHooks,
+    buildReplayPolicy: buildXaiReplayPolicy(xaiReplayFamilyHooks.buildReplayPolicy),
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
     wrapStreamFn: (ctx) =>
       wrapXaiProviderStream(ctx, {
