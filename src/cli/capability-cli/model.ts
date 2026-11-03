@@ -169,7 +169,10 @@ export function registerModelCapabilityCommands(capability: Command): void {
         if (opts.promptFile !== undefined) {
           const { root } = await import("../../infra/fs-safe.js");
           const promptRoot = await root(process.cwd());
-          prompt = await promptRoot.readText(opts.promptFile, { maxBytes: 1_048_576 });
+          prompt = decodeUtf8Input(
+            await promptRoot.readBytes(opts.promptFile, { maxBytes: 1_048_576 }),
+            "--prompt-file",
+          );
         }
         if (opts.promptStdin) {
           const { readByteStreamWithLimit } =

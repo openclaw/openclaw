@@ -495,6 +495,40 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: "true", continueAgent: true as const },
+    { label: "a replacement prompt", continueAgent: { prompt: "Recall request: now" } },
+  ])(
+    "hands a plugin command continuing with $label to the agent reply path",
+    async ({ continueAgent }) => {
+      const handler = vi.fn(async () => ({ continueAgent }));
+      expect(
+        registerPluginCommand("recall-plugin", {
+          name: "recall",
+          description: "Recall",
+          acceptsArgs: true,
+          handler,
+        }),
+      ).toEqual({ ok: true });
+      const command = await createPluginCommand({ cfg, name: "recall" });
+      interaction.options.getString.mockReturnValue("now");
+
+      await command.run(interaction);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(dispatchReply).toHaveBeenCalledTimes(1);
+      const call = dispatchReply.mock.calls[0]?.[0] as {
+        ctx: { CommandBody?: string };
+        replyOptions: Record<PropertyKey, unknown>;
+      };
+      // The pipeline receives the dispatch that already ran and applies its result there.
+      expect(call.replyOptions[PLUGIN_COMMAND_DISPATCH]).toMatchObject({ kind: "plugin" });
+      expect(call.ctx.CommandBody).toBe("/recall now");
+      expect(recordExchange).not.toHaveBeenCalled();
+      expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
+    },
+  );
+
   it("blocks unauthorized Discord senders before requireAuth:false plugin commands execute", async () => {
     cfg = guildConfig({ allowFrom: { discord: ["user:123456789012345678"] } });
     interaction = guildInteraction();

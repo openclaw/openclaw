@@ -8,7 +8,7 @@ import { authProfileRuntimeMode } from "../agents/auth-profiles/runtime-scope.js
 import { getRuntimeAuthProfileStoreSnapshotCore } from "../agents/auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { isTrustedToolExecutionPreflightError } from "../agents/tool-result-error.js";
+import { isTrustedToolExecutionPreflightError } from "../agents/tool-execution-error.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

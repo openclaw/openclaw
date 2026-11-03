@@ -576,7 +576,7 @@ describe("prepared model support admission", () => {
   it("uses final inline transport for admission and alias publication", async () => {
     const owner = retiredXaiOwner("https://custom.invalid/v1");
     await expectChoice(owner.config, { raw: "xai/auto" }).toMatchObject({ kind: "resolved" });
-    expect(renderPublishedAliases(owner)).toContain("- Grok: xai/auto");
+    expect(await renderPublishedAliases(owner)).toContain("- Grok: xai/auto");
   });
 
   it("uses provider transport normalization for explicit, automatic and published aliases without discovery", async () => {
@@ -601,7 +601,7 @@ describe("prepared model support admission", () => {
       model: { api: "openai-responses", baseUrl: model.baseUrl },
     };
     await expectChoice(config, { ...request, source: "automatic" }).toMatchObject(resolved);
-    expect(renderPublishedAliases(owner)).toContain("- Grok: xai/grok-4.6");
+    expect(await renderPublishedAliases(owner)).toContain("- Grok: xai/grok-4.6");
     expect(prepareDynamicModel).not.toHaveBeenCalled();
     await expectChoice(config, request).toMatchObject(resolved);
   });

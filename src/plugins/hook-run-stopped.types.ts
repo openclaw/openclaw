@@ -14,7 +14,7 @@ export type PluginHookRunStoppedEvent = {
 };
 
 /** Set only when the Stop covers exactly one session; `event.sessions` always lists them all. */
-export type PluginHookRunStoppedContext = {
+type PluginHookRunStoppedContext = {
   agentId?: string;
   sessionKey?: string;
 };
