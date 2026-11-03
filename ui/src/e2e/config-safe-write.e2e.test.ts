@@ -3,7 +3,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiViewportScreenshot,
+  waitForControlUiFrameLayout,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
   objectSchema,
@@ -203,17 +207,13 @@ suite.define(() => {
       }
       await page.setViewportSize({ width: 1440, height: 1000 });
       // Let the resize settle so the comparison below only sees save feedback.
-      let fieldBefore = await endpoint.boundingBox();
+      const shell = page.locator(".shell");
       await expect
-        .poll(
-          async () => {
-            const previous = fieldBefore;
-            fieldBefore = await endpoint.boundingBox();
-            return previous?.x === fieldBefore?.x && previous?.y === fieldBefore?.y;
-          },
-          { interval: 500 },
-        )
-        .toBe(true);
+        .poll(() => shell.evaluate((element) => element.classList.contains("shell--mobile-nav")))
+        .toBe(false);
+      await waitForControlUiProofSurface(endpoint, [endpoint]);
+      await waitForControlUiFrameLayout([shell, endpoint]);
+      const fieldBefore = await endpoint.boundingBox();
       await gateway.resolveDeferred("config.set");
       await expectSaveStatus(page, "Saved");
       expect(await endpoint.boundingBox()).toEqual(fieldBefore);
