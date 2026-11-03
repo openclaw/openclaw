@@ -3,14 +3,22 @@ import { Value } from "typebox/value";
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
   isWorkerGatewayToolFrameWithinBudget,
+  WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
   WorkerToolSurfaceSchema,
   type WorkerGatewayToolInvokeParams,
   type WorkerGatewayToolUpdateFrame,
   type WorkerToolSurface,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { validateWorkerGatewayToolResponseFrame } from "../../../packages/gateway-protocol/src/worker-response-validators.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.js";
+import {
+  createCatalogCodeModeHarness,
+  mcpTool,
+  resetCodeModeTestState,
+} from "../../agents/code-mode.test-support.js";
+import { projectMcpCallToolResult } from "../../agents/mcp-content.js";
 import { stringEnum } from "../../agents/schema/string-enum.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
@@ -18,6 +26,7 @@ import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createWorkerGatewayToolProxies } from "../../worker/worker-gateway-tools.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
@@ -147,6 +156,84 @@ it("enforces the deployment action policy when dispatching an issued worker hand
   });
   expect(execute).toHaveBeenCalledTimes(1);
 });
+
+function gatewayMcpTool(audio: string) {
+  const raw = {
+    content: [
+      { type: "text", text: "created item 42" },
+      { type: "audio", data: audio, mimeType: "audio/wav" },
+    ],
+    structuredContent: { id: 42 },
+    isError: false,
+    _meta: { privateNote: "not guest data" },
+  };
+  const execute = vi.fn(async () => projectMcpCallToolResult(raw));
+  const source = mcpTool({ name: "docs__create", serverName: "docs", toolName: "create", execute });
+  bindAgentToolExecutionLocation(source, { kind: "gateway" });
+  return { runtime: fixture([source]).runtime, raw, execute };
+}
+
+const mcpIdentity = {
+  ...identity,
+  protocolFeatures: [
+    ...identity.protocolFeatures,
+    WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
+  ],
+};
+
+it("delivers the Gateway's owned MCP result to the worker Code Mode namespace", async () => {
+  onTestFinished(resetCodeModeTestState);
+  const { runtime, raw, execute } = gatewayMcpTool("YXVkaW8=");
+  const surface = await runtime.getSurface(mcpIdentity);
+  const [proxy] = createWorkerGatewayToolProxies(surface, {
+    invokeGatewayTool: async (params) => {
+      const payload = await runtime.invoke(mcpIdentity, params, sink);
+      // Cross the serialization and validation boundary used by the worker WebSocket.
+      const wire = JSON.stringify({ type: "res", id: "r1", ok: true, payload });
+      expect(wire).not.toContain(raw._meta.privateNote);
+      const frame: unknown = JSON.parse(wire);
+      if (!validateWorkerGatewayToolResponseFrame(frame)) {
+        throw new Error("Invalid Gateway tool response");
+      }
+      return frame;
+    },
+    cancelGatewayTool: vi.fn(),
+  });
+  const workerExecute = vi.spyOn(proxy, "execute");
+  const result = await createCatalogCodeModeHarness([proxy]).complete(
+    "return await MCP.docs.create();",
+  );
+  expect(result.status).toBe("completed");
+  expect(result.value).toEqual({
+    content: raw.content,
+    structuredContent: raw.structuredContent,
+    isError: false,
+  });
+  expect(await workerExecute.mock.results[0]?.value).not.toHaveProperty("mcpGuestResult");
+  expect(execute).toHaveBeenCalledTimes(1);
+});
+
+it.each(["legacy worker", "oversized guest result"])(
+  "keeps the ordinary MCP receipt for a %s",
+  async (scenario) => {
+    const worker = scenario === "legacy worker" ? identity : mcpIdentity;
+    const { runtime, execute } = gatewayMcpTool(
+      scenario === "legacy worker" ? "YXVkaW8=" : "A".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES),
+    );
+    const surface = await runtime.getSurface(worker);
+    const result = await runtime.invoke(
+      worker,
+      {
+        ...request(surface),
+        arguments: {},
+      },
+      sink,
+    );
+    expect(result.content).toContainEqual({ type: "text", text: "created item 42" });
+    expect(result).not.toHaveProperty("mcpGuestResult");
+    expect(execute).toHaveBeenCalledTimes(1);
+  },
+);
 
 it("prepares deferred discovery guidance with the model tool projection", async () => {
   const { runtime } = fixture([], async () => ({

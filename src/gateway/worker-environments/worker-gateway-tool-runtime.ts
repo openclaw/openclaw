@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import {
   isWorkerGatewayToolFrameWithinBudget,
+  WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
   WorkerToolSurfaceSchema,
-  type WorkerGatewayToolResult,
+  type WorkerGatewayToolInvokeResult,
   type WorkerGatewayToolUpdateFrame,
   type WorkerToolSurface,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
@@ -11,6 +12,7 @@ import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-
 import { getAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../agents/harness/tool-surface-bridge.js";
+import { consumeMcpCodeModeGuestResult } from "../../agents/mcp-content.js";
 import { projectAgentToolDefinition } from "../../agents/prepared-tool-surface.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
@@ -55,7 +57,7 @@ export function createWorkerGatewayToolRuntime(params: {
       controller: AbortController;
       signal: AbortSignal;
       sinks: Set<WorkerGatewayToolSink>;
-      result: Promise<WorkerGatewayToolResult>;
+      result: Promise<WorkerGatewayToolInvokeResult>;
     }
   >();
   let sequential: Promise<unknown> = Promise.resolve();
@@ -181,7 +183,7 @@ export function createWorkerGatewayToolRuntime(params: {
       }
       return modelTools;
     },
-    async invoke(_identity, request, sink, connectionSignal) {
+    async invoke(identity, request, sink, connectionSignal) {
       // Admission issues handles; cancellation must see the call before its first yield.
       assertCurrent();
       const tool = issuedTools?.get(request.toolId);
@@ -217,8 +219,11 @@ export function createWorkerGatewayToolRuntime(params: {
       const execute = async () => {
         assertCurrent(callSignal);
         try {
-          return bounded(
-            await tool.execute(request.toolCallId, request.arguments, callSignal, (update) => {
+          const result = await tool.execute(
+            request.toolCallId,
+            request.arguments,
+            callSignal,
+            (update) => {
               assertCurrent(callSignal);
               const frame: WorkerGatewayToolUpdateFrame = {
                 type: "event",
@@ -239,8 +244,12 @@ export function createWorkerGatewayToolRuntime(params: {
                   }
                 }
               }
-            }),
+            },
           );
+          const includeGuest =
+            getPluginToolMeta(tool)?.mcp &&
+            identity.protocolFeatures.includes(WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE);
+          return bounded(result, includeGuest ? consumeMcpCodeModeGuestResult(result) : undefined);
         } catch (error) {
           return workerSessionToolErrorResult(error);
         }
