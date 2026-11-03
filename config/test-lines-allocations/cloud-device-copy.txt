@@ -1,2 +1,0 @@
-# Formatter wrapping for the cloud device capacity error and delete-dialog assertions; no new test cases.
-7

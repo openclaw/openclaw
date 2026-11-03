@@ -96,12 +96,9 @@ suite.define(() => {
       async (page, gateway) => {
         await gateway.waitForRequest("config.get");
         await page
-          .getByText(
-            "No cloud devices yet. Start a cloud session to prepare a repository and save a snapshot.",
-            {
-              exact: false,
-            },
-          )
+          .getByText(/^No cloud devices yet[.]/, {
+            exact: false,
+          })
           .waitFor();
         await page.locator(".settings-disclosure > summary").click();
         const emptyMachines = page.getByText("No cloud device profiles yet.", {

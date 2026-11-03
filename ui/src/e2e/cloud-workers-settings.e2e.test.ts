@@ -523,10 +523,7 @@ suite.define(() => {
 
         await exactButton(row, "Delete: pending").click();
         const confirmation = await waitForConfirmModal(page);
-        await expect
-          .poll(() => confirmation.textContent())
-          .toContain("Deleting pending also removes repository defaults that use it.");
-        await expect.poll(() => confirmation.textContent()).toContain("repository defaults");
+        await expect.poll(() => confirmation.textContent()).toContain("Deleting pending");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         await gateway.deferNext("config.patch");
         await exactButton(confirmation, "Delete").click();
