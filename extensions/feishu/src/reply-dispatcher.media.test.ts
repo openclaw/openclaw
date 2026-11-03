@@ -9,7 +9,8 @@ const { createMessage, uploadImage } = vi.hoisted(() => ({
     vi.fn<(request: { data: { msg_type: string; content: string } }) => Promise<unknown>>(),
   uploadImage: vi.fn(),
 }));
-vi.mock("./client.js", () => ({
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
   createFeishuClient: () => ({
     im: { message: { create: createMessage }, image: { create: uploadImage } },
   }),
