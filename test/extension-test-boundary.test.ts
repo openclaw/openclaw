@@ -6,7 +6,10 @@ import { afterAll, describe, expect, it } from "vitest";
 import { getChangedPathFacts } from "../scripts/lib/changed-path-facts.mjs";
 import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
 import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../src/plugin-sdk/test-helpers/public-artifacts.js";
+import {
+  GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES,
+  isDeclaredExtensionPublicSurfaceImport,
+} from "../src/plugin-sdk/test-helpers/public-artifacts.js";
 import { expectNoReaddirSyncDuring } from "../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../src/test-utils/repo-files.js";
 
@@ -68,8 +71,14 @@ function findExtensionImports(source: SourceFile): string[] {
 }
 
 function isAllowedExtensionPublicImport(specifier: string): boolean {
-  return /(?:^|\/)extensions\/[^/]+\/(?:api|index|runtime-api|setup-entry|login-qr-api|test-api)\.js$/u.test(
-    specifier,
+  return (
+    /(?:^|\/)extensions\/[^/]+\/(?:api|index|runtime-api|setup-entry|login-qr-api|test-api)\.js$/u.test(
+      specifier,
+    ) ||
+    isDeclaredExtensionPublicSurfaceImport(
+      specifier,
+      (pluginId) => JSON.parse(readSource(`extensions/${pluginId}/package.json`)).exports,
+    )
   );
 }
 
@@ -153,6 +162,23 @@ function isAllowedCoreContractSuite(file: string, imports: readonly string[]): b
 }
 
 describe("non-extension test boundaries", () => {
+  it.each([
+    ["../extensions/fixture/remote-api.js", true],
+    ["../extensions/fixture/private-api.js", false],
+    ["../extensions/fixture/blocked-api.js", false],
+    ["../extensions/fixture/src/private.js", false],
+  ])(
+    "classifies declared public artifacts without admitting private helpers: %s",
+    (specifier, allowed) => {
+      expect(
+        isDeclaredExtensionPublicSurfaceImport(specifier, () => ({
+          "./remote-api.js": "./remote-api.ts",
+          "./blocked-api.js": null,
+        })),
+      ).toBe(allowed);
+    },
+  );
+
   it("ignores fixture URLs", () => {
     expect(
       findExtensionImports(

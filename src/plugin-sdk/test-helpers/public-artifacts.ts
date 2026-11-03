@@ -56,3 +56,22 @@ export const GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES = assertUniqueValues(
   [...BUNDLED_RUNTIME_SIDECAR_BASENAMES, ...EXTRA_GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES],
   "guarded extension public surface basename",
 );
+
+/** Package exports intentionally promote narrow artifacts; a filename suffix alone does not. */
+export function isDeclaredExtensionPublicSurfaceImport(
+  specifier: string,
+  readPackageExports: (pluginId: string) => unknown,
+): boolean {
+  const match = /(?:^|\/)extensions\/([^/]+)\/(.+\.js)$/u.exec(specifier);
+  if (!match) {
+    return false;
+  }
+  const exports = readPackageExports(match[1]!);
+  const subpath = `./${match[2]}`;
+  return (
+    exports !== null &&
+    typeof exports === "object" &&
+    Object.hasOwn(exports, subpath) &&
+    Reflect.get(exports, subpath) !== null
+  );
+}

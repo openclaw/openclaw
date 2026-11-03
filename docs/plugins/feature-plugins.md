@@ -170,6 +170,16 @@ Export `defineControlUiPlugin({ id, activate(host) })` from the browser entry.
 Its id must match the plugin manifest. Register contributions through
 `host.ui`; each registration returns a disposer.
 
+For browser operation IDs, import `generateUUID` from
+`openclaw/plugin-sdk/control-ui`. It uses Web Crypto and reports an error when
+secure UUID generation is unavailable.
+
+Session-only readers can load the native browser catalog and its scoped assets,
+and report activation for their live Control UI connection. Their grants retain
+the session scope. Each contributed backend operation keeps its own authorization;
+catalog reload, cross-client activation status, and custom Gateway tabs retain
+their existing broader permissions.
+
 | Registration                            | Host placement                                                                                                                          |
 | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `registerPage` and `registerNavigation` | Plugin-owned routes and sidebar destinations.                                                                                           |

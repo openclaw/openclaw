@@ -323,6 +323,10 @@ describe("session-scoped method admission", () => {
 
   it.each([
     ["sessions.diff", ownSession, true],
+    ["plugins.controlUi.list", undefined, true],
+    ["plugins.controlUi.report", undefined, true],
+    ["plugins.controlUi.reload", undefined, false, ADMIN],
+    ["plugins.controlUi.status", undefined, false, ADMIN],
     ["controlUi.sessionPullRequests.subscribe", { sessionKeys: [ownKey.key] }, true],
     ["controlUi.sessionPullRequests.checks", ownSession, true],
     ["sessions.files.assets", { ...ownSession, path: "index.html", refs: ["a.png"] }, true],
@@ -331,12 +335,12 @@ describe("session-scoped method admission", () => {
     ["controlUi.githubPreview", ownSession, false],
   ] as const)(
     "restricts the narrow read alternative to session and bootstrap methods: %s",
-    (method, params, narrow) => {
+    (method, params, narrow, deniedScope: string = READ) => {
       for (const scopes of [[OWN_READ], [OWN_WRITE], [OWN_READ, OWN_WRITE]]) {
         admission(method, scopes, params).toEqual(
           narrow
             ? { allowed: true, sessionScope: OWN_READ }
-            : { allowed: false, missingScope: READ },
+            : { allowed: false, missingScope: deniedScope },
         );
       }
       if (!narrow) {
