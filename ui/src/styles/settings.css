@@ -855,6 +855,93 @@ openclaw-appearance-background .settings-background-preview .session-background_
   flex: 1 1 auto;
 }
 
+/* A secret that holds its edit: the field, then Save and Cancel beside it. Together they keep the
+   lone-input width, so a held edit narrows the field instead of moving the row or its neighbours. */
+.cfg-secret {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cfg-secret > .settings-secret {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.settings-row:not(.settings-row--stacked) .settings-row__control > .cfg-secret {
+  width: 340px;
+}
+
+.settings-row--stacked .settings-row__control > .cfg-secret {
+  flex: 1 1 auto;
+}
+
+.cfg-secret--multiline {
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+}
+
+.cfg-secret--multiline > .settings-secret {
+  flex: none;
+  width: 100%;
+}
+
+.cfg-secret--multiline > .cfg-secret-actions {
+  align-self: flex-end;
+}
+
+/* Saving and Saved keep the buttons' footprint, so the field changes width only when the edit
+   starts and when it ends. */
+.cfg-secret-actions {
+  display: grid;
+  flex: none;
+}
+
+.cfg-secret-actions > * {
+  grid-area: 1 / 1;
+}
+
+.cfg-secret-actions__buttons {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.cfg-secret-actions[data-saved] > .cfg-secret-actions__buttons {
+  visibility: hidden;
+}
+
+.cfg-secret-actions .btn {
+  display: inline-grid;
+  place-items: center;
+}
+
+.cfg-secret-actions__label {
+  grid-area: 1 / 1;
+}
+
+.cfg-secret-actions__label:not([data-shown]) {
+  visibility: hidden;
+}
+
+.cfg-secret-actions__saved {
+  align-self: center;
+  padding-inline: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+/* A refusal wraps under the field and its actions instead of squeezing them. */
+.settings-row:not(.settings-row--stacked) > .settings-row__control:has(> .cfg-secret) {
+  flex-wrap: wrap;
+  width: 340px;
+}
+
+.settings-row__control:has(> .cfg-secret) > .cfg-field__error {
+  flex-basis: 100%;
+}
+
 /* Multiline secrets (JSON textareas) anchor the eye to the first line. */
 .settings-secret:has(> textarea) {
   align-items: flex-start;

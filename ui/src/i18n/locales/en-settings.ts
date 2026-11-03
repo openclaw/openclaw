@@ -474,6 +474,10 @@ const enSettings = {
     removeEntry: "Remove entry",
     removeEntryKey: "Remove entry: {key}",
     renameRejected: "Rename not applied. The original key was kept. {reason}",
+    secretSaved: "Saved",
+    secretUnsavedOnLeave: "{field} has unsaved changes",
+    secretDroppedOnConnectionChange: "{field} wasn't saved because the connection changed",
+    secretReview: "Review",
     renameDuplicateKey: "This key is already in use.",
     renameInvalidKey: "Choose a key that matches this setting's constraints.",
     renameChangeRejected:

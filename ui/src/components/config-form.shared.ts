@@ -7,6 +7,7 @@ import {
   pathKey,
   type JsonSchema,
 } from "../lib/config-form-utils.ts";
+import type { ConfigSecretFields } from "../lib/config/config-secret-fields.ts";
 
 export type ConfigFormProps = {
   schema: JsonSchema | null;
@@ -31,6 +32,7 @@ export type ConfigFormProps = {
   maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
+  secretFields?: ConfigSecretFields;
   onPatch: (path: Array<string | number>, value: unknown) => void;
   onRemove?: (path: Array<string | number>) => void;
 };
