@@ -49,6 +49,7 @@ it.each([
   "test/helpers/fixture.ts",
   "src/agents/session.test-support.ts",
   "scripts/lib/source-file-scan-cache.mts",
+  "config/test-lines-allocations/regression.txt",
   "extensions/telegram/tsconfig.json",
   "new-owner/data.json",
 ])("falls back to the full checks for %s", (file) => {

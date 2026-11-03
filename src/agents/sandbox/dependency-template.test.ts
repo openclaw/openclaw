@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   prepareSandboxDependencyTemplate,
@@ -13,20 +14,35 @@ const mocks = vi.hoisted(() => ({
   retire: vi.fn(),
   registry: vi.fn(),
   current: vi.fn(),
+  mark: vi.fn(),
+  schedule: vi.fn(),
 }));
 vi.mock("./container-engine.js", () => ({
   DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
   execContainer: mocks.exec,
 }));
 vi.mock("./docker.js", () => ({ ensureSandboxContainer: mocks.ensure }));
-vi.mock("./manage.js", () => ({ removeSandboxRuntimeGeneration: mocks.retire }));
+// mock-isolation: Installer contract tests have no state owner; real lifecycle coverage lives in the lifecycle suite.
+vi.mock("./registry-lifecycle.js", () => ({
+  withSandboxRegistrySettlement: (_context: unknown, run: () => Promise<unknown>) => run(),
+  acquireSandboxRuntimeUse: async () => ({ [Symbol.dispose]: () => {} }),
+}));
+// mock-isolation: Unit installation contracts must not initialize backend dispatch or real housekeeping.
+vi.mock("./prune.js", () => ({ scheduleSandboxPrune: mocks.schedule }));
+vi.mock("./container-inspect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./container-inspect.js")>()),
+  containerHasTerminated: mocks.retire,
+}));
 vi.mock("./podman-runtime.js", () => ({
   validateSandboxContainerEngineTarget: vi.fn(),
   resolvePodmanSandboxRuntimeInfo: vi.fn(),
   bindPodmanSandboxEngine: vi.fn(),
 }));
+// mock-isolation: These installer contracts use synthetic registry facts without opening a state database.
 vi.mock("./registry.js", () => ({
-  assertSandboxRegistryEntryCurrent: mocks.current,
+  assertSandboxRegistryRetirementCurrent: mocks.current,
+  beginSandboxRegistryRemoval: mocks.mark,
+  withSandboxRegistryEntryLock: (_entry: unknown, run: () => Promise<void>) => run(),
   readRegistry: mocks.registry,
 }));
 
@@ -60,7 +76,8 @@ beforeEach(() => {
     stderr: "",
   }));
   mocks.ensure.mockResolvedValue({ containerName: "builder", containerId });
-  mocks.retire.mockResolvedValue(undefined);
+  mocks.retire.mockResolvedValue(true);
+  mocks.mark.mockImplementation(async (entry) => ({ ...entry, runtimeState: "removing" }));
   mocks.registry.mockResolvedValue({
     entries: [
       {
@@ -81,15 +98,24 @@ async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn
     assertCurrent: () => {},
   });
   expect(identity).toBeDefined();
-  return await prepareSandboxDependencyTemplate({
-    directory,
-    cfg: config,
-    scopeKey: "fixture",
-    identity: identity!,
-    signal,
-    assertCurrent: () => {},
-    rollbackGuard,
-  });
+  const closed = vi.fn();
+  try {
+    return await withDiagnosticsTimelineObserver(
+      (name) => (name.endsWith(".dependency.retire") ? closed : undefined),
+      () =>
+        prepareSandboxDependencyTemplate({
+          directory,
+          cfg: config,
+          scopeKey: "fixture",
+          identity: identity!,
+          signal,
+          assertCurrent: () => {},
+          rollbackGuard,
+        }),
+    );
+  } finally {
+    expect(closed).toHaveBeenCalledOnce();
+  }
 }
 
 it("installs the pinned guest image without session credentials or writable Git metadata", async () => {
@@ -108,7 +134,12 @@ it("installs the pinned guest image without session credentials or writable Git 
   expect(admitted.readOnlyResourceMounts).toEqual([
     { hostPath: "/owned/template/.git", containerPath: "/workspace/.git" },
   ]);
-  expect(mocks.retire).toHaveBeenCalledWith(expect.objectContaining({ id: containerId }));
+  expect(mocks.retire).toHaveBeenCalledWith(
+    expect.anything(),
+    containerId,
+    expect.any(AbortSignal),
+  );
+  expect(mocks.exec.mock.calls.map(([, args]) => args[0])).not.toContain("rm");
   expect(cfg.docker.env).toHaveProperty("REGISTRY_PASSWORD", "private-fixture");
 });
 

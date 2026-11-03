@@ -52,7 +52,7 @@ export function createAgentDatabaseAdmissionErrorShape(
 
 // Refusals are public protocol objects. Keep inspection causes private to the admission owner.
 const refusalCauses = new WeakMap<AgentDatabaseAdmissionRefusal, unknown>();
-const readAdmissions = new WeakMap<
+const readAdmissions = new Map<
   AgentDatabaseAdmissionRefusal,
   { key: string; paths: readonly string[]; assertCurrent: () => void }
 >();
@@ -95,7 +95,27 @@ const preparation = new AsyncLocalStorage<{
   access: "read" | "write";
   active: boolean;
   assertCurrent: () => void;
+  workers: AsyncDisposableStack;
 }>();
+
+/** Startup owns isolated native workers until preparation settles, including failed admission. */
+export function retainAgentDatabaseStartupWorker(
+  agentId: string,
+  options: AdmissionOptions,
+  close: () => Promise<void>,
+): boolean {
+  const scope = preparation.getStore();
+  if (
+    scope?.access !== "write" ||
+    scope.refusal.agentId !== agentId ||
+    scope.key !== stateKey(options)
+  ) {
+    return false;
+  }
+  scope.assertCurrent();
+  scope.workers.defer(close);
+  return true;
+}
 
 export function createAgentDatabaseInspectionRefusal(params: {
   agentId: string;
@@ -125,7 +145,7 @@ export function createAgentDatabaseInspectionRefusal(params: {
         : serializationFailure
           ? "A worker request could not be serialized. Update OpenClaw and restart the Gateway; repeating database migration will not repair this request."
           : params.pending
-            ? 'Sessions remain unavailable until background inspection and preparation finish. If they cannot complete, stop the Gateway, run "openclaw doctor --fix", and restart.'
+            ? "Startup preparation is in progress or waiting for capacity. Retry the request after startup preparation finishes. Pending startup does not indicate a database failure."
             : `Sessions remain unavailable. ${formatAgentDatabaseCorruptionRepairHint(params.agentId, params.cause) ?? 'Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.'}`,
   };
   refusalCauses.set(refusal, params.cause);
@@ -303,17 +323,15 @@ export function readAgentDatabaseReadAdmissionRefusal(
   agentId: string,
   options: AdmissionOptions = {},
 ): AgentDatabaseAdmissionRefusal | undefined {
+  const key = stateKey(options);
   const refusal = readSelectedAgentDatabaseAdmissionRefusal(
-    stateKey(options),
+    key,
     normalizeAgentId(agentId),
     agentId,
     "read",
   );
   const admitted = refusal && readAdmissions.get(refusal);
-  if (
-    refusal?.code === "agent-database-inspection-pending" &&
-    admitted?.key === stateKey(options)
-  ) {
+  if (refusal?.code === "agent-database-inspection-pending" && admitted?.key === key) {
     try {
       admitted.assertCurrent();
       return undefined;
@@ -339,9 +357,15 @@ export function publishPendingAgentDatabaseReadAdmission(
   }
   const admission = { key, paths: options.paths, assertCurrent: options.assertCurrent };
   readAdmissions.set(refusal, admission);
+  runWithAgentDatabaseReadAdmissionTurn = runWithInspectionReadAdmissionTurn;
+  isAgentDatabaseStartupReadReady = inspectAgentDatabaseStartupReadReady;
   return () => {
     if (readAdmissions.get(refusal) === admission) {
       readAdmissions.delete(refusal);
+      if (readAdmissions.size === 0) {
+        runWithAgentDatabaseReadAdmissionTurn = runWithSqliteDatabaseAdmissionTurn;
+        isAgentDatabaseStartupReadReady = noStartupReadAdmission;
+      }
       if (refusalsByState.get(key)?.refusals.has(refusal.agentId)) {
         sessionChanges.invalidate({
           all: true,
@@ -353,7 +377,11 @@ export function publishPendingAgentDatabaseReadAdmission(
 }
 
 /** Only an exact inspected physical path may bypass its pending writable preparation. */
-export function isAgentDatabaseStartupReadReady(
+const noStartupReadAdmission = () => false;
+export let isAgentDatabaseStartupReadReady: typeof inspectAgentDatabaseStartupReadReady =
+  noStartupReadAdmission;
+
+function inspectAgentDatabaseStartupReadReady(
   pathname: string,
   options: AdmissionOptions = {},
 ): boolean {
@@ -369,18 +397,22 @@ export function isAgentDatabaseStartupReadReady(
 }
 
 /** Inspected files can serve snapshots while their writable integrity scan holds its turn. */
-export function runWithAgentDatabaseReadAdmissionTurn<T>(
+export let runWithAgentDatabaseReadAdmissionTurn: typeof runWithInspectionReadAdmissionTurn =
+  runWithSqliteDatabaseAdmissionTurn;
+
+function runWithInspectionReadAdmissionTurn<T>(
   paths: readonly string[],
   operation: () => Promise<T>,
   families: readonly string[] = [],
   signal?: AbortSignal,
-  options: AdmissionOptions = {},
+  options: AdmissionOptions &
+    import("../infra/sqlite-database-admission-turn.js").PreparedSqliteReadAdmission = {},
 ): Promise<T> {
   // Unknown siblings and first creation retain their family ordering and native checks.
   const pendingPaths = refusalsByState.get(stateKey(options))?.refusals.size
     ? paths.filter((pathname) => !isAgentDatabaseStartupReadReady(pathname, options))
     : paths;
-  return runWithSqliteDatabaseAdmissionTurn(pendingPaths, operation, families, signal);
+  return runWithSqliteDatabaseAdmissionTurn(pendingPaths, operation, families, signal, options);
 }
 
 export function assertAgentDatabaseReadAdmitted(
@@ -453,9 +485,19 @@ async function withPendingAgentDatabasePreparation(
     }
   };
   assertCurrent();
-  const scope = { key, refusal, assertCurrent, access, active: true };
+  const scope = {
+    key,
+    refusal,
+    assertCurrent,
+    access,
+    active: true,
+    workers: new AsyncDisposableStack(),
+  };
   try {
-    await preparation.run(scope, run);
+    await preparation.run(scope, async () => {
+      await using _ = scope.workers;
+      await run();
+    });
     scope.assertCurrent();
     if (access === "write") {
       const current = refusalsByState.get(key)!;

@@ -19,6 +19,7 @@ import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { testState } from "./service.test-support.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
+import { gitInit } from "./workspace-recovery.test-support.js";
 
 describe("worker environment runtime upgrades", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -279,10 +280,7 @@ describe("worker environment runtime upgrades", () => {
     installWorkerPlacementReconcileGuard({
       placements: h.placements,
       environments: h.service,
-      dispatch: {
-        resumeProvisioning: unsupported("Attached runtime refresh does not provision"),
-        hasPendingPlacementLifecycleOperation: () => false,
-      },
+      dispatch: { isPlacementOperationInFlight: () => false },
       isStopping: h.service.isStopping,
     });
     const reconciling = h.service.reconcileOnce();
@@ -393,6 +391,8 @@ describe("worker environment runtime upgrades", () => {
               }),
             ],
       );
+      // Recovery probes durable Git refs; own the workspace instead of discovering a parent.
+      await gitInit(testState.root);
       const fixture = await createHarness(testState.stateDb, restarted.placements, {
         workspacePath: testState.root,
       });
@@ -471,6 +471,7 @@ describe("worker environment runtime upgrades", () => {
           expect(publicationAuthority).toContain(false);
           expect(publicationAuthority).not.toContain(true);
         }
+        expect(recovery.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
         expect(h.install).toHaveBeenCalledTimes(unchanged ? 0 : 1);
         expect(h.destroy).toHaveBeenCalledOnce();
         expect(h.provision).not.toHaveBeenCalled();

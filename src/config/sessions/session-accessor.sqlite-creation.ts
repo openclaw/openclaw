@@ -282,6 +282,13 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
               assertSessionCreationLabelAvailable(source.database, normalizedKey, options.label);
             },
             creation: {
+              receipt: options.creationOperation
+                ? {
+                    operation: options.creationOperation,
+                    sessionKey: normalizedKey,
+                    entry: created.entry,
+                  }
+                : undefined,
               preparedTranscript,
               ownerAssignment: owner ? { sessionKey: normalizedKey, owner } : undefined,
             },
@@ -311,6 +318,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
               options.label === undefined
                 ? undefined
                 : { sessionKey: normalizedKey, label: options.label },
+            creationOperation: options.creationOperation,
             preparedTranscript,
             initializeTranscript: separateHeader || preparedTranscript ? undefined : initialization,
             onWriterAdmitted: separateHeader ? undefined : () => options.onPhase?.("commit"),

@@ -59,6 +59,7 @@ const phases = new Set([
       "build",
       "host-idle",
       "simulator-idle",
+      "headroom",
       "create",
       "boot",
       "shutdown",
@@ -355,7 +356,8 @@ function startTimeline(output) {
     unavailableProbes = 0,
     outputLimitReached = false;
   let probeStatus = {};
-  let timer, pending;
+  let timer;
+  const pending = new Map();
   const started = performance.now();
   const cpuStart = process.cpuUsage();
   let previousCpu = cpuTimes(),
@@ -365,7 +367,6 @@ function startTimeline(output) {
   let previousAt = started;
   let previousProcessAt = started;
   let nextProcessAt = started;
-  let processSamplingStopped = false;
   const phase = () => {
     try {
       const value = readFileSync(phaseFile, "utf8").trim();
@@ -405,37 +406,59 @@ function startTimeline(output) {
         resolve("");
         return;
       }
+      const name = path.basename(command);
+      if (pending.has(name)) {
+        probeStatus[name] = { wallMs: 0, outcome: "pending-after-timeout" };
+        resolve("");
+        return;
+      }
       const at = performance.now();
+      let settled = false;
+      const observation = { child: undefined, deadline: undefined };
+      const finish = (outcome, stdout = "") => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(observation.deadline);
+        const wallMs = performance.now() - at;
+        commandWallMs += wallMs;
+        probeStatus[name] = { wallMs: Math.round(wallMs), outcome };
+        if (outcome !== "ok") {
+          unavailableProbes += 1;
+        }
+        resolve(outcome === "ok" ? stdout : "");
+      };
+      pending.set(name, observation);
       // Only observation subprocesses are deprioritized; the wrapped workload is unchanged.
-      pending = execFile(
+      observation.child = execFile(
         "/usr/bin/nice",
         ["-n", "10", command, ...args],
         {
-          timeout: 2_000,
           killSignal: "SIGKILL",
           maxBuffer: 256 * 1024,
           env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LC_ALL: "C" },
         },
         (error, stdout) => {
-          pending = undefined;
-          const wallMs = performance.now() - at;
-          commandWallMs += wallMs;
-          probeStatus[path.basename(command)] = {
-            wallMs: Math.round(wallMs),
-            outcome: !error
+          pending.delete(name);
+          finish(
+            !error
               ? "ok"
               : error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
                 ? "output-limit"
                 : error.killed
                   ? "timeout"
                   : "unavailable",
-          };
-          if (error) {
-            unavailableProbes += 1;
-          }
-          resolve(error ? "" : stdout);
+            stdout,
+          );
         },
       );
+      observation.deadline = setTimeout(() => {
+        // Child output closure can stall after SIGKILL. Stop waiting without
+        // starting another copy of this probe until its callback releases it.
+        finish("timeout");
+        observation.child.kill("SIGKILL");
+      }, 2_000);
     });
   async function sample() {
     const at = performance.now();
@@ -447,9 +470,7 @@ function startTimeline(output) {
     const diskRows = disks(await probe("/usr/sbin/iostat", ["-Id"]));
     let rows = [];
     let processIntervalMs = null;
-    if (processSamplingStopped) {
-      probeStatus.ps = { wallMs: 0, outcome: "disabled-after-timeout" };
-    } else if (performance.now() < nextProcessAt) {
+    if (performance.now() < nextProcessAt) {
       probeStatus.ps = { wallMs: 0, outcome: "not-due" };
     } else {
       const processOutput = await probe("/bin/ps", ["-axo", "pid=,ppid=,time=,rss=,state=,comm="]);
@@ -460,8 +481,6 @@ function startTimeline(output) {
       previousProcessAt = processAt;
       previousProcesses = new Map(rows.map((row) => [row.pid, row.cpuMs]));
       nextProcessAt = processAt + processSampleIntervalMs;
-      // Under contention, ps termination can itself stall. Do not keep adding process scans.
-      processSamplingStopped = probeStatus.ps?.outcome === "timeout";
     }
     if (!active) {
       return;
@@ -555,7 +574,10 @@ function startTimeline(output) {
     stop(code, signal) {
       active = false;
       clearTimeout(timer);
-      pending?.kill("SIGKILL");
+      for (const observation of pending.values()) {
+        clearTimeout(observation.deadline);
+        observation.child.kill("SIGKILL");
+      }
       // Do not await native probes at workload completion, even if the host is overloaded.
       emit({
         type: "end",

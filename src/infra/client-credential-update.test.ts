@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { inflateSync } from "node:zlib";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Client } from "pg";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -26,12 +27,14 @@ import { stateEngineSchema } from "../state/openclaw-state-db-engine.js";
 import { withLegacyStateHeadLayout } from "../state/openclaw-state-db-schema-v26-layout.js";
 import { withLegacyStateWriteIndexes } from "../state/openclaw-state-db-schema-v27-indexes.js";
 import { withLegacyPublicationDraft } from "../state/openclaw-state-db-schema-v28-publication.js";
+import { withLegacyTemplateStateSchema } from "../state/openclaw-state-db-schema-v36-template-names.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   prepareOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { readClientCredentialReceipt } from "./client-credential-readiness.js";
@@ -236,10 +239,9 @@ async function fixture(
         ),
       );
     } else {
+      const templateSchema = withLegacyTemplateStateSchema(OPENCLAW_STATE_SCHEMA_SQL);
       const publicationSchema =
-        sourceVersion < 28
-          ? withLegacyPublicationDraft(OPENCLAW_STATE_SCHEMA_SQL)
-          : OPENCLAW_STATE_SCHEMA_SQL;
+        sourceVersion < 28 ? withLegacyPublicationDraft(templateSchema) : templateSchema;
       const indexedSchema =
         sourceVersion < 27 ? withLegacyStateWriteIndexes(publicationSchema) : publicationSchema;
       db.exec(sourceVersion < 26 ? withLegacyStateHeadLayout(indexedSchema) : indexedSchema);
@@ -709,17 +711,14 @@ describe("client credential public update custody", () => {
     )!;
     expect(versionBackup.inspection).toMatchObject({ sourcePath: f.pathname, userVersion: 28 });
     expect(versionBackup.inspection.tables.map((table) => table.name)).toEqual(
-      [
-        ...sourceTables,
-        "config_machine_state",
-        "local_workspace_projections",
-        "local_workspace_manifest_nodes",
-        "local_workspace_source_path_sets",
-        "local_workspace_tree_packs",
-        "schema_meta",
-        "sqlite_stat1",
-        "sqlite_stat4",
-      ].toSorted(),
+      expectDefined(
+        resolveSchemaMigrationBackupTables({
+          kind: "state",
+          foundVersion: 28,
+          supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+        }),
+        "Every executed credential migration step must declare its bounded scope",
+      ),
     );
     const retirementBackup = archives.find((archive) => archive !== versionBackup)!;
     expect(retirementBackup.inspection).toMatchObject({ sourcePath: f.pathname, userVersion: 28 });

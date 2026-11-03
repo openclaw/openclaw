@@ -18,8 +18,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function linkFixture() {
-  const link = createControlUiWireLink();
+function linkFixture(options?: Parameters<typeof createControlUiWireLink>[0]) {
+  const link = createControlUiWireLink(options);
   links.push(link);
   const connect = () => {
     const source = new PassThrough();
@@ -37,21 +37,34 @@ function linkFixture() {
   return { link, connect };
 }
 
-it("shares throughput and overlaps propagation instead of adding RTT to every packet", async () => {
-  const fixture = linkFixture();
-  const first = fixture.connect();
-  const second = fixture.connect();
-  first.source.end(Buffer.alloc(62_500));
-  second.source.end(Buffer.alloc(62_500));
-  await vi.advanceTimersByTimeAsync(49);
-  expect([...first.writes, ...second.writes]).toEqual([]);
-  await vi.advanceTimersByTimeAsync(111);
-  expect(first.writes.reduce((sum, write) => sum + write.bytes, 0)).toBe(62_500);
-  expect(second.writes.reduce((sum, write) => sum + write.bytes, 0)).toBe(62_500);
-  const lastDelivery = Math.max(...[...first.writes, ...second.writes].map((write) => write.atMs));
-  expect(lastDelivery).toBeGreaterThanOrEqual(150);
-  expect(lastDelivery).toBeLessThanOrEqual(158);
-});
+it.each([
+  { profile: "remote defaults", options: undefined, earliest: 150, latest: 158 },
+  {
+    profile: "mobile",
+    options: { megabitsPerSecond: 3, latencyMs: 125 },
+    earliest: 458,
+    latest: 470,
+  },
+])(
+  "shares throughput and overlaps propagation for $profile",
+  async ({ options, earliest, latest }) => {
+    const fixture = linkFixture(options);
+    const first = fixture.connect();
+    const second = fixture.connect();
+    first.source.end(Buffer.alloc(62_500));
+    second.source.end(Buffer.alloc(62_500));
+    await vi.advanceTimersByTimeAsync(options?.latencyMs ? options.latencyMs - 1 : 49);
+    expect([...first.writes, ...second.writes]).toEqual([]);
+    await vi.advanceTimersByTimeAsync(latest);
+    expect(first.writes.reduce((sum, write) => sum + write.bytes, 0)).toBe(62_500);
+    expect(second.writes.reduce((sum, write) => sum + write.bytes, 0)).toBe(62_500);
+    const lastDelivery = Math.max(
+      ...[...first.writes, ...second.writes].map((write) => write.atMs),
+    );
+    expect(lastDelivery).toBeGreaterThanOrEqual(earliest);
+    expect(lastDelivery).toBeLessThanOrEqual(latest);
+  },
+);
 
 it("gives a small flow a turn and does not reserve cancelled bulk bytes", async () => {
   const fixture = linkFixture();

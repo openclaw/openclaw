@@ -2,7 +2,7 @@ import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/ha
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
-import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { StorageProvider } from "../storage/types.js";
 import type {
@@ -268,6 +268,7 @@ export type OpenClawPluginApi = {
   };
   /**
    * Register a gateway RPC method for this plugin.
+   * Return a payload for automatic completion, or call `respond(...)` explicitly.
    *
    * Reserved core admin namespaces (`config.*`, `exec.approvals.*`,
    * `wizard.*`, `update.*`) always normalize to `operator.admin` even if a
@@ -275,7 +276,7 @@ export type OpenClawPluginApi = {
    */
   registerGatewayMethod: (
     method: string,
-    handler: GatewayRequestHandler,
+    handler: (opts: GatewayRequestHandlerOptions) => unknown,
     opts?: {
       scope?: OperatorScope;
       profileAccess?: "independent" | "required";
@@ -285,6 +286,10 @@ export type OpenClawPluginApi = {
       shareInvalidationEvents?: readonly string[];
       shareMaxAgeMs?: number;
     },
+  ) => void;
+  /** Register repository preparation policy, selected by gateway.repositoryIntegration. */
+  registerRepositoryIntegration: (
+    integration: import("./repository-integration.types.js").RepositoryIntegration,
   ) => void;
   /** Add a plugin-owned lifetime requirement to authenticated person admission. */
   registerGatewayAccessPolicy: (policy: PluginGatewayAccessPolicy) => void;
@@ -382,8 +387,8 @@ export type OpenClawPluginApi = {
   /** Register a versioned typed decision executor declared in the manifest. */
   registerDecisionProvider: (
     provider:
-      | import("../decisions/types.js").DecisionProviderV1
-      | import("../decisions/types-v2.js").DecisionProviderV2,
+      | import("../decisions/provider-types.js").DecisionProviderV1
+      | import("../decisions/provider-types.js").DecisionProviderV2,
   ) => void;
   /** Register a compaction provider (pluggable summarization backend). */
   registerCompactionProvider: (

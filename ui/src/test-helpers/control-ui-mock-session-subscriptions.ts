@@ -26,27 +26,41 @@ export function createControlUiMockSessionSubscriptions(
   };
   return {
     canonicalKey,
-    subscribeResponse(params: unknown, readHistory: (params: Record<string, unknown>) => unknown) {
-      const key = canonicalKey(
-        isRecord(params) && typeof params.key === "string" ? params.key : "",
-      );
+    completeInitialHistory(
+      params: unknown,
+      response: unknown,
+      readHistory: (
+        historyParams: Record<string, unknown>,
+        respond: (history: unknown, deferred?: boolean) => void,
+      ) => void,
+      respond: (response: unknown, deferred?: boolean) => void,
+    ): boolean {
       if (
         !scenario.subscriptionInitialHistory ||
         !isRecord(params) ||
-        !isRecord(params.initialHistory)
+        !isRecord(params.initialHistory) ||
+        !isRecord(response) ||
+        Object.hasOwn(response, "__mockError")
       ) {
-        return { key };
+        return false;
       }
-      const payload = readHistory({
+      const historyParams = {
         ...params.initialHistory,
-        sessionKey: key,
+        sessionKey: response.key,
         agentId: params.agentId,
-      });
-      const error = isRecord(payload) ? payload["__mockError"] : undefined;
-      return {
-        key,
-        initialHistory: isRecord(error) ? { ok: false, error } : { ok: true, payload },
       };
+      // The caller owns dispatch; completion may wait for a held nested startup reply.
+      readHistory(historyParams, (history, deferred) => {
+        const error = isRecord(history) ? history["__mockError"] : undefined;
+        respond(
+          {
+            ...response,
+            initialHistory: isRecord(error) ? { ok: false, error } : { ok: true, payload: history },
+          },
+          deferred,
+        );
+      });
+      return true;
     },
     createClient(lifecycle?: {
       isOpen: () => boolean;

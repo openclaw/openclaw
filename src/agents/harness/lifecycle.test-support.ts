@@ -1,4 +1,3 @@
-import { setImmediate } from "node:timers/promises";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -75,8 +74,6 @@ export const createAttemptResult = (): EmbeddedRunAttemptResult => ({
   replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
   itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
 });
-
-export const flushDiagnosticEvents = setImmediate;
 
 export function captureDiagnosticEvents(
   filter: (event: Payload) => boolean = (event) => event.type.startsWith("harness.run."),

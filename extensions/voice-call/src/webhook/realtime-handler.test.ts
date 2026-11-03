@@ -407,11 +407,11 @@ describe("RealtimeCallHandler path routing", () => {
 
   it("normalizes Twilio outbound realtime directions", async () => {
     const triggerGreeting = vi.fn();
+    const call = makeCallRecord("CA-outbound", { direction: "outbound" });
+    call.metadata = { brief: { language: "cs" } };
     const { callbacks, handler, processEvent, createBridge } = makeCallHarness(
       { triggerGreeting },
-      {
-        call: makeCallRecord("CA-outbound", { direction: "outbound" }),
-      },
+      { call },
     );
     const server = await startRealtimeServer(
       handler,
@@ -423,7 +423,7 @@ describe("RealtimeCallHandler path routing", () => {
     );
     const ws = await connectWs(server.url);
     sendCarrierStart(ws, "MZ-outbound", "CA-outbound");
-    await waitFor(() => expect(createBridge).toHaveBeenCalled());
+    await waitFor(() => expect(createBridge.mock.calls[0]?.[0].language).toBe("cs"));
     expect(createBridge.mock.calls[0]?.[0].audioFormat).toEqual({
       encoding: "g711_ulaw",
       sampleRateHz: 8000,
@@ -678,6 +678,49 @@ describe("RealtimeCallHandler path routing", () => {
     await delay(60);
     expect(markAcknowledged).toBe(false);
   });
+
+  it.each(["local", "provider"])(
+    "ignores playback echo while preserving %s barge-in",
+    async (source) => {
+      const { callbacks, processEvent, outboundMessages, sendAudio, ws } = await bargeInHarness({
+        providerCallId: "CA-echo-transcript",
+        handlesProviderBargeIn: source === "provider",
+      });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const startedAt = Date.now();
+      const words = "Hello, how can I help you today?";
+      callbacks.onTranscript?.("assistant", words, true);
+      callbacks.onAudio(Buffer.alloc(160, 0x80));
+      await expectFrame(outboundMessages, "media");
+      sendMedia(ws, Buffer.alloc(160, 0xfe));
+      await waitForCalls(sendAudio);
+      callbacks.onTranscript?.("user", words, false);
+      callbacks.onTranscript?.("user", words, true);
+      expect(transcripts(processEvent)).toEqual([]);
+
+      callbacks.onEvent?.({ direction: "server", type: "response.done" });
+      vi.setSystemTime(startedAt + 100);
+      callbacks.onTranscript?.("user", words, true);
+      expect(transcripts(processEvent)).toEqual([]);
+      vi.setSystemTime(startedAt + 421);
+      callbacks.onTranscript?.("user", "A real question after playback", true);
+      expect(transcripts(processEvent)).toEqual(["A real question after playback"]);
+
+      callbacks.onAudio(Buffer.alloc(160, 0x80));
+      if (source === "provider") {
+        callbacks.onClearAudio("barge-in");
+      } else {
+        sendMedia(ws, Buffer.alloc(160, 0x00));
+        sendMedia(ws, Buffer.alloc(160, 0x00));
+        await waitForCalls(sendAudio, 3);
+      }
+      callbacks.onTranscript?.("user", "Please stop", true);
+      expect(transcripts(processEvent)).toEqual(["A real question after playback", "Please stop"]);
+      callbacks.onAudio(Buffer.alloc(160, 0x80));
+      callbacks.onTranscript?.("user", words, true);
+      expect(transcripts(processEvent)).toEqual(["A real question after playback", "Please stop"]);
+    },
+  );
 
   it("lets a session bridge override provider-level barge-in capabilities", async () => {
     const { callbacks, call, handleBargeIn, outboundMessages, sendAudio, ws } =
@@ -1292,7 +1335,20 @@ describe("RealtimeCallHandler path routing", () => {
     ]);
   });
 
-  it("waits for partial transcript fragments to settle before consulting", async () => {
+  it.each([
+    {
+      name: "ASCII",
+      first: "Send a Discord",
+      second: "message.",
+      text: "Send a Discord message.",
+    },
+    {
+      name: "Unicode overlap",
+      first: "Meet in İstanbul",
+      second: "İstanbul tomorrow",
+      text: "Meet in İstanbul tomorrow",
+    },
+  ])("settles $name fragments before consulting", async ({ first, second, text }) => {
     const { submitToolResult, consult, callbacks } = await openConsult(
       async () => ({ text: "I sent it." }),
       undefined,
@@ -1300,21 +1356,21 @@ describe("RealtimeCallHandler path routing", () => {
     );
 
     vi.useFakeTimers();
-    callbacks?.onTranscript?.("user", "Send a Discord", false);
+    callbacks?.onTranscript?.("user", first, false);
     requestConsult(callbacks, "consult-call", "message");
     await vi.advanceTimersByTimeAsync(50);
-    callbacks?.onTranscript?.("user", "message.", false);
+    callbacks?.onTranscript?.("user", second, false);
     await vi.advanceTimersByTimeAsync(350);
 
     await waitFor(() => expect(consult).toHaveBeenCalledTimes(1), { timeout: 2_000 });
     const [args, callId, context] = expectDefined(consult.mock.calls.at(0), "consult");
     expect(args).toMatchObject({
-      question: "Send a Discord message.",
+      question: text,
       context: "Realtime provider supplied a shorter consult question: message",
     });
     expect(callId).toBe("call-1");
     expect(context).toEqual({
-      partialUserTranscript: "Send a Discord message.",
+      partialUserTranscript: text,
       abortSignal: expect.any(AbortSignal),
     });
     await expectToolResult(submitToolResult, "consult-call", { text: "I sent it." }, true);

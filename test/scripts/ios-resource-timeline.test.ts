@@ -92,9 +92,9 @@ describe("iOS resource timeline workload boundary", () => {
     endRecord(output, 127);
   });
 
-  posixIt(
-    "limits process polling and stops it after a timeout while retaining host metrics and sanitized attribution",
-    () => {
+  posixIt.each([false, true])(
+    "retains host metrics during a stalled process scan and resumes only after closure (late close: %s)",
+    (closeLate) => {
       const root = tempDirs.make("ios-resource-timeline-");
       const output = path.join(root, "timeline.jsonl");
       const complete = path.join(root, "complete");
@@ -106,11 +106,12 @@ describe("iOS resource timeline workload boundary", () => {
       import childProcess from "node:child_process";
       import { writeFileSync } from "node:fs";
       import { syncBuiltinESMExports } from "node:module";
-      let now = 0, hostObservations = 0;
+      let now = 0, hostObservations = 0, lateProcessCallback;
       const processProbeTimes = [];
       Object.defineProperty(process, "platform", { value: "darwin" });
       Object.defineProperty(performance, "now", { value: () => now });
       globalThis.setTimeout = (callback, delay) => {
+        if (delay === 2_000) return setImmediate(() => { now += delay; callback(); });
         if (hostObservations === 24) {
           writeFileSync(${JSON.stringify(complete)}, JSON.stringify(processProbeTimes));
           return;
@@ -122,6 +123,7 @@ describe("iOS resource timeline workload boundary", () => {
         let error = null, stdout = "";
         if (args.includes("/usr/bin/vm_stat")) {
           hostObservations += 1;
+          if (${closeLate} && hostObservations === 20) lateProcessCallback(null, "42 1 999 1024 R /usr/bin/xcodebuild");
           if (hostObservations === 2) now += 75_000;
           stdout = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\\nPages free: " + hostObservations + ".";
         }
@@ -129,7 +131,10 @@ describe("iOS resource timeline workload boundary", () => {
         if (args.includes("/bin/ps")) {
           processProbeTimes.push(now);
           if (processProbeTimes.length === 4) error = new Error("probe unavailable");
-          else if (processProbeTimes.length === 6) error = Object.assign(new Error("probe timeout"), { killed: true });
+          else if (processProbeTimes.length === 6) {
+            lateProcessCallback = callback;
+            return { kill() {} };
+          }
           else {
             const runtime = "/Library/Developer/CoreSimulator/Volumes/iOS_private/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS.simruntime/Contents/Resources/RuntimeRoot";
             const row = (pid, ppid, rate, rss, state, command) => [pid, ppid, (now * rate / 1_000).toFixed(2), rss, state, command].join(" ");
@@ -152,7 +157,7 @@ describe("iOS resource timeline workload boundary", () => {
             ].join("\\n");
           }
         }
-        setImmediate(() => callback(error, stdout));
+        queueMicrotask(() => callback(error, stdout));
         return { kill() {} };
       };
       syncBuiltinESMExports();
@@ -175,7 +180,13 @@ describe("iOS resource timeline workload boundary", () => {
       expect(result.status).toBe(23);
       expect(result.stderr).toBe("");
       expect(JSON.parse(readFileSync(complete, "utf8"))).toEqual([
-        0, 90_000, 150_000, 210_000, 270_000, 330_000,
+        0,
+        90_000,
+        150_000,
+        210_000,
+        270_000,
+        330_000,
+        ...(closeLate ? [392_000] : []),
       ]);
       const raw = readFileSync(output, "utf8");
       expect(raw).not.toMatch(
@@ -205,16 +216,21 @@ describe("iOS resource timeline workload boundary", () => {
         [[100], 60_000],
         [[], 60_000],
         [[null], null],
-        [[], 60_000],
+        [[], 62_000],
+        ...(closeLate ? [[[null], null]] : []),
       ]);
-      for (const index of [2, 3, 4, 6, 7, 8, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23]) {
+      for (const index of [2, 3, 4, 6, 7, 8, 10, 11, 12, 14, 15, 16, 18, 19, 20, 22, 23]) {
         expect(samples[index]).toMatchObject({
-          probes: { ps: { wallMs: 0, outcome: index < 18 ? "not-due" : "disabled-after-timeout" } },
+          probes: { ps: { wallMs: 0, outcome: "not-due" } },
           processes: [],
           processSummary: null,
           processIntervalMs: null,
         });
       }
+      expect(samples[17]).toMatchObject({ probes: { ps: { wallMs: 2_000, outcome: "timeout" } } });
+      expect(samples[21]).toMatchObject({
+        probes: { ps: { wallMs: 0, outcome: closeLate ? "ok" : "pending-after-timeout" } },
+      });
       for (const [pid, role] of [
         [81, "CoreSpotlightService"],
         [82, "other"],

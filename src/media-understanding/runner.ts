@@ -12,6 +12,15 @@ import {
   normalizeMediaProviderId,
 } from "../../packages/media-understanding-common/src/provider-id.js";
 import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
+import type {
+  MediaAttachment,
+  MediaAttachmentDisposition,
+  MediaAttachmentProcessing,
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingModelDecision,
+  MediaUnderstandingOutput,
+} from "../../packages/media-understanding-common/src/types.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { configuredModelSupportsNativeVideo } from "../agents/model-input.js";
@@ -67,16 +76,7 @@ import {
   runProviderEntry,
   type MediaRequestOverrides,
 } from "./runner.entries.js";
-import type {
-  MediaAttachment,
-  MediaAttachmentDisposition,
-  MediaAttachmentProcessing,
-  MediaUnderstandingCapability,
-  MediaUnderstandingDecision,
-  MediaUnderstandingModelDecision,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 export {
   createMediaAttachmentCache,

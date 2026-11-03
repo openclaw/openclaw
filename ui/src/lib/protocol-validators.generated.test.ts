@@ -32,6 +32,7 @@ import {
 import {
   SessionNarrationEventSchema,
   SessionObserverDigestSchema,
+  SessionsFilesGetResultSchema,
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { TalkVoiceChangeEventSchema } from "../../../packages/gateway-protocol/src/schema/talk-voice.js";
 import { readTranscriptDisplayPosition } from "../../../src/chat/transcript-display-position.js";
@@ -135,6 +136,7 @@ const history = {
   pendingInputs: { items: [], total: 0 },
   sessionInfo: { key: "s", kind: "direct", sessionId: "session-1" },
 };
+const fileReadMetadataSchema = Type.Pick(SessionsFilesGetResultSchema, ["root", "source"]);
 const invalidOwner = { key: "s", kind: "direct", owner: { actor: { type: "unknown" } } };
 
 describe("standalone browser protocol validation", () => {
@@ -184,6 +186,7 @@ describe("standalone browser protocol validation", () => {
     ${"isSessionTitleSource"}                  | ${createFields.titleSource}                                   | ${"😀".repeat(1000)}                                                                        | ${"😀".repeat(1001)}
     ${"isSessionPermissionMode"}               | ${SessionPermissionModeSchema}                                | ${"guarded"}                                                                                | ${"unrestricted"}
     ${"isSessionToolOverrides"}                | ${SessionToolOverridesSchema}                                 | ${{ mcpToolsDeny: { server: ["tool"] } }}                                                   | ${{ mcpToolsDeny: { server: [123] } }}
+    ${"isSessionFileReadMetadata"}             | ${fileReadMetadataSchema}                                     | ${{ source: { workspaceId: "repository", root: null, fileRoot: null } }}                    | ${{ source: { workspaceId: "repository", root: null, fileRoot: 42 } }}
     ${"isChatHistoryState"}                    | ${historySchema}                                              | ${history}                                                                                  | ${{ stateRevision: { sessionInfo: "session-1" }, sessionInfo: invalidOwner }}
     ${"isChatTranscriptMetadata"}              | ${Type.Pick(SessionRowSchema, CHAT_TRANSCRIPT_METADATA_KEYS)} | ${{ key: "s", kind: "direct", contextTokens: 32768, owner: { actor: { type: "human" } } }}  | ${invalidOwner}
     ${"isProgressCard"}                        | ${ProgressCardSchema}                                         | ${{ ...progress, steps: [{ step: "Ship", status: "pending" }] }}                            | ${{ ...progress, steps: [{ step: "Ship", status: "unknown" }] }}
