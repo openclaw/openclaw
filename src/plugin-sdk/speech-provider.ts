@@ -32,3 +32,11 @@ export {
   buildGradiumSpeechRequestBody,
   DEFAULT_GRADIUM_VOICE_ID,
 } from "../tts/gradium-speech-payload.js";
+
+export {
+  buildElevenLabsSpeechRequestBody,
+  DEFAULT_ELEVENLABS_VOICE_ID,
+  DEFAULT_ELEVENLABS_MODEL_ID,
+  DEFAULT_ELEVENLABS_VOICE_SETTINGS,
+  ELEVENLABS_TTS_MODELS,
+} from "../tts/elevenlabs-speech-payload.js";
