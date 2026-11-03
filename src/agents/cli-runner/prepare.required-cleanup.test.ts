@@ -103,6 +103,7 @@ it.each(["error", "frozen", "auth", "undefined-required", "undefined-clean"] as 
         provider: "settings-cli",
         assertCurrent: () => {
           if (prepared) {
+            // oxlint-disable-next-line typescript/only-throw-error -- Exercise undefined authority refusal without normalizing it in the fixture.
             throw original;
           }
         },

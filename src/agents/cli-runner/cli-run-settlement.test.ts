@@ -409,6 +409,7 @@ it.each(["execution", "authority", "undefined", "optional"] as const)(
     }
     if (stage === "authority") {
       context.params.assertCurrent = () => {
+        // oxlint-disable-next-line typescript/only-throw-error -- Keep the original JavaScript failure value at the authority boundary.
         throw original;
       };
     }
@@ -418,6 +419,7 @@ it.each(["execution", "authority", "undefined", "optional"] as const)(
       run:
         stage !== "authority"
           ? async () => {
+              // oxlint-disable-next-line typescript/only-throw-error -- Exercise primitive rejection without changing the initiating failure value.
               throw original;
             }
           : async () => ({ payloads: [{ text: "pending" }], meta: { durationMs: 1 } }),
