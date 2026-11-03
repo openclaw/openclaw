@@ -1,4 +1,4 @@
-import { createMemo, createSignal, Show, useContext } from "solid-js";
+import { createMemo, createSignal, lazy, Show, useContext } from "solid-js";
 import type { PluginInlineViewBlock } from "../../../src/shared/plugin-inline-view.js";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -6,7 +6,10 @@ import { createIntersectionObserver, createResizeObserver } from "../lib/reactiv
 import { sharedPluginsProjection } from "../lib/reactive/shared-application-projections.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import { CustomPluginUiDisabled } from "./control-ui-disabled.solid.tsx";
-import { PluginContribution } from "./control-ui-view.solid.tsx";
+
+const PluginContribution = lazy(() => import("./control-ui-view.solid.tsx"), {
+  export: "PluginContribution",
+});
 
 /** Rows own only a small placeholder offscreen, never a parked plugin/component cache. */
 export function PluginInlineView(props: {

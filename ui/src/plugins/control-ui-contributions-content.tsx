@@ -1,5 +1,15 @@
 import type { JSX } from "@solidjs/web";
-import { Errored, For, Loading, Show, createMemo, createSignal, merge, onSettled } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createSignal,
+  lazy,
+  merge,
+  onSettled,
+} from "solid-js";
 import {
   normalizeSessionIconValue,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
@@ -18,7 +28,10 @@ import type {
   ContributionsElement,
 } from "./control-ui-contributions.solid.tsx";
 import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
-import { PluginContribution } from "./control-ui-view.solid.tsx";
+
+const PluginContribution = lazy(() => import("./control-ui-view.solid.tsx"), {
+  export: "PluginContribution",
+});
 
 export function PluginContributionsContent(input: {
   properties: ContributionsProps;
@@ -40,7 +53,6 @@ export function PluginContributionsContent(input: {
     AbortSignal,
     { entry: ControlUiRegistration<ControlUiAction>; abort: AbortController }
   >();
-  host().style.display = "contents";
   const currentSession = () =>
     context ? findUiSessionRow(context, host().sessionKey, host().agentId) : undefined;
   const retireAction = (signal: AbortSignal) => {

@@ -1,21 +1,26 @@
 import { describe, expect, it } from "vitest";
+import {
+  prepareMarkdownTextReferenceSnapshot,
+  prepareMarkdownTextReferences,
+} from "./markdown-text-references.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 describe("native and contributed text references", () => {
-  const reference = (host: string) => ({
-    key: "same-declared-key",
-    resolve: ({ text }: { text: string }) => {
-      const start = text.indexOf("TASK-42");
-      return start < 0 ? [] : [{ start, end: start + 7, url: `https://${host}/tasks/42` }];
-    },
-  });
+  const reference = (host: string) =>
+    prepareMarkdownTextReferenceSnapshot({
+      key: "same-declared-key",
+      resolve: ({ text }: { text: string }) => {
+        const start = text.indexOf("TASK-42");
+        return start < 0 ? [] : [{ start, end: start + 7, url: `https://${host}/tasks/42` }];
+      },
+    });
   it("keeps native GitHub refs, authored links and code while adding plugin refs", () => {
     const html = htmlFragment(
       toSanitizedMarkdownHtml(
         "[PR #12](https://github.com/acme/native/pull/12) and TASK-42; `TASK-42`; [TASK-42](https://example.test/authored)",
         {
-          textReferences: [reference("forge.example")],
+          textReferences: prepareMarkdownTextReferences([reference("forge.example")]),
         },
       ),
     );
@@ -28,10 +33,14 @@ describe("native and contributed text references", () => {
   });
   it("does not reuse settled Markdown output across replacement resolver snapshots", () => {
     const first = htmlFragment(
-      toSanitizedMarkdownHtml("TASK-42", { textReferences: [reference("first.example")] }),
+      toSanitizedMarkdownHtml("TASK-42", {
+        textReferences: prepareMarkdownTextReferences([reference("first.example")]),
+      }),
     );
     const second = htmlFragment(
-      toSanitizedMarkdownHtml("TASK-42", { textReferences: [reference("second.example")] }),
+      toSanitizedMarkdownHtml("TASK-42", {
+        textReferences: prepareMarkdownTextReferences([reference("second.example")]),
+      }),
     );
     expect(first.querySelector("a")?.getAttribute("href")).toBe("https://first.example/tasks/42");
     expect(second.querySelector("a")?.getAttribute("href")).toBe("https://second.example/tasks/42");

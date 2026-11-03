@@ -1,2 +1,2 @@
-# Keep existing native publication and session-read regressions on the current host preparation, one-use Git transfer, provider and typed request contracts after extracting vendor operations. No duplicate behavioral cases.
-56
+# Current host consumer contracts, activation-prepared UI lifecycle and cold-mount coverage, plus invalidated session facts; preserved upstream scenarios use their real owning fixtures.
+133

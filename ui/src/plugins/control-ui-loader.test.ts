@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import type { ControlUiHostV2 } from "../../../src/plugin-sdk/control-ui.js";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -11,7 +12,7 @@ it.each(["load", "error", "abort"] as const)(
   async (result) => {
     const prefix = "/__openclaw__/plugins/control-ui/fixture/one/";
     const entryUrl = new URL(`${prefix}${result}.js`, window.location.href).href;
-    const activate = vi.fn();
+    const activate = vi.fn<(host: ControlUiHostV2) => void>();
     const evaluated = vi.fn();
     vi.doMock(entryUrl, () => {
       evaluated();
@@ -82,6 +83,11 @@ it.each(["load", "error", "abort"] as const)(
       if (result === "load") {
         expect(await pending).toBe(owner);
         expect(activate).toHaveBeenCalledOnce();
+        const activationHost = activate.mock.calls[0]![0];
+        expect(activationHost.signal).toBe(owner.abort.signal);
+        expect("scopeView" in activationHost).toBe(false);
+        expect("invokeAction" in activationHost).toBe(false);
+        expect("projectTextReferences" in activationHost).toBe(false);
       } else {
         await expect(pending).rejects.toThrow(
           result === "error" ? "Could not load plugin stylesheet" : "Plugin UI activation ended",

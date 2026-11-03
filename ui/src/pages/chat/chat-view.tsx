@@ -18,7 +18,7 @@ import { projectPresentation } from "../../lib/reactive/presentation.ts";
 import { orderSessionPullRequests } from "../../lib/session-pull-request-presentation.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginContributions } from "../../plugins/control-ui-contributions.solid.tsx";
-import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
+import { PluginSurface } from "../../plugins/control-ui-surfaces.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";

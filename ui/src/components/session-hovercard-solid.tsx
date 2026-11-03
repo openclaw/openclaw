@@ -581,14 +581,20 @@ export function SessionHovercard(props: SessionHovercardInput) {
     props.progressCard ? undefined : props.row?.lastMessagePreview?.trim() || undefined;
   const nativeContent = () =>
     Boolean(props.row || hasContext() || hasPullRequestSection() || props.progressCard);
-  const [contributionPresent, setContributionPresent] = createSignal(false, { ownedWrite: true });
+  // The optional renderer may still be loading before its first presence report.
+  const [contributionPresent, setContributionPresent] = createSignal<boolean | undefined>(
+    undefined,
+    {
+      ownedWrite: true,
+    },
+  );
   return (
     <Show
       when={Boolean(
         props.row || props.session || hasContext() || hasPullRequestSection() || props.progressCard,
       )}
     >
-      <div class="session-hovercard" hidden={!nativeContent() && !contributionPresent()}>
+      <div class="session-hovercard" hidden={!nativeContent() && contributionPresent() === false}>
         <Show when={props.row || hasContext()}>
           <div class="session-hovercard__top">
             <Show when={props.row}>

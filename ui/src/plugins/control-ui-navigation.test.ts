@@ -86,6 +86,9 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
   window.history.replaceState(null, "", "/boards");
   document.body.append(provider);
   await Promise.all(contributions.map((element) => element.updateComplete));
+  await waitForSolid(() =>
+    contributions.forEach((element) => expect(element.querySelector("a")).not.toBeNull()),
+  );
   mountSolid(
     () => {
       onCleanup(menus.bindCatalogMenuView(menus.catalogMenu.createView(menuHost)));
@@ -160,6 +163,9 @@ it("shows the active plugin section's ordered children and leaves pinned childre
   window.history.replaceState(null, "", "/boards?board=alpha&filter=mine");
   document.body.append(provider);
   await Promise.all([parent.updateComplete, pinned.updateComplete]);
+  await waitForSolid(() =>
+    [parent, pinned].forEach((element) => expect(element.querySelector("a")).not.toBeNull()),
+  );
 
   const children = [...parent.querySelectorAll<HTMLAnchorElement>(".nav-item--child")];
   expect(children.map((child) => child.textContent?.trim())).toEqual(["alpha", "beta", "zulu"]);

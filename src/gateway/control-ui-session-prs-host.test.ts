@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -59,6 +60,31 @@ async function seedRepository(
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+});
+
+it("forwards invalidated facts even when the row itself is unchanged", async () => {
+  await withReader(async (f) => {
+    const changed = vi.fn();
+    const stop = f.sessionReads.subscribeChanges(changed);
+    try {
+      sessionChanges.emit({ sessionKey, facts: { kind: "unchanged" } });
+      expect(changed).not.toHaveBeenCalled();
+      sessionChanges.emit({
+        sessionKey,
+        facts: { kind: "unchanged" },
+        factsInvalidated: true,
+      });
+      expect(changed).toHaveBeenCalledExactlyOnceWith({
+        kind: "session",
+        sessionKey,
+        agentId: undefined,
+        removed: false,
+        lineageChanged: true,
+      });
+    } finally {
+      stop();
+    }
+  });
 });
 
 it.each([false, true])(

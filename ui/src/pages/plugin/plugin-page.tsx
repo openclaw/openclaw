@@ -26,9 +26,12 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
-import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
 import { PluginPageOwner, type PluginPageProps } from "./plugin-page-lifecycle.ts";
 export type { PluginPageProps } from "./plugin-page-lifecycle.ts";
+
+const PluginContribution = lazy(() => import("../../plugins/control-ui-view.solid.tsx"), {
+  export: "PluginContribution",
+});
 
 registerLoginEnglish();
 

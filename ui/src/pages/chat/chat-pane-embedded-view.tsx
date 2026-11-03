@@ -11,7 +11,6 @@ import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import { buildChatBoardPanel } from "./chat-pane-board-panel.ts";
 import { buildChatDiscussionPanel } from "./chat-pane-discussion-panel.ts";
 import type { SidebarPanelDefinitionParams, SidebarPanelData } from "./chat-pane-embedded-types.ts";
-import { EmbeddedPluginPanel } from "./chat-pane-plugin-panel.tsx";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import { ChatDetailSlot } from "./components/chat-detail-slot-view.tsx";
@@ -37,6 +36,9 @@ import { sidebarMainPanel } from "./sidebar-layout.ts";
 type PanelHostProps = { registerPanelHost?: SidebarPanelHostRegistration };
 type Props = SidebarPanelDefinitionParams & PanelHostProps;
 
+const EmbeddedPluginPanel = lazy(() => import("./chat-pane-plugin-panel.tsx"), {
+  export: "EmbeddedPluginPanel",
+});
 const Terminal = lazy(() => import("../../components/terminal/terminal-panel-registration.tsx"), {
   export: "TerminalPanelHost",
 });

@@ -19,13 +19,10 @@ import type {
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
-import { scopeControlUiHost } from "./control-ui-scope.ts";
 
 type ViewKind = "pages" | "panels" | "accessories" | "widgets" | "inlineViews" | "replacements";
 
@@ -339,6 +336,9 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     update();
   }
   const mount = (container: HTMLElement) => {
+    // Consume bridge writes that settled before the first mount, not a second vendor mount.
+    registration = resolveRegistration();
+    ownerChanged = false;
     if (!host.isConnected || disposed || !registration || registration.signal.aborted) {
       return;
     }
@@ -355,7 +355,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
             fail(failure);
           }
         },
-        host: scopeControlUiHost(registration.host, signal, () => host.isConnected),
+        host: registration.host.scopeView(signal, () => host.isConnected),
         signal,
         props: scopedProps(signal),
         presented: host.presented,
@@ -478,7 +478,7 @@ export const PluginView = defineSolidBridge<
 });
 
 /** Native callers keep built-in views in their Solid owner, including plugin delegation. */
-export function PluginSurface<S extends ControlUiSurface>(props: {
+export function SelectedPluginSurface<S extends ControlUiSurface>(props: {
   surface: S;
   props: ControlUiSurfaceProps[S];
   renderDefault: () => JSX.Element;
@@ -489,15 +489,8 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
 }) {
   // Delegated mounts run later inside a foreign plugin and retain the host's owner.
   const owner = getOwner();
-  const context = useOptionalApplication();
-  const runtime = context && projectOwner(context.plugins, (source) => source);
   const contentPresented = useContext(ContentPresentation);
   const presented = () => (props.presented ?? true) && contentPresented();
-  const selected = createParkedProjection(
-    () =>
-      props.enabled === false ? undefined : runtime?.read().selectedReplacement(props.surface),
-    presented,
-  );
   const mount = (target: HTMLElement, view: () => JSX.Element) =>
     runWithOwner(owner, () =>
       createRoot((dispose) => {
@@ -540,11 +533,7 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
       />
     );
   }
-  return (
-    <Show when={selected()} fallback={props.renderDefault()}>
-      <ReplacementView />
-    </Show>
-  );
+  return <ReplacementView />;
 }
 
 export function PluginContribution(props: {

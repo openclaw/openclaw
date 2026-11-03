@@ -51,7 +51,7 @@ export async function initializeControlUiPlugin(
   ) {
     throw new Error("This plugin UI requires an unsupported capability version.");
   }
-  const stop = await module.default.activate(complete.host);
+  const stop = await module.default.activate(complete.host.scopeView(abort.signal));
   if (stop) {
     complete.disposers.add(stop);
   }

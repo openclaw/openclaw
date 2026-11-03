@@ -15,7 +15,6 @@ import type {
 } from "../../../src/plugin-sdk/control-ui-settings.js";
 import type {
   ControlUiDisposer,
-  ControlUiHostV2 as ControlUiHost,
   ControlUiReplacementV2 as ControlUiReplacement,
   ControlUiSurface,
 } from "../../../src/plugin-sdk/control-ui.js";
@@ -31,6 +30,7 @@ import {
   ControlUiPluginAssetPreloads,
 } from "./control-ui-assets.ts";
 import type {
+  PreparedControlUiHost,
   ControlUiContributions,
   ControlUiPluginCapability,
   ControlUiRegistration,
@@ -50,7 +50,7 @@ export type ControlUiPluginOwner = {
     >;
   };
   selections: Map<ControlUiSurface, string | null>;
-  host: ControlUiHost;
+  host: PreparedControlUiHost;
 };
 
 const UI_CAPABILITY_BY_CONTRIBUTION = {

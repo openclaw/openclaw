@@ -8,12 +8,16 @@ import {
 import { createTestGatewayClient } from "./gateway-client.ts";
 
 /** Complete hosts for contribution fixtures, without activating plugins or making RPCs. */
-export function createTestControlUiPluginHost(context: ApplicationContext, pluginId: string) {
+export function createTestControlUiPluginHost(
+  context: ApplicationContext,
+  pluginId: string,
+  abort = new AbortController(),
+) {
   const runtime = new ControlUiPluginRuntime(() => context);
   const owner: Omit<ControlUiPluginOwner, "host"> = {
     descriptor: { pluginId, name: pluginId, revision: "1", entryUrl: "/fixture.js", styles: [] },
     client: context.gateway.snapshot.client ?? createTestGatewayClient(async () => ({})),
-    abort: new AbortController(),
+    abort,
     disposers: new Set(),
     contributions: {
       pages: new Map(),

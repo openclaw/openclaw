@@ -1,12 +1,13 @@
-import { Errored, Loading, Show, lazy, onSettled } from "solid-js";
+import { Show, lazy, onSettled } from "solid-js";
 import type {
   ControlUiAccessoryProps,
   ControlUiSessionHeaderFacts,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { SidebarMenus } from "../components/sidebar-menus.tsx";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { sharedPluginsProjection } from "../lib/reactive/shared-application-projections.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { ControlUiLazyView } from "./control-ui-lazy-view.tsx";
 
 export type ContributionsProps = {
   facts: ControlUiSessionHeaderFacts | undefined;
@@ -53,14 +54,10 @@ const Content = lazy(() => import("./control-ui-contributions-content.tsx"), {
 function PluginContributionsContent(props: ContributionsProps, host: ContributionsElement) {
   const context = useOptionalApplication();
   host.style.display = "contents";
-  const source = projectSource(context?.plugins, {
-    read: (runtime) => runtime,
-    subscribe: (runtime, notify) => runtime?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
-  });
+  const source = context && sharedPluginsProjection(context.plugins);
   // Presence only schedules the optional renderer; its owner still admits every registration.
   const available = () => {
-    const runtime = source.read();
+    const runtime = source?.read();
     const family =
       props.kind === "navigation"
         ? "navigation"
@@ -76,11 +73,9 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
   });
   return (
     <Show when={available()}>
-      <Errored fallback={(error) => <span role="alert">{String(error())}</span>}>
-        <Loading>
-          <Content properties={props} host={host} />
-        </Loading>
-      </Errored>
+      <ControlUiLazyView>
+        <Content properties={props} host={host} />
+      </ControlUiLazyView>
     </Show>
   );
 }

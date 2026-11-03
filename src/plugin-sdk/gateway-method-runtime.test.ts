@@ -9,7 +9,9 @@ import { createPluginRegistryFixture, registerVirtualTestPlugin } from "./plugin
 
 const { dispatchRaw } = vi.hoisted(() => ({ dispatchRaw: vi.fn() }));
 // mock-isolation: Exercise dispatch authorization without booting the Gateway or loading its handlers.
-vi.mock("../gateway/server-plugins.js", () => ({ dispatchGatewayMethodInProcessRaw: dispatchRaw }));
+vi.mock("../gateway/server-plugin-in-process-dispatch.js", () => ({
+  dispatchGatewayMethodInProcessRaw: dispatchRaw,
+}));
 
 it.each([
   ["http", false, true],

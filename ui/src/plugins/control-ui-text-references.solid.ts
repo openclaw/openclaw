@@ -1,12 +1,16 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { createMemo, onCleanup } from "solid-js";
-import type { ControlUiTextReferenceSnapshot } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { availableLinkReaders } from "../app/link-reader-routing.ts";
 import { resolveLinkReaderTarget } from "../components/link-reader-target.ts";
+import type { MarkdownTextReferences } from "../components/markdown-render-options.ts";
+import {
+  prepareMarkdownTextReferenceSnapshot,
+  prepareMarkdownTextReferences,
+} from "../components/markdown-text-references.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 
-type Binding = {
+export type Binding = {
   context?: Pick<ApplicationContext, "gateway" | "plugins">;
   session: BoardGetParams;
   presented: boolean;
@@ -41,40 +45,42 @@ export function createTextReferenceProjection(read: () => Binding) {
     const lifetime = new AbortController();
     onCleanup(() => lifetime.abort());
     return projectSource(currentBinding(), {
-      read(binding): readonly ControlUiTextReferenceSnapshot[] {
-        return admitted(binding).flatMap(({ entry, reader }) => {
-          try {
-            const snapshot = entry.value.snapshot(binding.session);
-            return [
-              {
-                key: `${entry.key}\0${JSON.stringify(reader.linkReader)}\0${snapshot.key}`,
-                resolve(input) {
-                  if (
-                    lifetime.signal.aborted ||
-                    entry.signal.aborted ||
-                    !admitted(binding).some(
-                      (current) =>
-                        current.entry.signal === entry.signal && current.reader === reader,
-                    )
-                  ) {
-                    return [];
-                  }
-                  try {
-                    return snapshot
-                      .resolve(input)
-                      .filter((value) => resolveLinkReaderTarget(value.url, [reader]));
-                  } catch (error) {
-                    binding.context?.plugins.reportError(entry.pluginId, error);
-                    return [];
-                  }
-                },
-              } satisfies ControlUiTextReferenceSnapshot,
-            ];
-          } catch (error) {
-            binding.context?.plugins.reportError(entry.pluginId, error);
-            return [];
-          }
-        });
+      read(binding): MarkdownTextReferences {
+        return prepareMarkdownTextReferences(
+          admitted(binding).flatMap(({ entry, reader }) => {
+            try {
+              const snapshot = entry.value.snapshot(binding.session);
+              return [
+                prepareMarkdownTextReferenceSnapshot({
+                  key: `${entry.key}\0${JSON.stringify(reader.linkReader)}\0${snapshot.key}`,
+                  resolve(input) {
+                    if (
+                      lifetime.signal.aborted ||
+                      entry.signal.aborted ||
+                      !admitted(binding).some(
+                        (current) =>
+                          current.entry.signal === entry.signal && current.reader === reader,
+                      )
+                    ) {
+                      return [];
+                    }
+                    try {
+                      return snapshot
+                        .resolve(input)
+                        .filter((value) => resolveLinkReaderTarget(value.url, [reader]));
+                    } catch (error) {
+                      binding.context?.plugins.reportError(entry.pluginId, error);
+                      return [];
+                    }
+                  },
+                }),
+              ];
+            } catch (error) {
+              binding.context?.plugins.reportError(entry.pluginId, error);
+              return [];
+            }
+          }),
+        );
       },
       subscribe(binding, notify) {
         if (!binding.context || !binding.presented) {
@@ -147,7 +153,7 @@ export function createTextReferenceProjection(read: () => Binding) {
           }
         };
       },
-      equality: (a, b) => a.length === b.length && a.every((value, index) => value === b[index]),
+      equality: (a, b) => a.key === b.key,
     });
   });
   return createMemo(() => source().read());

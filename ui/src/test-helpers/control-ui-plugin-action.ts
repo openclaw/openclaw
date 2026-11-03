@@ -4,7 +4,8 @@ import type {
   ControlUiHostV2 as ControlUiHost,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
-import { createControlUiRequests } from "../plugins/control-ui-requests.ts";
+import { createInitializationContext } from "../pages/chat/chat-application-context.test-support.ts";
+import { createTestControlUiPluginHost } from "./control-ui-plugin-host.ts";
 
 export function registerSessionPluginAction(
   context: Pick<ApplicationContext, "plugins" | "gateway">,
@@ -12,19 +13,9 @@ export function registerSessionPluginAction(
 ) {
   const lifetime = new AbortController();
   const open = vi.fn<ControlUiHost["sessions"]["open"]>();
-  const host = {
-    signal: lifetime.signal,
-    requests: createControlUiRequests({
-      current: () => context,
-      signal: lifetime.signal,
-      retain: (dispose) => dispose,
-    }),
-    sessions: { open },
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as unknown as ControlUiHost;
+  const hostContext = Object.assign(createInitializationContext(), context);
+  const host = createTestControlUiPluginHost(hostContext, "review", lifetime);
+  host.sessions.open = open;
   const entry = {
     key: `review/${action.id}`,
     pluginId: "review",

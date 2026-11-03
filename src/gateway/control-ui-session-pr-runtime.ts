@@ -309,7 +309,7 @@ export function createRepositorySessionReadHost(deps: {
             if (
               lifetime.aborted ||
               ("sessionKey" in change &&
-                (change.facts?.kind === "unchanged" ||
+                ((change.facts?.kind === "unchanged" && !change.factsInvalidated) ||
                   (change.scope === "runtime" && !change.facts && !change.factsInvalidated)))
             ) {
               return;

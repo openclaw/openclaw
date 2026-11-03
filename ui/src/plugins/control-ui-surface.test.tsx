@@ -6,7 +6,8 @@ import { useApplication } from "../lib/reactive/context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { PluginSurface } from "./control-ui-view.solid.tsx";
+import { PluginSurface } from "./control-ui-surfaces.solid.tsx";
+import "./control-ui-view.solid.tsx";
 import {
   composerProps,
   createViewRuntime,
@@ -68,8 +69,8 @@ describe("native plugin surface", () => {
         };
       }),
     );
-    await waitForSolid(() => expect(view.getAllByRole("button")).toHaveLength(1));
-    expect(replacementRef).toHaveBeenCalledOnce();
+    await waitForSolid(() => expect(replacementRef).toHaveBeenCalledOnce());
+    expect(view.getAllByRole("button")).toHaveLength(1);
     expect(releaseReplacement).not.toHaveBeenCalled();
     const delegated = view.getByRole("button", { name: "First" });
     expect(view.queryByText("Companion")).toBeNull();

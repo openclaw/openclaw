@@ -17,7 +17,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { registerToastContainer } from "../lib/toast.ts";
-import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
+import { PluginSurface } from "../plugins/control-ui-surfaces.solid.tsx";
 import {
   ShellComponentBoundary,
   ShellRequestedComponent,

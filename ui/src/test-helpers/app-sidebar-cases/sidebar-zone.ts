@@ -206,6 +206,9 @@ it("keeps Pages flat and rail pins independently ordered", async () => {
     entry.querySelector<SolidBridgeElement<object>>("openclaw-plugin-contributions")!
       .updateComplete;
   await Promise.all(entries.map(settled));
+  await waitForFast(() =>
+    entries.forEach((entry) => expect(entry.querySelector("a")).not.toBeNull()),
+  );
   expect(entries.map((entry) => entry.dataset.sidebarEntry)).toEqual(
     ids.map((id) => `plugin:example/${id}`),
   );

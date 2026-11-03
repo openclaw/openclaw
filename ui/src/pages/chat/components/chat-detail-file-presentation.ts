@@ -3,7 +3,7 @@ import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-l
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
-import { createTextReferenceProjection } from "../../../plugins/control-ui-text-references.solid.ts";
+import { createTextReferenceProjection } from "../../../plugins/control-ui-text-reference-projection.ts";
 import type { createAttachmentDownload } from "./chat-attachment-download.ts";
 import type { createFileCopy } from "./chat-file-copy.ts";
 import type { FileReadingMode, FileViewControls } from "./chat-file-reader-controls.ts";
@@ -390,7 +390,7 @@ export function createFilePresentationActions(context: {
 }
 
 export function renderFilePanelPresentation(context: {
-  textReferences?: readonly import("../../../../../src/plugin-sdk/control-ui.js").ControlUiTextReferenceSnapshot[];
+  textReferences?: import("../../../components/markdown-render-options.ts").MarkdownTextReferences;
   fileAttachment?: import("./chat-file-session-attachment.ts").FileSessionAttachment;
   props: ChatDetailPanelProps;
   presentation: FilePresentationState;

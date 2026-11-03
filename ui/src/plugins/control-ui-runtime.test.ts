@@ -8,17 +8,14 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createGatewayEvent } from "../app/gateway-store.test-support.ts";
-import {
-  observeSessionMenuActions,
-  pluginSessionMenuActions,
-  runControlUiPluginAction,
-} from "./control-ui-actions.ts";
+import { observeSessionMenuActions } from "./control-ui-action-observation.solid.ts";
+import { pluginSessionMenuActions, runControlUiPluginAction } from "./control-ui-actions.ts";
 import { controlUiPluginAssetUrls } from "./control-ui-assets.ts";
 import type { ControlUiPluginDistribution } from "./control-ui-distribution.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import * as controlUiLoader from "./control-ui-loader.ts";
 import { ControlUiPluginRuntime } from "./control-ui-runtime.ts";
-import { createTextReferenceProjection } from "./control-ui-text-references.solid.ts";
+import { createTextReferenceProjection } from "./control-ui-text-reference-projection.ts";
 
 vi.spyOn(controlUiLoader, "initializeControlUiPlugin").mockResolvedValue(undefined);
 const packaged = vi.hoisted(() => [] as ControlUiPluginDistribution[]);
@@ -805,7 +802,7 @@ it.each(["review", "reader"])(
     context = { ...context, plugins: runtime };
     runtime.start();
     await runtime.refresh();
-    let latest: ReturnType<ReturnType<typeof createTextReferenceProjection>> = [];
+    let latest: ReturnType<ReturnType<typeof createTextReferenceProjection>>;
     const dispose = createRoot((stopRoot) => {
       const references = createTextReferenceProjection(() => ({
         context,
@@ -819,19 +816,19 @@ it.each(["review", "reader"])(
     });
     onTestFinished(dispose);
     flush();
-    expect(latest).toEqual([]);
+    expect(latest?.snapshots ?? []).toEqual([]);
     expect(interests).toBe(0);
     setReader("foreign");
-    expect(latest).toEqual([]);
+    expect(latest?.snapshots ?? []).toEqual([]);
     setReader(readerPluginId);
     expect(interests).toBe(1);
     const stable = latest;
     publish();
     expect(latest).toBe(stable);
-    const retained = latest[0]!;
+    const retained = latest!.snapshots[0]!;
     expect(retained.resolve({ text: "PR #1", links: [] })).toHaveLength(1);
     setReader();
-    expect(latest).toEqual([]);
+    expect(latest?.snapshots ?? []).toEqual([]);
     expect(interests).toBe(0);
     expect(releases).toBe(1);
     expect(retained.resolve({ text: "PR #1", links: [] })).toEqual([]);
@@ -842,7 +839,7 @@ it.each(["review", "reader"])(
     await runtime.refresh();
     flush();
     expect(interests).toBe(0);
-    expect(latest).toEqual([]);
+    expect(latest?.snapshots ?? []).toEqual([]);
     // A provider may withdraw inside observe before returning its cleanup.
     expect(releases).toBe(3);
     synchronouslyWithdraw = false;
