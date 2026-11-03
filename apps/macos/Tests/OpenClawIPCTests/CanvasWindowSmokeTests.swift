@@ -82,6 +82,16 @@ struct CanvasWindowSmokeTests {
         #expect(!CanvasHostedURLResolver.isAppLocalTarget("openclaw-canvas://main/%252e%252e/secret"))
     }
 
+    @Test func `Canvas MIME types fall back to the system type database`() {
+        #expect(CanvasScheme.mimeType(forExtension: "webp") == "image/webp")
+        for ext in ["yaml", "yml", "xml", "tsv"] {
+            #expect(CanvasScheme.mimeType(forExtension: ext) == "text/plain", "\(ext)")
+        }
+        #expect(CanvasScheme.mimeType(forExtension: "MD") == "text/plain")
+        #expect(CanvasScheme.mimeType(forExtension: "zzunknown") == "application/octet-stream")
+        #expect(CanvasScheme.mimeType(forExtension: "") == "application/octet-stream")
+    }
+
     @Test func `panel shows text documents and a visible error when a load fails`() async throws {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-canvas-test-\(UUID().uuidString)")
@@ -99,6 +109,10 @@ struct CanvasWindowSmokeTests {
         let dir = URL(fileURLWithPath: controller.directoryPath)
         try "# Canvas note marker".write(to: dir.appendingPathComponent("note.md"), atomically: true, encoding: .utf8)
         try Data([0, 1, 2]).write(to: dir.appendingPathComponent("blob.bin"))
+        try "key: canvas_yaml_marker".write(to: dir.appendingPathComponent("data.yaml"), atomically: true, encoding: .utf8)
+        // A 1x1 lossy WebP (Google's WebP detection sample).
+        try #require(Data(base64Encoded: "UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA"))
+            .write(to: dir.appendingPathComponent("pixel.webp"))
         let pdf = PDFDocument()
         pdf.insert(PDFPage(), at: 0)
         try #require(pdf.dataRepresentation()).write(to: dir.appendingPathComponent("doc.pdf"))
@@ -111,9 +125,23 @@ struct CanvasWindowSmokeTests {
         #expect(await Self.loaded(controller, pathSuffix: "/doc.pdf"))
         #expect(!(await Self.pageText(of: controller, contains: "Canvas couldn't show this page")))
 
+        // Types outside the hand-written list come from the system type database.
+        controller.load(target: "/data.yaml")
+        #expect(await Self.pageText(of: controller, contains: "canvas_yaml_marker"))
+        controller.load(target: "/pixel.webp")
+        #expect(await Self.loaded(controller, pathSuffix: "/pixel.webp"))
+        #expect(!controller.isShowingLoadFailure)
+
         // WebKit refuses to display application/octet-stream in a frame; the panel must say so.
         controller.load(target: "/blob.bin")
         #expect(await Self.pageText(of: controller, contains: "Canvas couldn't show this page"))
+        #expect(controller.isShowingLoadFailure)
+
+        // The next load clears the failure state, so a later bare present is a plain present again.
+        controller.load(target: "/note.md")
+        #expect(!controller.isShowingLoadFailure)
+        #expect(await Self.pageText(of: controller, contains: "Canvas note marker"))
+        #expect(!controller.isShowingLoadFailure)
     }
 
     private static func loaded(_ controller: CanvasWindowController, pathSuffix: String) async -> Bool {

@@ -93,6 +93,7 @@ extension CanvasWindowController {
     }
 
     private func showLoadFailure(_ message: String) {
+        self.isShowingLoadFailure = true
         let page = CanvasSchemeHandler.html(message, title: "Canvas error")
         self.webView.load(
             page.data,

@@ -19,6 +19,9 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
     private var debugStatusSubtitle: String?
     private var canvasVisible = false
     private var watchesLocalCanvasFiles = false
+    /// Set while a load-failure page is showing; cleared by the next `load(target:)`. The node runtime
+    /// reads it to turn a bare present into a retry of the last logical target.
+    var isShowingLoadFailure = false
 
     var onVisibilityChanged: ((Bool) -> Void)?
 
@@ -112,6 +115,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
 
     func load(target: String) {
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.isShowingLoadFailure = false
 
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
             if scheme == CanvasScheme.scheme {
