@@ -557,7 +557,7 @@ suite.define(() => {
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Rename group" }));
       // The rename runs in the owned dialog, prefilled with the name it is
       // changing; a native prompt here would be a regression.
-      const renameDialog = page.getByRole("dialog", { name: 'Rename group "Research"' });
+      const renameDialog = page.getByRole("dialog", { name: "Rename group “Research”" });
       await renameDialog.waitFor({ state: "visible" });
       await expect
         .poll(() => page.locator("openclaw-modal-dialog input").inputValue())
@@ -592,7 +592,7 @@ suite.define(() => {
       // The confirm names the group and what happens to its sessions, and only
       // the operator's answer sends sessions.groups.delete.
       await page
-        .getByRole("dialog", { name: 'Delete group "Projects"' })
+        .getByRole("dialog", { name: "Delete group “Projects”?" })
         .waitFor({ state: "visible" });
       const deleteConfirm = page.locator("openclaw-modal-dialog");
       await expect
@@ -701,7 +701,7 @@ suite.define(() => {
       await researchGroup.locator(".sidebar-recent-sessions__head").hover();
       await researchGroup.getByRole("button", { name: "Group options for Research" }).click();
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Rename group" }));
-      const dialog = page.getByRole("dialog", { name: 'Rename group "Research"' });
+      const dialog = page.getByRole("dialog", { name: "Rename group “Research”" });
       const field = dialog.getByRole("textbox");
       await field.fill("Projects");
       await field.press("Enter");

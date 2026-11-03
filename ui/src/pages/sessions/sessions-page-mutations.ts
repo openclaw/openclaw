@@ -13,6 +13,7 @@ import {
   withSessionWorkspaceRecovery,
 } from "../../components/session-workspace-recovery.runtime.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccessRequest,
@@ -36,6 +37,8 @@ import type { SessionsPageMutationResult } from "./mutation-runner.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
 import { settleSelectedSession, type SessionDeleteRow } from "./selection.ts";
 import type { SessionsPageState } from "./sessions-page-state.types.ts";
+
+registerSessionOrganizationSharedEnglish();
 
 type SessionsPageMutationHost = {
   application: ApplicationContext;
@@ -399,10 +402,10 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       return { status: "failed", error: t("sessionsView.actionRequiresConnection") };
     }
     if (typeof patch.archived === "boolean" && !expectedSessionId?.trim()) {
-      state.error = "Session lifecycle action requires a durable session identity.";
+      state.error = t("sessionsView.lifecycleIdentityRequired");
       return {
         status: "failed",
-        error: "Session lifecycle action requires a durable session identity.",
+        error: t("sessionsView.lifecycleIdentityRequired"),
       };
     }
     const agentId = sessionAgentId(key, scope.context);

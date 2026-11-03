@@ -734,7 +734,7 @@ describe("sessions page lifecycle", () => {
         placement: state === "active" ? placement : { ...placement, state },
       });
       const page = await createRenderedPage(context, sessionsResult([target], 1));
-      expect((await openRowMenu(page, target)).textContent).toContain("Stop cloud worker…");
+      expect((await openRowMenu(page, target)).textContent).toContain("Stop cloud device…");
       const [query] = managed.subscribeList.mock.calls[0]!;
       managed.refreshList.mockClear();
       vi.mocked(showConfirmDialog).mockResolvedValue(true);
@@ -888,9 +888,7 @@ describe("sessions page new group", () => {
     pending.resolve("completed");
     await created;
     expect(sessions.patch).not.toHaveBeenCalled();
-    expect(messages).toEqual([
-      "Gateway connection replaced before the group was saved. Try again.",
-    ]);
+    expect(messages).toEqual(["The connection changed before the group was saved. Try again."]);
     page.result = sessionsResult([row], 1);
     await page.requestNewCategory(key);
     expect(messages[1]).toBeNull();
