@@ -162,16 +162,12 @@ export class BoardWidgetBridgeOwner {
       case "state.emit":
         return await this.emitState(params.payload);
       case "data.query":
-        return await this.options.client.request("board.data.read", {
-          ticket: this.options.ticket,
-          queryName: requiredString(params, "queryName"),
-        });
       case "data.read":
       case "action.run": {
-        const read = request.method === "data.read";
-        const key = read ? "bindingId" : "action";
+        const read = request.method !== "action.run";
+        const key = request.method === "data.query" ? "queryName" : read ? "bindingId" : "action";
         const target = requiredString(params, key);
-        const callParams = params.params;
+        const callParams = key === "queryName" ? undefined : params.params;
         if (callParams !== undefined && !isRecord(callParams)) {
           throw new Error(
             read ? "widget data binding params are invalid" : "widget action params are invalid",

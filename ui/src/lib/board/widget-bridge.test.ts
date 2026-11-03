@@ -107,6 +107,18 @@ it("rate-limits varying state payloads at the trusted host", async () => {
   vi.advanceTimersByTime(60_000);
   await expect(emit({ count: 13 })).resolves.toEqual({ ok: true });
 });
+it("keeps a named query request limited to its ticket and name", async () => {
+  await handle("data.query", {
+    queryName: "main-ci",
+    ticket: "widget-supplied-ticket",
+    bindingId: "github.actions.runs",
+    params: { repository: "other/repo", perPage: 30 },
+  });
+  expect(client.request).toHaveBeenCalledExactlyOnceWith("board.data.read", {
+    ticket: "ticket",
+    queryName: "main-ci",
+  });
+});
 it.each([
   ["data.query", { queryName: "main-ci" }, "board.data.read"],
   ["data.read", { bindingId: "health", params: { probe: false } }, "board.data.read"],
