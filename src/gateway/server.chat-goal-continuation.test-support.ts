@@ -70,9 +70,8 @@ export function registerGoalAutomaticContinuationCases(
     });
   });
 
-  // A background exec completion is admitted as a session-event turn. Its Goal
-  // successor must outlive that event's occurrence, signal, and one-shot delivery,
-  // while keeping an explicitly silent completion's delivery restriction.
+  // Admit the completion before ending the first turn. Goal successors outlive the
+  // event's signal and one-shot delivery but retain its explicit delivery restriction.
   const completeExecDuringFirstTurn = (
     onEventTurn: () => Promise<void>,
     event: { deliver?: false } = {},
@@ -89,7 +88,6 @@ export function registerGoalAutomaticContinuationCases(
           source: "exec",
           sourceTurnId: "exec:goal-background",
         });
-        // Hold the first turn until the completion is queued, before a Goal nudge can compete.
         expect(await receipt.accepted).toEqual({ ok: true });
       } else if (runEmbeddedAgent.mock.calls.length >= 2) {
         await onEventTurn();
