@@ -58,9 +58,8 @@ struct ChatToolActivityItem: Identifiable, Equatable {
         return self.displayState.title
     }
 
-    func showsCollapsedStatus(expandable: Bool) -> Bool {
+    var showsCollapsedStatus: Bool {
         self.displayState == .failed || self.displayState == .blocked || self.displayState == .skipped
-            || (self.displayState == .unavailable && !expandable)
     }
 
     var isError: Bool {
@@ -228,7 +227,7 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var expandable: Bool {
-        self.resolvedDiff != nil || !self.formattedResult.isEmpty
+        self.resolvedDiff != nil || !self.formattedResult.isEmpty || self.item.displayState == .unavailable
     }
 
     private var accessibilityValue: String {
@@ -392,8 +391,8 @@ private struct ChatToolActivityRowContent: View {
 
             Spacer(minLength: 0)
 
-            // Keep actionable and otherwise inaccessible outcomes visible.
-            if self.item.showsCollapsedStatus(expandable: self.expandable) {
+            // Keep actionable outcomes visible; unknown outcomes appear inside the disclosure.
+            if self.item.showsCollapsedStatus {
                 Text(self.item.statusTitle)
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : .secondary)
