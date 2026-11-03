@@ -888,6 +888,7 @@
 .agent-tools-buttons,
 .agent-tools-runtime {
   display: flex;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }

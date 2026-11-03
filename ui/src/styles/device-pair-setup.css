@@ -39,7 +39,7 @@
 .device-pair-setup__access {
   display: grid;
   width: min(440px, 100%);
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin: 0;
   padding: 0;
@@ -58,8 +58,9 @@
 .device-pair-setup__access label {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 8px;
-  padding: 10px;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
@@ -67,8 +68,7 @@
 }
 
 .device-pair-setup__access label:has(input:checked) {
-  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
-  background: var(--accent-subtle);
+  background: var(--surface-selected);
 }
 
 .device-pair-setup__access:disabled label {
@@ -326,10 +326,6 @@
   .device-pair-setup__qr-frame {
     width: min(300px, 100%);
     padding: 14px;
-  }
-
-  .device-pair-setup__access {
-    grid-template-columns: 1fr;
   }
 
   .device-pair-setup__footer a {
