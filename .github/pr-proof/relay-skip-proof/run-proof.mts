@@ -96,12 +96,13 @@ async function main() {
 
   const frames = client.sent as Array<Record<string, unknown>>;
   const response = frames.find((f) => f.id === 1);
-  const result = (response as { result?: { targetInfos?: Array<{ targetId?: string }> } })
-    ?.result;
+  const result = (response as { result?: { targetInfos?: Array<{ targetId?: string }> } })?.result;
   const targetInfos = result?.targetInfos ?? [];
   const returnedIds = targetInfos.map((t) => t.targetId).sort();
 
-  log.info(`Target.getTargets returned ${targetInfos.length} target(s): ${JSON.stringify(returnedIds)}`);
+  log.info(
+    `Target.getTargets returned ${targetInfos.length} target(s): ${JSON.stringify(returnedIds)}`,
+  );
 
   const hasHealthy = returnedIds.includes("target-1");
   const hasRefused = returnedIds.includes("target-2");
