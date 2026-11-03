@@ -10,7 +10,7 @@ scenario:
   successCriteria:
     - Scenario is mock-openai only so live lanes do not pick it up implicitly.
     - Every model call fails to connect, because the mock provider points at a closed local port.
-    - 'The DM gets an error reply that starts with "⚠️ mock-openai/<model> request failed" and keeps the "Couldn''t connect to the AI service." copy.'
+    - 'The DM gets an error reply that names both refused models (qa-lab''s primary and its fallback), distinct, before "request failed", and keeps the "Couldn''t connect to the AI service." copy.'
     - The reply keeps the completed-work caution and carries no raw error text.
   docsRefs:
     - docs/gateway/troubleshooting/agent-replies-and-control-ui.md
@@ -35,6 +35,9 @@ scenario:
       conversationId: qa-connection-failure-dm
       prompt: "Connection failure reply QA check. Reply with OK."
       expectedPrefix: "⚠️ mock-openai/"
+      # qa-lab configures a primary and an alternate fallback model on the refused provider, so the
+      # chain has two connection failures and both must be named, distinct, before "request failed".
+      namedModelsPattern: "^⚠️ (mock-openai/[^,\\s]+), (mock-openai/[^,\\s]+) request failed: "
       # The reply is matched on the shared connection copy, so main's unnamed reply is caught and reported too.
       connectionCopy: "Couldn't connect to the AI service."
       expectedCopy: "request failed: Couldn't connect to the AI service."
@@ -79,7 +82,7 @@ flow:
           value:
             expr: "String(outbound.text ?? '')"
         - assert:
-            expr: "outbound.isError === true && replyText.startsWith(config.expectedPrefix) && replyText.includes(config.expectedCopy) && replyText.includes(config.expectedCaution) && !config.forbiddenNeedles.some((needle) => replyText.includes(needle))"
+            expr: "outbound.isError === true && replyText.startsWith(config.expectedPrefix) && ((match) => Boolean(match) && match[1] !== match[2])(new RegExp(config.namedModelsPattern).exec(replyText)) && replyText.includes(config.expectedCopy) && replyText.includes(config.expectedCaution) && !config.forbiddenNeedles.some((needle) => replyText.includes(needle))"
             message:
               expr: "`unexpected connection-failure reply: ${replyText}`"
       detailsExpr: "`reply: ${replyText}`"
