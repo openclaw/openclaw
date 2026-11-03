@@ -16,7 +16,6 @@ import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { FollowupRun } from "./queue/types.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 
 /** Acquire original input custody before maintenance or a provider can consume it. */
 export async function prepareReplySourceAdmission(params: {
@@ -84,7 +83,11 @@ export async function prepareReplySourceAdmission(params: {
 
 /** Required preflight can invoke models and tools before the reply runner exists. */
 export async function admitReplyMaintenance(
-  turn: Pick<AdmittedFollowupTurn, "runId" | "queued" | "operation">,
+  turn: {
+    readonly runId: string;
+    queued: FollowupRun;
+    operation: ReplyOperation;
+  },
   sessionKey: string | undefined,
   assertCurrent: () => void,
 ): Promise<void> {
