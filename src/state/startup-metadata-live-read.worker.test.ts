@@ -53,7 +53,7 @@ it("refuses a source replaced while update metadata code loads before opening SQ
     await expect(pending).rejects.toThrow("SQLite database file identity changed");
     expect(nativeOpen).not.toHaveBeenCalled();
     expect(liveRead).not.toHaveBeenCalled();
-    expect(fs.readdirSync(directory).sort()).toEqual(["state.sqlite", "state.sqlite.original"]);
+    expect(fs.readdirSync(directory).toSorted()).toEqual(["state.sqlite", "state.sqlite.original"]);
   } finally {
     resume.resolve();
     await pending.catch(() => {});
