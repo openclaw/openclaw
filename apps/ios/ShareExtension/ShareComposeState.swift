@@ -11,7 +11,7 @@ enum ShareSendAdmissionError: LocalizedError, Equatable {
         guard let result = try? JSONDecoder().decode(NodeEventResult.self, from: data),
               result.event == "agent.request"
         else {
-            throw Self.unconfirmed
+            throw unconfirmed
         }
         guard result.ok, result.handled else {
             throw Self.rejected(result.reason)

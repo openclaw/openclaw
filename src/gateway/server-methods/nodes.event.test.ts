@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, nextEventLoopTurn } from "../../../test/helpers/promise.js";
 import { createMemorySessionActorOwner } from "../../config/sessions/session-actor-memory.js";
-import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import {
+  getSessionActorStorageBinding,
+  runWithSessionActorStorage,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   createSessionEventSubscriberRegistry,
@@ -118,6 +121,7 @@ it("admits an incognito share before the agent finishes and retains its actor cu
     }),
   };
   const owner = createMemorySessionActorOwner(location);
+  onTestFinished(() => owner.close());
   const authority = { assertCurrent() {}, authorize() {} };
   const actor = await owner.acquire(
     { database: owner.identity, sessionKey },
@@ -126,6 +130,7 @@ it("admits an incognito share before the agent finishes and retains its actor cu
       assertReadable() {},
     },
   );
+  onTestFinished(() => actor.release());
   assert(actor.storage);
   await actor.storage.mutate(
     {
@@ -143,9 +148,20 @@ it("admits an incognito share before the agent finishes and retains its actor cu
   runtimeMocks.upsertSessionEntryCore.mockImplementation(async (_scope, patch) => patch);
   const work = createDeferred();
   const dispatched = createDeferred();
-  runtimeMocks.agentCommandFromIngress.mockReset().mockImplementation(() => {
+  runtimeMocks.agentCommandFromIngress.mockReset().mockImplementation(async () => {
     dispatched.resolve();
-    return work.promise;
+    await work.promise;
+    // Resume after the admission response, through the binding inherited by accepted work.
+    const retained = getSessionActorStorageBinding({ sessionKey });
+    assert(retained);
+    const result = await retained.actor.storage.mutate(
+      {
+        type: "session.entry.patch",
+        input: { operation: { kind: "fields", patch: { label: "Written after admission" } } },
+      },
+      retained.authority,
+    );
+    expect(result.kind).toBe("committed");
   });
   const h = new NodeEventHarness();
   Object.assign(h.context, buildNodeEventContext());
@@ -182,8 +198,9 @@ it("admits an incognito share before the agent finishes and retains its actor cu
   } finally {
     work.resolve();
     await done;
-    await actor.release();
-    owner.close();
+    expect(
+      actor.storage.readCurrent({ type: "session.entry.read", input: { sessionKey } }, authority),
+    ).toMatchObject({ sessionId: "private-share", label: "Written after admission" });
   }
   expect(respond).toHaveBeenCalledTimes(1);
 });
