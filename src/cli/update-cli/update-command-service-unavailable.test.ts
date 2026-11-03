@@ -45,7 +45,7 @@ function withHostPlatform<T>(run: () => T): T {
   }
 }
 beforeEach(() => {
-  // Service platform mocks do not change the local test process's namespace.
+  // Service platform mocks retain the host's process identity and namespace.
   vi.spyOn(gatewayNamespace, "readGatewayLockProcessNamespace").mockReturnValue(hostNamespace);
   const classifyNamespace = gatewayNamespace.classifyGatewayLockProcessNamespace;
   vi.spyOn(gatewayNamespace, "classifyGatewayLockProcessNamespace").mockImplementation((...args) =>
@@ -198,7 +198,6 @@ describe("package update entry point", () => {
         "OPENCLAW_CONFIG_PATH",
         path.join(process.env.OPENCLAW_STATE_DIR!, "openclaw.json"),
       );
-      // The metadata child must observe the same real process identity as this owner.
       vi.mocked(processIdentity.getFileLockProcessStartTime).mockRestore();
       openOpenClawStateDatabase();
       if (malformedPreview) {
