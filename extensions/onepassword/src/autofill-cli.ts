@@ -5,6 +5,8 @@ import type { CommandLike } from "./cli.js";
 
 const publicReply = z.object({
   state: z.string(),
+  extensionAdapter: z.string().optional(),
+  guidance: z.string().optional(),
   code: z.string().optional(),
   sessionId: z.string().optional(),
   connectUrl: z.string().optional(),
@@ -69,6 +71,11 @@ export function registerAutofillCommands(command: CommandLike): void {
     .description("Show Agentic Autofill readiness without secrets")
     .action(async () => {
       const result = await invoke("status");
-      process.stdout.write(`1Password Agentic Autofill: ${result.state}.\n`);
+      process.stdout.write(
+        `1Password Agentic Autofill: ${result.state}; browser: ${result.extensionAdapter ?? "unknown"}.\n`,
+      );
+      if (result.guidance) {
+        process.stdout.write(`${result.guidance}\n`);
+      }
     });
 }

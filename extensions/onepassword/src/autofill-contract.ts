@@ -26,6 +26,7 @@ export type AccessRequestStatus = {
 
 /** Adapter must enable Agentic Mode and exclusively lock the tab during fill. */
 export interface AgenticAutofillExtension {
+  readiness?(): Promise<ExtResult<{ status: "ready" }>>;
   createAccessRequest(p: {
     accessToken: string;
     integrationKey: string;
@@ -48,19 +49,6 @@ export interface AgenticAutofillExtension {
 export interface AutofillApprovalDelivery {
   deliver(appLink: string): Promise<"sent" | "unsupported">;
 }
-
-/** Fail closed until the browser-plugin ExtensionBridge adapter is installed here. */
-export const unavailableAutofillExtension: AgenticAutofillExtension = {
-  async createAccessRequest() {
-    return { success: false, error: { code: "extensionAdapterUnavailable" } };
-  },
-  async getAccessRequestStatus() {
-    return { success: false, error: { code: "extensionAdapterUnavailable" } };
-  },
-  async fillCredential() {
-    return { success: false, error: { code: "extensionAdapterUnavailable" } };
-  },
-};
 
 /** Normal plugin text delivery mirrors into history and is NOT a sensitive-link transport. */
 export const unavailableApprovalDelivery: AutofillApprovalDelivery = {

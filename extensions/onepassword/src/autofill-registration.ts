@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { unavailableAutofillExtension } from "./autofill-contract.js";
+import { z } from "zod";
+import { BrowserAutofillExtension, autofillBrowserGuidance } from "./autofill-browser.js";
 import { isAgenticAutofillEnabled } from "./autofill-input.js";
 import { AutofillError, AutofillRelayClient } from "./autofill-relay.js";
 import {
@@ -14,6 +15,21 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
   if (!isAgenticAutofillEnabled(api.pluginConfig)) {
     return;
   }
+  const config = z
+    .object({
+      agenticAutofill: z.object({
+        extensionPath: z.string().trim().min(1).optional(),
+        browserProfile: z.string().trim().min(1).optional(),
+      }),
+    })
+    .parse(api.pluginConfig).agenticAutofill;
+  const extension = new BrowserAutofillExtension(config);
+  api.registerService({
+    id: "onepassword-autofill-browser",
+    apiVersion: 2,
+    start: () => extension.start(),
+    stop: () => extension.close(),
+  });
   const service = new AutofillService({
     stores: {
       connections: api.runtime.state.openKeyedStoreV2<AutofillConnection>({
@@ -26,9 +42,7 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
       }),
     },
     relay: new AutofillRelayClient(),
-    // ExtensionBridge seam: browser owner supplies an adapter implementing this contract.
-    // It MUST enforce one person per browser, Agentic Mode, and an exclusive tab lock.
-    extension: unavailableAutofillExtension,
+    extension,
     assertEnabled() {
       if (!isAgenticAutofillEnabled(resolveConfig())) {
         throw new AutofillError("autofillDisabled");
@@ -84,6 +98,7 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
           return {
             state: "error",
             code: error instanceof AutofillError ? error.code : "operationFailed",
+            guidance: autofillBrowserGuidance,
           };
         }
       },

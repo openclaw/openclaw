@@ -1,5 +1,6 @@
 import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { autofillBrowserGuidance } from "./autofill-browser.js";
 import type {
   AccessRequest,
   AccessRequestInput,
@@ -59,7 +60,7 @@ const safeExtensionErrors = new Set([
   "noExistingCredentials",
   "fillFailed",
   "autosubmitFailed",
-  "extensionAdapterUnavailable",
+  "extensionNotReady",
   "rateLimitExceeded",
 ]);
 function unwrap<T>(response: ExtResult<T>): T {
@@ -319,10 +320,15 @@ export class AutofillService {
   async status(authority: AutofillAuthority) {
     const entries = await this.options.stores.connections.entries();
     this.assertCurrent(authority);
+    const readiness = await this.options.extension.readiness?.();
+    this.assertCurrent(authority);
     return {
       state: entries.length ? "connected" : "disconnected",
       connectionCount: entries.length,
-      extensionAdapter: "not-wired",
+      extensionAdapter: readiness?.success ? "ready" : "unavailable",
+      ...(!readiness?.success
+        ? { code: "extensionNotReady", guidance: autofillBrowserGuidance }
+        : {}),
     };
   }
 

@@ -356,12 +356,10 @@ Agentic Autofill is a separate opt-in for signing in with **your own logins**,
 without returning their values to OpenClaw or the model. It does not use `op` or
 change the existing SecretRef and curated-secret features above.
 
-**Integration status:** the relay client, connection owner, commands, and agent
-workflow are implemented. Browser ExtensionBridge and sensitive approval-link
-transport adapters are not wired yet. Requesting a login currently returns a
-clear `extensionAdapterUnavailable` error; enabling this preview alone does not
-provide working browser sign-in. Normal chat delivery is deliberately not used
-for approval links because it can mirror them into model-visible history.
+**Integration status:** the browser adapter is wired through the managed browser
+extension host. Sensitive approval-link delivery remains intentionally unsupported;
+normal chat delivery is not used because it mirrors links into model-visible
+history. Enabling this preview alone does not provide working approval delivery.
 
 ### Setup and consent
 
@@ -373,14 +371,34 @@ Enable the plugin and its preview in your existing configuration:
     entries: {
       onepassword: {
         enabled: true,
-        config: { agenticAutofill: { enabled: true } },
+        config: {
+          agenticAutofill: {
+            enabled: true,
+            extensionPath: "/operator-managed/1password-nightly",
+            browserProfile: "openclaw",
+          },
+        },
       },
     },
   },
 }
 ```
 
-The only new config key is `agenticAutofill.enabled` (default `false`). The tool
+New plugin-owned config keys are `agenticAutofill.extensionPath` (the absolute
+path to an operator-vetted unpacked extension) and `agenticAutofill.browserProfile`
+(the dedicated local managed profile your agent uses). Both must be supplied when
+the preview is enabled. `agenticAutofill.enabled` still defaults to `false`.
+
+Install full Playwright Chromium using the [browser setup instructions](/tools/browser).
+Install and unpack 1Password Nightly 8.12.46.6 or later yourself, retaining its
+manifest `key` so the ID remains `gejiddohjgogedgjnonbofjigllpkmbf`. OpenClaw does
+not download, verify signatures, or update this operator-managed directory.
+Stop the profile before enabling the preview and restart the Gateway: the plugin
+reserves that profile before browser launch. Do not modify extension files while
+the profile is running. Use this profile for the Gateway owner's browser only;
+it must not contain another person's signed-in extension state.
+
+The tool
 is optional; allow `onepassword_autofill` in your agent's tool policy when needed.
 Restart the Gateway after enabling the feature. No OAuth client secret goes in
 OpenClaw configuration.
@@ -408,7 +426,7 @@ a different account. Multi-user personal connections are not supported yet.
 
 ### Request, approve, fill
 
-Once both adapters are installed, request a task's logins together (one to five
+Once a private approval delivery adapter is available, request a task's logins together (one to five
 entries). Each entry has an HTTPS website, a short reason (100 characters), and
 optional keywords (up to five, each 50 characters). The task goal is limited to
 140 characters. Keep secrets, personal messages, and account identifiers out of
@@ -431,9 +449,10 @@ unknown states are saved and never polled again.
 
 Grants are matched by entry ID, not array order. Unrequested grants are not
 exposed for filling. OpenClaw restricts fill to the conversation and request
-that created the grant. The browser adapter must enable Agentic Mode and lock
+that created the grant. The browser adapter enables Agentic Mode and locks
 the tab against screenshots, DOM reads, and other browser commands until fill
-and submit finish. `fill_submitted` means the form was submitted, **not** that
+and submit finish. It releases its tab-scoped Agentic Mode before unlocking.
+The worker attachment stays open across polling calls and closes on plugin shutdown. `fill_submitted` means the form was submitted, **not** that
 the website accepted the sign-in; check the page afterward.
 
 ### Requirements and limits
@@ -488,8 +507,15 @@ known successful rotation.
 
 ### Troubleshooting
 
-- `extensionAdapterUnavailable`: the browser ExtensionBridge adapter is not
-  installed. No login was requested or filled.
+- `extensionNotReady`: check `openclaw onepassword autofill-status`. Stop the
+  profile, verify `extensionPath`, Nightly version and manifest key, and restart
+  the Gateway. Use Chromium or Chrome for Testing, not branded Chrome. The
+  profile must not already be running at registration. An unavailable API can
+  also mean blocked feature-flag access to `my.1password.com`; see the upstream
+  [managed browser policy](https://www.1password.dev/agentic-autofill/partners/browser-policy.md).
+  The plugin does not write system browser policy; whole-browser Agentic Mode
+  policy must not conflict with the adapter's tab-scoped enable/release calls.
+  Status probes launch the owned browser if needed, without requesting access.
 - `approvalDelivery: unsupported`: your channel lacks a private, non-transcript
   link transport. Do not put the approval link in a normal message.
 - `gatewayOwnerRequired`: use an authenticated owner conversation; an agent ID

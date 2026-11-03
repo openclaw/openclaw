@@ -48,6 +48,8 @@ export async function pollAutofillDecision(params: {
       if (response.result.state !== "pending") {
         return response.result;
       }
+    } else if (response.error.code === "extensionNotReady") {
+      throw new AutofillError("extensionNotReady");
     } else if (response.error.code === "rateLimitExceeded") {
       await params.clock.sleep(60_000, params.signal);
     } else if (response.error.code !== "timeout" && response.error.code !== "networkError") {

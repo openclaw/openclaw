@@ -1,6 +1,7 @@
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { z } from "zod";
+import { autofillBrowserGuidance } from "./autofill-browser.js";
 import { unavailableApprovalDelivery, type AutofillApprovalDelivery } from "./autofill-contract.js";
 import { accessRequestInputSchema } from "./autofill-input.js";
 import { AutofillError } from "./autofill-relay.js";
@@ -49,7 +50,7 @@ export function createAutofillTool(
     name: "onepassword_autofill",
     label: "1Password Agentic Autofill",
     description:
-      "Connect your own 1Password, request task-specific logins, check approval, or fill and submit a granted login. Never returns passwords. Owner-only preview; browser adapter and private approval delivery must be wired.",
+      "Connect your own 1Password, request task-specific logins, check approval, or fill and submit a granted login. Never returns passwords. Owner-only preview; configure the managed browser profile and private approval delivery.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -167,8 +168,8 @@ export function createAutofillTool(
           guidance:
             code === "reconnectRequired"
               ? "The connection ended. Connect 1Password again."
-              : code === "extensionAdapterUnavailable"
-                ? "The browser ExtensionBridge adapter has not been wired. No login was requested or filled."
+              : code === "extensionNotReady"
+                ? autofillBrowserGuidance
                 : "The operation did not complete. Check Agentic Autofill setup or reconnect; no secret details were returned.",
         });
       }

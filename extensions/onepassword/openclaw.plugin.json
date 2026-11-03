@@ -99,7 +99,9 @@
         "additionalProperties": false,
         "required": ["enabled"],
         "properties": {
-          "enabled": { "type": "boolean", "default": false }
+          "enabled": { "type": "boolean", "default": false },
+          "extensionPath": { "type": "string", "minLength": 1 },
+          "browserProfile": { "type": "string", "minLength": 1 }
         }
       },
       "vault": {
