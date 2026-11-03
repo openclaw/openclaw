@@ -41,7 +41,7 @@ var isChatHistoryState = (() => {
       /(^pendingInputs$|^sessionInfo$|^commands$)/u,
       /(^items$|^total$|^queuedCount$|^nextBefore$)/u,
       /(^id$|^runId$|^message$|^acceptedAt$|^state$|^queued$)/u,
-      /(^key$|^rowMode$|^sharedFacts$|^sessionId$|^lifecycleRevision$|^sessionModelRevision$|^incognito$|^kind$|^label$|^autoLabel$|^icon$|^color$|^channelAvatarUrl$|^boardFace$|^hasBoard$|^boardPresentation$|^displayName$|^titlePending$|^derivedTitle$|^lastMessagePreview$|^lastAssistantMessage$|^channel$|^classification$|^agentId$|^accountId$|^peerKind$|^isMain$|^isBackground$|^isDock$|^chatType$|^activitySummary$|^updatedAt$|^snapshotAt$|^ancestorRevision$|^hiddenFromInvolvingMe$|^archived$|^archivedAt$|^archivedBy$|^archiveReason$|^pinned$|^sidebarRoot$|^pinnedAt$|^snoozedUntil$|^snoozedAt$|^unread$|^lastReadAt$|^markedUnreadAt$|^lastActivityAt$|^lastInteractionAt$|^status$|^lastRunError$|^suppressErrorNotice$|^providerReview$|^lastRunId$|^restartRecoveryStatus$|^restartRecoveryCycleId$|^activeLeafEntryId$|^spawnedBy$|^parentSessionKey$|^parentSessionId$|^controlOwnerSessionKey$|^childOwnerSessionKeys$|^childSessions$|^forkedFromParent$|^spawnDepth$|^subagentRole$|^subagentControlScope$|^swarmGroupId$|^swarm$|^deviceFolder$|^worktree$|^repositoryWorkspaceId$|^repository$|^execNode$|^execCwd$|^spawnedWorkspaceDir$|^spawnedCwd$|^projectId$|^workspaceDir$|^permissionMode$|^communication$|^effectiveCommunication$|^sandboxMode$|^nativeRuntimeConsent$|^permissionModePending$|^sessionRoot$|^createdVia$|^createdSurface$|^createdActor$|^owner$|^participants$|^expandedParticipants$|^participantCount$|^visibility$|^sharingRole$|^sendDisabledReason$|^createdAt$|^forkSource$|^previousSessionId$|^inputTokens$|^outputTokens$|^usageReport$|^totalTokens$|^totalTokensFresh$|^contextTokens$|^estimatedCostUsd$|^model$|^modelProvider$|^activeModel$|^activeModelProvider$|^modelOverrideSource$|^toolOverrides$)/u,
+      /(^key$|^rowMode$|^sharedFacts$|^sessionId$|^lifecycleRevision$|^sessionModelRevision$|^incognito$|^kind$|^label$|^autoLabel$|^icon$|^color$|^channelAvatarUrl$|^boardFace$|^hasBoard$|^boardPresentation$|^displayName$|^titlePending$|^derivedTitle$|^lastMessagePreview$|^lastAssistantMessage$|^channel$|^classification$|^agentId$|^accountId$|^peerKind$|^isMain$|^isBackground$|^isDock$|^chatType$|^activitySummary$|^updatedAt$|^snapshotAt$|^ancestorRevision$|^hiddenFromInvolvingMe$|^archived$|^archivedAt$|^archivedBy$|^archiveReason$|^pinned$|^sidebarRoot$|^pinnedAt$|^snoozedUntil$|^snoozedAt$|^unread$|^lastReadAt$|^markedUnreadAt$|^lastActivityAt$|^lastInteractionAt$|^status$|^lastRunError$|^suppressErrorNotice$|^providerReview$|^lastRunId$|^restartRecoveryStatus$|^restartRecoveryCycleId$|^activeLeafEntryId$|^spawnedBy$|^parentSessionKey$|^parentSessionId$|^controlOwnerSessionKey$|^childOwnerSessionKeys$|^childSessions$|^forkedFromParent$|^spawnDepth$|^subagentRole$|^subagentControlScope$|^swarmGroupId$|^swarm$|^deviceFolder$|^worktree$|^repositoryWorkspaceId$|^repository$|^execNode$|^execCwd$|^spawnedWorkspaceDir$|^spawnedCwd$|^projectId$|^workspaceDir$|^permissionMode$|^communication$|^effectiveCommunication$|^sandboxMode$|^nativeRuntimeConsent$|^permissionModePending$|^sessionRoot$|^createdVia$|^createdSurface$|^createdActor$|^owner$|^participants$|^expandedParticipants$|^participantCount$|^visibility$|^accessMode$|^sharingRole$|^sendDisabledReason$|^createdAt$|^forkSource$|^previousSessionId$|^inputTokens$|^outputTokens$|^usageReport$|^totalTokens$|^totalTokensFresh$|^contextTokens$|^estimatedCostUsd$|^model$|^modelProvider$|^activeModel$|^activeModelProvider$|^modelOverrideSource$|^toolOverrides$)/u,
       /(^text$|^timestamp$)/u,
       /(^canEnsure$|^text$|^updatedAt$|^state$)/u,
       /(^type$|^id$|^label$|^avatarUrl$|^identity$)/u,
@@ -84,7 +84,7 @@ var isChatHistoryState = (() => {
         !("pendingInputs" in value) ||
         check_5(value.pendingInputs)) &&
       (value.sessionInfo === void 0 || !("sessionInfo" in value) || check_17(value.sessionInfo)) &&
-      (value.commands === void 0 || !("commands" in value) || check_161(value.commands)),
+      (value.commands === void 0 || !("commands" in value) || check_166(value.commands)),
     check_2 = (value) => !1,
     check_3 = (value) =>
       typeof value == "object" &&
@@ -355,12 +355,13 @@ var isChatHistoryState = (() => {
         !("participantCount" in value) ||
         check_15(value.participantCount)) &&
       (value.visibility === void 0 || !("visibility" in value) || check_140(value.visibility)) &&
-      (value.sharingRole === void 0 || !("sharingRole" in value) || check_144(value.sharingRole)) &&
+      (value.accessMode === void 0 || !("accessMode" in value) || check_144(value.accessMode)) &&
+      (value.sharingRole === void 0 || !("sharingRole" in value) || check_149(value.sharingRole)) &&
       (value.sendDisabledReason === void 0 ||
         !("sendDisabledReason" in value) ||
         check_89(value.sendDisabledReason)) &&
       (value.createdAt === void 0 || !("createdAt" in value) || check_50(value.createdAt)) &&
-      (value.forkSource === void 0 || !("forkSource" in value) || check_149(value.forkSource)) &&
+      (value.forkSource === void 0 || !("forkSource" in value) || check_154(value.forkSource)) &&
       (value.previousSessionId === void 0 ||
         !("previousSessionId" in value) ||
         check_25(value.previousSessionId)) &&
@@ -368,7 +369,7 @@ var isChatHistoryState = (() => {
       (value.outputTokens === void 0 ||
         !("outputTokens" in value) ||
         check_50(value.outputTokens)) &&
-      (value.usageReport === void 0 || !("usageReport" in value) || check_150(value.usageReport)) &&
+      (value.usageReport === void 0 || !("usageReport" in value) || check_155(value.usageReport)) &&
       (value.totalTokens === void 0 || !("totalTokens" in value) || check_50(value.totalTokens)) &&
       (value.totalTokensFresh === void 0 ||
         !("totalTokensFresh" in value) ||
@@ -389,10 +390,10 @@ var isChatHistoryState = (() => {
         check_25(value.activeModelProvider)) &&
       (value.modelOverrideSource === void 0 ||
         !("modelOverrideSource" in value) ||
-        check_153(value.modelOverrideSource)) &&
+        check_158(value.modelOverrideSource)) &&
       (value.toolOverrides === void 0 ||
         !("toolOverrides" in value) ||
-        check_157(value.toolOverrides)),
+        check_162(value.toolOverrides)),
     check_18 = (value) => !0,
     check_19 = (value) => typeof value == "string",
     check_20 = (value) => check_21(value) || check_22(value) || check_23(value),
@@ -809,11 +810,17 @@ var isChatHistoryState = (() => {
     check_143 = (value) => typeof value == "string" && value === "draft",
     check_144 = (value) =>
       check_145(value) || check_146(value) || check_147(value) || check_148(value),
-    check_145 = (value) => typeof value == "string" && value === "admin",
-    check_146 = (value) => typeof value == "string" && value === "owner",
-    check_147 = (value) => typeof value == "string" && value === "member",
-    check_148 = (value) => typeof value == "string" && value === "viewer",
+    check_145 = (value) => typeof value == "string" && value === "creator",
+    check_146 = (value) => typeof value == "string" && value === "audience",
+    check_147 = (value) => typeof value == "string" && value === "source",
+    check_148 = (value) => typeof value == "string" && value === "unrestricted",
     check_149 = (value) =>
+      check_150(value) || check_151(value) || check_152(value) || check_153(value),
+    check_150 = (value) => typeof value == "string" && value === "admin",
+    check_151 = (value) => typeof value == "string" && value === "owner",
+    check_152 = (value) => typeof value == "string" && value === "member",
+    check_153 = (value) => typeof value == "string" && value === "viewer",
+    check_154 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
@@ -822,53 +829,53 @@ var isChatHistoryState = (() => {
       check_19(value.sessionKey) &&
       check_19(value.sessionId) &&
       (value.entryId === void 0 || !("entryId" in value) || check_25(value.entryId)),
-    check_150 = (value) =>
+    check_155 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
       "state" in value &&
-      check_151(value.state),
-    check_151 = (value) => check_152(value) || check_47(value),
-    check_152 = (value) => typeof value == "string" && value === "available",
-    check_153 = (value) =>
-      check_154(value) || check_155(value) || check_156(value) || check_49(value),
-    check_154 = (value) => typeof value == "string" && value === "user",
-    check_155 = (value) => typeof value == "string" && value === "auto",
-    check_156 = (value) => typeof value == "string" && value === "inherited",
-    check_157 = (value) =>
+      check_156(value.state),
+    check_156 = (value) => check_157(value) || check_47(value),
+    check_157 = (value) => typeof value == "string" && value === "available",
+    check_158 = (value) =>
+      check_159(value) || check_160(value) || check_161(value) || check_49(value),
+    check_159 = (value) => typeof value == "string" && value === "user",
+    check_160 = (value) => typeof value == "string" && value === "auto",
+    check_161 = (value) => typeof value == "string" && value === "inherited",
+    check_162 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
       Object.getOwnPropertyNames(value).every(
         (unique_56, unique_57) => External[24].test(unique_56) || check_2(value[unique_56]),
       ) &&
-      (value.mcpServers === void 0 || !("mcpServers" in value) || check_158(value.mcpServers)) &&
+      (value.mcpServers === void 0 || !("mcpServers" in value) || check_163(value.mcpServers)) &&
       (value.mcpToolsDeny === void 0 ||
         !("mcpToolsDeny" in value) ||
-        check_159(value.mcpToolsDeny)) &&
-      (value.skills === void 0 || !("skills" in value) || check_158(value.skills)) &&
+        check_164(value.mcpToolsDeny)) &&
+      (value.skills === void 0 || !("skills" in value) || check_163(value.skills)) &&
       (value.webSearch === void 0 || !("webSearch" in value) || check_34(value.webSearch)),
-    check_158 = (value) =>
+    check_163 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
       Object.entries(value).every(
         ([unique_58, unique_59], _) => !External[25].test(unique_58) || check_87(unique_59),
       ),
-    check_159 = (value) =>
+    check_164 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
       Object.entries(value).every(
-        ([unique_60, unique_61], _) => !External[26].test(unique_60) || check_160(unique_61),
+        ([unique_60, unique_61], _) => !External[26].test(unique_60) || check_165(unique_61),
       ),
-    check_160 = (value) =>
+    check_165 = (value) =>
       Array.isArray(value) && value.every((unique_62, index) => check_8(unique_62)),
-    check_161 = (value) =>
+    check_166 = (value) =>
       Array.isArray(value) &&
-      value.every((unique_63, index) => check_162(unique_63)) &&
+      value.every((unique_63, index) => check_167(unique_63)) &&
       value.length <= 500,
-    check_162 = (value) =>
+    check_167 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
@@ -880,63 +887,63 @@ var isChatHistoryState = (() => {
       Object.getOwnPropertyNames(value).every(
         (unique_64, unique_65) => External[27].test(unique_64) || check_2(value[unique_64]),
       ) &&
-      check_163(value.name) &&
-      (value.nativeName === void 0 || !("nativeName" in value) || check_164(value.nativeName)) &&
-      (value.textAliases === void 0 || !("textAliases" in value) || check_165(value.textAliases)) &&
-      check_166(value.description) &&
-      (value.category === void 0 || !("category" in value) || check_167(value.category)) &&
-      check_174(value.source) &&
+      check_168(value.name) &&
+      (value.nativeName === void 0 || !("nativeName" in value) || check_169(value.nativeName)) &&
+      (value.textAliases === void 0 || !("textAliases" in value) || check_170(value.textAliases)) &&
+      check_171(value.description) &&
+      (value.category === void 0 || !("category" in value) || check_172(value.category)) &&
+      check_179(value.source) &&
       (value.skillDisplayName === void 0 ||
         !("skillDisplayName" in value) ||
-        check_164(value.skillDisplayName)) &&
+        check_169(value.skillDisplayName)) &&
       (value.skillModelVisible === void 0 ||
         !("skillModelVisible" in value) ||
         check_34(value.skillModelVisible)) &&
-      check_177(value.scope) &&
+      check_182(value.scope) &&
       check_87(value.acceptsArgs) &&
-      (value.args === void 0 || !("args" in value) || check_180(value.args)) &&
+      (value.args === void 0 || !("args" in value) || check_185(value.args)) &&
       (value.clientPresentation === void 0 ||
         !("clientPresentation" in value) ||
-        check_190(value.clientPresentation)),
-    check_163 = (value) =>
+        check_195(value.clientPresentation)),
+    check_168 = (value) =>
       typeof value == "string" &&
       (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
       (value.length <= 200 || (value.length <= 400 && CodePointCount(value) <= 200)),
-    check_164 = (value) =>
+    check_169 = (value) =>
       typeof value == "string" &&
       (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
       (value.length <= 200 || (value.length <= 400 && CodePointCount(value) <= 200)),
-    check_165 = (value) =>
+    check_170 = (value) =>
       Array.isArray(value) &&
-      value.every((unique_66, index) => check_163(unique_66)) &&
+      value.every((unique_66, index) => check_168(unique_66)) &&
       value.length <= 20,
-    check_166 = (value) =>
+    check_171 = (value) =>
       typeof value == "string" &&
       (value.length <= 2e3 || (value.length <= 4e3 && CodePointCount(value) <= 2e3)),
-    check_167 = (value) =>
-      check_168(value) ||
-      check_169(value) ||
-      check_170(value) ||
-      check_171(value) ||
-      check_172(value) ||
-      check_173(value),
-    check_168 = (value) => typeof value == "string" && value === "session",
-    check_169 = (value) => typeof value == "string" && value === "options",
-    check_170 = (value) => typeof value == "string" && value === "status",
-    check_171 = (value) => typeof value == "string" && value === "management",
-    check_172 = (value) => typeof value == "string" && value === "media",
-    check_173 = (value) => typeof value == "string" && value === "tools",
-    check_174 = (value) => check_175(value) || check_176(value) || check_130(value),
-    check_175 = (value) => typeof value == "string" && value === "native",
-    check_176 = (value) => typeof value == "string" && value === "skill",
-    check_177 = (value) => check_178(value) || check_175(value) || check_179(value),
-    check_178 = (value) => typeof value == "string" && value === "text",
-    check_179 = (value) => typeof value == "string" && value === "both",
-    check_180 = (value) =>
+    check_172 = (value) =>
+      check_173(value) ||
+      check_174(value) ||
+      check_175(value) ||
+      check_176(value) ||
+      check_177(value) ||
+      check_178(value),
+    check_173 = (value) => typeof value == "string" && value === "session",
+    check_174 = (value) => typeof value == "string" && value === "options",
+    check_175 = (value) => typeof value == "string" && value === "status",
+    check_176 = (value) => typeof value == "string" && value === "management",
+    check_177 = (value) => typeof value == "string" && value === "media",
+    check_178 = (value) => typeof value == "string" && value === "tools",
+    check_179 = (value) => check_180(value) || check_181(value) || check_130(value),
+    check_180 = (value) => typeof value == "string" && value === "native",
+    check_181 = (value) => typeof value == "string" && value === "skill",
+    check_182 = (value) => check_183(value) || check_180(value) || check_184(value),
+    check_183 = (value) => typeof value == "string" && value === "text",
+    check_184 = (value) => typeof value == "string" && value === "both",
+    check_185 = (value) =>
       Array.isArray(value) &&
-      value.every((unique_67, index) => check_181(unique_67)) &&
+      value.every((unique_67, index) => check_186(unique_67)) &&
       value.length <= 20,
-    check_181 = (value) =>
+    check_186 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
@@ -946,24 +953,24 @@ var isChatHistoryState = (() => {
       Object.getOwnPropertyNames(value).every(
         (unique_68, unique_69) => External[28].test(unique_68) || check_2(value[unique_68]),
       ) &&
-      check_163(value.name) &&
-      check_182(value.description) &&
-      check_183(value.type) &&
+      check_168(value.name) &&
+      check_187(value.description) &&
+      check_188(value.type) &&
       (value.required === void 0 || !("required" in value) || check_34(value.required)) &&
-      (value.choices === void 0 || !("choices" in value) || check_187(value.choices)) &&
+      (value.choices === void 0 || !("choices" in value) || check_192(value.choices)) &&
       (value.dynamic === void 0 || !("dynamic" in value) || check_34(value.dynamic)),
-    check_182 = (value) =>
+    check_187 = (value) =>
       typeof value == "string" &&
       (value.length <= 500 || (value.length <= 1e3 && CodePointCount(value) <= 500)),
-    check_183 = (value) => check_184(value) || check_185(value) || check_186(value),
-    check_184 = (value) => typeof value == "string" && value === "string",
-    check_185 = (value) => typeof value == "string" && value === "number",
-    check_186 = (value) => typeof value == "string" && value === "boolean",
-    check_187 = (value) =>
+    check_188 = (value) => check_189(value) || check_190(value) || check_191(value),
+    check_189 = (value) => typeof value == "string" && value === "string",
+    check_190 = (value) => typeof value == "string" && value === "number",
+    check_191 = (value) => typeof value == "string" && value === "boolean",
+    check_192 = (value) =>
       Array.isArray(value) &&
-      value.every((unique_70, index) => check_188(unique_70)) &&
+      value.every((unique_70, index) => check_193(unique_70)) &&
       value.length <= 50,
-    check_188 = (value) =>
+    check_193 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
@@ -972,12 +979,12 @@ var isChatHistoryState = (() => {
       Object.getOwnPropertyNames(value).every(
         (unique_71, unique_72) => External[29].test(unique_71) || check_2(value[unique_71]),
       ) &&
-      check_189(value.value) &&
-      check_189(value.label),
-    check_189 = (value) =>
+      check_194(value.value) &&
+      check_194(value.label),
+    check_194 = (value) =>
       typeof value == "string" &&
       (value.length <= 200 || (value.length <= 400 && CodePointCount(value) <= 200)),
-    check_190 = (value) =>
+    check_195 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
@@ -986,11 +993,11 @@ var isChatHistoryState = (() => {
       Object.getOwnPropertyNames(value).every(
         (unique_73, unique_74) => External[30].test(unique_73) || check_2(value[unique_73]),
       ) &&
-      check_191(value.when) &&
-      check_192(value.action),
-    check_191 = (value) => typeof value == "string" && value === "no-arguments",
-    check_192 = (value) => check_193(value),
-    check_193 = (value) =>
+      check_196(value.when) &&
+      check_197(value.action),
+    check_196 = (value) => typeof value == "string" && value === "no-arguments",
+    check_197 = (value) => check_198(value),
+    check_198 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
@@ -998,8 +1005,8 @@ var isChatHistoryState = (() => {
       Object.getOwnPropertyNames(value).every(
         (unique_75, unique_76) => External[31].test(unique_75) || check_2(value[unique_75]),
       ) &&
-      check_194(value.kind),
-    check_194 = (value) => typeof value == "string" && value === "device-pairing";
+      check_199(value.kind),
+    check_199 = (value) => typeof value == "string" && value === "device-pairing";
   return (value) => check_0(value);
 })();
 export { isChatHistoryState };
