@@ -129,26 +129,6 @@ export function navigationSurfaceIsHidden(params: {
   );
 }
 
-/** The sidebar hosts the refresh notice while its panel is on screen. */
-export function refreshNoticeInSidebar(params: {
-  onboarding: boolean;
-  navCollapsed: boolean;
-  navDrawerOpen: boolean;
-  mobileNavLayout: boolean;
-}): boolean {
-  return (
-    !params.onboarding && (params.mobileNavLayout ? params.navDrawerOpen : !params.navCollapsed)
-  );
-}
-
-export function floatingRefreshNoticeVisible(params: {
-  compact?: boolean;
-  refreshRequired: boolean;
-  refreshInSidebar: boolean;
-}): boolean {
-  return !params.compact && params.refreshRequired && !params.refreshInSidebar;
-}
-
 export function floatingSidebarAttentionVisible(params: {
   navigationSurfaceHidden: boolean;
   mobileNavLayout: boolean;

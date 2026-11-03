@@ -21,7 +21,6 @@ describe("OpenClaw shell update affordance", () => {
         mobileNavLayout={false}
         onboarding={false}
         refreshRequired={refreshRequired()}
-        refreshInSidebar={false}
         onRefresh={onRefresh}
       />
     ));
@@ -54,38 +53,18 @@ describe("OpenClaw shell update affordance", () => {
         {...surface}
         navigationSurfaceHidden
         refreshRequired={refreshRequired()}
-        refreshInSidebar={false}
         onRefresh={async () => false}
       />
     ));
     expect(view.container.querySelector("openclaw-sidebar-attention")).toBeNull();
     await vi.waitFor(() =>
-      expect(view.container.textContent).toContain("Refresh for full capabilities"),
+      expect(
+        view.container.querySelector(".refresh-notice__surface")?.getAttribute("aria-label"),
+      ).toContain("Refresh for full capabilities"),
     );
     expect(view.container.querySelector(".refresh-notice__surface")).not.toBeNull();
     setRefreshRequired(false);
     flush();
     expect(view.container.querySelector("openclaw-sidebar-update-card")).toBeNull();
-  });
-
-  it("leaves the refresh notice to the sidebar while the sidebar hosts it", async () => {
-    const [refreshInSidebar, setRefreshInSidebar] = createSignal(true);
-    const view = mountSolid(() => (
-      <FloatingUpdateCard
-        navigationSurfaceHidden={false}
-        mobileNavLayout={false}
-        onboarding={false}
-        refreshRequired
-        refreshInSidebar={refreshInSidebar()}
-        onRefresh={async () => false}
-      />
-    ));
-    await vi.dynamicImportSettled();
-    expect(view.container.querySelector("openclaw-sidebar-update-card")).toBeNull();
-    setRefreshInSidebar(false);
-    flush();
-    await vi.waitFor(() =>
-      expect(view.container.querySelector(".refresh-notice-host--floating")).not.toBeNull(),
-    );
   });
 });

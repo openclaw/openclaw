@@ -32,10 +32,7 @@ import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy
 import { readShellView, type ShellView, type ShellViewHost } from "./app-shell-view-state.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
-import {
-  floatingRefreshNoticeVisible,
-  floatingSidebarAttentionVisible,
-} from "./navigation-surface.ts";
+import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
 import { RouterOutlet } from "./router-outlet.tsx";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, patchSettings } from "./settings.ts";
 import { CollapsedHomeToggle } from "./shell-assistant-toggles.tsx";
@@ -428,7 +425,7 @@ export function ApplicationShell(props: {
           <Show
             when={
               floatingSidebarAttentionVisible(view().floatingUpdateCard) ||
-              floatingRefreshNoticeVisible(view().floatingUpdateCard)
+              (!view().floatingUpdateCard.compact && view().floatingUpdateCard.refreshRequired)
             }
           >
             <FloatingUpdateCard {...view().floatingUpdateCard} />

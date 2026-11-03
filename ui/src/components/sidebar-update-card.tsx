@@ -444,7 +444,7 @@ export function SidebarUpdateCard(
             ? t("updates.refreshBlocked")
             : t("chat.sidebar.serverUpdatedRefresh");
     return (
-      <div class="sidebar-update-card refresh-notice" role="status" aria-live="polite">
+      <div class="refresh-notice" role="status" aria-live="polite">
         {renderStatus()}
         <button
           ref={sidebarAttentionFocusRef()}
@@ -459,17 +459,13 @@ export function SidebarUpdateCard(
           aria-busy={refreshInFlight() ? "true" : "false"}
           onClick={() => void refreshControlUi()}
         >
-          <span class="refresh-notice__icon" aria-hidden="true">
-            <Show when={!refreshInFlight()} fallback={<span class="session-run-spinner" />}>
-              <Icon name={problem() === "unreachable" ? "alertTriangle" : "refresh"} />
-            </Show>
-          </span>
-          <span class="refresh-notice__text">
-            <span class="refresh-notice__title">{t("chat.sidebar.serverUpdatedTitle")}</span>
-            <span class="refresh-notice__detail">{detail()}</span>
-          </span>
+          {/* Phones replace the title with a following detail. */}
+          <Show when={refreshInFlight() || problem()}>
+            <span class="sidebar-update-card__subtitle refresh-notice__detail">{detail()}</span>
+          </Show>
+          <span class="sidebar-update-card__title">{t("chat.sidebar.serverUpdatedTitle")}</span>
           <Show when={!refreshInFlight()}>
-            <span class="refresh-notice__action" aria-hidden="true">
+            <span class="sidebar-update-card__hold refresh-notice__action" aria-hidden="true">
               {problem() === "unreachable" ? t("common.retry") : t("common.refresh")}
             </span>
           </Show>
