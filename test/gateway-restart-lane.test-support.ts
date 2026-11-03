@@ -172,7 +172,7 @@ export async function measureRestartLaneFlood(options: {
     },
     signal: options.signal,
     startTimeoutMs: 180_000,
-    gracefulShutdownTimeoutMs: 20_000,
+    gracefulShutdownTimeoutMs: options.fixture ? 180_000 : 20_000,
   });
   const keys = Array.from({ length: count }, (_, id) => `agent:main:dashboard:lane-resume-${id}`);
   let client: GatewayClient | undefined;
