@@ -7,7 +7,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ModelSetupWizard } from "../model-setup/wizard-view-solid.tsx";
 import type { ModelProviderLogin } from "./login-controller.ts";
-import { hasProviderAccounts, ProviderAccountSummary } from "./profiles-view.tsx";
+import { ProviderAccountSummary } from "./profiles-view.tsx";
 
 export function ModelProviderLoginView(props: { controller: ModelProviderLogin }) {
   const picker = createMemo(() => props.controller.pickerView());
@@ -198,7 +198,7 @@ function PickerDialog(props: {
                   <Show when={current().unavailable}>
                     {(unavailable) => <p role="status">{unavailable().message}</p>}
                   </Show>
-                  <Show when={!current().unavailable && hasProviderAccounts(current().accounts)}>
+                  <Show when={!current().unavailable}>
                     <ProviderAccountSummary
                       cards={current().accounts}
                       recovery={
@@ -213,9 +213,7 @@ function PickerDialog(props: {
                     />
                   </Show>
                   <section class="model-provider-login__methods">
-                    <Show when={hasProviderAccounts(current().accounts)}>
-                      <h3>{t("modelProviders.login.connectAccount")}</h3>
-                    </Show>
+                    <h3>{t("modelProviders.login.connectAccount")}</h3>
                     <div
                       data-models-login-choice
                       ref={props.controller.setMethodChoices.bind(props.controller)}
@@ -225,6 +223,7 @@ function PickerDialog(props: {
                           <LoginOption
                             label={selected().label}
                             hint={selected().hint || undefined}
+                            card
                             disabled={current().disabled}
                             onClick={() => current().onChoice(selected())}
                           />
@@ -237,6 +236,7 @@ function PickerDialog(props: {
                         label={t("modelProviders.status.apiKey")}
                         hint={t("modelProviders.login.apiKeyHint")}
                         apiKey
+                        card
                         disabled={current().disabled}
                         onClick={() => current().onApiKey()}
                       />
@@ -282,6 +282,8 @@ function LoginOption(props: {
   hint?: string;
   provider?: string;
   apiKey?: boolean;
+  /** Connection methods are cards; catalog providers are plain rows. */
+  card?: boolean;
   disabled: boolean;
   onClick: () => void;
   buttonRef?: (element: HTMLButtonElement) => void;
@@ -290,7 +292,7 @@ function LoginOption(props: {
     <button
       ref={props.buttonRef}
       type="button"
-      class="model-provider-login__option"
+      class={["model-provider-login__option", { btn: props.card }]}
       data-models-login-provider={props.provider}
       data-models-login-api-key={props.apiKey ? "" : undefined}
       disabled={props.disabled}

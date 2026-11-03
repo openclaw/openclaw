@@ -424,6 +424,9 @@ export function ProviderAccountSummary(props: {
         </div>
       ) : undefined}
       <For each={sources()}>{(source) => <p class="muted">{source}</p>}</For>
+      {!profiles().length && !sources().length ? (
+        <p class="muted">{t("modelProviders.login.noAccounts")}</p>
+      ) : undefined}
     </section>
   );
 }

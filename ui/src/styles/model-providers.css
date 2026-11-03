@@ -465,8 +465,8 @@
   list-style: none;
 }
 
-/* Rows reach past the column so their text lines up with the title and field. */
-.model-provider-login__option {
+/* Catalog rows reach past the column so their text lines up with the title and field. */
+.model-provider-login__providers .model-provider-login__option {
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -484,22 +484,33 @@
   cursor: var(--cursor-action);
 }
 
-.model-provider-login__option:hover:not(:disabled) {
+.model-provider-login__providers .model-provider-login__option:hover:not(:disabled) {
   background: var(--bg-hover);
 }
 
-.model-provider-login__option:focus-visible {
+.model-provider-login__providers .model-provider-login__option:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
 
-.model-provider-login__option:disabled {
+.model-provider-login__providers .model-provider-login__option:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.model-provider-login__option strong {
+.model-provider-login__providers .model-provider-login__option strong {
   font-weight: var(--control-ui-font-weight-medium, 500);
+}
+
+/* Connection methods stay cards, so each way in reads as one choice. */
+.model-provider-login__option.btn {
+  justify-content: flex-start;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 52px;
+  padding: var(--space-3);
+  text-align: start;
+  white-space: normal;
 }
 
 .model-provider-login__copy > span {
@@ -511,22 +522,25 @@
 .model-provider-login__accounts h3,
 .model-provider-login__methods h3 {
   margin: 0;
-  color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  font-weight: 400;
 }
 
-.model-provider-login__accounts,
-.model-provider-login__methods,
-.model-provider-login [data-models-login-choice] {
+.model-provider-login__accounts {
   display: grid;
   gap: var(--space-1);
 }
 
-.model-provider-login__methods > .model-provider-login__option,
-.model-provider-login [data-models-login-choice] > .model-provider-login__option {
-  width: calc(100% + 2 * var(--space-2));
-  margin-inline: calc(-1 * var(--space-2));
+/* The empty state and key sources read at the description's size, under their heading. */
+.model-provider-login__accounts > p {
+  margin: 0;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.model-provider-login__methods,
+.model-provider-login [data-models-login-choice] {
+  display: grid;
+  gap: var(--space-2);
 }
 
 .model-provider-login__account {
