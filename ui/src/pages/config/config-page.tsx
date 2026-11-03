@@ -78,24 +78,22 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
     case "mcp":
       return (
         <>
-          {t("mcpPage.intro")} <LearnMoreLink url="https://docs.openclaw.ai/tools/mcp" />
+          {t("subtitles.mcp")} <LearnMoreLink url="https://docs.openclaw.ai/tools/mcp" />
         </>
       );
     case "security":
       return (
         <>
-          {t("quickSettings.security.intro")}{" "}
+          {t("subtitles.security")}{" "}
           <LearnMoreLink url="https://docs.openclaw.ai/gateway/security" />
         </>
       );
     case "talk":
       return (
         <>
-          {t("talkPage.intro")} <LearnMoreLink url="https://docs.openclaw.ai/nodes/talk" />
+          {t("subtitles.talk")} <LearnMoreLink url="https://docs.openclaw.ai/nodes/talk" />
         </>
       );
-    case "updates":
-      return t("updates.page.intro");
     default:
       return subtitleForRoute(pageId);
   }

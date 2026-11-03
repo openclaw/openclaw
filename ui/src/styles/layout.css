@@ -3815,6 +3815,10 @@ html.openclaw-native-web-chrome
   color: var(--muted);
 }
 
+.content-header--settings:not(.hub-page-header) .page-subtitle {
+  max-width: none;
+}
+
 .page-subtitle .learn-more-link {
   white-space: nowrap;
 }
