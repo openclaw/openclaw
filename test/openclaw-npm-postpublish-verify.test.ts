@@ -31,14 +31,8 @@ import {
   writeStableRootRuntimeAliases,
 } from "../scripts/runtime-postbuild.mts";
 import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../src/infra/runtime-worker-url.js";
 import { WORKER_BUNDLE_ENTRY_PATH } from "../src/shared/worker-bundle-hash.js";
-import { withEnv } from "../src/test-utils/env.js";
 import { createScriptTestHarness } from "./scripts/test-helpers.js";
-import { toolingTsEntrypoints } from "./scripts/tooling-ts-runtime.test-support.js";
 
 const { createTempDir } = createScriptTestHarness();
 const makeInstalledPackageRoot = () => createTempDir("openclaw-postpublish-");

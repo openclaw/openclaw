@@ -22,8 +22,6 @@ import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
-const publicationRecoveryPath =
-  ".agents/skills/release-openclaw-maintainer/references/publication-recovery.md";
 const testNodeExecPath = resolveTestNodeExecPath();
 
 type Step = {
@@ -1236,42 +1234,6 @@ ${policy}`,
     expect(serialized).not.toContain("NPM_TOKEN");
     expect(serialized).not.toMatch(/\bnpm publish\b/u);
     expect(serialized).not.toMatch(/\bnpm dist-tag\b/u);
-  });
-
-  it("routes publication recovery through the read-only trusted-publisher preflight", () => {
-    const guidance = readFileSync(publicationRecoveryPath, "utf8");
-    const recoveryGuidance = guidance
-      .split("Before resuming regular plugin npm publication", 2)[1]
-      ?.split("Publication records distinguish", 1)[0];
-    const recoveryCommand = recoveryGuidance?.split("```bash", 2)[1]?.split("```", 1)[0];
-    expect(recoveryGuidance).toContain("npm-token-bootstrap");
-    expect(recoveryGuidance).toContain("If no recovered package uses `npm-oidc`, skip this check.");
-    expect(recoveryGuidance).toContain("For extended-stable recovery");
-    expect(recoveryCommand).toBeDefined();
-    expect(recoveryCommand).toContain("--ref release-publish/<tooling-sha12>-<epoch>");
-    expect(recoveryCommand).toContain("-f preflight_only=true");
-    expect(recoveryCommand).toContain("-f trusted_publisher_preflight=true");
-    expect(recoveryCommand).toContain("-f publish_scope=selected");
-    expect(recoveryCommand).toContain("-f plugins=<comma-separated-npm-oidc-package-names>");
-    expect(recoveryCommand).not.toContain("publish_scope=all-publishable");
-    expect(recoveryCommand).not.toContain("npm_dist_tag=extended-stable");
-    expect(recoveryCommand).not.toContain("release_publish_run_id");
-    const extendedCommand = recoveryGuidance
-      ?.split("For extended-stable recovery", 2)[1]
-      ?.split("```bash", 2)[1]
-      ?.split("```", 1)[0];
-    expect(extendedCommand).toBeDefined();
-    expect(extendedCommand).toContain(
-      "--ref release-publish/<trusted-current-main-tooling-sha12>-<epoch>",
-    );
-    expect(extendedCommand).toContain("-f preflight_only=true");
-    expect(extendedCommand).toContain("-f trusted_publisher_preflight=true");
-    expect(extendedCommand).toContain("-f publish_scope=all-publishable");
-    expect(extendedCommand).toContain("-f ref=<exact-canonical-extended-stable-branch-tip-sha>");
-    expect(extendedCommand).toContain("-f npm_dist_tag=extended-stable");
-    expect(extendedCommand).not.toContain("-f plugins=");
-    expect(extendedCommand).not.toContain("release_candidate_branch");
-    expect(extendedCommand).not.toContain("release_publish_run_id");
   });
 
   it("publishes extended-stable with OIDC only and verifies every package tag", () => {

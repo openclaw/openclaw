@@ -1,6 +1,6 @@
 // npm publish plan tests validate package publish planning rules.
 import { createServer } from "node:http";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   fetchNpmRegistryPackumentWithRetry,
   fetchNpmRegistryTarballWithRetry,
@@ -33,6 +33,19 @@ function registryResponse(params: {
       return params.body ?? "{}";
     },
   } as unknown as Response;
+}
+
+function fetchPackument(
+  options: Omit<
+    Parameters<typeof fetchNpmRegistryPackumentWithRetry>[0],
+    "packageName" | "packageUrl"
+  >,
+) {
+  return fetchNpmRegistryPackumentWithRetry({
+    packageName: "@openclaw/meta-provider",
+    packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
+    ...options,
+  });
 }
 
 describe("fetchNpmRegistryPackumentWithRetry", () => {
