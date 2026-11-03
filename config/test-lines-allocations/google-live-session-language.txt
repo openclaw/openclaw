@@ -1,2 +1,0 @@
-42
-# Cover session-language guidance and absent/unknown hints at the Google Live connection boundary.
