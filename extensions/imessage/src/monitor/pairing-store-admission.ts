@@ -10,47 +10,47 @@ import type { IMessagePayload } from "./types.js";
  * A failed read must reach the inbound dispatch owner so the durable claim is
  * retried; it must not become an empty allowlist and a pairing challenge.
  */
-export async function readIMessageInboundStoreAllowFrom(params: {
-  message: IMessagePayload;
-  cfg: OpenClawConfig;
-  accountId: string;
-  dmPolicy: string;
-  allowFrom: string[];
-  env?: NodeJS.ProcessEnv;
-}): Promise<string[]> {
-  if (!(await isIMessagePairingStoreRequired(params))) {
+export async function readIMessageInboundStoreAllowFrom(
+  message: IMessagePayload,
+  cfg: OpenClawConfig,
+  accountId: string,
+  dmPolicy: string,
+  allowFrom: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string[]> {
+  if (!(await isIMessagePairingStoreRequired(message, cfg, accountId, dmPolicy, allowFrom))) {
     return [];
   }
-  return await readChannelAllowFromStore("imessage", params.env ?? process.env, params.accountId);
+  return await readChannelAllowFromStore("imessage", env, accountId);
 }
 
-async function isIMessagePairingStoreRequired(params: {
-  message: IMessagePayload;
-  cfg: OpenClawConfig;
-  accountId: string;
-  dmPolicy: string;
-  allowFrom: string[];
-}): Promise<boolean> {
+async function isIMessagePairingStoreRequired(
+  message: IMessagePayload,
+  cfg: OpenClawConfig,
+  accountId: string,
+  dmPolicy: string,
+  allowFrom: string[],
+): Promise<boolean> {
   if (
-    params.dmPolicy === "open" ||
-    params.dmPolicy === "allowlist" ||
-    params.dmPolicy === "disabled" ||
-    params.message.is_group
+    dmPolicy === "open" ||
+    dmPolicy === "allowlist" ||
+    dmPolicy === "disabled" ||
+    message.is_group
   ) {
     return false;
   }
-  const sender = (params.message.sender ?? "").trim();
+  const sender = (message.sender ?? "").trim();
   if (!sender) {
     return true;
   }
-  const chatId = params.message.chat_id;
-  const chatGuid = params.message.chat_guid ?? undefined;
-  const chatIdentifier = params.message.chat_identifier ?? undefined;
+  const chatId = message.chat_id;
+  const chatGuid = message.chat_guid ?? undefined;
+  const chatIdentifier = message.chat_identifier ?? undefined;
   const access = await createChannelIngressResolver({
     channelId: "imessage",
-    accountId: params.accountId,
+    accountId,
     identity: imessageIngressIdentity,
-    cfg: params.cfg,
+    cfg,
     readStoreAllowFrom: async () => [],
   }).message({
     subject: {
