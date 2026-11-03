@@ -11,39 +11,29 @@ enum ClientCredentialStartup {
         }
     }
 
-    /// Recovery for a Gateway-held preparation while another owner keeps that Gateway's version.
-    /// Migration retires the credential layout that Gateway reads, so the app neither stops it
-    /// nor migrates under it; the operator updates it through its owner or keeps a matching app.
+    /// A Gateway-held refusal establishes maintenance contention, not version incompatibility.
     nonisolated static func excludedGatewayRecovery(
         _ exclusion: CLIInstallPrompter.ManagedRepairExclusion,
-        appVersion: String?,
         detail: String) -> (title: String, message: String)
     {
-        let target = appVersion.map { "OpenClaw \($0) or newer" } ?? "this app's version or newer"
-        let owner: String
-        let update: String
-        switch exclusion {
+        let owner = switch exclusion {
         case .extendedStable:
-            owner = "Your local Gateway follows the extended-stable channel, so OpenClaw kept its version."
-            update = "To use this app, move the Gateway to \(target) with openclaw update --channel stable."
+            "Your local Gateway follows the extended-stable channel, so OpenClaw kept its version."
         case let .installPolicy(policy):
-            owner = "OpenClaw installs Gateways from the \(policy) channel, so it left this Gateway's version " +
+            "OpenClaw installs Gateways from the \(policy) channel, so it left this Gateway's version " +
                 "to openclaw update."
-            update = "To use this app, update the Gateway to \(target) with openclaw update."
         case .independentlyManaged:
-            owner = "Your local Gateway service is managed outside OpenClaw, so the app did not stop or replace it."
-            update = "To use this app, update the Gateway to \(target) with the tool that manages it."
+            "Your local Gateway service is managed outside OpenClaw, so the app did not stop or replace it."
         }
         let message = [
             owner,
-            "This app must migrate local client credentials, and that Gateway is still using them. " +
-                "Its current version can't read the migrated credentials, so the app left it running " +
-                "and stopped before migrating.",
-            update + " Then choose Retry.",
-            "To keep the Gateway's current version, quit and install the OpenClaw app release that matches it.",
+            "This app needs to perform local client credential maintenance, but a running Gateway holds " +
+                "the shared state. The app left it running and stopped before performing that maintenance.",
+            "Resolve the reported maintenance conflict through the tool that manages your Gateway, then choose Retry.",
+            "Change the Gateway or app version only if recovery identifies a version incompatibility.",
             "Details: " + detail.suffix(300),
         ].joined(separator: "\n\n")
-        return ("OpenClaw couldn't migrate client credentials", message)
+        return ("OpenClaw couldn't prepare client credentials", message)
     }
 
     typealias CommandRunner = @Sendable ([String], String, [String: String]) async -> ShellExecutor.ShellResult

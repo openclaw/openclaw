@@ -423,13 +423,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Another owner keeps this Gateway, so the operator updates it there and retries in place.
+    /// Another owner keeps this Gateway, so the operator resolves maintenance there and retries in place.
     /// Background launches report the same recovery and quit, as before.
     private func retryAfterExcludedGatewayFailure(
         _ exclusion: CLIInstallPrompter.ManagedRepairExclusion, detail: String) async -> Bool
     {
         let recovery = ClientCredentialStartup.excludedGatewayRecovery(
-            exclusion, appVersion: GatewayEnvironment.appVersionString(), detail: detail)
+            exclusion, detail: detail)
         guard AppLaunchRuntimePlan.current.allowsActivation else {
             fputs("\(recovery.title). \(recovery.message)\n", stderr)
             return false

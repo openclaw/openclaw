@@ -97,17 +97,17 @@ build's app-managed Gateway service running, that Gateway still owns the state,
 so the app stops it, prepares credentials, and then installs the service on its
 own runtime. The app leaves a local Gateway on the extended-stable channel, a
 channel install policy, or an independently managed service at its selected
-version. When credential migration is required but that running Gateway still
-holds the shared state, the app leaves the Gateway running and does not
-migrate: migrating would retire the credential layout that version reads. The
-app explains which owner keeps the Gateway and offers **Retry**. Other
-credential preparation failures keep the generic recovery alert.
-Update that Gateway to the app's version or newer through its owner (for
-example `openclaw update`, or `openclaw update --channel stable` to leave
-extended-stable), then choose **Retry**. To keep the Gateway's version, install
-the matching OpenClaw app release instead. Background launches print the same
-guidance and quit. Ordinary pending migrations and validated remounts
-complete automatically without a manual Doctor command or a recovery prompt.
+version. When credential maintenance is required but a running Gateway still
+holds the shared state, the app leaves the Gateway running and stops before
+performing that maintenance. This conflict does not establish version
+incompatibility: maintenance can also reconcile a receipt after a filesystem
+remount without changing the credential layout. The app explains which owner
+keeps the Gateway and offers **Retry**. Other credential preparation failures
+keep the generic recovery alert. Resolve the reported maintenance conflict
+through the tool that manages the Gateway, then choose **Retry**. Change the
+Gateway or app version only if recovery identifies a version incompatibility.
+Background launches print the same guidance and quit. Ordinary pending migrations
+and validated remounts complete automatically without a manual Doctor command or a recovery prompt.
 A recognized credential-only native version-zero database can be
 extracted under exclusive custody before PostgreSQL bootstrap. Unknown data or
 other application tables require the supported Doctor/port route. Existing

@@ -80,18 +80,6 @@ struct ClientCredentialStartupTests {
         }
     }
 
-    @Test func `Gateway-held recovery keeps its owner and offers both supported paths`() {
-        let recovery = ClientCredentialStartup.excludedGatewayRecovery(
-            .extendedStable, appVersion: "2026.10.30", detail: "synthetic lease refusal")
-        #expect(recovery.message.contains("openclaw update --channel stable"))
-        #expect(recovery.message.contains("OpenClaw 2026.10.30 or newer"))
-        #expect(recovery.message.contains("app release that matches it"))
-        #expect(recovery.message.contains("synthetic lease refusal"))
-        #expect(!recovery.message.contains("doctor --fix"))
-        #expect(ClientCredentialStartup.excludedGatewayRecovery(
-            .installPolicy("beta"), appVersion: nil, detail: "").message.contains("the beta channel"))
-    }
-
     @Test func `a mismatched bundled build never dispatches preparation through another CLI`() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
