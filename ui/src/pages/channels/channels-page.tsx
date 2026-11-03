@@ -151,7 +151,7 @@ export function ChannelsPage() {
       yield Promise.race([pending, retired]);
     } catch (error) {
       if (isCurrent(view)) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   });
@@ -503,6 +503,7 @@ export function ChannelsPage() {
     const labels = channelIds.map((channelId) => resolveChannelLabel(props, channelId));
     const [only] = channelIds.length === 1 ? channelIds : [];
     showToast({
+      actionPrimary: true,
       message:
         only !== undefined
           ? t("channels.config.unsavedOnLeave", { channel: resolveChannelLabel(props, only) })

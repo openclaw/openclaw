@@ -7,7 +7,10 @@ import { showToast } from "../../lib/toast.ts";
 
 async function copyAgentId(id: string) {
   const copied = await copyToClipboard(id);
-  showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+  showToast({
+    severity: copied ? undefined : "error",
+    message: t(copied ? "common.copied" : "common.copyFailed"),
+  });
 }
 
 // Phone widths swap the toolbar's secondary actions for this menu; both run the same actions.
