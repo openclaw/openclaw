@@ -242,6 +242,14 @@ openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 
 Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings. A saved target can become unresolvable or stop advertising execution support. Its binding then stays selected and is marked **Unavailable**. You can clear it with **Any node** or **Use default**, even when no execution-capable nodes are available. Supported names, addresses, and ID prefixes resolve without rewriting the saved reference.
 
+### macOS Local Network access
+
+A Gateway running as a macOS LaunchAgent can fail to reach LAN devices even when
+the same command succeeds in Terminal. Check [Local Network permission for the
+Gateway runtime](/platforms/mac/permissions#local-network-access-for-the-gateway)
+when Gateway-hosted commands fail with `EHOSTUNREACH`. If a connected node already
+has access, select that node with `host=node` for the command.
+
 ### Python environments (`uv`)
 
 In a [uv-managed project](https://docs.astral.sh/uv/guides/projects/), a bare `python` or `python3` uses the interpreter selected by the exec host's `PATH`. If the project environment is not on that path, imports of dependencies installed there can fail with `ModuleNotFoundError`.
