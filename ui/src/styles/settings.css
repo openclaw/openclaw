@@ -1744,7 +1744,7 @@ openclaw-settings-save-indicator:empty {
   background: none;
   color: inherit;
   font: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .settings-save-indicator__reason-toggle:hover {

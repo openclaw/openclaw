@@ -17,8 +17,10 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
-  /** Opaque original source identity used only to compare compatible queued input. */
+  /** Opaque authenticated source identity, independent of per-invocation restrictions. */
   source?: object;
+  /** Independent invocation dependency; compatible queued input must retain this exact owner. */
+  invocation?: object;
   /** Retains the original source independently of a foreground run or request. */
   retain?: () => () => void;
   /** Assignment and verified login from one check of the original live profile authority. */
