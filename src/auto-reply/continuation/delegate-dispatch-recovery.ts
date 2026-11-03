@@ -101,6 +101,11 @@ export async function rearmPendingContinuationDelegates(params: {
   entry: SessionEntry;
 }): Promise<void> {
   const { sessionKey, storePath, entry } = params;
+  const runtimeConfig = resolveContinuationRuntimeConfig();
+  // Disabled continuation leaves the kept rows durable for a re-enable, as recovery does.
+  if (!runtimeConfig.enabled) {
+    return;
+  }
   const earliestQueuedDueAt = await peekEarliestQueuedDelegateDueAt(sessionKey);
   const claimed =
     (await listUnresolvedDelegateClaims(sessionKey, { updatedAtOrBefore: Date.now() })).length > 0;
@@ -116,7 +121,7 @@ export async function rearmPendingContinuationDelegates(params: {
     {
       chainState: loadContinuationChainState(entry),
       ctx: { sessionKey },
-      maxChainLength: resolveContinuationRuntimeConfig().maxChainLength,
+      maxChainLength: runtimeConfig.maxChainLength,
       applyDelegateChainTokensFold: true,
       ...sessionRowChainState(sessionKey, storePath, entry),
     },

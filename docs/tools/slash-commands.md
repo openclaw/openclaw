@@ -364,6 +364,8 @@ list of requirements reaches the agent complete.
     | Command | Description |
     | --- | --- |
     | `/subagents list\|log\|info` | Inspect sub-agent runs for the current session |
+    | `/continuations [list]` | List the session's queued continuation work (`continue_work` wakes and delegates not yet spawned) with ids. Text-only |
+    | `/continuations cancel <id> [id...]` | Owner-only. Cancel exactly the named continuation records and reply with a receipt per id. `/new` and `/reset` keep queued continuation work; this is how you stop it. Text-only |
     | `/acp spawn\|cancel\|steer\|close\|sessions\|status\|set-mode\|set\|cwd\|permissions\|timeout\|model\|reset-options\|doctor\|install\|help` | Manage ACP sessions and runtime options. Runtime controls require external owner or internal Gateway admin identity |
     | `/session unbind` | Detach the current conversation without closing its agent session |
     | `/agents` | List thread-bound agents for the current session |

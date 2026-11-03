@@ -7,6 +7,7 @@ import { handleBtwCommand } from "./commands-btw.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import { handleContextCommand } from "./commands-context-command.js";
+import { handleContinuationsCommand } from "./commands-continuations.js";
 import { handleDashboardCommand } from "./commands-dashboard.js";
 import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
 import { handleFollowupCommand } from "./commands-followup.js";
@@ -83,6 +84,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleWhoamiCommand,
     handleSystemAgentCommand,
     handleSubagentsCommand,
+    handleContinuationsCommand,
     handleAcpCommand,
     handleMcpCommand,
     handlePluginsCommand,

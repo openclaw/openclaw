@@ -485,6 +485,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/dispatch-acp.owner.test.ts",
   "src/auto-reply/reply/acp-spawn-owner.test.ts",
   "src/auto-reply/reply/commands-subagents.test.ts",
+  // /continuations reads and cancels real continuation custody through shared state.
+  "src/auto-reply/reply/commands-continuations.test.ts",
   "test/subagent-announce-origin.integration.test.ts",
   "test/subagent-progress-telegram-retirement.integration.test.ts",
   "test/media-progress-telegram-retirement.integration.test.ts",

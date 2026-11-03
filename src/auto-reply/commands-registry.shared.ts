@@ -362,6 +362,18 @@ export function buildBuiltinChatCommands(
         argsMenu: "auto",
       },
     ),
+    defineBuiltinCommand(
+      "continuations",
+      "List this session's queued continuation work, or cancel it by id.",
+      "management",
+      "standard",
+      {
+        activeRunSafe: true,
+        modelIndependent: "always",
+        nativeName: false,
+        acceptsArgs: true,
+      },
+    ),
     defineBuiltinCommand("acp", "Manage ACP sessions and runtime options.", "management", "power", {
       modelIndependent: (args) => {
         const parsed = parseSlashCommandOrNull(`/acp ${args}`, "/acp", "help");
