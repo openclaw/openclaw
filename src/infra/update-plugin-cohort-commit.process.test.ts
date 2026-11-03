@@ -164,7 +164,7 @@ it.each([false, true])(
           });
         }
         const result = await invoke();
-        expect(result.cleanup).toBe("normal");
+        expect(result.cleanup, JSON.stringify(result)).toBe("normal");
         expect(result.termination).toBe("exit");
         if (wrongBuild) {
           expect(result.code).not.toBe(0);
