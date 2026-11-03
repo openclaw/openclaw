@@ -167,7 +167,7 @@ suite.define(() => {
     expect(await page.evaluate(() => (window as LinkTestWindow).openclawModifiedLinkClick)).toEqual(
       { defaultPrevented: false, metaKey: true },
     );
-    expect(await linkMessages(page)).toHaveLength(2);
+    expect(await linkMessages(page)).toHaveLength(3);
 
     await page.evaluate(() => {
       const dialog = document.createElement("dialog");
@@ -194,7 +194,7 @@ suite.define(() => {
     await expect.poll(() => modalBrowserItem.isVisible()).toBe(true);
     await modalBrowserItem.click();
     await expectBrowserTab(page, "https://example.com/modal-report");
-    expect(await linkMessages(page)).toHaveLength(2);
+    expect(await linkMessages(page)).toHaveLength(3);
     await page.evaluate(() => {
       document.querySelector("#native-link-routing-modal")?.remove();
     });
