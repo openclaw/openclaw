@@ -262,6 +262,10 @@ suite.define(() => {
         if (!input) {
           throw new Error("file input missing");
         }
+        Object.defineProperty(window, "showOpenFilePicker", {
+          configurable: true,
+          value: undefined,
+        });
         input.click = () => {
           input.dataset.proxied = "true";
         };
