@@ -137,6 +137,9 @@
   --accent-muted: #ff5c5c;
   --accent-subtle: rgba(255, 92, 92, 0.1);
   --accent-foreground: #0e1015;
+  --accent-hover-foreground: var(--accent-foreground);
+  --accent-active: var(--accent);
+  --accent-active-foreground: var(--accent-foreground);
   --accent-glow: rgba(255, 92, 92, 0.2);
   --inbox-attention: #e5243b;
   --inbox-attention-foreground: #ffffff;
@@ -167,6 +170,9 @@
   /* Imported palettes supply a fill/ink pair, not a hover pair. Keep their
      contrast intact; built-in palettes override with audited hover colors. */
   --primary-hover: var(--primary);
+  --primary-hover-foreground: var(--primary-foreground);
+  --primary-active: var(--primary);
+  --primary-active-foreground: var(--primary-foreground);
   --primary-foreground: #ffffff;
 
   --secondary: #161920;

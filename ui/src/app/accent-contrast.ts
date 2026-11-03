@@ -36,8 +36,17 @@ export function controlUiAccentStates(color: string, hover?: string) {
   };
 }
 
-export function controlUiAccentFocus(color: string, surface: string): string {
-  const values = [luminance(color), luminance(surface)].toSorted((a, b) => b - a);
-  // Keep the chosen hue where it is visible; a neutral ring does not constrain the accent.
-  return (values[0]! + 0.05) / (values[1]! + 0.05) >= 3 ? color : controlUiAccentInk(surface);
+export function controlUiAccentFocus(color: string, surfaces: readonly string[]): string {
+  const contrast = (candidate: string) =>
+    Math.min(
+      ...surfaces.map((surface) => {
+        const values = [luminance(candidate), luminance(surface)].toSorted((a, b) => b - a);
+        return (values[0]! + 0.05) / (values[1]! + 0.05);
+      }),
+    );
+  // Keep the hue only when it remains visible on every surface carrying controls.
+  if (contrast(color) >= 3) {
+    return color;
+  }
+  return contrast("#000000") > contrast("#ffffff") ? "#000000" : "#ffffff";
 }

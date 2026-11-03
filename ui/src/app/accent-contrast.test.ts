@@ -43,3 +43,13 @@ it.each(["#ffffff", "#101014"])("keeps the focus ring visible on %s", (surface) 
   applyControlUiAccent(surface);
   expect(contrast(style.getPropertyValue("--ring"), surface)).toBeGreaterThanOrEqual(3);
 });
+
+it("keeps the ring visible on both the page and an elevated control surface", () => {
+  const style = document.documentElement.style;
+  style.setProperty("--bg", "#ffffff");
+  style.setProperty("--card", "#707070");
+  applyControlUiAccent("#707070");
+  const ring = style.getPropertyValue("--ring");
+  expect(contrast(ring, "#ffffff")).toBeGreaterThanOrEqual(3);
+  expect(contrast(ring, "#707070")).toBeGreaterThanOrEqual(3);
+});

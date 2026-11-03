@@ -260,8 +260,10 @@ export function applyControlUiAccent(userAccent?: string): void {
       root.style.setProperty("--" + family + suffix + "-foreground", pair.foreground);
     }
   }
-  const surface = resolveThemeColor(computed, "--bg");
-  root.style.setProperty("--ring", controlUiAccentFocus(accentColor, surface));
+  const surfaces = LINK_SURFACES.map((surface) => resolveThemeColor(computed, surface)).filter(
+    (surface) => /^#[0-9a-f]{6}$/i.test(surface),
+  );
+  root.style.setProperty("--ring", controlUiAccentFocus(accentColor, surfaces));
   const mix = (variable: string, amount: number) =>
     "color-mix(in srgb, var(" + variable + ") " + amount + "%, transparent)";
   if (color) {
