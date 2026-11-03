@@ -181,6 +181,45 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
     }
   });
 
+  it("completes an upload within its elapsed budget after a wall-clock correction", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    try {
+      vi.setSystemTime(0);
+      interactionMocks.clickViaPlaywright.mockImplementation(async () => {
+        vi.setSystemTime(60_000);
+        page.emitChooser();
+      });
+      let assigned = false;
+      // The native file assignment needs 10ms, independently of wall time.
+      page.fileChooser.setFiles.mockImplementation(async (_paths, { timeout }) => {
+        let assignment: ReturnType<typeof setTimeout> | undefined;
+        let expiry: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await new Promise<void>((resolve, reject) => {
+            assignment = setTimeout(() => {
+              assigned = true;
+              resolve();
+            }, 10);
+            expiry = setTimeout(
+              () => reject(new Error("Native file assignment timed out")),
+              timeout,
+            );
+          });
+        } finally {
+          clearTimeout(assignment);
+          clearTimeout(expiry);
+        }
+      });
+      const completed = Promise.allSettled([startUpload("e12", { timeoutMs: 500 })]);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(await completed).toEqual([{ status: "fulfilled", value: undefined }]);
+      expect(assigned).toBe(true);
+      expect(page.listenerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves the cleanup tail when a queued owner aborts", async () => {
     let firstSignal: AbortSignal | undefined;
     let finishCancellation!: () => void;
