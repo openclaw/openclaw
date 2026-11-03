@@ -257,6 +257,37 @@ export async function persistCliSessionBindingResult(
   });
 }
 
+/**
+ * A directly stopped first turn has no settled result, but its flushed native session is
+ * the chat's only continuity. The turn owner still guards the write; caller abort does not,
+ * and an existing binding is never replaced.
+ */
+export async function persistStoppedFirstCliSessionInStore(
+  params: CliSessionStoreTarget & {
+    binding: CliSessionBinding;
+    expectedSession?: InternalSessionEntry;
+    assertSettlementCurrent: SessionSourceAssertion;
+  },
+): Promise<void> {
+  if (!params.expectedSession || getCliSessionBinding(params.expectedSession, params.provider)) {
+    return;
+  }
+  await patchCliSessionBindingInStore({
+    ...params,
+    expectedSession: params.expectedSession,
+    preserveActivity: true,
+    skipMaintenance: true,
+    assertCommitAllowed: params.assertSettlementCurrent,
+    update: (entry) => {
+      if (getCliSessionBinding(entry, params.provider)) {
+        return false;
+      }
+      setCliSessionBinding(entry, params.provider, params.binding);
+      return true;
+    },
+  });
+}
+
 /** Clears a failed/invalid native binding; a turn owner supplies its exact commit guard. */
 export async function clearCliSessionInStore(
   params: CliSessionStoreTarget & {

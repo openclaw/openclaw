@@ -12,9 +12,10 @@ import {
   clearCliSessionInStore,
   buildCliSessionForkRunParams,
   persistCliSessionBindingResult,
+  persistStoppedFirstCliSessionInStore,
   restoreCliSessionForkInStore,
 } from "./cli-session-store.js";
-import { resolveCliSessionReuse } from "./cli-session.js";
+import { getCliSessionBinding, resolveCliSessionReuse } from "./cli-session.js";
 import {
   createRunResult,
   loadPersistedSessionEntry,
@@ -526,4 +527,77 @@ describe("clearCliSessionInStore", () => {
       });
     },
   );
+});
+
+describe("persistStoppedFirstCliSessionInStore", () => {
+  const sessionKey = "agent:main:explicit:stopped-first";
+  const entry = (fields: Partial<SessionEntry> = {}): SessionEntry => ({
+    sessionId: "openclaw-session",
+    updatedAt: 1,
+    ...fields,
+  });
+  const bound = (sessionId: string) =>
+    entry({ cliSessionBindings: { "claude-cli": { sessionId } } });
+
+  it.each([
+    ["fills an empty binding", entry(), undefined, "stopped-first-session"],
+    ["keeps a binding bound meanwhile", entry(), bound("bound-meanwhile"), "bound-meanwhile"],
+    [
+      "skips a reset session",
+      entry(),
+      entry({ sessionId: "openclaw-session-after-reset" }),
+      undefined,
+    ],
+    [
+      "skips a released writer",
+      entry({ activeWriterRunId: "stopped-run" }),
+      entry({ activeWriterRunId: "next-run" }),
+      undefined,
+    ],
+  ] as const)(
+    "persists a stopped first CLI session: %s",
+    async (_case, working, durable, expected) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        await seedSessionFixture(storePath, sessionKey, { ...(durable ?? working) });
+        const sessionStore = { [sessionKey]: { ...working } };
+        await persistStoppedFirstCliSessionInStore({
+          agentId: "main",
+          provider: "claude-cli",
+          sessionKey,
+          storePath,
+          sessionStore,
+          binding: { sessionId: "stopped-first-session", authEpochVersion: 7 },
+          expectedSession: { ...working },
+          assertSettlementCurrent: () => {},
+        });
+        const persisted = loadPersistedSessionEntry(storePath, sessionKey);
+        expect(persisted && getCliSessionBinding(persisted, "claude-cli")?.sessionId).toBe(
+          expected,
+        );
+      });
+    },
+  );
+
+  it("refuses a stopped first CLI session after its turn owner closed", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const working = entry();
+      await seedSessionFixture(storePath, sessionKey, { ...working });
+      const closed = new Error("settlement closed");
+      await expect(
+        persistStoppedFirstCliSessionInStore({
+          agentId: "main",
+          provider: "claude-cli",
+          sessionKey,
+          storePath,
+          binding: { sessionId: "stopped-first-session" },
+          expectedSession: working,
+          assertSettlementCurrent: () => {
+            throw closed;
+          },
+        }),
+      ).rejects.toBe(closed);
+      const persisted = loadPersistedSessionEntry(storePath, sessionKey);
+      expect(persisted && getCliSessionBinding(persisted, "claude-cli")).toBeUndefined();
+    });
+  });
 });
