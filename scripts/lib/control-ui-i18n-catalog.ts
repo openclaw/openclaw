@@ -266,9 +266,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   let menuIndex = 0;
   const appendSessionCopy = (key: string, value: TranslationMap[string]) => {
     sessionsView[key] = value;
-    if (key === "searchPlaceholder") {
-      Object.assign(sessionsView, registerCommandPaletteEnglish.catalog.sessionsView);
-    }
     if (key === "assignToMe") {
       Object.assign(sessionsView, registerSessionPeopleEnglish.catalog.sessionsView);
     }

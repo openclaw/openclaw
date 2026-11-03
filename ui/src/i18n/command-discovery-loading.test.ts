@@ -11,7 +11,6 @@ describe("command discovery English loading", () => {
       surface: "palette search",
       load: () => import("../components/command-palette-catalog-search.ts"),
     },
-    { surface: "session transcript search", load: () => import("../pages/sessions/view.tsx") },
     { surface: "shortcut help", load: () => import("../components/keyboard-shortcuts-dialog.tsx") },
   ])("registers fallback copy before $surface reads it", async ({ load }) => {
     const { manager } = await loadI18n();
@@ -33,6 +32,12 @@ describe("command discovery English loading", () => {
   });
 
   it.each([
+    {
+      surface: "session transcript search",
+      key: "sessionsView.transcriptSearchTitle",
+      expected: "Search transcripts",
+      load: () => import("../pages/sessions/view.tsx"),
+    },
     {
       surface: "slash commands",
       key: "chat.commands.menu",
