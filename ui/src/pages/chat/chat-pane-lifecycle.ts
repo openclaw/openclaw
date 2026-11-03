@@ -22,6 +22,7 @@ import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { takeCreatedComposer } from "../new-session/creation-composer-registry.ts";
 import * as chatAvatars from "./chat-avatar.ts";
+import type { ChatCommandDispatchResult } from "./chat-commands.ts";
 import { exportCurrentChat } from "./chat-export.ts";
 import { CHAT_ROUTE_READY_EVENT } from "./chat-history-events.ts";
 import { retireInitialChatSnapshot } from "./chat-history-state.ts";
@@ -56,7 +57,6 @@ import { createPageState } from "./chat-state-page.ts";
 import {
   applyChatAgentOwnerTransition,
   applySelectedChatAgent,
-  refreshPageChat,
   refreshChatModelAuthStatus,
   refreshChatMetadata,
   retireChatMetadataRequests,
@@ -80,6 +80,7 @@ import { applyChatCacheSnapshot, readChatSessionSnapshot } from "./session-messa
 import { closeSlot } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
+  protected abstract forkConversation(title?: string): Promise<ChatCommandDispatchResult>;
   private panelActions: { syncLaunch: () => void; flush: () => void } | undefined;
 
   protected flushPendingPanelToggles(): void {
@@ -283,9 +284,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     chatState.addCleanup(listen(this.element, "pointerdown", this.handlePaneFocus));
     chatState.addCleanup(listen(this.element, "focusin", this.handlePaneFocus));
     chatState.addCleanup(listen(this.element, "input", this.handlePaneInput));
-    chatState.addCleanup(
-      listen(document, "keydown", { handleEvent: this.handleDocumentKeydown }, true),
-    );
+    chatState.addCleanup(listen(document, "keydown", this.handleDocumentKeydown, true));
     const pageState = createPageState(
       this.context,
       chatState.createRenderLifecycle(),
@@ -327,15 +326,13 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     pageState.chatCancelScroll = () => this.transcript.cancelScroll();
     pageState.reviewQueuedMessageEdit = () => this.reviewQueuedMessageEdit(pageState);
     pageState.createChatSession = () => this.createSession();
+    pageState.forkChatSession = (title) => this.forkConversation(title);
     pageState.confirmConversationReset = () => this.confirmConversationReset();
     pageState.exportCurrentChat = () =>
       exportCurrentChat(
         pageState,
         () => this.state === pageState && this.presented && this.isConnected,
       );
-    pageState.refreshCurrentChat = async () => {
-      await refreshPageChat(pageState);
-    };
     pageState.refreshSessionPullRequests = (options) => this.refreshSessionPullRequests(options);
     pageState.openSessionCompanion = (question) => this.openSessionCompanion(pageState, question);
     pageState.retireSessionCompanion = (key, agentId) =>
@@ -450,6 +447,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
+        this.handleCatalogGatewayEvent(event.event);
         if (state && modelAuthEventInvalidates(event)) {
           state.modelAuthStatusResult = null;
           void refreshChatModelAuthStatus(state);

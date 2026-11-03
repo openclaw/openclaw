@@ -33,6 +33,7 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   settingsNavigationLabelForRoute,
   settingsNavigationOwnerRoute,
+  settingsParentRoute,
   settingsSearchTextMatches,
 } from "../lib/settings-navigation.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
@@ -74,6 +75,8 @@ export type SettingsSidebarProps = {
     typeof import("../pages/config/settings-search.ts").findSettingsSearchBlocks
   >[0];
   onExit: () => void;
+  /** Escape from an empty search; a subpage goes up a level instead of leaving. */
+  onEscape?: () => void;
   onRetryConnect: () => void;
   onNavigate: (routeId: RouteId, options?: ApplicationNavigationOptions) => void;
   onSearchQueryChange: (query: string) => void;
@@ -502,7 +505,14 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                 <Icon name="arrowLeft" />
               </span>
               {t("nav.exitSettings")}
-              <Kbd keys="esc" class="settings-sidebar__esc" ariaHidden />
+              {/* On a subpage Escape goes up a level, so it does not mean this button. */}
+              <Show
+                when={
+                  !settingsParentRoute(props.activeRouteId, props.activePathname, props.basePath)
+                }
+              >
+                <Kbd keys="esc" class="settings-sidebar__esc" ariaHidden />
+              </Show>
             </button>
             <h1 class="settings-sidebar__title">{t("nav.settings")}</h1>
           </header>
@@ -530,7 +540,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                   event.currentTarget.value = "";
                   props.onSearchQueryChange("");
                 } else {
-                  props.onExit();
+                  (props.onEscape ?? props.onExit)();
                 }
               }}
             />
@@ -557,9 +567,6 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                 </div>
               )}
             </Show>
-            <div class="settings-sidebar__connection">
-              <SettingsSaveIndicator {...props.saveIndicator} />
-            </div>
             <SidebarBuildChip
               basePath={props.basePath}
               gatewayVersion={props.gatewayVersion || null}

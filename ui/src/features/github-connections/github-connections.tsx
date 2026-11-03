@@ -3,6 +3,10 @@ import { pathForAgentPanel } from "../../app-route-paths.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import {
+  SettingsDetailsRow,
+  SettingsDisclosure,
+} from "../../components/solid/settings-disclosure.tsx";
+import {
   SettingsRow,
   SettingsSection,
   SettingsSegmented,
@@ -275,7 +279,9 @@ export function GitHubConnections() {
             />
           </div>
           <div data-github-connection="system">
-            <SettingsRow
+            <SettingsDetailsRow
+              detailsLabel={t("githubConnections.details")}
+              hasDetails={Boolean(view().systemIdentity)}
               title={t("githubConnections.system")}
               description={
                 <>
@@ -304,7 +310,9 @@ export function GitHubConnections() {
                   )}
                 </>
               }
-            />
+            >
+              <GitHubDetails identity={view().systemIdentity} />
+            </SettingsDetailsRow>
           </div>
           {view().canAdmin && view().agentId ? (
             <div data-github-connection="agent">
@@ -400,11 +408,11 @@ export function GitHubConnections() {
               ) : undefined}
             </div>
           ) : undefined}
-          <details class="settings-row settings-row--stacked">
-            <summary class="settings-row__title">{t("githubConnections.usage")}</summary>
-            <div class="settings-row__desc">{t("githubConnections.usageDescription")}</div>
-            <GitHubDetails identity={view().systemIdentity} />
-          </details>
+          <SettingsDisclosure quiet title={t("githubConnections.usage")}>
+            <div class="settings-row">
+              <div class="settings-row__desc">{t("githubConnections.usageDescription")}</div>
+            </div>
+          </SettingsDisclosure>
           {view().canAdmin && systemView().status?.selected.configured ? (
             <SettingsRow
               title={t("agentTools.githubUseNativeNewRuns")}

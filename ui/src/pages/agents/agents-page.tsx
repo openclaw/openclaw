@@ -17,7 +17,7 @@ export function AgentsPage(props: { routeData?: AgentsRouteData }) {
   }));
   return (
     <openclaw-agents-page>
-      <Agents {...viewProps()} identitySavePending={state.identitySavePending()} />
+      <Agents {...viewProps()} />
     </openclaw-agents-page>
   );
 }

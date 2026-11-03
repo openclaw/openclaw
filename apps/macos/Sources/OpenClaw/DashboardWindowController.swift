@@ -1466,7 +1466,7 @@ extension DashboardWindowController {
 
     func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
         if self.nativeBrowser.owns(webView) {
-            self.nativeBrowser.navigationDidFail(for: webView)
+            self.nativeBrowser.navigationDidFail(for: webView, error: error)
             return
         }
         guard webView === self.webView else { return }

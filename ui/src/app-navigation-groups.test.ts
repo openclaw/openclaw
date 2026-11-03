@@ -7,7 +7,7 @@ import {
 } from "./app-navigation.ts";
 import type { NativeDeviceSettingsCapability as Device } from "./app/native-device-settings.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
-import { settingsNavigationOwnerRoute } from "./lib/settings-navigation.ts";
+import { settingsNavigationOwnerRoute, settingsParentRoute } from "./lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
 import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
 import {
@@ -117,6 +117,20 @@ it("keeps model setup as a settings subpage without a sidebar entry", () => {
   expect(isSettingsNavigationRoute("templates")).toBe(false);
   expect(isSettingsNavigationRoute("model-setup")).toBe(true);
   expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
+});
+
+it("gives each settings subpage one level up and top-level sections none", () => {
+  expect(settingsNavigationOwnerRoute("lobsterdex")).toBe("appearance");
+  expect(settingsParentRoute("lobsterdex")).toBe("appearance");
+  expect(settingsParentRoute("ai-agents")).toBe("agents");
+  expect(settingsParentRoute("appearance")).toBeNull();
+  expect(settingsParentRoute("plugin-settings", "/settings/plugins")).toBeNull();
+  expect(settingsParentRoute("plugin-settings", "/settings/plugins/fixture")).toBe(
+    "plugin-settings",
+  );
+  expect(settingsParentRoute("plugin-settings", "/ui/settings/plugins/fixture", "/ui")).toBe(
+    "plugin-settings",
+  );
 });
 
 const opaqueIds = ["plugin:reports/daily/team:summary", "plugin:reports/日报 summary"];

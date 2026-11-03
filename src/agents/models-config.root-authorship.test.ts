@@ -326,3 +326,32 @@ it("preserves an eligible shared-hook output without aliases", async () => {
   expect(discovered?.alternate?.models.map(({ id }) => id)).toEqual(["native-model"]);
   expect(discovered?.fixture).toBeUndefined();
 });
+
+it("keeps a recovered CLI backend catalog with its plugin when discovery skips it", async () => {
+  // claude-cli/<model> rows are published by the plugin that registers the CLI backend.
+  metadata = createPluginMetadataSnapshotFixture({
+    plugins: [{ ...catalogOwner, cliBackends: ["fixture-cli"] }],
+  });
+  await replacePersistedPluginModelCatalogs({
+    agentDir,
+    pluginCatalogWrites: {
+      "plugins/catalog-owner/catalog.json": JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: { "fixture-cli": native },
+      }),
+    },
+  });
+
+  // An authored provider keeps the plan from skipping, so the recovered entry must be placed.
+  const planned = await planSource(
+    { models: { providers: { configured: native } } },
+    agentDir,
+    context(),
+  );
+
+  assert(planned.modelsJsonContents, "The plan must write a root catalog");
+  expect(Object.keys(JSON.parse(planned.modelsJsonContents).providers)).toEqual(["configured"]);
+  const generated = planned.pluginCatalogs.find(({ pluginId }) => pluginId === "catalog-owner");
+  assert(generated, "The plan must keep the plugin catalog");
+  expect(Object.keys(JSON.parse(generated.contents).providers)).toContain("fixture-cli");
+});

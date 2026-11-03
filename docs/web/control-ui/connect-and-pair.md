@@ -10,6 +10,12 @@ sidebarTitle: "Connect and pair"
 
 Reach the Control UI from a new browser, phone, or network, and fix the connection when it fails.
 
+If the page says **No access to this Gateway**, automatic retries stop. Sign in as
+a different user or ask a Gateway administrator to grant your account operator
+access, then choose **Connect**. Returning to the tab or restoring your network
+does not retry an access denial. Temporary connection failures still reconnect
+with capped exponential backoff and jitter.
+
 ## Device pairing (first connection)
 
 After gateway auth succeeds, connecting from a new browser or device usually requires a **one-time pairing approval**, shown as `disconnected (1008): pairing required`. On the Gateway host, `openclaw dashboard` is the preferred owner path: it opens a short-lived, single-use pairing link and leaves that exact signed browser with a durable administrator credential. Opening a fresh link in the same browser also repairs a previously limited credential; another browser profile cannot inherit or replay the grant.

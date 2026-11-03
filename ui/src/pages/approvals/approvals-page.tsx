@@ -14,12 +14,7 @@ import {
   validateApprovalHistoryResult,
   type ApprovalHistoryResult,
 } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
-import type {
-  ApprovalDecision,
-  ApprovalKind,
-  ApprovalTerminalReason,
-  TerminalApprovalSnapshot,
-} from "../../../../packages/gateway-protocol/src/schema/approvals.js";
+import type { TerminalApprovalSnapshot } from "../../../../packages/gateway-protocol/src/schema/approvals.js";
 import type {
   ExecApprovalGrantsListResult,
   ExecApprovalStandingGrant,
@@ -30,6 +25,7 @@ import { parseApprovalResolvedEvent } from "../../app/exec-approval.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import {
+  SettingsEmpty,
   SettingsPage,
   SettingsPageHeader,
   SettingsSection,
@@ -44,6 +40,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ApprovalErrorNotice } from "./approval-error-notice.tsx";
+import { HistoryRow } from "./approval-history-row.tsx";
 
 registerEnglishCatalog(registerApprovalsEnglish);
 
@@ -66,55 +63,6 @@ function grantStateLabel(grant: ExecApprovalStandingGrant, nowMs: number): strin
 const APPROVAL_HISTORY_REQUIRED_SCOPE = "operator.approvals";
 const APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
 
-const APPROVAL_KIND_LABELS = {
-  exec: "approvalHistory.kinds.exec",
-  plugin: "approvalHistory.kinds.plugin",
-  "system-agent": "approvalHistory.kinds.systemAgent",
-} satisfies Record<ApprovalKind, string>;
-
-const APPROVAL_STATUS_LABELS = {
-  allowed: "approvalHistory.statuses.allowed",
-  denied: "approvalHistory.statuses.denied",
-  expired: "approvalHistory.statuses.expired",
-  cancelled: "approvalHistory.statuses.cancelled",
-} satisfies Record<TerminalApprovalSnapshot["status"], string>;
-
-const APPROVAL_DECISION_LABELS = {
-  "allow-once": "approvalHistory.decisions.allowOnce",
-  "allow-always": "approvalHistory.decisions.allowAlways",
-  deny: "approvalHistory.decisions.deny",
-} satisfies Record<ApprovalDecision, string>;
-
-const APPROVAL_REASON_LABELS = {
-  user: "approvalHistory.reasons.user",
-  timeout: "approvalHistory.reasons.timeout",
-  "malformed-verdict": "approvalHistory.reasons.malformedVerdict",
-  "no-route": "approvalHistory.reasons.noRoute",
-  "run-aborted": "approvalHistory.reasons.runAborted",
-  "gateway-restart": "approvalHistory.reasons.gatewayRestart",
-  "storage-corrupt": "approvalHistory.reasons.storageCorrupt",
-} satisfies Record<ApprovalTerminalReason, string>;
-
-function requestLabel(item: TerminalApprovalSnapshot): string {
-  const presentation = item.presentation;
-  const request = presentation.kind === "exec" ? presentation.commandText : presentation.title;
-  return request || t("approvalHistory.unknown");
-}
-
-function sourceLabel(item: TerminalApprovalSnapshot): string {
-  const parts = [item.source?.agentId, item.source?.sessionKey].filter((part): part is string =>
-    Boolean(part),
-  );
-  return parts.length > 0 ? parts.join(" · ") : t("approvalHistory.unknown");
-}
-
-function resolverLabel(item: TerminalApprovalSnapshot): string {
-  if (!item.resolver) {
-    return t("approvalHistory.unknown");
-  }
-  return item.resolver.id ? `${item.resolver.kind} · ${item.resolver.id}` : item.resolver.kind;
-}
-
 function EmptyRow(props: { columns: number; label: string }) {
   return (
     <tr>
@@ -126,6 +74,7 @@ function EmptyRow(props: { columns: number; label: string }) {
     </tr>
   );
 }
+
 function Cell(props: { labelKey: string; value: JSX.Element; mono?: boolean }) {
   return (
     <td class={{ mono: props.mono }} data-label={t(props.labelKey)}>
@@ -187,7 +136,16 @@ export function ApprovalsPage() {
       // Refresh the system timezone with history, not unrelated grants or loading notices.
       historyItems();
       getLocale();
-      return createMsFormatter({ dateStyle: "medium", timeStyle: "short" });
+      // History is a rolling 30-day window, so the row can drop the year.
+      return {
+        short: createMsFormatter({
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        }),
+        full: createMsFormatter({ dateStyle: "medium", timeStyle: "short" }),
+      };
     },
     { lazy: true },
   );
@@ -528,40 +486,6 @@ export function ApprovalsPage() {
       </tr>
     );
   }
-  function HistoryRow(props: { item: TerminalApprovalSnapshot }) {
-    return (
-      <tr>
-        <Cell
-          labelKey="approvalHistory.columns.resolved"
-          value={formatResolvedAt()(props.item.resolvedAtMs)}
-        />
-        <Cell
-          labelKey="approvalHistory.columns.kind"
-          value={t(APPROVAL_KIND_LABELS[props.item.presentation.kind])}
-        />
-        <Cell labelKey="approvalHistory.columns.request" value={requestLabel(props.item)} mono />
-        <Cell
-          labelKey="approvalHistory.columns.decision"
-          value={
-            <>
-              {t(APPROVAL_STATUS_LABELS[props.item.status])} ·{" "}
-              {t(
-                "decision" in props.item && props.item.decision
-                  ? APPROVAL_DECISION_LABELS[props.item.decision]
-                  : "approvalHistory.notApplicable",
-              )}
-            </>
-          }
-        />
-        <Cell
-          labelKey="approvalHistory.columns.reason"
-          value={t(APPROVAL_REASON_LABELS[props.item.reason])}
-        />
-        <Cell labelKey="approvalHistory.columns.source" value={sourceLabel(props.item)} mono />
-        <Cell labelKey="approvalHistory.columns.resolver" value={resolverLabel(props.item)} mono />
-      </tr>
-    );
-  }
   return (
     <openclaw-approvals-page>
       <SettingsPageHeader
@@ -648,50 +572,31 @@ export function ApprovalsPage() {
                   fallback={<SettingsLoadingSkeleton label={t("approvalHistory.loading")} />}
                 >
                   {readHistory()}
-                  <div class="data-table-container">
-                    <table
-                      class="data-table approval-history-table settings-table--stacked"
-                      role="table"
+                  {view().items.length === 0 ? (
+                    <SettingsEmpty
+                      message={t(
+                        view().error || !view().hasLoaded
+                          ? "approvalHistory.unknown"
+                          : "approvalHistory.empty",
+                      )}
+                    />
+                  ) : (
+                    <ul
+                      class="approval-log"
                       aria-labelledby="approval-history-title"
                       aria-busy={isPending(historyRead) ? "true" : "false"}
                     >
-                      <thead>
-                        <tr>
-                          <For
-                            each={[
-                              "resolved",
-                              "kind",
-                              "request",
-                              "decision",
-                              "reason",
-                              "source",
-                              "resolver",
-                            ]}
-                          >
-                            {(column) => (
-                              <th scope="col">{t(`approvalHistory.columns.${column}`)}</th>
-                            )}
-                          </For>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {view().items.length === 0 ? (
-                          <EmptyRow
-                            columns={7}
-                            label={t(
-                              view().error || !view().hasLoaded
-                                ? "approvalHistory.unknown"
-                                : "approvalHistory.empty",
-                            )}
+                      <For each={historyItems()} keyed={(item) => item.id}>
+                        {(item) => (
+                          <HistoryRow
+                            item={item()}
+                            time={formatResolvedAt().short(item().resolvedAtMs)}
+                            fullTime={formatResolvedAt().full(item().resolvedAtMs)}
                           />
-                        ) : (
-                          <For each={historyItems()} keyed={(item) => item.id}>
-                            {(item) => <HistoryRow item={item()} />}
-                          </For>
                         )}
-                      </tbody>
-                    </table>
-                  </div>
+                      </For>
+                    </ul>
+                  )}
                   <div class="data-table-pagination">
                     <div class="data-table-pagination__info">{t("approvalHistory.retention")}</div>
                     <div class="data-table-pagination__controls">
