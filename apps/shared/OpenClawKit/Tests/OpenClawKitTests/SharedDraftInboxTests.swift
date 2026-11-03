@@ -3,7 +3,7 @@ import Testing
 @testable import OpenClawKit
 
 struct SharedDraftInboxTests {
-    @Test func preservesOriginalMixedShareAcrossReopenAndCleansOnlyExplicitly() async throws {
+    @Test func `preserves original mixed share across reopen and cleans only explicitly`() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -14,7 +14,8 @@ struct SharedDraftInboxTests {
             try Data([0, UInt8(index), 255]).write(to: url)
             urls.append(url)
         }
-        let target = SharedDraftTarget(gatewayID: "gateway-original", agentID: "research", sessionKey: "agent:research:notes")
+        let target = SharedDraftTarget(
+            gatewayID: "gateway-original", agentID: "research", sessionKey: "agent:research:notes")
         let now = Date(timeIntervalSince1970: 1000)
         let dbURL = directory.appendingPathComponent("inbox")
         let inbox = SharedDraftInbox(directoryURL: dbURL)
@@ -36,7 +37,7 @@ struct SharedDraftInboxTests {
         #expect(try await inbox.pending(now: now).isEmpty)
     }
 
-    @Test func rejectsWholeUnreadableOrOverBudgetShareAndExpiresAt48Hours() async throws {
+    @Test func `rejects whole unreadable or over budget share and expires at 48 hours`() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let inbox = SharedDraftInbox(directoryURL: directory)
@@ -44,12 +45,19 @@ struct SharedDraftInboxTests {
         let now = Date(timeIntervalSince1970: 1000)
         let id = try await inbox.save(text: "Keep me", target: target, files: [], now: now)
         do {
-            try await inbox.save(text: "Must roll back", target: target,
-                files: [directory.appendingPathComponent("missing.pdf")], now: now)
+            try await inbox.save(
+                text: "Must roll back",
+                target: target,
+                files: [directory.appendingPathComponent("missing.pdf")],
+                now: now)
             Issue.record("Unreadable item was accepted")
         } catch {}
         do {
-            try await inbox.save(text: String(repeating: "x", count: 128 * 1024 + 1), target: target, files: [], now: now)
+            try await inbox.save(
+                text: String(repeating: "x", count: 128 * 1024 + 1),
+                target: target,
+                files: [],
+                now: now)
             Issue.record("Oversized text was accepted")
         } catch {}
         let oversized = directory.appendingPathComponent("too-large.pdf")
@@ -70,7 +78,7 @@ struct SharedDraftInboxTests {
 }
 
 extension SharedDraftInboxTests {
-    @Test func opensThroughAncestorAliasesButRejectsDatabaseFileSymlinks() async throws {
+    @Test func `opens through ancestor aliases but rejects database file symlinks`() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let physical = root.appendingPathComponent("physical")

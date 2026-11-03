@@ -343,22 +343,15 @@ final class ChatViewModelAttachmentTests: XCTestCase {
 
         await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: 8.4)
 
-        let attachment = try await MainActor.run { () throws -> (Data, String, String, String, Double?, Bool) in
+        try await MainActor.run {
             let attachment = try XCTUnwrap(viewModel.attachments.first)
-            return (
-                attachment.data,
-                attachment.fileName,
-                attachment.mimeType,
-                attachment.type,
-                attachment.durationSeconds,
-                attachment.preview == nil)
+            XCTAssertEqual(attachment.data, data)
+            XCTAssertEqual(attachment.fileName, "voice-note-20260706-120000.m4a")
+            XCTAssertEqual(attachment.mimeType, "audio/mp4")
+            XCTAssertEqual(attachment.type, "file")
+            XCTAssertEqual(attachment.durationSeconds, 8.4)
+            XCTAssertNil(attachment.preview)
         }
-        XCTAssertEqual(attachment.0, data)
-        XCTAssertEqual(attachment.1, "voice-note-20260706-120000.m4a")
-        XCTAssertEqual(attachment.2, "audio/mp4")
-        XCTAssertEqual(attachment.3, "file")
-        XCTAssertEqual(attachment.4, 8.4)
-        XCTAssertTrue(attachment.5)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
 
@@ -947,7 +940,6 @@ final class ChatViewModelAttachmentTests: XCTestCase {
     }
 }
 
-
 extension ChatViewModelAttachmentTests {
     @MainActor
     func testSharedImportStagesMixedSelectionWithoutSendingOrReplacingDraft() async throws {
@@ -962,7 +954,8 @@ extension ChatViewModelAttachmentTests {
             return url
         }
         let capture = AttachmentSendCapture()
-        let model = OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport(capture: capture))
+        let model = OpenClawChatViewModel(
+            sessionKey: "main", transport: AttachmentProcessingTransport(capture: capture))
         model.input = "Unrelated draft"
         let refused = await model.importSharedDraft(text: "Shared text", files: files) { true }
         XCTAssertFalse(refused)
@@ -989,18 +982,27 @@ extension ChatViewModelAttachmentTests {
         let file = directory.appendingPathComponent("report.pdf")
         try Data("original-file".utf8).write(to: file)
         let model = OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
-        let failed = await model.importSharedDraft(text: "Do not partially import", files: [file, directory.appendingPathComponent("missing.pdf")]) { true }
+        let failed = await model.importSharedDraft(
+            text: "Do not partially import",
+            files: [file, directory.appendingPathComponent("missing.pdf")]) { true }
         XCTAssertFalse(failed)
         XCTAssertTrue(model.attachments.isEmpty)
         XCTAssertTrue(model.input.isEmpty)
         for cancel in [false, true] {
             let gate = AttachmentGate()
             let capture = AttachmentSendCapture()
-            let waiting = OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport(capture: capture, importGate: gate))
+            let waiting = OpenClawChatViewModel(
+                sessionKey: "main",
+                transport: AttachmentProcessingTransport(capture: capture, importGate: gate))
             var currentRoute = true
             let task = Task { await waiting.importSharedDraft(text: "Retain in inbox", files: [file]) { currentRoute } }
             await gate.waitUntilEntered()
-            if cancel { task.cancel() } else { currentRoute = false; waiting.syncSession(to: "other") }
+            if cancel {
+                task.cancel()
+            } else {
+                currentRoute = false
+                waiting.syncSession(to: "other")
+            }
             await gate.release()
             let imported = await task.value
             XCTAssertFalse(imported)
