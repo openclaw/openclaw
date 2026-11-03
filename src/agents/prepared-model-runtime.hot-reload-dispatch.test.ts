@@ -33,6 +33,7 @@ import {
 import { readPreparedGatewayModelCatalogOwnerSnapshot as readCatalog } from "../gateway/server-model-catalog.js";
 import { createPluginReloadRecoveryFixture } from "../gateway/server-plugin-reload.recovery.test-support.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
+import { resetGatewayRestartStateForInProcessRestart } from "../infra/restart.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
@@ -813,7 +814,7 @@ it.for(["config write", "plugins.reload"] as const)(
     const metadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [{ id: "first" }, { id: "sibling" }],
     });
-    using _metadata = vi
+    using _ = vi
       .spyOn(configPluginMetadata, "resolveConfigWidePluginMetadataSnapshotAsync")
       .mockResolvedValue(metadataSnapshot);
     let diskConfig = initialConfig;
@@ -858,10 +859,10 @@ it.for(["config write", "plugins.reload"] as const)(
     );
     const configOwner = createReloaderHarness(async () => makeSnapshot({ config: diskConfig }), {
       initialConfig,
-      onHotReload: async (plan, config, ownership) => {
+      onHotReload: async (plan, nextConfig, ownership) => {
         try {
-          return await handler.applyHotReload(plan, config, {
-            sourceConfig: config,
+          return await handler.applyHotReload(plan, nextConfig, {
+            sourceConfig: nextConfig,
             isCurrent: ownership.isCurrent,
             checkpoint: ownership.checkpoint,
             assertInvokerOwned: ownership.assertInvokerOwned,
@@ -869,11 +870,11 @@ it.for(["config write", "plugins.reload"] as const)(
               ownership.withRestartPreparation(async (current) => {
                 await current.checkpoint();
                 events.push("restart prepared");
-                return config;
+                return nextConfig;
               }),
             publish: async (commit) => {
               await commit();
-              ownership.markRuntimeCommitted(config, plan);
+              ownership.markRuntimeCommitted(nextConfig, plan);
             },
           });
         } catch (error) {
@@ -928,6 +929,8 @@ it.for(["config write", "plugins.reload"] as const)(
       expect(configOwner.onConfigApplied).not.toHaveBeenCalled();
     } finally {
       handler.stopRestartRetries();
+      // The simulated emitter has no run loop to retire its signal fence.
+      resetGatewayRestartStateForInProcessRestart();
       await closeTestConfigReloaders();
       configOwner.watcher.restore();
       await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
