@@ -13,6 +13,7 @@ import {
   ControlUiLinkReaderMetadataSchema,
   ControlUiLinkReaderDescriptorSchema,
 } from "./control-ui-link-reader.js";
+import { PluginCatalogInstallActionSchema } from "./plugin-catalog-install.js";
 import { PluginSdkDeprecationNoticeSchema } from "./plugin-compatibility.js";
 import { PluginCredentialDescriptorSchema } from "./plugin-credentials.js";
 import {
@@ -28,6 +29,12 @@ import { PluginJsonValueSchema } from "./plugin-json-value.js";
 import { PluginInspectRuntimeRetentionSchema } from "./plugin-retention.js";
 import { NonEmptyString } from "./primitives.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
+
+export {
+  PluginCatalogClawHubInstallSchema,
+  PluginCatalogOfficialInstallSchema,
+  PluginCatalogInstallActionSchema,
+} from "./plugin-catalog-install.js";
 
 export { PluginJsonValueSchema } from "./plugin-json-value.js";
 
@@ -223,23 +230,6 @@ export const PluginsSessionActionFailureResultSchema = closedObject({
 export const PluginsSessionActionResultSchema = Type.Union([
   PluginsSessionActionSuccessResultSchema,
   PluginsSessionActionFailureResultSchema,
-]);
-
-export const PluginCatalogClawHubInstallSchema = closedObject({
-  source: Type.Literal("clawhub"),
-  packageName: NonEmptyString,
-});
-
-export const PluginCatalogOfficialInstallSchema = closedObject({
-  source: Type.Literal("official"),
-  pluginId: NonEmptyString,
-});
-
-// Branches stay named schemas: the Swift generator only emits discriminated
-// unions whose branches resolve to registered types (see PluginsSessionActionResult).
-export const PluginCatalogInstallActionSchema = Type.Union([
-  PluginCatalogClawHubInstallSchema,
-  PluginCatalogOfficialInstallSchema,
 ]);
 
 /** Observed state of the plugin in the current Gateway runtime generation. */

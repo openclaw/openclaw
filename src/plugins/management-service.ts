@@ -336,6 +336,7 @@ export const listManagedPlugins = withManagedPluginCache(
               : "disabled",
         removable,
         hasNativeUi: manifest ? Boolean(manifest.controlUi) : undefined,
+        recommendedPrompts: manifest?.recommendedPrompts,
       };
       Object.assign(plugin, projectPluginCatalogCategoryFacts(manifest, enabled));
       if (record.packageName) {
@@ -350,9 +351,6 @@ export const listManagedPlugins = withManagedPluginCache(
       }
       if (presentation.description) {
         plugin.description = presentation.description;
-      }
-      if (manifest?.recommendedPrompts !== undefined) {
-        plugin.recommendedPrompts = manifest.recommendedPrompts;
       }
       if (presentation.version) {
         plugin.version = presentation.version;

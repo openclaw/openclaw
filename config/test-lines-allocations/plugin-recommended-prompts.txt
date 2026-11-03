@@ -1,0 +1,4 @@
+# Distinct manifest/bundle/catalog, consent/failure/intent-retirement, native-editing,
+# theme and responsive-rail regressions add 1111 test lines; allocate only the
+# 324-line shortfall beyond existing headroom. No assertions or caps are disabled.
+324
