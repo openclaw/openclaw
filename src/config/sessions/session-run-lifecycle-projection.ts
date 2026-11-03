@@ -406,19 +406,26 @@ export function projectSessionLifecyclePatch(
     patch.providerReview = providerReview.review;
   }
   const endedAt = patch.endedAt ?? params.event.ts;
+  const terminal = resolveSettledLifecycleTerminalOutcome(params.event);
+  const stopped =
+    patch.status === "killed" &&
+    (terminal?.reason === "aborted" ||
+      (terminal?.reason === "cancelled" && terminal.stopReason !== "restart"));
   if (
-    (patch.status === "failed" || patch.status === "timeout") &&
+    (patch.status === "failed" || patch.status === "timeout" || stopped) &&
     entry.goal?.status === "active" &&
     entry.goal.updatedAt <= endedAt
   ) {
-    // The terminal owner has exhausted retries. Commit the pause with the run
-    // failure so every client sees the same stopped goal and frozen timer.
-    // A delayed failure must not undo a newer resume or replacement goal.
+    // Commit a definitive failure or Stop with its goal pause and frozen timer.
+    // Restart, supersession, and yielded work retain their continuation custody.
+    // A delayed terminal must not undo a newer resume or replacement goal.
     patch.goal = buildUpdatedSessionGoalStatus(
       entry,
       {
         status: "paused",
-        note: `Paused after an error. Resume to continue. ${patch.lastRunError ?? (patch.status === "timeout" ? "Run timed out." : "Run failed.")}`,
+        note: stopped
+          ? "Paused after Stop. Resume to continue."
+          : `Paused after an error. Resume to continue. ${patch.lastRunError ?? (patch.status === "timeout" ? "Run timed out." : "Run failed.")}`,
       },
       endedAt,
     );

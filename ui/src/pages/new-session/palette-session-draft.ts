@@ -202,7 +202,7 @@ export class PaletteSessionDraft {
     this.synchronizePresentationScope();
     const props = this.attachmentProps();
     if (this.read().open && !this.messageLocked && props) {
-      handleChatAttachmentPaste(event, props, { imagesOnly: true });
+      handleChatAttachmentPaste(event, props);
     }
   };
 

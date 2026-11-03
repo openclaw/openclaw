@@ -80,7 +80,7 @@ const modelPickerLabels = {
   primary: "Model",
   utility: "Utility Model",
   fallback: "Fallback Model",
-  decision: "Decision Model",
+  decision: "Decision model",
 };
 
 export function modelPicker(

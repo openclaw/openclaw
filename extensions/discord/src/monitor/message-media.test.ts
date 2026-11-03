@@ -85,6 +85,11 @@ function attachmentFixture(
   };
 }
 
+function resolveBlockedAttachmentMedia(attachment: AttachmentFixture) {
+  readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+  return resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+}
+
 function stickerFixture(id: string, name: string): APIStickerItem {
   return { id, name, format_type: StickerFormatType.PNG };
 }
@@ -372,10 +377,7 @@ describe("resolveMediaList", () => {
     const attachment = attachmentFixture("att-audio-fallback", "voice.ogg", {
       content_type: undefined,
     });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-    const message = asMessage({ attachments: [attachment] });
-
-    const result = await resolveMediaList(message, 512);
+    const result = await resolveBlockedAttachmentMedia(attachment);
 
     expect(result).toEqual([
       {
@@ -391,10 +393,7 @@ describe("resolveMediaList", () => {
       duration_secs: 1.5,
       waveform: "AAAA",
     });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-    const message = asMessage({ attachments: [attachment] });
-
-    const result = await resolveMediaList(message, 512);
+    const result = await resolveBlockedAttachmentMedia(attachment);
 
     expect(result).toEqual([
       {
@@ -410,9 +409,7 @@ describe("resolveMediaList", () => {
       duration_secs: 1.5,
       waveform: "AAAA",
     });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+    const result = await resolveBlockedAttachmentMedia(attachment);
 
     expect(result).toEqual([{ contentType: undefined, kind: "audio" }]);
   });
@@ -442,9 +439,7 @@ describe("resolveMediaList", () => {
     const attachment = attachmentFixture("att-audio-mime-case", "voice.bin", {
       content_type: "Audio/OGG",
     });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+    const result = await resolveBlockedAttachmentMedia(attachment);
 
     expect(result).toEqual([
       {
@@ -458,9 +453,7 @@ describe("resolveMediaList", () => {
     const attachment = attachmentFixture("att-video-audio-extension", "clip.ogg", {
       content_type: "video/ogg",
     });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+    const result = await resolveBlockedAttachmentMedia(attachment);
 
     expect(result).toEqual([
       {
@@ -510,9 +503,7 @@ describe("resolveMediaList", () => {
       const attachment = attachmentFixture(`att-definitive-${contentType}`, "document.ogg", {
         content_type: contentType,
       });
-      readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-
-      const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+      const result = await resolveBlockedAttachmentMedia(attachment);
 
       expect(result).toEqual([
         {
@@ -544,9 +535,7 @@ describe("resolveMediaList", () => {
       content_type: "video/mp4",
       duration_secs: 11.262232780456543,
     });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+    const result = await resolveBlockedAttachmentMedia(attachment);
 
     expect(result).toEqual([
       {
@@ -578,9 +567,7 @@ describe("resolveMediaList", () => {
       content_type: "image/png",
       duration_secs: 0.5,
     });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
+    const result = await resolveBlockedAttachmentMedia(attachment);
 
     expect(result).toEqual([
       {
