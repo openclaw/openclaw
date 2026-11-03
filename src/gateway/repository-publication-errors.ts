@@ -1,5 +1,9 @@
 import type { GitHubPublicationSelectionRejectedErrorDetails } from "../../packages/gateway-protocol/src/gateway-error-details.js";
-import type { RepositoryPublicationFailure } from "./repository-publication-contract.js";
+import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+export type RepositoryPublicationFailure = Pick<
+  Extract<SessionGitHubPublicationResult, { status: "failed" }>,
+  "code" | "nextAction"
+>;
 export class RepositoryPublicationAuthorityLostError extends Error {}
 /** An owner observed a definitive failure; probe unavailability is not such a failure. */
 export class RepositoryPublicationFailureError extends Error {

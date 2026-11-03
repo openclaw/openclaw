@@ -380,7 +380,7 @@ suite.define(() => {
             contributions: Boolean(customElements.get("openclaw-plugin-contributions")),
             manager: Boolean(customElements.get("openclaw-plugin-manager")),
           })),
-        ).toEqual({ contributions: false, manager: false });
+        ).toEqual({ contributions: true, manager: false });
         await gateway.resolveDeferred("plugins.controlUi.list");
         await bootstrapRequested.promise;
         await expectPluginLoading(page);
@@ -620,7 +620,7 @@ suite.define(() => {
       await heading(page, "two").waitFor();
       await expectAbsent(heading(page, "one"));
       await button(page, "Call previous activation").click();
-      await outcome(page).toContain("activation has ended");
+      await outcome(page).toContain("view has ended");
       expect(await gateway.getRequests("fixture.stale")).toHaveLength(0);
       await selectView(page, "Composer", composerView);
       const sameRevisionListed = (await gateway.getRequests("plugins.controlUi.list")).length;

@@ -14,6 +14,7 @@ import {
   type ControlUiSessionPullRequestsChanged,
   type ControlUiSessionPullRequestSnapshot,
 } from "./control-ui-contract.js";
+import { invalidatePrReader } from "./control-ui-session-pr-delivery.js";
 import {
   withRepositoryInternalSessionRead,
   createRepositoryViewerRead,
@@ -234,11 +235,7 @@ export function createRepositorySessionReadHost(deps: {
         prepareServiceRead,
         invalidateViewer(connId: string) {
           assertCurrent();
-          deps.broadcastToConnIds(
-            "sessions.changed",
-            { reason: "profile-identity" },
-            new Set([connId]),
-          );
+          invalidatePrReader(connId, deps.broadcastToConnIds);
         },
         createViewerRead(
           connId: string,

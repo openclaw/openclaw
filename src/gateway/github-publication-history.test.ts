@@ -46,11 +46,21 @@ async function historyFixture() {
     headRef: BRANCH,
     baseRef: "main",
   };
-  const remoteHead = async () =>
-    (await git("ls-remote", "--refs", remote, `refs/heads/${BRANCH}`)).split(/\s+/u)[0] ?? "";
+  const remoteHead = async (branch = BRANCH) =>
+    (await git("ls-remote", "--refs", remote, `refs/heads/${branch}`)).split(/\s+/u)[0] ?? "";
   mocks.runCommand.mockImplementation(
     async (argv: string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string }) => {
       calls.push(argv);
+      const matchingRef = argv.find((arg) =>
+        arg.startsWith("repos/openclaw/openclaw/git/matching-refs/heads/"),
+      );
+      if (matchingRef) {
+        const branch = decodeURIComponent(matchingRef.split("/heads/")[1]!);
+        const sha = await remoteHead(branch);
+        return commandResult(
+          JSON.stringify(sha ? [{ ref: `refs/heads/${branch}`, object: { sha } }] : []),
+        );
+      }
       if (argv.includes("ls-remote")) {
         return gitResult("ls-remote", "--refs", remote, `refs/heads/${BRANCH}`);
       }
@@ -412,7 +422,7 @@ describe("GitHub publication branch history", () => {
         const result = await fallback(args, options);
         if (
           observation === "branch"
-            ? args.includes("ls-remote")
+            ? args.some((arg) => arg.includes("/git/matching-refs/heads/"))
             : args.includes("repos/openclaw/openclaw/pulls/125200")
         ) {
           mocks.matchesIdentity.mockReturnValue(false);
@@ -438,7 +448,7 @@ describe("GitHub publication branch history", () => {
     await f.rejected("foreign-head", "github_rejected", "permission");
   });
 
-  it.each(["failed", "wrong-ref", "fetch", "ancestry"] as const)(
+  it.each(["failed", "malformed-ref", "fetch", "ancestry"] as const)(
     "leaves the workspace untouched when remote %s observation is unknown",
     async (fault) => {
       await f.git("push", f.remote, "HEAD:refs/heads/main");
@@ -456,15 +466,15 @@ describe("GitHub publication branch history", () => {
       let faultInjected = false;
       interceptCommand((argv) => {
         const targeted =
-          fault === "failed" || fault === "wrong-ref"
-            ? argv.includes("ls-remote")
+          fault === "failed" || fault === "malformed-ref"
+            ? argv.some((arg) => arg.includes("/git/matching-refs/heads/"))
             : fault === "fetch"
               ? argv.includes("fetch") && argv.at(-1) === remoteCommit
               : argv.includes("--is-ancestor") && argv.at(-2) === remoteCommit;
         if (targeted) {
           faultInjected = true;
-          return fault === "wrong-ref"
-            ? commandResult(`${remoteCommit}\trefs/heads/other\n`)
+          return fault === "malformed-ref"
+            ? commandResult(JSON.stringify([{ ref: `refs/heads/${BRANCH}`, object: {} }]))
             : commandResult("", fault === "ancestry" ? 128 : 1);
         }
         return undefined;

@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import * as githubIdentity from "../../agents/github-tool-identity.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -12,15 +12,27 @@ import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-st
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as checkDetails from "../control-ui-session-pr-check-details.js";
+import { startGitHubSessionPresentation } from "../control-ui-session-pr-presentation.js";
+import {
+  createRepositorySessionReadHost,
+  type RepositorySessionPresentation,
+} from "../control-ui-session-pr-runtime.js";
 import {
   createTestControlUiSessionPrSubscriptions,
   createTestSessionPrReadSource,
 } from "../control-ui-session-pr-subscriptions.test-support.js";
 import { gitHubPublicApi, githubApiToken } from "../github-public-api.js";
+import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
 import { controlUiHandlers } from "./control-ui.js";
-import { identifiedClient } from "./sessions-sharing.test-support.js";
-import type { GatewayClient, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+import { identifiedClient, soloClient } from "./sessions-sharing.test-support.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  RespondFn,
+} from "./types.js";
 
 const requestOptions = createControlUiRequestOptions(() => ({
   agents: { entries: { main: {} } },
@@ -29,17 +41,59 @@ const requestOptions = createControlUiRequestOptions(() => ({
 
 type RequestExtras = Parameters<typeof requestOptions>[2] &
   Pick<Partial<GatewayRequestHandlerOptions>, "signal" | "hasCurrentClientAuthority">;
+function sessionContext(
+  scheduler: ReturnType<typeof createTestGatewayScheduler>,
+  client: GatewayClient | null,
+  context: GatewayRequestContext = createContext(),
+  replace?: RepositorySessionPresentation["replace"],
+) {
+  context.getClientConnIds = (filter) =>
+    new Set(
+      client?.connId && !client.invalidated && (!filter || filter(client)) ? [client.connId] : [],
+    );
+  const host = createRepositorySessionReadHost({
+    signal: scheduler.signal,
+    getRuntimeConfig: context.getRuntimeConfig,
+    getSessionRowProjection: () => getSessionRowProjection(context),
+    getClient: (connId) => (client?.connId === connId && !client.invalidated ? client : undefined),
+    resolveGatewayContext: () => context,
+    broadcastToConnIds: vi.fn(),
+  });
+  context.repositorySessions = host;
+  const service = startGitHubSessionPresentation({
+    scheduler,
+    getConfig: context.getRuntimeConfig,
+    reads: host.bindService(scheduler.signal, () => scheduler.signal.throwIfAborted()),
+  });
+  if (replace) {
+    service.presentation.replace = replace;
+  }
+  return { context, stop: service.stop };
+}
+
 function fixture(method: string) {
   const handler = expectDefined(controlUiHandlers[`controlUi.${method}`], method);
   const respond = vi.fn<RespondFn>();
   return {
     respond,
-    send: (params: Record<string, unknown>, extra?: RequestExtras) =>
-      handler({
+    send: async (params: Record<string, unknown>, extra?: RequestExtras) => {
+      const options: GatewayRequestHandlerOptions = {
         ...requestOptions(params, respond, extra),
         signal: extra?.signal,
         hasCurrentClientAuthority: extra?.hasCurrentClientAuthority,
-      }),
+      };
+      if (method !== "sessionPullRequests.checks" || options.context.repositorySessions) {
+        return await handler(options);
+      }
+      const scheduler = createTestGatewayScheduler();
+      const service = sessionContext(scheduler, options.client, options.context);
+      try {
+        return await handler(options);
+      } finally {
+        await service.stop();
+        await scheduler.stop();
+      }
+    },
   };
 }
 
@@ -505,6 +559,7 @@ describe("controlUi.githubPreview", () => {
 describe("controlUi.sessionPullRequests.subscribe", () => {
   it("acknowledges pending preparation and preserves refresh through a sidebar replacement", async () => {
     const held = createDeferred();
+    const preparing = createDeferred();
     const scheduler = createTestGatewayScheduler();
     const broadcastToConnIds = vi.fn();
     const readSource = createTestSessionPrReadSource();
@@ -516,6 +571,7 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
       scheduler,
       broadcastToConnIds,
       prepareRead: async (_connId, session) => {
+        preparing.resolve();
         await held.promise;
         return async () => ({
           identity: session.sessionKey,
@@ -526,15 +582,23 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
       },
       load,
     });
+    const client = { ...soloClient(), connId: "conn-control-ui" };
+    const service = sessionContext(scheduler, client, undefined, subscriptions.replace);
+    onTestFinished(service.stop);
     const { respond, send } = fixture("sessionPullRequests.subscribe");
     const request = send(
       { sessionKeys: ["agent:main:main"], refreshSessionKeys: ["agent:main:main"] },
       {
-        client: { connId: "conn-control-ui" },
-        context: { controlUiSessionPullRequests: subscriptions },
+        client,
+        context: service.context,
       },
     );
     try {
+      await awaitGateBeforeSettlement(
+        preparing.promise,
+        request,
+        "Subscription preparation did not start",
+      );
       await Promise.resolve();
       expectReply(respond, { subscribed: true });
       expect(broadcastToConnIds).not.toHaveBeenCalled();
@@ -542,8 +606,8 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
       await send(
         { sessionKeys: ["agent:main:main"], passiveSessionKeys: ["agent:main:sidebar"] },
         {
-          client: { connId: "conn-control-ui" },
-          context: { controlUiSessionPullRequests: subscriptions },
+          client,
+          context: service.context,
         },
       );
       expect(respond).toHaveBeenCalledTimes(2);
@@ -589,16 +653,17 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
         throw new Error("session reader unavailable");
       },
     });
+    const client = { ...soloClient(), connId: "conn-control-ui" };
+    const service = sessionContext(scheduler, client, undefined, subscriptions.replace);
+    service.context.logGateway.warn = warn;
+    onTestFinished(service.stop);
     try {
       const { respond, send } = fixture("sessionPullRequests.subscribe");
       await send(
         { sessionKeys: ["agent:main:main"] },
         {
-          client: { connId: "conn-control-ui" },
-          context: {
-            controlUiSessionPullRequests: subscriptions,
-            logGateway: { warn },
-          },
+          client,
+          context: service.context,
         },
       );
       expectReply(respond, { subscribed: true });
@@ -622,13 +687,26 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
     "validates subscriptions: $sessionKeys",
     async ({ sessionKeys, expected, subscribed, valid }) => {
       const { promise: hydration, resolve: finishHydration } = createDeferred();
-      const replace = valid ? vi.fn(() => hydration) : vi.fn();
+      const replace = vi.fn<RepositorySessionPresentation["replace"]>(
+        async (_connId, _keys, _refresh, admitted) => {
+          admitted?.();
+          await hydration;
+        },
+      );
+      const scheduler = createTestGatewayScheduler();
+      const client = { ...soloClient(), connId: "conn-control-ui" };
+      const service = sessionContext(scheduler, client, undefined, replace);
+      onTestFinished(async () => {
+        finishHydration();
+        await service.stop();
+        await scheduler.stop();
+      });
       const { respond, send } = fixture("sessionPullRequests.subscribe");
       const request = send(
         { sessionKeys },
         {
-          client: { connId: "conn-control-ui" },
-          context: { controlUiSessionPullRequests: { replace } },
+          client,
+          context: service.context,
         },
       );
       if (!valid) {
@@ -640,8 +718,14 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
         });
         return;
       }
-      await Promise.resolve();
-      expect(replace).toHaveBeenCalledWith("conn-control-ui", expected, undefined, undefined);
+      await request;
+      expect(replace).toHaveBeenCalledWith(
+        "conn-control-ui",
+        expected,
+        undefined,
+        expect.any(Function),
+        undefined,
+      );
       expectReply(respond, { subscribed });
       finishHydration();
       await request;

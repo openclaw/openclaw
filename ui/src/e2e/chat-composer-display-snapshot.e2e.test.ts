@@ -59,9 +59,10 @@ suite.define(() => {
         await gateway.resolveDeferred("connect");
         await page.getByText(text, { exact: true }).waitFor();
         const pane = page.locator(".chat-pane-cache__pane--active");
-        const model = pane.locator("[data-chat-model-select]");
-        const effort = pane.locator("[data-chat-thinking-select]");
-        const permission = pane.locator("[data-chat-permission-select]");
+        const composer = pane.locator(".agent-chat__input");
+        const model = composer.locator("[data-chat-model-select]");
+        const effort = composer.locator("[data-chat-thinking-select]");
+        const permission = composer.locator("[data-chat-permission-select]");
         const ring = pane.locator(".context-ring");
         const flushSnapshot = () =>
           page.evaluate(async () => {
@@ -129,7 +130,10 @@ suite.define(() => {
           await control.press("Enter");
           await control.press("Space");
         }
-        expect(await pane.locator("details[open], :popover-open").count()).toBe(0);
+        // Disabled controls can explain refresh state in a tooltip without opening a picker.
+        expect(
+          await composer.locator('details[open], :popover-open:not([role="tooltip"])').count(),
+        ).toBe(0);
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         await gateway.resolveDeferred("connect");
         await expect.poll(() => permission.isEnabled()).toBe(true);

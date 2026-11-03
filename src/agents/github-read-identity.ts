@@ -27,7 +27,6 @@ const nativeTokens = createStaleWhileRevalidateCache<string | undefined>({
   cacheable: (token) => token !== undefined,
 });
 
-export const githubIdentityChanges: { onChange?: () => void } = {};
 const identityChangeListeners = new Set<() => void>();
 export function subscribeGitHubIdentityChanges(listener: () => void) {
   identityChangeListeners.add(listener);
@@ -44,11 +43,6 @@ export function clearNativeGitHubTokenCache(): void {
     } catch {
       /* Discovery does not block credential retirement. */
     }
-  }
-  try {
-    githubIdentityChanges.onChange?.();
-  } catch {
-    // Discovery is best effort; cache retirement must still succeed.
   }
 }
 

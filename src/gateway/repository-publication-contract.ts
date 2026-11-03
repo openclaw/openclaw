@@ -18,7 +18,7 @@ export type NativeGitHubPublisherProvenance = Readonly<{
   profileId?: string;
   account: Readonly<{ accountId: number; login: string }>;
 }>;
-export type RepositoryPublicationAuthor = { name: string; email: string };
+type RepositoryPublicationAuthor = { name: string; email: string };
 export type RepositoryPublicationPublisher = {
   provenance: NativeGitHubPublisherProvenance;
   author: RepositoryPublicationAuthor;
@@ -28,7 +28,7 @@ export type RepositoryPublicationPublisher = {
   /** Credentials are consumed only by this one-use host-bound Git operation. */
   authorizeGit(this: void, transfer: RepositoryPublicationGitTransfer): Promise<void>;
 };
-export type RepositoryPublicationPublishedPullRequest = {
+type RepositoryPublicationPublishedPullRequest = {
   url: string;
   number: number;
   pushRepository: string;
@@ -80,14 +80,12 @@ export type RepositoryPublicationRemoteFacts = {
   workspaceTree: string;
   parentCommit: string;
 };
-export type RepositoryPublicationFailure = Pick<
-  Extract<SessionGitHubPublicationResult, { status: "failed" }>,
-  "code" | "nextAction"
->;
+export type { RepositoryPublicationFailure } from "./repository-publication-errors.js";
+import type { RepositoryPublicationFailure } from "./repository-publication-errors.js";
 
 export type RepositoryPublicationPersonalAction = {
   owner: string;
-  assertCurrent(this: void): void;
+  assertCurrent: () => void;
 };
 export type RepositoryPublicationOwnPullRequestReader = Awaited<
   ReturnType<

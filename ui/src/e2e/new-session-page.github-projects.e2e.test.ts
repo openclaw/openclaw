@@ -112,6 +112,7 @@ suite.define(() => {
         const trigger = page.locator("#new-session-project-trigger");
         const picker = page.locator(".oc-popover.new-session-page__project-popover");
         await trigger.click();
+        await picker.locator(".header-search__toggle").click();
         await picker
           .getByRole("searchbox", { name: "Search projects or paste a Git URL" })
           .fill("plugin");
@@ -120,6 +121,8 @@ suite.define(() => {
         expect(await gateway.getRequests(source.searchMethod)).toHaveLength(0);
         await captureProjectUiProof(suite, page, "plugin-sources-before.png");
         await page.keyboard.press("Escape");
+        await page.keyboard.press("Escape");
+        await picker.waitFor({ state: "hidden" });
 
         await gateway.setMethodResponse("plugins.controlUi.list", {
           ...initialCatalog,
@@ -130,6 +133,7 @@ suite.define(() => {
         await gateway.emitGatewayEvent("plugins.controlUi.changed", { revision: "plugin-source" });
         await gateway.waitForRequest("plugins.controlUi.list", { after: catalogs });
         await trigger.click();
+        await picker.locator(".header-search__toggle").click();
         await picker
           .getByRole("searchbox", { name: "Search projects or paste a Git URL" })
           .fill("plugin");

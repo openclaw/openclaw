@@ -39,8 +39,6 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef, isSecretRef, type SecretRef } from "../config/types.secrets.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { isRecord } from "../utils.js";
 import {
@@ -54,6 +52,8 @@ import {
 } from "./runtime-source-contract.js";
 import {
   cloneSecretsRuntimeSnapshot,
+  cloneSecretsRuntimeRefreshContext,
+  type SecretsRuntimeRefreshContext,
   type PreparedSecretsRuntimeSnapshot,
 } from "./runtime-state-clone.js";
 import {
@@ -61,18 +61,10 @@ import {
   setActiveRuntimeWebToolsMetadata,
 } from "./runtime-web-tools-state.js";
 
-export type { PreparedSecretsRuntimeSnapshot } from "./runtime-state-clone.js";
-
-/** Context needed to refresh active secrets runtime snapshots without losing plugin origin data. */
-export type SecretsRuntimeRefreshContext = {
-  env: Record<string, string | undefined>;
-  explicitAgentDirs: string[] | null;
-  includeConfigRefs?: boolean;
-  includeAuthStoreRefs: boolean;
-  loadAuthStore?: (agentDir?: string) => AuthProfileStore | Promise<AuthProfileStore>;
-  loadablePluginOrigins: ReadonlyMap<string, PluginOrigin>;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-};
+export type {
+  PreparedSecretsRuntimeSnapshot,
+  SecretsRuntimeRefreshContext,
+} from "./runtime-state-clone.js";
 
 type ProviderAuthRuntimeSnapshotActivation = (params: {
   snapshot: PreparedSecretsRuntimeSnapshot;
@@ -105,23 +97,6 @@ type StoreMutationLineage = {
   mainProfileSetToken?: RuntimeAuthProfileStoreMutationToken;
   token: RuntimeAuthProfileStoreMutationToken;
 };
-
-/**
- * Clones refresh context while preserving callback identity and isolating mutable maps/config.
- */
-function cloneSecretsRuntimeRefreshContext(
-  context: SecretsRuntimeRefreshContext,
-): SecretsRuntimeRefreshContext {
-  return {
-    env: { ...context.env },
-    explicitAgentDirs: context.explicitAgentDirs ? [...context.explicitAgentDirs] : null,
-    includeConfigRefs: context.includeConfigRefs ?? true,
-    includeAuthStoreRefs: context.includeAuthStoreRefs,
-    loadablePluginOrigins: new Map(context.loadablePluginOrigins),
-    ...(context.manifestRegistry ? { manifestRegistry: context.manifestRegistry } : {}),
-    ...(context.loadAuthStore ? { loadAuthStore: context.loadAuthStore } : {}),
-  };
-}
 
 function mergeLiveAuthStoreBookkeeping(
   authStores: PreparedSecretsRuntimeSnapshot["authStores"],

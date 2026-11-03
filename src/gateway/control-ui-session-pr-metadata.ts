@@ -10,6 +10,7 @@ import {
   isRecord,
   readNonBlankString,
 } from "../plugin-sdk/string-coerce-runtime.js";
+import type { ControlUiSessionTaskPullRequest } from "./control-ui-contract.js";
 import {
   createGitHubReadGroup,
   prepareSessionPullRequestGitHubRead,
@@ -19,10 +20,6 @@ import {
   sessionPullRequestRepositoryApiUrl,
 } from "./control-ui-session-prs-checks.js";
 import { gitHubPublicApi } from "./github-public-api.js";
-
-type ControlUiSessionTaskPullRequest = NonNullable<
-  ControlUiSessionPullRequests["taskPullRequests"]
->[number];
 
 type Read = ReturnType<typeof prepareSessionPullRequestGitHubRead>;
 type Entry = {

@@ -2,15 +2,14 @@ import type { SessionGitHubPullRequestInspectResult } from "../../packages/gatew
 import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
-import {
-  type NativeGitHubPublicationProvider as RepositoryPublicationProvider,
-  type NativeGitHubPullRequestBinding as SessionGitHubPullRequestBinding,
-  NativeGitHubPublicationRequesterUnavailableError as RepositoryPublicationRequesterUnavailableError,
-  nativeGitHubPublicationBaseBranch as parseGitHubPublicationBaseBranch,
-  NativeGitHubPublicationWorkspaceChangedError as RepositoryPublicationWorkspaceChangedError,
-} from "../plugin-sdk/native-github-publication-host.js";
+import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
 import { readRepositoryPublicationTargetFacts } from "./github-publication-availability.js";
+import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
+import {
+  RepositoryPublicationRequesterUnavailableError,
+  RepositoryPublicationWorkspaceChangedError,
+} from "./github-publication-errors.js";
 import { GitHubPublicationBranchChangedError } from "./github-publication-failure.js";
 import { assertExpectedPublisher } from "./github-publication-policy.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-pr-inspect.js";
@@ -22,6 +21,7 @@ import type { PublicationSessionIdentity } from "./github-publication-session.ty
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
+import type { RepositoryPublicationProvider } from "./repository-publication-contract.js";
 import type {
   RepositoryPublicationTarget,
   RepositoryPublicationPublisher,
@@ -241,6 +241,28 @@ export async function preparePublishedPullRequestTarget(
   return prepared;
 }
 
+/** Host source facts and receipts select one current workspace publication target. */
+export async function prepareRepositoryPublicationWorkspaceTarget(params: {
+  worktree: ManagedWorktreeRecord;
+  provider: RepositoryPublicationProvider;
+  publisher: RepositoryPublicationPublisher;
+  pullRequest?: SessionGitHubPullRequestBinding;
+  session?: PublicationSessionIdentity;
+  assertCurrent: () => void;
+}): Promise<RepositoryPublicationTarget> {
+  const initial = await params.provider.prepareTarget({
+    ...(await readRepositoryPublicationTargetFacts(params)),
+    ...(params.pullRequest ? { pullRequest: params.pullRequest } : {}),
+    publisher: params.publisher,
+    assertCurrent: params.assertCurrent,
+  });
+  // An explicitly prepared PR retains its requester/author admission ahead of receipt fallback.
+  if (params.pullRequest) {
+    return initial;
+  }
+  return await preparePublishedPullRequestTarget(params, initial);
+}
+
 /** Preserve a dispatched attempt's recorded destination until its effects are reconciled. */
 export async function prepareGitHubPublicationExecutionTarget(params: {
   worktree: ManagedWorktreeRecord;
@@ -256,30 +278,18 @@ export async function prepareGitHubPublicationExecutionTarget(params: {
   assertCurrent: () => void;
 }): Promise<{ status: "reconcile" } | { status: "ready"; target: RepositoryPublicationTarget }> {
   const { row } = params;
-  const source = await readRepositoryPublicationTargetFacts(params);
-  const initial = await params.provider.prepareTarget({
-    ...source,
-    pullRequest: params.pullRequest,
-    publisher: params.publisher,
-    assertCurrent: params.assertCurrent,
+  const target = await prepareRepositoryPublicationWorkspaceTarget({
+    ...params,
+    session:
+      row.identity_source === "personal"
+        ? undefined
+        : {
+            agentId: row.agent_id,
+            sessionKey: row.session_key,
+            sessionId: row.session_id,
+            lifecycleRevision: params.lifecycleRevision,
+          },
   });
-  const target = await preparePublishedPullRequestTarget(
-    {
-      session:
-        row.identity_source === "personal"
-          ? undefined
-          : {
-              agentId: row.agent_id,
-              sessionKey: row.session_key,
-              sessionId: row.session_id,
-              lifecycleRevision: params.lifecycleRevision,
-            },
-      provider: params.provider,
-      publisher: params.publisher,
-      assertCurrent: params.assertCurrent,
-    },
-    initial,
-  );
   const expected = params.expectedTarget;
   if (
     expected &&

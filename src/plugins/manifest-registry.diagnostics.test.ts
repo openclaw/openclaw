@@ -110,3 +110,97 @@ it.each([
   });
   expect(registry.plugins[0]?.providerAuthChoices).toEqual(expected);
 });
+
+describe("loadPluginManifestRegistry", () => {
+  it("normalizes media and tool metadata at the registry boundary", () => {
+    const imageGenerationProviderMetadata = {
+      openai: {
+        aliases: ["openai"],
+        authProviders: ["openai"],
+        authSignals: [
+          {
+            provider: "openai",
+            providerBaseUrl: {
+              provider: "openai",
+              defaultBaseUrl: "https://api.openai.com/v1",
+              allowedBaseUrls: ["https://api.openai.com/v1"],
+            },
+          },
+        ],
+        configSignals: [
+          {
+            rootPath: "plugins.entries.openai.config",
+            overlayPath: "image",
+            mode: { path: "mode", default: "local", allowed: ["local"] },
+            requiredAny: ["workflow", "workflowPath"],
+            required: ["promptNodeId"],
+          },
+        ],
+      },
+    };
+    const media = {
+      capabilities: ["image", "audio"],
+      defaultModels: { image: "gpt-5.4-mini", audio: "gpt-4o-transcribe" },
+      autoPriority: { image: 10, audio: 20 },
+      nativeDocumentInputs: ["pdf"],
+      documentModels: { pdf: { textExtraction: "gpt-5.4-mini", image: false } },
+    };
+    const tools = {
+      image_generate: {
+        optional: true,
+        authSignals: [{ provider: "openai" }],
+        configSignals: [
+          {
+            rootPath: "plugins.entries.openai.config",
+            overlayPath: "image",
+            overlayMapPath: "accounts",
+            required: ["apiKey"],
+          },
+        ],
+      },
+      memory_get: {
+        replaySafe: true,
+        profiles: ["coding", "messaging"],
+        policyGroups: ["group:sessions", "group:openclaw"],
+      },
+      memory_store: { sideEffecting: true },
+    };
+    const pluginCandidate = candidate(
+      "bundled",
+      {
+        contracts: {
+          mediaUnderstandingProviders: ["openai"],
+          imageGenerationProviders: ["openai"],
+          tools: ["image_generate", "memory_get"],
+        },
+        imageGenerationProviderMetadata,
+        mediaUnderstandingProviderMetadata: {
+          openai: {
+            ...media,
+            capabilities: [...media.capabilities, "unknown"],
+            defaultModels: { ...media.defaultModels, unknown: "ignored" },
+            autoPriority: { ...media.autoPriority, video: "ignored" },
+            nativeDocumentInputs: ["pdf", "docx"],
+            documentModels: {
+              pdf: { ...media.documentModels.pdf, unsupported: "ignored" },
+              docx: { textExtraction: "ignored" },
+            },
+          },
+        },
+        toolMetadata: {
+          ...tools,
+          memory_get: {
+            ...tools.memory_get,
+            profiles: [...tools.memory_get.profiles, "invalid"],
+            policyGroups: [...tools.memory_get.policyGroups, "group:unknown"],
+          },
+        },
+      },
+      "openai",
+    );
+    const plugin = loadPluginManifestRegistryCore({ candidates: [pluginCandidate] }).plugins[0];
+    expect(plugin?.imageGenerationProviderMetadata).toEqual(imageGenerationProviderMetadata);
+    expect(plugin?.mediaUnderstandingProviderMetadata).toEqual({ openai: media });
+    expect(plugin?.toolMetadata).toEqual(tools);
+  });
+});

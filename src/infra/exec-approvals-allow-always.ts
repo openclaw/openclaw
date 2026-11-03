@@ -24,6 +24,10 @@ import {
   POSIX_INLINE_COMMAND_FLAGS,
 } from "./shell-inline-command.js";
 
+export const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
+  kind: "one-shot",
+  reasons: ["no-reusable-pattern"],
+};
 export function hasDurableExecApproval(params: {
   analysisOk: boolean;
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;

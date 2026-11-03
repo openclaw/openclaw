@@ -48,7 +48,7 @@ export async function requireGitHubPublicationCommand(
   }
   return result.stdout.toString("utf8").trim();
 }
-export function createGitHubPublicationCommandRunner(assertCurrent: () => void) {
+export function createGitHubPublicationApiRunner(assertCurrent: () => void) {
   return {
     run: async (argv: string[], options: GitHubCommandOptions = {}) => {
       const result = await runGitHubPublicationCommand(argv, {
@@ -82,7 +82,7 @@ export function githubPublicationApiArgs(
 }
 
 export async function readGitHubPublicationBaseSha(
-  run: ReturnType<typeof createGitHubPublicationCommandRunner>["run"],
+  run: ReturnType<typeof createGitHubPublicationApiRunner>["run"],
   repository: string,
   branch: string,
   host: string,

@@ -1,6 +1,7 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { GitHubPublicationChange } from "../gateway/github-publication-events.js";
 import type { GitHubPublicationEffectTransition } from "../gateway/github-publication-execution-effects.js";
+import type { NativePublisherFacts } from "../gateway/github-publication-publisher-facts.js";
 import type { WorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import type { GitHubPublicationRow } from "./github-publication-read.types.js";
 import type { GitHubPublicationAuthorityReceipt } from "./github-publication-receipts.js";
@@ -23,7 +24,7 @@ export type SharedGitHubPublicationInsert = {
   requester: GitHubPublicationRequesterSnapshot;
   now: number;
   worktree: { id: string; repoFingerprint: string; branch: string };
-  identity: import("../gateway/github-publication-publisher-facts.js").NativePublisherFacts;
+  identity: NativePublisherFacts;
   claim?: WorkerSessionTurnClaim;
   snapshot?: { sourceHeadCommit: string; sourceIndexTree: string; workspaceTree: string };
 };

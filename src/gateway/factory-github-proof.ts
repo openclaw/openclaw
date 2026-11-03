@@ -3,26 +3,18 @@ import type { GitHubCredentialReader } from "../agents/github-credential-reader.
 import { resolveGitHubHost, resolveGitHubApiBaseUrl } from "../agents/github-host-runtime.js";
 import { parseEnterpriseGitHubPrincipal } from "../shared/enterprise-github-principal.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
-import { readFactoryRepositoryAdmission } from "./factory-github-repository-admission.js";
+import {
+  readFactoryRepositoryAdmission,
+  type FactoryGitHubProofClaim,
+} from "./factory-github-repository-admission.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 
 const AUDIENCE = "lobster.github.system-token" as const;
 const PROOF_LIFETIME_MS = 60_000;
 const MAX_PENDING_PROOFS = 128;
-export const FACTORY_GITHUB_PROOF_ENV = "OPENCLAW_FACTORY_GITHUB_PROOF";
+const FACTORY_GITHUB_PROOF_ENV = "OPENCLAW_FACTORY_GITHUB_PROOF";
 
-type SessionBinding = {
-  kind: "session";
-  agentId: string;
-  sessionKey: string;
-  sessionId: string;
-  lifecycleRevision: string | null;
-  requestDigest: string;
-};
-export type FactoryGitHubProofClaim = {
-  purpose: "session-item-read";
-  binding: SessionBinding;
-};
+export type { FactoryGitHubProofClaim } from "./factory-github-repository-admission.js";
 
 export type FactoryGitHubProofVerdict = FactoryGitHubProofClaim & {
   version: 1;
@@ -33,7 +25,7 @@ export type FactoryGitHubProofVerdict = FactoryGitHubProofClaim & {
 };
 
 /** Capture only handshake-authenticated Factory identity, never a request field. */
-export function factoryGitHubClientProof(input: {
+function factoryGitHubClientProof(input: {
   client: GatewayClient | null | undefined;
   claim: FactoryGitHubProofClaim;
   assertCurrent: () => void;
@@ -155,7 +147,7 @@ export function redeemFactoryGitHubProof(proof: string): FactoryGitHubProofVerdi
 }
 
 /** Retain original caller, profile bindings and issuer through one broker-owned operation. */
-export async function withFactoryGitHubProof<T>(
+async function withFactoryGitHubProof<T>(
   input: {
     actorId: number;
     profileId: string;

@@ -12,7 +12,6 @@ import {
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import { isGitHubPublicationRequesterV2 } from "./github-publication-requester-capability.js";
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
-import { restoreGitHubPublicationRequester } from "./github-publication-runtime-deps.js";
 import {
   bindRepositoryGitHubPublicationCheckpointAsync,
   claimRepositoryGitHubPublicationAsync,
@@ -146,7 +145,9 @@ export function createRepositoryGitHubPublicationExecution(params: {
         ) {
           requester = context.requester;
         } else {
-          const restored = await restoreGitHubPublicationRequester(
+          const restored = await (
+            await import("./github-publication-requester.js")
+          ).restoreGitHubPublicationRequester(
             row.requester_authority_json,
             { sessionKey: row.session_key, agentId: row.agent_id },
             getCommittedRuntimeConfig,

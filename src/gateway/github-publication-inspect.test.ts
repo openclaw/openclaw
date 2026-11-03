@@ -1,6 +1,6 @@
 // Keep external GitHub I/O synthetic while exercising registered admission and current profile state.
 // oxfmt-ignore
-import { commandResult, githubPublicationTestMocks, installGitHubPublicationTestHarness, overrideCommands, SESSION_ID, SESSION_KEY } from "./github-publication.test-support.js";
+import { commandResult, createTestGitHubPublicationCoordinator, githubPublicationTestMocks, installGitHubPublicationTestHarness, overrideCommands, SESSION_ID, SESSION_KEY } from "./github-publication.test-support.js";
 // Install the existing tool transport before loading the publication tool.
 // oxfmt-ignore
 import { withPublicationToolTransport } from "./github-publication-actions.test-support.js";
@@ -42,6 +42,9 @@ async function fixture(
   const host = options.host ?? "github.com";
   const config = { ...f.config, gateway: { ...f.config.gateway, github: { host } } };
   setRuntimeConfigSnapshot(config);
+  Object.assign(f.guestSource.context, {
+    githubPublicationService: createTestGitHubPublicationCoordinator(),
+  });
   if (options.linked !== false) {
     if (host === "github.com") {
       await syncCanonicalGitHubIdentity({

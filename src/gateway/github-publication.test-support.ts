@@ -248,7 +248,7 @@ type PublicationFixtureOptions<T> = Omit<
   getCommittedRuntimeConfig?: () => OpenClawConfig;
 };
 
-export function createTestPublicationProvider(
+function createTestPublicationProvider(
   getConfig = currentGitHubPublicationConfig,
   controller = new AbortController(),
 ) {

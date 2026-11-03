@@ -1,8 +1,8 @@
 import { getOrCreatePromise } from "../plugin-sdk/lazy-runtime.js";
-import { NativeGitHubPublicationChangePermissionError as RepositoryPublicationChangePermissionError } from "../plugin-sdk/native-github-publication-host.js";
-import type { NativeGitHubPublicationObjectPlan as RepositoryPublicationObjectPlan } from "../plugin-sdk/native-github-publication-host.js";
 import { isRecord } from "../plugin-sdk/string-coerce-runtime.js";
+import { RepositoryPublicationChangePermissionError } from "./github-publication-errors.js";
 import { GitHubPublicationKnownFailure } from "./github-publication-failure.js";
+import type { RepositoryPublicationObjectPlan } from "./repository-publication-contract.js";
 
 const workflowDirectory = ".github/workflows/";
 

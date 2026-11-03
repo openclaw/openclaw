@@ -92,3 +92,54 @@ export type RepositorySourceV1 = {
     }) => Promise<void>;
   };
 };
+
+/** Host-admitted source operations bound to one resolved URL and registration lifetime. */
+type ResolvedRepositorySource = {
+  id: string;
+  name: string;
+  url: string;
+  assertCurrent: () => void;
+  prepare: (input: {
+    agentId: string;
+    requiredCommit?: string;
+    signal?: AbortSignal;
+    assertCurrent: () => void;
+  }) => Promise<RepositorySourcePreparation>;
+  isWorkerIdentityCurrent: (input: {
+    agentId: string;
+    identity: { source: string; key?: string };
+  }) => boolean;
+  supportsPublicationRestoration: boolean;
+  restoreWorker: (input: {
+    agentId: string;
+    requiredCommit: string;
+    signal?: AbortSignal;
+    assertCurrent: () => void;
+  }) => Promise<{
+    project: RepositorySourceProject;
+    assertCurrent: () => void;
+    readRemoteHead: (branch: string) => Promise<string | undefined>;
+  }>;
+  prepareWorker: (input: {
+    agentId: string;
+    ref?: string;
+    baseCommit?: string;
+    expected?: { repositoryId: string; identityKey: string };
+    readCredential?: RepositoryCredentialReader;
+    retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
+    signal?: AbortSignal;
+    assertCurrent: () => void;
+  }) => Promise<RepositoryWorkerReadLease>;
+  checkoutWorker: (input: {
+    agentId: string;
+    transfer: import("./repository-checkout-transfer.js").RepositoryCheckoutTransfer;
+    readCredential?: RepositoryCredentialReader;
+    retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
+    assertCurrent: () => void;
+  }) => Promise<void>;
+};
+
+/** Gateway source lookup contract; implementation and registry custody stay host-owned. */
+export type RepositorySources = {
+  resolve: (url: string, sourceId?: string) => ResolvedRepositorySource;
+};

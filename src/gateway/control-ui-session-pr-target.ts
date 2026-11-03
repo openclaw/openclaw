@@ -8,8 +8,8 @@ import type {
   RepositorySessionSourceScope,
   ControlUiSessionPullRequests,
 } from "../plugin-sdk/native-github-session-read.js";
+import type { GitHubCheckoutContext } from "./control-ui-session-pr-checkout.js";
 import type { SessionPullRequestReadCredential } from "./control-ui-session-pr-request.js";
-import type { GitHubCheckoutContext } from "./control-ui-session-prs.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
 export type ControlUiSessionPrTarget = {

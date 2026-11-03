@@ -11,7 +11,9 @@
  * No maintenance or other command touches an operator repository. Preparation is
  * sequential and caps synthetic blob payload at 128 MiB. Hundreds of promisor packs
  * coexist with an already-present non-promisor commit and 15,000 remote refs.
- * Each owner Git command is timed; RSS is largest-process rusage, not summed RSS.
+ * Each owner Git command is timed by a host-owned PATH shim; RSS is largest-process
+ * rusage, not summed RSS. Total owner wall time includes shim startup. Historical
+ * revisions need the matching probe when their private transfer API differs.
  * A separate replay of Git's traced connectivity argv measures that child directly.
  * This targeted owner proof supplements the canonical Team-shaped Gateway stress.
  */
@@ -175,30 +177,13 @@ if (values.mode === "prepare") {
   )) as typeof import("../../src/gateway/github-publication-git-transport.js");
   const metrics: unknown[] = [];
   let commandIndex = 0;
-  const command = async (
-    argv: string[],
-    options: {
-      cwd?: string;
-      env?: NodeJS.ProcessEnv;
-      input?: string | Buffer | (() => string | Buffer);
-    } = {},
+  const recordCommand = async (
+    id: number,
+    safeArgs: string[],
+    elapsedMs: number,
+    timing: string,
+    trace: string,
   ) => {
-    assert.equal(argv[0], "git");
-    const id = commandIndex++;
-    const trace = path.join(output, `command-${id}.trace.jsonl`);
-    const safeArgs = argv.map((arg) =>
-      arg === "https://github.com/synthetic/fixture.git" ? pathToFileURL(remote).href : arg,
-    );
-    const started = performance.now();
-    const result = await run(
-      ["/usr/bin/time", ...(process.platform === "darwin" ? ["-l"] : ["-v"]), ...safeArgs],
-      options.cwd ?? receiver,
-      typeof options.input === "function" ? options.input() : options.input,
-      { ...env, ...options.env, GIT_TRACE2_EVENT: trace },
-    );
-    const elapsedMs = performance.now() - started;
-    await fs.writeFile(path.join(output, `command-${id}.time.txt`), result.stderr);
-    const timing = result.stderr.toString();
     const rss =
       process.platform === "darwin"
         ? Number(/(\d+)\s+maximum resident set size/.exec(timing)?.[1])
@@ -229,12 +214,81 @@ if (values.mode === "prepare") {
       connectivityChildren: connectivity.length,
       hostLoad: os.loadavg(),
     });
+  };
+  const command = async (
+    argv: string[],
+    options: {
+      cwd?: string;
+      env?: NodeJS.ProcessEnv;
+      input?: string | Buffer | (() => string | Buffer);
+    } = {},
+  ) => {
+    assert.equal(argv[0], "git");
+    const id = commandIndex++;
+    const trace = path.join(output, `command-${id}.trace.jsonl`);
+    const safeArgs = argv.map((arg) =>
+      arg === "https://github.com/synthetic/fixture.git" ? pathToFileURL(remote).href : arg,
+    );
+    const started = performance.now();
+    const result = await run(
+      ["/usr/bin/time", ...(process.platform === "darwin" ? ["-l"] : ["-v"]), ...safeArgs],
+      options.cwd ?? receiver,
+      typeof options.input === "function" ? options.input() : options.input,
+      { ...env, ...options.env, GIT_TRACE2_EVENT: trace },
+    );
+    const elapsedMs = performance.now() - started;
+    await fs.writeFile(path.join(output, `command-${id}.time.txt`), result.stderr);
+    await recordCommand(id, safeArgs, elapsedMs, result.stderr.toString(), trace);
     return {
       ...result,
       termination: "exit" as const,
       signal: null,
       killed: false,
     };
+  };
+  // Only this benchmark's synthetic Git executable replaces the fixed fixture URL.
+  // The publisher still consumes the actual one-use host transfer and cannot replace argv.
+  const bin = path.join(output, "bin");
+  await fs.mkdir(bin);
+  const resolvedGit = await run(["/usr/bin/which", "git"], receiver);
+  assert.equal(resolvedGit.code, 0, resolvedGit.stderr.toString());
+  const realGit = resolvedGit.stdout.toString().trim();
+  const shim = `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+const directory = ${JSON.stringify(output)};
+const id = process.pid;
+const args = process.argv.slice(2).map((value) => value === "https://github.com/synthetic/fixture.git" ? ${JSON.stringify(pathToFileURL(remote).href)} : value);
+const trace = path.join(directory, "command-" + id + ".trace.jsonl");
+const started = performance.now();
+const result = spawnSync("/usr/bin/time", [${process.platform === "darwin" ? '"-l"' : '"-v"'}, ${JSON.stringify(realGit)}, ...args], {
+  stdio: ["inherit", "pipe", "pipe"],
+  env: { ...process.env, ...${JSON.stringify(env)}, GIT_TRACE2_EVENT: trace },
+  maxBuffer: 64 * 1024 * 1024,
+});
+writeFileSync(path.join(directory, "command-" + id + ".time.txt"), result.stderr ?? "");
+writeFileSync(path.join(directory, "command-" + id + ".metric.json"), JSON.stringify({ id, argv: ["git", ...args], elapsedMs: performance.now() - started }));
+if (result.error) throw result.error;
+process.stdout.write(result.stdout ?? "");
+process.stderr.write(result.stderr ?? "");
+process.exit(result.status ?? 1);
+`;
+  await fs.writeFile(path.join(bin, "git"), shim, { mode: 0o700 });
+  const { performRepositoryPublicationGit } =
+    await import("../../src/gateway/repository-publication-git-transfer.js");
+  const lifetime = new AbortController();
+  const assertCurrent = () => lifetime.signal.throwIfAborted();
+  const publisher: Parameters<typeof owner.requireGitHubPublicationCommit>[0]["publisher"] = {
+    provenance: { source: "system-configured", account: { accountId: 1, login: "synthetic" } },
+    author: { name: "Synthetic", email: "synthetic@example.invalid" },
+    assertCurrent,
+    refresh: async () => assertCurrent(),
+    authorizeGit: (transfer) =>
+      performRepositoryPublicationGit(transfer, {
+        httpAuthorization: "Basic synthetic",
+        assertCurrent,
+      }),
   };
   const samples = integer(values.samples);
   const connectivityArgs =
@@ -258,17 +312,41 @@ if (values.mode === "prepare") {
       const result = await command(connectivityArgs, { input: `${metadata.target}\n` });
       assert.equal(result.code, 0, result.stderr.toString());
     } else {
-      await owner.requireGitHubPublicationCommit(
-        command,
-        "synthetic/fixture",
-        metadata.target,
-        "github.com",
-        receiver,
-        env,
-        "Synthetic fetch failed",
-      );
+      const previousEnv = process.env;
+      process.env = { ...env, PATH: bin + path.delimiter + env.PATH };
+      try {
+        await owner.requireGitHubPublicationCommit({
+          publisher,
+          remoteUrl: "https://github.com/synthetic/fixture.git",
+          sha: metadata.target,
+          cwd: receiver,
+          assertCurrent,
+          failure: "Synthetic fetch failed",
+        });
+      } finally {
+        process.env = previousEnv;
+      }
     }
     runs.push({ sample, elapsedMs: performance.now() - start });
+  }
+  lifetime.abort();
+  if (values.mode === "measure") {
+    for (const name of (await fs.readdir(output))
+      .filter((value) => value.endsWith(".metric.json"))
+      .toSorted()) {
+      // The owned shim above writes this exact interchange record, never operator input.
+      const metric: { id: number; argv: string[]; elapsedMs: number } = JSON.parse(
+        await fs.readFile(path.join(output, name), "utf8"),
+      );
+      await recordCommand(
+        metric.id,
+        metric.argv,
+        metric.elapsedMs,
+        await fs.readFile(path.join(output, `command-${metric.id}.time.txt`), "utf8"),
+        path.join(output, `command-${metric.id}.trace.jsonl`),
+      );
+    }
+    assert(metrics.length > 0, "The native owner must execute and record actual Git commands");
   }
   const summary = {
     fixture: metadata,

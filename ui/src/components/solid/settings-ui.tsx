@@ -3,13 +3,13 @@ import { children, For, onSettled, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { Icon } from "./icon.tsx";
 import { nextSettingsRadioName } from "./settings-control-id.ts";
 import { ToggleControl } from "./settings-toggle.tsx";
-export { SettingsToggle } from "./settings-toggle.tsx";
-import { Icon } from "./icon.tsx";
 import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
 import "../tooltip.ts";
 
+export { SettingsToggle } from "./settings-toggle.tsx";
 export type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
 
 type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "running" | "muted";

@@ -1,2 +1,2 @@
-# Current host consumer contracts, activation-prepared UI lifecycle and cold-mount coverage, plus invalidated session facts; preserved upstream scenarios use their real owning fixtures.
-133
+# Current SDK host consumer contracts, publication recovery, canonical RPC fixtures and browser lifecycle proof; preserved upstream assertions use their actual owning boundaries.
+363

@@ -89,6 +89,7 @@ import {
   prepareSessionCreateDefaultAccount,
   prepareSessionCreateModelSelection,
   projectSessionCreateSpawnModelSelection,
+  projectSessionCreateCatalogModelSelection,
   resolveSessionCreateModelInputError,
 } from "./session-create-model-selection.js";
 import { tryResetGatewaySessionForCreation } from "./session-create-reset.js";
@@ -805,17 +806,11 @@ async function createGatewaySessionInScope(
             spawnedCwd,
             preparedLifecycle,
           }),
-          ...(catalogResolvedModel && catalogAgentRuntime
-            ? {
-                providerOverride: catalogResolvedModel.provider,
-                modelOverride: catalogResolvedModel.model,
-                modelOverrideSource: "user" as const,
-                modelOverrideRouteResolution: "resolved" as const,
-                agentRuntimeOverride: catalogAgentRuntime,
-                modelSelectionLocked: true,
-                pluginOwnerId: catalogPluginOwnerId,
-              }
-            : {}),
+          ...projectSessionCreateCatalogModelSelection({
+            model: catalogResolvedModel,
+            agentRuntime: catalogAgentRuntime,
+            pluginOwnerId: catalogPluginOwnerId,
+          }),
           ...(params.deviceFolder ? { deviceFolder: { ...params.deviceFolder } } : {}),
           ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
           ...(createdNewEntry &&

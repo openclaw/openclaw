@@ -5,7 +5,7 @@ export type RepositorySessionIdentity = Readonly<{
   lifecycleRevision?: string | null;
 }>;
 
-export type RepositorySessionSource =
+type RepositorySessionSource =
   | Readonly<{ kind: "checkout"; root: string }>
   | Readonly<{ kind: "repository"; url: string; branch: string }>
   | null;

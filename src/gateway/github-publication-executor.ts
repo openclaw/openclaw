@@ -624,7 +624,7 @@ export async function executeGitHubPublication<Row extends GitHubPublicationExec
             `The push to ${pushRepository} was rejected.`,
             {
               code: "push_rejected",
-              nextAction: `Nothing was pushed as @${login}. Give @${login} write access (or point the worktree's origin at a fork it owns) and check the repository's branch rules, then request publication again.`,
+              nextAction: `The remote rejected the push to ${pushRepository}. Nothing was pushed as @${login}. Give @${login} write access (or point the worktree's origin at a fork it owns) and check the repository's branch rules, then request publication again.`,
             },
           );
         }

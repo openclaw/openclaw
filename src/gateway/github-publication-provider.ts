@@ -6,8 +6,6 @@ import {
   matchesPreparedGitHubPublicationIdentity,
 } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../plugin-sdk/core.js";
-import { NativeGitHubPublicationFailureError as RepositoryPublicationFailureError } from "../plugin-sdk/native-github-publication-host.js";
-import type { NativeGitHubPublicationProvider as RepositoryPublicationProvider } from "../plugin-sdk/native-github-publication-host.js";
 import { isRecord, readNonBlankString } from "../plugin-sdk/string-coerce-runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import {
@@ -19,6 +17,7 @@ import {
   preparePersonalGitHubPublicationSelection,
 } from "./github-personal-publication-selection.js";
 import { personalGitHubStatusAsync } from "./github-personal-status.js";
+import { RepositoryPublicationFailureError } from "./github-publication-errors.js";
 import {
   resolveGitHubPublicationFailure,
   isDefinitiveGitHubPublicationFailure,
@@ -29,11 +28,7 @@ import { prepareCurrentGitHubPublicationIdentity } from "./github-publication-id
 import { performGitHubPullRequestAction } from "./github-publication-pr-actions.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-pr-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
-import {
-  sameGitHubPublisherSelection,
-  prepareGitHubPublisher,
-  readGitHubPublisher,
-} from "./github-publication-publisher.js";
+import { prepareGitHubPublisher, readGitHubPublisher } from "./github-publication-publisher.js";
 import {
   readPublishedGitHubPullRequest,
   findGitHubPublicationPullRequest,
@@ -42,7 +37,7 @@ import {
 import {
   runGitHubPublicationCommand,
   requireGitHubPublicationCommand,
-  createGitHubPublicationCommandRunner,
+  createGitHubPublicationApiRunner,
   githubPublicationApiArgs,
   readGitHubPublicationBaseSha,
 } from "./github-publication-remote.js";
@@ -65,6 +60,7 @@ import {
   prepareGitHubWorkerIdentity,
   subscribeGitHubWorkerIdentityChanges,
 } from "./github-worker-identity.js";
+import type { RepositoryPublicationProvider } from "./repository-publication-contract.js";
 
 function workflowTree(raw: Buffer | undefined) {
   if (!raw) {
@@ -159,19 +155,20 @@ export function createGitHubPublicationProvider(owner: {
           input.action.assertCurrent();
           bound.assertCurrent();
         },
+        // Capture the verified account in the receipt before claim rebinds its stored selection.
         prepare: async (assertWorkspace) =>
-          prepareGitHubPublisher(input.action.agentId, provenance, {
+          prepareGitHubPublisher(input.action.agentId, undefined, {
             prepare: () =>
               preparePersonalGitHubPublicationSelection(
                 bound,
                 assertWorkspace,
                 owner.refreshPersonal,
               ),
-            isCurrent: (current) => {
+            isCurrent: () => {
               input.action.assertCurrent();
               assertWorkspace();
               bound.assertCurrent();
-              return sameGitHubPublisherSelection(current, selected);
+              return true;
             },
           }),
       };
@@ -313,7 +310,7 @@ export function createGitHubPublicationProvider(owner: {
     async readBase(input) {
       const identity = readGitHubPublisher(input.publisher);
       return await readGitHubPublicationBaseSha(
-        createGitHubPublicationCommandRunner(input.assertCurrent).run,
+        createGitHubPublicationApiRunner(input.assertCurrent).run,
         input.target.repository,
         input.target.baseBranch,
         identity.host ?? resolveGitHubHost(),

@@ -119,6 +119,17 @@ async function fixture(fork = false, linked = true, maintainer = false, sameBran
       }
       const endpoint = argv[argv.indexOf("GET") + 1]!;
       await beforeRead?.(endpoint);
+      const matchingRefs = `repos/${headRepo.full_name}/git/matching-refs/heads/`;
+      if (endpoint.startsWith(matchingRefs)) {
+        const branch = decodeURIComponent(endpoint.slice(matchingRefs.length));
+        return commandResult(
+          JSON.stringify(
+            branch === pr.head.ref
+              ? [{ ref: `refs/heads/${branch}`, object: { sha: branchHead } }]
+              : [],
+          ),
+        );
+      }
       const value =
         endpoint === `repos/${baseRepo.full_name}`
           ? baseRepo

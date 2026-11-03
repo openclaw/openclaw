@@ -9,13 +9,13 @@ import type { SandboxContext } from "../agents/sandbox/types.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
 import { resolveGitMetadataPath } from "../agents/worktrees/git.js";
 import { readRuntimeConfig as currentGitHubPublicationConfig } from "../config/runtime-snapshot.js";
-import { readRepositoryPublicationTargetFacts } from "./github-publication-availability.js";
 import {
   assertSafeGitPublicationWorkspace,
   captureSettledGitHubPublicationWorkspaceSnapshot,
   createGitHubPublicationCommandRunner,
   requireGitHubPublicationCommit,
 } from "./github-publication-git-transport.js";
+import { prepareRepositoryPublicationWorkspaceTarget } from "./github-publication-target.js";
 import {
   prepareManagedWorkspaceReviewBase,
   readManagedSandboxGitState,
@@ -79,6 +79,7 @@ export async function integrateManagedWorkspaceSource(
   },
 ): Promise<SessionGitHubBaseRefreshResult> {
   const { owner, publisher, provider, sandbox } = params;
+  const { agentId, sessionKey, sessionId, lifecycleRevision } = owner;
   const identity = publisher.provenance;
   const integrationSource = params.source ?? params.verifiedBase;
   const action = params.source ? "prepare_pr" : "refresh_base";
@@ -118,11 +119,10 @@ export async function integrateManagedWorkspaceSource(
         baseBranch: integrationSource.branch,
         baseRemoteUrl: `https://${integrationSource.githubHost}/${integrationSource.repository}.git`,
       }
-    : await provider.prepareTarget({
-        ...(await readRepositoryPublicationTargetFacts({
-          worktree: owner.worktree,
-          assertCurrent,
-        })),
+    : await prepareRepositoryPublicationWorkspaceTarget({
+        worktree: owner.worktree,
+        session: { agentId, sessionKey, sessionId, lifecycleRevision },
+        provider,
         publisher,
         assertCurrent,
       });

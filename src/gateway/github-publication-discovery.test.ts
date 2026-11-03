@@ -201,6 +201,7 @@ describe("Gateway-owned publication discovery", () => {
     const stale = holdPreparation();
     owner.invalidate();
     const oldRefresh = clock.wake();
+    await stale.entered;
     const oldPreparation = vi.mocked(prepareRepositoryWorkerPublicationFact).mock.calls[1]![0];
     expect(() => oldPreparation.assertCurrent?.()).not.toThrow();
     rebind({});

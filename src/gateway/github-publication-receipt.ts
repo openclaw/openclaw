@@ -5,6 +5,7 @@ import type {
   GitHubPublicationExecutionRow,
   GitHubPublicationRow,
 } from "../state/github-publication-read.types.js";
+import type { NativePublisherFacts } from "./github-publication-publisher-facts.js";
 import { publisherProvenance } from "./github-publication-publisher-facts.js";
 
 type PublicationFailureCode = Extract<SessionGitHubPublicationResult, { status: "failed" }>["code"];
@@ -159,7 +160,7 @@ export function matchesGitHubPublicationIdentityRow(
     GitHubPublicationExecutionRow,
     "identity_source" | "identity_profile_id" | "identity_account_id" | "identity_login"
   >,
-  identity: import("./github-publication-publisher-facts.js").NativePublisherFacts,
+  identity: NativePublisherFacts,
 ): boolean {
   return (
     row.identity_source === identity.source &&

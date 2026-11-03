@@ -1,9 +1,7 @@
 import { readNativeGitHubToken } from "../agents/github-read-identity.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
-import {
-  performNativeGitHubPublicationGit as performRepositoryPublicationGit,
-  type NativeGitHubPublicationPublisher as RepositoryPublicationPublisher,
-} from "../plugin-sdk/native-github-publication-host.js";
+import type { RepositoryPublicationPublisher } from "./repository-publication-contract.js";
+import { performRepositoryPublicationGit } from "./repository-publication-git-transfer.js";
 
 const publishers = new WeakMap<
   RepositoryPublicationPublisher,
@@ -13,7 +11,7 @@ const publishers = new WeakMap<
 export async function prepareGitHubPublisher(
   _agentId: string,
   expected:
-    | import("../plugin-sdk/native-github-publication-host.js").NativeGitHubPublisherProvenance
+    | import("./repository-publication-contract.js").NativeGitHubPublisherProvenance
     | undefined,
   owner: {
     prepare(): Promise<PreparedGitHubPublicationIdentity>;
@@ -85,8 +83,8 @@ export function readGitHubPublisher(
 
 /** Login casing is presentation; source, profile and verified account select the identity. */
 export function sameGitHubPublisherSelection(
-  actual: import("../plugin-sdk/native-github-publication-host.js").NativeGitHubPublisherProvenance,
-  expected: import("../plugin-sdk/native-github-publication-host.js").NativeGitHubPublisherProvenance,
+  actual: import("./repository-publication-contract.js").NativeGitHubPublisherProvenance,
+  expected: import("./repository-publication-contract.js").NativeGitHubPublisherProvenance,
 ): boolean {
   return (
     actual.source === expected.source &&

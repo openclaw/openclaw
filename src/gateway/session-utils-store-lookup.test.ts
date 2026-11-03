@@ -29,7 +29,7 @@ import {
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareCurrentGitHubPublicationOptionsIdentity } from "./github-publication-availability.js";
+import { prepareCurrentGitHubPublicationOptionsIdentity } from "./github-publication-identity.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
@@ -59,9 +59,9 @@ import type { GatewaySessionRow } from "./session-utils.types.js";
 
 afterEach(() => memorySessionActorOwners.reset());
 
-vi.mock("./github-publication-availability.js", async () => {
-  const actual = await vi.importActual<typeof import("./github-publication-availability.js")>(
-    "./github-publication-availability.js",
+vi.mock("./github-publication-identity.js", async () => {
+  const actual = await vi.importActual<typeof import("./github-publication-identity.js")>(
+    "./github-publication-identity.js",
   );
   return {
     ...actual,

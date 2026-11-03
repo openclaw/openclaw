@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createPluginRecord as createLoaderPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { makeEmptyPluginMetadataOwners } from "./plugin-metadata-empty.test-support.js";
 import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
 import { resolvePluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-selection.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "./runtime/index.js";
+import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 import type { OpenClawPluginToolContext } from "./tool-types.js";
 
 export type MockRegistryToolEntry = {
@@ -155,4 +158,95 @@ export function createToolRegistry(
     };
   });
   return registry;
+}
+
+export function createOptionalToolResolveParams(params?: {
+  context?: ReturnType<typeof createOptionalToolContext> & Record<string, unknown>;
+  clientCaps?: string[];
+  toolAllowlist?: readonly string[];
+  toolDenylist?: readonly string[];
+  existingToolNames?: Set<string>;
+  env?: NodeJS.ProcessEnv;
+  suppressNameConflicts?: boolean;
+  allowGatewaySubagentBinding?: boolean;
+  runtimePluginToolGrant?: { pluginId: string; toolNames: readonly string[] };
+}) {
+  const toolAllowlist = appendRuntimePluginToolGrant(
+    [...(params?.toolAllowlist ?? [])],
+    params?.runtimePluginToolGrant,
+  );
+  return {
+    context: (params?.context ?? createOptionalToolContext()) as never,
+    ...(params?.clientCaps ? { clientCaps: params.clientCaps } : {}),
+    ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
+    ...(params?.toolDenylist ? { toolDenylist: [...params.toolDenylist] } : {}),
+    ...(params?.existingToolNames ? { existingToolNames: params.existingToolNames } : {}),
+    ...(params?.env ? { env: params.env } : {}),
+    ...(params?.suppressNameConflicts ? { suppressNameConflicts: true } : {}),
+    ...(params?.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+  };
+}
+
+export function installOptionalToolManifestSnapshots(
+  params: {
+    config: ReturnType<typeof createOptionalToolContext>["config"];
+    compatibleConfigs?: ReturnType<typeof createOptionalToolContext>["config"][];
+    env?: NodeJS.ProcessEnv;
+    plugins: Record<string, unknown>[];
+  },
+  setSnapshot: typeof import("./current-plugin-metadata.test-support.js").setCurrentPluginMetadataSnapshot,
+) {
+  const plugins = params.plugins.map((plugin): Record<string, unknown> => ({
+    rootDir: "/tmp",
+    source: `/tmp/${String(plugin.id)}.js`,
+    ...plugin,
+  }));
+  const snapshot = {
+    policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+    workspaceDir: "/tmp",
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: plugins.map((plugin) => ({
+        pluginId: String(plugin.id),
+        origin: plugin.origin,
+        enabled: true,
+        enabledByDefault: plugin.enabledByDefault,
+        startup: {
+          sidecar: false,
+          memory: false,
+          agentHarnesses: [],
+        },
+        compat: [],
+      })),
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: { plugins, diagnostics: [] },
+    plugins,
+    diagnostics: [],
+    byPluginId: new Map(plugins.map((plugin) => [String(plugin.id), plugin])),
+    normalizePluginId: (id: string) => id,
+    owners: makeEmptyPluginMetadataOwners(),
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: plugins.length,
+      manifestPluginCount: plugins.length,
+    },
+  };
+  setSnapshot(snapshot as never, {
+    config: params.config,
+    compatibleConfigs: params.compatibleConfigs,
+    env: params.env ?? process.env,
+    workspaceDir: "/tmp",
+  });
+  return snapshot;
 }

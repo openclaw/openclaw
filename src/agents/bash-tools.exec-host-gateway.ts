@@ -8,6 +8,7 @@ import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-
 import { detectInlineEvalInSegments } from "../infra/command-analysis/risks.js";
 import { lookupCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
+import { ONE_SHOT_ALLOW_ALWAYS } from "../infra/exec-approvals-allow-always.js";
 import {
   type AllowAlwaysPersistenceDecision,
   commitExecAuthorizationLocked,
@@ -87,10 +88,6 @@ import {
 import { createApprovalSlug, runExecProcess } from "./bash-tools.exec-runtime.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 
-const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
-  kind: "one-shot",
-  reasons: ["no-reusable-pattern"],
-};
 // Keep compound reviews bounded independently of the serialized prompt cap.
 const MAX_GATEWAY_AUTO_REVIEW_CANDIDATES = 64;
 const MAX_CONSECUTIVE_AUTO_REVIEW_DENIALS = 3;

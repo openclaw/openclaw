@@ -236,7 +236,14 @@ describe("recipient publication lifetimes", () => {
           holdRecipient = false;
           await held.wait();
         }
-        return target;
+        return {
+          ...target,
+          assertCurrent() {
+            if (connId === "recipient" && holdRecipient) {
+              throw new Error("Recipient preparation pending");
+            }
+          },
+        };
       },
     });
     await watch(active, "first", "recipient");
@@ -273,7 +280,16 @@ describe("recipient publication lifetimes", () => {
           await held.wait();
         }
         return async () =>
-          session.sessionKey === "old" && !oldVisible ? undefined : targetFor(session.sessionKey);
+          session.sessionKey === "old" && !oldVisible
+            ? undefined
+            : {
+                ...targetFor(session.sessionKey),
+                assertCurrent() {
+                  if (session.sessionKey === "old" && !oldVisible) {
+                    throw new Error("Watcher visibility changed");
+                  }
+                },
+              };
       },
     });
     await active.replace("same", ["old"]);
@@ -471,7 +487,14 @@ describe("recipient publication lifetimes", () => {
           holdRecipient = false;
           return recipient.wait();
         }
-        return target;
+        return {
+          ...target,
+          assertCurrent() {
+            if (connId === "recipient" && holdRecipient) {
+              throw new Error("Recipient preparation pending");
+            }
+          },
+        };
       },
     });
     await watch(active, "first", "recipient");
@@ -518,7 +541,14 @@ describe("recipient publication lifetimes", () => {
             holdRecipient = false;
             return held.wait();
           }
-          return Promise.resolve(target);
+          return Promise.resolve({
+            ...target,
+            assertCurrent() {
+              if (connId === "removed" && holdRecipient) {
+                throw new Error("Recipient preparation pending");
+              }
+            },
+          });
         },
       });
       await watch(active, "first", "removed");

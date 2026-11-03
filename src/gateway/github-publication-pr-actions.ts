@@ -1,10 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionGitHubActionResult } from "../../packages/gateway-protocol/src/index.js";
 import { redactToolPayloadText as redactToolDetail } from "../plugin-sdk/logging-core.js";
-import type {
-  NativeGitHubPublicationActionInput as RepositoryPublicationActionInput,
-  NativeGitHubPublicationActionResult as RepositoryPublicationActionResult,
-} from "../plugin-sdk/native-github-publication-host.js";
 import { pullRequestState } from "./github-publication-action-state.js";
 import { uploadGitHubPublicationEvidence } from "./github-publication-evidence-upload.js";
 import {
@@ -18,6 +14,10 @@ import {
   githubPublicationApiArgs,
   runGitHubPublicationCommand as runPublicationCommand,
 } from "./github-publication-remote.js";
+import type {
+  RepositoryPublicationActionInput,
+  RepositoryPublicationActionResult,
+} from "./repository-publication-contract.js";
 
 function assertPreservedPublicationFooter(before: string, after: string) {
   const marker = before.indexOf("\n\n<!-- openclaw-publication:");

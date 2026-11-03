@@ -334,10 +334,15 @@ export async function createRealPublicationWorkspace(params: {
   }
   mocks.runCommand.mockImplementation(async (argv: string[], options?: CommandOptions) => {
     if (argv[0] === "gh") {
-      if (argv.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/matching-refs/heads/"))) {
-        interrupt("observe", "synthetic remote observation unavailable", Boolean(remoteHead));
+      const matchingRef = argv.find((arg) =>
+        arg.startsWith("repos/openclaw/openclaw/git/matching-refs/heads/"),
+      );
+      if (matchingRef) {
+        const selectedBranch = decodeURIComponent(matchingRef.split("/heads/")[1]!);
+        const exists = Boolean(remoteHead) && selectedBranch === remoteBranch;
+        interrupt("observe", "synthetic remote observation unavailable", exists);
         return json(
-          remoteHead ? [{ ref: `refs/heads/${branch}`, object: { sha: remoteHead } }] : [],
+          exists ? [{ ref: `refs/heads/${remoteBranch}`, object: { sha: remoteHead } }] : [],
         );
       }
       const pr = publishedPullRequest;

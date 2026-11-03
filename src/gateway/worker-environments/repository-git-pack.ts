@@ -10,7 +10,7 @@ import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 const FETCH_TIMEOUT_MS = 10 * 60_000;
 
 /** The caller retains scratch-directory custody until this operation settles. */
-export async function prepareRepositoryCheckoutPack(params: {
+export async function fetchRepositoryCheckoutPack(params: {
   url: string;
   baseCommit: string;
   httpAuthorization?: string;
@@ -144,7 +144,7 @@ export async function prepareRepositoryWorkerGitPack(params: {
     throw new Error("Private repository preparation requires a current GitHub credential");
   }
   const { token, ...input } = params;
-  return await prepareRepositoryCheckoutPack({
+  return await fetchRepositoryCheckoutPack({
     ...input,
     httpAuthorization: `Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
   });

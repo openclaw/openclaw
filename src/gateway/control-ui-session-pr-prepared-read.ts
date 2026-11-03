@@ -24,12 +24,6 @@ import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-pr
 const receiptsOnlyTargetIdentity = (identity: string) =>
   JSON.stringify([identity, "receipts-only"]);
 
-export type LoadSessionPullRequests = (
-  params: ControlUiSessionPullRequestsParams,
-  cacheSignal: AbortSignal | undefined,
-  read: ControlUiSessionPrReadContext,
-) => Promise<ControlUiSessionPullRequests>;
-
 export async function loadSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
   cacheSignal: AbortSignal | undefined,
@@ -200,7 +194,7 @@ export function addControlUiSessionPrMembership(
 }
 
 /** Retire the unused cell through the same owner that retains its prepared readers. */
-export function retireControlUiSessionPrState<
+function retireControlUiSessionPrState<
   State extends PreparedSessionPrState & { cancelRefresh?: () => void },
 >(state: State | undefined, keyStates: Map<string, State>): void {
   if (!state || state.prepared || state.connIds.size > 0) {
@@ -397,7 +391,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
             assertReadCurrent();
             try {
               const result = await load(target.params, undefined, {
-                target,
+                target: selectedRead ? { ...target, read: selectedRead } : target,
                 sourceIdentity,
                 sourceScope,
                 readTaskPublications: selectedRead?.readTaskPublications,

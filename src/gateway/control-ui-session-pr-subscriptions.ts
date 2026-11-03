@@ -311,7 +311,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
                 { ...state.target.params, ...(refresh ? { refresh: true } : {}) },
                 state.cacheLifetime.signal,
                 {
-                  target: state.target,
+                  target: selectedRead ? { ...state.target, read: selectedRead } : state.target,
                   sourceIdentity,
                   sourceScope,
                   readTaskPublications: selectedRead?.readTaskPublications,
@@ -543,6 +543,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
         watched.refreshPending = true;
       }
     }
+    admit();
     const replacement = scope.track(async () => {
       const previousSubscription = subscriptions.get(normalizedConnId);
       const subscription = new Map<string, Watched>();
@@ -640,7 +641,6 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
         }
       }
 
-      admit();
       await Promise.all(
         Array.from(subscription, async ([sessionKey, watched]) => {
           const cacheKey = watched.target.identity;

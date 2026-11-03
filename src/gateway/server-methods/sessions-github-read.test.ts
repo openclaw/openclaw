@@ -19,7 +19,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import type { ControlUiSessionPullRequestSnapshot } from "../control-ui-contract.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
 import { personalGitHubStatusAsync as personalGitHubStatus } from "../github-personal-status.js";
-import * as publicationAvailability from "../github-publication-availability.js";
+import * as publicationIdentity from "../github-publication-identity.js";
 import * as relevance from "../github-publication-relevance.js";
 import {
   expectFailure,
@@ -72,7 +72,7 @@ const expectOptions = (respond: Respond, overrides: Record<string, unknown> = {}
 const expectPartialReply = (respond: Respond, result: Record<string, unknown>) =>
   expectReply(respond, expect.objectContaining(result));
 function useRealIdentity(token?: string) {
-  vi.mocked(publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
+  vi.mocked(publicationIdentity.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
   vi.stubEnv("GH_TOKEN", token);
   vi.stubEnv("GITHUB_TOKEN", undefined);
 }
@@ -130,7 +130,7 @@ it("reads personal options and receipts while shared identity discovery is pendi
     const entered = createDeferredCore();
     const release = createDeferredCore();
     vi.mocked(
-      publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
+      publicationIdentity.prepareCurrentGitHubPublicationOptionsIdentity,
     ).mockImplementationOnce(async () => {
       entered.resolve();
       await release.promise;
@@ -245,7 +245,7 @@ it("marks only expired personal account facts stale through options revalidation
 }) => {
   const personalToken = "synthetic-personal-options-stale";
   const sharedToken = "synthetic-shared-options-fresh";
-  vi.mocked(publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
+  vi.mocked(publicationIdentity.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
   vi.stubEnv("GH_TOKEN", sharedToken);
   mocks.runCommandBuffered.mockResolvedValue(commandResult(sharedToken));
   const refresh = createDeferredCore<Response>();
@@ -384,9 +384,7 @@ it.each(["refresh", "personal", "receipt"] as const)(
         await pending.promise;
       };
       if (phase === "refresh") {
-        vi.mocked(
-          publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
-        ).mockRestore();
+        vi.mocked(publicationIdentity.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
         vi.mocked(requestCurrentGitHubOAuthRefresh).mockImplementationOnce(hold);
         mocks.runCommandBuffered.mockClear();
       } else if (phase === "personal") {
@@ -460,7 +458,7 @@ it.each(["accepted", "missing", "scope", "connection", "unverified-profile"] as 
         );
         expect(fixture.requestForSession).not.toHaveBeenCalled();
         expect(
-          publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
+          publicationIdentity.prepareCurrentGitHubPublicationOptionsIdentity,
         ).not.toHaveBeenCalled();
       } else {
         expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));

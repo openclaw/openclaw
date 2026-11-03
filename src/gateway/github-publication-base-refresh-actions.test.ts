@@ -157,51 +157,67 @@ it("recovers a retargeted guest PR, retains saved data and publishes the resolve
   let cancelAfterScan: AbortController | undefined;
   await write(cwd, ".env.local", "host-private-fixture");
   const transport = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-    if (argv.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"))) {
-      const selected = argv.some((arg) => arg.endsWith(`/${destination}`)) ? destination : "main";
-      return commandResult(
-        JSON.stringify({
-          ref: `refs/heads/${selected}`,
-          sha: selected === destination ? baseCommit : originalBase,
-        }),
-      );
-    }
-    if (
-      argv[0] === "gh" &&
-      argv.includes("GET") &&
-      argv.some((arg) => /\/pulls\/\d+$/u.test(arg))
-    ) {
-      return commandResult(JSON.stringify(publicationPullRequestResponse(pr)));
-    }
-    if (argv.includes("fetch") && (argv.includes(partialBase) || argv.includes("--stdin"))) {
-      expect(argv).toContain("https://github.com/openclaw/openclaw.git");
-      expect(argv).toContain("credential.helper=!gh auth git-credential");
-      if (argv.includes("--stdin")) {
-        contentFetches++;
-        if (rejectContentFetch) {
-          return commandResult("", 1);
-        }
-      } else {
-        commitFetches++;
+  mocks.runCommand.mockImplementation(
+    async (argv: string[], options?: { input?: string; env?: NodeJS.ProcessEnv }) => {
+      if (argv.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"))) {
+        const selected = argv.some((arg) => arg.endsWith(`/${encodeURIComponent(destination)}`))
+          ? destination
+          : "main";
+        return commandResult(
+          JSON.stringify({
+            ref: `refs/heads/${selected}`,
+            sha: selected === destination ? baseCommit : originalBase,
+          }),
+        );
       }
-      return await runCommandBuffered(
-        argv.map((arg) => (arg === "https://github.com/openclaw/openclaw.git" ? upstreamUrl : arg)),
-        { ...options, cwd, timeoutMs: 10_000 },
-      );
-    }
-    if (argv.includes("state=all")) {
-      return commandResult(JSON.stringify([pr]));
-    }
-    const result = await transport(argv, options);
-    if (argv.includes("--missing=print")) {
-      cancelAfterScan?.abort(new Error("refresh cancelled after object discovery"));
-    }
-    if (argv.includes("push")) {
-      pr.headSha = await git("rev-parse", "HEAD");
-    }
-    return result;
-  });
+      if (
+        argv[0] === "gh" &&
+        argv.includes("GET") &&
+        argv.some((arg) => /\/pulls\/\d+$/u.test(arg))
+      ) {
+        return commandResult(JSON.stringify(publicationPullRequestResponse(pr)));
+      }
+      if (argv.includes("fetch") && (argv.includes(partialBase) || argv.includes("--stdin"))) {
+        expect(argv).toContain("https://github.com/openclaw/openclaw.git");
+        const config = Object.fromEntries(
+          Array.from({ length: Number(options?.env?.GIT_CONFIG_COUNT ?? 0) }, (_, i) => [
+            options?.env?.[`GIT_CONFIG_KEY_${i}`],
+            options?.env?.[`GIT_CONFIG_VALUE_${i}`],
+          ]),
+        );
+        expect(config).toMatchObject({
+          "credential.helper": "",
+          "http.https://github.com/openclaw/openclaw.git.extraHeader":
+            expect.stringMatching(/^Authorization: Basic /),
+        });
+        if (argv.includes("--stdin")) {
+          contentFetches++;
+          if (rejectContentFetch) {
+            return commandResult("", 1);
+          }
+        } else {
+          commitFetches++;
+        }
+        return await runCommandBuffered(
+          argv.map((arg) =>
+            arg === "https://github.com/openclaw/openclaw.git" ? upstreamUrl : arg,
+          ),
+          { ...options, cwd, timeoutMs: 10_000 },
+        );
+      }
+      if (argv.includes("state=all")) {
+        return commandResult(JSON.stringify([pr]));
+      }
+      const result = await transport(argv, options);
+      if (argv.includes("--missing=print")) {
+        cancelAfterScan?.abort(new Error("refresh cancelled after object discovery"));
+      }
+      if (argv.includes("push")) {
+        pr.headSha = await git("rev-parse", "HEAD");
+      }
+      return result;
+    },
+  );
   using owner = await resolveLocalWorkspaceOwner({
     ...f.guestSource.session,
     cfg: f.config,

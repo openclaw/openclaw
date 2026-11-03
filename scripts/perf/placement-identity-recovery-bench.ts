@@ -71,10 +71,13 @@ const state = await import("../../src/state/openclaw-state-db.js");
 const inspector = new Session();
 let stopRuntime: (() => Promise<void>) | undefined;
 try {
-  const { createGatewayWorkerPlacementRuntime, createGatewayGitHubPublicationRuntime } =
-    (await import(
-      ownerUrl.href
-    )) as typeof import("../../src/gateway/server-worker-placement-startup.js");
+  const { createGatewayWorkerPlacementRuntime } = (await import(
+    ownerUrl.href
+  )) as typeof import("../../src/gateway/server-worker-placement-startup.js");
+  const { createNativeGitHubPublicationRuntime } =
+    await import("../../src/gateway/github-publication-runtime.js");
+  const { loadWorkerPlacementSessionRuntimeModule } =
+    await import("../../src/gateway/server-worker-placement-session-target.js");
   const { createWorkerEnvironmentService } =
     await import("../../src/gateway/worker-environments/service.js");
   const { createWorkerEnvironmentStore } =
@@ -227,7 +230,9 @@ try {
   });
   const warnings: string[] = [];
   const warn = (message: string) => warnings.push(message);
-  const publications = createGatewayGitHubPublicationRuntime({
+  const publications = createNativeGitHubPublicationRuntime({
+    scheduler,
+    loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
     placements,
     getCommittedRuntimeConfig: () => config,
     warn,

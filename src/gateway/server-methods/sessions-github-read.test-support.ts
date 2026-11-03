@@ -18,7 +18,8 @@ import {
   type PersonalGitHubAction,
 } from "../github-personal-oauth.js";
 import { personalGitHubStatusAsync as personalGitHubStatus } from "../github-personal-status.js";
-import * as publicationAvailability from "../github-publication-availability.js";
+import * as publicationIdentity from "../github-publication-identity.js";
+import { createGitHubPublicationProvider } from "../github-publication-provider.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -34,10 +35,9 @@ export const publisherIdentity = () => ({
   account: { accountId: publisher.accountId, login: publisher.login, avatarUrl: null },
 });
 export function mockPublicationIdentity() {
-  vi.spyOn(
-    publicationAvailability,
-    "prepareCurrentGitHubPublicationOptionsIdentity",
-  ).mockResolvedValue(publisherIdentity());
+  vi.spyOn(publicationIdentity, "prepareCurrentGitHubPublicationOptionsIdentity").mockResolvedValue(
+    publisherIdentity(),
+  );
 }
 export const receipt = {
   result: {
@@ -137,6 +137,7 @@ export async function withReadFixture(
     scopes?: string[];
     others?: "none" | "view";
     foreign?: boolean;
+    projection?: boolean;
   } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -175,7 +176,9 @@ export async function withReadFixture(
       },
     );
     const fixture = createFixture(profile, options.scopes);
-    await initializeSessionReadContext(fixture.context);
+    if (options.projection !== false) {
+      await initializeSessionReadContext(fixture.context);
+    }
     const profileCatalog = await prepareUserProfileCatalog();
     try {
       await run(fixture);
@@ -203,7 +206,16 @@ function createFixture(
     );
   }
   let connected = true;
+  const readScheduler = createTestGatewayScheduler();
+  const provider = createGitHubPublicationProvider({
+    signal: readScheduler.signal,
+    assertCurrent: () => readScheduler.signal.throwIfAborted(),
+    getConfig: getRuntimeConfig,
+    refreshIdentity: async () => {},
+    refreshPersonal: async () => {},
+  });
   const publication = {
+    supportsOrigin: provider.supportsOrigin,
     sharedStatus: vi.fn().mockResolvedValue(receipt),
     latestShared: vi.fn().mockResolvedValue(receipt),
     personalStatusAsync: vi.fn(),
@@ -238,7 +250,6 @@ function createFixture(
       },
     },
   } as unknown as GatewayRequestContext;
-  const readScheduler = createTestGatewayScheduler();
   const readHost = createRepositorySessionReadHost({
     signal: readScheduler.signal,
     getRuntimeConfig,

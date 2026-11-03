@@ -1079,6 +1079,31 @@ const config = {
     "src/auto-reply/reply/request-native-subagent.ts": ["exports"],
     // Scheduled-command tests exercise registry replacement and persisted-job validation at the owner.
     "src/gateway/plugin-command-scheduled-run.ts": ["exports"],
+    // delegated-tool-policy and sessions-spawn visible tests build the real inherited deny floor.
+    "src/agents/conversation-capability-profile.ts": ["exports"],
+    // github-publish-tool tests verify the registered definition's policy inheritance.
+    "src/agents/tools/github-publish-tool.ts": ["exports"],
+    // session-actor-effect-reads exercises the physical source lease independently of viewer setup.
+    "src/gateway/control-ui-session-pr-source.ts": ["exports"],
+    // Task receipt tests verify the exact projected audience and current source selection.
+    "src/gateway/control-ui-session-task-prs.ts": ["exports"],
+    // factory-github-proof tests issue the actual owner claim before exercising redemption.
+    "src/gateway/factory-github-proof.ts": ["exports"],
+    // OAuth inventory tests independently verify read sharing and write-during-scan invalidation.
+    "src/gateway/github-oauth-lifecycle-helpers.ts": ["exports"],
+    "src/gateway/github-oauth-lifecycle-host.ts": ["exports"],
+    // Publication-lifetime tests exercise the accepted worktree owner adapter.
+    "src/gateway/github-publication-availability.ts": ["exports"],
+    // sessions-github RPC tests compare the exact requester-unavailable error class.
+    "src/gateway/github-publication-failure.ts": ["exports"],
+    // Publication fixtures instantiate the production provider with isolated refresh transport.
+    "src/gateway/github-publication-provider.ts": ["exports"],
+    // users-github RPC tests observe the actual durable profile retirement callback.
+    "src/state/user-github-connections.ts": ["exports"],
+    // Publication readiness tests retain the real owner while the UI uses its local constructor.
+    "ui/src/lib/sessions/github-publication-owner.ts": ["exports"],
+    // control-ui-runtime tests exercise synchronous menu notifications and observer retirement.
+    "ui/src/plugins/control-ui-action-observation.solid.ts": ["exports"],
     // Diagnostic fixtures reset owner-private state; the full-tree audit checks these consumers.
     "src/logging/diagnostic-memory.ts": ["exports"],
     "src/logging/diagnostic-phase.ts": ["exports"],

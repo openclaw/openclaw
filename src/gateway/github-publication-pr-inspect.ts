@@ -1,7 +1,6 @@
 import { GITHUB_PULL_REQUEST_LOGIN_PATTERN } from "@openclaw/gateway-protocol/schema";
 import type { SessionGitHubPullRequestInspectResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveConfiguredGitHubApiBaseUrl } from "../agents/github-host.js";
-import type { NativeGitHubPublicationOwnPullRequestReader as RepositoryPublicationOwnPullRequestReader } from "../plugin-sdk/native-github-publication-host.js";
 import { isRecord } from "../plugin-sdk/string-coerce-runtime.js";
 import { containsAsciiControlCharacter } from "../plugin-sdk/string-normalization-runtime.js";
 import {
@@ -10,6 +9,7 @@ import {
   prepareCurrentGitHubPublicationIdentity,
 } from "./github-publication-identity.js";
 import { createGitHubPublicationJsonReader } from "./github-publication-json-read.js";
+import type { RepositoryPublicationOwnPullRequestReader } from "./repository-publication-contract.js";
 type Inspection = SessionGitHubPullRequestInspectResult;
 const unavailable = () =>
   new Error(

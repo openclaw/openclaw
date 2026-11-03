@@ -25,6 +25,7 @@ import type {
   SystemAgentApprovalResolved,
 } from "../../infra/system-agent-approvals.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
+import type { RepositorySources } from "../../plugins/repository-source-types.js";
 import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
@@ -431,7 +432,7 @@ type GatewayResidentBridgeContext = {
   githubOAuthService?: ReturnType<
     typeof import("../github-oauth-lifecycle.js").createGitHubOAuthLifecycle
   >;
-  repositorySources?: import("../repository-sources.js").RepositorySources;
+  repositorySources?: RepositorySources;
   modelAccountConnectService?: ReturnType<
     typeof import("../model-account-connect.js").createModelAccountConnectService
   >;

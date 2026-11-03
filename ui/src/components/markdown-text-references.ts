@@ -40,7 +40,7 @@ function splitsSurrogatePair(text: string, offset: number): boolean {
 }
 
 /** The activation-prepared host rule consumes only admitted synchronous resolver snapshots. */
-export function renderMarkdownTextReferences(
+function renderMarkdownTextReferences(
   state: StateCore,
   providers: readonly import("../../../src/plugin-sdk/control-ui.js").ControlUiTextReferenceSnapshot[],
 ): void {

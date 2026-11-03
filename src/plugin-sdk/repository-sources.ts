@@ -87,10 +87,10 @@ export function createManagedProjectCheckoutV1(source: ManagedProjectSourceV1) {
 /** Native pack custody is loaded only for admitted source transport. */
 export async function prepareRepositoryCheckoutPack(
   ...args: Parameters<
-    typeof import("../gateway/worker-environments/repository-git-pack.js").prepareRepositoryCheckoutPack
+    typeof import("../gateway/worker-environments/repository-git-pack.js").fetchRepositoryCheckoutPack
   >
 ) {
   return await (
     await import("../gateway/worker-environments/repository-git-pack.js")
-  ).prepareRepositoryCheckoutPack(...args);
+  ).fetchRepositoryCheckoutPack(...args);
 }

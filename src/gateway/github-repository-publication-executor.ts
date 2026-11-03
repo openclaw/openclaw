@@ -1,13 +1,9 @@
 import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { runTasksWithConcurrency } from "../plugin-sdk/concurrency-runtime.js";
-import {
-  type NativeGitHubPublicationObjectPlan as RepositoryPublicationObjectPlan,
-  nativeGitHubPublicationBaseBranch as parseGitHubPublicationBaseBranch,
-  hasNativeGitHubPublicationMessageFooter as hasGitHubPublicationMessageFooter,
-  NativeGitHubPublicationWorkspaceChangedError as RepositoryPublicationWorkspaceChangedError,
-} from "../plugin-sdk/native-github-publication-host.js";
 import { isRecord } from "../plugin-sdk/string-coerce-runtime.js";
+import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
+import { RepositoryPublicationWorkspaceChangedError } from "./github-publication-errors.js";
 import {
   GitHubPublicationBranchChangedError,
   GitHubPublicationCreditChangedError,
@@ -27,6 +23,8 @@ import {
 } from "./github-publication-workflows.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
+import type { RepositoryPublicationObjectPlan } from "./repository-publication-contract.js";
+import { hasGitHubPublicationMessageFooter } from "./repository-publication-message.js";
 
 async function api(
   endpoint: string,

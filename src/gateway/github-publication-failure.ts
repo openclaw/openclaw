@@ -2,10 +2,10 @@ import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol/gateway-erro
 import type { GitHubPublicationSelectionRejectedErrorDetails } from "@openclaw/gateway-protocol/gateway-error-details";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/index.js";
 import {
-  NativeGitHubPublicationCreditChangedError as RepositoryPublicationCreditChangedError,
-  NativeGitHubPublicationFailureError as RepositoryPublicationFailureError,
-  NativeGitHubPublicationAuthorityError as RepositoryPublicationAuthorityError,
-} from "../plugin-sdk/native-github-publication-host.js";
+  RepositoryPublicationFailureError,
+  RepositoryPublicationAuthorityError,
+} from "./github-publication-errors.js";
+import { RepositoryPublicationCreditChangedError } from "./repository-publication-content-contract.js";
 
 type PublicationFailure = Pick<
   Extract<SessionGitHubPublicationResult, { status: "failed" }>,
@@ -68,27 +68,6 @@ export class GitHubPublicationBranchChangedError extends GitHubPublicationKnownF
         : "Preserve your local work and inspect the published head. If this conversation published the PR from its managed workspace, call prepare_pr with its URL to merge the newer head into the saved work, then publish again; otherwise publish from a new session branch and open a replacement PR. Repository-only checkpoints cannot adopt external branch changes; use a new session branch for those. Do not merge old history merely to make a rebased branch pushable. The broker never rewrites published history.",
     });
   }
-}
-
-/**
- * Classify a push whose head did not land. Git exiting on its own with a failure while the
- * remote still holds its pre-push head is a definitive rejection. Anything else (exit 0, a
- * killed or signalled push, or a moved remote) stays unconfirmed for recovery to settle.
- */
-export function gitHubPublicationPushFailure(
-  pushed: { code: number | null; signal: unknown; killed: boolean },
-  remoteUnchanged: boolean,
-  { login, pushRepository }: { login: string; pushRepository: string },
-): Error {
-  if (!remoteUnchanged || pushed.code === 0 || pushed.signal !== null || pushed.killed) {
-    return new Error(
-      pushed.code === 0 ? "GitHub push verification failed." : "GitHub push was rejected.",
-    );
-  }
-  return new GitHubPublicationKnownFailure(`GitHub rejected the push to ${pushRepository}.`, {
-    code: "push_rejected",
-    nextAction: `Nothing was pushed as @${login}. Give @${login} write access (or point the worktree's origin at a fork it owns) and check the repository's branch rules, then request publication again.`,
-  });
 }
 
 export class GitHubPublicationCreditChangedError extends GitHubPublicationKnownFailure {
@@ -198,10 +177,7 @@ export function isDefinitiveGitHubPublicationFailure(error: unknown): boolean {
   );
 }
 
-export {
-  RepositoryPublicationRequesterUnavailableError as GitHubPublicationRequesterUnavailableError,
-  RepositoryPublicationChangePermissionError as GitHubPublicationWorkflowPermissionError,
-} from "./repository-publication-errors.js";
+export { RepositoryPublicationRequesterUnavailableError as GitHubPublicationRequesterUnavailableError } from "./repository-publication-errors.js";
 export {
   RepositoryPublicationWorkspaceChangedError as GitHubPublicationWorkspaceChangedError,
   RepositoryPublicationSessionChangedError as GitHubPublicationSessionChangedError,

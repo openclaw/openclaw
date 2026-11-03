@@ -74,3 +74,11 @@ export function createDoctorRuntimeProjection(root: string, packageRoot: string,
   fs.copyFileSync(path.join(packageRoot, "package.json"), path.join(projectedRoot, "package.json"));
   return directory;
 }
+
+export function requireDoctorContribution(id: string) {
+  const contribution = resolveDoctorHealthContributions().find((entry) => entry.id === id);
+  if (!contribution) {
+    throw new Error(`expected doctor contribution ${id}`);
+  }
+  return contribution;
+}

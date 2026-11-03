@@ -1,6 +1,6 @@
 import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
-import type { NativeGitHubPullRequestBinding as SessionGitHubPullRequestBinding } from "../plugin-sdk/native-github-publication-host.js";
+import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
 import { isRecord, readNonBlankString } from "../plugin-sdk/string-coerce-runtime.js";
 import { GitHubPublicationKnownFailure } from "./github-publication-failure.js";
 import {

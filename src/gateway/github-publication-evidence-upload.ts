@@ -2,13 +2,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import type { SessionGitHubActionResult } from "../../packages/gateway-protocol/src/index.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
-import type { NativeGitHubPublicationActionInput as RepositoryPublicationActionInput } from "../plugin-sdk/native-github-publication-host.js";
 import { readResponseWithLimit } from "../plugin-sdk/response-limit-runtime.js";
 import { fetchWithSsrFGuard } from "../plugin-sdk/ssrf-runtime.js";
 import {
   githubPublicationApiArgs,
   runGitHubPublicationCommand as runPublicationCommand,
 } from "./github-publication-remote.js";
+import type { RepositoryPublicationActionInput } from "./repository-publication-contract.js";
 
 /** Upload only the inspected workspace bytes granted by the native publication owner. */
 export async function uploadGitHubPublicationEvidence(params: {

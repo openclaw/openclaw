@@ -7,13 +7,11 @@ import {
   onManagedGitHubProfileChanged,
 } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../plugin-sdk/core.js";
-import {
-  performNativeGitHubWorkerIdentity as performRepositoryWorkerIdentity,
-  type NativeGitHubWorkerIdentity as RepositoryWorkerIdentity,
-} from "../plugin-sdk/native-github-publication-host.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { sameGitHubPublisherSelection } from "./github-publication-publisher.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
+import type { RepositoryWorkerIdentity } from "./repository-publication-contract.js";
+import { performRepositoryWorkerIdentity } from "./repository-worker-identity-transfer.js";
 
 export function subscribeGitHubWorkerIdentityChanges(listener: () => void) {
   const stopProfiles = onManagedGitHubProfileChanged(listener);
