@@ -2079,14 +2079,13 @@ describe("capability cli", () => {
       mocks.loadConfig.mockReturnValue({ tools: { web: { fetch: { enabled: false } } } });
 
       const args = [
-        "web",
         "fetch",
         "--url",
         "https://example.com",
         ...(provider ? ["--provider", provider] : []),
         "--json",
       ];
-      await expect(runCapability(...args)).rejects.toThrow("exit 1");
+      await expect(runCapability("web", ...args)).rejects.toThrow("exit 1");
 
       expect(runtimeErrorMessages().join("\n")).toContain("tools.web.fetch.enabled");
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
