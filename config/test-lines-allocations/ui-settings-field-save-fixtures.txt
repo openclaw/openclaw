@@ -1,0 +1,2 @@
+27
+# Migrate credential field saves to config.patch with exact payload, read-only, and complete reload preservation checks.
