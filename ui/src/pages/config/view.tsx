@@ -509,7 +509,6 @@ export function Config(props: ConfigProps) {
               {state().showModeToggle ? (
                 <SettingsSegmented
                   mode="buttons"
-                  variant="primary"
                   value={state().formMode}
                   onChange={props.onFormModeChange}
                   onReselect={props.onFormModeChange}

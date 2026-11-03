@@ -6,6 +6,7 @@ import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import { resolveSessionContextLimit } from "../../../lib/sessions/context-budget.ts";
+import type { ChatSessionStateSnapshot } from "../chat-session-state-snapshot.ts";
 import type { ContextCompactProps } from "./chat-context-compact.tsx";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
@@ -21,13 +22,18 @@ export function latestAssistantProvider(messages: unknown[] | undefined): string
   return null;
 }
 
-export function getContextNoticeViewModel(session: GatewaySessionRow | undefined) {
-  const used = asNonNegativeFiniteNumber(session?.totalTokens);
-  const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(session);
+export function getContextNoticeViewModel(
+  session: GatewaySessionRow | undefined,
+  cached?: ChatSessionStateSnapshot["contextUsage"],
+) {
+  const used = cached?.used ?? asNonNegativeFiniteNumber(session?.totalTokens);
+  const { tokens: limit, fromLastPrompt } = cached
+    ? { tokens: cached.limit, fromLastPrompt: cached.fromLastPrompt }
+    : resolveSessionContextLimit(session);
   if (used === undefined || !limit) {
     return null;
   }
-  const approximate = session?.totalTokensFresh === false;
+  const approximate = cached?.approximate ?? session?.totalTokensFresh === false;
   const ratio = used / limit;
   const pct = Math.min(Math.round(ratio * 100), 100);
   // A stale total is still useful orientation, but must not drive warning or
@@ -61,6 +67,7 @@ export function getContextNoticeViewModel(session: GatewaySessionRow | undefined
 }
 
 export type ContextNoticeProps = {
+  contextUsage?: ChatSessionStateSnapshot["contextUsage"];
   messages?: unknown[];
   providerUsage?: ProviderUsageDisplayProps;
 } & {

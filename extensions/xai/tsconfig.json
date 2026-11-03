@@ -983,6 +983,9 @@
       ],
       "openclaw/plugin-sdk/memory-core-host-transcript-stats": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-transcript-stats.d.ts"
+      ],
+      "openclaw/plugin-sdk/skill-authoring-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/skill-authoring-runtime.d.ts"
       ]
     }
   }

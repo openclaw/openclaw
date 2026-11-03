@@ -104,8 +104,12 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/io.js", () => ({ createConfigIO }));
 
+// mock-isolation: The fixture owns process identities and signals without native process discovery.
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync,
+  findVerifiedGatewayListenerPidsOnPort: async (
+    ...args: Parameters<typeof findVerifiedGatewayListenerPidsOnPortSync>
+  ) => findVerifiedGatewayListenerPidsOnPortSync(...args),
   signalVerifiedGatewayPidSync,
   formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),
 }));

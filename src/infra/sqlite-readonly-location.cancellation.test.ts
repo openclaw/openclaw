@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -50,31 +50,17 @@ async function fixtureReadyBeforeSettlement(ready: string, operation: Promise<un
   await Promise.race([receipts.waitFor(ready, "ready"), settled]);
 }
 
-const reclamationChildren: Promise<ChildProcess>[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
-    try {
-      for (const child of await Promise.all(reclamationChildren)) {
-        expect(child).toMatchObject({ exitCode: 0, signalCode: null });
-      }
-    } finally {
-      vi.restoreAllMocks();
-      vi.unstubAllEnvs();
-      cleanup();
-    }
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    cleanup();
   });
 });
 let cacheRoot: string;
 beforeEach(async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  reclamationChildren.length = 0;
-  processMocks.execFile.mockReset().mockImplementation((file, args, options, callback) => {
-    const child = actual.execFile(file, args, options, callback);
-    if (isWorkerMode(args, "reclaim")) {
-      reclamationChildren.push(once(child, "close").then(() => child));
-    }
-    return child;
-  });
+  processMocks.execFile.mockReset().mockImplementation(actual.execFile);
   vi.mocked(spawn).mockClear();
   vi.mocked(spawnSync).mockReset().mockImplementation(actual.spawnSync);
   cacheRoot = tempDirs.make("openclaw-readonly-cancellation-cache-");
@@ -94,10 +80,6 @@ function installWorker(
         import fs from "node:fs";
         import path from "node:path";
         ${receipt ? fixtureReceiptClientSource(receipts.endpoint) : ""}
-        if (process.argv[3] === "reclaim") {
-          process.stdout.write(JSON.stringify({ ok: true, warnings: [] }));
-          process.exit(0);
-        }
         const reply = ${JSON.stringify(reply)};
         ${reply === "valid" ? "" : 'process.on("SIGTERM", () => {});'}
         const block = (stagingRoot, id) => {

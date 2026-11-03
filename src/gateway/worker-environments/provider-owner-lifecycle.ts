@@ -1,5 +1,6 @@
 import type { SecretRef } from "../../config/types.secrets.js";
 import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
+import { assertWorkerResourceReceiptMatch } from "../../plugins/worker-resource-receipt.js";
 import { measureGatewayRestartTrace } from "../restart-trace.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import {
@@ -69,6 +70,36 @@ export function createWorkerProviderOwnerLifecycle(
     ) {
       throw serviceError("invalid_state", "Worker environment owner changed during teardown");
     }
+    return current;
+  };
+
+  const requireCurrentProvisionOwner = (
+    record: WorkerEnvironmentRecord,
+    enrollmentSetupId?: string,
+  ): WorkerEnvironmentRecord => {
+    const current = store.get(record.environmentId);
+    const setupId = enrollmentSetupId ?? record.nodeSetupId;
+    if (
+      !current ||
+      current.ownerEpoch !== record.ownerEpoch ||
+      current.provisionOperationId !== record.provisionOperationId ||
+      (current.state !== "requested" && current.state !== "provisioning") ||
+      current.leaseId !== record.leaseId ||
+      (setupId !== null && current.nodeSetupId !== setupId) ||
+      (current.nodeDeviceId !== record.nodeDeviceId &&
+        (record.nodeDeviceId !== null || !setupId)) ||
+      current.destroyRequestedAtMs !== null
+    ) {
+      throw new Error("Worker provisioning operation is closed");
+    }
+    if (record.resourceReceipt) {
+      assertWorkerResourceReceiptMatch(
+        record.resourceReceipt,
+        current.resourceReceipt ?? undefined,
+      );
+    }
+    // Pairing publishes the first node while this operation still owns provisioning.
+    // The caller retains this admitted binding so a later replacement is not progress.
     return current;
   };
 
@@ -589,6 +620,7 @@ export function createWorkerProviderOwnerLifecycle(
   return {
     identityResolverFor,
     requireCurrentOwner,
+    requireCurrentProvisionOwner,
     stopOwner,
     beginDrain,
     finishProvenDestroy,

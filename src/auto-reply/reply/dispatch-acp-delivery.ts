@@ -69,11 +69,11 @@ const messageActionRuntimeLoader = createLazyImportLoader(
   () => import("../../infra/outbound/message-action-runner.js"),
 );
 
-export type AcpDispatchDeliveryCoordinator = ReturnType<
-  typeof createAcpDispatchDeliveryCoordinator
+export type AcpDispatchDeliveryCoordinator = Awaited<
+  ReturnType<typeof createAcpDispatchDeliveryCoordinator>
 >;
 
-export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDeliveryParams) {
+export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDeliveryParams) {
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
   const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
@@ -103,14 +103,14 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
     accumulatedFinalText: "",
     accumulatedDeliveredFinalText: "",
     pendingTranscriptOutcomes: [],
-    cleanBlockTtsDirectiveText: shouldCleanTtsDirectiveText({
+    cleanBlockTtsDirectiveText: (await shouldCleanTtsDirectiveText({
       cfg: params.cfg,
       preparedTtsPreferences: params.preparedTtsPreferences,
       ttsAuto: params.sessionTtsAuto,
       agentId: params.agentId,
       channelId: params.ttsChannel,
       accountId: resolvedAccountId,
-    })
+    }))
       ? createTtsDirectiveTextStreamCleaner()
       : undefined,
     deliveredFinalReply: false,

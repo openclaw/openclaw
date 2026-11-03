@@ -54,6 +54,15 @@
   border-top: 1px solid var(--border);
 }
 
+.skill-reader-dialog__notice {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin: 0 var(--skill-reader-inset) var(--space-3);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .skill-reader-dialog__body > p {
   margin: 0;
 }

@@ -900,7 +900,7 @@ packages/ai/src/providers/clean-for-gemini.ts	4
 packages/ai/src/providers/google-shared.ts	2
 packages/ai/src/providers/mistral.ts	1
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
-packages/ai/src/providers/openai-chatgpt-responses.ts	16
+packages/ai/src/providers/openai-chatgpt-responses.ts	15
 packages/ai/src/providers/openai-completions.ts	1
 packages/ai/src/providers/openai-reasoning-effort.ts	5
 packages/ai/src/providers/openai-responses-shared.ts	4
@@ -1011,7 +1011,7 @@ src/agents/agent-bundle-mcp-combined.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-command.ts	1
-src/agents/agent-hooks/compaction-safeguard.ts	9
+src/agents/agent-hooks/compaction-safeguard.ts	7
 src/agents/agent-project-settings-snapshot.ts	3
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-receipt.ts	1
@@ -1250,7 +1250,7 @@ src/agents/tool-call-id.ts	7
 src/agents/tool-display-common.ts	1
 src/agents/tool-images.ts	2
 src/agents/tool-policy-shared.ts	1
-src/agents/tool-result-error.ts	2
+src/agents/tool-result-error.ts	1
 src/agents/tool-schema-hints.ts	1
 src/agents/tool-search-catalog.ts	2
 src/agents/tool-search-directory.ts	1
@@ -2141,7 +2141,6 @@ src/plugins/uninstall.ts	1
 src/plugins/update-channel.ts	2
 src/plugins/update-config.ts	2
 src/plugins/update-installed.ts	5
-src/plugins/update-summary.ts	2
 src/plugins/web-search-install-catalog.ts	2
 src/poll-params.ts	1
 src/process/command-queue.ts	2
@@ -2211,7 +2210,6 @@ src/skills/lifecycle/clawhub-store.ts	4
 src/skills/loading/frontmatter.ts	1
 src/skills/loading/workspace-skill-sync.runtime.ts	1
 src/skills/runtime/remote-skills.ts	1
-src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	7
 src/snapshot/local-repository.ts	3
 src/snapshot/manifest.ts	1
@@ -2247,7 +2245,7 @@ src/templates/project-build.ts	4
 src/templates/project.ts	2
 src/templates/reader.ts	3
 src/templates/schema.ts	2
-src/trajectory/export.ts	8
+src/trajectory/export.ts	7
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	2
 src/transcripts/config.ts	2

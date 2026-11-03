@@ -2,10 +2,10 @@ import path from "node:path";
 import type { SkillsWorkshopListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readSkillUsage } from "../runtime/skill-usage.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { listWorkshopDrafts } from "./drafts.js";
 import { listWorkshopArchive, listWorkshopSkills } from "./library.js";
-import { readSkillUsage } from "./skill-usage.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 /** Workshop inventory shared by `skills.workshop.list` and the local CLI fallback. */

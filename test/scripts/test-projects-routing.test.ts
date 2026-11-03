@@ -253,6 +253,7 @@ describe("test-projects args", () => {
     ["test/scripts/mac-elevation-artifact.test.ts", "tooling"],
     ["src/utils.test.ts", "unit-fast-fake-timers"],
     ["extensions/google/embedding-provider.test.ts", "extension-database-workers"],
+    ["test/decision-baseten-admission.integration.test.ts", "infra"],
     ["src/acp/translator.stop-reason.test.ts", "infra"],
     ["src/acp/control-plane/manager.test.ts", "infra"],
     ["src/agents/tools/message-tool.scheduled-lifetime.test.ts", "infra"],
