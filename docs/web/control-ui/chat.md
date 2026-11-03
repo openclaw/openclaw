@@ -219,6 +219,14 @@ In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, 
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
 
+## Command approvals
+
+When a command needs your approval, the session shows **Command approval needed**.
+Review the command and **Request details**, then choose **Allow once**, **Always allow**
+when offered, or **Deny**. A standalone approval link shows **Admin approval** above
+the request. You need approval access to record a decision; viewing a request does
+not grant that access. If disconnected, reconnect before deciding.
+
 ## Desktop message input
 
 Choose **Settings → Appearance → Chat → Send shortcut** to control how you submit
