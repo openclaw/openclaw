@@ -147,6 +147,7 @@ export async function searchClawRouter(
 
 function searchCodec(format: string) {
   if (Object.hasOwn(nativeWebSearchCodecs, format)) {
+    // SAFETY: The own-property check restricts the wire format to a declared codec key.
     return nativeWebSearchCodecs[format as keyof typeof nativeWebSearchCodecs];
   }
   return format === "tavily.search" ? tavilySearchCodec : undefined;
