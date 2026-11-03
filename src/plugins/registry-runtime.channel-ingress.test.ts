@@ -16,6 +16,7 @@ import {
   resolveChannelMessageIngress,
   resolveStableChannelMessageIngress,
 } from "../plugin-sdk/channel-ingress-runtime.js";
+import { createPluginRegistry as createSdkPluginRegistry } from "../plugin-sdk/plugin-test-runtime.js";
 import { recordAcceptedSessionParticipantInput } from "../sessions/session-participant-input-recording.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
@@ -313,6 +314,30 @@ function createLegacyReceiver(
 }
 
 describe("bundled channel ingress runtime ownership", () => {
+  it("composes trusted channel admission through the public test registry", async () => {
+    const runtime = createPluginRuntime();
+    const gateway = createGateway(createAudit());
+    bindGatewayContextResolver(runtime.subagent, () => gateway);
+    const builder = createSdkPluginRegistry({
+      logger: console,
+      runtime,
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({ id: "sdk-channel", origin: "bundled" });
+    builder.createApi(record, fullRegistration).registerChannel({
+      plugin: createChannelTestPluginBase({ id: record.id }),
+    });
+    builder.registry.plugins.push(record);
+    markPluginRegistryActive(builder.registry);
+    cleanups.push(() => markPluginRegistryRetired(builder.registry));
+    const channel = builder.registry.channels[0]!.resolveChannelRuntime!();
+    const ingress = await resolveIngressForRuntime(channel, "person-a", { channelId: record.id });
+    expectIngress(channel.inbound, ingress, "present", { channelId: record.id });
+    const pending = await resolveIngressForRuntime(channel, "person-a", { channelId: record.id });
+    markPluginRegistryRetired(builder.registry);
+    expectIngress(channel.inbound, pending, "unknown", { channelId: record.id });
+  });
+
   it("never binds a registration-time factory to another live instance of the same channel", async () => {
     const first = createLegacyReceiver();
     const second = createLegacyReceiver();
