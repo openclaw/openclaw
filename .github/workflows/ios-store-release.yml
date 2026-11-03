@@ -27,13 +27,6 @@ on:
         description: Observe idle host and iPhone simulator before screenshots (temporary, no upload)
         type: boolean
         default: false
-      simulator_profile:
-        description: Temporary screenshot-only stock versus pre-first-boot search/family comparison
-        type: choice
-        default: stock
-        options:
-          - stock
-          - search-family
 
 permissions: {}
 
@@ -100,7 +93,6 @@ jobs:
           swift_tools_dir="$RUNNER_TEMP/ios-screenshot-tools"
           ./scripts/install-xcodegen.sh "$swift_tools_dir"
           ./scripts/install-swift-tools.sh "$swift_tools_dir"
-          ./scripts/install-simslim.sh "$swift_tools_dir"
           echo "$swift_tools_dir" >> "$GITHUB_PATH"
           export PATH="$HOME/.cargo/bin:$PATH"
           watch_toolchain="$(awk -F '\"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
@@ -140,7 +132,6 @@ jobs:
           OPENCLAW_SNAPSHOT_STARTUP_PROBE: ${{ inputs.startup_probe && '1' || '0' }}
           OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ inputs.startup_probe && 'iphone' || '' }}
           OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ inputs.startup_probe && '1' || '0' }}
-          OPENCLAW_SNAPSHOT_COMPARISON_PROFILE: ${{ !inputs.startup_probe && inputs.simulator_profile || '' }}
         run: |
           node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
             pnpm ios:screenshots &&
@@ -163,7 +154,6 @@ jobs:
             apps/ios/fastlane/screenshots/en-US/*.png
             apps/ios/build/SnapshotTestResults/capture-attempts.json
             apps/ios/build/screenshot-diagnostics.json
-            apps/ios/build/SnapshotComparison/
             ${{ runner.temp }}/ios-resource-timeline.jsonl
             ${{ runner.temp }}/ios-spotlight-probe.json
           if-no-files-found: error
