@@ -91,9 +91,12 @@ PostgreSQL or the Gateway is unavailable; shared approval policy still requires
 its existing state owner.
 
 The packaged app runs the matching bundled CLI's narrow, noninteractive
-credential preparation before native admission. Gateway and node startup use
-the same migration owner. When an in-place app update leaves the previous
-build's app-managed Gateway service running, that Gateway still owns the state,
+credential preparation before native admission. That native handoff also settles
+pending local runtime-pin migration before the app chooses its Gateway runtime.
+It preserves explicit pin data rather than forcing a new seed; a migration
+conflict prevents startup and retains recovery guidance. Gateway and node
+startup use the same credential migration owner. When an in-place app update
+leaves the previous build's app-managed Gateway service running, that Gateway still owns the state,
 so the app stops it, prepares credentials, and then installs the service on its
 own runtime. Ordinary pending migrations and validated remounts
 complete automatically without a manual Doctor command or a recovery prompt.
