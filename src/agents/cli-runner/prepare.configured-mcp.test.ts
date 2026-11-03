@@ -333,21 +333,16 @@ describe("configured MCP servers on CLI turns", () => {
       const { sessionTarget } = fixture.session;
       const server = await startProbeServer();
       const registry = createMcpProofPluginRegistry();
-      const notes =
-        mode === "shared"
-          ? {
-              transport: "streamable-http" as const,
-              url: server.url,
-              headers: { Authorization: "Bearer shared" },
-            }
-          : mode === "per-requester OAuth"
-            ? {
-                transport: "streamable-http" as const,
-                url: server.url,
-                auth: "oauth" as const,
-                oauth: { identity: "per-requester" as const },
-              }
-            : { transport: "streamable-http" as const };
+      const http = { transport: "streamable-http" as const, url: server.url };
+      const notes = {
+        shared: { ...http, headers: { Authorization: "Bearer shared" } },
+        "per-requester OAuth": {
+          ...http,
+          auth: "oauth" as const,
+          oauth: { identity: "per-requester" as const },
+        },
+        resolver: { transport: "streamable-http" as const },
+      }[mode];
       if (mode === "resolver") {
         // The resolver hands out each requester's own credential; bob has none.
         registry.apiFor("notes-plugin").registerMcpServerConnectionResolver({
@@ -411,15 +406,12 @@ describe("configured MCP servers on CLI turns", () => {
             }
           }
           // The embedded runner acquires the same owner with the turn's sender.
-          const embedded = await materializeBundleMcpToolsForRun({
-            ...(await acquireSessionMcpRuntime({
-              sessionId: "embedded-session",
-              workspaceDir: fixture.session.dir,
-              cfg: config,
-              requesterSenderId: "alice",
-              ...requester,
-            })),
-          });
+          const embedded = await materializeBundleMcpToolsForRun(
+            await acquireSessionMcpRuntime({
+              ...{ sessionId: "embedded", workspaceDir: fixture.session.dir, cfg: config },
+              ...{ requesterSenderId: "alice", ...requester },
+            }),
+          );
           try {
             const tool = embedded.tools.find((entry) => entry.name === "notes__echo");
             expect(tool && getTextContent(await tool.execute("echo", { word: "hi" }))).toBe(
