@@ -175,8 +175,8 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
 
   /** The message of what this channel's Save reported, without its buttons. */
   const alertText = (page: HTMLElement) => {
-    const callout = page.querySelector(".channels-detail__feedback .callout");
-    return (callout?.querySelector(".callout__content") ?? callout)?.textContent ?? null;
+    const notice = page.querySelector(".channels-detail__feedback .settings-save-indicator");
+    return notice?.querySelector("span")?.textContent ?? null;
   };
 
   it("writes nothing over fields changed elsewhere, then lets the newer values win", async () => {

@@ -162,12 +162,8 @@
 }
 
 /* A conflict's choice drops under its message once the dialog is too narrow for both. */
-.channels-detail__feedback .callout--action {
+.channels-detail__feedback .settings-save-indicator {
   flex-wrap: wrap;
-}
-
-.channels-detail__feedback .callout__content {
-  flex-basis: 16rem;
 }
 
 .channels-pairing-filters {

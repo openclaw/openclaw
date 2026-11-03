@@ -60,50 +60,58 @@ export function ChannelConfigFeedback(params: { channelId: string; props: Channe
   const message = () => {
     const current = feedback();
     return current?.kind === "error"
-      ? { tone: "danger", text: current.message }
+      ? { danger: true, text: current.message }
       : current?.kind === "notSaved"
-        ? { tone: "danger", text: t("channels.config.saveNotSaved") }
+        ? { danger: true, text: t("channels.config.saveNotSaved") }
         : current?.kind === "interrupted"
-          ? { tone: "warn", text: t("channels.config.saveInterrupted") }
+          ? { danger: false, text: t("channels.config.saveInterrupted") }
           : null;
   };
   const busy = () => isSavingChannelConfig(params.channelId, params.props);
+  // The settings save indicator's own "changed elsewhere" look: text and actions, no tinted box.
   return (
     <Show when={feedback() || blockedSetup()}>
       <div class="channels-detail__feedback" role="alert">
         <Show when={conflict()}>
           {(paths) => (
-            <div class="callout warn callout--action">
-              <span class="callout__content">
+            <div class="settings-save-indicator settings-save-indicator--danger">
+              <span>
                 {t("channels.config.conflict", {
                   fields: paths()
                     .map((path) => channelConfigFieldLabel(params.props, path))
                     .join(", "),
                 })}
               </span>
-              <div class="channels-detail__decide">
-                <button
-                  class="btn btn--sm"
-                  type="button"
-                  disabled={busy()}
-                  onClick={() => params.props.onConfigConflict(params.channelId, "latest")}
-                >
-                  {t("common.reload")}
-                </button>
-                <button
-                  class="btn btn--sm"
-                  type="button"
-                  disabled={busy() || !params.props.channels.connected}
-                  onClick={() => params.props.onConfigConflict(params.channelId, "keep")}
-                >
-                  {t("agents.files.overwrite")}
-                </button>
-              </div>
+              <button
+                class="btn btn--xs settings-save-indicator__action"
+                type="button"
+                disabled={busy()}
+                onClick={() => params.props.onConfigConflict(params.channelId, "latest")}
+              >
+                {t("common.reload")}
+              </button>
+              <button
+                class="btn btn--xs settings-save-indicator__action"
+                type="button"
+                disabled={busy() || !params.props.channels.connected}
+                onClick={() => params.props.onConfigConflict(params.channelId, "keep")}
+              >
+                {t("agents.files.overwrite")}
+              </button>
             </div>
           )}
         </Show>
         <Show when={message()}>
-          {(current) => <div class={`callout ${current().tone}`}>{current().text}</div>}
+          {(current) => (
+            <div
+              class={[
+                "settings-save-indicator",
+                { "settings-save-indicator--danger": current().danger },
+              ]}
+            >
+              <span>{current().text}</span>
+            </div>
+          )}
         </Show>
         <Show when={blockedSetup()}>
           <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
