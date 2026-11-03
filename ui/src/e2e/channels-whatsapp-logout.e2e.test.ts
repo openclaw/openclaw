@@ -413,6 +413,10 @@ suite.define(() => {
         "wizard.next": {
           sequence: [
             step("token", "text", { message: "Telegram bot token", sensitive: true }),
+            {
+              ...step("token", "text", { message: "Telegram bot token", sensitive: true }),
+              error: "Token must not contain spaces",
+            },
             step("features", "multiselect", {
               initialValue: ["alpha"],
               options: [
@@ -466,8 +470,19 @@ suite.define(() => {
 
         const token = wizard.getByLabel("Telegram bot token");
         await expect.poll(() => token.getAttribute("type")).toBe("password");
-        await token.fill("123456:proof-secret");
-        await button(wizard, "Continue").click();
+        await token.fill("123456 proof-secret");
+        await gateway.deferNext("wizard.next");
+        await token.press("Enter");
+        await expect.poll(() => token.isDisabled()).toBe(true);
+        await gateway.resolveDeferred("wizard.next");
+        await wizard.getByRole("alert").filter({ hasText: "must not contain spaces" }).waitFor();
+        // The rejected field regains focus, so a keyboard correction needs no click.
+        await expect
+          .poll(() => token.evaluate((input) => input === document.activeElement))
+          .toBe(true);
+        await page.keyboard.press("ControlOrMeta+A");
+        await page.keyboard.type("123456:proof-secret");
+        await page.keyboard.press("Enter");
         const beta = wizard.getByRole("button", { name: /Beta/u });
         await expect.poll(() => beta.getAttribute("aria-pressed")).toBe("false");
         await beta.click();
@@ -478,6 +493,7 @@ suite.define(() => {
 
         const userAnswers = [
           ["account", "work"],
+          ["token", "123456 proof-secret"],
           ["token", "123456:proof-secret"],
           ["features", ["alpha", "beta"]],
           ["confirm", true],
