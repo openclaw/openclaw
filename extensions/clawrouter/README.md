@@ -24,6 +24,12 @@ Discovery refreshes for each operation, shares its resolved credential with
 dispatch, and uses a bounded, cancellable guarded request without upstream-key
 fallback. Image generation uses this resolver; other consumers migrate separately.
 
+Mistral chat routes share the native Mistral strict9 tool-call replay policy and
+transport fields. Replayed tool calls use nine alphanumeric characters with paired
+tool results; chat output uses `max_tokens` and does not send `store`. Reasoning
+efforts remain owned by the router catalog. These rules apply to the Mistral
+route, not another provider serving a similarly named model.
+
 When `models.providers.clawrouter` is configured, the bundled plugin adds
 **ClawRouter** to the Control UI sidebar. Its read-only pool dashboard shows
 subscription quota windows, account and plan details, model eligibility,
