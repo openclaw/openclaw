@@ -258,7 +258,7 @@ it("resumes a backed-up pre-change archive migration after interruption without 
       database
         .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = 'archive-b'")
         .run(archivedEvent);
-      expect(mediaRowsNeedMigration(database, pathname)).toBe(false);
+      expect(await mediaRowsNeedMigration(database, pathname)).toBe(false);
     }
     const retained = inspect();
     expect(await migrateHistoricalTranscriptDirectives({ env: state.env })).toEqual({

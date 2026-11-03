@@ -244,6 +244,7 @@ function Answer(
 function TextForm(props: WizardStepControlsProps) {
   // Channel drafts stay in the input until submit; unrelated refreshes must not overwrite them.
   const value = createMemo(() => (typeof props.value === "string" ? props.value : ""));
+  const focusText = () => props.presentation === "model-setup";
   return (
     <form
       class="wizard-step__form"
@@ -278,7 +279,15 @@ function TextForm(props: WizardStepControlsProps) {
             type={props.step.sensitive ? "password" : "text"}
             autocomplete={props.step.sensitive ? "off" : "on"}
             placeholder={props.step.placeholder ?? ""}
-            ref={liveValue(value)}
+            ref={[
+              liveValue(value),
+              (element) => {
+                if (focusText()) {
+                  props.onAutofocusRef?.(element);
+                }
+              },
+            ]}
+            autofocus={focusText()}
             disabled={props.busy}
             aria-invalid={props.validationErrorId ? "true" : undefined}
             aria-describedby={props.validationErrorId}

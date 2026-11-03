@@ -46,6 +46,7 @@ import {
   assertPluginCohortArtifactDirectory,
   readPluginCohortArtifactIdentity as artifactIdentity,
   readPluginCohortArtifactPreimage,
+  readPluginCohortPublishedArtifactIdentity as publishedArtifactIdentity,
   ownsPluginCohortRetentionMarker as ownsRetentionMarker,
   readPluginCohortRetentionMarker,
 } from "./update-cohort-artifacts.js";
@@ -268,7 +269,7 @@ export function createPluginCohortPublication(
     forceFreshGeneration: true,
     deferRecordPublication: params.deferRecordPublication,
     async beforeManagedNpmPublish(facts) {
-      const stagedIdentity = artifactIdentity(facts.stagedPackageDir);
+      const stagedIdentity = publishedArtifactIdentity(facts.stagedPackageDir);
       assertSource(pair!, params);
       write([
         ...pair!.cohort.artifacts,
@@ -304,7 +305,7 @@ export function createPluginCohortPublication(
       const artifacts = pair!.cohort.artifacts.map((artifact) => {
         try {
           return Object.assign({}, artifact, {
-            identity: artifactIdentity(artifact.targetPackageDir),
+            identity: publishedArtifactIdentity(artifact.targetPackageDir),
           });
         } catch (error) {
           if (hasErrnoCode(error, "ENOENT")) {
@@ -584,15 +585,7 @@ export async function settleUpdatePluginCohort(
         ) {
           continue;
         }
-        let currentMarker: string | null;
-        try {
-          currentMarker = await readMarker(artifact.targetPackageDir);
-        } catch (error) {
-          if (hasErrnoCode(error, "ENOENT")) {
-            continue;
-          }
-          throw error;
-        }
+        const currentMarker = await readMarker(artifact.targetPackageDir);
         if (currentMarker !== artifact.markerAfter) {
           continue;
         }
