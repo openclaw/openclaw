@@ -1,0 +1,2 @@
+# Declared-size rejection must not await independent response capture cancellation.
+33

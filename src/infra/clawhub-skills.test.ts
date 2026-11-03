@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   reportClawHubPluginInstallTelemetry,
   fetchClawHubPackageArtifact,
@@ -370,6 +371,38 @@ describe("clawhub skills", () => {
     const request = captureResponse(new Response(content));
     await expect(fetchClawHubSkillCard(options)).resolves.toBe(content);
     expect(request.url().href).toBe(url);
+  });
+
+  it("rejects declared-oversized skill cards before body cancellation completes", async () => {
+    const cancelStarted = createDeferredCore();
+    const cancelFinished = createDeferredCore();
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelStarted.resolve();
+        return cancelFinished.promise;
+      },
+    });
+    captureResponse(new Response(body, { headers: { "content-length": "262145" } }));
+    let rejection: unknown;
+    const result = fetchClawHubSkillCard({ slug: "agentreceipt", token: "fixture-token" }).catch(
+      (error: unknown) => {
+        rejection = error;
+      },
+    );
+    try {
+      await cancelStarted.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(rejection).toEqual(
+        new Error(
+          "ClawHub skill card for agentreceipt exceeded 262144 bytes (262145 bytes declared)",
+        ),
+      );
+    } finally {
+      cancelFinished.resolve();
+      await result;
+    }
   });
 
   it.each([
