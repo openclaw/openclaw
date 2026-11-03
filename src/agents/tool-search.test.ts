@@ -1,7 +1,6 @@
+import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 // Tool search tests cover catalog compaction, scoped tool lookup, raw fallback
 // tools, hooks, abort wrapping, and transcript projection.
-
-import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { validateToolArguments } from "@openclaw/ai/validation";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
@@ -13,7 +12,6 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
-import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
@@ -49,6 +47,12 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
 } from "./tool-search.js";
+import {
+  fakeTool,
+  pluginTool,
+  mcpPluginTool,
+  structuredControlStubs,
+} from "./tool-search.test-support.js";
 import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
@@ -83,53 +87,6 @@ function headlessFixture(tools: AnyAgentTool[], executeTool?: CatalogExecutor) {
     runtime: catalogRuntime(catalogRef, executeTool),
     call: controlTool({ catalogRef }, TOOL_CALL_RAW_TOOL_NAME),
   };
-}
-
-function fakeTool(name: string, description: string): AnyAgentTool {
-  return {
-    name,
-    label: name,
-    description,
-    parameters: {
-      type: "object",
-      properties: {
-        value: { type: "string" },
-      },
-    },
-    execute: vi.fn(async (_toolCallId, input) => jsonResult({ name, input })),
-  };
-}
-
-function structuredControlStubs(): AnyAgentTool[] {
-  return [
-    fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
-    fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
-    fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
-  ];
-}
-
-function pluginTool(name: string, description: string, pluginId = "fake-catalog"): AnyAgentTool {
-  const tool = fakeTool(name, description);
-  setPluginToolMeta(tool, {
-    pluginId,
-    optional: true,
-  });
-  return tool;
-}
-
-function mcpPluginTool(name: string, description: string, pluginId = "fake-catalog"): AnyAgentTool {
-  const tool = fakeTool(name, description);
-  setPluginToolMeta(tool, {
-    pluginId,
-    optional: true,
-    mcp: {
-      serverName: "remote-demo",
-      safeServerName: "remoteDemo",
-      toolName: "echo",
-      operation: "tool",
-    },
-  });
-  return tool;
 }
 
 function resultDetails(result: { details?: unknown }): Record<string, unknown> {

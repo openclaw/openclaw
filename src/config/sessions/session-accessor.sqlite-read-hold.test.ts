@@ -14,7 +14,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
-import { prepareSessionMemoryEntries } from "./session-memory-entry-preparation.js";
+import { prepareSessionMemoryEntries } from "./session-memory-entry-preparation.worker.js";
 
 const sliceBudget = vi.hoisted(() => ({ bytes: undefined as number | undefined }));
 const transactionLog = vi.hoisted(() => ({

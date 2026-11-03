@@ -155,15 +155,15 @@ it.for([false, true])(
         });
         const operation = createTestReplyOperation({ sessionKey, sessionId });
         operation.setPhase("running");
-        let blocker: ReturnType<typeof createTestReplyOperation> | undefined;
+        const active: { blocker?: ReturnType<typeof createTestReplyOperation> } = {};
         const cleanup = createDeferredCore();
         const enqueued = createDeferredCore<ReturnType<typeof events.enqueueSessionEventForHost>>();
         const dispatched = createDeferredCore<unknown>();
         const enqueue = events.enqueueSessionEventForHost;
         vi.spyOn(events, "enqueueSessionEventForHost").mockImplementation((text, options) => {
           if (busy) {
-            blocker = createTestReplyOperation({ sessionKey, sessionId });
-            blocker.setPhase("running");
+            active.blocker = createTestReplyOperation({ sessionKey, sessionId });
+            active.blocker.setPhase("running");
           }
           const receipt = enqueue(text, options);
           enqueued.resolve(receipt);
@@ -240,7 +240,7 @@ it.for([false, true])(
             await withinTest(receipt.accepted, signal);
             expect(await withinTest(dispatched.promise, signal)).toBe("followup");
             expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-            blocker?.complete();
+            active.blocker?.complete();
           }
           expect(await withinTest(receipt.settled, signal)).toMatchObject({
             status: "completed",
@@ -255,7 +255,7 @@ it.for([false, true])(
           expect(routed).not.toHaveBeenCalled();
         } finally {
           cleanup.resolve();
-          blocker?.complete();
+          active.blocker?.complete();
           operation.complete();
           await Promise.allSettled([receipt?.settled]);
         }

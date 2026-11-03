@@ -21,7 +21,7 @@ export function collectQueuedPromptMedia(
   const currentTurnImagesPrepared = items.every(hasPreparedCurrentTurnImages);
   for (const item of items) {
     const mediaOffset = media.length;
-    const internalItem = item as InternalFollowupRun;
+    const internalItem: InternalFollowupRun = item;
     images.push(...(item.images ?? []));
     imageOrder.push(...(item.imageOrder ?? []));
     if (currentTurnImagesPrepared) {

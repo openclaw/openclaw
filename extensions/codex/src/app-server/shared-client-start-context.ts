@@ -120,8 +120,8 @@ export async function resolveCodexAppServerClientStartContext(
     );
   }
   const resolvedPreparedAuth: codexAuth.CodexAppServerResolvedPreparedAuth | undefined =
-    preparedAuth?.kind === "api-key"
-      ? { kind: "api-key", apiKey: preparedApiKey as string }
+    preparedAuth?.kind === "api-key" && preparedApiKey
+      ? { kind: "api-key", apiKey: preparedApiKey }
       : preparedAuthProfileSnapshot && authProfileId && authProfileStore
         ? {
             kind: "profile",

@@ -385,7 +385,12 @@ describe("gateway probe endpoints", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         getRuntimeConfig: () => ({ gateway: { trustedProxies: ["10.0.0.0/24"] } }),
-        getReadiness: () => ({ ready: healthy, failing: ["private-channel"], uptimeMs: 8_000 }),
+        getReadiness: () => ({
+          ready: healthy,
+          coreReady: healthy,
+          failing: ["private-channel"],
+          uptimeMs: 8_000,
+        }),
         getStartup: () =>
           healthy
             ? { ok: true, status: "started", uptimeMs: 8_000 }

@@ -86,4 +86,3 @@ export function resolveSessionStoreOwnership(params: {
   const targetStoreAliases = resolveSessionStoreAliasPlan(targetStorePath, candidateStorePaths);
   return { preserveAmbiguousKeys, preserveForeignMainAliases, targetStoreAliases };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

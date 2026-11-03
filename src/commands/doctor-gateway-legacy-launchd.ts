@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ExtraGatewayService } from "../daemon/inspect.js";
 import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { sleep } from "../utils/sleep.js";
 
 const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
@@ -53,7 +54,7 @@ async function cleanupLegacyLaunchdService(params: {
   try {
     await fs.access(params.plistPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return { status: "removed" };
     }
     return { status: "failed", reason: "could not inspect plist" };
