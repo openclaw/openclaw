@@ -14,10 +14,7 @@ describe("parseMd — frontmatter", () => {
     [String.raw`'C:\Tools\bin'`, String.raw`C:\Tools\bin`],
     [String.raw`"bad\qescape"`, String.raw`bad\qescape`],
     ["ready # operator note", "ready"],
-    ["ready#literal", "ready#literal"],
-    ["00123", "00123"],
-    ["true", "true"],
-    ["123", "123"],
+    ...["ready#literal", "00123", "true", "123"].map((value) => [value, value]),
   ])("reads string scalar %s without changing non-string spelling", (encoded, value) => {
     const raw = `---\nnote: ${encoded}\n---\n`;
     const ast = parseMd(raw);
