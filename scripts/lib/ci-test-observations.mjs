@@ -75,7 +75,12 @@ function dependenciesFor(record, file, root) {
   ].toSorted((a, b) => a.localeCompare(b));
 }
 
-/** Convert native reporter events to a content-only exchange artifact, never admission evidence. */
+/**
+ * Convert native reporter events to a content-only exchange artifact, never admission evidence.
+ * @param {string} log
+ * @param {unknown} context
+ * @param {unknown} [dependencyRecord]
+ */
 export function collectTestObservations(log, context, dependencyRecord = null) {
   const identity = contextIdentity(context);
   const invocations = new Map();

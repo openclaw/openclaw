@@ -106,8 +106,8 @@ describe("CI observation export", () => {
     ),
   )("does not turn filtered or incomplete execution into a negative label", ({ lines }) => {
     const report = collectTestObservations(lines.join("\n"), context, dependencies);
-    expect(report.invocations[0].complete).toBe(false);
-    expect(report.invocations[0].files[0]).toMatchObject({ complete: false, outcome: "unknown" });
+    expect(report.invocations[0]?.complete).toBe(false);
+    expect(report.invocations[0]?.files[0]).toMatchObject({ complete: false, outcome: "unknown" });
   });
 
   it("includes global setup dependencies and rejects ambiguous cache bindings", () => {
@@ -123,17 +123,17 @@ describe("CI observation export", () => {
     };
     const log = receipts().join("\n");
     expect(
-      collectTestObservations(log, context, graph).invocations[0].files[0].dependencies,
+      collectTestObservations(log, context, graph).invocations[0]?.files[0]?.dependencies,
     ).toContain("test/setup.ts");
     const mixed = log + "\n" + log.replaceAll("run-1", "run-2").replaceAll('"bun"', '"node"');
     expect(
       collectTestObservations(mixed, context, graph).invocations.every(
-        (run) => run.files[0].dependencies === null,
+        (run) => run.files[0]?.dependencies === null,
       ),
     ).toBe(true);
     graph.projects.unit.globalSetup = [99];
     expect(
-      collectTestObservations(log, context, graph).invocations[0].files[0].dependencies,
+      collectTestObservations(log, context, graph).invocations[0]?.files[0]?.dependencies,
     ).toBeNull();
   });
 
@@ -142,14 +142,17 @@ describe("CI observation export", () => {
       .join("\n")
       .replaceAll(file.file, `ui/${file.file}`)
       .replace('"dependencyRoot":""', '"dependencyRoot":"ui"');
-    const observation = collectTestObservations(log, context, dependencies).invocations[0].files[0];
-    expect(observation.file).toBe(`ui/${file.file}`);
-    expect(observation.dependencies).toEqual([`ui/${file.file}`, "ui/src/example.ts"]);
+    const observation = collectTestObservations(log, context, dependencies).invocations[0]
+      ?.files[0];
+    expect(observation).toMatchObject({
+      file: `ui/${file.file}`,
+      dependencies: [`ui/${file.file}`, "ui/src/example.ts"],
+    });
   });
 
   it("keeps missing dependency data distinct from a completed test outcome", () => {
     const report = collectTestObservations(receipts().join("\n"), context);
-    expect(report.invocations[0].files[0]).toMatchObject({
+    expect(report.invocations[0]?.files[0]).toMatchObject({
       complete: true,
       outcome: "passed",
       dependencies: null,
