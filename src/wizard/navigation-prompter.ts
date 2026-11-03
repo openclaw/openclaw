@@ -1,25 +1,10 @@
-// Prompt navigation wrapper for interactive setup history.
-import type {
-  WizardMultiSelectParams,
-  WizardProgress,
-  WizardPrompter,
-  WizardSelectParams,
-} from "./prompts.js";
+import type { WizardMultiSelectParams, WizardPrompter, WizardSelectParams } from "./prompts.js";
 import { WizardNavigationError } from "./prompts.js";
 
-type PromptKind = "select" | "multiselect" | "text" | "confirm";
 type WizardTextParams = Parameters<WizardPrompter["text"]>[0];
 type WizardConfirmParams = Parameters<WizardPrompter["confirm"]>[0];
 
-type PromptRecord = {
-  kind: PromptKind;
-  signature: string;
-  answer: unknown;
-  answerKey: string;
-};
-
 type PromptRequest<T, Params> = {
-  kind: PromptKind;
   params: Params;
   signature: string;
   cacheAnswer: boolean;
@@ -39,13 +24,6 @@ function unwrapNavigationPrompter(prompter: WizardPrompter): WizardPrompter {
   return current;
 }
 
-function inertProgress(): WizardProgress {
-  return {
-    update: () => {},
-    stop: () => {},
-  };
-}
-
 function stableKey(value: unknown): string {
   if (value === undefined) {
     return "undefined";
@@ -62,7 +40,7 @@ function optionSignature(options: Array<{ value: unknown; label: string }>): str
 }
 
 function buildPromptSignature(
-  kind: PromptKind,
+  kind: "select" | "multiselect" | "text" | "confirm",
   params: { message: string; options?: Array<{ value: unknown; label: string }>; layout?: string },
 ): string {
   return stableKey({
@@ -79,7 +57,8 @@ class WizardPromptNavigator {
   private restartRequested = false;
   private boundaryBackRequested = false;
   private backNavigationDisabled = false;
-  private records: Array<PromptRecord | undefined> = [];
+  private records: Array<{ signature: string; answer: unknown; answerKey: string } | undefined> =
+    [];
 
   constructor(
     private readonly base: WizardPrompter,
@@ -100,7 +79,6 @@ class WizardPromptNavigator {
     plain: (message) => this.display(() => this.base.plain?.(message)),
     select: async <T>(params: WizardSelectParams<T>) =>
       await this.prompt<T, WizardSelectParams<T>>({
-        kind: "select",
         params,
         signature: buildPromptSignature("select", params),
         cacheAnswer: true,
@@ -112,7 +90,6 @@ class WizardPromptNavigator {
       }),
     multiselect: async <T>(params: WizardMultiSelectParams<T>) =>
       await this.prompt<T[], WizardMultiSelectParams<T>>({
-        kind: "multiselect",
         params,
         signature: buildPromptSignature("multiselect", params),
         cacheAnswer: true,
@@ -124,7 +101,6 @@ class WizardPromptNavigator {
       }),
     text: async (params) =>
       await this.prompt<string, WizardTextParams>({
-        kind: "text",
         params,
         signature: buildPromptSignature("text", params),
         cacheAnswer: params.sensitive !== true,
@@ -136,7 +112,6 @@ class WizardPromptNavigator {
       }),
     confirm: async (params) =>
       await this.prompt<boolean, WizardConfirmParams>({
-        kind: "confirm",
         params,
         signature: buildPromptSignature("confirm", params),
         cacheAnswer: true,
@@ -147,7 +122,9 @@ class WizardPromptNavigator {
         call: (nextParams) => this.base.confirm(nextParams),
       }),
     progress: (label) =>
-      this.shouldSuppressOutput() ? inertProgress() : this.base.progress(label),
+      this.shouldSuppressOutput()
+        ? { update: () => {}, stop: () => {} }
+        : this.base.progress(label),
     ...(this.base.openUrl
       ? {
           openUrl: (url) => this.display(() => this.base.openUrl?.(url)),
@@ -192,12 +169,12 @@ class WizardPromptNavigator {
     }
   }
 
-  private matchingRecord(index: number, kind: PromptKind, signature: string) {
+  private matchingRecord(index: number, signature: string) {
     const record = this.records[index];
     if (!record) {
       return undefined;
     }
-    if (record.kind === kind && record.signature === signature) {
+    if (record.signature === signature) {
       return record;
     }
     this.records.splice(index);
@@ -217,7 +194,6 @@ class WizardPromptNavigator {
     const answerKey = stableKey(answer);
     const previous = this.records[index];
     this.records[index] = {
-      kind: request.kind,
       signature: request.signature,
       answer,
       answerKey,
@@ -231,7 +207,7 @@ class WizardPromptNavigator {
     request: PromptRequest<T, Params>,
   ): Promise<T> {
     const index = this.cursor;
-    const record = this.matchingRecord(index, request.kind, request.signature);
+    const record = this.matchingRecord(index, request.signature);
 
     if (this.targetIndex !== undefined && index < this.targetIndex && record) {
       this.cursor = index + 1;

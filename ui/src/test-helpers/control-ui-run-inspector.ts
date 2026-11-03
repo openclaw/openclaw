@@ -17,7 +17,7 @@ export async function withControlUiRunInspector<T>(
     baseUrl: string;
     selector: RunInspectorSelector;
     receipt?: Parameters<typeof activityRunInspectorSelectorHref>[2];
-    /** Install the mock Gateway or campaign-owned per-tab auth before navigation. */
+    /** Install a mock Gateway or use pairControlUiPage with the isolated Gateway's CLI. */
     preparePage?: (page: Page) => Promise<unknown>;
   },
   collect: (page: Page, inspector: Locator) => Promise<T>,

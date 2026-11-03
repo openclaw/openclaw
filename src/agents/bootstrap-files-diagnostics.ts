@@ -7,11 +7,13 @@ import { tryResolveConfiguredAgentWorkspaceDir } from "./agent-scope-config.js";
 import { resolveBootstrapContextWithProjectedHookFiles } from "./bootstrap-files.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
-function isBundledExtraFilesHookSelected(config: OpenClawConfig | undefined): boolean {
+async function isBundledExtraFilesHookSelected(
+  config: OpenClawConfig | undefined,
+): Promise<boolean> {
   if (!config) {
     return false;
   }
-  const selection = resolveInternalHookSelection(config);
+  const selection = await resolveInternalHookSelection(config);
   if (!selection.configured) {
     return false;
   }
@@ -31,7 +33,7 @@ function isBundledExtraFilesHookSelected(config: OpenClawConfig | undefined): bo
 export async function resolveBootstrapContextForDiagnostics(
   params: Parameters<typeof resolveBootstrapContextWithProjectedHookFiles>[0],
 ): ReturnType<typeof resolveBootstrapContextWithProjectedHookFiles> {
-  if (!isBundledExtraFilesHookSelected(params.config)) {
+  if (!(await isBundledExtraFilesHookSelected(params.config))) {
     return resolveBootstrapContextWithProjectedHookFiles(params, []);
   }
   const declared = await loadDeclaredExtraBootstrapFiles({

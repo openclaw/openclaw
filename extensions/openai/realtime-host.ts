@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
   resolveProviderAuthProfileApiKey,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -12,24 +13,27 @@ import {
   readProviderTextResponse,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
-import * as proxyCaptureSdk from "openclaw/plugin-sdk/proxy-capture";
+import {
+  captureWsEventAsync,
+  createDebugProxyWebSocketAgent,
+  resolveDebugProxySettings,
+} from "openclaw/plugin-sdk/proxy-capture";
 import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
-// The shipped 2026.9.6 host lacks async diagnostics; remove optionality when the minimum advances.
-const captureHost: Partial<Pick<typeof proxyCaptureSdk, "captureWsEventAsync">> = proxyCaptureSdk;
-
 export const openAIRealtimeHost = {
   resolveAgentDir,
+  // Retained for public synchronous SDK calls through 2026-12-31.
   isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
   resolveProviderAuthProfileApiKey,
   resolveProviderRequestHeaders,
   createRealtimeTranscriptionWebSocketSession,
-  captureWsEventAsync: captureHost.captureWsEventAsync,
-  createDebugProxyWebSocketAgent: proxyCaptureSdk.createDebugProxyWebSocketAgent,
-  resolveDebugProxySettings: proxyCaptureSdk.resolveDebugProxySettings,
+  captureWsEventAsync,
+  createDebugProxyWebSocketAgent,
+  resolveDebugProxySettings,
   fetchWithSsrFGuard,
   createProviderHttpError,
   readProviderJsonResponse,
@@ -40,10 +44,9 @@ export const openAIRealtimeHost = {
 } satisfies Omit<
   PluginCapabilityCatalogHostContext,
   | "isProviderApiKeyConfigured"
+  | "isProviderApiKeyConfiguredAsync"
   | "resolveApiKeyForProvider"
   | "captureWsEvent"
-  | "captureWsEventAsync"
-> &
-  Partial<Pick<PluginCapabilityCatalogHostContext, "captureWsEventAsync">>;
+>;
 
 export type OpenAIRealtimeHost = typeof openAIRealtimeHost;

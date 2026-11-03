@@ -1,7 +1,7 @@
 name: Maintainer Command Reactions
 
 on:
-  issue_comment:
+  issue_comment: # zizmor: ignore[dangerous-triggers] -- No checkout or user-code execution; the literal script checks repository permission before reacting.
     types: [created, edited]
 
 permissions: {}
@@ -12,11 +12,17 @@ concurrency:
 
 jobs:
   react:
-    # Custom commands may be any text; only defaults require a slash.
+    # Defaults need a tracked prefix; arbitrary custom commands keep the full matcher.
     if: >-
       ${{ (
         !endsWith(github.actor, '[bot]') &&
-        (vars.MAINTAINER_COMMAND_REACTIONS != '' || contains(github.event.comment.body, '/'))
+        (
+          vars.MAINTAINER_COMMAND_REACTIONS != '' ||
+          contains(github.event.comment.body, '/autoclose') ||
+          contains(github.event.comment.body, '/clawsweeper ') ||
+          contains(github.event.comment.body, '/merge') ||
+          contains(github.event.comment.body, '/land')
+        )
       ) }}
     runs-on: ubuntu-24.04
     permissions:

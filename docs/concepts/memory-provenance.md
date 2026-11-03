@@ -221,6 +221,10 @@ historical session backfill, and transcript indexing, including
 `memory index --force`, check these records. Automatic ingestion records the
 reason `forgotten`.
 
+Transcript updates check forgotten-session membership only for the selected
+sessions. Startup catch-up, dreaming, and backfill check their candidates in
+bounded batches, preserving exclusions across the complete selection.
+
 The memory plugin coordinates purges with its staging and file mutations.
 A pending dream narrative is skipped if its tracked source entries or prior
 diary context were removed before publication. This does not retroactively

@@ -20,22 +20,8 @@ const MAX_DIRECTORY_NAME_CHARS = 512;
 const MAX_DIRECTORY_HANDLE_CHARS = 320;
 const MAX_DIRECTORY_URL_CHARS = 4_096;
 
-type BuzzDirectoryProfile = {
-  publicKey: string;
-  displayName?: string;
-  handle?: string;
-  avatarUrl?: string;
-  createdAt: number;
-  eventId: string;
-};
-
-type BuzzDirectoryRoom = {
-  roomId: string;
-  name?: string;
-  archived: boolean;
-  createdAt: number;
-  eventId: string;
-};
+type BuzzDirectoryProfile = NonNullable<ReturnType<typeof parseBuzzDirectoryProfileEvent>>;
+type BuzzDirectoryRoom = NonNullable<ReturnType<typeof parseBuzzDirectoryRoomEvent>>;
 
 function normalizeBoundedString(value: unknown, maxChars: number): string | undefined {
   const trimmed = normalizeOptionalString(value);
@@ -58,7 +44,7 @@ function fallbackPublicKeyLabel(publicKey: string): string {
   return `${publicKey.slice(0, 8)}...${publicKey.slice(-6)}`;
 }
 
-function parseBuzzDirectoryProfileEvent(event: Event): BuzzDirectoryProfile | undefined {
+function parseBuzzDirectoryProfileEvent(event: Event) {
   const publicKey = event.pubkey.trim().toLowerCase();
   if (event.kind !== BUZZ_PROFILE_KIND || !HEX_PUBLIC_KEY_PATTERN.test(publicKey)) {
     return undefined;
@@ -87,7 +73,7 @@ function parseBuzzDirectoryProfileEvent(event: Event): BuzzDirectoryProfile | un
   };
 }
 
-function parseBuzzDirectoryRoomEvent(event: Event): BuzzDirectoryRoom | undefined {
+function parseBuzzDirectoryRoomEvent(event: Event) {
   if (event.kind !== BUZZ_ROOM_METADATA_KIND) {
     return undefined;
   }
@@ -134,11 +120,7 @@ export class BuzzDirectoryState {
     this.#publicKey = params.publicKey.trim().toLowerCase();
     this.#fallbackProfileName = params.fallbackProfileName.trim() || "OpenClaw";
     this.#configuredRoomIds = new Set(params.channelIds.map(parseBuzzTarget));
-    const requestedProfileLimit = params.profileLimit ?? DEFAULT_BUZZ_DIRECTORY_PROFILE_LIMIT;
-    this.#profileLimit =
-      Number.isFinite(requestedProfileLimit) && requestedProfileLimit >= 0
-        ? Math.floor(requestedProfileLimit)
-        : DEFAULT_BUZZ_DIRECTORY_PROFILE_LIMIT;
+    this.#profileLimit = params.profileLimit ?? DEFAULT_BUZZ_DIRECTORY_PROFILE_LIMIT;
     if (this.#profileLimit > 0) {
       this.#profilePublicKeys.add(this.#publicKey);
     }

@@ -4,7 +4,7 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardSandboxNavigationTests {
     @Test(arguments: [
@@ -25,11 +25,19 @@ struct DashboardSandboxNavigationTests {
         let url = try #require(URL(string: address))
         let sourceURL = try #require(URL(string: source, relativeTo: dashboardURL)?.absoluteURL)
         #expect(ControlUIDocumentHost.shouldHandleAppLinkNavigation(
-            url, navigationType: .linkActivated, buttonNumber: button,
-            sourceURL: sourceURL, sourceIsMainFrame: mainFrame, dashboardURL: dashboardURL) == allowed)
+            url,
+            navigationType: .linkActivated,
+            buttonNumber: button,
+            sourceURL: sourceURL,
+            sourceIsMainFrame: mainFrame,
+            dashboardURL: dashboardURL) == allowed)
         #expect(!ControlUIDocumentHost.shouldHandleAppLinkNavigation(
-            url, navigationType: .other, buttonNumber: button,
-            sourceURL: sourceURL, sourceIsMainFrame: mainFrame, dashboardURL: dashboardURL))
+            url,
+            navigationType: .other,
+            buttonNumber: button,
+            sourceURL: sourceURL,
+            sourceIsMainFrame: mainFrame,
+            dashboardURL: dashboardURL))
     }
 
     @Test(arguments: [
@@ -59,17 +67,32 @@ struct DashboardSandboxNavigationTests {
         let url = try #require(URL(string: address))
         let browserAuth = DashboardWindowAuth.browserIdentity(gatewayUrl: "wss://gateway.example/control/")
         #expect(ControlUIDocumentHost.shouldAllowIdentityNavigation(
-            to: url, auth: browserAuth, isMainFrame: true,
-            sourceIsDashboard: true, navigationType: .other) == allowed)
+            to: url,
+            auth: browserAuth,
+            isMainFrame: true,
+            sourceIsDashboard: true,
+            navigationType: .other) == allowed)
         #expect(!ControlUIDocumentHost.shouldAllowIdentityNavigation(
-            to: url, auth: DashboardWindowAuth(gatewayUrl: nil, token: "fixture", password: nil),
-            isMainFrame: true, sourceIsDashboard: true, navigationType: .other))
+            to: url,
+            auth: DashboardWindowAuth.nativeDevice(
+                gatewayUrl: "wss://gateway.example/",
+                token: "fixture",
+                password: nil),
+            isMainFrame: true,
+            sourceIsDashboard: true,
+            navigationType: .other))
         #expect(!ControlUIDocumentHost.shouldAllowIdentityNavigation(
-            to: url, auth: browserAuth, isMainFrame: true,
-            sourceIsDashboard: true, navigationType: .linkActivated))
+            to: url,
+            auth: browserAuth,
+            isMainFrame: true,
+            sourceIsDashboard: true,
+            navigationType: .linkActivated))
         #expect(ControlUIDocumentHost.shouldAllowIdentityNavigation(
-            to: url, auth: browserAuth, isMainFrame: true,
-            sourceIsDashboard: false, navigationType: .formSubmitted) == allowed)
+            to: url,
+            auth: browserAuth,
+            isMainFrame: true,
+            sourceIsDashboard: false,
+            navigationType: .formSubmitted) == allowed)
     }
 
     @Test func `sign-in documents cannot observe native data or consume pending commands`() async throws {
@@ -90,11 +113,18 @@ struct DashboardSandboxNavigationTests {
         let dashboardURL = server.url("/control/")
         let auth = DashboardWindowAuth.browserIdentity(gatewayUrl: server.websocketURL("/control/").absoluteString)
         let snapshot = DashboardGatewaySnapshot(gateways: [.init(
-            id: "primary", name: "Private Gateway", kind: "remote",
-            isPrimary: true, canPromote: false, health: .ok)], currentId: "primary")
+            id: "primary",
+            name: "Private Gateway",
+            kind: "remote",
+            isPrimary: true,
+            canPromote: false,
+            health: .ok)], currentId: "primary")
         let controller = DashboardWindowController(
-            url: dashboardURL, auth: auth, websiteDataStore: .nonPersistent(),
-            gatewaySnapshot: snapshot, windowAutosaveName: "",
+            url: dashboardURL,
+            auth: auth,
+            websiteDataStore: .nonPersistent(),
+            gatewaySnapshot: snapshot,
+            windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         controller.show()
@@ -120,7 +150,8 @@ struct DashboardSandboxNavigationTests {
 
         controller.webView.load(URLRequest(url: dashboardURL))
         try await self.waitForDocument(
-            controller, url: dashboardURL,
+            controller,
+            url: dashboardURL,
             ready: "window.commands === 1 && window.navigation === '/chat/example'")
         #expect(try await controller.webView.evaluateJavaScript("window.commands") as? Int == 1)
         #expect(try await controller.webView.evaluateJavaScript("window.navigation") as? String == "/chat/example")
@@ -138,7 +169,7 @@ struct DashboardSandboxNavigationTests {
     {
         try await DashboardTestWait.document(controller, "document at \(url.path)") { controller.webView.url == url }
         // Callers pass page-script facts that can settle after the load completes.
-        try await DashboardTestWait.state("\(ready) at \(url.path)") {
+        try await TestWait.state("\(ready) at \(url.path)") {
             try await controller.webView.evaluateJavaScript(ready) as? Bool == true
         }
     }
@@ -162,7 +193,10 @@ struct DashboardSandboxNavigationTests {
         let url = server.url()
         let auth = DashboardWindowAuth.browserIdentity(gatewayUrl: server.websocketURL().absoluteString)
         let controller = DashboardWindowController(
-            url: url, auth: auth, websiteDataStore: .nonPersistent(), windowAutosaveName: "",
+            url: url,
+            auth: auth,
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         controller.show(url: url, auth: auth)
@@ -191,11 +225,14 @@ struct DashboardSandboxNavigationTests {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
         let dashboardURL = server.url("/")
-        let auth = DashboardWindowAuth(
+        let auth = DashboardWindowAuth.nativeDevice(
             gatewayUrl: server.websocketURL().absoluteString, token: "fixture-token", password: nil)
         let controller = DashboardWindowController(
-            url: dashboardURL, auth: auth, websiteDataStore: .nonPersistent(),
-            windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })
+            url: dashboardURL,
+            auth: auth,
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         controller.show(url: dashboardURL, auth: auth)
         try await self.waitForDocument(controller, url: dashboardURL)
@@ -219,6 +256,11 @@ struct DashboardSandboxNavigationTests {
     @Test(arguments: [
         "https://widgets.example/mcp-app-sandbox?csp=encoded",
         "http://127.0.0.1:18790/mcp-app-sandbox?csp=encoded",
+        "https://widgets.example/mcp-app",
+        "https://widgets.example/mcp-app-sandbox/",
+        "https://widgets.example//mcp-app-sandbox",
+        "https://widgets.example/%6dcp-app-sandbox",
+        "https://widgets.example/mcp-app-sandbox%2f",
     ])
     func `sandbox navigation requires a trusted dashboard subframe`(_ address: String) throws {
         let dashboard = try #require(URL(string: "https://openclaw.example/control/"))
@@ -232,15 +274,10 @@ struct DashboardSandboxNavigationTests {
     }
 
     @Test(arguments: [
-        "https://widgets.example/mcp-app",
-        "https://widgets.example/mcp-app-sandbox/",
-        "https://widgets.example//mcp-app-sandbox",
-        "https://widgets.example/%6dcp-app-sandbox",
-        "https://widgets.example/mcp-app-sandbox%2f",
         "file:///mcp-app-sandbox",
         "custom://widgets.example/mcp-app-sandbox",
     ])
-    func `sandbox navigation rejects noncanonical or unsafe URLs`(_ address: String) throws {
+    func `sandbox navigation rejects unsafe schemes`(_ address: String) throws {
         let dashboard = try #require(URL(string: "https://openclaw.example/control/"))
         let sandbox = try #require(URL(string: address))
         #expect(!ControlUIDocumentHost.shouldAllowNavigation(
@@ -315,14 +352,17 @@ struct DashboardSandboxNavigationTests {
         let dashboardURL = dashboard.url("/control/")
         let controller = DashboardWindowController(
             url: dashboardURL,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: "fixture-only", password: nil),
+            auth: DashboardWindowAuth.nativeDevice(
+                gatewayUrl: dashboard.websocketURL("/control/").absoluteString,
+                token: "fixture-only",
+                password: nil),
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
-        controller.loadInBackground(url: dashboardURL, auth: controller.auth)
+        controller.update(url: dashboardURL, auth: controller.auth)
         var rendered = false
-        try await DashboardTestWait.state("sandbox inner document handshake") {
+        try await TestWait.state("sandbox inner document handshake") {
             rendered = await (try? controller.webView.evaluateJavaScript(
                 "document.body.dataset.appReady")) as? String == "true"
             return rendered

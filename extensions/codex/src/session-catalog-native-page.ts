@@ -6,9 +6,8 @@ import {
   type CodexNativeCatalogCursor,
   type CodexResidentCatalogCursor,
 } from "./session-catalog-index-cursor.js";
-import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
+import { CODEX_CATALOG_MAX_ROWS, rememberCodexCatalogCursor } from "./session-catalog-limits.js";
 import type { CodexCatalogListRequest } from "./session-catalog-list-request.js";
-import { CODEX_CATALOG_NATIVE_PAGE_LIMIT } from "./session-catalog-native-projection.js";
 import {
   CatalogParamsError,
   filterCatalogPageByTitle,
@@ -24,6 +23,9 @@ import type {
   CodexSessionCatalogPage,
   CodexSessionCatalogPageParams,
 } from "./session-catalog-types.js";
+
+// Codex returns full previews. Keep wire pages small before the display projection.
+const NATIVE_PAGE_SIZE = 16;
 
 /** Background walks share bounded native pages; the index decides when a prefix is current. */
 export async function* readCodexCatalogHydrationPages<
@@ -42,7 +44,7 @@ export async function* readCodexCatalogHydrationPages<
         modelProviders: [],
         sortKey: "recency_at",
         sortDirection: "desc",
-        limit: CODEX_CATALOG_NATIVE_PAGE_LIMIT,
+        limit: NATIVE_PAGE_SIZE,
         ...(useStateDbOnly ? { useStateDbOnly } : {}),
         ...(cursor ? { cursor } : {}),
       },
@@ -53,10 +55,7 @@ export async function* readCodexCatalogHydrationPages<
       throw new Error("Codex catalog repeated a hydration cursor");
     }
     if (cursor) {
-      cursors.add(cursor);
-      if (cursors.size > CODEX_CATALOG_MAX_ROWS) {
-        cursors.delete(cursors.values().next().value!);
-      }
+      rememberCodexCatalogCursor(cursors, cursor);
     }
     yield { ...page, nextCursor: cursor, offset };
     offset += page.rows.length;
@@ -77,7 +76,7 @@ export class CodexCatalogNativePages {
     options: Pick<CodexCatalogIndexOptions, "readNative" | "assertCurrent">,
     request: CodexCatalogListRequest,
   ): Promise<CodexSessionCatalogPage> {
-    const limit = Math.min(normalizeLimit(params.limit, "limit"), 64);
+    const limit = Math.min(normalizeLimit(params.limit, "limit"), NATIVE_PAGE_SIZE);
     const cwd = params.cwd?.trim();
     let position: CodexNativeCatalogCursor =
       prepared.kind === "native"
@@ -105,8 +104,7 @@ export class CodexCatalogNativePages {
       // instead refetches that descending page and locates its frozen thread identity.
       const filterCwdLocally = Boolean(cwd && this.settings.hasLiveCwd());
       const ascending = position.backwards && !position.anchorThreadId;
-      const pageLimit = position.anchorThreadId ? 64 : limit;
-      const statusRevision = this.status.capture();
+      const pageLimit = position.anchorThreadId ? NATIVE_PAGE_SIZE : limit;
       const page = await request.read(Number.POSITIVE_INFINITY, () =>
         options.readNative(
           {
@@ -125,7 +123,7 @@ export class CodexCatalogNativePages {
       );
       options.assertCurrent();
       for (const row of page.rows) {
-        this.status.observe(row, statusRevision);
+        this.status.observe(row);
       }
       if (cwd && !filterCwdLocally && this.settings.hasLiveCwd()) {
         continue;

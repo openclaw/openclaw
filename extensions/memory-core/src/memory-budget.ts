@@ -5,7 +5,12 @@ const PROMOTION_SECTION_HEADING_RE = /^## Promoted From Short-Term Memory \(([^)
 
 const PROMOTION_SUBSECTION_HEADING_RE = /^### (?:Global|Project: .+?)\s*$/;
 
+// Annotated markers still belong to their promotion section when finding boundaries.
 const PROMOTION_ENTRY_MARKER_RE = /^<!--\s*openclaw-memory-promotion:.*-->\s*$/i;
+
+// Only a single comment can qualify a block for deletion; retain the marker's line domain.
+const GENERATED_PROMOTION_ENTRY_MARKER_RE =
+  /^<!--\s*openclaw-memory-promotion:(?:(?!-->).)*-->\s*$/i;
 
 const ATX_HEADING_RE = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 
@@ -32,12 +37,8 @@ export function resolveMemoryPromotionFileMaxChars(params: {
     const configuredLimit = agentId
       ? (resolveAgentConfig(params.cfg ?? {}, agentId)?.bootstrapMaxChars ?? defaultBootstrapLimit)
       : defaultBootstrapLimit;
-    if (
-      typeof configuredLimit === "number" &&
-      Number.isFinite(configuredLimit) &&
-      configuredLimit > 0
-    ) {
-      limit = Math.min(limit, Math.floor(configuredLimit));
+    if (configuredLimit !== undefined) {
+      limit = Math.min(limit, configuredLimit);
     }
   }
   return limit;
@@ -68,7 +69,7 @@ function isGeneratedPromotionBlock(lines: string[]): boolean {
       }
     }
 
-    if (!PROMOTION_ENTRY_MARKER_RE.test(lines[index] ?? "")) {
+    if (!GENERATED_PROMOTION_ENTRY_MARKER_RE.test(lines[index] ?? "")) {
       return false;
     }
     // A marker owns only the single bullet emitted with it. Treat any other
@@ -191,19 +192,8 @@ export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemo
 
   const blocks = parseMemoryBlocks(existingMemory);
   const promotionEntries = blocks
-    .flatMap((block, index) =>
-      block.kind === "promotion"
-        ? [
-            {
-              index,
-              date: block.date,
-              length: block.text.length,
-              entryCount: block.entryCount,
-            },
-          ]
-        : [],
-    )
-    .toSorted((a, b) => a.date.localeCompare(b.date));
+    .flatMap((block, index) => (block.kind === "promotion" ? [{ block, index }] : []))
+    .toSorted((a, b) => a.block.date.localeCompare(b.block.date));
 
   if (promotionEntries.length === 0) {
     return { compacted: existingMemory, droppedDates: [] };
@@ -211,7 +201,10 @@ export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemo
 
   const droppedIndices = new Set<number>();
   const droppedDates: string[] = [];
-  const totalEntryCount = promotionEntries.reduce((total, entry) => total + entry.entryCount, 0);
+  const totalEntryCount = promotionEntries.reduce(
+    (total, { block }) => total + block.entryCount,
+    0,
+  );
   const maxLossFraction = Math.max(0, Math.min(1, params.maxPriorEntryLossFraction ?? 1));
   let droppedEntryCount = 0;
   let projectedExistingSize = existingMemory.length;
@@ -219,20 +212,23 @@ export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemo
   // newline along with the block text so the projection stays honest.
   const blockSeparatorCost = blocks.length > 1 ? 1 : 0;
 
-  for (const entry of promotionEntries) {
+  for (const { block, index } of promotionEntries) {
     if (projectedExistingSize + newSection.length <= effectiveBudget) {
       break;
     }
     if (
       totalEntryCount > 0 &&
-      (droppedEntryCount + entry.entryCount) / totalEntryCount > maxLossFraction
+      (droppedEntryCount + block.entryCount) / totalEntryCount > maxLossFraction
     ) {
       break;
     }
-    droppedIndices.add(entry.index);
-    droppedDates.push(entry.date);
-    droppedEntryCount += entry.entryCount;
-    projectedExistingSize = Math.max(0, projectedExistingSize - entry.length - blockSeparatorCost);
+    droppedIndices.add(index);
+    droppedDates.push(block.date);
+    droppedEntryCount += block.entryCount;
+    projectedExistingSize = Math.max(
+      0,
+      projectedExistingSize - block.text.length - blockSeparatorCost,
+    );
   }
 
   if (droppedIndices.size === 0) {

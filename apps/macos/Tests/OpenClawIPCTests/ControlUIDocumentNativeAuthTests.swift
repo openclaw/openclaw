@@ -237,7 +237,6 @@ struct ControlUIDocumentNativeAuthTests {
                 }
                 for document in documents {
                     #expect(!document.auth.hasAcceptedNativeBinding)
-                    #expect(document.auth.legacyCredentials.isEmpty)
                     #expect(document.nativeGatewayAuthProvider != nil)
                 }
                 #expect(controller.window === window)
@@ -396,7 +395,12 @@ struct ControlUIDocumentNativeAuthTests {
                 #expect(webView.url == route)
                 #expect(try await webView.evaluateJavaScript("window.unsavedDraft") as? String == "keep me")
                 #expect(retained.documentHost.hasCurrentNativeStartupCredentials)
-                #expect(retained.auth.legacyCredentials == ["token": "accepted-profile-token"])
+                let credentials: [String: String]? = if case let .nativeDevice(_, _, _, credentials) = retained.auth {
+                    credentials
+                } else {
+                    nil
+                }
+                #expect(credentials == ["token": "accepted-profile-token"])
                 #expect(helloIdentities.value == [identity.deviceId, identity.deviceId])
                 try scopeNativeDashboardIdentity(retained.documentHost, stateDirectory: stateDir)
                 let providerRevision = retained.documentHost.nativeGatewayAuthRevision

@@ -56,7 +56,7 @@ it.each(["discovery", "watch"] as const)(
         async (_options, _command, _request, _signal, onLine) => {
           expect(onLine).toBeTypeOf("function");
           for (const event of events) {
-            onLine!(JSON.stringify(event));
+            await onLine!(JSON.stringify(event));
           }
           expect(() => onLine!(JSON.stringify("ready"))).toThrow(
             "Invalid Skill change notification",

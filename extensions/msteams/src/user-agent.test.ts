@@ -28,24 +28,12 @@ import { getMSTeamsRuntime } from "./runtime.js";
 let buildUserAgent: typeof import("./user-agent.js").buildUserAgent;
 let ensureUserAgentHeader: typeof import("./user-agent.js").ensureUserAgentHeader;
 
-function readFirstFetchInit(mockFetch: { mock: { calls: unknown[][] } }): {
-  headers: Record<string, string>;
-} {
-  const [call] = mockFetch.mock.calls;
-  if (!call) {
-    throw new Error("Expected Graph fetch call");
-  }
-  const [, init] = call;
-  if (
-    !init ||
-    typeof init !== "object" ||
-    !("headers" in init) ||
-    typeof init.headers !== "object" ||
-    init.headers === null
-  ) {
-    throw new Error("Expected Graph fetch init headers");
-  }
-  return init as { headers: Record<string, string> };
+async function fetchGraphHeaders(headers?: Record<string, string>) {
+  const mockFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json({ value: [] }));
+  vi.stubGlobal("fetch", mockFetch);
+  await fetchGraphJson({ token: "test-token", path: "/groups", headers });
+  expect(mockFetch).toHaveBeenCalledOnce();
+  return new Headers(mockFetch.mock.calls[0]?.[1]?.headers);
 }
 
 describe("buildUserAgent", () => {
@@ -72,34 +60,18 @@ describe("buildUserAgent", () => {
     });
     const ua = buildUserAgent();
     expect(ua).toMatch(/OpenClaw\/unknown$/);
-    // SDK version should still be present
     expect(ua).toMatch(/^teams\.ts\[apps\]\//);
   });
 
   it("sends the generated User-Agent in Graph requests by default", async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce(Response.json({ value: [] }));
-    vi.stubGlobal("fetch", mockFetch);
-
-    await fetchGraphJson({ token: "test-token", path: "/groups" });
-
-    expect(mockFetch).toHaveBeenCalledOnce();
-    const init = readFirstFetchInit(mockFetch);
-    expect(init.headers["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/2026\.3\.19$/);
-    expect(init.headers).toHaveProperty("Authorization", "Bearer test-token");
+    const headers = await fetchGraphHeaders();
+    expect(headers.get("User-Agent")).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/2026\.3\.19$/);
+    expect(headers.get("Authorization")).toBe("Bearer test-token");
   });
 
   it("lets caller headers override the default Graph User-Agent", async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce(Response.json({ value: [] }));
-    vi.stubGlobal("fetch", mockFetch);
-
-    await fetchGraphJson({
-      token: "test-token",
-      path: "/groups",
-      headers: { "User-Agent": "custom-agent/1.0" },
-    });
-
-    const init = readFirstFetchInit(mockFetch);
-    expect(init.headers["User-Agent"]).toBe("custom-agent/1.0");
+    const headers = await fetchGraphHeaders({ "User-Agent": "custom-agent/1.0" });
+    expect(headers.get("User-Agent")).toBe("custom-agent/1.0");
   });
 
   it("adds the generated User-Agent to Headers instances without overwriting callers", () => {

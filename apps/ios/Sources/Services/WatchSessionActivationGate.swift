@@ -4,8 +4,7 @@ import Foundation
 /// Owns the SDK's non-Sendable reply closure across the application admission hop.
 final class WatchMessageAcknowledgment: @unchecked Sendable {
     private let lock = NSLock()
-    private var didReply = false
-    private let replyHandler: ([String: Any]) -> Void
+    private var replyHandler: (([String: Any]) -> Void)?
 
     init(replyHandler: @escaping ([String: Any]) -> Void) {
         self.replyHandler = replyHandler
@@ -19,18 +18,12 @@ final class WatchMessageAcknowledgment: @unchecked Sendable {
         self.reply(["ok": false, "error": reason])
     }
 
-    func rejectUnsupportedPayload() {
-        self.reject(reason: "unsupported_payload")
-    }
-
     private func reply(_ payload: [String: Any]) {
-        let shouldReply = self.lock.withLock {
-            guard !self.didReply else { return false }
-            self.didReply = true
-            return true
+        let replyHandler = self.lock.withLock {
+            defer { self.replyHandler = nil }
+            return self.replyHandler
         }
-        guard shouldReply else { return }
-        self.replyHandler(payload)
+        replyHandler?(payload)
     }
 }
 

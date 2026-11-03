@@ -2,7 +2,11 @@ import type {
   WorkboardAttachment,
   WorkboardBoardMetadata,
   WorkboardCard,
+  WorkboardCardCursor,
   WorkboardNotificationSubscription,
+  WorkboardSessionPlacement,
+  WorkboardSessionsBoard,
+  WorkboardSessionsBoardSpec,
 } from "@openclaw/workboard-contract";
 
 /**
@@ -42,6 +46,24 @@ export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
   entries(): Promise<Array<{ key: string; value: T }>>;
 };
 
+export type WorkboardSessionPlacementWrite = WorkboardSessionPlacement & {
+  source: "operator";
+  /** Undefined requires an absent row; otherwise compare the last observed revision. */
+  expectedUpdatedAt?: number;
+};
+
+export type WorkboardSessionsBoardStore = {
+  get(boardId: string): Promise<WorkboardSessionsBoard>;
+  update(boardId: string, patch: unknown): Promise<WorkboardSessionsBoard>;
+  listPlacements(boardId: string): Promise<WorkboardSessionPlacement[]>;
+  repairPlacements(): Promise<{ placements: number; boards: number }>;
+  writePlacement(
+    boardId: string,
+    placement: WorkboardSessionPlacementWrite,
+    expectedSpec: WorkboardSessionsBoardSpec,
+  ): Promise<boolean>;
+};
+
 export type WorkboardSubscriptionStore = Omit<
   WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>,
   "entries"
@@ -72,8 +94,16 @@ export type WorkboardCardStatsAggregate = {
 export type WorkboardOwnerClaimResult = "updated" | "conflict" | "owner_busy";
 
 export type WorkboardCardReadScope =
+  | {
+      kind: "page";
+      boardId?: string;
+      sessionKey?: string;
+      after?: WorkboardCardCursor;
+      limit: number;
+    }
   | { kind: "board"; boardId: string }
   | { kind: "session"; sessionKey: string }
+  | { kind: "session-links"; sessionKey: string; boardId?: string }
   | {
       kind: "worker-context";
       cardId: string;
@@ -104,4 +134,12 @@ export type WorkboardCardStore = Omit<WorkboardKeyedStore, "entries"> & {
   listBoardAggregates(): Promise<WorkboardBoardCardAggregate[]>;
   listStatsAggregates(boardId?: string): Promise<WorkboardCardStatsAggregate[]>;
   hasCards(boardId: string): Promise<boolean>;
+};
+
+export type WorkboardPersistence = {
+  cards: WorkboardCardStore;
+  boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
+  sessionsBoard: WorkboardSessionsBoardStore;
+  subscriptions: WorkboardSubscriptionStore;
+  attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
 };

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntries } from "../agents/agent-roster.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
@@ -13,10 +13,6 @@ export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((c
   }
 
   const explicitTargets = [
-    {
-      path: ["agents", "defaults", "heartbeat", "agentId"],
-      agentId: cfg.agents?.defaults?.heartbeat?.agentId,
-    },
     {
       path: ["agents", "defaults", "systemAgent", "agentId"],
       agentId: cfg.agents?.defaults?.systemAgent?.agentId,

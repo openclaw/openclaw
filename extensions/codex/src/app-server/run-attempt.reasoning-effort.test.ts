@@ -99,7 +99,7 @@ describe("Codex reasoning effort across completed turns", () => {
     const params = createTestParams();
     const compat: ModelCompatConfig = {
       supportsTools: false,
-      supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
     };
     params.provider = "openai";
     params.modelId = "gpt-5.6-luna";
@@ -137,8 +137,8 @@ describe("Codex reasoning effort across completed turns", () => {
       },
       {
         threadId: "thread-1",
-        effort: null,
-        collaborationMode: { settings: { reasoning_effort: null } },
+        effort: "none",
+        collaborationMode: { settings: { reasoning_effort: "none" } },
       },
     ]);
     expect(onAgentEvent).toHaveBeenCalledWith({
@@ -147,7 +147,7 @@ describe("Codex reasoning effort across completed turns", () => {
     });
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "codex_app_server.lifecycle",
-      data: expect.objectContaining({ phase: "turn_starting", effort: null }),
+      data: expect.objectContaining({ phase: "turn_starting", effort: "none" }),
     });
   });
 
@@ -209,16 +209,16 @@ describe("Codex reasoning effort across completed turns", () => {
     });
   });
 
-  it("rejects a pre-turn reasoning update after durable ownership changes", async () => {
+  it("does not publish pre-turn reasoning when the binding store rejects the update", async () => {
     const params = createTestParams();
     await writeExistingReasoningBinding(params.sessionFile, params.workspaceDir, null);
     const mutate = testCodexAppServerBindingStore.mutate.bind(testCodexAppServerBindingStore);
     const bindingStore: typeof testCodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,
-      mutate: async (identity, mutation) =>
-        mutation.kind === "patch" && mutation.patch.reasoningEffort === "high"
+      mutate: async (...args) =>
+        args[1].kind === "patch" && args[1].patch.reasoningEffort === "high"
           ? false
-          : await mutate(identity, mutation),
+          : await mutate(...args),
     };
     const harness: ReturnType<typeof createAppServerHarness> = createAppServerHarness(
       async (method) => {

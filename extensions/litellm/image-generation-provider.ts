@@ -29,21 +29,18 @@ const LITELLM_MAX_INPUT_IMAGES = 5;
 // for loopback-style hosts; LAN/custom private endpoints should use the
 // explicit models.providers.litellm.request.allowPrivateNetwork opt-in.
 function shouldAutoAllowPrivateLitellmEndpoint(baseUrl: string): boolean {
-  try {
-    const { protocol, hostname } = new URL(baseUrl);
-    if (protocol !== "http:" && protocol !== "https:") {
-      return false;
-    }
-    return (
-      hostname === "localhost" ||
-      hostname === "host.docker.internal" ||
-      hostname.endsWith(".localhost") ||
-      hostname === "[::1]" ||
-      (isIP(hostname) === 4 && hostname.startsWith("127."))
-    );
-  } catch {
+  const url = URL.parse(baseUrl);
+  if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) {
     return false;
   }
+  const { hostname } = url;
+  return (
+    hostname === "localhost" ||
+    hostname === "host.docker.internal" ||
+    hostname.endsWith(".localhost") ||
+    hostname === "[::1]" ||
+    (isIP(hostname) === 4 && hostname.startsWith("127."))
+  );
 }
 
 export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
@@ -84,14 +81,14 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
         size: req.size ?? DEFAULT_SIZE,
       },
     }),
-    // LiteLLM's /v1/images/edits is multipart (OpenAI's edits schema): the
-    // reference image must be an uploaded file part, not a JSON field — a JSON
-    // body fails before the request reaches the provider.
+    // LiteLLM requires multipart uploads; Gemini edits reject even explicit n=1.
     buildEditRequest: ({ req, inputImages, model, count }) => {
       const form = new FormData();
       form.set("model", model);
       form.set("prompt", req.prompt);
-      form.set("n", String(count));
+      if (count > 1) {
+        form.set("n", String(count));
+      }
       form.set("size", req.size ?? DEFAULT_SIZE);
       // OpenAI-compatible edits take repeated `image[]` parts when more than one
       // reference is supplied, and a single `image` part otherwise.

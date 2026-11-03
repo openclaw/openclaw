@@ -29,22 +29,6 @@ enum ChatMessageSpeechClient {
         let paramsData = try JSONEncoder().encode(params)
         let paramsJSON = String(bytes: paramsData, encoding: .utf8)!
         let responseData = try await request("tts.speak", paramsJSON, Self.requestTimeoutSeconds)
-        let response = try JSONDecoder().decode(TtsSpeakResult.self, from: responseData)
-        guard let audioData = Data(base64Encoded: response.audiobase64), !audioData.isEmpty else {
-            throw ChatMessageSpeechError.emptyAudio
-        }
-        return OpenClawChatSpeechClip(
-            data: audioData,
-            outputFormat: response.outputformat,
-            mimeType: response.mimetype,
-            fileExtension: response.fileextension)
-    }
-}
-
-private enum ChatMessageSpeechError: LocalizedError {
-    case emptyAudio
-
-    var errorDescription: String? {
-        "Gateway tts.speak returned empty audio"
+        return try OpenClawChatGatewayPayloadCodec.decodeSpeechClip(responseData)
     }
 }

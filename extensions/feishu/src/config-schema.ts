@@ -1,9 +1,11 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
+  ChannelDeliveryStreamingConfigSchema,
   ContextVisibilityModeSchema,
   DmPolicySchema,
   GroupPolicySchema,
   ReplyToModeSchema,
+  TtsConfigSchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
@@ -69,11 +71,11 @@ const FeishuWebhookPathSchema = z
   .string()
   .refine((value) => normalizeFeishuWebhookPath(value) === value, {
     message:
-      'webhookPath must be a canonical HTTP request path; run "openclaw doctor --fix" to repair it',
+      'webhookPath must be a normalized HTTP request path; run "openclaw doctor --fix" to repair it',
   });
 const TtsOverrideSchema = z
   .object({
-    auto: z.enum(["off", "always", "inbound", "tagged"]).optional(),
+    auto: TtsConfigSchema.unwrap().shape.auto,
     enabled: z.boolean().optional(),
     mode: z.enum(["final", "all"]).optional(),
     provider: z.string().optional(),
@@ -116,18 +118,6 @@ const MarkdownConfigSchema = z
 // Message render mode: auto (default) = detect markdown, raw = plain text, card = always card
 const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 
-// Field names must match the core coalesce reader
-// (resolveChannelStreamingBlockCoalesce); the legacy feishu-local
-// enabled/minDelayMs/maxDelayMs spelling was never read by any runtime path.
-const BlockStreamingCoalesceSchema = z
-  .object({
-    minChars: z.number().int().positive().optional(),
-    maxChars: z.number().int().positive().optional(),
-    idleMs: z.number().int().nonnegative().optional(),
-  })
-  .strict()
-  .optional();
-
 // Streaming config: `mode` gates Feishu Card Kit streaming-card replies
 // ("partial" = streaming cards, default; "off" = single final message);
 // `chunkMode`/`block` are the shared delivery controls. Legacy boolean
@@ -136,14 +126,7 @@ const BlockStreamingCoalesceSchema = z
 const FeishuStreamingSchema = z
   .object({
     mode: z.enum(["off", "partial"]).optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    block: z
-      .object({
-        enabled: z.boolean().optional(),
-        coalesce: BlockStreamingCoalesceSchema,
-      })
-      .strict()
-      .optional(),
+    ...ChannelDeliveryStreamingConfigSchema.shape,
   })
   .strict()
   .optional();
@@ -171,9 +154,6 @@ export const DynamicAgentCreationSchema = z
   .optional();
 
 /**
- * Feishu tools configuration.
- * Controls which tool categories are enabled.
- *
  * Dependencies:
  * - wiki requires doc (wiki content is edited via doc tools)
  * - perm can work independently but is typically used with drive
@@ -288,7 +268,7 @@ const FeishuSharedConfigShape = {
 export const FeishuAccountConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    name: z.string().optional(), // Display name for this account
+    name: z.string().optional(),
     appId: z.string().optional(),
     appSecret: buildSecretInputSchema().optional(),
     encryptKey: buildSecretInputSchema().optional(),
@@ -322,9 +302,7 @@ const FeishuConfigSchemaBase = z
     requireMention: z.boolean().optional(),
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
-    // Dynamic agent creation for DM users
     dynamicAgentCreation: DynamicAgentCreationSchema,
-    // Optimization flags
     typingIndicator: z.boolean().optional().default(true),
     resolveSenderNames: z.boolean().optional().default(true),
   })

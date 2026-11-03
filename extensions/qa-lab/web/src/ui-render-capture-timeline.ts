@@ -3,6 +3,29 @@ import type { CaptureViewModel } from "./ui-render-capture-model.js";
 import { redactCapturePayloadPreview } from "./ui-render-capture-redaction.js";
 import { esc, formatTime } from "./ui-render-utils.js";
 
+const TIMELINE_STATS = {
+  request: ["requests", "R"],
+  response: ["responses", "S"],
+  focus: ["focused flow events", "F"],
+  background: ["background events", "B"],
+  error: ["errors", "!"],
+} as const;
+
+function renderTimelineStat(
+  kind: keyof typeof TIMELINE_STATS,
+  count: number,
+  visible = true,
+): string {
+  if (!visible) {
+    return "";
+  }
+  const [title, label] = TIMELINE_STATS[kind];
+  return `<span class="capture-timeline-stat${kind === "error" ? " capture-timeline-stat-danger" : ""}" title="${title}">
+    <span class="capture-timeline-stat-key capture-timeline-stat-key-${kind}">${label}</span>
+    <span class="capture-timeline-stat-value">${count}</span>
+  </span>`;
+}
+
 export function renderCaptureTimeline(model: CaptureViewModel): string {
   const {
     state,
@@ -74,7 +97,7 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                               ).length;
                               const collapsed = collapsedLaneIds.has(lane.id);
                               const pinned = pinnedLaneIds.has(lane.id);
-                              const sortedLaneEvents = [...lane.events].toSorted(
+                              const sortedLaneEvents = lane.events.toSorted(
                                 (left, right) => left.ts - right.ts,
                               );
                               const markerGapPx = 16;
@@ -98,15 +121,9 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                 }
                                 rowRightEdges[rowIndex] = leftPx + markerGapPx;
                                 const topPx = baselineTopPx + rowIndex * rowStridePx;
-                                return { event, key, leftPct, leftPx, rowIndex, topPx };
+                                return { event, key, leftPct, leftPx, topPx };
                               });
-                              const laneRowCount = Math.max(
-                                1,
-                                packedMarkers.reduce(
-                                  (max, marker) => Math.max(max, marker.rowIndex + 1),
-                                  1,
-                                ),
-                              );
+                              const laneRowCount = Math.max(1, rowRightEdges.length);
                               const laneTrackHeightPx = collapsed
                                 ? 18
                                 : Math.max(
@@ -114,10 +131,9 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                     baselineTopPx + (laneRowCount - 1) * rowStridePx + 18,
                                   );
                               const selectedLaneEvent =
-                                lane.events.find((event) => {
-                                  const key = captureEventKey(event);
-                                  return key === selectedEventKey;
-                                }) ?? null;
+                                lane.events.find(
+                                  (event) => captureEventKey(event) === selectedEventKey,
+                                ) ?? null;
                               const selectedFlowIdLocal =
                                 selectedLaneEvent?.flowId || selectedEvent?.flowId || "";
                               const focusSelectedFlow =
@@ -178,17 +194,9 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                       new Map(),
                                     ),
                                   )
-                                    .flatMap(([, markers]) => {
-                                      if (markers.length < 2) {
-                                        return [];
-                                      }
-                                      const followingMarkers = markers.slice(1).values();
-                                      return markers.slice(0, -1).flatMap((previous) => {
-                                        const following = followingMarkers.next();
-                                        if (following.done) {
-                                          return [];
-                                        }
-                                        const marker = following.value;
+                                    .flatMap(([, markers]) =>
+                                      markers.slice(1).map((marker, index) => {
+                                        const previous = markers[index]!;
                                         const dx = marker.leftPx - previous.leftPx;
                                         const dy = marker.topPx - previous.topPx;
                                         const length = Math.sqrt(dx * dx + dy * dy);
@@ -202,14 +210,12 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                         const paired =
                                           pairedEventKey != null &&
                                           captureEventKey(marker.event) === pairedEventKey;
-                                        return [
-                                          `<div
+                                        return `<div
                                     class="capture-timeline-flow-link${selected ? " selected" : ""}${dimmed ? " dimmed" : ""}${paired ? " paired" : ""}"
                                     style="left:${previous.leftPct.toFixed(2)}%;top:${previous.topPx}px;width:${length.toFixed(2)}px;transform:translateY(-50%) rotate(${angle.toFixed(2)}deg)"
-                                  ></div>`,
-                                        ];
-                                      });
-                                    })
+                                  ></div>`;
+                                      }),
+                                    )
                                     .join("");
                               const laneGuides = timelineAxisTicks
                                 .slice(1, -1)
@@ -359,14 +365,8 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                               }
                               ${renderLaneSparkline(lane.events, lane.id)}
                               <div class="capture-timeline-lane-stats">
-                                <span class="capture-timeline-stat" title="requests">
-                                  <span class="capture-timeline-stat-key capture-timeline-stat-key-request">R</span>
-                                  <span class="capture-timeline-stat-value">${laneRequestCount}</span>
-                                </span>
-                                <span class="capture-timeline-stat" title="responses">
-                                  <span class="capture-timeline-stat-key capture-timeline-stat-key-response">S</span>
-                                  <span class="capture-timeline-stat-value">${laneResponseCount}</span>
-                                </span>
+                                ${renderTimelineStat("request", laneRequestCount)}
+                                ${renderTimelineStat("response", laneResponseCount)}
                                 ${
                                   laneMovement == null || laneMovement === 0
                                     ? ""
@@ -379,30 +379,9 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                     ? `<span class="capture-chip capture-chip-severity capture-timeline-inline-chip">severity ${lane.score.toFixed(1)}</span>`
                                     : ""
                                 }
-                                ${
-                                  focusSelectedFlow
-                                    ? `<span class="capture-timeline-stat" title="focused flow events">
-                                        <span class="capture-timeline-stat-key capture-timeline-stat-key-focus">F</span>
-                                        <span class="capture-timeline-stat-value">${laneFocusedEventCount}</span>
-                                      </span>`
-                                    : ""
-                                }
-                                ${
-                                  focusSelectedFlow && laneBackgroundEventCount > 0
-                                    ? `<span class="capture-timeline-stat" title="background events">
-                                        <span class="capture-timeline-stat-key capture-timeline-stat-key-background">B</span>
-                                        <span class="capture-timeline-stat-value">${laneBackgroundEventCount}</span>
-                                      </span>`
-                                    : ""
-                                }
-                                ${
-                                  laneErrorCount > 0
-                                    ? `<span class="capture-timeline-stat capture-timeline-stat-danger" title="errors">
-                                        <span class="capture-timeline-stat-key capture-timeline-stat-key-error">!</span>
-                                        <span class="capture-timeline-stat-value">${laneErrorCount}</span>
-                                      </span>`
-                                    : ""
-                                }
+                                ${renderTimelineStat("focus", laneFocusedEventCount, focusSelectedFlow)}
+                                ${renderTimelineStat("background", laneBackgroundEventCount, focusSelectedFlow && laneBackgroundEventCount > 0)}
+                                ${renderTimelineStat("error", laneErrorCount, laneErrorCount > 0)}
                               </div>
                               ${
                                 laneSelected &&

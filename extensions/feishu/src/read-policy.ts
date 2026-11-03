@@ -46,14 +46,7 @@ function normalizeFeishuAllowlist(entries: Array<string | number> | undefined): 
   return (entries ?? []).map((entry) => normalizeFeishuAllowEntry(String(entry))).filter(Boolean);
 }
 
-function readContextFields(ctx: FeishuReadContext): {
-  accountId?: string;
-  currentChannelId?: string;
-  currentProvider?: string;
-  requesterAccountId?: string;
-  requesterSenderId?: string;
-  directOperator: boolean;
-} {
+function readContextFields(ctx: FeishuReadContext) {
   if (isActionContext(ctx)) {
     return {
       accountId: normalizeOptionalString(ctx.accountId),
@@ -132,13 +125,10 @@ export function isFeishuGroupReadEnabled(
   account: ResolvedFeishuAccount,
   chatId: string,
 ): boolean {
-  if (resolveFeishuReadGroupPolicy(cfg, account) === "disabled") {
-    return false;
-  }
-  return resolveFeishuGroupConfig({ cfg: account.config, groupId: chatId })?.enabled !== false;
+  return isFeishuGroupReadAllowed(cfg, account, chatId, true);
 }
 
-function isDmUniversallyAllowed(account: ResolvedFeishuAccount): boolean {
+export function canEnumerateAllFeishuPeers(account: ResolvedFeishuAccount): boolean {
   // Feishu's canonical schema has no disabled DM mode; channel/account enabled owns shutdown.
   // Account overrides merge field-by-field, so only an allowFrom wildcard proves
   // universal non-current access under every supported ingress policy.
@@ -182,7 +172,7 @@ export function resolveFeishuChatReadPreliminaryAuthorization(params: FeishuChat
   const groupAllowed = directOperator
     ? isFeishuGroupReadEnabled(params.cfg, params.account, chatId)
     : isFeishuGroupReadAllowed(params.cfg, params.account, chatId, current);
-  const dmAllowed = directOperator || current || isDmUniversallyAllowed(params.account);
+  const dmAllowed = directOperator || current || canEnumerateAllFeishuPeers(params.account);
   if (knownGroup) {
     return { chatId, decision: groupAllowed ? "allow" : "deny" };
   }
@@ -213,20 +203,16 @@ export async function readFeishuChatInfoWithAuthorization<
   } catch (error) {
     if (params.preliminary.decision === "needs-metadata") {
       assertFeishuChatReadAllowed({
-        cfg: params.cfg,
-        account: params.account,
+        ...params,
         chatId: params.preliminary.chatId,
-        ctx: params.ctx,
       });
     }
     throw error;
   }
   assertFeishuChatReadAllowed({
-    cfg: params.cfg,
-    account: params.account,
+    ...params,
     chatId: params.preliminary.chatId,
     chatType: resolveFeishuChatType(chat),
-    ctx: params.ctx,
   });
   return chat;
 }
@@ -295,8 +281,4 @@ export function canEnumerateAllFeishuGroups(
     (policy === "allowlist" &&
       compileAllowlist(normalizeFeishuAllowlist(account.config.groupAllowFrom)).wildcard)
   );
-}
-
-export function canEnumerateAllFeishuPeers(account: ResolvedFeishuAccount): boolean {
-  return isDmUniversallyAllowed(account);
 }

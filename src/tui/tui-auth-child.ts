@@ -30,16 +30,7 @@ function signalAuthChild(child: ChildProcess, signal: "SIGTERM" | "SIGKILL"): vo
 export function createTuiAuthChildOwner() {
   let active: ActiveAuthChild | null = null;
   let closed = false;
-
-  const clearActive = (owned: ActiveAuthChild): void => {
-    if (owned.forceTimer) {
-      clearTimeout(owned.forceTimer);
-      owned.forceTimer = undefined;
-    }
-    if (active === owned) {
-      active = null;
-    }
-  };
+  let childCompletion: Promise<void> = Promise.resolve();
 
   const cancel = (owned: ActiveAuthChild): void => {
     if (!isChildRunning(owned.child)) {
@@ -56,9 +47,6 @@ export function createTuiAuthChildOwner() {
   };
 
   return {
-    get running(): boolean {
-      return active !== null && isChildRunning(active.child);
-    },
     spawnAndWait: async (spawnChild: () => ChildProcess): Promise<TuiAuthChildResult> => {
       if (closed) {
         throw new Error("TUI auth child owner is closed");
@@ -68,28 +56,33 @@ export function createTuiAuthChildOwner() {
       }
       const owned: ActiveAuthChild = { child: spawnChild() };
       active = owned;
-      return await new Promise<TuiAuthChildResult>((resolve, reject) => {
-        let settled = false;
+      const result = new Promise<TuiAuthChildResult>((resolve, reject) => {
         const settle = (complete: () => void): void => {
-          if (settled) {
-            return;
+          clearTimeout(owned.forceTimer);
+          owned.forceTimer = undefined;
+          if (active === owned) {
+            active = null;
           }
-          settled = true;
-          clearActive(owned);
           complete();
         };
         owned.child.once("error", (error) => settle(() => reject(error)));
         owned.child.once("exit", (exitCode, signal) => settle(() => resolve({ exitCode, signal })));
       });
+      childCompletion = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return await result;
     },
-    close: (): void => {
+    close: (): Promise<void> => {
       if (closed) {
-        return;
+        return childCompletion;
       }
       closed = true;
       if (active) {
         cancel(active);
       }
+      return childCompletion;
     },
   };
 }

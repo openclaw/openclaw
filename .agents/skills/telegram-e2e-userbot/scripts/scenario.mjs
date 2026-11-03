@@ -4,7 +4,17 @@ const SCENARIO_KEYS = new Set(["actions", "health"]);
 const HEALTH_KEYS = new Set(["intervalMs", "timeoutMs"]);
 const RECORDER_READY_KEYS = new Set(["schemaVersion", "startedAtUnixMs", "chatId"]);
 const ACTION_KEYS = {
-  send: new Set(["type", "atMs", "text", "forumTopicId", "photo", "replyToPrevious", "awaitReply"]),
+  send: new Set([
+    "type",
+    "atMs",
+    "text",
+    "forumTopicId",
+    "photo",
+    "photos",
+    "replyToPrevious",
+    "awaitReply",
+  ]),
+  forwardBurst: new Set(["type", "atMs", "text", "photo"]),
   click: new Set(["type", "atMs", "messageText", "buttonText", "timeoutMs"]),
   restartGateway: new Set(["type", "atMs", "graceMs"]),
   patchConfig: new Set(["type", "atMs", "patch"]),
@@ -82,14 +92,39 @@ export function parseScenario(value) {
     }
     assertKnownKeys(action, allowed, label);
     const atMs = nonNegativeInteger(action.atMs, `${label}.atMs`, 0);
+    if (action.type === "forwardBurst") {
+      return {
+        type: action.type,
+        atMs,
+        text: nonEmptyString(action.text, `${label}.text`),
+        photo: nonEmptyString(action.photo, `${label}.photo`),
+      };
+    }
     if (action.type === "send" || action.type === "systemEvent") {
-      // A photo send may carry an empty caption; every other send needs text.
+      // A photo or album send may carry an empty caption; every other send needs text.
       const photo =
         action.type === "send" && action.photo !== undefined
           ? nonEmptyString(action.photo, `${label}.photo`)
           : undefined;
+      let photos;
+      if (action.type === "send" && action.photos !== undefined) {
+        if (photo !== undefined) {
+          throw new Error(`${label} must use photo or photos, not both.`);
+        }
+        // Telegram albums hold 2-10 items; one photo is a plain photo send.
+        if (
+          !Array.isArray(action.photos) ||
+          action.photos.length < 2 ||
+          action.photos.length > 10
+        ) {
+          throw new Error(`${label}.photos must be an array of 2-10 photo paths.`);
+        }
+        photos = action.photos.map((value, photoIndex) =>
+          nonEmptyString(value, `${label}.photos[${photoIndex}]`),
+        );
+      }
       const text =
-        photo !== undefined && action.text === undefined
+        (photo !== undefined || photos !== undefined) && action.text === undefined
           ? ""
           : nonEmptyString(action.text, `${label}.text`);
       if (action.type === "send" && action.replyToPrevious !== undefined) {
@@ -124,6 +159,7 @@ export function parseScenario(value) {
           ? { forumTopicId: positiveInteger(action.forumTopicId, `${label}.forumTopicId`) }
           : {}),
         ...(photo !== undefined ? { photo } : {}),
+        ...(photos !== undefined ? { photos } : {}),
         ...(awaitReply ? { awaitReply } : {}),
         ...(action.type === "send" && action.replyToPrevious === true
           ? { replyToPrevious: true }
@@ -236,7 +272,9 @@ export function parseScenario(value) {
   let hasSent = false;
   const replyMarkers = new Set();
   for (const action of orderedActions) {
-    if (action.type !== "send") continue;
+    if (action.type !== "send" && action.type !== "forwardBurst") {
+      continue;
+    }
     if (action.replyToPrevious && !hasSent) {
       throw new Error("replyToPrevious needs an earlier send action.");
     }

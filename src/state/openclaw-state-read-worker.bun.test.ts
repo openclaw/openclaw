@@ -10,11 +10,20 @@ const version = spawnSync(bun, ["--version"], { encoding: "utf8" }).stdout?.trim
 const [major = 0, minor = 0] = version?.split(".").map(Number) ?? [];
 const supported = major > 1 || (major === 1 && minor >= 4);
 
-it.runIf(supported)("reuses Bun read workers and joins host and task native cleanup", async () => {
-  const root = tempDirs.make("openclaw-bun-state-read-");
-  const { stdout } = await promisify(execFile)(bun, [
-    fileURLToPath(new URL("./openclaw-state-read-worker.bun.test-support.ts", import.meta.url)),
-    root,
-  ]);
-  expect(stdout.trim()).toBe("Bun shared-state worker reuse and native-exit cleanup passed");
-});
+it.runIf(supported).each(["conservative", "admitted"])(
+  "reuses Bun read workers and joins native cleanup (%s)",
+  async (policy) => {
+    const root = tempDirs.make("openclaw-bun-state-read-");
+    const { stdout } = await promisify(execFile)(bun, [
+      fileURLToPath(new URL("./openclaw-state-read-worker.bun.test-support.ts", import.meta.url)),
+      root,
+      policy,
+    ]);
+    expect(stdout.trim()).toMatch(
+      /^Bun shared-state worker reuse and native cleanup passed \(capable=(true|false)\)$/,
+    );
+    if (policy === "conservative") {
+      expect(stdout.trim()).toContain("capable=false");
+    }
+  },
+);

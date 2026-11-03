@@ -1343,11 +1343,7 @@ mod tests {
 
     fn validated_runtime_exchange(
         configuration: &SidecarRuntimeConfiguration,
-    ) -> (
-        SidecarConfigurationExchange,
-        AuthenticatedSidecarChannel,
-        SidecarRuntimeConfiguration,
-    ) {
+    ) -> (SidecarConfigurationExchange, AuthenticatedSidecarChannel) {
         let (supervisor, runtime, mut supervisor_channel, mut runtime_channel) =
             authenticated_pair();
         let mut supervisor_exchange = SidecarConfigurationExchange::new(supervisor).unwrap();
@@ -1355,7 +1351,7 @@ mod tests {
         let frame = supervisor_exchange
             .start(&mut supervisor_channel, configuration)
             .unwrap();
-        let received = runtime_exchange
+        runtime_exchange
             .receive(&mut runtime_channel, &frame)
             .unwrap()
             .unwrap();
@@ -1369,7 +1365,7 @@ mod tests {
         supervisor_exchange
             .receive(&mut supervisor_channel, &acknowledgement)
             .unwrap();
-        (runtime_exchange, runtime_channel, received)
+        (runtime_exchange, runtime_channel)
     }
 
     fn configuration() -> SidecarRuntimeConfiguration {
@@ -1441,8 +1437,7 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_routes_admission_then_native_invocation() {
-        let (mut exchange, mut channel, _configuration) =
-            validated_runtime_exchange(&configuration());
+        let (mut exchange, mut channel) = validated_runtime_exchange(&configuration());
         let adapter = Arc::new(RecordingAdapter::default());
         let bridge = SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();
 
@@ -1482,8 +1477,7 @@ mod tests {
 
     #[tokio::test]
     async fn admission_denial_never_dispatches_native_work() {
-        let (mut exchange, mut channel, _configuration) =
-            validated_runtime_exchange(&configuration());
+        let (mut exchange, mut channel) = validated_runtime_exchange(&configuration());
         let adapter = Arc::new(RecordingAdapter::default());
         *adapter
             .denied_command
@@ -1579,7 +1573,7 @@ mod tests {
         for fail_admission in [true, false] {
             let mut bounded = configuration();
             bounded.max_output_bytes = 4_096;
-            let (mut exchange, mut channel, _configuration) = validated_runtime_exchange(&bounded);
+            let (mut exchange, mut channel) = validated_runtime_exchange(&bounded);
             let adapter = Arc::new(OversizedAdapterError { fail_admission });
             let bridge =
                 SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();
@@ -1630,8 +1624,7 @@ mod tests {
     async fn nonportable_json_has_a_distinct_runtime_failure() {
         let mut failure_bounded = configuration();
         failure_bounded.max_output_bytes = u32::try_from(minimum_bridge_failure_bytes()).unwrap();
-        let (mut exchange, mut channel, _configuration) =
-            validated_runtime_exchange(&failure_bounded);
+        let (mut exchange, mut channel) = validated_runtime_exchange(&failure_bounded);
         let adapter = Arc::new(RecordingAdapter::default());
         let bridge = SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();
         assert_eq!(
@@ -1651,7 +1644,7 @@ mod tests {
         );
         assert_eq!(adapter.admissions.load(Ordering::SeqCst), 0);
 
-        let (mut result_exchange, mut result_channel, _configuration) =
+        let (mut result_exchange, mut result_channel) =
             validated_runtime_exchange(&failure_bounded);
         let result_adapter = Arc::new(NonPortableResultAdapter);
         let result_bridge = SidecarRuntimeBridge::activate(
@@ -1682,7 +1675,7 @@ mod tests {
         let mut bounded = configuration();
         bounded.max_input_bytes = 4096;
         bounded.max_output_bytes = 4096;
-        let (mut exchange, mut runtime_channel, _received) = validated_runtime_exchange(&bounded);
+        let (mut exchange, mut runtime_channel) = validated_runtime_exchange(&bounded);
         let adapter = Arc::new(RecordingAdapter::default());
         let bridge =
             SidecarRuntimeBridge::activate(&mut exchange, &mut runtime_channel, &adapter).unwrap();
@@ -1709,8 +1702,7 @@ mod tests {
         assert_eq!(adapter.admissions.load(Ordering::SeqCst), 0);
         assert_eq!(adapter.invocations.load(Ordering::SeqCst), 0);
 
-        let (mut result_exchange, mut result_channel, _received) =
-            validated_runtime_exchange(&bounded);
+        let (mut result_exchange, mut result_channel) = validated_runtime_exchange(&bounded);
         let result_adapter = Arc::new(OversizedResultAdapter);
         let result_bridge = SidecarRuntimeBridge::activate(
             &mut result_exchange,
@@ -1771,8 +1763,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_timeout_reaches_the_product_adapter() {
-        let (mut exchange, mut channel, _configuration) =
-            validated_runtime_exchange(&configuration());
+        let (mut exchange, mut channel) = validated_runtime_exchange(&configuration());
         let invoked = Arc::new(Notify::new());
         let cancelled = Arc::new(Notify::new());
         let adapter = Arc::new(CancellationAdapter {
@@ -1796,8 +1787,7 @@ mod tests {
     #[tokio::test]
     async fn retired_or_dropped_channel_cancels_and_blocks_native_work() {
         for drop_channel in [false, true] {
-            let (mut exchange, mut channel, _configuration) =
-                validated_runtime_exchange(&configuration());
+            let (mut exchange, mut channel) = validated_runtime_exchange(&configuration());
             let invoked = Arc::new(Notify::new());
             let cancelled = Arc::new(Notify::new());
             let adapter = Arc::new(CancellationAdapter {
@@ -2026,10 +2016,7 @@ mod tests {
 
     #[test]
     fn bridge_uses_the_exact_authenticated_configuration() {
-        let (mut exchange, mut channel, mut caller_copy) =
-            validated_runtime_exchange(&configuration());
-        caller_copy.max_concurrency = u16::MAX;
-        caller_copy.max_input_bytes = u32::MAX;
+        let (mut exchange, mut channel) = validated_runtime_exchange(&configuration());
         assert_eq!(exchange.configuration.as_ref().unwrap().max_concurrency, 2);
         assert_eq!(
             exchange.configuration.as_ref().unwrap().max_input_bytes,
@@ -2137,8 +2124,7 @@ mod tests {
 
     #[test]
     fn lifecycle_events_keep_attempt_and_manifest_generations_distinct() {
-        let (mut exchange, mut channel, _configuration) =
-            validated_runtime_exchange(&configuration());
+        let (mut exchange, mut channel) = validated_runtime_exchange(&configuration());
         let adapter = Arc::new(RecordingAdapter::default());
         let mut bridge =
             SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();

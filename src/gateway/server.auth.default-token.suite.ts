@@ -112,7 +112,8 @@ export function registerDefaultAuthTokenSuite(): void {
     });
 
     test("hello policy counts canonical session-sharing identities", async () => {
-      const { ensureProfileForEmail, linkEmail } = await import("../state/user-profiles.js");
+      const { ensureProfileForEmail } = await import("../state/user-profiles.js");
+      const { linkEmail } = await import("../state/user-profile-writes.worker.js");
       const suffix = `${process.pid}-${Date.now()}`;
       ensureProfileForEmail(`hello-a-${suffix}@example.invalid`);
       const target = ensureProfileForEmail(`hello-b-${suffix}@example.invalid`);
@@ -214,16 +215,27 @@ export function registerDefaultAuthTokenSuite(): void {
 
     test("hello-ok separates effective scopes from a reused device token grant", async () => {
       const { randomUUID } = await import("node:crypto");
-      const os = await import("node:os");
       const path = await import("node:path");
       const token = resolveGatewayTokenOrEnv();
       const deviceIdentityPath = path.join(
-        os.homedir(),
-        `openclaw-shared-auth-scope-reuse-${randomUUID()}.json`,
+        process.env.OPENCLAW_STATE_DIR!,
+        `shared-auth-scope-reuse-${randomUUID()}`,
+        "client",
+        "credentials.sqlite",
       );
       const wsInitial = await openWs(port);
       let pairedDeviceToken: string | undefined;
       let recoveryScope: string | undefined;
+      const expectedAuthKeys = [
+        "deviceToken",
+        "issuedAtMs",
+        "method",
+        "recoveryMigrationAllowed",
+        "recoveryScope",
+        "role",
+        "roleAllowsAdmin",
+        "scopes",
+      ];
       try {
         const initial = await connectReq(wsInitial, {
           token,
@@ -233,19 +245,12 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(initial.ok).toBe(true);
         const auth = readHelloOkAuth(initial.payload);
         expect(auth?.role).toBe("operator");
+        expect(auth?.roleAllowsAdmin).toBe(true);
         expect(auth?.scopes).toEqual(["operator.admin"]);
         expect(typeof auth?.deviceToken).toBe("string");
         expect(auth?.recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
         expect(auth?.recoveryMigrationAllowed).toBe(true);
-        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
-          "deviceToken",
-          "issuedAtMs",
-          "method",
-          "recoveryMigrationAllowed",
-          "recoveryScope",
-          "role",
-          "scopes",
-        ]);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual(expectedAuthKeys);
         pairedDeviceToken = auth?.deviceToken as string | undefined;
         recoveryScope = auth?.recoveryScope;
       } finally {
@@ -262,19 +267,12 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(reconnect.ok).toBe(true);
         const auth = readHelloOkAuth(reconnect.payload);
         expect(auth?.role).toBe("operator");
+        expect(auth?.roleAllowsAdmin).toBe(true);
         expect(auth?.deviceToken).toBe(pairedDeviceToken);
         expect(auth?.recoveryScope).toBe(recoveryScope);
         expect(auth?.recoveryMigrationAllowed).toBe(true);
         expect(auth?.scopes).toEqual(["operator.read"]);
-        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
-          "deviceToken",
-          "issuedAtMs",
-          "method",
-          "recoveryMigrationAllowed",
-          "recoveryScope",
-          "role",
-          "scopes",
-        ]);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual(expectedAuthKeys);
         const schema = await rpcReq(wsReconnect, "config.schema");
         expect(schema.ok).toBe(true);
         const admin = await rpcReq(wsReconnect, "config.patch");
@@ -291,7 +289,6 @@ export function registerDefaultAuthTokenSuite(): void {
       const nonce = await readConnectChallengeNonce(ws);
 
       const { randomUUID } = await import("node:crypto");
-      const os = await import("node:os");
       const path = await import("node:path");
       // Fresh identity avoids inheriting a previously paired device's grant.
       const { device } = await createSignedDevice({
@@ -299,7 +296,13 @@ export function registerDefaultAuthTokenSuite(): void {
         scopes: [],
         clientId: GATEWAY_CLIENT_NAMES.TEST,
         clientMode: GATEWAY_CLIENT_MODES.TEST,
-        identityPath: path.join(os.homedir(), `openclaw-test-device-${randomUUID()}.sqlite`),
+        identityPath: path.join(
+          process.env.OPENCLAW_STATE_DIR!,
+          "test-device-identities",
+          randomUUID(),
+          "client",
+          "credentials.sqlite",
+        ),
         nonce,
       });
 
@@ -350,6 +353,27 @@ export function registerDefaultAuthTokenSuite(): void {
       });
     });
 
+    test("keeps protocol-v4 Mac apps connected after widget retirement", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          minProtocol: 4,
+          maxProtocol: 4,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.MACOS_APP,
+            version: "2026.10.3",
+            platform: "macos",
+            mode: GATEWAY_CLIENT_MODES.UI,
+          },
+        });
+        expect(res.ok, JSON.stringify(res)).toBe(true);
+        expect(res.payload).toMatchObject({ type: "hello-ok", protocol: 4 });
+        expect((await rpcReq(ws, "health")).ok).toBe(true);
+      } finally {
+        ws.close();
+      }
+    });
+
     test("allows previous protocol for restart health probes", async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, {
@@ -367,7 +391,7 @@ export function registerDefaultAuthTokenSuite(): void {
       ws.close();
     });
 
-    test("retains authenticated previous-protocol node-host maintenance commands", async () => {
+    test("auto-approves authenticated previous-protocol local node-host maintenance commands", async () => {
       const nodeWs = await openWs(port);
       const operatorWs = await openWs(port);
       try {
@@ -385,6 +409,7 @@ export function registerDefaultAuthTokenSuite(): void {
         const operatorRes = await connectReq(operatorWs);
         expect(operatorRes.ok).toBe(true);
         type LegacyNodeStatus = {
+          approvalState?: string;
           commands?: string[];
           connected?: boolean;
           deviceFamily?: string;
@@ -393,18 +418,21 @@ export function registerDefaultAuthTokenSuite(): void {
           platform?: string;
           version?: string;
         };
-        const pendingList = await rpcReq<{
+        const nodeList = await rpcReq<{
           nodes?: LegacyNodeStatus[];
         }>(operatorWs, "node.list", {});
-        const pendingNode = pendingList.payload?.nodes?.find(
+        expect(nodeList.ok).toBe(true);
+        const legacyNode = nodeList.payload?.nodes?.find(
           (node) => node.connected === true && node.version === legacyVersion,
         );
-        expect(pendingNode).toMatchObject({
+        expect(legacyNode).toMatchObject({
+          approvalState: "approved",
+          commands: ["system.which"],
           deviceFamily: "Linux",
-          pendingDeclaredCommands: ["system.which"],
           platform: "linux",
         });
-        expect(pendingNode?.pendingRequestId).toBeTypeOf("string");
+        expect(legacyNode?.pendingDeclaredCommands).toBeUndefined();
+        expect(legacyNode?.pendingRequestId).toBeUndefined();
       } finally {
         nodeWs.close();
         operatorWs.close();

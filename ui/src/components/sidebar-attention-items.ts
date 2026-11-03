@@ -8,15 +8,8 @@ import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 
 registerSidebarAttentionEnglish();
 
-// A cron job counts as overdue when its next planned run is this far in the
-// past; mirrors the threshold the Overview attention list used.
 const CRON_OVERDUE_GRACE_MS = 300_000;
 const ALERT_QUESTION_MAX_LENGTH = 1_000;
-const SIDEBAR_ATTENTION_PRIORITY: Record<SidebarAttentionItem["kind"], number> = {
-  modelAuthExpired: 0,
-  cronFailed: 1,
-  cronOverdue: 2,
-};
 
 export type CronAttentionJob = Pick<
   CronJob,
@@ -37,18 +30,6 @@ export function cronOverdueAt(job: CronAttentionJob, schedulerEnabled: boolean |
     : Infinity;
 }
 
-export function compareSidebarAttentionEntries(
-  left: SidebarAttentionItem,
-  right: SidebarAttentionItem,
-): number {
-  return SIDEBAR_ATTENTION_PRIORITY[left.kind] - SIDEBAR_ATTENTION_PRIORITY[right.kind];
-}
-
-type SidebarAttentionContent = Omit<
-  SidebarAttentionItem,
-  "category" | "dismissal" | "requiresAction" | "type"
->;
-
 export function buildSidebarAttentionEntries(params: {
   cronJobs: readonly CronAttentionJob[];
   cronSchedulerEnabled: boolean | null;
@@ -59,7 +40,7 @@ export function buildSidebarAttentionEntries(params: {
 }): SidebarAttentionItem[] {
   const entries: SidebarAttentionItem[] = [];
   const attentionEntry = (
-    item: SidebarAttentionContent,
+    item: Omit<SidebarAttentionItem, "category" | "dismissal" | "requiresAction" | "type">,
     category: SidebarAttentionItem["category"],
   ): SidebarAttentionItem => ({
     ...item,
@@ -68,6 +49,73 @@ export function buildSidebarAttentionEntries(params: {
     dismissal: { kind: item.kind, signature: item.signature },
     requiresAction: true,
   });
+
+  const monitored = listEffectiveModelAuthProviders(params.modelAuthStatus?.providers ?? []).filter(
+    isMonitoredAuthProvider,
+  );
+  const expired = monitored.filter(
+    (provider) => provider.status === "expired" || provider.status === "missing",
+  );
+  for (const provider of expired) {
+    // Auth is agent-scoped; one agent's dismissal must not hide another's warning.
+    const signature = params.modelAuthAgentId
+      ? `agent:${params.modelAuthAgentId}\n${provider.provider}`
+      : provider.provider;
+    const fact = `${provider.displayName}: ${provider.status}`;
+    const scope =
+      provider.profiles.find(
+        (profile) => profile.status === "expired" || profile.status === "missing",
+      )?.profileId ?? params.modelAuthAgentId?.trim();
+    // Status snapshots refresh, so a known expiry keeps the row's arrival stable.
+    const expiredAt = provider.expiry?.at;
+    const arrivedAtMs =
+      expiredAt !== undefined && expiredAt <= params.now
+        ? expiredAt
+        : (params.modelAuthStatus?.ts ?? params.now);
+    const time = formatTimeAgo(Math.max(0, params.now - arrivedAtMs), { suffix: false });
+    const detail = scope
+      ? t("attention.modelAuthExpiredWithScope", { scope, time })
+      : t("attention.modelAuthExpiredState", { time });
+    const alertTitle = t("attention.modelAuthExpired", { providers: provider.displayName });
+    entries.push(
+      attentionEntry(
+        {
+          kind: "modelAuthExpired",
+          severity: "error",
+          icon: "plug",
+          label: provider.displayName,
+          detail,
+          meta: {
+            ...(scope ? { context: scope } : {}),
+            status: t("attention.authExpired"),
+          },
+          arrivedAtMs,
+          inlineAction: {
+            label: t("attention.reconnect"),
+            routeId: "model-providers",
+          },
+          signature,
+          action: {
+            kind: "askCustodian",
+            alert: {
+              id: `modelAuthExpired:${signature}`,
+              title: alertTitle,
+              facts: [fact],
+              question: clampText(
+                t("attention.alerts.modelAuthExpiredQuestion", { facts: fact }),
+                ALERT_QUESTION_MAX_LENGTH,
+              ),
+              action: {
+                label: t("routeTitles.modelProviders"),
+                target: { kind: "navigate", routeId: "model-providers" },
+              },
+            },
+          },
+        },
+        "system",
+      ),
+    );
+  }
   for (const kind of ["cronFailed", "cronOverdue"] as const) {
     const failed = kind === "cronFailed";
     const timestamp = (job: CronAttentionJob) =>
@@ -95,8 +143,8 @@ export function buildSidebarAttentionEntries(params: {
             meta: {
               ...(context ? { context } : {}),
               status: t(failed ? "attention.failed" : "attention.overdue"),
-              time,
             },
+            arrivedAtMs: timestamp(job),
             action: { kind: "navigate", routeId: "cron" },
             // A later overdue episode must resurface after its planned run changes.
             signature: failed ? job.id : `${job.id}@${job.state?.nextRunAtMs}`,
@@ -107,68 +155,5 @@ export function buildSidebarAttentionEntries(params: {
     }
   }
 
-  const monitored = listEffectiveModelAuthProviders(params.modelAuthStatus?.providers ?? []).filter(
-    isMonitoredAuthProvider,
-  );
-  const expired = monitored.filter(
-    (provider) => provider.status === "expired" || provider.status === "missing",
-  );
-  for (const provider of expired) {
-    // Auth is agent-scoped; one agent's dismissal must not hide another's warning.
-    const signature = params.modelAuthAgentId
-      ? `agent:${params.modelAuthAgentId}\n${provider.provider}`
-      : provider.provider;
-    const fact = `${provider.displayName}: ${provider.status}`;
-    const scope =
-      provider.profiles.find(
-        (profile) => profile.status === "expired" || profile.status === "missing",
-      )?.profileId ?? params.modelAuthAgentId?.trim();
-    const time = formatTimeAgo(
-      Math.max(0, params.now - (params.modelAuthStatus?.ts ?? params.now)),
-      { suffix: false },
-    );
-    const detail = scope
-      ? t("attention.modelAuthExpiredWithScope", { scope, time })
-      : t("attention.modelAuthExpiredState", { time });
-    const alertTitle = t("attention.modelAuthExpired", { providers: provider.displayName });
-    entries.push(
-      attentionEntry(
-        {
-          kind: "modelAuthExpired",
-          severity: "error",
-          icon: "plug",
-          label: provider.displayName,
-          detail,
-          meta: {
-            ...(scope ? { context: scope } : {}),
-            status: t("attention.authExpired"),
-            time,
-          },
-          inlineAction: {
-            label: t("attention.reconnect"),
-            routeId: "model-providers",
-          },
-          signature,
-          action: {
-            kind: "askCustodian",
-            alert: {
-              id: `modelAuthExpired:${signature}`,
-              title: alertTitle,
-              facts: [fact],
-              question: clampText(
-                t("attention.alerts.modelAuthExpiredQuestion", { facts: fact }),
-                ALERT_QUESTION_MAX_LENGTH,
-              ),
-              action: {
-                label: t("routeTitles.modelProviders"),
-                target: { kind: "navigate", routeId: "model-providers" },
-              },
-            },
-          },
-        },
-        "system",
-      ),
-    );
-  }
   return entries;
 }

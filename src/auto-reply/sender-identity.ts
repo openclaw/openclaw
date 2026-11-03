@@ -1,18 +1,17 @@
 /** Shared sender identity helpers for authorization checks. */
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import {
+  normalizeStringEntries,
+  normalizeTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 function isConversationLikeIdentity(value: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return false;
-  }
+  const normalized = value.toLowerCase();
   if (normalized.startsWith("chat_id:")) {
     return true;
   }
@@ -69,29 +68,19 @@ export function resolveSenderCandidates(
   },
 ): string[] {
   const { plugin, cfg, accountId } = params;
-  const candidates: string[] = [];
-  const pushCandidate = (value?: string | null) => {
-    const trimmed = normalizeOptionalString(value) ?? "";
-    if (!trimmed) {
-      return;
-    }
-    candidates.push(trimmed);
-  };
-  if (plugin?.commands?.preferSenderE164ForCommands) {
-    pushCandidate(params.senderE164);
-    pushCandidate(params.senderId);
-  } else {
-    pushCandidate(params.senderId);
-    pushCandidate(params.senderE164);
-  }
+  const candidates = normalizeTrimmedStringList(
+    plugin?.commands?.preferSenderE164ForCommands
+      ? [params.senderE164, params.senderId]
+      : [params.senderId, params.senderE164],
+  );
   if (
     candidates.length === 0 &&
     shouldUseFromAsSenderFallback({ from: params.from, chatType: params.chatType })
   ) {
-    pushCandidate(params.from);
+    candidates.push(...normalizeTrimmedStringList([params.from]));
   }
 
-  pushCandidate(params.commandSenderId);
+  candidates.push(...normalizeTrimmedStringList([params.commandSenderId]));
   return [
     ...new Set(
       candidates.flatMap((sender) =>

@@ -62,12 +62,9 @@ export function resolveSessionInfoModelSelection(params: SessionInfoModelSelecti
 } {
   const fallbackProvider =
     normalizeOptionalString(params.currentProvider) ??
-    normalizeOptionalString(params.defaultProvider) ??
-    undefined;
+    normalizeOptionalString(params.defaultProvider);
   const fallbackModel =
-    normalizeOptionalString(params.currentModel) ??
-    normalizeOptionalString(params.defaultModel) ??
-    undefined;
+    normalizeOptionalString(params.currentModel) ?? normalizeOptionalString(params.defaultModel);
 
   if (params.entryProvider !== undefined || params.entryModel !== undefined) {
     return {
@@ -77,16 +74,10 @@ export function resolveSessionInfoModelSelection(params: SessionInfoModelSelecti
   }
 
   const overrideModel = normalizeOptionalString(params.overrideModel);
-  if (overrideModel) {
-    const overrideProvider = normalizeOptionalString(params.overrideProvider);
-    return {
-      modelProvider: overrideProvider || fallbackProvider,
-      model: overrideModel,
-    };
-  }
-
   return {
-    modelProvider: fallbackProvider,
-    model: fallbackModel,
+    modelProvider: overrideModel
+      ? normalizeOptionalString(params.overrideProvider) || fallbackProvider
+      : fallbackProvider,
+    model: overrideModel ?? fallbackModel,
   };
 }

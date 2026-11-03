@@ -15,6 +15,9 @@ const UpdateCandidatePluginEntrySchema = z.discriminatedUnion("kind", [
     birthtimeNs: z.string(),
     mtimeNs: z.string(),
     ctimeNs: z.string(),
+    uid: z.string(),
+    gid: z.string(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/u),
   }),
   z.object({
     ...entryFields,
