@@ -115,7 +115,10 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
       await presentRefresh(operation, lifecycle);
     } catch (error) {
       if (props.open && props.lifecycle === lifecycle) {
-        showToast({ message: formatUiError(error), severity: "error" });
+        showToast({
+          message: `${t("devices.pairing.copyFailed")} ${formatUiError(error)}`,
+          severity: "error",
+        });
       }
     }
   }

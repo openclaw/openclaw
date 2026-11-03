@@ -58,9 +58,10 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
               </p>
             ) : undefined}
             {props.error ? (
-              <p class="exec-approval-error" role="alert">
-                {t("newSession.connectMachineFailed")} {props.error}
-              </p>
+              <div class="exec-approval-error" role="alert">
+                <p>{t("newSession.connectMachineFailed")}</p>
+                <p>{props.error}</p>
+              </div>
             ) : undefined}
             <Show when={props.setup}>
               {(setup) => (

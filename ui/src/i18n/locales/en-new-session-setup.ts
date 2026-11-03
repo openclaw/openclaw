@@ -225,7 +225,7 @@ const enNewSessionSetup = {
       "Native CLI sessions use a specific host, not OpenClaw worker placement. Reset this draft and choose a native host.",
     terminalNeedsFolder: "Pick a folder before starting in a terminal.",
     noSessionHosts:
-      "No devices have session hosting enabled. Connect a machine with session hosting enabled, or enable it on a paired device.",
+      "No devices have session hosting enabled. Connect a device with session hosting enabled, or enable it on a paired device.",
     deviceUnavailable: "Device unavailable. Reconnect it and try again.",
     environmentUnavailable: "Unavailable",
     sessionHostingDisabled:
@@ -233,20 +233,21 @@ const enNewSessionSetup = {
     deviceCapacityUnavailable:
       "Worker capacity is unavailable. Restart the device session host and try again.",
     deviceNoSlots: "No worker slots are available. Wait for a slot or pick another device.",
-    connectMachineTitle: "Connect a machine",
-    connectMachineDescription: "Run this command on the machine you want to connect.",
+    connectMachineTitle: "Connect a device",
+    connectMachineDescription: "Run this command on the device you want to connect.",
     connectMachineGenerating: "Creating a secure connection link…",
-    connectMachineFailed: "Couldn't create a connection link.",
-    connectMachineMissingUrl: "The Gateway did not return a join URL. Update it and try again.",
-    connectMachineUnavailable: "Reconnect to the Gateway and try again.",
+    connectMachineFailed: "Couldn’t create a connection link. Try again.",
+    connectMachineMissingUrl:
+      "The Gateway didn’t return a connection link. Update it and try again.",
+    connectMachineUnavailable: "Reconnect to create a connection link.",
     connectMachineTeamHint:
-      "Installs a background node service that pairs this machine with your team and can run agent sessions.",
+      "Installs a background service that connects this device to your team and can run agent sessions.",
     connectMachineCommandOnly: "Command access only (no agent sessions)",
-    connectMachineInstalled: "Already have OpenClaw installed? Run:",
+    connectMachineInstalled: "Already have OpenClaw installed? Run this command:",
     connectMachineSingleUse: "This link is single-use and expires soon.",
     connectMachineSingleUseExpires: "This link is single-use and expires at {time}.",
-    connectMachineFreshCode: "Mint fresh code",
-    connectMachineRefreshing: "Minting…",
+    connectMachineFreshCode: "Create new code",
+    connectMachineRefreshing: "Creating code…",
     connectMachineManageDevices: "Manage devices",
   },
 } satisfies TranslationMap;

@@ -99,7 +99,7 @@ describe("cloud target menu", () => {
         projectDevicePlacements(environments),
       ),
     ).toBe(
-      "No devices have session hosting enabled. Connect a machine with session hosting enabled, or enable it on a paired device.",
+      "No devices have session hosting enabled. Connect a device with session hosting enabled, or enable it on a paired device.",
     );
   });
 
