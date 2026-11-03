@@ -383,6 +383,7 @@ export async function prepareCodexAttemptTurnRequest(
       acceptedTurnId = startedTurn.turn.id;
       recordCodexTurnForkSettings(turnClient, turnStartParams);
       resources.nativeProcessAuthority?.bindTurn(turnClient, threadId, acceptedTurnId);
+      resourceState.nativeHookRelay?.bindForegroundTurn(threadId, acceptedTurnId);
       assertTurnCurrent();
       resourceState.nativeSubagentMonitor?.bindTurn(acceptedTurnId, modelMapping);
       // Fitting may drop or truncate references; only acknowledge the complete block.
