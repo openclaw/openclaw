@@ -6,6 +6,10 @@ import { en } from "./en.ts";
 // This copy follows its lazy rendering consumers; shared labels stay in en.ts.
 const enChatSession = {
   chat: {
+    recovery: {
+      editMessage: "Edit message",
+      editDraftBlocked: "Send or clear your current draft before editing this message.",
+    },
     savedConversation: "Saved conversation · {status}",
     sessionAutomation: {
       everyDuration: "Every {duration}",

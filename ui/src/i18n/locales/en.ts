@@ -1550,8 +1550,6 @@ const startupEnglish = {
     historyUnavailableTitle: "Couldn’t load this conversation",
     historyUnavailableBody: "Try again to load its messages.",
     recovery: {
-      editMessage: "Edit message",
-      editDraftBlocked: "Send or clear your current draft before editing this message.",
       retrying: "Retrying…",
       retryingIn: "Retrying in {seconds}s",
       tryingFallback: "Trying fallback model…",

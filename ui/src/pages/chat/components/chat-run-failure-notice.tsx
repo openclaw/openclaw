@@ -3,10 +3,13 @@ import { formatWebUiIconErrorText } from "../../../components/error-presentation
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
-import { openChatRewindConfirmation } from "./chat-message-confirmation-view.tsx";
+import { RewindButton } from "./chat-message-confirmation-view.tsx";
+
+registerChatSessionEnglish();
 
 let nextPanelId = 0;
 
@@ -137,25 +140,11 @@ export function ChatRunFailureNotice(props: {
           </div>
         </Popover>
         <Show when={props.onEdit}>
-          <span class="chat-confirm-wrap">
-            <openclaw-tooltip
-              prop:content={props.editDisabledReason ?? t("chat.recovery.editMessage")}
-            >
-              <button
-                type="button"
-                class="btn btn--sm"
-                disabled={Boolean(props.editDisabledReason)}
-                onClick={(event) =>
-                  openChatRewindConfirmation(event.currentTarget, () => {
-                    void props.onEdit?.();
-                  })
-                }
-              >
-                <Icon name="pencil" />
-                {t("chat.recovery.editMessage")}
-              </button>
-            </openclaw-tooltip>
-          </span>
+          <RewindButton
+            label={t("chat.recovery.editMessage")}
+            disabledReason={props.editDisabledReason}
+            onRewind={() => void props.onEdit?.()}
+          />
         </Show>
         <Show when={props.onRetry}>
           <button
