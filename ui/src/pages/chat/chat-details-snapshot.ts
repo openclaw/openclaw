@@ -31,9 +31,9 @@ export function projectDetailsSubagents(rows: readonly DetailsSubagent[], mobile
 }
 
 /**
- * The summary shows at most two statuses. Waiting parents are still working and
- * failed runs are finished; stopped runs only appear when nothing else exists.
- * The first status sits beside the avatars, the second is trailing.
+ * The summary shows at most two statuses: the first beside the avatars, the
+ * second trailing. Waiting parents count as working. Failed and stopped runs
+ * count as done; agents usually retry around them, so they get no own status.
  */
 function projectSummaryCounts(rows: readonly DetailsSubagent[]) {
   const count = (matches: (row: DetailsSubagent) => boolean) => rows.filter(matches).length;
@@ -41,10 +41,11 @@ function projectSummaryCounts(rows: readonly DetailsSubagent[]) {
   const queued = { status: "queued" as const, count: count((row) => row.status === "queued") };
   const done = {
     status: "done" as const,
-    count: count((row) => row.status === "done" || row.status === "failed"),
+    count: count(
+      (row) => row.status === "done" || row.status === "failed" || row.status === "stopped",
+    ),
   };
-  const stopped = { status: "stopped" as const, count: count((row) => row.status === "stopped") };
-  const primary = [working, queued, done, stopped].find((entry) => entry.count > 0);
+  const primary = [working, queued, done].find((entry) => entry.count > 0);
   if (!primary) {
     return [];
   }

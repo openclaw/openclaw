@@ -83,7 +83,7 @@ it("omits empty content and removes collapsed activity when the last waiting chi
   expect(view.getByRole("button", { name: "Waiting child Done" })).toBeTruthy();
 });
 
-it("summarizes at most two statuses, leading with the most active one", () => {
+it("summarizes at most two statuses and never shows Stopped", () => {
   const working = (key: string): Row => ({ key, label: key, status: "running" });
   const waiting = (key: string): Row => ({ key, label: key, status: "waiting" });
   const queued = (key: string): Row => ({ key, label: key, status: "queued" });
@@ -104,10 +104,13 @@ it("summarizes at most two statuses, leading with the most active one", () => {
   expect(summary()).toEqual(["3 Working", "1 Queued"]);
   setRows([working("a"), waiting("b"), done("d"), stopped("e"), done("f"), working("g")]);
   flush();
-  expect(summary()).toEqual(["3 Working", "2 Done"]);
+  expect(summary()).toEqual(["3 Working", "3 Done"]);
   setRows([done("a"), stopped("b"), done("c"), done("d"), done("e"), done("f")]);
   flush();
-  expect(summary()).toEqual(["5 Done"]);
+  expect(summary()).toEqual(["6 Done"]);
+  setRows(["a", "b", "c", "d", "e", "f"].map(stopped));
+  flush();
+  expect(summary()).toEqual(["6 Done"]);
 });
 
 it("folds failed runs into Done without changing child outcomes", () => {
