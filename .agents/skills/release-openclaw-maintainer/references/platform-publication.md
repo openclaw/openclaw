@@ -197,6 +197,14 @@ A failed-writer retry reuses its successful validation artifact by ID. After
 that artifact's seven-day retention, rerun validation with the still-valid
 original approval.
 
+Windows promotion uploads the two installers and checksum manifest sequentially,
+rechecking current authority before each upload; these writes are not atomic.
+Cancellation is asynchronous, so an in-flight upload may complete and previously
+uploaded assets remain published. After interruption, reconcile the actual asset
+names and digests against the approved bytes before retrying with a still-valid
+original publisher approval. A superseded publisher attempt remains denied;
+replaying its old approval does not authorize recovery.
+
 Verify canonical x64/arm64 installer assets and
 `OpenClawCompanion-SHA256SUMS.txt`, expected Foundation Authenticode signer, and
 redownloaded checksums. Recovery rejects unexpected contract asset names and
