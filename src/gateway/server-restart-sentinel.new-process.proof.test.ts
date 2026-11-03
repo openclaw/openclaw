@@ -114,12 +114,12 @@ describe("fork-only: recipient-bound continuation rows across process lifetimes"
       ]);
       // The kept row stays pending until a prompt adopts its in-memory event.
       expect(ids(recovered.after)).toEqual([keptId]);
-      // Refused, not recovered: the revoked row is retired as failed and never reported delivered.
+      // Refused, not recovered: the revoked row keeps its failed receipt and is never reported delivered.
       expect(recovered.logs).toEqual([
         `warn: Session delivery: dead-letter decision for entry ${revokedId}: continuation return refused: recipient-authority-changed`,
         `warn: Session delivery: entry ${revokedId} was dead-lettered and moved to failed`,
       ]);
-      expect(storedRows(stateDir)).toEqual({ [keptId!]: "pending" });
+      expect(storedRows(stateDir)).toEqual({ [revokedId!]: "failed", [keptId!]: "pending" });
       expect(storedRows(environment)).toBeNull();
     },
   );

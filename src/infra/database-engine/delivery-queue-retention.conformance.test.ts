@@ -42,15 +42,20 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL receipt deadlines", () => {
           ]) {
             upsert({ queueName, status: "completed", entry: receipt }, database);
           }
+          const failed = {
+            ...entry("failed", nowMs - 30 * 86_400_000 + 10),
+            recoveryState: "failed_receipt",
+          };
+          upsert({ queueName, status: "failed", entry: failed }, database);
         });
         pruneAt();
         pruneAt(6);
         expect(load("bounded-sooner")).toBeNull();
         expect(load("ordinary")).not.toBeNull();
         pruneAt(10);
-        expect(load("ordinary")).not.toBeNull();
+        expect([load("ordinary"), load("failed")]).not.toContain(null);
         pruneAt(11);
-        expect(load("ordinary")).toBeNull();
+        expect([load("ordinary"), load("failed")]).toEqual([null, null]);
         expect(load("bounded-huge")).not.toBeNull();
         prune(database);
         expect(load("bounded-huge")).not.toBeNull();

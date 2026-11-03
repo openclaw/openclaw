@@ -3,6 +3,7 @@ import type { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { compactLegacyDeliveryQueueFailures } from "../state/openclaw-state-db-delivery-queue-backfill.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -398,6 +399,52 @@ describe("delivery queue pending terminal transition", () => {
       });
     },
   );
+
+  it("keeps an opted-in failed receipt bounded through recompaction until the ordinary sweep", () => {
+    const entry = {
+      id: "terminal-receipt",
+      enqueuedAt: 1_000,
+      retryCount: 2,
+      sessionKey: "private",
+    };
+    seed(entry);
+    vi.useFakeTimers();
+    vi.setSystemTime(50_000);
+    expect(
+      terminalizePendingDeliveryQueueEntry({
+        queueName,
+        id: entry.id,
+        entry,
+        stateDir,
+        keepFailedReceipt: true,
+      }),
+    ).toEqual({ status: "terminalized", retained: true });
+    const columns =
+      "status, session_key, recovery_state, retention_id_prefix, entry_json, enqueued_at";
+    const receipt = {
+      status: "failed",
+      session_key: null,
+      recovery_state: "failed_receipt",
+      retention_id_prefix: null,
+      entry_json: JSON.stringify({
+        id: entry.id,
+        enqueuedAt: 50_000,
+        retryCount: 2,
+        failedAt: 50_000,
+        recoveryState: "failed_receipt",
+      }),
+      enqueued_at: 50_000,
+    };
+    expect(storedRow(entry.id, columns)).toEqual(receipt);
+    // Doctor's legacy compaction re-infers retention from the projection alone.
+    const db = requireNativeSqliteDatabase(openTestDatabase().db);
+    compactLegacyDeliveryQueueFailures(db);
+    expect(storedRow(entry.id, columns)).toEqual(receipt);
+    pruneDeliveryQueueTombstones(db, 50_000 + 30 * 24 * 60 * 60_000);
+    expect(status(entry.id)).toBe("failed");
+    pruneDeliveryQueueTombstones(db, 50_001 + 30 * 24 * 60 * 60_000);
+    expect(status(entry.id)).toBeUndefined();
+  });
 
   it("does not terminalize a replacement pending owner", () => {
     const entry = { id: "terminal-race", enqueuedAt: 1_000, retryCount: 0 };
