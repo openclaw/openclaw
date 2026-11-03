@@ -62,22 +62,22 @@
   "Shared": "RED-unwaived",
   "packetFiles": {
     "BootstrapProbe.csproj": "f7d88528ac41739f81684ff10c6a0842387105703b299b7a78dcfed19fc16591",
-    "CAUSAL-GIT-REPAIR.json": "645a7515d8eb49447db6416d13e787219e70c0f46db601b9fac117c473ca61f9",
+    "CAUSAL-GIT-REPAIR.json": "06e84d27bba77a9d62c1187b11e92323818a4b21141203d9badbb3d92416fe94",
     "CONTROLLER-STATIC.json": "816f4f1ab3852a1b4a7f0aca870f78e88c24488f5749df6bc66125f59819510f",
     "Initialize-NativeRuntime.ps1": "3f042d5b6492c1271c6f5247ba38608104fa229cb16a768cad937776cca0e4f9",
-    "Invoke-ProviderArtworkCI.ps1": "92f96a154ed19a9eeaa0a5ea4c24c64094e165fe2691d91c19ad9e777ca08c81",
-    "Invoke-ProviderArtworkProof.ps1": "4920982a18bbab8fd38a612da5e0c4d155820f814b74b43b8292d7b363626d86",
+    "Invoke-ProviderArtworkCI.ps1": "effb19db5348ac0cebe6c92f4c5bcacacf934fc29e5876c54511f8f83364277d",
+    "Invoke-ProviderArtworkProof.ps1": "23f8417ff46087e64486084f24c8b471336edcb4bbdfee08dbf21abd4813aa19",
     "PROOF-PLAN.md": "ab0aa4c842beea80466887df80d6ca8d07d2c73baa34387885efa3165b58644b",
     "Program.cs": "d7337e908472033755a5c1c83046875523931ada52ad08f4f86ef736b9eb54a2",
     "Proof.Common.ps1": "c2a8a7aad4d70af850bd0581008714b0e5e6b3767cc4550219d2cbe996a45edc",
     "QUALIFIED-OWNERS.json": "d0a5a3fa38ed5952c8b0720c78ef1fe4c954a1879f2873dd8ffad9b3ae9149fa",
-    "README.md": "140948b4094f81e3e62dabfca50699cd51fd3933a8134e3f61ec0b749bc7ef24",
+    "README.md": "56c81079e1645a83b6e899cc0ed4d6cb4994cfd9d5097b755441d7e6e776d48c",
     "REVIEW-RUNTIME2.md": "f6714d5058ab39c2ff14ff47a86aedfb264e29b95d9cfc16b208668c4d9b5c22",
     "REVIEW.md": "c99f1e33950182b8c87c071e988c856ac6521585e2d28d0b1d1716619e709da3",
     "STATIC-PREPARATION.json": "3eee803702eac675d4cce850732b1c05c5cb12491d083b6b897b0088f6756da8",
     "Save-CalculatedVersion.ps1": "a045b196c0e98341735aa8a21dc80cfdacf4504f574c602775e3e31f728e7e39",
     "TEST-COST.json": "f60779d4a8f48f885bf5eb0d76843bf745e85181e2244095db65883493de51c1",
-    "Test-PacketSyntaxAndStage.ps1": "3fc18b1a93453f8c7e581375be194f8de0a1c98548f5ea076c4e2ad07e6fc92d",
+    "Test-PacketSyntaxAndStage.ps1": "9d39f26da301934b0d238bb1edf4d7376909c92f0c1f08700bc077aaf0574f5d",
     "baseline-capture.patch": "0760c6a99289216f84b794961c5433d94c15f653584c785f866d4a90893f7727",
     "baseline-captures.cs.append": "7071acc7e3ef1570743983f037936f597670e5459e3d394cb4382739b59b9c19",
     "baseline-postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "eb4a48f2ec5e6eb732ea6d33eb150348cdd694a05dcad3a5e8c1680b89ae7fbc",
@@ -101,7 +101,7 @@
       "beforeSha256": "f238918a76271fee64392bd3fbd3a93da912d24fedebad80b705a136628697e6"
     }
   ],
-  "sourceState": "unchanged seven-file candidate; causal native-Git harness repair after terminal run41576920173",
-  "nativeGitWrapperSha256": "b1545c9427ade25602bfcbeba4c3758bfbaf787bcf99b77375ecd275f9e2173a",
-  "qualification": "native-icons-w5-nativegit-6bdc3018-v3"
+  "sourceState": "unchanged source; causal native-Git Application cardinality repair",
+  "nativeGitWrapperSha256": "fbeb977dca0320c14edd0b2d0888091d121b1449cce16d9c56f619aabbf5589f",
+  "qualification": "native-icons-w5-nativegit-one-6bdc3018-v4"
 }

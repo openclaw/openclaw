@@ -30,7 +30,10 @@
   "currentPowerShellSmoke": "UNRUN: pwsh unavailable on child host; first CI gate required",
   "currentUICompileAndIconProof": "UNRUN; failed run is no product-code verdict",
   "canonicalReview": "BLOCKED in child: bound autoreview tool absent; canonical skill forbids guest host-CLI fallback. Complete frozen delta and actual assembled workflow supplied for parent bound review.",
-  "qualification": "native-icons-w5-nativegit-6bdc3018-v3",
+  "qualification": "native-icons-w5-nativegit-one-6bdc3018-v4",
   "Shared": "RED-unwaived",
-  "newDispatchOrSourceCommitOrPushOrPr": "none"
+  "newDispatchOrSourceCommitOrPushOrPr": "none",
+  "followupFailedRun": 41580497236,
+  "followupLeaf": "Application-only lookup returned three Git PATH matches; Source array became one invalid executable string.",
+  "followupRepair": "Select exactly the first discovered ApplicationInfo in both source Git owner and its actual-function smoke, preserving PATH precedence and all guards."
 }

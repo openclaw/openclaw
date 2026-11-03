@@ -1,8 +1,12 @@
+## Git application cardinality repair
+
+Run 41580497236 failed in the first native smoke because Application-only discovery returned three PATH entries. Both callers now select exactly the first ApplicationInfo. This preserves normal PATH precedence and the existing source/exit/hash/smoke guards. Product source/tree/runtime/dependencies remain unchanged; native proof is still pending.
+
 # Native Git application-resolution repair after run 41576920173
 
 Published driver function Git recursively resolved its unqualified & git call. The actual failed artifact/commit/log bind the call-depth overflow to the first Before Git guard, before any UI restore/build. The corrected owner explicitly resolves an Application and keeps every existing source/exit/tree/hash/no-safe.directory guard. First CI preflight now executes the extracted CURRENT driver function against an owned tiny Git blob/rev-parse fixture; AST-only success is insufficient. Controller requires its matching function hash and expected SHA before runtime/build work. No source commit is created by the smoke. See CAUSAL-GIT-REPAIR.json.
 
-New acknowledgement: native-icons-w5-nativegit-6bdc3018-v3. Current wrapper smoke and changed PS bytes are unexecuted locally (pwsh unavailable). The earlier AST8/runtime/bootstrap passes remain evidence for e1 only. No UI code verdict exists. Canonical bound review is unavailable in this child; supplied frozen delta/full actual assembled workflow must pass the parent's existing bound canonical P0-P3 review before any one newly authorized causal dispatch. No CLI bypass or fake canonical status is supplied.
+New acknowledgement: native-icons-w5-nativegit-one-6bdc3018-v4. Current wrapper smoke and changed PS bytes are unexecuted locally (pwsh unavailable). The earlier AST8/runtime/bootstrap passes remain evidence for e1 only. No UI code verdict exists. Canonical bound review is unavailable in this child; supplied frozen delta/full actual assembled workflow must pass the parent's existing bound canonical P0-P3 review before any one newly authorized causal dispatch. No CLI bypass or fake canonical status is supplied.
 
 # Windows provider artwork: complete narrow CI packet (prepared only)
 
@@ -12,7 +16,7 @@ This repair has not run CI, VM/cloud, source commit/push/PR, runtime installatio
 
 - workflow-input-choice.yml: merge only the new windows-provider-artwork choice into existing manual platform options, retaining all other parent choices and inputs.
 - workflow-job.yml: actual guarded jobs entry for the existing parent-owned manual workflow branch. Copy this packet under harness/windows-provider-artwork at the SAME immutable reviewed workflow commit. It uses qualified windows-2025, pinned checkout/setup-dotnet/upload actions, SDK 10.0.403, read-only contents permission, no secrets/deploy/release/merge action. No publication or dispatch occurs here. Its literal payload SHA binds payload-manifest.json.
-- Qualification acknowledgement: native-icons-w5-nativegit-6bdc3018-v3. This correlates the reviewed task, not independent runtime authority. Parent must separately authorize the run.
+- Qualification acknowledgement: native-icons-w5-nativegit-one-6bdc3018-v4. This correlates the reviewed task, not independent runtime authority. Parent must separately authorize the run.
 - source-pins.json/candidate-source.json and complete postimages/: seven-file candidate, all 2,090 source hashes, before/after bytes/blob IDs. baseline-capture.patch and baseline-postimages/: separately sealed test-file-only capture append on W4, production unchanged; baseline capture tree cf5d2abcd19544541f4f25de3023fd73804827b2.
 
 ## Execution chain and real first leaf

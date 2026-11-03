@@ -11,7 +11,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $PSNativeCommandUseErrorActionPreference=$true
-if (!$ExecutionAuthorized -or !$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:GITHUB_REF -cne 'refs/heads/roboclaw/local-ai-native-followups-20261102' -or $Qualification -cne 'native-icons-w5-nativegit-6bdc3018-v3') { throw 'Only the parent-authorized, reviewed manual Windows CI qualification is admitted.' }
+if (!$ExecutionAuthorized -or !$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:GITHUB_REF -cne 'refs/heads/roboclaw/local-ai-native-followups-20261102' -or $Qualification -cne 'native-icons-w5-nativegit-one-6bdc3018-v4') { throw 'Only the parent-authorized, reviewed manual Windows CI qualification is admitted.' }
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function Json($Value,[string]$Path) { ConvertTo-Json -InputObject $Value -Depth 16 | Set-Content -LiteralPath $Path -Encoding utf8NoBOM }
 $manifestPath=Join-Path $PSScriptRoot 'payload-manifest.json'

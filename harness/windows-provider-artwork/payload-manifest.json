@@ -1,6 +1,6 @@
 {
   "v": 1,
-  "name": "windows-provider-artwork-w5-nativegit",
+  "name": "windows-provider-artwork-nativegit-one",
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
   "candidateTree": "6bdc3018768492e101bb12ea603a067b4e2414bd",
   "baselineCaptureTree": "cf5d2abcd19544541f4f25de3023fd73804827b2",
@@ -54,8 +54,8 @@
     },
     {
       "path": "CAUSAL-GIT-REPAIR.json",
-      "bytes": 2370,
-      "sha256": "645a7515d8eb49447db6416d13e787219e70c0f46db601b9fac117c473ca61f9"
+      "bytes": 2713,
+      "sha256": "06e84d27bba77a9d62c1187b11e92323818a4b21141203d9badbb3d92416fe94"
     },
     {
       "path": "CONTROLLER-STATIC.json",
@@ -69,13 +69,13 @@
     },
     {
       "path": "Invoke-ProviderArtworkCI.ps1",
-      "bytes": 7640,
-      "sha256": "92f96a154ed19a9eeaa0a5ea4c24c64094e165fe2691d91c19ad9e777ca08c81"
+      "bytes": 7644,
+      "sha256": "effb19db5348ac0cebe6c92f4c5bcacacf934fc29e5876c54511f8f83364277d"
     },
     {
       "path": "Invoke-ProviderArtworkProof.ps1",
-      "bytes": 16152,
-      "sha256": "4920982a18bbab8fd38a612da5e0c4d155820f814b74b43b8292d7b363626d86"
+      "bytes": 16158,
+      "sha256": "23f8417ff46087e64486084f24c8b471336edcb4bbdfee08dbf21abd4813aa19"
     },
     {
       "path": "PROOF-PLAN.md",
@@ -99,8 +99,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 8355,
-      "sha256": "140948b4094f81e3e62dabfca50699cd51fd3933a8134e3f61ec0b749bc7ef24"
+      "bytes": 8751,
+      "sha256": "56c81079e1645a83b6e899cc0ed4d6cb4994cfd9d5097b755441d7e6e776d48c"
     },
     {
       "path": "REVIEW-RUNTIME2.md",
@@ -129,8 +129,8 @@
     },
     {
       "path": "Test-PacketSyntaxAndStage.ps1",
-      "bytes": 4539,
-      "sha256": "3fc18b1a93453f8c7e581375be194f8de0a1c98548f5ea076c4e2ad07e6fc92d"
+      "bytes": 4545,
+      "sha256": "9d39f26da301934b0d238bb1edf4d7376909c92f0c1f08700bc077aaf0574f5d"
     },
     {
       "path": "baseline-capture.patch",
@@ -194,8 +194,8 @@
     },
     {
       "path": "source-pins.json",
-      "bytes": 6773,
-      "sha256": "62bd742aa3d50ccf5e6bc89c4cf8dd670f9ecbc3145a19498102323cd3046a8c"
+      "bytes": 6749,
+      "sha256": "14488d27cfa6ff3909a26371acf9fbf02d7cbcb5c3167dad94a89d3d91ebfa60"
     }
   ]
 }

@@ -42,7 +42,7 @@ $gitFunctions=@($ast.FindAll({param($node)
 if ($gitFunctions.Count -ne 1) { throw 'Expected one current driver Git function.' }
 $functionText=$gitFunctions[0].Extent.Text
 $functionSha=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($functionText))).ToLowerInvariant()
-$application=Get-Command git -CommandType Application -ErrorAction Stop
+$application=@(Get-Command git -CommandType Application -ErrorAction Stop)[0]
 $tempRoot=if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
 $smokeRoot=Join-Path $tempRoot ('provider-artwork-native-git-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $smokeRoot | Out-Null
