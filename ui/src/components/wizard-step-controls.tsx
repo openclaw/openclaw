@@ -244,7 +244,7 @@ function TextForm(props: WizardStepControlsProps) {
   let form: HTMLFormElement | undefined;
   // Disabling the field while a reply is pending drops its focus to the page. When the reply
   // settles on this step (e.g. a validation rejection), give it back unless focus moved elsewhere.
-  createPendingFocus(() => props.busy === true, {
+  createPendingFocus(() => props.busy, {
     requested: (busy, wasBusy) => !busy && wasBusy === true,
     focus: () => {
       const input = form?.elements.namedItem("wizard-text");

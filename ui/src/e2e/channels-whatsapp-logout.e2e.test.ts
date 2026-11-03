@@ -359,14 +359,9 @@ suite.define(() => {
   });
 
   it("preserves standard channel details and the complete Telegram setup wizard", async () => {
-    const channelEntries = [
-      ["discord", "Discord"],
-      ["googlechat", "Google Chat"],
-      ["imessage", "iMessage"],
-      ["signal", "Signal"],
-      ["slack", "Slack"],
-      ["telegram", "Telegram"],
-    ] as const;
+    const channelEntries = "Discord|Google Chat|iMessage|Signal|Slack|Telegram"
+      .split("|")
+      .map((label) => [label.toLowerCase().replace(" ", ""), label] as const);
     const running = { configured: true, running: true };
     const details: Record<string, Record<string, unknown>> = {
       googlechat: {
@@ -386,6 +381,8 @@ suite.define(() => {
       status: "running",
       step: { id, type, ...values },
     });
+    const sessionId = "channel-standard-proof";
+    const tokenStep = step("token", "text", { message: "Telegram bot token", sensitive: true });
     await withChannels(
       {
         "channels.status": channelStatus(
@@ -400,7 +397,7 @@ suite.define(() => {
           },
         ),
         "wizard.start": {
-          sessionId: "channel-standard-proof",
+          sessionId,
           ...step("account", "select", {
             message: "Choose Telegram account",
             initialValue: "personal",
@@ -412,11 +409,8 @@ suite.define(() => {
         },
         "wizard.next": {
           sequence: [
-            step("token", "text", { message: "Telegram bot token", sensitive: true }),
-            {
-              ...step("token", "text", { message: "Telegram bot token", sensitive: true }),
-              error: "Token must not contain spaces",
-            },
+            tokenStep,
+            { ...tokenStep, error: "Token must not contain spaces" },
             step("features", "multiselect", {
               initialValue: ["alpha"],
               options: [
@@ -438,9 +432,7 @@ suite.define(() => {
         };
         for (const [channelId, label] of channelEntries) {
           const detail = await openChannel(page, label);
-          await expect
-            .poll(() => detail.locator("h2.settings-section__heading").textContent())
-            .toContain(label);
+          await detail.getByRole("heading", { name: label, exact: true }).waitFor();
           await detail.getByRole("button", { name: "Check connection" }).waitFor();
           for (const value of expectedFields[channelId] ?? []) {
             await detail.getByText(value, { exact: true }).waitFor();
@@ -456,16 +448,12 @@ suite.define(() => {
         const account = wizard.locator("openclaw-select-picker");
         await selectPickerValue(account, "1");
         await expectRequests(gateway, "wizard.next", 1);
-        await expect
-          .poll(() => account.locator(".picker-select__trigger").getAttribute("disabled"))
-          .not.toBeNull();
+        await expect.poll(() => account.locator(".picker-select__trigger").isDisabled()).toBe(true);
         const busyButton = wizard.locator('button[aria-busy="true"]');
         await expect.poll(() => busyButton.getAttribute("disabled")).not.toBeNull();
         await expect.poll(() => busyButton.locator(".btn__label").textContent()).toBe("Continue");
         await expect.poll(() => busyButton.locator(".btn__spinner").count()).toBe(1);
-        await expect
-          .poll(() => wizard.locator(".channels-wizard__spinner", { hasText: "Working…" }).count())
-          .toBe(0);
+        await expect.poll(() => wizard.locator(".channels-wizard__spinner").count()).toBe(0);
         await gateway.resolveDeferred("wizard.next");
 
         const token = wizard.getByLabel("Telegram bot token");
@@ -477,9 +465,7 @@ suite.define(() => {
         await gateway.resolveDeferred("wizard.next");
         await wizard.getByRole("alert").filter({ hasText: "must not contain spaces" }).waitFor();
         // The rejected field regains focus, so a keyboard correction needs no click.
-        await expect
-          .poll(() => token.evaluate((input) => input === document.activeElement))
-          .toBe(true);
+        await expect.poll(() => token.evaluate((input) => input.matches(":focus"))).toBe(true);
         await page.keyboard.press("ControlOrMeta+A");
         await page.keyboard.type("123456:proof-secret");
         await page.keyboard.press("Enter");
@@ -499,11 +485,8 @@ suite.define(() => {
           ["confirm", true],
         ] as const;
         expect((await gateway.getRequests("wizard.next")).map(({ params }) => params)).toEqual([
-          ...userAnswers.map(([stepId, value]) => ({
-            sessionId: "channel-standard-proof",
-            answer: { stepId, value },
-          })),
-          { sessionId: "channel-standard-proof" },
+          ...userAnswers.map(([stepId, value]) => ({ sessionId, answer: { stepId, value } })),
+          { sessionId },
         ]);
       },
       contextOptions,

@@ -1,2 +1,0 @@
-# Prove a rejected channel setup reply returns keyboard focus to its masked field in a real browser.
-16
