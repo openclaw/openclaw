@@ -1,4 +1,7 @@
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
+import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createGitHubIdentityStatusTool } from "./github-identity-status-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
@@ -58,7 +61,7 @@ describe("github_identity_status tool", () => {
     }));
     const tool = createGitHubIdentityStatusTool({
       callGateway: callGateway as InProcessGatewayCaller,
-      githubIdentitySettingsAvailable: true,
+      clientCaps: ["ui-agent-github-settings"],
     });
 
     const result = await withGatewayToolCallerIdentity(
@@ -67,5 +70,40 @@ describe("github_identity_status tool", () => {
     );
 
     expect(JSON.stringify(result)).toContain("github_identity_settings");
+
+    const screen = {
+      ...createStubTool("screen"),
+      parameters: Type.Object({
+        action: Type.Unsafe<string>({
+          type: "string",
+          enum: ["github_identity_settings", "status"],
+        }),
+      }),
+    };
+    for (const tools of [[tool], [tool, screen]]) {
+      finalizeAgentToolAvailability(tools, { toolExecutionAllow: ["github_identity_status"] });
+      const unavailable = await withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey: "agent:main:status" },
+        () => tool.execute("denied", {}),
+      );
+      expect(JSON.stringify(unavailable)).toContain("Ask the operator to open Settings");
+    }
+    finalizeAgentToolAvailability([tool, screen]);
+    const available = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:status" },
+      () => tool.execute("available", {}),
+    );
+    expect(JSON.stringify(available)).toContain("Use screen action github_identity_settings");
+    expect(tool.description).toContain("github_identity_settings");
+    finalizeAgentToolAvailability([
+      tool,
+      { ...screen, parameters: Type.Object({ action: Type.Literal("status") }) },
+    ]);
+    const unsupported = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:status" },
+      () => tool.execute("unsupported", {}),
+    );
+    expect(JSON.stringify(unsupported)).toContain("Ask the operator to open Settings");
+    expect(tool.description).not.toContain("github_identity_settings");
   });
 });

@@ -15,7 +15,7 @@ export function createGitHubTools(options: OpenClawToolsOptions | undefined): {
     tools: [
       options?.githubPublicationAvailable !== undefined
         ? createGitHubIdentityStatusTool({
-            githubIdentitySettingsAvailable: identitySettingsAvailable,
+            clientCaps: options?.clientCaps,
           })
         : null,
       options?.githubPublicationAvailable === true ? createGitHubPublishTool() : null,
