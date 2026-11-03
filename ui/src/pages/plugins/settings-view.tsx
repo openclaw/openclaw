@@ -118,6 +118,14 @@ function PluginConnectionAction(props: {
   const verb = () => CONNECTION_VERBS[props.kind][props.ready ? 1 : 0];
   return (
     <>
+      {props.ready ? (
+        <span class="plugin-connection-status" role="status">
+          <Icon name="check" />
+          {t(
+            props.kind === "Account" ? "pluginsPage.auth.connected" : "pluginsPage.auth.configured",
+          )}
+        </span>
+      ) : null}
       <button
         type="button"
         class="btn btn--sm oc-action oc-action-secondary"
@@ -127,14 +135,6 @@ function PluginConnectionAction(props: {
       >
         {t(`pluginsPage.auth.${verb()}`)}
       </button>
-      {props.ready ? (
-        <span class="plugin-connection-status" role="status">
-          <Icon name="check" />
-          {t(
-            props.kind === "Account" ? "pluginsPage.auth.connected" : "pluginsPage.auth.configured",
-          )}
-        </span>
-      ) : null}
     </>
   );
 }
@@ -238,7 +238,7 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
       ) : !plugin()?.installed ? (
         <SettingsPage carapace={true}>
           <a
-            class="btn btn--sm oc-action oc-action-secondary"
+            class="btn btn--sm oc-action oc-action-secondary plugins-settings-back"
             href={props.backHref}
             onClick={(event) => {
               event.preventDefault();

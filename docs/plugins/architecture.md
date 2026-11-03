@@ -298,6 +298,14 @@ rebuild first when the installation loads compiled output. Embedded executable c
 changes require a newly built executable. External on-disk plugins continue to
 capture updated source and dependencies on explicit reload.
 
+For development, `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS=1` lets an explicit reload
+capture a bundled plugin's own code: its package tree and the build chunks that
+`dist/runtime-dependency-ownership.json` lists for that plugin. Those chunks are used
+only by plugins, though other plugins may share them. Imports of host,
+SDK, and core-shared chunks resolve to the Gateway's loaded modules, including from
+captured Workers. Standalone executables ignore the variable. See
+[Development: reload edited bundled code](/cli/plugins/uninstall-and-update#development-reload-edited-bundled-code).
+
 WebAssembly libraries remain ordinary captured assets even when they use a `.so`
 filename. Directory asset references reuse an active capture walk; filesystem
 directory cycles still fail capture.
@@ -520,6 +528,12 @@ system-temporary instance and reports a warning. Normal disposal still removes
 that instance; automatic cleanup does not scan unrelated system-temporary roots.
 There is no total disk quota, and an active instance may legitimately exceed the
 one-hour cleanup grace period.
+Before allocating a capture or staging an installed source snapshot, OpenClaw
+checks the destination volume and refuses when less than 512 MiB is available.
+The error asks the operator to free space and retry. State-volume refusal keeps
+the existing temporary-volume fallback; setup preparation records source failure
+without stopping startup. Unavailable disk statistics keep best-effort loading.
+This preflight is a free-space floor, not a size reservation for an in-flight copy.
 If its payload directory is removed while the instance still holds custody, the
 next capture recreates that directory under the same lease. This does not restore
 previously deleted captured files or recreate a missing ownership directory.

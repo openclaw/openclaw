@@ -234,13 +234,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/about/view.tsx",
-      "text": "v"
-    },
-    {
-      "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/activity/session-activity-view.test-harness.ts",
@@ -413,13 +406,6 @@
       "name": "text",
       "path": "ui/src/pages/debug/debug-page.tsx",
       "text": "openclaw security audit --deep"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/devices/view-exec-approvals.tsx",
-      "text": "exec host=gateway/node"
     },
     {
       "count": 1,

@@ -228,7 +228,7 @@ function BilledCost(props: { history: CostHistory }) {
       <div class="provider-usage__trend">
         <StepSparkline
           values={props.history.daily.map((day) => day.amount)}
-          color="var(--oc-accent)"
+          color="var(--oc-accent-secondary)"
           label={t("usage.providerUsage.dailyCost")}
         />
         <small>
