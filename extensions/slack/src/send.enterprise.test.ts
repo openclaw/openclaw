@@ -194,42 +194,52 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     });
   });
 
-  it("preserves account unfurl overrides when a block send falls back from custom identity", async () => {
-    const postMessage = client.chat.postMessage;
-    postMessage
-      .mockRejectedValueOnce(
-        Object.assign(new Error("missing_scope"), {
-          data: { error: "missing_scope", needed: "chat:write.customize" },
-        }),
-      )
-      .mockResolvedValue(postResult());
-    await sendMessageSlack("channel:C123", "https://example.com", {
-      token: "xoxb-test",
-      accountId: "work",
-      client,
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-root",
-            unfurlLinks: false,
-            unfurlMedia: true,
-            accounts: { work: { unfurlLinks: true, unfurlMedia: false } },
+  it.each(["explicit blocks", "Markdown list"])(
+    "preserves account unfurl overrides when %s falls back from custom identity",
+    async (content) => {
+      const postMessage = client.chat.postMessage;
+      postMessage
+        .mockRejectedValueOnce(
+          Object.assign(new Error("missing_scope"), {
+            data: { error: "missing_scope", needed: "chat:write.customize" },
+          }),
+        )
+        .mockResolvedValue(postResult());
+      await sendMessageSlack(
+        "channel:C123",
+        content === "Markdown list" ? "- [Example](https://example.com)" : "https://example.com",
+        {
+          token: "xoxb-test",
+          accountId: "work",
+          client,
+          cfg: {
+            channels: {
+              slack: {
+                botToken: "xoxb-root",
+                unfurlLinks: false,
+                unfurlMedia: true,
+                accounts: { work: { unfurlLinks: true, unfurlMedia: false } },
+              },
+            },
           },
+          ...(content === "explicit blocks" ? { blocks: [{ type: "divider" }] } : {}),
+          identity: { username: "OpenClaw" },
         },
-      },
-      blocks: [{ type: "divider" }],
-      identity: { username: "OpenClaw" },
-    });
-    expect(postMessage).toHaveBeenCalledTimes(2);
-    for (const [payload] of postMessage.mock.calls) {
-      expect(payload).toMatchObject({
-        blocks: [{ type: "divider" }],
-        unfurl_links: true,
-        unfurl_media: false,
-      });
-    }
-    expect(postMessage.mock.calls[1]?.[0]).not.toHaveProperty("username");
-  });
+      );
+      expect(postMessage).toHaveBeenCalledTimes(2);
+      for (const [payload] of postMessage.mock.calls) {
+        expect(payload).toMatchObject({
+          blocks:
+            content === "explicit blocks"
+              ? [{ type: "divider" }]
+              : [expect.objectContaining({ type: "rich_text" })],
+          unfurl_links: true,
+          unfurl_media: false,
+        });
+      }
+      expect(postMessage.mock.calls[1]?.[0]).not.toHaveProperty("username");
+    },
+  );
 
   it("caps Enterprise finalization text at Slack's UTF-8 edit limit", async () => {
     const update = vi.fn(async (_payload: { text: string }) => ({ ok: true }));

@@ -120,7 +120,7 @@ it("stops a revoked direct send after the per-target queue", async () => {
       await started.promise;
       let live = true;
       const options = directOptions(cfg, () => live);
-      const secondError = sendMessageSlack("channel:C123", "second", options).catch(
+      const secondError = sendMessageSlack("channel:C123", "- **Queued list**", options).catch(
         (error: unknown) => error,
       );
       live = false;
