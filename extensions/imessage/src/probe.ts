@@ -63,18 +63,18 @@ function cacheIMessagePrivateApiStatus(
   setCachedIMessagePrivateApiStatus(
     cliPath,
     status,
-    status.available ? 0 : Date.now() + PRIVATE_API_NEGATIVE_TTL_MS,
+    status.available ? 0 : performance.now() + PRIVATE_API_NEGATIVE_TTL_MS,
   );
 }
 
 function setCachedRpcSupport(cliPath: string, result: RpcSupportResult): void {
-  rpcSupportCache.set(cliPath, { result, expiresAt: Date.now() + RPC_SUPPORT_CACHE_TTL_MS });
+  rpcSupportCache.set(cliPath, { result, expiresAt: performance.now() + RPC_SUPPORT_CACHE_TTL_MS });
 }
 
 async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcSupportResult> {
   const cached = rpcSupportCache.get(cliPath);
   if (cached) {
-    if (cached.expiresAt > Date.now()) {
+    if (cached.expiresAt > performance.now()) {
       return cached.result;
     }
     rpcSupportCache.delete(cliPath);

@@ -64,7 +64,7 @@ export function getCachedIMessagePrivateApiStatus(
   if (entry.expiresAt === 0) {
     return entry.status;
   }
-  if (entry.expiresAt <= Date.now()) {
+  if (entry.expiresAt <= performance.now()) {
     bridgeStatusCache.delete(key);
     return undefined;
   }
