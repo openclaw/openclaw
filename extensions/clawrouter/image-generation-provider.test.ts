@@ -35,6 +35,15 @@ function catalog(model = MODEL) {
     providers: [
       {
         id: "openai",
+        routes: [
+          {
+            endpoint: "images_generations",
+            methods: ["POST"],
+            path: "/v1/images/generations",
+            requestFormat: "openai.images_generations",
+            responseFormat: "openai.images_generations",
+          },
+        ],
         allowed: true,
         executable: true,
         models: [

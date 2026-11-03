@@ -15,6 +15,15 @@ eligible unified HTTP offer for that exact model and endpoint. Its `/v1` base is
 not a native proxy prefix. Playground, denied, and unrelated offers cannot enable
 the route. The service still checks current policy and compound budgets at dispatch.
 
+Capability discovery joins eligible HTTP offers from the selected key's catalog
+to the provider's declared endpoint formats. Native and manifest routes stay on
+the configured router origin; model-less offers are valid for operations such as
+search. A missing format, unsupported transport, playground offer, or unlisted
+model is not executable. Consumers still implement only their known wire formats.
+Discovery refreshes for each operation, shares its resolved credential with
+dispatch, and uses a bounded, cancellable guarded request without upstream-key
+fallback. Image generation uses this resolver; other consumers migrate separately.
+
 When `models.providers.clawrouter` is configured, the bundled plugin adds
 **ClawRouter** to the Control UI sidebar. Its read-only pool dashboard shows
 subscription quota windows, account and plan details, model eligibility,
