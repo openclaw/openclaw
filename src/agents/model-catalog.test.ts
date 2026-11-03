@@ -358,7 +358,10 @@ it.each([
     ]);
     const snapshot = await build({
       metadataSnapshot: providerManifestSnapshot("demo", "runtime", []),
-      providerOutcomes: [{ provider, status, listedModelIds: ["listed", "chat"] }],
+      providerOutcomes: [
+        { provider: "demo", status: "unavailable" },
+        { provider, status, listedModelIds: ["listed", "chat"] },
+      ],
       readOnly: false,
     });
     expect(snapshot.entries.filter((entry) => entry.provider === "demo")).toEqual(

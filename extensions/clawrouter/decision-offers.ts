@@ -69,7 +69,11 @@ export async function listClawRouterDecisionModels(
     return [];
   }
   const http = resolveClawRouterCapabilityHttpContext(context.config, apiKey);
-  const offers = await fetchClawRouterCapabilityOffers({ context: http, timeoutMs: () => 5_000 });
+  const offers = await fetchClawRouterCapabilityOffers({
+    context: http,
+    timeoutMs: () => 5_000,
+    allowLegacyCatalog: true,
+  });
   return offers.flatMap((offer) => {
     const qualified = readLiquidDecisionOffer(offer);
     if (!qualified) {

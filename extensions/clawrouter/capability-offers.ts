@@ -180,6 +180,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
   timeoutMs: () => number;
   signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
+  allowLegacyCatalog?: boolean;
 }): Promise<ClawRouterCapabilityOffer[]> {
   params.signal?.throwIfAborted();
   const remaining = createProviderOperationTimeoutResolver({
@@ -217,6 +218,16 @@ export async function fetchClawRouterCapabilityOffers(params: {
     });
     remaining();
     params.signal?.throwIfAborted();
+    const catalog = asOptionalRecord(body);
+    // Optional discovery must preserve older chat catalogs, without granting any
+    // native capability until the versioned offer contract is present.
+    if (
+      params.allowLegacyCatalog &&
+      catalog?.version === undefined &&
+      Array.isArray(catalog?.providers)
+    ) {
+      return [];
+    }
     return readClawRouterCapabilityOffers(body, context.baseUrl);
   } finally {
     void response.body?.cancel().catch(() => undefined);

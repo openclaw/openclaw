@@ -349,8 +349,14 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
       expect(await readFile(state.configPath, "utf8")).toBe(settingsBefore);
       expect(fetched).toEqual([
         "Bearer synthetic-granted",
+        "Bearer synthetic-granted",
+        "Bearer synthetic-decisions-only",
         "Bearer synthetic-decisions-only",
         "Bearer synthetic-incompatible",
+        "Bearer synthetic-incompatible",
+        "Bearer synthetic-granted",
+        "Bearer synthetic-granted",
+        "Bearer synthetic-granted",
       ]);
     },
   );
