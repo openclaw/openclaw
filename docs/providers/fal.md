@@ -78,7 +78,9 @@ route to a per-model edit endpoint with per-model reference limits:
 | Krea 2                    | `krea/v2/{medium,large}/text-to-image`                | none (style refs) | 10 style references  |
 
 <Warning>
-Flux image-to-image requests do **not** support `aspectRatio` overrides. GPT
+FLUX dev image-to-image requests reject `size`, `aspectRatio`, and `resolution`
+overrides; the edit endpoint has no `image_size` field. Text-to-image geometry
+remains supported. GPT
 Image and Nano Banana 2 edit requests use fal's `/edit` endpoint and accept
 aspect-ratio hints. Nano Banana 2 also accepts extra-native wide/tall ratios
 such as `4:1`, `1:4`, `8:1`, and `1:8`; Krea 2 validates its own smaller
@@ -277,7 +279,7 @@ shared `music_generate` tool.
 | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | Default model | `fal/fal-ai/minimax-music/v2.6`                                                                                          |
 | Models        | `fal-ai/minimax-music/v2.6` (mp3), `fal-ai/ace-step/prompt-to-audio` (wav), `fal-ai/stable-audio-25/text-to-audio` (wav) |
-| Max duration  | 240 seconds                                                                                                              |
+| Duration      | MiniMax: automatic; ACE-Step: 5–240 seconds; Stable Audio: integer seconds from 1–190                                    |
 | Runtime       | Synchronous request plus generated audio download                                                                        |
 
 Use fal as the default music provider:
@@ -301,6 +303,11 @@ but not both in the same request. ACE-Step and Stable Audio are
 prompt-to-audio endpoints; choose them with the `model` override when you want
 those model families. ACE-Step rejects explicit lyrics; Stable Audio rejects
 both lyrics and instrumental mode.
+
+MiniMax Music 2.6 rejects `durationSeconds`; fal does not document a duration
+input for that endpoint. Stable Audio rejects fractional durations and values
+outside 1–190 seconds. ACE-Step accepts fractional seconds from 5–240. These
+constraints are checked before submission, without rounding or clamping.
 
 <Tip>
 The tables and accordions above cover the model families the bundled fal

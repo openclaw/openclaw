@@ -38,6 +38,20 @@ worker, storage, or embedding provider must satisfy. Part of the
 | `api.registerWebSearchProvider(...)`             | Web search                                                                        |
 | `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                           |
 
+Music generation mode capabilities can declare `durationConstraintsByModel`:
+`false` rejects an explicit duration; `{ minSeconds, maxSeconds, integer? }`
+requires an exact value within inclusive bounds. The runtime preserves accepted
+values instead of rounding or clamping them. Models without an entry keep the
+existing normalization behavior. Providers can use
+`validateMusicGenerationDuration` from `openclaw/plugin-sdk/music-generation`
+to enforce the same constraint for direct calls before network I/O; its return
+value indicates whether the model has an exact constraint.
+
+Image generation mode capabilities can set `supportsGeometryByModel[model]` to
+`false` to reject explicit size, aspect-ratio, and resolution overrides before
+normalization. The runtime also omits inferred resolution for those models.
+Other models retain the mode's existing geometry behavior.
+
 Transcript source providers that share an account namespace with an inbound
 channel declare an `accountOwnership` descriptor with that channel id and a
 shared account resolver. OpenClaw then

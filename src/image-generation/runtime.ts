@@ -121,8 +121,21 @@ async function runImageGeneration(
         const modeCapabilities = params.inputImages?.length
           ? provider.capabilities.edit
           : provider.capabilities.generate;
+        const supportsGeometry = modeCapabilities.supportsGeometryByModel?.[candidate.model];
+        if (
+          supportsGeometry === false &&
+          (params.size !== undefined ||
+            params.aspectRatio !== undefined ||
+            params.resolution !== undefined)
+        ) {
+          throw new Error(
+            `${candidate.model} does not support size, aspectRatio, or resolution overrides.`,
+          );
+        }
         const inferredResolution =
-          modeCapabilities.supportsResolution === false || modelResolutions?.length === 0
+          supportsGeometry === false ||
+          modeCapabilities.supportsResolution === false ||
+          modelResolutions?.length === 0
             ? undefined
             : params.inferredResolution;
         const geometry = provider.capabilities.geometry;

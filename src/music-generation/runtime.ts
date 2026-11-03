@@ -14,7 +14,10 @@ import {
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
 import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
-import { resolveMusicGenerationModeCapabilities } from "./capabilities.js";
+import {
+  resolveMusicGenerationModeCapabilities,
+  validateMusicGenerationDuration,
+} from "./capabilities.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 import type {
   MusicGenerationIgnoredOverride,
@@ -98,10 +101,15 @@ async function runMusicGeneration(
             ignoredOverrides.push({ key: "instrumental", value: instrumental });
             instrumental = undefined;
           }
-          if (typeof durationSeconds === "number" && !caps.supportsDuration) {
+          const exactDuration = validateMusicGenerationDuration({
+            capabilities: caps,
+            model: candidate.model,
+            durationSeconds,
+          });
+          if (!exactDuration && typeof durationSeconds === "number" && !caps.supportsDuration) {
             ignoredOverrides.push({ key: "durationSeconds", value: durationSeconds });
             durationSeconds = undefined;
-          } else if (typeof durationSeconds === "number") {
+          } else if (!exactDuration && typeof durationSeconds === "number") {
             const normalizedDurationSeconds = normalizeDurationToClosestMax(
               durationSeconds,
               caps.maxDurationSeconds,

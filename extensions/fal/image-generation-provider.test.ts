@@ -392,16 +392,79 @@ describe("fal image-generation provider", () => {
   it("uses image-to-image endpoint and data-uri input for edits", async () => {
     await expectImageRequest(
       {
-        resolution: "2K",
         inputImages: [sourceImage("source-image", "image/jpeg", "source.jpg")],
       },
       "https://fal.run/fal-ai/flux/dev/image-to-image",
       {
-        image_size: { width: 2048, height: 2048 },
         image_url: `data:image/jpeg;base64,${Buffer.from("source-image").toString("base64")}`,
       },
     );
   });
+
+  it.each(["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"])(
+    "rejects explicit geometry through the real image runtime for %s edits",
+    async (model) => {
+      for (const geometry of [
+        { size: "1024x1024" },
+        { aspectRatio: "16:9" },
+        { resolution: "2K" as const },
+      ]) {
+        await expect(
+          generateImage(
+            {
+              cfg: {},
+              prompt: "edit",
+              modelOverride: `fal/${model}`,
+              autoProviderFallback: false,
+              inputImages: [sourceImage("source")],
+              ...geometry,
+            },
+            { getProvider: () => provider, listProviders: () => [provider] },
+          ),
+        ).rejects.toThrow("does not support size, aspectRatio, or resolution overrides");
+      }
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not turn inferred FLUX edit resolution into upstream geometry", async () => {
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(releasedJson({ images: [{ url: "https://v3.fal.media/out.png" }] }))
+      .mockResolvedValueOnce(releasedImage(Buffer.from("png-data")));
+    await generateImage(
+      {
+        cfg: {},
+        prompt: "edit",
+        modelOverride: "fal/fal-ai/flux/dev",
+        inferredResolution: "4K",
+        inputImages: [sourceImage("source")],
+      },
+      { getProvider: () => provider, listProviders: () => [provider] },
+    );
+    expectFalJsonPost({
+      url: "https://fal.run/fal-ai/flux/dev/image-to-image",
+      body: {
+        prompt: "edit",
+        num_images: 1,
+        output_format: "png",
+        image_url: `data:image/png;base64,${Buffer.from("source").toString("base64")}`,
+      },
+    });
+  });
+
+  it.each([{ size: "auto" }, { resolution: "2K" as const }, { aspectRatio: "16:9" }])(
+    "rejects direct FLUX edit geometry %j before I/O",
+    async (geometry) => {
+      await expect(
+        provider.generateImage({
+          ...defaultRequest,
+          inputImages: [sourceImage("source")],
+          ...geometry,
+        }),
+      ).rejects.toThrow("does not support size, aspectRatio, or resolution overrides");
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("routes 10 GPT Image 2 references through /edit with image_urls", async () => {
     const inputImages = Array.from({ length: 10 }, (_, index) =>
