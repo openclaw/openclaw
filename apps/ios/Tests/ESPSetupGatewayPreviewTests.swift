@@ -19,13 +19,21 @@ struct ESPSetupGatewayPreviewTests {
             options.deviceAuthGatewayID = stableID
             let url = try #require(URL(string: "wss://gateway.example.com:443/openclaw"))
             model.activeGatewayConnectConfig = GatewayConnectConfig(
-                url: url, stableID: stableID, tls: nil, token: nil,
-                bootstrapToken: nil, password: nil, nodeOptions: options)
+                url: url,
+                stableID: stableID,
+                tls: nil,
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: options)
             let identity = DeviceIdentityStore.loadOrCreate()
             #expect(DeviceAuthStore.storeTokenPersisted(
-                deviceId: identity.deviceId, role: "operator", token: "fixture-operator-token",
-                scopes: ["operator.admin"], gatewayID: stableID))
-            let code = #"{"url":"wss://gateway.example.com:443/openclaw","urls":["ws://fallback.example.com:18789"],"bootstrapToken":"fixture-device-bootstrap"}"#
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: "fixture-operator-token",
+                scopes: ["operator.admin"],
+                gatewayID: stableID))
+            let code = #"{"url":"wss://gateway.example.com:443/openclaw","urls":["wss://fallback.example.com:18789"],"bootstrapToken":"fixture-device-bootstrap"}"#
             let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
                 guard GatewayWebSocketTestSupport.requestMethod(from: message) == "device.pair.setupCode"
                 else { return }
@@ -42,9 +50,12 @@ struct ESPSetupGatewayPreviewTests {
                 socket.emitReceiveSuccess(.data(reply))
             })
             try await model.operatorSession.connect(
-                url: url, credentials: .init(), connectOptions: options,
+                url: url,
+                credentials: .init(),
+                connectOptions: options,
                 sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
-                onConnected: {}, onDisconnected: { _ in },
+                onConnected: {},
+                onDisconnected: { _ in },
                 onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
             model.setOperatorConnected(true)
             let route = try #require(await model.operatorSession.currentRoute())
@@ -55,7 +66,7 @@ struct ESPSetupGatewayPreviewTests {
             } else {
                 let preview = try await ESPSetupGatewayPreview.prepare(appModel: model)
                 #expect(preview.link.connectionEndpoints.compactMap(\.websocketURL).map(\.absoluteString) == [
-                    "wss://gateway.example.com:443/openclaw", "ws://fallback.example.com:18789",
+                    "wss://gateway.example.com:443/openclaw", "wss://fallback.example.com:18789",
                 ])
                 try await preview.authorize(appModel: model)
                 DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "operator", gatewayID: stableID)
