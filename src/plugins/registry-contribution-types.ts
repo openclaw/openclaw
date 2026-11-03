@@ -95,9 +95,6 @@ export type MemoryPromptSectionParams = {
 
 export type MemoryPromptSectionBuilder = (params: MemoryPromptSectionParams) => string[];
 
-/** Provider-owned /learn guidance for the tools tool policy leaves this turn; [] when it cannot learn. */
-export type MemoryLearnGuidanceBuilder = (params: { availableTools: Set<string> }) => string[];
-
 export type MemoryPromptSectionPreparer = (
   params: MemoryPromptSectionParams,
 ) => Promise<readonly string[]>;
@@ -338,10 +335,74 @@ export type MemoryPluginCapability = {
   deterministicRecallToolName?: string;
   /** Whether recall may read protected same-agent private session transcripts. */
   supportsPrivateTranscriptRecall?: boolean;
+};
+
+/**
+ * What a /learn contribution writes. The host owns routing between media, so a medium is
+ * host vocabulary: "memory" is reserved for the selected memory slot owner.
+ */
+export type LearnMedium = "skills" | "memory";
+
+export type LearnGuidance = {
+  /** Lines for the /learn prompt body. */
+  lines: readonly string[];
+  /** Reference blocks the host appends after the closing instruction, each after a blank line. */
+  appendix?: readonly string[];
+};
+
+export type LearnSubcommandContext = {
+  /** Text after the subcommand name. */
+  args: string;
+  config: OpenClawConfig;
+  agentId: string;
+  sessionKey?: string;
+  /** Revalidates admitted owner authority; call it after awaited work, before effects. */
+  assertOwnerCurrent?: () => void;
+};
+
+/** A reply without a model turn, or the prompt that replaces this turn's user message. */
+export type LearnSubcommandResult = { text: string } | { prompt: string };
+
+export type LearnSubcommand = {
+  /** The word after /learn, matched case-insensitively. */
+  name: string;
+  /**
+   * Whether the raw text after the name, separator included, selects the subcommand;
+   * other text stays a learning request. The handler gets the arguments without the separator.
+   */
+  matchArgs?: (args: string) => boolean;
+  /**
+   * Changes state without a model turn: only owners may run it, gateway clients need
+   * operator.admin, and it runs even when the contribution's tools are unavailable.
+   * Other subcommands run only when the contribution can learn on this turn.
+   */
+  direct?: boolean;
+  handle: (
+    context: LearnSubcommandContext,
+  ) => LearnSubcommandResult | Promise<LearnSubcommandResult>;
+};
+
+export type LearnContribution = {
+  medium: LearnMedium;
   /** Tools a /learn turn may use to persist lessons; the host checks them against tool policy. */
-  learnToolNames?: readonly string[];
-  /** Guidance appended to /learn when some learnToolNames are available. */
-  learnGuidanceBuilder?: MemoryLearnGuidanceBuilder;
+  toolNames: readonly string[];
+  /** Tools that must all be allowed for this contribution to learn; default: any of toolNames. */
+  requiredToolNames?: readonly string[];
+  /**
+   * Builds this contribution's /learn guidance from the allowed tools and the media that
+   * learn on this turn, including this one. It must be deterministic: it is prompt text.
+   */
+  buildGuidance: (params: {
+    availableTools: Set<string>;
+    media: ReadonlySet<LearnMedium>;
+  }) => LearnGuidance;
+  /** Words after /learn that this contribution handles instead of a learning request. */
+  subcommands?: readonly LearnSubcommand[];
+};
+
+export type LearnContributionRegistration = {
+  pluginId: string;
+  contribution: LearnContribution;
 };
 
 export type MemoryPluginCapabilityRegistration = {

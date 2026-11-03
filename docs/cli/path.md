@@ -221,6 +221,11 @@ For JSONL, `**` can span both the physical line and nested value keys:
 text plus a `leafType` so plugin authors can render previews without
 depending on the per-kind AST shape.
 
+Markdown frontmatter string reads decode YAML quoting and inline comments:
+`key: value # note` resolves to `value`. A quoted `#` or adjacent hash such as
+`a#b` remains part of the string, and non-string scalar spelling such as
+`00123` is preserved. Reads leave the source bytes unchanged.
+
 ## Mutation contract
 
 `set` writes one concrete target:

@@ -16,12 +16,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -293,12 +293,7 @@ try {
     }
     global.gc?.();
     if (values.mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 4096,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 4096);
     }
     const warm = [];
     for (let i = 0; i < iterations; i++) {
@@ -307,9 +302,7 @@ try {
     let allocatedBytes: number | undefined;
     if (values.mode === "allocation") {
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
-      const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-        node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
-      allocatedBytes = sum(profile.head);
+      allocatedBytes = sumSampledHeapBytes(profile.head);
       inspector.disconnect();
     }
     console.log(
