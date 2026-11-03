@@ -3,12 +3,16 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, expect, it } from "vitest";
+import { applyMergePatch } from "../../../src/config/merge-patch.ts";
 import { loadPluginManifest, PLUGIN_MANIFEST_FILENAME } from "../../../src/plugins/manifest.ts";
 import { resolveBundledPluginPublicModulePath } from "../../../src/test-utils/bundled-plugin-public-surface.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
-import { createSettingsPageOptions } from "./config-composer-fixtures.test-support.ts";
+import {
+  createSettingsPageOptions,
+  objectSchema,
+} from "./config-composer-fixtures.test-support.ts";
 import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
@@ -322,18 +326,19 @@ suite.define(() => {
         throw new Error(`Expected credential UI hints for ${pluginId}`);
       }
       await suite.withPage(createSettingsPageOptions(), async ({ page }) => {
-        const credentialConfig = {
-          ...config,
-          plugins: {
-            ...config.plugins,
-            entries: {
-              ...config.plugins.entries,
-              [manifest.id]: { enabled: true, config: pluginConfig },
-            },
-          },
-        };
+        const credentialConfig = structuredClone(config);
+        Object.assign(credentialConfig.plugins.entries, {
+          [manifest.id]: { enabled: true, config: pluginConfig },
+        });
+        const configSnapshot = (value: unknown, hash = configMocks["config.get"].hash) => ({
+          ...configMocks["config.get"],
+          config: value,
+          raw: JSON.stringify(value),
+          hash,
+          appliedConfigHash: hash,
+        });
         const gateway = await installMockGateway(page, {
-          featureMethods: pluginMethods,
+          featureMethods: [...pluginMethods, "config.patch"],
           operatorScopes: readOnly ? ["operator.read"] : ["operator.read", "operator.admin"],
           methodResponses: {
             ...pluginResponses(),
@@ -357,32 +362,16 @@ suite.define(() => {
               source: { kind: "npm", packageName: `@openclaw/${manifest.id}` },
               plugin: { ...inspection.plugin, id: manifest.id, name, origin: "bundled" },
             },
-            "config.get": {
-              ...configMocks["config.get"],
-              config: credentialConfig,
-              raw: JSON.stringify(credentialConfig),
-            },
+            "config.get": configSnapshot(credentialConfig),
             "config.schema": {
               ...configMocks["config.schema"],
-              schema: {
-                type: "object",
-                properties: {
-                  plugins: {
-                    type: "object",
-                    properties: {
-                      entries: {
-                        type: "object",
-                        properties: {
-                          [manifest.id]: {
-                            type: "object",
-                            properties: { config: manifest.configSchema },
-                          },
-                        },
-                      },
-                    },
-                  },
-                },
-              },
+              schema: objectSchema("", {
+                plugins: objectSchema("", {
+                  entries: objectSchema("", {
+                    [manifest.id]: objectSchema("", { config: manifest.configSchema }),
+                  }),
+                }),
+              }),
               uiHints: Object.fromEntries(
                 Object.entries(uiHints).map(([key, hint]) => [
                   `plugins.entries.${manifest.id}.config.${key}`,
@@ -417,33 +406,44 @@ suite.define(() => {
         if (readOnly) {
           expect(await reference.isDisabled()).toBe(true);
           expect(await gateway.getRequests("config.set")).toHaveLength(0);
+          expect(await gateway.getRequests("config.patch")).toHaveLength(0);
           return;
         }
-        await apiKey.pressSequentially("synthetic-credential", { delay: 30 });
-        expect(await apiKey.inputValue()).toBe("synthetic-credential");
+        const newKey = "synthetic-credential";
+        await apiKey.pressSequentially(newKey, { delay: 30 });
+        expect(await apiKey.inputValue()).toBe(newKey);
         expect(await apiKey.getAttribute("type")).toBe("password");
-        await apiKey.press("Tab");
-        const save = await gateway.waitForRequest("config.set");
-        expect(JSON.parse(String(asRecord(save.params).raw))).toEqual({
-          ...credentialConfig,
+        const saveAction = page
+          .locator(".plugin-editor__row")
+          .filter({ has: apiKey })
+          .getByRole("button", { name: /^Save:/u });
+        await gateway.deferNext("config.patch");
+        await saveAction.click();
+        const save = await gateway.waitForRequest("config.patch");
+        const patch = JSON.parse(String(asRecord(save.params).raw));
+        expect(patch).toEqual({
           plugins: {
-            ...credentialConfig.plugins,
             entries: {
-              ...credentialConfig.plugins.entries,
-              [manifest.id]: {
-                enabled: true,
-                config: {
-                  ...pluginConfig,
-                  [section]: { ...pluginConfig[section], apiKey: "synthetic-credential" },
-                },
-              },
+              [manifest.id]: { config: { [section]: { apiKey: newKey } } },
             },
           },
         });
-        await page.getByRole("button", { name: "Apply changes", exact: true }).waitFor();
+        const persisted = applyMergePatch(credentialConfig, patch);
+        const expectedConfig = structuredClone(credentialConfig);
+        Object.assign(expectedConfig.plugins.entries, {
+          [manifest.id]: {
+            enabled: true,
+            config: { ...pluginConfig, [section]: { ...pluginConfig[section], apiKey: newKey } },
+          },
+        });
+        expect(persisted).toEqual(expectedConfig);
+        const savedSnapshot = configSnapshot(persisted, "credential-saved");
+        await gateway.setMethodResponse("config.get", savedSnapshot);
+        await gateway.resolveDeferred("config.patch", { ok: true, ...savedSnapshot });
+        await expect.poll(() => saveAction.count()).toBe(0);
         await page.reload();
         await gateway.waitForRequest("config.get");
-        await expect.poll(() => apiKey.inputValue()).toBe("synthetic-credential");
+        await expect.poll(() => apiKey.inputValue()).toBe(newKey);
         expect(await reference.inputValue()).toBe("");
         expect(await reference.getAttribute("readonly")).not.toBeNull();
         if (captureUiProof) {
