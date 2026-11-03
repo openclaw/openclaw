@@ -11,7 +11,6 @@ import { resolveWidgetPresenters } from "../plugins/widget-presenters.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import { resolveSkillWorkshopToolConstructionBlock } from "../skills/workshop/tool-availability.js";
 import { hasMultipleSessionSharingIdentitiesNative } from "../state/user-profile-list.native.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { hasConfiguredWebSearchProvider } from "../web-search/runtime.js";
@@ -89,6 +88,7 @@ import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
+import { createSkillLibraryTool } from "./tools/skill-library-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
@@ -588,19 +588,18 @@ function* createOpenClawToolsSteps(
     ...[createGetGoalTool, createCreateGoalTool, createUpdateGoalTool].map((createTool) =>
       createTool({ ...options, sessionAgentId }),
     ),
-    resolveSkillWorkshopToolConstructionBlock({
-      sandboxed: options?.sandboxed,
-      libraryAuthoring: options?.skillWorkshop?.libraryAuthoring,
-    }) || !resolvedConfig
-      ? null
-      : createConfiguredSkillWorkshopTool({
+    resolvedConfig
+      ? createConfiguredSkillWorkshopTool({
           config: resolvedConfig,
           agentId: sessionAgentId,
           sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
           runId: options?.runId,
           run: options?.skillWorkshop,
+          libraryAuthoring: options?.skillLibraryAuthoring,
           sandboxed: options?.sandboxed,
-        }),
+        })
+      : null,
+    options?.skillLibraryAuthoring ? createSkillLibraryTool(options.skillLibraryAuthoring) : null,
     progressCardTool,
     ...swarmToolGroups.structuredOutput,
     ...(

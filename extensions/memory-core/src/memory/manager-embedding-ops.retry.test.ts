@@ -275,6 +275,36 @@ describe("memory embedding query retry cancellation", () => {
 describe.each(["text", "structured"])("memory embedding batch retry boundary (%s)", (kind) => {
   const batchInputs = (texts: string[]) =>
     kind === "text" ? texts : texts.map((text) => ({ text }));
+  it("recovers a watchdog timeout through smaller requests in input order", async () => {
+    vi.useFakeTimers();
+    const aborted: number[] = [];
+    const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs, options) => {
+      if (inputs.length > 1) {
+        return await new Promise<number[][]>((_, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            aborted.push(inputs.length);
+            reject(new Error("embedding request aborted"));
+          });
+        });
+      }
+      return inputs.map((input) => [Number(typeof input === "string" ? input : input.text)]);
+    });
+    const manager = createEmbeddingBatchRetryHarness(embedBatch);
+    const pending = manager.embedBatchWithRetry(batchInputs(["0", "1", "2"]));
+    const result = expect(pending).resolves.toEqual([[0], [1], [2]]);
+    void result.catch(() => {});
+    try {
+      await vi.runAllTimersAsync();
+      await result;
+      expect(aborted).toEqual([3, 2]);
+      expect(embedBatch.mock.calls.map(([inputs]) => inputs.length)).toEqual([3, 2, 1, 1, 1]);
+      expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
+      expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("splits a provider row-cap error without retrying oversized requests", async () => {
     const items = Array.from({ length: 33 }, (_, index) => `item-${index}`);
     const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) => {

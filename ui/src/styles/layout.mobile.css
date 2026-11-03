@@ -289,7 +289,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     inset: var(--safe-area-top) var(--safe-area-right) auto var(--safe-area-left);
     display: block;
     min-height: 0;
-    padding: 8px 16px 0;
+    padding: 8px 12px 0;
     border-bottom: 0;
     background: none;
     backdrop-filter: none;
@@ -316,7 +316,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     /* Equal sides center the title; their floors keep it clear of the pill,
        so a long title truncates instead of colliding. */
     grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(max-content, 1fr);
-    gap: 8px;
+    gap: 6px;
     min-height: var(--floating-header-control);
   }
 
@@ -641,7 +641,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .log-stream {
-    border-radius: var(--radius-md);
     max-height: 380px;
   }
 
@@ -666,19 +665,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     flex: none;
     min-height: 200px;
     max-height: 380px;
-  }
-
-  .log-row {
-    grid-template-columns: 1fr;
-    gap: 4px;
-    padding: 8px;
-  }
-
-  .log-time,
-  .log-level,
-  .log-subsystem,
-  .log-message {
-    font-size: 12px;
   }
 
   .list-title {

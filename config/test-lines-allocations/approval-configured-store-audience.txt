@@ -1,0 +1,2 @@
+# L1: real configured-store and registry precedence; actual Gateway recipient/nonrecipient wire.
+337
