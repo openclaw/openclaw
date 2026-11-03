@@ -47,6 +47,12 @@ requested worktree name or existing session title can name the checkout.
 Otherwise, allocation chooses a short generated name while display-title
 generation runs in the background.
 
+Worktree registration waits at most 30 seconds for a shared repository Git
+operation, including object repair. After one second it logs the wait; if the
+operation remains busy, creation reports a retryable error naming the repository
+wait. A timed-out registration cannot create a checkout later. Git operations
+that have already started retain their normal execution and cleanup budgets.
+
 Pull-request statistics may refresh Git's cached file timestamps in a managed
 checkout; they do not stage content or change commits. Statistics for user-managed
 checkouts keep their index unchanged.
