@@ -86,6 +86,15 @@ function createProfileContext(
     if (current !== runtimeState || !isBrowserRuntimeRunning(runtimeState)) {
       throw new BrowserProfileUnavailableError("Browser runtime changed or is stopping.");
     }
+    // Config refresh can settle cleanup before a captured caller resumes. Keep
+    // that context bound to its configured endpoint, not a replacement profile.
+    const configured = getOwnBrowserProfile(current.resolved.profiles, profile.name);
+    if (
+      !configured ||
+      resolveProfile(current.resolved, profile.name)?.cdpPort !== profile.cdpPort
+    ) {
+      throw new BrowserProfileUnavailableError("Browser profile configuration changed.");
+    }
     return runtimeState;
   };
 

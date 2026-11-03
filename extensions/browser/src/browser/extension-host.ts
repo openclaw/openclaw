@@ -14,11 +14,10 @@ import { getChromeWebSocketEndpoint, isChromeReachable } from "./chrome.js";
 import { withChromeProfileLifecycleLock } from "./chrome.profile-lifecycle-lock.js";
 import { isLocalManagedProfile } from "./config.js";
 import {
-  extensionDeclarations,
   matchesExtensionBrowserEndpoint,
   quarantineExtensionProfile,
-  type ExtensionDeclaration,
 } from "./extension-host-state.js";
+import { extensionDeclarations, type ExtensionDeclaration } from "./extension-launch-state.js";
 import { cachedByCdpUrl, contextStates } from "./pw-session-contracts.js";
 import { hasBrowserScreencast } from "./screencast/session.js";
 import { runProfileContextOperation } from "./server-context.js";

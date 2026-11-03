@@ -1,16 +1,8 @@
-import type { BrowserExtensionRequest } from "openclaw/plugin-sdk/browser-extension-host";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { BrowserError } from "./errors.js";
+import { extensionDeclarations } from "./extension-launch-state.js";
 import type { ResolvedBrowserProfile } from "./profile.types.js";
 import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
-
-/** Validated launch declaration; identity is retained on the launched process. */
-export type ExtensionDeclaration = BrowserExtensionRequest & {
-  version: string;
-  workerPath: string;
-  ownerState: BrowserServerState;
-};
-export const extensionDeclarations = new Map<string, ExtensionDeclaration>();
 
 type Gate = {
   readers: number;

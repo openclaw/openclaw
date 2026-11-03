@@ -5,7 +5,7 @@ import {
 } from "./chrome.executables.js";
 import { findPlaywrightChromiumExecutable } from "./chrome.playwright-cache.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
-import type { ExtensionDeclaration } from "./extension-host-state.js";
+import type { ExtensionDeclaration } from "./extension-launch-state.js";
 
 /** Select a full browser that honors unpacked extension launch flags. */
 export function resolveExtensionLaunchExecutable(

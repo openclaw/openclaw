@@ -78,7 +78,7 @@ import {
 } from "./config.js";
 import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME } from "./constants.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
-import { extensionDeclarations, type ExtensionDeclaration } from "./extension-host-state.js";
+import { extensionDeclarations, type ExtensionDeclaration } from "./extension-launch-state.js";
 import { ensureOutputDirectory } from "./output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import type { ManagedBrowserHeadlessSource } from "./profile.types.js";

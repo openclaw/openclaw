@@ -30,8 +30,9 @@ vi.mock("../control-service.js", () => ({
 
 import * as cdp from "./cdp.helpers.js";
 import * as chrome from "./chrome.js";
-import { extensionDeclarations, matchesExtensionBrowserEndpoint } from "./extension-host-state.js";
+import { matchesExtensionBrowserEndpoint } from "./extension-host-state.js";
 import { registerBrowserExtension } from "./extension-host.js";
+import { extensionDeclarations } from "./extension-launch-state.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./routes/test-helpers.js";
 import { stopBrowserRuntime } from "./runtime-lifecycle.js";
