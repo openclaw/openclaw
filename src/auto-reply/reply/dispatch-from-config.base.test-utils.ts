@@ -77,9 +77,9 @@ describe("dispatchReplyFromConfig", () => {
   beforeEach(dispatchHarness.describe0BeforeEach0);
   registerOriginRoutingCases();
 
-  it.each([false, true])(
-    "reports agent refusal before runtime loading (aborted: %s)",
-    async (aborted) => {
+  it.each(["delivered", "aborted", "denied"])(
+    "reports agent refusal before runtime loading (%s)",
+    async (mode) => {
       const refusal = {
         agentId: "cleaner",
         paths: ["/synthetic/agents/cleaner/openclaw-agent.cleaner.sqlite"],
@@ -88,13 +88,12 @@ describe("dispatchReplyFromConfig", () => {
         reason: "Refused agent cleaner: its database belongs to main.",
         repairHint: "Keep the main copy and quarantine the divergent cleaner copy, then restart.",
       };
-      const cfg: OpenClawConfig = { agents: { entries: { main: {}, cleaner: {} } } };
+      const rules = [{ action: "deny" as const, match: { keyPrefix: "agent:cleaner:" } }];
+      const session = { sendPolicy: { rules: mode === "denied" ? rules : [] } };
+      const cfg: OpenClawConfig = { agents: { entries: { main: {}, cleaner: {} } }, session };
       const dispatcher = createDispatcher();
       const replyResolver = vi.fn(async () => ({ text: "must not run" }));
-      const abort = new AbortController();
-      if (aborted) {
-        abort.abort();
-      }
+      const abortSignal = mode === "aborted" ? AbortSignal.abort() : new AbortController().signal;
       recordAgentDatabaseAdmissions([refusal]);
       try {
         const result = await dispatchReplyFromConfig({
@@ -102,10 +101,10 @@ describe("dispatchReplyFromConfig", () => {
           cfg,
           dispatcher,
           replyResolver,
-          replyOptions: { abortSignal: abort.signal },
+          replyOptions: { abortSignal },
         });
-        expect(result.queuedFinal).toBe(!aborted);
-        if (aborted) {
+        expect(result.queuedFinal).toBe(mode === "delivered");
+        if (mode !== "delivered") {
           expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
         } else {
           expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({

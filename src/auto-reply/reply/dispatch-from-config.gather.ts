@@ -11,7 +11,9 @@ import type {
   PreparedModelRuntimeLease,
   PreparedReplyDispatchRuntime,
 } from "../../agents/prepared-model-runtime.types.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
+import { logVerbose } from "../../globals.js";
 import {
   deriveInboundMessageHookContext,
   toPluginInboundClaimPair,
@@ -32,6 +34,7 @@ import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycl
 import { stripLegacyMediaContextFields } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
+import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
@@ -176,8 +179,20 @@ export async function gatherDispatchRequest(
   const refusal = readAgentDatabaseAdmissionRefusal(targetAgentId);
   if (refusal) {
     const aborted = params.replyOptions?.abortSignal?.aborted === true;
+    // The refused database cannot supply a session override, so configured rules decide.
+    const sendDenied =
+      resolveSendPolicy({
+        cfg,
+        sessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
+        channel: ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
+        chatType: normalizeChatType(ctx.ChatType),
+      }) === "deny";
+    if (sendDenied) {
+      logVerbose(`agent database refusal reply suppressed by send policy: ${refusal.code}`);
+    }
     const queuedFinal =
       !aborted &&
+      !sendDenied &&
       dispatcher.sendFinalReply({
         text: `${refusal.reason}\n${refusal.repairHint}`,
         isError: true,
