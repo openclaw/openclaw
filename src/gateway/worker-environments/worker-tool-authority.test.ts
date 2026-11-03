@@ -5,6 +5,7 @@ import "../../agents/test-helpers/fast-bash-tools.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import { finalizeAgentToolAvailability } from "../../agents/agent-tool-availability.js";
 import { createOpenClawCodingToolsInternal } from "../../agents/agent-tools.js";
+import { expectSenderGated } from "../../agents/agent-tools.turn-authority.test-support.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import { resolveNodeExecutionTarget } from "../../agents/bash-tools.exec-host-node-phases.js";
 import * as conversationPolicy from "../../agents/conversation-capability-profile.js";
@@ -387,10 +388,7 @@ describe("resolveWorkerToolAuthority", () => {
     // The sender overlay keeps the session's definitions and refuses the denied calls.
     const senderTools = await authorityTools(sender);
     expect(senderTools.map((tool) => tool.name)).toEqual(["read", "write", "apply_patch"]);
-    for (const name of ["write", "apply_patch"]) {
-      const refused = await senderTools.find((tool) => tool.name === name)!.execute(name, {});
-      expect(refused.details).toMatchObject({ gated: true });
-    }
+    await expectSenderGated(senderTools, "write", "apply_patch");
     expect(
       await authority({
         messageProvider: "whatsapp",
