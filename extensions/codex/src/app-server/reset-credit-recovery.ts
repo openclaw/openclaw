@@ -140,16 +140,28 @@ export async function recoverWithEarnedCodexReset(params: {
   ) {
     return { status: "not-eligible" };
   }
-  const available = await params.firstAvailable();
+  let available: string | undefined;
+  try {
+    available = await params.firstAvailable();
+  } catch {
+    return { status: "uncertain" };
+  }
   if (available) {
-    return { status: "available", profileId: available };
+    return params.orderedProfileIds.includes(available)
+      ? { status: "available", profileId: available }
+      : { status: "uncertain" };
   }
   // Existing ordering is authoritative; never widen the chain.
   const profileId = params.orderedProfileIds[0];
   if (!profileId) {
     return { status: "not-eligible" };
   }
-  const claim = await params.claim(profileId, params.maxPer24Hours);
+  let claim: CodexResetClaim;
+  try {
+    claim = await params.claim(profileId, params.maxPer24Hours);
+  } catch {
+    return { status: "uncertain" };
+  }
   if (claim.status !== "owned") {
     return { status: claim.status };
   }
@@ -166,6 +178,10 @@ export async function recoverWithEarnedCodexReset(params: {
     // A peer may have recovered any candidate before this durable claim settled.
     const currentAvailable = await params.firstAvailable();
     if (currentAvailable) {
+      if (!params.orderedProfileIds.includes(currentAvailable)) {
+        await settle("uncertain");
+        return { status: "uncertain" };
+      }
       await settle("not-needed");
       return { status: "available", profileId: currentAvailable };
     }
