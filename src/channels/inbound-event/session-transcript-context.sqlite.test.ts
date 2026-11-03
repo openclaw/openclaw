@@ -60,6 +60,7 @@ it("keeps answered WhatsApp group turns out of the next inbound history", async 
     ChatType: "group",
     SessionKey: scope.sessionKey,
     AgentId: scope.agentId,
+    CommandAuthorized: false,
     Timestamp: Date.now() + 1_000,
     InboundHistory: [
       { messageId: "question-1", sender: "Alice", body: "Is the report ready?" },
