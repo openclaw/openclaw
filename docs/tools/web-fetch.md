@@ -20,6 +20,10 @@ transforms that collapse the X or Y axis, such as `scale(0, 0)` and
 `scale3d(0, 0, 0)`. Nonzero scales and a zero Z axis alone remain visible.
 Basic HTML extraction keeps definition-list terms and values on separate lines.
 
+Document charset detection ignores declarations inside HTML or XML comments.
+Byte-order marks and HTTP charset headers retain precedence over active document
+declarations; commented-out metadata does not change the fetched bytes.
+
 ## Quick start
 
 Enabled by default, no configuration needed:

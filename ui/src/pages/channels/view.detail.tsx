@@ -13,7 +13,12 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { ChannelSettingsSlot } from "./channel-settings-presentation.tsx";
 import { channelDetailPresentations } from "./detail-presentation.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
-import { ChannelConfig } from "./view.config.tsx";
+import {
+  ChannelConfig,
+  ChannelConfigActions,
+  ChannelConfigFeedback,
+  ChannelConfigStatus,
+} from "./view.config.tsx";
 import { renderChannelPairingDetail } from "./view.pairing.tsx";
 import {
   boolStatusKind,
@@ -199,7 +204,11 @@ export function renderChannelDetail(params: {
     <openclaw-modal-dialog
       label={params.label}
       style={{ "--openclaw-modal-width": "680px" }}
-      onModal-cancel={() => params.onClose()}
+      onModal-cancel={(event: Event) => {
+        // The selected channel owns this dialog; closing may still ask about unsaved edits.
+        event.preventDefault();
+        params.onClose();
+      }}
     >
       <div class="channels-detail">
         <div class="channels-detail__header">
@@ -221,9 +230,6 @@ export function renderChannelDetail(params: {
           </div>
         </div>
         <div class="channels-detail__body">
-          {params.props.wizardHost.blockedByDirtyConfig() && params.props.config.configFormDirty ? (
-            <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
-          ) : undefined}
           <For each={statusIssues()}>
             {(issue) => (
               <div class="callout warn" role="note">
@@ -253,7 +259,9 @@ export function renderChannelDetail(params: {
           )}
         </div>
 
+        <ChannelConfigFeedback channelId={params.channelId} props={params.props} />
         <openclaw-modal-actions class="channels-detail__footer">
+          <ChannelConfigStatus channelId={params.channelId} props={params.props} />
           <a
             class="btn btn--sm"
             href={channelDocsUrl(params.channelId)}
@@ -271,6 +279,7 @@ export function renderChannelDetail(params: {
           >
             {t("channels.hub.runSetup")}
           </button>
+          <ChannelConfigActions channelId={params.channelId} props={params.props} />
         </openclaw-modal-actions>
       </div>
     </openclaw-modal-dialog>

@@ -809,6 +809,7 @@ src/config/sessions/transcript-store-identity.ts
 src/config/sessions/transcript-target-binding.ts
 src/config/sessions/version.ts
 src/config/shell-env-expected-keys.ts
+src/config/skill-library-tool-split-migration.ts
 src/config/skill-workshop-plugin-migration.ts
 src/config/source-value-projection.ts
 src/config/state-dir.ts
@@ -1167,6 +1168,7 @@ src/infra/private-directory-creation.ts
 src/infra/private-mode.ts
 src/infra/private-store-file.ts
 src/infra/process-env.ts
+src/infra/process-exit-cleanup.ts
 src/infra/prototype-keys.ts
 src/infra/restart-stale-pids.ts
 src/infra/retry-attempt-errors.ts
@@ -1688,6 +1690,7 @@ src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
+src/plugins/plugin-bundled-reload.ts
 src/plugins/plugin-instance-iterator.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-lifecycle-lease-identity.ts
@@ -2121,6 +2124,7 @@ src/state/openclaw-state-db-cron-delivery-migration.ts
 src/state/openclaw-state-db-cron-identity-migration.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
+src/state/openclaw-state-db-engine-input.ts
 src/state/openclaw-state-db-engine.ts
 src/state/openclaw-state-db-existing-schema.ts
 src/state/openclaw-state-db-existing-write.ts

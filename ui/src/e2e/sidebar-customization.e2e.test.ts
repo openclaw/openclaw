@@ -493,7 +493,7 @@ suite.define(() => {
         .poll(() =>
           page
             .locator("#settings-appearance-sidebar")
-            .getByRole("heading", { name: "Session observer" })
+            .getByText("Session observer", { exact: true })
             .isVisible(),
         )
         .toBe(true);
