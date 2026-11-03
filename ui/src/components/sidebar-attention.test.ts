@@ -126,6 +126,25 @@ async function openPanel(element: ParentNode, trigger: HTMLButtonElement) {
 }
 
 describe("model auth attention", () => {
+  it.each([
+    ["oauth", "Sign-in required", "Sign in"],
+    ["api_key", "API key needs attention", "Update API key"],
+    ["token", "Account needs attention", "Review account"],
+  ] as const)("offers the right recovery for %s", (type, status, action) => {
+    const snapshot = authStatus(1);
+    snapshot.providers = [
+      {
+        provider: "openai",
+        displayName: "OpenAI",
+        status: "missing",
+        profiles: [{ profileId: "openai:test", type, status: "missing" }],
+      },
+    ];
+    const item = authItems("main", snapshot)[0];
+    expect(item?.meta?.status).toBe(status);
+    expect(item?.inlineAction?.label).toBe(action);
+    expect(item?.detail).toContain(status);
+  });
   it("keeps identical provider warnings distinct across agents", () => {
     expect(authItems("main")[0]?.signature).toBe("agent:main\nopenai");
     expect(authItems("writer")[0]?.signature).toBe("agent:writer\nopenai");
@@ -152,7 +171,7 @@ describe("model auth attention", () => {
     const item = authItems("main")[0];
     expect(item).toMatchObject({
       label: "OpenAI",
-      inlineAction: { label: "Reconnect", routeId: "model-providers" },
+      inlineAction: { label: "Review account", routeId: "model-providers" },
     });
     const action = item?.action;
     expect(action).toMatchObject({ kind: "askCustodian" });

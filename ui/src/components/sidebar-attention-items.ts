@@ -62,10 +62,17 @@ export function buildSidebarAttentionEntries(params: {
       ? `agent:${params.modelAuthAgentId}\n${provider.provider}`
       : provider.provider;
     const fact = `${provider.displayName}: ${provider.status}`;
-    const scope =
-      provider.profiles.find(
-        (profile) => profile.status === "expired" || profile.status === "missing",
-      )?.profileId ?? params.modelAuthAgentId?.trim();
+    const profile = provider.profiles.find(
+      (candidate) => candidate.status === "expired" || candidate.status === "missing",
+    );
+    const scope = profile?.profileId ?? params.modelAuthAgentId?.trim();
+    const status = t(
+      profile?.type === "oauth"
+        ? "attention.signInRequired"
+        : profile?.type === "api_key"
+          ? "attention.apiKeyRequired"
+          : "attention.authExpired",
+    );
     // Status snapshots refresh, so a known expiry keeps the row's arrival stable.
     const expiredAt = provider.expiry?.at;
     const arrivedAtMs =
@@ -74,8 +81,8 @@ export function buildSidebarAttentionEntries(params: {
         : (params.modelAuthStatus?.ts ?? params.now);
     const time = formatTimeAgo(Math.max(0, params.now - arrivedAtMs), { suffix: false });
     const detail = scope
-      ? t("attention.modelAuthExpiredWithScope", { scope, time })
-      : t("attention.modelAuthExpiredState", { time });
+      ? t("attention.modelAuthExpiredWithScope", { scope, status, time })
+      : t("attention.modelAuthExpiredState", { status, time });
     const alertTitle = t("attention.modelAuthExpired", { providers: provider.displayName });
     entries.push(
       attentionEntry(
@@ -87,11 +94,17 @@ export function buildSidebarAttentionEntries(params: {
           detail,
           meta: {
             ...(scope ? { context: scope } : {}),
-            status: t("attention.authExpired"),
+            status,
           },
           arrivedAtMs,
           inlineAction: {
-            label: t("attention.reconnect"),
+            label: t(
+              profile?.type === "oauth"
+                ? "attention.signIn"
+                : profile?.type === "api_key"
+                  ? "attention.updateApiKey"
+                  : "attention.reconnect",
+            ),
             routeId: "model-providers",
           },
           signature,
