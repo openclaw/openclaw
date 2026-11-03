@@ -82,6 +82,42 @@ function buildRequesterConnectCatalog(
   };
 }
 
+function listRequesterOAuthServers(
+  serverNames: Iterable<string>,
+  mcpServers: Record<string, BundleMcpServerConfig>,
+) {
+  return [...serverNames]
+    .toSorted((a, b) => a.localeCompare(b))
+    .flatMap((serverName) => {
+      const resolved = resolveMcpTransportConfig(serverName, mcpServers[serverName], {
+        logWarnings: false,
+      });
+      return resolved?.kind === "http" &&
+        resolved.auth === "oauth" &&
+        resolved.oauth?.identity === "per-requester"
+        ? [{ serverName, resolved }]
+        : [];
+    });
+}
+
+/**
+ * The sign-in surface a requester sees before connecting, built from config
+ * alone. Turns without a verified requester list it so their catalog matches.
+ */
+export function buildConfiguredRequesterConnectCatalog(params: {
+  serverNames: Iterable<string>;
+  mcpServers: Record<string, BundleMcpServerConfig>;
+  safeServerNamesByServer: ReadonlyMap<string, string>;
+}): McpToolCatalog | undefined {
+  const configured = listRequesterOAuthServers(params.serverNames, params.mcpServers);
+  return configured.length > 0
+    ? buildRequesterConnectCatalog(
+        configured.map(({ serverName }) => serverName),
+        params.safeServerNamesByServer,
+      )
+    : undefined;
+}
+
 /** Builds the per-message requester sign-in surface without opening MCP transports. */
 export async function createRequesterMcpConnect(params: {
   serverNames: ReadonlySet<string>;
@@ -91,18 +127,7 @@ export async function createRequesterMcpConnect(params: {
   cfg?: OpenClawConfig;
   configFingerprint: string;
 }): Promise<RequesterMcpConnect | undefined> {
-  const configured = [...params.serverNames]
-    .toSorted((a, b) => a.localeCompare(b))
-    .flatMap((serverName) => {
-      const resolved = resolveMcpTransportConfig(serverName, params.mcpServers[serverName], {
-        logWarnings: false,
-      });
-      return resolved?.kind === "http" &&
-        resolved.auth === "oauth" &&
-        resolved.oauth?.identity === "per-requester"
-        ? [{ serverName, resolved }]
-        : [];
-    });
+  const configured = listRequesterOAuthServers(params.serverNames, params.mcpServers);
   if (configured.length === 0) {
     return undefined;
   }

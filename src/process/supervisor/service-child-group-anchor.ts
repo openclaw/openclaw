@@ -509,7 +509,7 @@ export function runServiceChildGroupAnchor(): void {
     }
 
     if (next.executionIntent === "agent-tool") {
-      enterAgentExecCgroup();
+      enterAgentExecCgroup(next.executionScopeKey);
     }
     // Prepare before launch: loading this writer during TERM consumes cleanup grace
     // and can race a source loader's compiler receiving the same group signal.

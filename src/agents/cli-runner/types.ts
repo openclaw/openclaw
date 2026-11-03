@@ -255,7 +255,7 @@ export type PreparedCliRunContext = {
     import("./claude-skills-plugin.js").ClaudeCliSkillsPlugin,
     "args" | "skillCommands"
   >;
-  /** Host-held, policy-selected personal Workshop tool for the paired-node adapter. */
+  /** Host-held, policy-selected skill_library tool for the paired-node "workshop" slot. */
   nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;
   /** Only the exact resumed native session may receive these newly committed conversation rows. */

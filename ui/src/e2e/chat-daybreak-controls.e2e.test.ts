@@ -165,17 +165,52 @@ suite.define(() => {
             await writeFile(dir + "/stale-selection.png", staleFrame.png);
           }
           if (entitled) {
-            // The control disappears once a revoked selection is turned off.
-            await toggle.click();
-            await gateway.waitForRequest("sessions.patch", {
-              match: { cyberAccessProgram: "standard" },
-            });
-            await expect
-              .poll(async () => (await gateway.getSessionRow("agent:main:main")).cyberAccessProgram)
-              .toBe("standard");
-            await expect.poll(() => select.locator('[aria-pressed="true"]').count()).toBe(0);
-            if (name.startsWith("blue-only")) {
-              await toggle.waitFor({ state: "detached" });
+            try {
+              if (name === "both") {
+                const bounds = (await toggle.boundingBox())!;
+                expect(bounds).not.toBeNull();
+                await expect.poll(() => toggle.isEnabled()).toBe(true);
+                await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+                await page.mouse.down();
+                try {
+                  // A peer refresh can arrive between native pointer down and activation.
+                  const historyRequests = await gateway.deferNext("chat.history");
+                  await gateway.emitGatewayEvent("session.message", {
+                    sessionKey: "agent:main:main",
+                    session: await gateway.getSessionRow("agent:main:main"),
+                    messageId: "daybreak-peer-message",
+                    messageSeq: 3,
+                    message: {
+                      role: "user",
+                      content: [{ type: "text", text: "A peer updated the security test plan." }],
+                      __openclaw: { id: "daybreak-peer-message", seq: 3 },
+                    },
+                  });
+                  await gateway.waitForRequest("chat.history", { after: historyRequests });
+                } finally {
+                  await page.mouse.up();
+                }
+                await expect.poll(() => toggle.isChecked()).toBe(false);
+              } else {
+                // The control disappears once a revoked selection is turned off.
+                await toggle.click();
+              }
+              await gateway.waitForRequest("sessions.patch", {
+                match: { cyberAccessProgram: "standard" },
+              });
+              await expect
+                .poll(
+                  async () => (await gateway.getSessionRow("agent:main:main")).cyberAccessProgram,
+                )
+                .toBe("standard");
+              await expect.poll(() => select.locator('[aria-pressed="true"]').count()).toBe(0);
+              if (name.startsWith("blue-only")) {
+                await toggle.waitFor({ state: "detached" });
+              }
+            } finally {
+              if (name === "both") {
+                await gateway.resolveDeferred("chat.history");
+              }
             }
           }
         },

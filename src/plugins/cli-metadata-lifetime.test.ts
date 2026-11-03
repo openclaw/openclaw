@@ -734,9 +734,9 @@ it("runs a legacy external plugin register once across CLI bootstrap stages", as
   expect(countRegisterRuns(markerPath)).toBe(1);
 });
 
-it("keeps distinct load scopes on separate register passes", async () => {
+it("does not register plugin runtimes while collecting root help", async () => {
   const { config, markerPath } = setupCountingCliPlugin();
   await loadPluginCliDescriptors({ cfg: config, env: process.env });
   await getPluginCliCommandDescriptors(config, process.env);
-  expect(countRegisterRuns(markerPath)).toBe(2);
+  expect(countRegisterRuns(markerPath)).toBe(1);
 });

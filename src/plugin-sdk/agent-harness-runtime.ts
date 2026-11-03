@@ -311,8 +311,10 @@ export {
 } from "../agents/embedded-agent-tool-results.js";
 export {
   formatToolExecutionErrorMessage,
-  isToolResultError,
   resolveToolExecutionErrorKind,
+} from "../agents/tool-execution-error.js";
+export {
+  isToolResultError,
   resolveToolResultFailureKind,
   type ToolResultFailureKind,
 } from "../agents/tool-result-error.js";

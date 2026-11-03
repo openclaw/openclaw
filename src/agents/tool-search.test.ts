@@ -25,8 +25,8 @@ import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createPromptBuildToolPolicy } from "./embedded-agent-runner/run/attempt-prompt-support.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
+import { formatToolExecutionErrorMessage } from "./tool-execution-error.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
-import { formatToolExecutionErrorMessage } from "./tool-result-error.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {

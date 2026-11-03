@@ -18,18 +18,32 @@
  * --retained-heap collects before/after the measured window in a separate retention
  * diagnostic pass. Its forced pre-window GC makes its timings unsuitable as gates.
  * Native total-allocated-byte deltas, when available, also measure untraced churn.
+ * --readonly selects executeExistingOpenClawStateRead with owner-created schema.
+ * --kind cron reads 500 job names from 10,000 synthetic jobs; mixed alternates
+ * shared session facts and cron names (an explicit probe mix, not a traffic claim).
+ * --interval-ms 150 paces reads near 400/minute; zero measures throughput.
+ * Both keep the same rows.
+ * --verify-charges separately records actual pool admission byte charges, including
+ * warmup; compare equal-length output paths so path-byte charges match across arms.
+ * --accounting-only isolates requestBytes on these selectors, excluding transport.
+ * Main allocation includes collected objects; untraced native allocation counters
+ * are included when the runtime provides them. Profiles stay in the output folder.
  * --snapshot adds post-GC worker snapshots at both retention boundaries; use with
  * --retained-heap and keep this diagnostic pass separate from latency gates.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { Session } from "node:inspector/promises";
 import { availableParallelism, hostname, loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
+import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
 import type { AcpSessionReadCommand } from "../../src/acp/runtime/session-meta-read.types.js";
 import type { OpenClawStateReadCommand } from "../../src/state/openclaw-state-read.types.js";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -43,9 +57,22 @@ const { values } = parseArgs({
     snapshot: { type: "boolean", default: false },
     "owner-dir": { type: "string" },
     allocations: { type: "boolean", default: false },
+    readonly: { type: "boolean", default: false },
+    "accounting-only": { type: "boolean", default: false },
+    "verify-charges": { type: "boolean", default: false },
+    "interval-ms": { type: "string", default: "0" },
   },
 });
-const kinds = ["acp", "shared-facts", "lifecycle", "plugins", "machine-state", "session-list"];
+const kinds = [
+  "acp",
+  "shared-facts",
+  "lifecycle",
+  "plugins",
+  "machine-state",
+  "session-list",
+  "cron",
+  "mixed",
+];
 assert(!values.snapshot || values["retained-heap"], "--snapshot requires --retained-heap");
 assert(kinds.includes(values.kind), `--kind must be one of ${kinds.join(", ")}`);
 assert(values.output, "--output must name a new synthetic fixture directory");
@@ -62,6 +89,12 @@ const warmup = parseStrictIntegerOption({
   label: "--warmup",
   min: 200,
   fallback: 200,
+});
+const intervalMs = parseStrictIntegerOption({
+  raw: values["interval-ms"],
+  label: "--interval-ms",
+  min: 0,
+  fallback: 0,
 });
 const output = path.join(root, "workers");
 const environment = {
@@ -94,8 +127,42 @@ const { updateConfigMachineStateInDatabase } =
 const { extractSqliteTableSchema } = await import("../../src/infra/sqlite-schema-sql.js");
 const { captureOpenClawStateReadSource } =
   await import("../../src/state/openclaw-state-read-worker.js");
+const { executeExistingOpenClawStateRead } =
+  await import("../../src/state/openclaw-state-db-readonly.js");
+const { withExistingOpenClawStateSchema } =
+  await import("../../src/state/openclaw-state-db-schema-policy.js");
+const { installDatabaseProcessRole } =
+  await import("../../src/infra/database-engine/admission-scope.js");
+if (values.readonly) {
+  installDatabaseProcessRole("gateway");
+}
 const stateCache = await import("../../src/state/openclaw-state-db-cache.js");
 const metrics = await import("../../src/infra/worker-cpu.js");
+const { requestBytes } = await import("../../src/state/openclaw-state-read-request.js");
+const requestOwnerPath = "src/state/openclaw-state-read-request.ts";
+const replacementRequest =
+  values["owner-dir"] && path.resolve(values["owner-dir"], requestOwnerPath);
+const requestOwnerSourceSha256 = createHash("sha256")
+  .update(
+    fs.readFileSync(
+      replacementRequest && fs.existsSync(replacementRequest)
+        ? replacementRequest
+        : new URL(`../../${requestOwnerPath}`, import.meta.url),
+    ),
+  )
+  .digest("hex");
+const chargeDigest = createHash("sha256");
+let chargeCount = 0;
+if (values["verify-charges"]) {
+  // The interceptor forwards the original receiver via apply below.
+  // oxlint-disable-next-line typescript/unbound-method
+  const runTask = WorkerTaskPoolCore.prototype.runTask;
+  WorkerTaskPoolCore.prototype.runTask = function (...args: Parameters<typeof runTask>) {
+    chargeCount++;
+    chargeDigest.update(`${args[1].inputBytes}\n`);
+    return runTask.apply(this, args);
+  };
+}
 const ownerPath =
   values.kind === "lifecycle"
     ? "src/state/agent-lifecycle-read.worker.ts"
@@ -146,20 +213,35 @@ const acpCommands: Extract<AcpSessionReadCommand, { type: "acpSessions.metadata"
   }),
 );
 const commands: OpenClawStateReadCommand[] =
-  values.kind === "shared-facts"
-    ? acpCommands.map((command) => ({
-        type: "sessionRows.sharedFacts",
-        entries: command.entries.map((acp) => ({ acp })),
-      }))
-    : values.kind === "lifecycle"
-      ? [{ type: "agentLifecycle.read", input: "main" }]
-      : values.kind === "plugins"
-        ? [{ type: "plugins.metadata.read", input: { selector: "installed-index" } }]
-        : values.kind === "machine-state"
-          ? [{ type: "machineState.read", input: { key: "synthetic.config" } }]
-          : values.kind === "session-list"
-            ? [{ type: "subagents.sessionList" }]
-            : acpCommands;
+  values.kind === "mixed"
+    ? acpCommands.flatMap((command): OpenClawStateReadCommand[] => [
+        { type: "sessionRows.sharedFacts", entries: command.entries.map((acp) => ({ acp })) },
+        {
+          type: "cron.jobNames",
+          storePath: "/synthetic/cron",
+          jobIds: command.entries.map((entry) => entry.keys[0]!),
+        },
+      ])
+    : values.kind === "shared-facts"
+      ? acpCommands.map((command) => ({
+          type: "sessionRows.sharedFacts",
+          entries: command.entries.map((acp) => ({ acp })),
+        }))
+      : values.kind === "lifecycle"
+        ? [{ type: "agentLifecycle.read", input: "main" }]
+        : values.kind === "plugins"
+          ? [{ type: "plugins.metadata.read", input: { selector: "installed-index" } }]
+          : values.kind === "machine-state"
+            ? [{ type: "machineState.read", input: { key: "synthetic.config" } }]
+            : values.kind === "session-list"
+              ? [{ type: "subagents.sessionList" }]
+              : values.kind === "cron"
+                ? acpCommands.map((command) => ({
+                    type: "cron.jobNames",
+                    storePath: "/synthetic/cron",
+                    jobIds: command.entries.map((entry) => entry.keys[0]!),
+                  }))
+                : acpCommands;
 const pluginPayload = JSON.stringify({
   plugins: Array.from({ length: 40 }, (_, index) => ({
     id: `synthetic-plugin-${index}`,
@@ -169,17 +251,27 @@ const pluginPayload = JSON.stringify({
   })),
 });
 const filename = path.join(environment.OPENCLAW_STATE_DIR, "state.sqlite");
+if (values.readonly) {
+  const { openOpenClawStateDatabase } = await import("../../src/state/openclaw-state-db.js");
+  openOpenClawStateDatabase({ path: filename, env: environment });
+}
 {
   using db = openNodeSqliteDatabase(filename);
   const schema = fs.readFileSync(
     new URL("../../src/state/openclaw-state-schema.sql", import.meta.url),
     "utf8",
   );
-  const tables = ["acp_sessions", "agent_provenance", "agent_deletion_journal", "subagent_runs"];
+  const tables = [
+    "acp_sessions",
+    "agent_provenance",
+    "agent_deletion_journal",
+    "subagent_runs",
+    "cron_jobs",
+  ];
   for (const table of tables) {
     db.exec(extractSqliteTableSchema(schema, table));
   }
-  db.exec(`CREATE TABLE config_machine_state
+  db.exec(`CREATE TABLE IF NOT EXISTS config_machine_state
     (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER); BEGIN`);
   const insert = db.prepare(`INSERT INTO acp_sessions
     (session_key, session_id, backend, agent, runtime_session_name, mode, state,
@@ -188,8 +280,14 @@ const filename = path.join(environment.OPENCLAW_STATE_DIR, "state.sqlite");
   const insertRun = db.prepare(`INSERT INTO subagent_runs
     (run_id, child_session_key, requester_session_key, created_at, payload_json)
     VALUES (?, ?, 'agent:main:parent', ?, ?)`);
+  const insertJob = db.prepare(`INSERT INTO cron_jobs
+    (store_key, job_id, name, enabled, payload_kind, job_json, updated_at)
+    VALUES ('/synthetic/cron', ?, ?, 1, 'agentTurn', '{}', 100)`);
   try {
     for (const [index, key] of keys.entries()) {
+      if (values.kind === "cron" || values.kind === "mixed") {
+        insertJob.run(key, `Synthetic job ${index}`);
+      }
       insert.run(key, `synthetic-runtime-${index}`, '{"model":"fixture-model"}');
       if (values.kind === "session-list") {
         insertRun.run(
@@ -226,6 +324,7 @@ const filename = path.join(environment.OPENCLAW_STATE_DIR, "state.sqlite");
   } finally {
     disposeSqliteStatement(insert);
     disposeSqliteStatement(insertRun);
+    disposeSqliteStatement(insertJob);
   }
 }
 
@@ -282,22 +381,88 @@ function census() {
     ),
   };
 }
+if (values["accounting-only"]) {
+  const requests = commands.map((command) => ({
+    context: { environment },
+    databasePath: filename,
+    location: filename,
+    checkFreshAdmission: false,
+    command,
+  }));
+  for (let index = 0; index < warmup; index++) {
+    requestBytes(requests[index % requests.length]!);
+  }
+  const inspector = values.allocations ? new Session() : undefined;
+  if (inspector) {
+    await startCollectedHeapSampling(inspector, 4096);
+  }
+  const allocatedBefore: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
+  const cpuBefore = process.threadCpuUsage();
+  const loadBefore = loadavg();
+  const start = performance.now();
+  let bytes = 0;
+  for (let index = 0; index < iterations; index++) {
+    bytes += requestBytes(requests[index % requests.length]!);
+  }
+  const elapsedMs = performance.now() - start;
+  const cpu = process.threadCpuUsage(cpuBefore);
+  const allocatedAfter: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
+  const allocation = inspector ? await inspector.post("HeapProfiler.stopSampling") : undefined;
+  inspector?.disconnect();
+  const result = {
+    workload: "requestBytes only",
+    requestOwnerSourceSha256,
+    kind: values.kind,
+    rows,
+    batchSize,
+    iterations,
+    bytes,
+    allocationSampling: values.allocations,
+    elapsedMs,
+    loadBefore,
+    loadAfter: loadavg(),
+    mainCpuUsPerTask: (cpu.user + cpu.system) / iterations,
+    mainNativeAllocationBytesPerTask:
+      typeof allocatedBefore === "number" && typeof allocatedAfter === "number"
+        ? (allocatedAfter - allocatedBefore) / iterations
+        : undefined,
+    mainSampledAllocationBytesPerTask: allocation
+      ? sumSampledHeapBytes(allocation.profile.head) / iterations
+      : undefined,
+  };
+  fs.writeFileSync(path.join(root, "result.json"), JSON.stringify(result, null, 2));
+  console.log(JSON.stringify(result));
+  await stateCache.closeOpenClawStateDatabaseAsync();
+  process.exit(0);
+}
 metrics.setTrackedWorkerGcObserver(() => {});
 const source = captureOpenClawStateReadSource();
 const signal = new AbortController().signal;
 async function read(command: (typeof commands)[number]) {
-  const admission = stateCache.captureOpenClawStateDatabaseReadAdmission(filename);
-  const transport = source.createTransport(command);
+  const admission = values.readonly
+    ? undefined
+    : stateCache.captureOpenClawStateDatabaseReadAdmission(filename);
+  const transport = values.readonly ? undefined : source.createTransport(command);
   try {
-    const outcome = await transport.startRead(
-      { context: { environment, admission }, location: filename, checkFreshAdmission: false },
-      { signal, assertCurrent: admission.assertCurrent },
-    );
+    const outcome =
+      transport && admission
+        ? await transport.startRead(
+            { context: { environment, admission }, location: filename, checkFreshAdmission: false },
+            { signal, assertCurrent: admission.assertCurrent },
+          )
+        : {
+            value: await withExistingOpenClawStateSchema({ path: filename }, () =>
+              executeExistingOpenClawStateRead({ path: filename, env: environment }, command, {
+                current: true,
+                live: true,
+              }),
+            ),
+          };
     if ("error" in outcome) {
       throw outcome.error;
     }
     const result = outcome.value;
-    assert(result.ok && result.type === command.type);
+    assert(result && result.ok && result.type === command.type);
     if (result.type === "acpSessions.metadata" && command.type === result.type) {
       assert.equal(result.rows.length, batchSize);
       for (const [index, row] of result.rows.entries()) {
@@ -307,6 +472,11 @@ async function read(command: (typeof commands)[number]) {
       assert.equal(result.rows.length, batchSize);
       for (const [index, row] of result.rows.entries()) {
         assert.equal(row.acp?.session_key, command.entries[index]!.acp!.keys[0]);
+      }
+    } else if (result.type === "cron.jobNames" && command.type === result.type) {
+      assert.equal(result.names.size, batchSize);
+      for (const key of command.jobIds) {
+        assert(result.names.get(key)?.startsWith("Synthetic job "));
       }
     } else if (result.type === "agentLifecycle.read") {
       assert.deepEqual(result.facts, {
@@ -336,7 +506,7 @@ async function read(command: (typeof commands)[number]) {
     }
     return outcome.value;
   } finally {
-    await transport.startClose();
+    await transport?.startClose();
   }
 }
 try {
@@ -350,11 +520,19 @@ try {
   const before = census();
   const loadBefore = loadavg();
   await sample("start", "start");
+  const inspector = values.allocations ? new Session() : undefined;
+  if (inspector) {
+    await startCollectedHeapSampling(inspector, 4096);
+  }
+  const allocatedBefore: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
   const cpuBefore = process.threadCpuUsage();
   const started = performance.now();
   const digest = createHash("sha256");
   const latencies: number[] = [];
   for (let index = 0; index < iterations; index++) {
+    if (intervalMs) {
+      await delay(Math.max(0, started + index * intervalMs - performance.now()));
+    }
     const start = performance.now();
     const result = await read(commands[index % commands.length]!);
     latencies.push(performance.now() - start);
@@ -364,6 +542,15 @@ try {
   }
   const elapsedMs = performance.now() - started;
   const mainCpu = process.threadCpuUsage(cpuBefore);
+  const allocatedAfter: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
+  const mainAllocation = inspector ? await inspector.post("HeapProfiler.stopSampling") : undefined;
+  inspector?.disconnect();
+  if (mainAllocation) {
+    fs.writeFileSync(
+      path.join(root, "main-allocation.json"),
+      JSON.stringify(mainAllocation.profile),
+    );
+  }
   const measurement = await sample("stop", "stop");
   assert(measurement.complete, "Worker GC measurement exceeded its sample budget");
   await delay(1_100);
@@ -376,6 +563,18 @@ try {
   const result = {
     workload: `${commands[0]!.type} real worker`,
     kind: values.kind,
+    requestOwnerSourceSha256,
+    readonly: values.readonly,
+    chargeCount: values["verify-charges"] ? chargeCount : undefined,
+    chargeSha256: values["verify-charges"] ? chargeDigest.digest("hex") : undefined,
+    intervalMs,
+    mainNativeAllocationBytesPerTask:
+      typeof allocatedBefore === "number" && typeof allocatedAfter === "number"
+        ? (allocatedAfter - allocatedBefore) / iterations
+        : undefined,
+    mainSampledAllocationBytesPerTask: mainAllocation
+      ? sumSampledHeapBytes(mainAllocation.profile.head) / iterations
+      : undefined,
     host: hostname(),
     node: process.version,
     availableParallelism: availableParallelism(),

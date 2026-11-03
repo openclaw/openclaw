@@ -47,6 +47,7 @@ import type {
 import type { PluginProviderRegistration } from "./provider-plugin.types.js";
 import type {
   ContextEngineRegistration,
+  LearnContributionRegistration,
   MemoryCorpusSupplementRegistration,
   MemoryPluginCapabilityRegistration,
   MemoryPromptPreparationRegistration,
@@ -354,6 +355,7 @@ export type PluginRegistry = {
   memoryCorpusSupplements: MemoryCorpusSupplementRegistration[];
   memoryPromptPreparations: MemoryPromptPreparationRegistration[];
   memoryPromptSupplements: MemoryPromptSupplementRegistration[];
+  learnContributions: LearnContributionRegistration[];
   sessionDiscussionProviders: Map<
     string,
     {
