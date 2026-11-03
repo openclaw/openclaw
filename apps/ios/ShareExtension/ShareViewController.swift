@@ -31,6 +31,7 @@ final class ShareViewController: UIViewController {
     private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ShareExtension")
     private let composeView = ShareComposeView()
     private var importTarget: SharedDraftTarget?
+    private var importRecovery: ShareImportRecovery = .selectDestination
     private var didCancel = false
     private var isSaving = false
     private var didPrepareDraft = false
@@ -66,7 +67,14 @@ final class ShareViewController: UIViewController {
     private func prepareDraft() async {
         ShareGatewayRelaySettings.saveLastEvent("Share opened.")
         self.composeView.apply(.preparing)
-        self.importTarget = try? await SharedDraftInbox.shared.destination()
+        do {
+            self.importTarget = try await SharedDraftInbox.shared.destination()
+            self.importRecovery = self.importTarget == nil ? .selectDestination : .save
+        } catch {
+            self.importRecovery = .unreadableDestination
+            ShareGatewayRelaySettings.saveLastEvent(
+                "Share import destination could not be read; open OpenClaw and select a chat.")
+        }
         let extracted = await self.extractSharedContent()
         guard !self.didCancel else { return }
         let payload = extracted.payload
@@ -76,7 +84,7 @@ final class ShareViewController: UIViewController {
             summary: extracted.attachmentSummary)
         let message = self.attachmentBlockReason == nil
             ? ShareDraftComposer.compose(from: payload) : extracted.originalText
-        self.composeView.canSave = self.importTarget != nil && self.attachmentBlockReason != nil
+        self.composeView.canSave = self.importRecovery.canSave && self.attachmentBlockReason != nil
         self.composeView.setDraft(message)
         self.composeView.setAttachmentPreviews(extracted.attachments.map(\.preview))
         self.composeView.focusDraft()
@@ -317,13 +325,10 @@ final class ShareViewController: UIViewController {
         switch blockReason {
         case .imageProcessingFailed:
             ShareGatewayRelaySettings.saveLastEvent("Share blocked: image processing failed.")
-            self.composeView.apply(.blocked(NSLocalizedString(
-                "The shared image could not be prepared.",
-                comment: "Share extension image processing failure")))
-        case let .omitted(message):
+        case .omitted:
             ShareGatewayRelaySettings.saveLastEvent("Share blocked: attachment(s) omitted.")
-            self.composeView.apply(.blocked(message))
         }
+        self.composeView.apply(.blocked(blockReason.message(recovery: self.importRecovery)))
     }
 
     /// Previews are retained for the sheet's lifetime; keep them bounded so

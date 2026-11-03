@@ -17,32 +17,39 @@ enum ShareContentExtractor {
         var attributedContentText: String?
         var providers: [NSItemProvider] = []
         for item in items {
-            originalTexts.append(contentsOf: [item.attributedTitle?.string, item.attributedContentText?.string].compactMap(\.self))
+            originalTexts.append(contentsOf: [
+                item.attributedTitle?.string,
+                item.attributedContentText?.string,
+            ].compactMap(\.self))
             if title == nil { title = item.attributedTitle?.string }
             if attributedContentText == nil { attributedContentText = item.attributedContentText?.string }
             providers.append(contentsOf: item.attachments ?? [])
         }
 
-        var providersWithLoadedContent = Set<ObjectIdentifier>()
+        var providersIncludedInDirectDraft = Set<ObjectIdentifier>()
         var sharedURL: URL?
         for provider in providers {
             guard let providerURL = await self.loadURL(from: provider) else { continue }
             guard !providerURL.isFileURL else { continue }
             originalTexts.append(providerURL.absoluteString)
             sharedURL = sharedURL ?? providerURL
-            providersWithLoadedContent.insert(ObjectIdentifier(provider))
+            if sharedURL == providerURL {
+                providersIncludedInDirectDraft.insert(ObjectIdentifier(provider))
+            }
         }
 
         var sharedText: String?
         for provider in providers {
             guard let providerText = await self.loadText(from: provider) else { continue }
             if !self.isFileProvider(provider) { originalTexts.append(providerText) }
-            providersWithLoadedContent.insert(ObjectIdentifier(provider))
             guard let distinctText = SharePayloadNormalizer.distinctProviderText(
                 providerText,
                 sharedURL: sharedURL)
             else { continue }
             sharedText = sharedText ?? distinctText
+            if sharedText == distinctText {
+                providersIncludedInDirectDraft.insert(ObjectIdentifier(provider))
+            }
         }
 
         var imageProviders: [NSItemProvider] = []
@@ -56,10 +63,10 @@ enum ShareContentExtractor {
             } else if self.isFileProvider(provider) {
                 attachmentSummary.fileCount += 1
             } else {
-                // UTI conformance only promises a representation exists; count it as handled
-                // only after the provider successfully delivers content we can send.
+                // Preservation may load more values than the direct draft can represent.
+                // Only providers included in that draft may bypass omission blocking.
                 attachmentSummary.recordUnclassifiedProvider(
-                    didLoadContent: providersWithLoadedContent.contains(ObjectIdentifier(provider)))
+                    didIncludeContent: providersIncludedInDirectDraft.contains(ObjectIdentifier(provider)))
             }
         }
 
@@ -68,7 +75,9 @@ enum ShareContentExtractor {
             sharedText: sharedText,
             sharedURL: sharedURL)
         var seenTexts = Set<String>()
-        let originalText = originalTexts.filter { !$0.isEmpty && seenTexts.insert($0).inserted }.joined(separator: "\n\n")
+        let originalText = originalTexts
+            .filter { !$0.isEmpty && seenTexts.insert($0).inserted }
+            .joined(separator: "\n\n")
         return ExtractedShareProviderContent(
             originalText: originalText,
             payload: SharedContentPayload(title: title ?? supplementalTitle, url: sharedURL, text: sharedText),
@@ -134,7 +143,8 @@ extension ShareContentExtractor {
         return provider.registeredTypeIdentifiers.contains { identifier in
             guard let type = UTType(identifier) else { return false }
             return type.conforms(to: .data) && !type.conforms(to: .url) &&
-                (!type.conforms(to: .text) || provider.suggestedName.map { !($0 as NSString).pathExtension.isEmpty } == true)
+                (!type.conforms(to: .text) ||
+                    provider.suggestedName.map { !($0 as NSString).pathExtension.isEmpty } == true)
         }
     }
 
@@ -168,7 +178,11 @@ extension ShareContentExtractor {
         return files
     }
 
-    private static func copyFile(from provider: NSItemProvider, into directory: URL, maximumBytes: Int) async throws -> URL {
+    private static func copyFile(
+        from provider: NSItemProvider,
+        into directory: URL,
+        maximumBytes: Int) async throws -> URL
+    {
         let type = provider.registeredTypeIdentifiers.first {
             UTType($0)?.conforms(to: .data) == true && UTType($0)?.conforms(to: .url) != true
         }
@@ -200,7 +214,9 @@ extension ShareContentExtractor {
                     let output = try FileHandle(forWritingTo: destination)
                     defer { try? output.close() }
                     var count = 0
-                    while let chunk = try input.read(upToCount: min(1024 * 1024, maximumBytes - count + 1)), !chunk.isEmpty {
+                    while let chunk = try input.read(upToCount: min(1024 * 1024, maximumBytes - count + 1)),
+                          !chunk.isEmpty
+                    {
                         count += chunk.count
                         guard count <= maximumBytes else { throw SharedDraftError.full }
                         try output.write(contentsOf: chunk)

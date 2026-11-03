@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawNativeState
 import SQLite3
 
 /// An unsent import, never an outbox command. Its route is captured when Share opens.
@@ -28,7 +29,7 @@ public enum SharedDraftError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .unavailable: "Share storage is unavailable. Open OpenClaw and try again."
-        case .full: "Share storage is full or this share exceeds 50 items or 48 MiB. Open OpenClaw to review saved shares."
+        case .full: "Share storage is full or exceeds 50 items or 48 MiB. Open OpenClaw to review saved shares."
         case .missing: "This saved share expired or was discarded."
         case .unreadable: "An item could not be preserved. Nothing was saved; your share is still here."
         }
@@ -71,7 +72,9 @@ public actor SharedDraftInbox {
         try db.transaction {
             try db.run("DELETE FROM destination")
             if let target {
-                try db.run("INSERT INTO destination VALUES (?,?,?)", [target.gatewayID, target.agentID, target.sessionKey])
+                try db.run(
+                    "INSERT INTO destination VALUES (?,?,?)",
+                    [target.gatewayID, target.agentID, target.sessionKey])
             }
         }
     }
@@ -119,7 +122,9 @@ public actor SharedDraftInbox {
                 guard !data.isEmpty else { throw SharedDraftError.unreadable }
                 guard data.count <= remaining else { throw SharedDraftError.full }
                 remaining -= data.count
-                try db.run("INSERT INTO attachments VALUES (?,?,?,?)", [id, String(index), url.lastPathComponent], data: data)
+                try db.run(
+                    "INSERT INTO attachments VALUES (?,?,?,?)",
+                    [id, String(index), url.lastPathComponent], data: data)
             }
         }
         return id
@@ -158,13 +163,15 @@ public actor SharedDraftInbox {
             defer { sqlite3_finalize(exists) }
             try db.bind(id, to: exists, index: 1)
             guard try db.step(exists) else { throw SharedDraftError.missing }
-            let statement = try db.prepare("SELECT position,name,bytes FROM attachments WHERE import_id=? ORDER BY position")
+            let statement = try db.prepare(
+                "SELECT position,name,bytes FROM attachments WHERE import_id=? ORDER BY position")
             defer { sqlite3_finalize(statement) }
             try db.bind(id, to: statement, index: 1)
             var files: [URL] = []
             while try db.step(statement) {
                 // Each item has its own directory so equal filenames remain distinct.
-                let folder = directory.appendingPathComponent(String(sqlite3_column_int(statement, 0)), isDirectory: true)
+                let folder = directory.appendingPathComponent(
+                    String(sqlite3_column_int(statement, 0)), isDirectory: true)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                 let name = (db.text(statement, 1) as NSString).lastPathComponent
                 guard !name.isEmpty, name != ".", name != ".." else { throw SharedDraftError.unreadable }
@@ -200,11 +207,15 @@ private final class Connection {
         var resourceValues = URLResourceValues()
         resourceValues.isExcludedFromBackup = true
         try mutableDirectory.setResourceValues(resourceValues)
-        let url = directory.resolvingSymlinksInPath().appendingPathComponent("inbox.sqlite")
+        let url = directory.appendingPathComponent("inbox.sqlite")
+        // Foundation preserves macOS aliases such as /tmp and /var. Reuse the
+        // native POSIX path owner and resolve only the directory: NOFOLLOW must
+        // still reject a symbolic link at the database filename itself.
+        let databasePath = (try OpenClawClientCredentialStore.canonicalPath(directory) as NSString)
+            .appendingPathComponent("inbox.sqlite")
         var pointer: OpaquePointer?
-        guard sqlite3_open_v2(url.path, &pointer,
-            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_NOFOLLOW, nil) == SQLITE_OK,
-              let pointer
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_NOFOLLOW
+        guard sqlite3_open_v2(databasePath, &pointer, flags, nil) == SQLITE_OK, let pointer
         else {
             if let pointer { sqlite3_close(pointer) }
             throw SharedDraftError.unavailable
@@ -218,9 +229,24 @@ private final class Connection {
             let version = try self.integer("PRAGMA user_version")
             guard version == 0 || version == 1 else { throw SharedDraftError.unavailable }
             if version == 0 {
-                try self.run("CREATE TABLE destination(gateway TEXT NOT NULL,agent TEXT NOT NULL,session TEXT NOT NULL) STRICT")
-                try self.run("CREATE TABLE imports(id TEXT PRIMARY KEY NOT NULL,gateway TEXT NOT NULL,agent TEXT NOT NULL,session TEXT NOT NULL,text TEXT NOT NULL,expires REAL NOT NULL) STRICT")
-                try self.run("CREATE TABLE attachments(import_id TEXT NOT NULL REFERENCES imports(id) ON DELETE CASCADE,position INTEGER NOT NULL,name TEXT NOT NULL,bytes BLOB NOT NULL,PRIMARY KEY(import_id,position)) STRICT")
+                try self.run("""
+                CREATE TABLE destination(
+                    gateway TEXT NOT NULL, agent TEXT NOT NULL, session TEXT NOT NULL
+                ) STRICT
+                """)
+                try self.run("""
+                CREATE TABLE imports(
+                    id TEXT PRIMARY KEY NOT NULL, gateway TEXT NOT NULL, agent TEXT NOT NULL,
+                    session TEXT NOT NULL, text TEXT NOT NULL, expires REAL NOT NULL
+                ) STRICT
+                """)
+                try self.run("""
+                CREATE TABLE attachments(
+                    import_id TEXT NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL, name TEXT NOT NULL, bytes BLOB NOT NULL,
+                    PRIMARY KEY(import_id,position)
+                ) STRICT
+                """)
                 try self.run("PRAGMA user_version=1")
             }
         }
@@ -263,7 +289,8 @@ private final class Connection {
 
     func bind(_ value: String, to statement: OpaquePointer, index: Int32) throws {
         let result = value.withCString {
-            sqlite3_bind_text(statement, index, $0, Int32(value.utf8.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(
+                statement, index, $0, Int32(value.utf8.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         }
         guard result == SQLITE_OK else { throw SharedDraftError.unavailable }
     }
@@ -300,10 +327,15 @@ private final class Connection {
 
     func text(_ statement: OpaquePointer, _ column: Int32) -> String {
         guard let bytes = sqlite3_column_text(statement, column) else { return "" }
-        return String(decoding: UnsafeBufferPointer(start: bytes, count: Int(sqlite3_column_bytes(statement, column))), as: UTF8.self)
+        return String(
+            decoding: UnsafeBufferPointer(start: bytes, count: Int(sqlite3_column_bytes(statement, column))),
+            as: UTF8.self)
     }
 
     func target(_ statement: OpaquePointer) -> SharedDraftTarget {
-        SharedDraftTarget(gatewayID: self.text(statement, 0), agentID: self.text(statement, 1), sessionKey: self.text(statement, 2))
+        SharedDraftTarget(
+            gatewayID: self.text(statement, 0),
+            agentID: self.text(statement, 1),
+            sessionKey: self.text(statement, 2))
     }
 }

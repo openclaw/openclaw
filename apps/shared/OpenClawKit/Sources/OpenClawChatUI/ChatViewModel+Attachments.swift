@@ -24,7 +24,8 @@ extension OpenClawChatViewModel {
         guard isDestinationCurrent(), self.input.isEmpty, self.attachments.isEmpty,
               !self.isAttachmentOwnerPinned, !self.isSubmittingDraft
         else {
-            self.errorText = String(localized: "Open the original chat and send or clear its draft before importing. The saved share has not changed.")
+            self.errorText = String(
+                localized: "Send or clear the original chat's draft before importing. Your saved share is unchanged.")
             return false
         }
         let session = self.currentSessionSnapshot()
@@ -56,7 +57,8 @@ extension OpenClawChatViewModel {
             self.errorText = nil
             return true
         } catch {
-            self.errorText = String(localized: "Could not import the complete share. Check the original chat and attachment limits, then try again. Nothing was sent; the saved share is unchanged.")
+            self.errorText = String(
+                localized: "Import failed. Check the original chat and file limits, then retry. Nothing was sent.")
             return false
         }
     }
@@ -277,8 +279,12 @@ extension OpenClawChatViewModel {
 
     @discardableResult
     private func stageImageAttachment(
-        url: URL?, data: Data, fileName: String, mimeType: String,
-        advertisedLimits: GatewayAttachmentLimits?, expectedSession: SessionSnapshot? = nil) async -> ChatAttachmentReadError?
+        url: URL?,
+        data: Data,
+        fileName: String,
+        mimeType: String,
+        advertisedLimits: GatewayAttachmentLimits?,
+        expectedSession: SessionSnapshot? = nil) async -> ChatAttachmentReadError?
     {
         do {
             let attachment = try await self.prepareImageAttachment(

@@ -47,7 +47,11 @@ all selected items, **Save to OpenClaw** preserves the original shared text and
 document, video, and image bytes instead of sending an incomplete selection.
 Open a paired Gateway and the intended native chat in OpenClaw once before
 sharing; Share captures that chat's Gateway, agent, and session when it opens.
-A later selection change does not retarget an already saved share.
+A later selection change does not retarget an already saved share. If Share has
+no saved destination or cannot read it, its recovery message asks you to open
+OpenClaw, select the intended Gateway and chat, and share again instead of
+promising an unavailable Save action. Additional text or URL providers that do
+not fit the direct-send draft also block sending rather than being omitted.
 
 After saving, tap **Done** and open OpenClaw yourself. iOS does not provide a
 supported way for a Share extension to foreground its containing app. Tap

@@ -42,7 +42,11 @@ struct SharedDraftImportReview: View {
                             ForEach(Array(draft.fileNames.enumerated()), id: \.offset) { _, name in
                                 Label(name, systemImage: "doc").font(OpenClawType.body)
                             }
-                            Text(verbatim: "Gateway: \(draft.target.gatewayID)\nAgent: \(draft.target.agentID)\nChat: \(draft.target.sessionKey)")
+                            Text(verbatim: """
+                            Gateway: \(draft.target.gatewayID)
+                            Agent: \(draft.target.agentID)
+                            Chat: \(draft.target.sessionKey)
+                            """)
                                 .font(OpenClawType.caption)
                             Text("Expires \(draft.expiresAt, style: .relative). Nothing is sent automatically.")
                                 .font(OpenClawType.caption)
@@ -64,7 +68,7 @@ struct SharedDraftImportReview: View {
                             }
                             .disabled(self.isImporting)
                             if !self.matches(draft.target) {
-                                Text("Select this Gateway, agent, and chat first. Your current draft will not be replaced.")
+                                Text("Select this Gateway, agent, and chat first. Your draft will not be replaced.")
                                     .font(OpenClawType.caption)
                             }
                         }
@@ -104,7 +108,9 @@ struct SharedDraftImportReview: View {
 
     @MainActor
     private func importDraft(_ draft: SharedDraftImport) async {
-        guard !self.isImporting, self.matches(draft.target), let model = self.appModel.chatPresentation.viewModel else { return }
+        guard !self.isImporting, self.matches(draft.target),
+              let model = self.appModel.chatPresentation.viewModel
+        else { return }
         self.isImporting = true
         defer { self.isImporting = false }
         let directory = FileManager.default.temporaryDirectory

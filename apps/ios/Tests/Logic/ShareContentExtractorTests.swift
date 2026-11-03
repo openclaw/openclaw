@@ -1,5 +1,5 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 import Testing
 import UniformTypeIdentifiers
 
@@ -21,6 +21,7 @@ struct ShareContentExtractorTests {
         let extracted = await ShareContentExtractor.extract(from: [
             self.extensionItem(providers: [
                 self.itemProvider(url as NSURL, type: .url),
+                self.itemProvider(url.absoluteString as NSString, type: .plainText),
                 self.itemProvider("Article summary" as NSString, type: .plainText),
             ]),
         ])
@@ -29,6 +30,7 @@ struct ShareContentExtractorTests {
         #expect(extracted.payload.text == "Article summary")
         #expect(ShareDraftComposer.compose(from: extracted.payload) ==
             "Article summary\n\nhttps://example.com/article")
+        #expect(extracted.attachmentSummary == ShareAttachmentSummary())
     }
 
     @Test @MainActor func `provider extraction preserves attachment accounting`() async throws {
@@ -76,7 +78,6 @@ struct ShareContentExtractorTests {
     }
 }
 
-
 extension ShareContentExtractorTests {
     @Test @MainActor func preservesAllTextAndMixedProviderBytesForNativeImport() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -115,7 +116,6 @@ extension ShareContentExtractorTests {
     }
 }
 
-
 extension ShareContentExtractorTests {
     @Test @MainActor func copiesFileURLAdvertisedOnlyAsPublicURLRatherThanOmittingIt() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -132,5 +132,34 @@ extension ShareContentExtractorTests {
         let files = try await ShareContentExtractor.preserveFiles(from: [item], into: directory.appendingPathComponent("copies"))
         #expect(files.count == 1)
         #expect(try Data(contentsOf: #require(files.first)) == Data([0, 255, 42]))
+    }
+}
+
+extension ShareContentExtractorTests {
+    @Test(arguments: [
+        ["First paragraph", "Second paragraph"],
+        ["https://example.com/one", "https://example.com/two", "https://example.com/three"],
+        ["Paragraph", "https://example.com/one", "https://example.com/two"],
+    ])
+    @MainActor func directSendNeverOmitsAdditionalTextOrURLProviders(_ values: [String]) async throws {
+        let providers = try values.map { value in
+            if value.hasPrefix("https://") {
+                return self.itemProvider(try #require(URL(string: value)) as NSURL, type: .url)
+            }
+            return self.itemProvider(value as NSString, type: .plainText)
+        }
+        let extracted = await ShareContentExtractor.extract(from: [self.extensionItem(providers: providers)])
+        let directDraft = ShareDraftComposer.compose(from: extracted.payload)
+        let includesEveryValue = values.allSatisfy { directDraft.contains($0) }
+        let reason = ShareAttachmentBlockReason.resolve(
+            hasImageProcessingError: false, summary: extracted.attachmentSummary)
+        #expect(includesEveryValue || reason != nil)
+        for value in values { #expect(extracted.originalText.contains(value)) }
+        if !includesEveryValue {
+            let blocked = try #require(reason)
+            let controls = ShareComposeControlState.resolve(
+                status: .blocked(blocked.message(recovery: .save)), hasDraftText: !directDraft.isEmpty)
+            #expect(!controls.isSendEnabled)
+        }
     }
 }

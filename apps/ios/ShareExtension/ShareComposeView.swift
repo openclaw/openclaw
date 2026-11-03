@@ -94,7 +94,7 @@ final class ShareComposeView: UIView, UITextViewDelegate {
             self.showFooter(text: NSLocalizedString("Saving share…", comment: "Share import status"), icon: nil)
         case .saved:
             self.showFooter(text: NSLocalizedString(
-                "Saved for 48 hours. Open OpenClaw yourself to review and import into the original chat. Nothing was sent.",
+                "Saved for 48 hours. Open OpenClaw to review and import into the original chat. Nothing was sent.",
                 comment: "Share import manual open instructions"),
                 icon: (name: "checkmark.circle.fill", tint: .systemGreen))
         case .ready:

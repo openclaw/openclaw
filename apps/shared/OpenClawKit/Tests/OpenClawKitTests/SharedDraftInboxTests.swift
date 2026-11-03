@@ -68,3 +68,27 @@ struct SharedDraftInboxTests {
         #expect(try await inbox.pending(now: now.addingTimeInterval(48 * 60 * 60)).isEmpty)
     }
 }
+
+extension SharedDraftInboxTests {
+    @Test func opensThroughAncestorAliasesButRejectsDatabaseFileSymlinks() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let physical = root.appendingPathComponent("physical")
+        try FileManager.default.createDirectory(at: physical, withIntermediateDirectories: true)
+        let alias = root.appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: physical)
+        let inbox = SharedDraftInbox(directoryURL: alias.appendingPathComponent("inbox"))
+        let target = SharedDraftTarget(gatewayID: "gateway", agentID: "main", sessionKey: "main")
+        let id = try await inbox.save(text: "Keep this draft", target: target, files: [])
+        let reopened = SharedDraftInbox(directoryURL: physical.appendingPathComponent("inbox"))
+        #expect(try await reopened.pending().map(\.id) == [id])
+        let foreign = root.appendingPathComponent("foreign")
+        try FileManager.default.createDirectory(at: foreign, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: foreign.appendingPathComponent("inbox.sqlite"),
+            withDestinationURL: physical.appendingPathComponent("inbox/inbox.sqlite"))
+        let linkedDatabase = SharedDraftInbox(directoryURL: foreign)
+        await #expect(throws: SharedDraftError.self) { try await linkedDatabase.pending() }
+        #expect(try await reopened.pending().map(\.id) == [id])
+    }
+}
