@@ -204,6 +204,7 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
         messages: [],
         replyToSender: source()?.replyToSender,
         replyToMessage: source()?.replyToMessage,
+        replyPreviousMessageId: source()?.replyPreviousMessageId,
       },
       props.options.resolveReplyPreview,
     );

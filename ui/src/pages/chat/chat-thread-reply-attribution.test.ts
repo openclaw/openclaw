@@ -79,6 +79,20 @@ const assistantGroups = (props: Partial<Props>) =>
 const forwarded = { provenance: { kind: "inter_session", sourceTool: "sessions_send" } };
 const projected = { senderSession: { sessionKey: "agent:other:main", agentId: "other" } };
 beforeEach(() => resetChatThreadState());
+it("keeps the preceding message identity when search hides its row", () => {
+  const groups = assistantGroups({
+    searchOpen: true,
+    searchQuery: "matching answer",
+    messages: [
+      userMessage("First request", 1000, { __openclaw: { id: "first-prompt" } }),
+      assistantMessage("Earlier answer", 1001, { __openclaw: { id: "earlier-answer" } }),
+      userMessage("Latest request", 1002, { __openclaw: { id: "latest-prompt" } }),
+      assistantMessage("The matching answer", 1003, { __openclaw: { id: "matching-answer" } }),
+    ],
+  });
+  expect(groups).toHaveLength(1);
+  expect(groups[0]?.replyPreviousMessageId).toBe("latest-prompt");
+});
 it.each([
   boundary("sender-less user", false, { role: "user" }),
   boundary("[System] Scheduled report", false, {
