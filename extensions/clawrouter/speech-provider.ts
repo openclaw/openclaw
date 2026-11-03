@@ -222,7 +222,8 @@ export function buildClawRouterSpeechProvider(
       : offers.find(
           (candidate) =>
             candidate.providerId === "openai" &&
-            candidate.model?.id === config.model &&
+            candidate.model !== undefined &&
+            candidate.model.id === config.model &&
             candidate.model.upstream === upstream &&
             Array.isArray(candidate.model.capabilities) &&
             candidate.model.capabilities.includes("audio.speech") &&
