@@ -102,7 +102,6 @@
 
 .plugin-card-title-row :is(h2, h3),
 .plugin-catalog-card__head > .installed-plugins-card__head,
-.plugins-consent__header > div,
 .plugin-catalog-detail__heading,
 .plugin-catalog-detail__readme-section,
 .plugin-catalog-detail__panel {
@@ -777,20 +776,21 @@
   letter-spacing: -0.02em;
 }
 
-.plugins-consent {
-  display: grid;
-  max-height: min(85vh, 860px);
-  gap: var(--space-4);
-  overflow-y: auto;
-  border: 0;
-  padding: var(--overlay-modal-padding);
-  background: var(--overlay-modal-surface);
+/* Art beside the name, with version and meta aligned under it; close keeps the shell's spot. */
+.oc-dialog__header.plugins-consent__header {
+  grid-template-columns: auto minmax(0, 1fr) var(--overlay-modal-close-size);
+  column-gap: var(--space-3);
+  padding-block-start: var(--overlay-modal-padding);
 }
 
-.plugins-consent__header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
+.plugins-consent__header > .oc-dialog__close {
+  align-self: start;
+  margin-block-start: calc(12px - var(--overlay-modal-padding));
+}
+
+.plugins-consent__identity {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .plugins-consent__section {
@@ -816,10 +816,6 @@
 .plugins-consent__hint {
   display: block;
   font-size: var(--control-ui-text-xs);
-}
-
-.plugins-consent__rows {
-  border-top: 1px solid var(--border);
 }
 
 .plugins-consent__items {
@@ -1337,48 +1333,23 @@ openclaw-plugins-page
 .plugin-tool-dialog {
   --openclaw-modal-width: 760px;
 }
-.plugin-tool-preview {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  width: 100%;
-  max-height: var(--openclaw-modal-height-limit, calc(100dvh - 48px));
-  padding: var(--overlay-modal-padding);
-}
-.plugin-tool-preview header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-}
-.plugin-tool-preview h2 {
-  margin: 0;
-  font-size: var(--control-ui-text-lg);
-}
-.plugin-tool-preview__body {
-  overflow: auto;
-  min-height: 0;
-}
 .plugin-tool-preview p {
-  margin: 20px 0 0;
+  margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.6;
 }
-.plugin-tool-preview__parameters {
-  margin-top: 20px;
+.plugin-tool-preview__parameters + p {
+  margin-block-start: var(--space-2);
 }
 .plugin-tool-preview__parameters h3 {
   margin: 0 0 12px;
-  font-size: var(--control-ui-text-base);
+  font-size: var(--control-ui-text-md);
 }
 .plugin-tool-preview__parameters dl {
   display: grid;
   gap: 12px;
   margin: 0;
-}
-.plugin-tool-preview__parameters dl > div {
-  padding: 12px 0;
-  border-top: 1px solid var(--border);
 }
 .plugin-tool-preview__parameters dt {
   display: flex;

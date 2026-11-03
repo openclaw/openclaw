@@ -6,9 +6,13 @@
   text-align: left;
 }
 
-.update-run-dialog {
-  max-height: calc(100dvh - 48px);
-  overflow-y: auto;
+.update-run-dialog__status {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.update-run-dialog__status:empty {
+  display: none;
 }
 
 .update-run-view__heading h3,
