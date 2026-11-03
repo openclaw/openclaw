@@ -908,12 +908,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       "rejects concurrent %s replacement",
       (kind, { signal }) => {
         let change: ReturnType<typeof startEntryChange> | undefined;
-        let scenario: Promise<void>;
         let retirement: Promise<void> | undefined;
         const appends: Promise<PromiseSettledResult<unknown>[]>[] = [];
         retire = () => {
           retirement ??= (async () => {
-            change?.finish();
+            void change?.finish();
             const [primary] = await Promise.allSettled([scenario]);
             // Setup can finish after cancellation; retire any change it acquired before joining.
             const outcomes = [
@@ -940,7 +939,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           })();
           return retirement;
         };
-        scenario = (async () => {
+        const scenario = (async () => {
           try {
             const replacementSessionFile = resolveSessionTranscriptPathInDir(
               "replacement-session",
@@ -988,7 +987,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
               expect(await withinTest(currentAppend, signal)).toMatchObject({ ok: true });
             }
           } finally {
-            change?.finish();
+            void change?.finish();
           }
         })();
         return scenario;
