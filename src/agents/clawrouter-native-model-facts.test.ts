@@ -463,6 +463,21 @@ it("uses Vercel's granted native Messages SDK route for catalog, replay and stre
     providers = [
       {
         ...row,
+        models: [
+          {
+            id: "vercel-ai-gateway/synthetic-chat",
+            upstream: "synthetic-chat",
+            capabilities: ["llm.chat", "llm.messages"],
+          },
+        ],
+      },
+    ];
+    expect((await discover("synthetic-other-vercel-key")).models[0]?.api).toBe(
+      "openai-completions",
+    );
+    providers = [
+      {
+        ...row,
         id: "other-gateway",
         nativeBaseUrl: "/v1/native/other-gateway",
         models: [

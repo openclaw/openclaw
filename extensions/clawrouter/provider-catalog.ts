@@ -292,12 +292,14 @@ function buildRoutedModel(
             offer.url.endsWith("/chat/completions"),
         )
       : undefined;
-  if (provider.id === "vercel-ai-gateway") {
+  if (
+    provider.id === "vercel-ai-gateway" &&
+    id === "vercel-ai-gateway/anthropic/claude-sonnet-4.6"
+  ) {
     // Frozen Vercel row uses the native Anthropic SDK, even when Chat is also
     // offered. The SDK appends /v1/messages; the older /messages route cannot
     // serve it. Require the key's exact mapped native offer, without Chat fallback.
     const messages =
-      id === "vercel-ai-gateway/anthropic/claude-sonnet-4.6" &&
       upstream === "anthropic/claude-sonnet-4.6" &&
       capabilities.includes("llm.messages") &&
       provider.httpOffers.find(

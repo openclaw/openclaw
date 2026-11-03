@@ -76,7 +76,7 @@ you only need an issued ClawRouter key.
 The frozen `vercel-ai-gateway/anthropic/claude-sonnet-4.6` row uses OpenClaw's
 native Anthropic SDK and replay handling when the current key's catalog grants
 the exact native Messages offer. A simultaneous Chat offer does not change that
-model's protocol. Other mixed providers keep their existing selection behavior.
+model's protocol. Other rows and mixed providers keep their existing selection behavior.
 
 This requires a deployment that advertises
 `POST /v1/native/vercel-ai-gateway/v1/messages` with matching
@@ -87,9 +87,9 @@ The older public `/messages` route is not SDK-compatible and is not substituted.
 The [published path-mapping contract](https://github.com/openclaw/clawrouter/pull/583)
 does not activate this provider declaration by itself.
 
-Only the ClawRouter credential is used. Missing or ineligible native offers,
-unknown model identities and unsupported formats do not fall back to Chat or
-local Anthropic/Vercel credentials. This client support does not establish live
+Only the ClawRouter credential is used. For this model, missing or ineligible
+native offers, mismatched upstream identities and unsupported formats do not
+fall back to Chat or local Anthropic/Vercel credentials. This client support does not establish live
 Vercel entitlement or an upstream tariff.
 
 ## Utility model
