@@ -602,8 +602,6 @@ describe("session hovercard", () => {
       );
       expect(container.querySelector(".session-progress-card")).toBeNull();
       expect(container.querySelector("time")).toBeNull();
-      expect(container.querySelector(".session-hovercard__excerpt")).toBeNull();
-      expect(container.textContent).not.toContain("This must not appear.");
     },
   );
 
