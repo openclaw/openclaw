@@ -2459,6 +2459,7 @@ describe("chat attachment picker", () => {
           origin: "paste",
         },
         dataUrl: `data:text/plain;base64,${btoa("retained pasted text")}`,
+        file: new File(["retained pasted text"], "pasted-text-123.txt", { type: "text/plain" }),
       }),
     ];
 
