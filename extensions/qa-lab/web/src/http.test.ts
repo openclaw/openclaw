@@ -16,7 +16,11 @@ function mockResponse(text: string, init: ResponseInit) {
 
 describe("QA Lab dashboard HTTP", () => {
   it("gives every API request an independent 30 second deadline", async (context) => {
-    const controllers = [new AbortController(), new AbortController(), new AbortController()];
+    const controllers = [
+      new AbortController(),
+      new AbortController(),
+      new AbortController(),
+    ] as const;
     const timeout = vi.spyOn(AbortSignal, "timeout");
     for (const controller of controllers) {
       timeout.mockReturnValueOnce(controller.signal);
@@ -41,7 +45,7 @@ describe("QA Lab dashboard HTTP", () => {
           const onAbort = () => {
             signal.removeEventListener("abort", onAbort);
             entry.settled = true;
-            reject(signal.reason);
+            reject(signal.reason as Error);
           };
           pending.push(entry);
           if (signal.aborted) {
@@ -93,8 +97,9 @@ describe("QA Lab dashboard HTTP", () => {
       expect(pending.map((request) => request.settled)).toEqual([false, true, false]);
       await withinTest(expect(requests[1]).rejects.toBe(cancellation), context.signal);
       expect(settled).toEqual([false, true, false]);
-      pending[0].release();
-      pending[2].release();
+      for (const request of pending) {
+        request.release();
+      }
       await withinTest(expect(requests[0]).resolves.toEqual({ ok: true }), context.signal);
       await withinTest(expect(requests[2]).resolves.toEqual({ ok: true }), context.signal);
     } finally {
