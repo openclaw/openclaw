@@ -128,6 +128,14 @@ it("loads a changed locale without replacing the edited profile input", async ()
 
 it("retains profile facts while refreshed snapshots update their values", () => {
   f.click("Cancel");
+  f.update({
+    status: {
+      configured: true,
+      running: true,
+      publicKey: "initial-public-key",
+      profile: { name: "Alice" },
+    },
+  });
   const fact = (label: string) =>
     [...f.container.querySelectorAll("dt")].find((node) => node.textContent === label)!;
   const name = fact("Name");

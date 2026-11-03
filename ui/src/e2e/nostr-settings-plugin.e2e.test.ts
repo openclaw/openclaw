@@ -131,8 +131,8 @@ suite.define(() => {
         await gateway.waitForRequest("config.get", { after: beforeChange });
         await expect(enabled).toBeChecked();
         await refreshAfter(
-          () => detail.getByRole("button", { name: "Refresh", exact: true }).click(),
-          false,
+          () => detail.getByRole("button", { name: "Check connection", exact: true }).click(),
+          true,
         );
         expect(await gateway.getRequests("plugins.controlUi.report")).toHaveLength(0);
         expect(errors).toEqual([]);

@@ -4,7 +4,7 @@ import { createMemo, For, Show } from "solid-js";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
-import { resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import "../../components/modal-dialog.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
@@ -52,8 +52,8 @@ function ChannelDetailStatus(params: ChannelDetailParams) {
       </span>
       <Show
         when={
-          !params.props.presentation.details.has(params.channelId) &&
-          channelDetailPresentations.has(params.channelId)
+          channelDetailPresentations.has(params.channelId) ||
+          channelSnapshotEntryIsActive(params.props.channels.channelsSnapshot, params.channelId)
         }
       >
         <button
@@ -125,7 +125,7 @@ function ChannelProblem(params: ChannelDetailParams) {
       fallback={
         <Show when={fallback()}>
           {(problem) => (
-            <div class="callout danger">
+            <div class="callout danger" role="alert">
               <Show when={problem().title}>
                 <strong>{problem().title}</strong>
               </Show>
