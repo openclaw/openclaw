@@ -58,7 +58,7 @@ describe("iMessage private API status cache", () => {
   };
 
   it("expires temporary verdicts at the deadline while retaining permanent verdicts", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_700_000_000_000);
     setCachedIMessagePrivateApiStatus("imsg-temporary", availableStatus, 1_700_000_030_000);
     setCachedIMessagePrivateApiStatus("imsg-permanent", availableStatus);
     now.mockReturnValue(1_700_000_029_999);
@@ -66,5 +66,18 @@ describe("iMessage private API status cache", () => {
     now.mockReturnValue(1_700_000_030_000);
     expect(getCachedIMessagePrivateApiStatus("imsg-temporary")).toBeUndefined();
     expect(getCachedIMessagePrivateApiStatus("imsg-permanent")).toEqual(availableStatus);
+  });
+
+  it("keeps a temporary verdict alive across a wall-clock forward step", () => {
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_700_000_000_000);
+    setCachedIMessagePrivateApiStatus("imsg-temporary", availableStatus, 1_700_000_030_000);
+    now.mockReturnValue(1_700_000_029_000);
+    expect(getCachedIMessagePrivateApiStatus("imsg-temporary")).toEqual(availableStatus);
+
+    // A wall-clock forward step (NTP correction, manual clock change) must not
+    // expire the 30-second window early; the window is anchored to the monotonic
+    // clock, so only elapsed time moves it.
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    expect(getCachedIMessagePrivateApiStatus("imsg-temporary")).toEqual(availableStatus);
   });
 });
