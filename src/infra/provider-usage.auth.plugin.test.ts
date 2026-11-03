@@ -137,7 +137,13 @@ describe("provider usage auth boundary", () => {
     const auths = await resolveProviderAuths({
       providers: ["deepseek"],
       env: {},
-      config: { models: { providers: { deepseek: { apiKey: "openai:manual" } } } },
+      config: {
+        models: {
+          providers: {
+            deepseek: { baseUrl: "https://api.deepseek.com", apiKey: "openai:manual", models: [] },
+          },
+        },
+      },
       agentDir: "/tmp/openclaw-agent",
     });
 
@@ -159,21 +165,31 @@ describe("provider usage auth boundary", () => {
       },
       { deepseek: [] },
     );
-    let legacy: string[] | undefined;
+    let legacy: string | undefined;
     resolvePlugin.mockImplementationOnce(async ({ context }) => {
-      legacy = (await context.resolveApiKeyFromConfigAndStore?.({})) ?? [];
+      legacy = context.resolveApiKeyFromConfigAndStore?.({});
       return undefined;
     });
 
     await resolveProviderAuths({
       providers: ["deepseek"],
       env: {},
-      config: { models: { providers: { deepseek: { apiKey: "deepseek:expired" } } } },
+      config: {
+        models: {
+          providers: {
+            deepseek: {
+              baseUrl: "https://api.deepseek.com",
+              apiKey: "deepseek:expired",
+              models: [],
+            },
+          },
+        },
+      },
       agentDir: "/tmp/openclaw-agent",
     });
 
-    expect(legacy ?? []).not.toContain("expired-token");
-    expect(legacy ?? []).not.toContain("deepseek:expired");
+    expect(legacy).not.toBe("expired-token");
+    expect(legacy).not.toBe("deepseek:expired");
   });
 
   it("resolves a saved profile binding written into provider config", async () => {
@@ -193,7 +209,13 @@ describe("provider usage auth boundary", () => {
     const auths = await resolveProviderAuths({
       providers: ["deepseek"],
       env: {},
-      config: { models: { providers: { deepseek: { apiKey: profileId } } } },
+      config: {
+        models: {
+          providers: {
+            deepseek: { baseUrl: "https://api.deepseek.com", apiKey: profileId, models: [] },
+          },
+        },
+      },
       agentDir: "/tmp/openclaw-agent",
     });
 
@@ -212,7 +234,17 @@ describe("provider usage auth boundary", () => {
     const auths = await resolveProviderAuths({
       providers: ["deepseek"],
       env: {},
-      config: { models: { providers: { deepseek: { apiKey: "sk-literal-usage-key" } } } },
+      config: {
+        models: {
+          providers: {
+            deepseek: {
+              baseUrl: "https://api.deepseek.com",
+              apiKey: "sk-literal-usage-key",
+              models: [],
+            },
+          },
+        },
+      },
       agentDir: "/tmp/openclaw-agent",
     });
 
