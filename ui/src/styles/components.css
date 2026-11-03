@@ -535,10 +535,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   animation: btn-spinner-spin 0.7s linear infinite;
 }
 
-.settings-save-indicator__spinner svg {
-  animation: btn-spinner-spin 0.7s linear infinite;
-}
-
 @keyframes btn-spinner-spin {
   to {
     transform: rotate(360deg);
@@ -546,8 +542,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .btn__spinner,
-  .settings-save-indicator__spinner svg {
+  .btn__spinner {
     animation: none;
   }
 }
@@ -612,7 +607,8 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   flex-shrink: 0;
 }
 
-.btn.primary {
+/* The accent means "do this next": a primary that can't be pressed paints like any disabled button. */
+.btn.primary:where(:not(:disabled, [aria-disabled="true"])) {
   border-color: transparent;
   background: var(--primary);
   color: var(--primary-foreground);
@@ -1255,7 +1251,8 @@ select.settings-select:not([multiple]) {
   border-color: var(--danger);
 }
 
-:root[data-theme-mode="light"] .btn:where(:not(.primary, .danger)) {
+:root[data-theme-mode="light"]
+  .btn:where(:not(.danger, .primary:not(:disabled, [aria-disabled="true"]))) {
   background: var(--bg);
   border-color: var(--input);
 }
@@ -1422,7 +1419,6 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 
 .callout.danger,
 .callout.warn {
-  border-color: color-mix(in srgb, var(--callout-tone) 34%, var(--border));
   background: linear-gradient(
     135deg,
     color-mix(in srgb, var(--callout-tone) 14%, var(--bg-elevated)) 0%,
@@ -1433,7 +1429,6 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 
 .callout.info,
 .callout.success {
-  border-color: color-mix(in srgb, var(--callout-tone) 25%, transparent);
   background: linear-gradient(
     135deg,
     color-mix(in srgb, var(--callout-tone) 8%, transparent) 0%,
@@ -1534,20 +1529,15 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 }
 
 .lazy-view-error__icon {
-  width: 44px;
-  height: 44px;
   display: grid;
   place-items: center;
-  border-radius: 50%;
-  background: var(--danger-subtle);
   color: var(--danger);
   margin-bottom: 4px;
 }
 
 /* A stale-chunk reload prompt is routine after an update, not a failure. */
 .lazy-view-error--stale .lazy-view-error__icon {
-  background: var(--accent-subtle);
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .lazy-view-error__icon svg {
@@ -2421,8 +2411,13 @@ select.data-table-pagination__size {
   color: var(--danger);
 }
 
-.input-dialog__field {
-  margin-top: 14px;
+.confirm-dialog .oc-dialog__description {
+  white-space: pre-line;
+}
+
+.confirm-dialog .oc-dialog__body > .exec-approval-command,
+.confirm-dialog .oc-dialog__body > .exec-approval-skip {
+  margin-top: 0;
 }
 
 /* The confirm opt-out is a control, not a continuation of the message copy, so it
@@ -2546,9 +2541,9 @@ select.data-table-pagination__size {
 
 .agent-select__chevron svg,
 .agent-select__avatar--icon svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.7px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .agent-select--compact .agent-select__trigger,
@@ -2822,40 +2817,7 @@ select.data-table-pagination__size {
   }
 }
 
-.device-pair-setup {
-  display: flex;
-  max-height: var(--openclaw-modal-height-limit);
-  flex-direction: column;
-  overflow-y: auto;
-}
-
-.device-pair-setup__header {
-  position: relative;
-  flex-shrink: 0;
-  display: grid;
-  justify-items: center;
-  gap: 12px;
-  padding: 28px 52px 18px;
-  text-align: center;
-}
-
-.device-pair-setup__header h2 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-}
-
-.device-pair-setup__header p {
-  max-width: 390px;
-  margin: 7px 0 0;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.device-pair-setup__get-apps button,
+.device-pair-setup__link,
 .apps-pair-hint button {
   padding: 0;
   border: 0;
@@ -2867,37 +2829,23 @@ select.data-table-pagination__size {
   text-underline-offset: 2px;
 }
 
-.device-pair-setup__get-apps button:hover,
+.device-pair-setup__link:hover,
 .apps-pair-hint button:hover {
   color: var(--text-strong);
 }
 
-.device-pair-setup__get-apps button:focus-visible,
+.device-pair-setup__link:focus-visible,
 .apps-pair-hint button:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
   border-radius: 4px;
 }
 
-.device-pair-setup__footer {
-  padding: 14px 20px;
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-elevated) 45%, transparent);
-  font-size: 13px;
-}
-
 .app-toast__dismiss svg,
 .data-table-bulk-bar .btn svg,
-.agent-select__option-check svg,
-.device-pair-setup__external-icon svg {
+.agent-select__option-check svg {
   width: 14px;
   height: 14px;
-}
-
-@media (max-width: 640px) {
-  .device-pair-setup__header {
-    padding: 22px 46px 16px;
-  }
 }
 
 .md-preview-expand-btn .when-fullscreen,

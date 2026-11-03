@@ -267,7 +267,7 @@ suite.define(() => {
       .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
     await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
 
-    expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
+    await expect.poll(() => page.locator("#new-session-checkout-trigger").count()).toBe(0);
     await page.locator("#new-session-where-trigger").click();
     const where = page.locator(".oc-popover.new-session-page__where-popover");
     const cloud = where.getByRole("button", { name: "aws", exact: true });

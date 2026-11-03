@@ -45,11 +45,15 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
 export function transcriptContextDependencies(
   item: ChatRenderItem,
   loadedSources: ReadonlyMap<string, LoadedReplySource>,
-  props: Pick<ChatThreadProps, "onRetryRun" | "failureActionsRunId" | "modelCatalog">,
+  props: Pick<
+    ChatThreadProps,
+    "onRetryRun" | "failedMessageEditSource" | "failureActionsRunId" | "modelCatalog"
+  >,
 ): unknown[] {
   if (item.kind === "notice") {
     return [
       props.onRetryRun,
+      props.failedMessageEditSource,
       props.failureActionsRunId,
       item.modelChange ? props.modelCatalog : undefined,
     ];

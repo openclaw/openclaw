@@ -101,6 +101,7 @@ export async function buildPluginControlUi(params: {
   const output = `dist/control-ui/${pluginControlUiGenerationHash(files)}`;
   const outputDir = path.join(rootDir, output);
   const declaration = {
+    ...(presentation.value?.panelIcon ? { panelIcon: presentation.value.panelIcon } : {}),
     ...(presentation.value?.activation ? { activation: presentation.value.activation } : {}),
     ...(presentation.value?.settingsViews
       ? { settingsViews: presentation.value.settingsViews }

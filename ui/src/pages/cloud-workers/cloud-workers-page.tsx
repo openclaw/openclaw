@@ -28,7 +28,7 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
@@ -610,7 +610,20 @@ export function CloudWorkersPage() {
             <>
               <Show when={!hasManageAccess()}>
                 <div class="callout warning" role="note">
-                  {t("cloudWorkersPage.adminRequired")}
+                  {t(
+                    !gateway.connected
+                      ? "cloudWorkersPage.reconnectRequired"
+                      : canPresentGatewayMethod(
+                            gateway.snapshot,
+                            "config.patch",
+                            "operator.admin",
+                            {
+                              requireAdvertisement: false,
+                            },
+                          )
+                        ? "cloudWorkersPage.unavailableAccess"
+                        : "cloudWorkersPage.adminRequired",
+                  )}
                 </div>
               </Show>
               <Errored
