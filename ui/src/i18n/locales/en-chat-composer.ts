@@ -214,7 +214,8 @@ const catalog = {
         applyingSettings: "Applying chat settings",
         blockedByReview:
           "Queue paused. Review or discard the earlier held message in the conversation.",
-        pausedByStop: "Queue paused because you stopped the run",
+        pausedByStop: "Queue paused",
+        pausedByStopReason: "You stopped the run",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         editing: "Editing",

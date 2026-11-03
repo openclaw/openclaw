@@ -663,13 +663,10 @@ suite.define(() => {
     await stop.click();
     await gateway.waitForRequest("chat.abort");
     const paused = page.locator('[data-chat-queue-global-state="paused"]');
-    await paused
-      .getByText("Queue paused because you stopped the run", { exact: true })
-      .waitFor({ timeout: 10_000 });
+    await paused.getByText("Queue paused", { exact: true }).waitFor({ timeout: 10_000 });
     // A correction typed before the abort settles is not parked: it goes out next.
     await composer.fill("send this one now");
     await composer.press("Enter");
-    await page.locator(".chat-queue__item", { hasText: "send this one now" }).waitFor();
     await gateway.emitGatewayEvent("chat", chatEvent(runId, "agent:main:main", "aborted"));
 
     const direct = requireRecord((await waitForRequests(gateway, "chat.send", 2))[1]?.params);

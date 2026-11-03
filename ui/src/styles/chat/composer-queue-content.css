@@ -49,73 +49,54 @@
   color: var(--warn);
 }
 
-.chat-queue__global-state[data-chat-queue-global-state="paused"] {
-  gap: 6px;
-  min-height: 32px;
+.chat-queue__paused {
+  display: grid;
+  grid-template-columns: var(--chat-stack-icon-size) [copy] minmax(0, 1fr) [actions] auto;
+  align-items: center;
+  column-gap: 8px;
+  min-height: 36px;
   padding-block: 4px;
-  padding-inline: 12px 6px;
-  font-size: 11px;
+  padding-inline: var(--chat-stack-leading-inset) var(--chat-stack-trailing-inset);
+  border-bottom: 1px solid var(--chat-queue-divider);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
-.chat-queue__global-state[data-chat-queue-global-state="paused"] > svg {
-  flex: none;
-  width: 12px;
-  height: 12px;
+/* Solid glyphs: the outlined pause and play shapes read as hollow at this size. */
+.chat-queue__paused svg :is(rect, polygon) {
+  fill: currentColor;
+  stroke: none;
 }
 
-.chat-queue__global-state-label {
-  flex: 1;
+.chat-queue__paused .chat-queue__leading svg {
+  width: 11px;
+  height: 11px;
+}
+
+.chat-queue__paused-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.chat-queue__global-state-actions {
-  display: inline-flex;
+.chat-queue__paused-title {
   flex: none;
-  gap: 2px;
+  color: var(--chat-text);
+  font-weight: 500;
 }
 
-.chat-queue__global-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding-inline: 9px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: none;
+.chat-queue__paused-reason {
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  cursor: var(--cursor-action);
+  text-overflow: ellipsis;
 }
 
-.chat-queue__global-action:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.chat-queue__global-action:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
-.chat-queue__global-action svg {
-  width: 10px;
-  height: 10px;
-}
-
-.chat-queue__global-action--primary {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-}
-
-.chat-queue__global-action--primary:hover {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-  color: var(--accent);
+.chat-queue__paused-reason::before {
+  margin-inline-end: 6px;
+  content: "·";
 }
 
 .chat-queue__scroll[data-scrollable="true"] {
@@ -447,6 +428,14 @@
 .chat-queue__action:disabled {
   color: color-mix(in srgb, var(--muted) 48%, transparent);
   cursor: default;
+}
+
+.chat-queue__clear {
+  color: var(--muted);
+}
+
+.chat-queue__clear:hover {
+  color: var(--text);
 }
 
 .chat-queue__remove,

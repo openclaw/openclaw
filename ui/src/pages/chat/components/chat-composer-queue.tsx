@@ -192,41 +192,46 @@ export function renderChatQueueSolid(props: ChatQueueProps) {
     <>
       {visibleQueue().length > 0 ? (
         <div class="chat-queue" role="status" aria-live="polite">
-          {globalState() ? (
+          {globalState()?.tone === "paused" ? (
+            <div class="chat-queue__paused" data-chat-queue-global-state="paused">
+              <span class="chat-queue__leading">
+                <Icon name="pause" />
+              </span>
+              <span class="chat-queue__paused-copy">
+                <span class="chat-queue__paused-title">{globalState()!.label}</span>
+                <span class="chat-queue__paused-reason">
+                  {t("chat.queue.states.pausedByStopReason")}
+                </span>
+              </span>
+              <span class="chat-queue__actions">
+                {props.onQueueClear ? (
+                  <button
+                    class={["chat-queue__action", "chat-queue__clear"]}
+                    type="button"
+                    aria-label={t("chat.queue.clearPausedQueue")}
+                    onClick={() => props.onQueueClear?.()}
+                  >
+                    {t("chat.queue.clearPaused")}
+                  </button>
+                ) : null}
+                {props.onQueueResume ? (
+                  <button
+                    class={["chat-queue__action", "chat-queue__resume"]}
+                    type="button"
+                    onClick={() => props.onQueueResume?.()}
+                  >
+                    <Icon name="play" />
+                    <span>{t("chat.queue.resume")}</span>
+                  </button>
+                ) : null}
+              </span>
+            </div>
+          ) : globalState() ? (
             <div
               class="chat-queue__global-state"
               data-chat-queue-global-state={globalState()!.tone}
             >
-              {globalState()!.tone === "paused" ? (
-                <>
-                  <Icon name="pause" />
-                  <span class="chat-queue__global-state-label">{globalState()!.label}</span>
-                  <span class="chat-queue__global-state-actions">
-                    {props.onQueueClear ? (
-                      <button
-                        class="chat-queue__global-action"
-                        type="button"
-                        aria-label={t("chat.queue.clearPausedQueue")}
-                        onClick={() => props.onQueueClear?.()}
-                      >
-                        {t("chat.queue.clearPaused")}
-                      </button>
-                    ) : null}
-                    {props.onQueueResume ? (
-                      <button
-                        class="chat-queue__global-action chat-queue__global-action--primary"
-                        type="button"
-                        onClick={() => props.onQueueResume?.()}
-                      >
-                        <Icon name="play" />
-                        <span>{t("chat.queue.resume")}</span>
-                      </button>
-                    ) : null}
-                  </span>
-                </>
-              ) : (
-                globalState()!.label
-              )}
+              {globalState()!.label}
             </div>
           ) : null}
           <div
