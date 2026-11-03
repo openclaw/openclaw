@@ -306,13 +306,11 @@ function ChatErrorNotice(props: {
   actionAvailable?: boolean;
 }) {
   const displayError = () => props.displayError ?? formatWebUiIconErrorText(props.error);
-  const lines = () =>
-    displayError()
-      .trim()
-      .split(/\r?\n/u)
-      .map((line) => line.replace(/\s+/gu, " ").trim());
   const title = () => props.summary ?? t("chat.errorSummary");
-  const hasDetails = () => lines().some((line) => line !== "" && line !== title());
+  const hasDetails = () => {
+    const detail = displayError().trim();
+    return detail !== "" && detail !== title();
+  };
   const tone = () => props.tone ?? "danger";
   const content = (error: string) => (
     <Show

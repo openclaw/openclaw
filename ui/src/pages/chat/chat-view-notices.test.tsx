@@ -68,12 +68,8 @@ it.each([false, true])("collapses a replacement diagnostic (mobile=%s)", async (
     { runError: { summary: "First diagnostic" } },
     mobile,
   );
-  const details = await waitForElement<HTMLDetailsElement>(
-    container,
-    "details",
-    "first diagnostic",
-  );
-  details.open = true;
+  const details = await waitForElement(container, "details", "first diagnostic");
+  details.setAttribute("open", "");
   publish({ messages: [], runError: { summary: "Second diagnostic" } });
   await waitForSolid(() => {
     expect(container.querySelector("details")).not.toBe(details);
