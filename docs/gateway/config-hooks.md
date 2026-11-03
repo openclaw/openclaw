@@ -203,7 +203,6 @@ hook path.
 | `model`                      | agent/model defaults        | Templated model override.                                                                                                                         |
 | `thinking`                   | agent/model defaults        | Templated thinking override.                                                                                                                      |
 | `timeoutSeconds`             | agent timeout               | Positive integer turn timeout.                                                                                                                    |
-| `allowInsecureTokenArgs`     | `false`                     | Explicitly accept both tokens in process arguments for positively identified legacy Gog. Supporting Gog always uses child environment sources.    |
 | `allowUnsafeExternalContent` | `false`                     | Dangerous: disables agent external-content wrapping for this mapping. Gmail's global unsafe flag can also disable wrapping.                       |
 | `transform.module`           | unset                       | Safe relative JS/TS module under `transformsDir`; absolute, traversal, URL/drive forms, and symlink escapes are rejected.                         |
 | `transform.export`           | `default`, then `transform` | Named function export; an explicitly named export must exist.                                                                                     |

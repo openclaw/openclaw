@@ -51,10 +51,14 @@ vi.mock("../process/exec.js", () => ({
 // mock-isolation: terminate only the fixture's fake child processes.
 vi.mock("../process/kill-tree.js", () => ({ killProcessTree: mocks.killProcessTree }));
 
-vi.mock("./gmail-setup-utils.js", () => ({
+vi.mock("./gmail-setup-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gmail-setup-utils.js")>()),
   ensureTailscaleEndpoint: mocks.ensureTailscaleEndpoint,
 }));
-vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => mocks.log }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+  createSubsystemLogger: () => mocks.log,
+}));
 
 const { startGmailWatcher, stopGmailWatcher } = await import("./gmail-watcher.js");
 
