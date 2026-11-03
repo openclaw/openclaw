@@ -10,8 +10,11 @@ export type BrowserExtensionRequest = {
 
 /** Task-scoped attachment to an extension worker in one managed browser instance. */
 export interface ExtensionHostSession {
-  /** Run closure-free code in the worker; arguments and results must be JSON-serializable. */
-  callInServiceWorker<A, R>(fn: (args: A) => Promise<R> | R, args: A): Promise<R>;
+  /**
+   * Run closure-free code in the worker; arguments and results must be JSON-serializable.
+   * The result is untrusted extension output, so callers validate its shape.
+   */
+  callInServiceWorker<A>(fn: (args: A) => unknown, args: A): Promise<unknown>;
   /** Resolve an OpenClaw tab handle or raw target id; ambiguous same-URL tabs fail closed. */
   resolveChromeTabId(tab: { targetId: string }): Promise<number>;
   /** Exclude browser reads/actions while fn runs. Conflicts fail with a clear busy error. */

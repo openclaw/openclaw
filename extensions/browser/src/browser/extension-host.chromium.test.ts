@@ -22,11 +22,13 @@ vi.mock("./paths.js", async (importOriginal) => ({
     return path.join(fixture.root, "downloads");
   },
 }));
+// mock-isolation: Route control state to this fixture instead of the process-wide browser service.
 vi.mock("../browser-control-state.js", () => ({
   getBrowserControlState: () => fixture.state,
   createBrowserControlContext: () =>
     createBrowserRouteContext({ getState: () => fixture.state ?? null }),
 }));
+// mock-isolation: The fixture owns browser launch; never start the real control service.
 vi.mock("../control-service.js", () => ({
   startBrowserControlServiceFromConfig: async () => fixture.state,
 }));

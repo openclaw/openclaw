@@ -1219,6 +1219,7 @@ try {
     const tabId = await session.resolveChromeTabId(tab);
     // Call the extension's documented API here. Functions must not capture
     // host closures. Pass tokens/keys in args, never in the function source.
+    // The result is `unknown`: validate it before use.
     await session.callInServiceWorker((args: { tabId: number }) => ({ tabId: args.tabId }), {
       tabId,
     });

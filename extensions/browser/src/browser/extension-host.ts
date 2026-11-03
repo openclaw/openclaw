@@ -360,7 +360,7 @@ async function openWorkerSession(params: {
     await connection.catch(() => {});
   };
   const session: ExtensionHostSession = {
-    callInServiceWorker: async <A, R>(fn: (args: A) => Promise<R> | R, args: A): Promise<R> => {
+    callInServiceWorker: async <A>(fn: (args: A) => unknown, args: A): Promise<unknown> => {
       assertCurrent();
       return await runProfileContextOperation(params.profileCtx, undefined, async () => {
         assertCurrent();
@@ -384,8 +384,8 @@ async function openWorkerSession(params: {
           if (response.exceptionDetails) {
             throw new Error("Worker function failed.");
           }
-          // CDP's JSON result is the caller's declared return type, like worker.evaluate.
-          return response.result.value as R;
+          // Worker output crosses a trust boundary; callers validate its shape.
+          return response.result.value;
         } catch {
           if (exclusive) {
             quarantineExtensionProfile(params.runtime);
@@ -408,7 +408,7 @@ async function openWorkerSession(params: {
           return matches.length === 1 ? matches[0]?.id : undefined;
         });
       }, tab.url);
-      if (!Number.isSafeInteger(id) || id === undefined) {
+      if (typeof id !== "number" || !Number.isSafeInteger(id)) {
         throw new Error(
           "Cannot uniquely map this browser target to a Chrome tab id. Close duplicate-URL tabs and retry.",
         );
