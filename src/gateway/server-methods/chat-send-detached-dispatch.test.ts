@@ -10,7 +10,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
-import { createOwnedTestInstance } from "../../plugins/plugin-instance.test-support.js";
+import { createOwnedTestInstance, throwing } from "../../plugins/plugin-instance.test-support.js";
 import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -51,38 +51,29 @@ it("settles detached dispatch after its parent plugin scope closes and cleanup t
       }),
     };
     const context = createGatewayRequestContext(makeContextParams());
-    const removeFaulted = createDeferred();
     const cleanupError = new Error("accepted chat-run cleanup failed");
-    vi.mocked(context.removeChatRun).mockImplementation(() => {
-      removeFaulted.resolve();
-      throw cleanupError;
-    });
+    vi.mocked(context.removeChatRun).mockImplementation(throwing(cleanupError));
     const originalAdmission = chatAdmission.admitChatSend;
     let admission: chatAdmission.AdmittedChatSend | undefined;
     // Admission is already awaited; leave detached dispatch completion unspied.
-    const observeAdmission = vi
-      .spyOn(chatAdmission, "admitChatSend")
-      .mockImplementation(async (params) => {
-        const result = await originalAdmission(params);
-        if (result.ok) {
-          admission = result.value;
-        }
-        return result;
-      });
-    const plugin = createOwnedTestInstance("spawn-parent");
-    const invocations = new PluginInvocationScope(plugin.owner!.registry!, [plugin], {
-      retained: true,
+    using observeAdmission = vi.spyOn(chatAdmission, "admitChatSend");
+    observeAdmission.mockImplementation(async (params) => {
+      const result = await originalAdmission(params);
+      admission = result.ok ? result.value : admission;
+      return result;
     });
+    const plugin = createOwnedTestInstance("spawn-parent");
+    const registry = plugin.owner!.registry!;
+    const invocations = new PluginInvocationScope(registry, [plugin], { retained: true });
     const names = plugin.wrap(["child_tool"]);
     const parentReleased = createDeferred();
-    const rejectDispatch = vi
-      .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
-      .mockImplementation(async () => {
-        await parentReleased.promise;
-        // Registry adoption enumerates plugin-owned names after workspace preparation.
-        expect([...new Set(names)]).toEqual(["child_tool"]);
-        throw new SubagentRegistryMutationRejectedError("Replacement subagent cohort changed");
-      });
+    using rejectDispatch = vi.spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher");
+    rejectDispatch.mockImplementation(async () => {
+      await parentReleased.promise;
+      // Registry adoption enumerates plugin-owned names after workspace preparation.
+      expect([...new Set(names)]).toEqual(["child_tool"]);
+      throw new SubagentRegistryMutationRejectedError("Replacement subagent cohort changed");
+    });
     try {
       const params = {
         sessionKey,
@@ -103,53 +94,45 @@ it("settles detached dispatch after its parent plugin scope closes and cleanup t
       );
       invocations.release();
       parentReleased.resolve();
-      expect(respond).toHaveBeenCalledOnce();
-      const [ok, response] = expectDefined(respond.mock.calls[0], "chat.send did not respond");
-      expect([ok, response]).toEqual([true, expect.objectContaining({ runId, status: "started" })]);
-      await removeFaulted.promise;
+      expect(respond.mock.calls.map(([ok]) => ok)).toEqual([true]);
+      expect(respond.mock.calls[0]?.[1]).toMatchObject({ runId, status: "started" });
+      await expectDefined(admission, "missing admission").gatewayWorkAdmission.released;
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      const terminals = vi
-        .mocked(context.broadcast)
-        .mock.calls.filter(
-          ([event, payload]) =>
-            event === "chat" &&
-            isRecord(payload) &&
-            payload.runId === runId &&
-            payload.state === "error",
-        );
+      const events = vi.mocked(context.broadcast).mock.calls;
+      const terminals = events.filter(
+        ([event, payload]) =>
+          event === "chat" &&
+          isRecord(payload) &&
+          payload.runId === runId &&
+          payload.state === "error",
+      );
       expect(terminals).toHaveLength(1);
-      expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
-        ok: false,
-        payload: {
-          runId,
-          status: "error",
-          summary: expect.stringContaining("Replacement subagent cohort changed"),
-        },
+      const outcome = context.dedupe.get(`chat:${runId}`);
+      expect(outcome?.ok).toBe(false);
+      expect(outcome?.payload).toMatchObject({
+        runId,
+        status: "error",
+        summary: expect.stringContaining("Replacement subagent cohort changed"),
       });
-      await expectDefined(admission, "dispatch did not acquire admission").gatewayWorkAdmission
-        .released;
       expect(context.logGateway.warn).toHaveBeenCalledWith(
         expect.stringContaining("accepted chat-run cleanup failed"),
       );
       const transcript = await loadTranscriptEvents(scope);
       expect(
-        transcript.filter(
-          (event) =>
-            isRecord(event) &&
-            event.type === "message" &&
-            isRecord(event.message) &&
-            event.message.role === "user",
-        ),
+        transcript
+          .filter(isRecord)
+          .filter(
+            (event) =>
+              event.type === "message" && isRecord(event.message) && event.message.role === "user",
+          ),
       ).toHaveLength(1);
     } finally {
       invocations.release();
       parentReleased.resolve();
-      rejectDispatch.mockRestore();
       admission?.cleanupAdmittedRun();
       await admission?.gatewayWorkAdmission.released;
-      observeAdmission.mockRestore();
     }
   });
 });

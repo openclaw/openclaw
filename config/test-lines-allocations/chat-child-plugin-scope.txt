@@ -1,2 +1,0 @@
-# Exercise accepted chat dispatch after its spawning plugin lease closes, retaining cleanup failure coverage.
-17
