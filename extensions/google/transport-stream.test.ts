@@ -10,6 +10,7 @@ import type { Model, ProviderContext } from "openclaw/plugin-sdk/llm";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { resetGoogleVertexAdcState } from "./google-oauth.test-support.js";
 
@@ -601,6 +602,125 @@ describe("google transport stream", () => {
         const payload = parseRequestJsonBody(requireRequestInit(call, "Google request"));
         expect(payload.generationConfig ?? {}).toEqual(expected);
       }
+    },
+  );
+
+  it.each(["google-generative-ai", "google-vertex"] as const)(
+    "round-trips keyword parameters through the managed %s transport",
+    async (api) => {
+      const wireArgs = { from__: "source", from_: "literal", data: { from__: "opaque" } };
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      functionCall: { id: "call_kw", name: "lookup", args: wireArgs },
+                      thoughtSignature: "c2lnXzE=",
+                    },
+                  ],
+                },
+                finishReason: "STOP",
+              },
+            ],
+          },
+        ]),
+      );
+      const model = {
+        ...buildGeminiModel(),
+        api,
+        provider: api === "google-vertex" ? "google-vertex" : "google",
+      };
+      const tools = [
+        {
+          name: "lookup",
+          description: "Lookup",
+          parameters: {
+            type: "object",
+            properties: {
+              from: { type: "string" },
+              from_: { type: "string" },
+              data: { type: "object" },
+            },
+            required: ["from"],
+          },
+        },
+      ];
+      const streamFn =
+        api === "google-vertex"
+          ? createGoogleVertexTransportStreamFn()
+          : createGoogleGenerativeAiTransportStreamFn();
+      const output = await (
+        await streamFn(
+          model,
+          {
+            messages: [{ role: "user", content: "Look it up", timestamp: 0 }],
+            tools,
+          },
+          { apiKey: "test-key", project: "test-project", location: "us-central1" } as Parameters<
+            typeof streamFn
+          >[2],
+        )
+      ).result();
+      expect(output.stopReason).toBe("toolUse");
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: "call_kw",
+          name: "lookup",
+          thoughtSignature: "c2lnXzE=",
+          arguments: { from: "source", from_: "literal", data: { from__: "opaque" } },
+        },
+      ]);
+      const request = parseRequestJsonBody(
+        requireRequestInit(
+          requireMockCall(guardedFetchMock, 0, "Google request"),
+          "Google request",
+        ),
+      );
+      expect(request.tools).toEqual([
+        {
+          functionDeclarations: [
+            {
+              name: "lookup",
+              description: "Lookup",
+              parametersJsonSchema: {
+                type: "object",
+                properties: {
+                  from__: { type: "string" },
+                  from_: { type: "string" },
+                  data: { type: "object" },
+                },
+                required: ["from__"],
+              },
+            },
+          ],
+        },
+      ]);
+      expect(
+        buildGoogleGenerativeAiParams(model, {
+          messages: [output, makeTextToolResult("call_kw", "lookup", "ok", false, 0)],
+          tools,
+        }).contents,
+      ).toEqual([
+        {
+          role: "model",
+          parts: [
+            {
+              functionCall: { id: "call_kw", name: "lookup", args: wireArgs },
+              thoughtSignature: "c2lnXzE=",
+            },
+          ],
+        },
+        {
+          role: "user",
+          parts: [
+            { functionResponse: { id: "call_kw", name: "lookup", response: { output: "ok" } } },
+          ],
+        },
+      ]);
     },
   );
 
