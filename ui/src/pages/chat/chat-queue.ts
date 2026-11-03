@@ -86,28 +86,6 @@ export function enqueueChatMessage(
   return keepVolatileQueuedMessage(host, host.sessionKey, item, item.agentId);
 }
 
-export function enqueuePendingRunMessage(
-  host: ChatQueueScopedSessionHost,
-  text: string,
-  pendingRunId: string,
-  sender?: SenderIdentity,
-) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return;
-  }
-  // Local commands join an existing run without a wire chat.send, so this
-  // pending row intentionally has no fake send identity.
-  const item: ChatQueueItem = {
-    id: generateUUID(),
-    text: trimmed,
-    createdAt: Date.now(),
-    pendingRunId,
-    ...(sender ? { sender } : {}),
-  };
-  keepVolatileQueuedMessage(host, host.sessionKey, item);
-}
-
 export function readChatQueueForScope(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,

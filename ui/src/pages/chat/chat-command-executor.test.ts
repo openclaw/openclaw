@@ -927,7 +927,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
-    expect(result.pendingCurrentRun).toBe(true);
+    expect(result).not.toHaveProperty("pendingCurrentRun");
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload).toMatchObject({
       sessionKey: "agent:main:main",
@@ -954,7 +954,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
-    expect(result.pendingCurrentRun).toBeUndefined();
+    expect(result).not.toHaveProperty("pendingCurrentRun");
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload.deliver).toBe(false);
   });
@@ -978,7 +978,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
 
       expect(result.content).toBe(t(expectedKey));
       expect(result.content).not.toBe(t("chat.commandResults.steer.succeeded"));
-      expect(result.pendingCurrentRun).toBeUndefined();
+      expect(result).not.toHaveProperty("pendingCurrentRun");
       const chatSend = requireRequestCall(request, "chat.send");
       expect(chatSend.payload.deliver).toBe(false);
     },
