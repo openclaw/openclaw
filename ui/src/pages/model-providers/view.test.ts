@@ -73,9 +73,9 @@ describe("renderModelProviders", () => {
     await updatePickers(container);
     for (const [label, change] of [
       ["Model", onPrimaryChange],
-      ["Utility Model", onUtilityChange],
-      ["Utility Fallback Model", onUtilityFallbackChange],
-      ["Fallback Model", onFallbackChange],
+      ["Utility model", onUtilityChange],
+      ["Utility fallback model", onUtilityFallbackChange],
+      ["Fallback model", onFallbackChange],
     ] as const) {
       const picker = settingsRow(container, label).querySelector<HTMLElement>(
         "openclaw-select-picker",
@@ -801,10 +801,10 @@ describe("renderModelProviders", () => {
       await openPicker(
         automatic.querySelectorAll<HTMLElement>(
           ".model-providers__defaults openclaw-select-picker",
-        )[1]!,
+        )[2]!,
       );
       const automaticOption = automatic
-        .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+        .querySelectorAll(".model-providers__defaults openclaw-select-picker")[2]
         ?.querySelector('[role="option"][aria-selected="true"]');
       expect(text(automaticOption?.querySelector(".picker-select__label") ?? null)).toBe("Auto");
       expect(text(automaticOption?.querySelector(".picker-select__description") ?? null)).toBe(
@@ -821,12 +821,12 @@ describe("renderModelProviders", () => {
       await openPicker(
         disabled.querySelectorAll<HTMLElement>(
           ".model-providers__defaults openclaw-select-picker",
-        )[1]!,
+        )[2]!,
       );
       expect(
         text(
           disabled
-            .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+            .querySelectorAll(".model-providers__defaults openclaw-select-picker")[2]
             ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
         ),
       ).toBe("Disabled");
@@ -837,10 +837,10 @@ describe("renderModelProviders", () => {
     await openPicker(
       container.querySelectorAll<HTMLElement>(
         ".model-providers__defaults openclaw-select-picker",
-      )[1]!,
+      )[2]!,
     );
     const option = container
-      .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+      .querySelectorAll(".model-providers__defaults openclaw-select-picker")[2]
       ?.querySelector(`[role="option"][data-value="${value}"]`);
     return {
       label: text(option?.querySelector(".picker-select__label") ?? null),

@@ -386,7 +386,7 @@ describe("ModelProvidersPage agent scope", () => {
       await updatePickers(page.renderRoot);
       const fallback = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
         (select) =>
-          select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback Model",
+          select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback model",
       );
       expect(fallback).toBeDefined();
       expect(page.querySelector(".model-providers__defaults")?.textContent).toContain(

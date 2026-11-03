@@ -279,7 +279,7 @@ suite.define(() => {
           await ready.waitFor();
           if (isSettings) {
             expect(await page.locator(".model-providers__defaults").textContent()).toContain(
-              "Utility Model",
+              "Utility model",
             );
             await openModelSetup(page);
             await page.getByText(/Find existing connections or prepare a local model/).waitFor();
