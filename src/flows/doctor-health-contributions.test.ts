@@ -3194,6 +3194,56 @@ describe("doctor health contributions", () => {
       );
     });
 
+    it.each(["invalid config", "required deferred", "conditional deferred"] as const)(
+      "records final validation blockers: %s",
+      async (failure) => {
+        const ctx = createDoctorContext({
+          cfg: {},
+          cfgForPersistence: {},
+          configResult: { cfg: {} },
+          shouldRepair: true,
+        });
+        if (failure === "invalid config") {
+          mocks.readConfigFileSnapshot.mockResolvedValueOnce({
+            exists: true,
+            valid: false,
+            sourceConfig: {},
+            config: {},
+            issues: [{ path: "retired.key", message: "Unsupported setting" }],
+          });
+        } else {
+          ctx.configResult.stateMigrationStepReceipts = [
+            {
+              id: "fixture-required-migration",
+              phase: "final",
+              source: [{ kind: "owner", id: "fixture" }],
+              target: [{ kind: "owner", id: "fixture" }],
+              requiredness: failure === "required deferred" ? "required" : "conditional",
+              reversibility: "checkpoint-required",
+              outcome: "deferred",
+              changes: [],
+              warnings: ["Fixture migration blocked"],
+            },
+          ];
+        }
+        await requireDoctorContribution("doctor:final-config-validation").run(ctx);
+        if (failure === "conditional deferred") {
+          expect(ctx.postInstallDoctorResult).toBeUndefined();
+          expect(ctx.runtime.error).not.toHaveBeenCalled();
+        } else {
+          expect(ctx.postInstallDoctorResult).toMatchObject({
+            status: "error",
+            failureFacts: [
+              expect.objectContaining({
+                code: failure === "invalid config" ? "valid-config" : "required-migration-deferred",
+              }),
+            ],
+          });
+          expect(ctx.runtime.log).toHaveBeenCalledWith(expect.stringContaining("doctor --fix"));
+        }
+      },
+    );
+
     it("skips plugin schema validation for final validation during update doctor runs", async () => {
       const contribution = requireDoctorContribution("doctor:final-config-validation");
 

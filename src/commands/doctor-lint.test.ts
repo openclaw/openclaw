@@ -15,6 +15,7 @@ import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/ins
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { formatDoctorLintFailure } from "./doctor-lint-output.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import {
   createDoctorLintSemanticIndex,
@@ -671,3 +672,19 @@ function restoreDoctorLintTestEnv(values: {
       values.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE;
   }
 }
+
+it("marks fatal lint inspection as blocked for updater consumers", () => {
+  expect(formatDoctorLintFailure(new Error("inspection unavailable"))).toMatchObject({
+    status: "blocked",
+    schemaVersion: 1,
+    ok: false,
+    checksRun: 0,
+    findings: [
+      {
+        checkId: "core/doctor/lint-inspection",
+        severity: "error",
+        message: "inspection unavailable",
+      },
+    ],
+  });
+});

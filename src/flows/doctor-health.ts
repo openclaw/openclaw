@@ -142,9 +142,15 @@ async function runDoctorHealthFlowWithResult(
   let healthContext: DoctorHealthFlowContext | undefined;
   let preparedArchiveDiscovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
-  const recordConfigWriteRefusal = (ctx: DoctorHealthFlowContext): boolean => {
+  const recordRepairRefusal = (ctx: DoctorHealthFlowContext): boolean => {
     if (!ctx.configWriteRefusal) {
-      return false;
+      if (ctx.postInstallDoctorResult?.status !== "error") {
+        return false;
+      }
+      showDoctorOutro("Doctor blocked; required repairs remain incomplete.");
+      exitCode = 1;
+      doctorResult = ctx.postInstallDoctorResult;
+      return true;
     }
     // Config fixes were computed but refused by the writer; the warning above
     // already lists the manual work. This failure outranks a recoverable
@@ -450,7 +456,7 @@ async function runDoctorHealthFlowWithResult(
       await measureGatewayBootstrapStep("doctor.contributions", () =>
         runDoctorHealthContributions(ctx),
       );
-      if (recordConfigWriteRefusal(ctx)) {
+      if (recordRepairRefusal(ctx)) {
         return undefined;
       }
       if (maintenance) {
@@ -530,7 +536,7 @@ async function runDoctorHealthFlowWithResult(
         );
       }
     }
-    if (!ctx || recordConfigWriteRefusal(ctx)) {
+    if (!ctx || recordRepairRefusal(ctx)) {
       return;
     }
     const pluginWarnings: string[] = [];

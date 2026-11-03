@@ -269,7 +269,7 @@ describe("doctor invalid config process exit", () => {
     getCliProcessTestTimeout(LEGACY_APPROVAL_CHILD_TIMEOUT_MS),
   );
 
-  it("exits after a complete best-effort report for an unparseable config", async () => {
+  it("exits nonzero after a best-effort report for an unparseable config", async () => {
     const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-invalid-config-exit-"));
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -309,10 +309,11 @@ describe("doctor invalid config process exit", () => {
     );
     const output = `${result.stderr}\n${result.stdout}`;
 
-    expect(result.code, output).toBe(0);
+    expect(result.code, output).toBe(1);
     expect(result.signal, output).toBeNull();
     expect(output).toContain("Config invalid; doctor will run with best-effort config.");
-    expect(output).toContain("Doctor complete.");
+    expect(output).toContain("Doctor blocked; required repairs remain incomplete.");
+    expect(output).not.toContain("Doctor complete.");
     expect(output).not.toContain("Building Control UI assets");
   }, 75_000);
 });

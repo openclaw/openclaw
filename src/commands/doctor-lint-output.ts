@@ -48,6 +48,7 @@ export function formatDoctorLintFailure(error: unknown) {
   const failure = formatCliJsonFailure(error);
   return {
     ...failure,
+    status: "blocked",
     ...formatJsonResult({
       ok: false,
       checksRun: 0,

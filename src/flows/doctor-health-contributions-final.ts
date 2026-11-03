@@ -1,10 +1,10 @@
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/shared/update-phase.js";
+import { runFinalConfigValidationHealth } from "./doctor-config-validation-findings.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { runCoreHealthFindingNote } from "./doctor-health-contribution-core.js";
 import {
   collectWriteConfigHealthFindings,
-  runFinalConfigValidationHealth,
   runWriteConfigHealth,
 } from "./doctor-health-contribution-runners.config.js";
 import {

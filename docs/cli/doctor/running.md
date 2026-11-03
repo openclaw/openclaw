@@ -16,6 +16,11 @@ reports that Doctor finished with plugin load errors. When an updater invokes
 Doctor, the same failures remain recorded warnings so an otherwise safe update
 can continue; rerun Doctor after resolving the reported cause.
 
+If final validation still finds invalid config or required migrations left
+deferred, Doctor exits `1` and lists the rejected paths and next steps. This
+includes a best-effort run after malformed config; a completion report does not
+mean repairs succeeded. Conditional deferred migrations remain advisory.
+
 The CLI drains its shared-state database workers before exiting. Scripted callers
 must still check the process exit status: `Doctor complete.` records completion
 of the checks, but a subsequent crash remains a failed candidate-Doctor step
