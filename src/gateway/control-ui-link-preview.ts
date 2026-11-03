@@ -11,6 +11,7 @@ import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fet
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { createImageProcessor, readImageMetadataFromHeader } from "../media/image-ops.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type { ControlUiLinkPreview } from "./control-ui-contract.js";
 
 const HTML_MAX_BYTES = 64 * 1024;
@@ -393,7 +394,7 @@ export async function loadControlUiLinkPreview(
     principals.set(scope.principal, principal);
   }
   const key = JSON.stringify([principal, scope.revision, url.href]);
-  const now = Date.now();
+  const now = monotonicNow();
   const existing = cache.get(key);
   if (existing && existing.expiresAt > now) {
     const result = await existing.promise;
@@ -415,6 +416,6 @@ export async function loadControlUiLinkPreview(
   cache.set(key, entry);
   pruneMapToMaxSize(cache, CACHE_MAX_ENTRIES);
   const result = await entry.promise;
-  entry.expiresAt = Date.now() + (Object.keys(result).length ? SUCCESS_TTL_MS : FAILURE_TTL_MS);
+  entry.expiresAt = monotonicNow() + (Object.keys(result).length ? SUCCESS_TTL_MS : FAILURE_TTL_MS);
   return isEnabled() ? result : {};
 }

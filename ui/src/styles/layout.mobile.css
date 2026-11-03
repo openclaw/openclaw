@@ -628,7 +628,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .log-stream {
-    border-radius: var(--radius-md);
     max-height: 380px;
   }
 
@@ -653,19 +652,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     flex: none;
     min-height: 200px;
     max-height: 380px;
-  }
-
-  .log-row {
-    grid-template-columns: 1fr;
-    gap: 4px;
-    padding: 8px;
-  }
-
-  .log-time,
-  .log-level,
-  .log-subsystem,
-  .log-message {
-    font-size: 12px;
   }
 
   .list-title {

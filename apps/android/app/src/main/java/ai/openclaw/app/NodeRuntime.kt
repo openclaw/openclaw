@@ -930,7 +930,7 @@ class NodeRuntime internal constructor(
       scope = scope,
       recognizer =
         when (mode) {
-          NodeRuntimeMode.Live -> AndroidOnDeviceVoiceWakeRecognizer(appContext)
+          NodeRuntimeMode.Live -> AndroidOnDeviceVoiceWakeRecognizer(appContext, scope)
           NodeRuntimeMode.ScreenshotFixture -> PreviewVoiceWakeRecognizer()
         },
       initialTriggerWords = VoiceWakePreferences.defaultTriggerWords,
@@ -3897,6 +3897,10 @@ class NodeRuntime internal constructor(
         }
       }
     }
+  }
+
+  internal fun setVoiceWakeBackgroundListeningAllowed(allowed: Boolean) {
+    voiceWakeManager.setBackgroundListeningAllowed(allowed)
   }
 
   fun refreshVoiceWakePermission() {

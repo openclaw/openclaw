@@ -269,13 +269,21 @@ keys or request values. Worktree preparation measures only work required before
 the response; provisioning already deferred to an initial turn stays with that
 turn's lifecycle.
 
-At trace log level, chat startup diagnostics break `detail.attempt.system-prompt`
+Slow chat startup diagnostics break `detail.attempt.system-prompt`
 into sandbox policy,
 tool catalog text, session entry, runtime facts, reference paths, provider
 contributions, memory and watched-session context, project memory, TTS preferences,
 rendering, and reporting. These `detail.attempt.system-prompt.*` phases measure
 elapsed preparation time, including awaited work, without recording prompt content.
 The parent and nested phase totals overlap; do not add them together as CPU time.
+
+`detail.attempt.bundle-tools.*` separates core normalization, MCP configuration,
+runtime acquisition and materialization, LSP startup, policy filtering, bundled
+normalization, final projection, and cleanup after failure. These fixed phases
+appear in the existing `slow chat send` record without trace logging or timeline
+configuration. Workspace bootstrap reads and skill preparation belong to the
+separate `attempt.bootstrap` and `attempt.skills` stages; plugin tool factories
+run in `attempt.tool-base`.
 
 Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;
@@ -787,8 +795,13 @@ at 90%. The main thread's V8 `heap_size_limit` is the primary signal
 limit (`worker_heap_threshold`), including process-wide heap flag overrides. RSS
 includes every worker and native allocation, so `rss_threshold` uses the smaller of
 physical RAM and the process/cgroup memory constraint, independently of V8 heap
-limits. Unknown limits are omitted; Bun's compatibility heap metadata is not treated
-as a V8 limit. RSS growth alone does not indicate pressure.
+limits. On Node/Linux with a positive process constraint below physical RAM,
+`process_memory_threshold` also checks the remaining constrained allowance using
+`process.availableMemory()`. Its `usedBytes` is the constraint minus that remaining
+allowance, not process RSS: cgroup charges can exhaust headroom before RSS reaches
+the same 80%/90% thresholds. This signal follows heap and RSS priority within each
+severity. Unknown limits are omitted; Bun's compatibility heap metadata is not
+treated as a V8 limit. RSS growth alone does not indicate pressure.
 
 Warning and critical journal lines and diagnostic events retain the measured
 `usedBytes`, `limitBytes`, and `thresholdBytes`; worker pressure also identifies

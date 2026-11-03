@@ -82,8 +82,6 @@ it("merges sidecar consolidation without lending its recall authorization", () =
     recallToolNames: ["memory_search", "memory_get"],
     deterministicRecallToolName: "memory_search",
     supportsPrivateTranscriptRecall: true,
-    learnToolNames: ["memory_save"],
-    learnGuidanceBuilder: () => ["sidecar learn"],
   });
   const owner = selected();
   expect(owner).toMatchObject({ pluginId: "acme-memory", memorySlotSelected: true });
@@ -95,4 +93,20 @@ it("merges sidecar consolidation without lending its recall authorization", () =
     flushPlanResolver: sidecar.flushPlanResolver,
     publicArtifacts: sidecar.publicArtifacts,
   });
+});
+
+it("admits memory lessons only from the selected memory slot owner", () => {
+  const { registry, register } = fixture();
+  const memory = {
+    medium: "memory" as const,
+    toolNames: ["save"],
+    buildGuidance: () => ({ lines: [] }),
+  };
+  const contribute = (id: string, fields: Partial<Parameters<typeof register>[0]>) =>
+    register({ id, ...fields }, (api) => api.registerLearnContribution(memory));
+  contribute("memory-core", { kind: "memory" });
+  contribute("notes", { kind: "context-engine" });
+  contribute("acme-memory", { kind: "memory", memorySlotSelected: true });
+  expect(registry.learnContributions.map(({ pluginId }) => pluginId)).toEqual(["acme-memory"]);
+  expect(registry.diagnostics.map(({ pluginId }) => pluginId)).toEqual(["memory-core", "notes"]);
 });
