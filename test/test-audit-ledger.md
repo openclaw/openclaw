@@ -181,10 +181,15 @@ no startup retry is established. Capture actual emitted IDs, prove a real retry,
 then retain the existing abort, no-further-request and zero-timer keepers after
 retirement. Register protocol settlement through the existing fixture cleanup.
 
-Qualification will compare the old and repaired row with an actual
-last-subscriber producer-abort fault, restoring owner bytes exactly. Baseline,
-fault controls, clean proof, related catalog siblings, scoped checks, exact
-growth allocation, fresh review, published-head proof and CI remain pending.
+Untouched native baseline29 passes without skips. Suppressing the actual
+last-subscriber producer-abort call leaves the old row green; the repaired row
+fails the no-further-request keeper (expected2 calls, received3). Both selected
+fault runs reach the marker once, leave28 unrelated cases unselected, and
+restore the owner bytes exactly. Clean29 and25 catalog sibling cases pass.
+Scoped types, typed lint, formatting, ledger MDX, whitespace and the exact
+five-line allocation ratchet pass. The minimal repair adds no production seam
+or helper and preserves every original case; fresh review, published-head proof
+and CI remain pending.
 Production and the shared test-line scalar remain unchanged. No declaration,
 fixture, import, helper or export is removed; no removal-scan claim is made.
 
