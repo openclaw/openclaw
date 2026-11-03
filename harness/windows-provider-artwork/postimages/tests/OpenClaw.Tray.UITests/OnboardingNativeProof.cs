@@ -725,7 +725,7 @@ internal static class OnboardingNativeProof
             {
                 schema = "owned-native-dialog-name-v1", state, status, expectedName, openedObserved,
                 binding.Hwnd, binding.ProcessId, binding.ThreadId, binding.Title, binding.Provider,
-                binding.WindowBounds, binding.ContentBounds, binding.ProviderBounds,
+                binding.WindowBounds, binding.ContentBounds, binding.RenderedProviderBounds, binding.ProviderLayoutSlotInParent, binding.ProviderLayoutSlotBounds,
                 referenceContract = "microsoft-ui-xaml 948461c2d0c93bce2e9c039ec28b4a25976afede: ContentDialog projects Name to PopupAutomationPeer; class Popup, Window role",
                 head = string.IsNullOrWhiteSpace(proofDirectory) ? null : Source.Value.Head,
                 freezeManifestSha256 = Environment.GetEnvironmentVariable("OPENCLAW_UI_PROOF_MANIFEST_SHA256"),
@@ -743,6 +743,7 @@ internal static class OnboardingNativeProof
         var current = BindNativeDialog(window, dialog);
         Assert.Same(binding.Root, current.Root);
         Assert.Same(binding.XamlRoot, current.XamlRoot);
+        Assert.Same(binding.ProviderParent, current.ProviderParent);
         Assert.Equal(binding.Hwnd, current.Hwnd);
         Assert.Equal(binding.ProcessId, current.ProcessId);
         Assert.Equal(binding.ThreadId, current.ThreadId);
@@ -750,14 +751,20 @@ internal static class OnboardingNativeProof
         Assert.Equal(binding.Provider, current.Provider);
         Assert.Equal(binding.WindowBounds, current.WindowBounds);
         Assert.Equal(binding.ContentBounds, current.ContentBounds);
-        Assert.Equal(binding.ProviderBounds, current.ProviderBounds);
+        Assert.Equal(binding.RenderedProviderBounds, current.RenderedProviderBounds);
+        Assert.Equal(binding.ProviderLayoutSlotInParent, current.ProviderLayoutSlotInParent);
+        Assert.Equal(binding.ProviderLayoutSlotBounds, current.ProviderLayoutSlotBounds);
         Assert.Equal(expectedName, binding.Title);
         var candidate = Assert.Single(observed.Nodes, node =>
             node.ProcessId == binding.ProcessId && node.Role == "ControlType.Window" && node.ClassName == "Popup" &&
             node.IsModal == true && !node.IsOffscreen && node.RuntimeId.Length > 0 && node.Bounds is { } bounds &&
-            binding.WindowBounds.Contains(bounds) && bounds.Contains(binding.ContentBounds) && bounds.Contains(binding.ProviderBounds) &&
+            binding.WindowBounds.Contains(bounds) && bounds.Contains(binding.ContentBounds) && bounds.Contains(binding.RenderedProviderBounds) &&
+            bounds.Contains(binding.ProviderLayoutSlotBounds) &&
             node.TextChildren.Any(text => text.ProcessId == binding.ProcessId && !text.IsOffscreen &&
-                text.Name == binding.Provider && text.Bounds is { } providerBounds && providerBounds.SamePhysical(binding.ProviderBounds)) &&
+                text.Name == binding.Provider && text.Bounds is { } providerBounds && providerBounds.SamePhysical(binding.ProviderLayoutSlotBounds) &&
+                observed.Nodes.Any(providerNode => providerNode.RuntimeId.SequenceEqual(text.RuntimeId) &&
+                    providerNode.ProcessId == binding.ProcessId && providerNode.Role == "ControlType.Text" &&
+                    providerNode.ClassName == "TextBlock" && providerNode.AutomationId == "ProviderName" && !providerNode.IsOffscreen)) &&
             node.TextChildren.Any(text => text.ProcessId == binding.ProcessId && !text.IsOffscreen &&
                 text.Name == expectedName && text.Bounds is { } titleBounds && bounds.Contains(titleBounds)));
         Assert.Equal(expectedName, candidate.Name);
@@ -791,19 +798,32 @@ internal static class OnboardingNativeProof
         var inset = GetContentTopInset(window);
         var scale = root.XamlRoot.RasterizationScale;
         Assert.True(double.IsFinite(scale) && scale > 0);
-        NativeDialogBounds Bounds(FrameworkElement element)
+        NativeDialogBounds PhysicalBounds(Windows.Foundation.Rect rect, string context = "rendered element")
         {
-            var rect = element.TransformToVisual(root).TransformBounds(
-                new Windows.Foundation.Rect(0, 0, element.ActualWidth, element.ActualHeight));
             var physical = new NativeDialogBounds(origin.X + rect.Left * scale, origin.Y + inset + rect.Top * scale,
                 origin.X + rect.Right * scale, origin.Y + inset + rect.Bottom * scale);
-            Assert.True(physical.PositiveFinite);
+            Assert.True(physical.PositiveFinite,
+                $"Rejected native-dialog geometry: context={context}; rootRect={rect}; physical={physical}; clientOrigin=({origin.X},{origin.Y}); inset={inset}; scale={scale}.");
             return physical;
         }
+        NativeDialogBounds Bounds(FrameworkElement element) => PhysicalBounds(
+            element.TransformToVisual(root).TransformBounds(
+                new Windows.Foundation.Rect(0, 0, element.ActualWidth, element.ActualHeight)));
+        var providerParent = Assert.IsAssignableFrom<FrameworkElement>(VisualTreeHelper.GetParent(provider));
+        Assert.Same(root.XamlRoot, providerParent.XamlRoot);
+        var renderedProviderBounds = Bounds(provider);
+        var layoutSlot = Microsoft.UI.Xaml.Controls.Primitives.LayoutInformation.GetLayoutSlot(provider);
+        var providerLayoutSlotInParent = new NativeDialogBounds(layoutSlot.Left, layoutSlot.Top, layoutSlot.Right, layoutSlot.Bottom);
+        var slotContext = $"parent={providerParent.GetType().FullName}/{providerParent.Name}; rawSlot={providerLayoutSlotInParent}; rendered={renderedProviderBounds}";
+        Assert.True(providerLayoutSlotInParent.PositiveFinite,
+            $"Actual provider layout slot must be finite and nonempty: {slotContext}; physicalSlot=not projected because raw slot was rejected.");
+        var providerLayoutSlotBounds = PhysicalBounds(providerParent.TransformToVisual(root).TransformBounds(layoutSlot), slotContext);
+        Assert.True(providerLayoutSlotBounds.Contains(renderedProviderBounds),
+            $"Actual provider layout slot must contain its rendered extent: {slotContext}; physicalSlot={providerLayoutSlotBounds}.");
         var outer = windowBounds.Rectangle;
-        return new(handle.ToInt64(), (int)process, thread, root, root.XamlRoot,
+        return new(handle.ToInt64(), (int)process, thread, root, root.XamlRoot, providerParent,
             Assert.IsType<string>(dialog.Title), provider.Text,
-            new(outer.Left, outer.Top, outer.Right, outer.Bottom), Bounds(content), Bounds(provider));
+            new(outer.Left, outer.Top, outer.Right, outer.Bottom), Bounds(content), renderedProviderBounds, providerLayoutSlotInParent, providerLayoutSlotBounds);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -862,8 +882,9 @@ internal static class OnboardingNativeProof
     }
 
     private sealed record NativeDialogBinding(long Hwnd, int ProcessId, uint ThreadId, FrameworkElement Root,
-        XamlRoot XamlRoot, string Title, string Provider, NativeDialogBounds WindowBounds,
-        NativeDialogBounds ContentBounds, NativeDialogBounds ProviderBounds);
+        XamlRoot XamlRoot, FrameworkElement ProviderParent, string Title, string Provider, NativeDialogBounds WindowBounds,
+        NativeDialogBounds ContentBounds, NativeDialogBounds RenderedProviderBounds,
+        NativeDialogBounds ProviderLayoutSlotInParent, NativeDialogBounds ProviderLayoutSlotBounds);
     private sealed record NativeDialogObservation(int TotalOwnedNodes, bool Overflow, NativeDialogNode[] Nodes, string[] Errors);
     private sealed record NativeDialogNode(int[] RuntimeId, int ProcessId, string Role, string ClassName,
         string Name, string AutomationId, NativeDialogBounds? Bounds, bool IsOffscreen, bool? IsModal,

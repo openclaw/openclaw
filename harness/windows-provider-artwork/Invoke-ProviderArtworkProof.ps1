@@ -255,6 +255,10 @@ try {
                 !$nameReceipt.openedObserved -or $nameReceipt.expectedName -cne ('Provider '+$step) -or $nameReceipt.selected.Name -cne $nameReceipt.expectedName -or
                 $nameReceipt.selected.Role -cne 'ControlType.Window' -or $nameReceipt.selected.ClassName -cne 'Popup' -or !$nameReceipt.selected.IsModal -or $nameReceipt.selected.IsOffscreen -or
                 $nameReceipt.selected.ProcessId -ne $nameReceipt.ProcessId -or $nameReceipt.selected.RuntimeId.Count -eq 0 -or
+                $null -eq $nameReceipt.RenderedProviderBounds -or $null -eq $nameReceipt.ProviderLayoutSlotInParent -or $null -eq $nameReceipt.ProviderLayoutSlotBounds -or
+                $nameReceipt.ProviderLayoutSlotInParent.Right -le $nameReceipt.ProviderLayoutSlotInParent.Left -or $nameReceipt.ProviderLayoutSlotInParent.Bottom -le $nameReceipt.ProviderLayoutSlotInParent.Top -or
+                $nameReceipt.ProviderLayoutSlotBounds.Left -gt $nameReceipt.RenderedProviderBounds.Left -or $nameReceipt.ProviderLayoutSlotBounds.Top -gt $nameReceipt.RenderedProviderBounds.Top -or
+                $nameReceipt.ProviderLayoutSlotBounds.Right -lt $nameReceipt.RenderedProviderBounds.Right -or $nameReceipt.ProviderLayoutSlotBounds.Bottom -lt $nameReceipt.RenderedProviderBounds.Bottom -or
                 $nameReceipt.observed.Overflow -or $nameReceipt.observed.Errors.Count -ne 0 -or
                 $nameReceipt.head -cne $head -or $nameReceipt.freezeManifestSha256 -cne $env:OPENCLAW_UI_PROOF_MANIFEST_SHA256 -or
                 $nameReceipt.assemblySha256 -cne (Hash (Join-Path $bin 'OpenClaw.Tray.UITests.dll'))) { throw 'Actual owned native dialog role/name receipt is absent or unverified.' }

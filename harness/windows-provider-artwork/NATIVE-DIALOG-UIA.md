@@ -1,3 +1,7 @@
+# Current geometry amendment
+
+Read PROVIDER-LAYOUT-SLOT.md: the native ProviderName rectangle now must match the ACTUAL measured allocation slot, with rendered extent preserved separately. All role/name/ownership constraints below remain unchanged. Exact current base51db6b22db1988ba44b2c3cc34e5219e8482a5a2.
+
 # Owned native dialog-name boundary: preparation only
 
 Exact harness base30ac6382f17d23baa66907da725f00a0ec37531c. No CI, source/harness commit, publication or runtime action performed. Parent personal/canonical review and separate execution authority remain required.

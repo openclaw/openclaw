@@ -1,10 +1,10 @@
 {
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
   "baseTree": "eab5a16b2c6b57a741c7a1a22f830f737592d1ee",
-  "candidateTree": "1d14a8f660666d85e606620ca9bdd2f152dba42c",
-  "priorCandidateTree": "f03cab09b4e81e3c2113428024862f9fee6c42e6",
+  "candidateTree": "89e9012ee2346da3ccb2304af61f1b85e01949dc",
+  "priorCandidateTree": "1d14a8f660666d85e606620ca9bdd2f152dba42c",
   "priorCandidatePatchSha256": "6194060d067b8858d832ab17951c0f518bc0750f9f6b26e807b744947bd3dc7e",
-  "patchSha256": "ead934d1f50739c263c524268db9f8a2a378a3c7497671932c63930050d5674d",
+  "patchSha256": "2ffa4e4cffde2127349bfd6a1d8d5e36204bb4cea35f5c8106943fb938e1c3f7",
   "changedFiles": [
     {
       "path": "docs/PROVIDER_ARTWORK.md",
@@ -65,9 +65,9 @@
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingNativeProof.cs",
       "beforeSha256": "ee3cfce10129b857848acc7ecc982bc03826eaa5101a3da562174a5a32d1ec52",
-      "afterSha256": "fe52d97435792574195d597c2466b2dda9ebf742968913e116311f3d97d0993f",
-      "bytes": 68040,
-      "afterBlob": "8baf29214b867dcc6d96973f87fb4894fcb028c0"
+      "afterSha256": "9a3f8d490372f4e5515c5939dfb88627d83ca6d02965b496df89ee6ec67b7dac",
+      "bytes": 70533,
+      "afterBlob": "3be1dde9a958919a46eb7bec13fc6d57af9a4652"
     }
   ],
   "sourceFiles": [
@@ -8245,7 +8245,7 @@
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingNativeProof.cs",
-      "sha256": "fe52d97435792574195d597c2466b2dda9ebf742968913e116311f3d97d0993f"
+      "sha256": "9a3f8d490372f4e5515c5939dfb88627d83ca6d02965b496df89ee6ec67b7dac"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingNativeProofTests.cs",
@@ -8434,7 +8434,7 @@
   ],
   "count": 2090,
   "sourceCommit": "NOT_CREATED",
-  "canonicalChangeFromPrior": "Ninth existing native UIA owner plus canonical dialog test/normal fixture adapter; all production UI/docs/capture/rebind bytes unchanged",
-  "AfterProofTree": "9aa2dadf0031e6e848ccd687b7caf6c0da69869b",
+  "canonicalChangeFromPrior": "Only native UIA geometry owner now records actual parent-space layout slot plus physical allocated/rendered bounds; all other eight canonical source files unchanged",
+  "AfterProofTree": "817942ea657733b20e3c8549958196e41f7a0bbf",
   "BeforeProofTree": "50de4508d71a67ed2fb44ad9d1cdf56781d4d4a2"
 }
