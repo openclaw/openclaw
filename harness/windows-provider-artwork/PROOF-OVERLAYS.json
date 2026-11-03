@@ -3,16 +3,23 @@
   "canonicalAfterTree": "d58d740ce7e5beb1b43889e6897ae96cf54370ba",
   "priorCanonicalAfterTree": "6bdc3018768492e101bb12ea603a067b4e2414bd",
   "before": {
-    "tree": "a1c05f702d256b3675ca787bdebf18f588f8db08",
+    "tree": "c657bbcfc2d034ede260118d8c0093f3f37a96d4",
     "patch": "baseline-capture.patch",
-    "patchSha256": "2045e786b8b4762f3bb0d7d3c640f7a0c12160379ad8511ab9ad2e6ca00f0891",
+    "patchSha256": "91dd12a2900b5de7c651fe527def452941dda870948ff4f6fc1d0b20d5106918",
     "changes": [
+      {
+        "path": "tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
+        "beforeSha256": "04ba3c57ffc976063b42bbde41f5fc835912bf18a51fe1e6ac961c1a2d8fbd84",
+        "afterSha256": "5114c3c7ea6a3ef8795024c961ab2aa24b289d3d1d1be7a9ae459770cb09a0bf",
+        "bytes": 6379,
+        "afterBlob": "f4b6db6fef98ec6faceeb16f434bce3792b5e9e5"
+      },
       {
         "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
         "beforeSha256": "f238918a76271fee64392bd3fbd3a93da912d24fedebad80b705a136628697e6",
-        "afterSha256": "f2a19c39c2c479dcf72508382cd39a8081659ea54c4a0dc8f89804f2cdabfaf9",
-        "bytes": 181425,
-        "afterBlob": "272881988835a6c3bbc9089f95586d86533259a2"
+        "afterSha256": "8daac42573566d1339688c890331a2292d988d828c77b4ea6e351a4f85badda1",
+        "bytes": 193647,
+        "afterBlob": "d4eaf6e8ac6cb34f9c2d7e5538be5e8f4293635b"
       }
     ]
   },
@@ -30,20 +37,31 @@
       }
     ]
   },
-  "sourceOwner": "same suite Application/thread, task-owned Window, required consumer over unchanged c550 MountedControlCapture",
+  "sourceOwner": "Existing suite Application/thread, task-owned private Window. Existing capture owner with task-only observation and declared single-statement move A/B control; all other owner guards/capture bytes unchanged.",
   "foregroundHelpers": "unchanged",
-  "scope": "proof-only existing test compilation unit; no new capture implementation",
+  "scope": "Two Before proof-only existing compilation units. Canonical and After overlay unchanged; no new capture implementation.",
   "canonicalSourceManifest": {
     "path": "candidate-source.json",
     "sha256": "796084880fbaf2281d407519d5922ee20347214fbfd1c63c2a6cee48932274a1",
     "entries": 2090
   },
   "sourceProjectionContracts": {
-    "Before": "canonical source hash map; revert each canonical changed file to beforeSha256, then apply the sole Before proof postimage hash",
+    "Before": "Canonical source hash map; revert all canonical changed files to beforeSha256, then apply both Before diagnostic postimage hashes.",
     "After": "canonical source hash map; apply the sole After proof postimage hash"
   },
   "aliases": {
     "baseline-postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "proof-postimages/Before/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs"
   },
-  "patchEncoding": "Git accepts empty unprefixed context lines. Normalized context-only single spaces to empty lines; exact tree/applicability verified, no source or guard change."
+  "patchEncoding": "Complete readable proof owner postimage uses LF; original source is CRLF. That source-file hunk is losslessly transported as a Git binary patch so patch-in-patch deletion CR bytes are not new outer-file whitespace. Remaining empty context lines normalized as before. Exact source/outer applicability and resulting trees verified with whitespace=error; no whitespace suppression/guard change or shared/global config mutation.",
+  "diagnostic": {
+    "cases": 2,
+    "theme": "Light",
+    "arms": [
+      "same-position-move",
+      "conditional-move"
+    ],
+    "qualifiedFrames": 0,
+    "after": "BuildOnly; no tests",
+    "noNativeExecution": true
+  }
 }

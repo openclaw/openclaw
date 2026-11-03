@@ -5,7 +5,7 @@ windows-provider-artwork:
     github.event_name == 'workflow_dispatch' &&
     github.ref == 'refs/heads/roboclaw/local-ai-native-followups-20261102' &&
     inputs.platform == 'windows-provider-artwork' &&
-    inputs.qualification == 'native-icons-w5-private-mounted-v1'
+    inputs.qualification == 'native-icons-w5-popup-boundary-light-v1'
   runs-on: windows-2025
   timeout-minutes: 90
   permissions:
@@ -56,15 +56,15 @@ windows-provider-artwork:
       uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
       with:
         dotnet-version: 10.0.403
-    - name: Qualified runtime, current UI builds, then bounded private Before/After selections
+    - name: Qualified runtime, After build only, then Light two-arm popup diagnostic
       run: |
         ./proof-harness/harness/windows-provider-artwork/Invoke-ProviderArtworkCI.ps1 `
           -BeforeSource "$env:GITHUB_WORKSPACE/source-before" `
           -AfterSource "$env:GITHUB_WORKSPACE/source-after" `
           -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/native-icons-w5" `
           -AstReceipt "$env:GITHUB_WORKSPACE/packet-preflight.json" `
-          -ExpectedPayloadSha256 'e6a4d5c607a58f224dde69ae190a572bb846760472a0cbb30b0d5850537919db' `
-          -Qualification 'native-icons-w5-private-mounted-v1' -ExecutionAuthorized
+          -ExpectedPayloadSha256 '13d67c8bae749c281a165126dfc0fddf32251dff722a8802eb8ba49b6c3b2be0' `
+          -Qualification 'native-icons-w5-popup-boundary-light-v1' -ExecutionAuthorized
     - name: Retain complete evidence or the real first blocking leaf
       if: always()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

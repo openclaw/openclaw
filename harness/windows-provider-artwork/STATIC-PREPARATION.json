@@ -1,29 +1,38 @@
 {
-  "state": "static-contract-checks-passed-native-unrun",
-  "harnessBase": "1e7eb928b4ac40e327d7c641659c22720e7172c2",
-  "canonicalTree": "d58d740ce7e5beb1b43889e6897ae96cf54370ba",
-  "priorCanonicalTree": "6bdc3018768492e101bb12ea603a067b4e2414bd",
-  "beforeProofTree": "a1c05f702d256b3675ca787bdebf18f588f8db08",
-  "afterProofTree": "ba0180569e297f63934a27c540adf006d1834aad",
-  "checks": [
-    "all3 patches/tree admission passed",
-    "only canonical natural-entry test changes from prior6bd",
-    "every original candidate assertion preserved; only capture-owner using/task punctuation differs",
-    "both real API Keys entry/scroller flows precede popup",
-    "unconditional required captures in proof matrix",
-    "task-owned Window/suite App/thread/private nonactivating presentation",
-    "standard mounted Invoke and scoped cleanup",
-    "unchanged maintained PrintWindow/foreground/input owners",
-    "qualified native Git one-App/AST8/runtime/SDK/version owners unchanged",
-    "first Before2 then4 and After7/frame14each retained",
-    "guarded YAML parsed"
+  "state": "CURRENT-DIAGNOSTIC-STATIC-ONLY-NO-NATIVE-RESULT",
+  "harnessBase": "34c97aa88a3e9faef04421d41a0f388dda14c248",
+  "canonicalSourceUnchanged": true,
+  "AfterProofOverlayUnchanged": true,
+  "AfterBuildOnlyFirst": true,
+  "BeforeDiagnostic": {
+    "cases": 2,
+    "theme": "Light",
+    "arms": [
+      "same-position-move",
+      "conditional-move"
+    ],
+    "rawAttempts": 2,
+    "qualifiedFrames": 0,
+    "phases": 9
+  },
+  "terminal": {
+    "Before": "all source/binary hashes + source inventory count + exact tree",
+    "After": "all source/binary hashes + source inventory count + exact tree; no tests"
+  },
+  "staticChecks": [
+    "all three source patches apply to exact bases and expected trees with whitespace=error",
+    "outer harness patch applies to exact34c and expected tree with whitespace=error",
+    "seven canonical source postimages unchanged",
+    "capture owner original statements exactly restored LF-normalized by removing observations and move conditional",
+    "original six Before cases/private fixture/required consumer preserved",
+    "all eight other full workflow jobs unchanged",
+    "manifest and packet seals exact"
   ],
-  "checkFixtureNote": "Two overbroad checks matched metadata text and using/task punctuation; inspected exact differences and used exact extern declaration/assertion comparison, no source altered to hide failures.",
-  "unrun": [
-    "PowerShell AST",
-    "native C#/XAML compilation",
-    "all cases and required pixel inspection",
-    "parent eligible canonical review"
-  ],
+  "localGates": {
+    "pwshAST": "UNRUN-unavailable",
+    "dotnetBuild": "UNRUN-unavailable",
+    "WindowsNative": "UNRUN-unavailable",
+    "newCost": "UNMEASURED"
+  },
   "Shared": "RED-unwaived"
 }

@@ -6,7 +6,9 @@ param(
     [ValidateSet('Before','After')][string]$Stage = 'After',
     [switch]$ExecutionAuthorized,
     [switch]$BuildOnly,
-    [switch]$TestsOnly
+    [switch]$TestsOnly,
+    [switch]$PopupDiagnostic,
+    [switch]$RevalidateOnly
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -111,7 +113,7 @@ $minimumRuntime=[version]($runtimeVersion+'.0')
 $runtime = @(Get-AppxPackage -Name $runtimeFamily | Where-Object { $_.Name -ceq $runtimeFamily -and $_.Architecture.ToString() -ceq 'X64' -and $_.Status.ToString() -ceq 'Ok' -and $_.IsFramework -and [version]$_.Version -ge $minimumRuntime -and $_.Publisher -match 'CN=Microsoft Corporation' })
 if ($runtime.Count -eq 0) { throw "Source-declared $runtimeFamily x64 framework >= $minimumRuntime is not registered for this user. Runtime provisioning belongs to the reviewed CI initializer." }
 Json @{head=$head;candidateTree=$AcceptedTree;sdk=$sdk;sessionId=$session;runtime=@($runtime | Select-Object PackageFullName,Version,Architecture);state='prerequisites-observed'} (Join-Path $Artifacts 'prerequisites.json')
-$names = @('OPENCLAW_REPO_ROOT','OPENCLAW_TRAY_DATA_DIR','OPENCLAW_TRAY_APPDATA_DIR','OPENCLAW_TRAY_LOCALAPPDATA_DIR','OPENCLAW_UI_PROOF_DIR','OPENCLAW_UI_PROOF_FREEZE_DIR','OPENCLAW_UI_PROOF_MANIFEST_SHA256','GitVersion_NoNormalizeEnabled','GitVersion_NoFetchEnabled','OPENCLAW_PROVIDER_ARTWORK_PRIVATE_CAPTURE_JOB','OPENCLAW_MOUNTED_CONTROL_CAPTURE_DIR','OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD')
+$names = @('OPENCLAW_PROVIDER_ARTWORK_POPUP_DIAGNOSTIC','OPENCLAW_REPO_ROOT','OPENCLAW_TRAY_DATA_DIR','OPENCLAW_TRAY_APPDATA_DIR','OPENCLAW_TRAY_LOCALAPPDATA_DIR','OPENCLAW_UI_PROOF_DIR','OPENCLAW_UI_PROOF_FREEZE_DIR','OPENCLAW_UI_PROOF_MANIFEST_SHA256','GitVersion_NoNormalizeEnabled','GitVersion_NoFetchEnabled','OPENCLAW_PROVIDER_ARTWORK_PRIVATE_CAPTURE_JOB','OPENCLAW_MOUNTED_CONTROL_CAPTURE_DIR','OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD')
 $old = @{}
 foreach ($name in $names) { $old[$name]=[Environment]::GetEnvironmentVariable($name) }
 Push-Location $Source
@@ -146,6 +148,13 @@ try {
     $binaryFiles=@(Get-Content (Join-Path $freeze 'build-manifest.json') -Raw | ConvertFrom-Json)
     foreach ($file in $sourceFiles) { if ((Hash (Join-Path $Source $file.path)) -cne $file.sha256) { throw 'Prepared source drift before native execution.' } }
     foreach ($file in $binaryFiles) { if ((Hash (Join-Path $bin $file.path.Substring(15))) -cne $file.sha256) { throw 'Prepared binary drift before native execution.' } }
+    if ($RevalidateOnly) {
+        if ($Stage -cne 'After' -or $PopupDiagnostic) { throw 'Revalidation-only is the independently compiled After stage, never native test execution.' }
+        if (@(Manifest).Count -ne $sourceFiles.Count) { throw 'After build source inventory changed.' }
+        Assert-Tree
+        Json @{state='After-build-source-binaries-tree-revalidated-NO-TESTS';sourceTree=$ExpectedSourceTree;candidateTree=$AcceptedTree;head=$head;Shared='RED-unwaived'} (Join-Path $Artifacts 'build-revalidated.json')
+        return
+    }
     $env:OPENCLAW_TRAY_DATA_DIR=Join-Path $Artifacts 'isolated-data'
     $env:OPENCLAW_TRAY_APPDATA_DIR=Join-Path $Artifacts 'isolated-roaming'
     $env:OPENCLAW_TRAY_LOCALAPPDATA_DIR=Join-Path $Artifacts 'isolated-local'
@@ -155,77 +164,44 @@ try {
     $env:OPENCLAW_PROVIDER_ARTWORK_PRIVATE_CAPTURE_JOB='private-mounted-v1'
     $env:OPENCLAW_UI_PROOF_FREEZE_DIR=$freeze
     $env:OPENCLAW_UI_PROOF_MANIFEST_SHA256=Hash (Join-Path $freeze 'manifest.json')
-    $filter='FullyQualifiedName~OnboardingAiPageTests.ProviderPicker_ShowsAdvertisedBrandsAndHonestFallbacksWithoutStartingSetup|FullyQualifiedName~OnboardingAiPageTests.ProviderDialog_KeepsSelectedArtworkThroughTypedPromptsAndReleasesOnlyItsBorrow|FullyQualifiedName~OnboardingArtworkRenderingTests.ProviderArtwork_RebindingDetachesThePreviousSessionWithoutClosingTheBorrowedReplacement'
-    $expectedCases = 7
-    $framePrefix = ''
-    if ($Stage -ceq 'Before') {
-        $filter='FullyQualifiedName~OnboardingAiPageTests.BeforeArtworkPicker|FullyQualifiedName~OnboardingAiPageTests.BeforeArtworkDialog'
-        $expectedCases=6
-        $framePrefix='before-'
-    }
-    $selections=@(@{name='candidate';filter=$filter;cases=7})
-    if ($Stage -ceq 'Before') {
-        # The original picker is the named unknown leaf. Do not spend the dialog
-        # selection after a genuine popup/occlusion/PrintWindow failure here.
-        $selections=@(@{name='before-picker';filter='FullyQualifiedName~OnboardingAiPageTests.BeforeArtworkPicker';cases=2},
-            @{name='before-dialog';filter='FullyQualifiedName~OnboardingAiPageTests.BeforeArtworkDialog';cases=4})
-    }
-    . (Join-Path $Source 'scripts/TestResultContract.ps1')
-    $cases=@()
-    foreach ($selection in $selections) {
-        $report=Join-Path $Artifacts ($selection.name+'.trx')
-        if (Test-Path $report) { throw 'A selected native report already exists; do not retry uncertain/failed work.' }
+    if ($PopupDiagnostic) {
+        if ($Stage -cne 'Before') { throw 'The popup observation is Before/Light only.' }
+        $env:OPENCLAW_PROVIDER_ARTWORK_POPUP_DIAGNOSTIC='popup-boundary-light-v1'
+        $report=Join-Path $Artifacts 'popup-boundary.trx'
+        if (Test-Path $report) { throw 'Never replay or adopt an existing diagnostic report.' }
         $startedUtc=[datetime]::UtcNow
-        Command 'dotnet' @('test',$project,'-c','Debug','-r','win-x64','--no-build','--no-restore','--filter',$selection.filter,'--results-directory',$Artifacts,'--logger',('trx;LogFileName='+$selection.name+'.trx'),'--blame-hang','--blame-hang-timeout','120s','--blame-hang-dump-type','none') ($selection.name+'-tests')
+        Command 'dotnet' @('test',$project,'-c','Debug','-r','win-x64','--no-build','--no-restore','--filter','FullyQualifiedName~OnboardingAiPageTests.ProviderPopupBoundaryDiagnostic','--results-directory',$Artifacts,'--logger','trx;LogFileName=popup-boundary.trx','--blame-hang','--blame-hang-timeout','120s','--blame-hang-dump-type','none') 'popup-boundary-tests'
+        . (Join-Path $Source 'scripts/TestResultContract.ps1')
         $contract=Read-TestResultContract -Path $report -StartedUtc $startedUtc -ExitCode 0
-        [xml]$trx=Get-Content -LiteralPath $report -Raw
+        [xml]$trx=Get-Content $report -Raw
         $rows=@($trx.SelectNodes("//*[local-name()='UnitTestResult']"))
         $counters=$trx.SelectSingleNode("//*[local-name()='Counters']")
-        if ($rows.Count -ne $selection.cases -or @($rows | Where-Object {$_.outcome -cne 'Passed'}).Count -ne 0 -or [int]$counters.executed -ne $selection.cases -or [int]$counters.passed -ne $selection.cases) { throw 'Every selected stage case must execute and pass with zero skips.' }
+        if ($rows.Count -ne 2 -or @($rows|Where-Object {$_.outcome -cne 'Passed'}).Count -ne 0 -or [int]$counters.executed -ne 2 -or [int]$counters.passed -ne 2) { throw 'Both controlled Light observations must execute; this is not icon qualification.' }
         Json $contract ($report+'.contract.json')
-        $cases += $rows
-    }
-    if ($cases.Count -ne $expectedCases) { throw 'Stage aggregate case inventory differs.' }
-    $expectedFrames=@("${framePrefix}provider-inventory-Light","${framePrefix}provider-inventory-Dark")
-    foreach ($brand in @('llama-app','ollama')) { foreach ($theme in @('Light','Dark')) { foreach ($step in @('note','text','confirm')) { $expectedFrames += "${framePrefix}provider-$brand-$step-$theme" } } }
-    if (@(Get-ChildItem -LiteralPath $frames -Filter '*.png').Count -ne $expectedFrames.Count) { throw 'Incomplete or extra frame inventory.' }
-    foreach ($name in $expectedFrames) {
-        $image=Join-Path $frames ($name+'.png')
-        $receipt=Get-Content (Join-Path $frames ($name+'.json')) -Raw | ConvertFrom-Json
-        $required=Get-Content (Join-Path $frames ($name+'.required.json')) -Raw | ConvertFrom-Json
-        $assemblyHash=Hash (Join-Path $bin 'OpenClaw.Tray.UITests.dll')
-        if ($receipt.head -cne $head -or $receipt.method -cne 'PrintWindow(PW_RENDERFULLCONTENT); no fallback' -or
-            (Hash $image) -cne $receipt.imageSha256 -or $receipt.assemblySha256 -cne $assemblyHash -or
-            $receipt.qualification -cne 'Synthetic dependencies; private owned production window. Not native compositor, keyboard, installed-app, or live Gateway proof.') { throw "Private mounted image binding failed: $name" }
-        if ($required.schema -cne 'provider-artwork-private-mounted-required-v1' -or $required.state -cne $name -or
-            $required.head -cne $head -or $required.freezeManifestSha256 -cne $env:OPENCLAW_UI_PROOF_MANIFEST_SHA256 -or
-            $required.assemblySha256 -cne $assemblyHash -or $required.imageSha256 -cne (Hash $image) -or
-            $required.method -cne 'PrintWindow(PW_RENDERFULLCONTENT); no fallback') { throw 'Required private-frame/source/freeze/assembly binding differs.' }
-        if ($name -like '*-inventory-*') { $labels=@('Llama app','Ollama','llama.cpp','Unknown provider') }
-        else {
-            $match=[regex]::Match($name,'^(?:before-)?provider-(llama-app|ollama)-(note|text|confirm)-(Light|Dark)$')
-            if (!$match.Success) { throw 'Unknown private dialog frame.' }
-            $label=if($match.Groups[1].Value -ceq 'llama-app'){'Llama app'}else{'Ollama'}
-            $labels=@($label,('Provider '+$match.Groups[2].Value),'Cancel')
+        if (@(Get-ChildItem $frames -Filter '*.png').Count -ne 2 -or @(Get-ChildItem $frames -Filter '*.required.json').Count -ne 0) { throw 'Expected exactly two raw diagnostic attempts and no qualified images.' }
+        $phases=@('before-open','opened-and-mounted','owner-before-move','owner-after-move','owner-after-composition','owner-before-printwindow','owner-after-printwindow','after-owner-return','test-finally-before-close')
+        foreach ($arm in @('same-position-move','conditional-move')) {
+            $name='popup-'+$arm+'-Light'
+            $raw=Get-Content (Join-Path $frames ($name+'.json')) -Raw|ConvertFrom-Json
+            $trace=Get-Content (Join-Path $frames ($name+'.boundary.json')) -Raw|ConvertFrom-Json
+            $assemblyHash=Hash (Join-Path $bin 'OpenClaw.Tray.UITests.dll')
+            if ($raw.head -cne $head -or $raw.method -cne 'PrintWindow(PW_RENDERFULLCONTENT); no fallback' -or $raw.imageSha256 -cne (Hash (Join-Path $frames ($name+'.png'))) -or $raw.assemblySha256 -cne $assemblyHash) { throw 'Raw observation image/source/assembly binding differs.' }
+            if ($trace.schema -cne 'provider-popup-boundary-observation-v1' -or $trace.state -cne 'observed-not-qualified' -or $trace.Arm -cne $arm -or $trace.head -cne $head -or $trace.assemblySha256 -cne $assemblyHash -or $trace.freezeManifestSha256 -cne $env:OPENCLAW_UI_PROOF_MANIFEST_SHA256 -or ($trace.events.phase -join '|') -cne ($phases -join '|')) { throw 'Incomplete or misbound causal boundary observation.' }
+            foreach ($event in $trace.events) {
+                if ($event.sourcePid -le 0 -or $event.sourceThread -le 0 -or $event.sourceHwnd -eq 0 -or $event.desktop -ieq 'Default' -or $event.rows.Count -ne 4) { throw 'Invalid private owned observation identity.' }
+                foreach ($owned in $event.ownedDesktopWindows) {
+                    if ($owned.pid -ne $event.sourcePid -or $owned.thread -le 0 -or $owned.desktop -cne $event.desktop) { throw 'Observation expanded beyond the owned PID on the same private desktop.' }
+                }
+            }
         }
-        if (@(Compare-Object ($labels|Sort-Object) (@($required.requiredLabels)|Sort-Object)).Count -ne 0 -or
-            $required.nativeLabels.Count -ne $labels.Count -or $required.geometry.Hwnd -eq 0 -or
-            $required.geometry.Desktop -ieq 'Default' -or $required.requiredContentBounds.Width -le 0 -or
-            $required.requiredContentBounds.Height -le 0) { throw 'Required private content/label geometry differs.' }
-        foreach ($label in $labels) {
-            $node=@($required.nativeLabels|Where-Object {$_.Expected -ceq $label -and $_.ActualName -ceq $label})
-            if ($node.Count -ne 1 -or $node[0].Width -le 0 -or $node[0].Height -le 0 -or
-                $node[0].Left -lt $required.geometry.Left -or $node[0].Top -lt $required.geometry.Top -or
-                $node[0].Left+$node[0].Width -gt $required.geometry.Right -or
-                $node[0].Top+$node[0].Height -gt $required.geometry.Bottom) { throw 'Required owned-HWND label is missing or clipped.' }
-        }
-        if (@($required.ocr.MissingLabels).Count -ne 0) { throw 'A required icon-matrix OCR label is missing; no new exception is admitted.' }
+        if (@(Manifest).Count -ne $sourceFiles.Count) { throw 'Diagnostic source inventory changed.' }
+        foreach ($file in $sourceFiles) { if ((Hash (Join-Path $Source $file.path)) -cne $file.sha256) { throw 'Diagnostic source drift.' } }
+        foreach ($file in $binaryFiles) { if ((Hash (Join-Path $bin $file.path.Substring(15))) -cne $file.sha256) { throw 'Diagnostic binary drift.' } }
+        Assert-Tree
+        Json @{state='controlled-observations-collected-NOT-QUALIFICATION';head=$head;sourceTree=$ExpectedSourceTree;candidateTree=$AcceptedTree;executed=2;passed=2;skipped=0;rawAttempts=2;qualifiedFrames=0;theme='Light';Dark='UNRUN';Shared='RED-unwaived';manualPixels='required for both arms, never select the best arm';outcome='parent must classify closure versus separate HWND or inconclusive; no automatic fix/qualification'} (Join-Path $Artifacts 'diagnostic-result.json')
+        return
     }
-    if (@(Manifest).Count -ne $sourceFiles.Count) { throw 'Frozen source inventory changed.' }
-    foreach ($file in $sourceFiles) { if ((Hash (Join-Path $Source $file.path)) -cne $file.sha256) { throw "Source drift: $($file.path)" } }
-    foreach ($file in $binaryFiles) { if ((Hash (Join-Path $bin $file.path.Substring(15))) -cne $file.sha256) { throw "Binary drift: $($file.path)" } }
-    Assert-Tree
-    Json @{state='private-mounted-cases-passed-manual-pixel-review-required';foregroundProven=$false;keyboardProven=$false;compositorProven=$false;head=$head;stage=$Stage;candidateTree=$AcceptedTree;sourceTree=$ExpectedSourceTree;executed=$expectedCases;passed=$expectedCases;skipped=0;frames=$expectedFrames;Shared='RED-unwaived';fullBuild='not executed by this narrow driver';priorW4='unchanged-contract evidence only; not current-tree aggregate proof';popup='Reject absent/cropped inventory pixels; no AX-only acceptance or unowned fallback'} (Join-Path $Artifacts 'result.json')
+    throw 'This diagnostic packet cannot execute qualification selections.'
 } catch {
     Json @{state='failed';error=($_ | Out-String);candidateTree=$AcceptedTree;Shared='RED-unwaived'} (Join-Path $Artifacts 'failure.json')
     throw

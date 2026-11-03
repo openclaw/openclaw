@@ -1,39 +1,24 @@
 {
-  "status": "UNMEASURED-new-source-and-proof-bytes-unrun",
-  "canonicalSourceDelta": "Only natural API Keys entry and event-observed scroller/render settlement in existing picker test; LF. Prior6bd/619 preserved.",
-  "candidate": {
-    "cases": 7,
-    "requiredFrames": 14,
-    "existingSuiteAppBoots": 1,
-    "taskOwnedWindows": 6,
-    "wallSeconds": null,
-    "ciSeconds": null
-  },
-  "baseline": {
-    "cases": 6,
-    "requiredFrames": 14,
-    "existingSuiteAppBoots": 2,
-    "taskOwnedWindows": 6,
-    "order": "picker pair first; dialogs only on success",
-    "wallSeconds": null,
-    "ciSeconds": null
-  },
-  "protectedBehavior": "same native decode/fallback, typed prepare and answers, no auth/activation, cancellation/reopen/close and independent rebind assertions; required private capture not skipped",
-  "qualifiedReuse": "same suite Application/thread, real production page and Gateway fixture, existing mounted Invoke, same maintained MountedControlCapture owner; no new process boot owner/timer/sleep/retry/fake inventory/visibility mutation",
-  "priorRun": {
-    "id": 41581126055,
-    "BeforeUiBuildSeconds": 73.26,
-    "BeforeCasesExecuted": 2,
-    "BeforeCasesFailed": 2,
-    "frames": 0,
-    "status": "foreground mode mismatch, not product verdict"
-  },
-  "validationHeld": [
-    "canonical parent review",
-    "PowerShell AST/current smoke",
-    "current source/proof native compilation",
-    "Before6/After7 native counts",
-    "all28 real pixel inspections"
+  "status": "UNRUN-UNMEASURED-new-diagnostic-bytes",
+  "diagnosticCases": 2,
+  "themes": [
+    "Light"
   ],
+  "Dark": "UNRUN",
+  "suiteBoots": 1,
+  "taskOwnedWindows": 2,
+  "rawAttempts": 2,
+  "qualifiedFrames": 0,
+  "After": "independent current UI build only; source+proof source admitted; tests unrun",
+  "prior41586364473": {
+    "BeforeBuildWallSeconds": 109.7058327,
+    "BeforePickerWallSeconds": 12.0918625,
+    "executed": 2,
+    "failed": 2,
+    "qualifiedFrames": 0
+  },
+  "newWallSeconds": null,
+  "newCISeconds": null,
+  "noSleepsOrNewBootOwner": true,
   "Shared": "RED-unwaived"
 }

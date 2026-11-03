@@ -1,5 +1,37 @@
+diff --git a/tests/OpenClaw.Tray.UITests/MountedControlCapture.cs b/tests/OpenClaw.Tray.UITests/MountedControlCapture.cs
+index 681e17cbc13b7a4d08ca796b59798d4ed84fb094..f4b6db6fef98ec6faceeb16f434bce3792b5e9e5 100644
+GIT binary patch
+delta 1186
+zcmb_ZOHUI~7){^prM&tQ5*|aX(1Fqj2?`XWDACYppn^z{D23k2#4^*&Ok1%uhJ~_m
+zK|P6yJ238i`~_JW7siDw+`!UA6E`F-TzO|`+B8v2h&P$}9y9lx^L=MG{Jn3}YapAR
+zVvnOZ&{>=h6xZENB%=u8U2bYsQRzx}n%-B#QAH9X#kb7{QvA@tUOz%cl1G~%Y9$;y
+zd87>q>>B#Lda1RvBU3daixGl$;{a|L!<e*s@!U9uJ>y9jO@oM-#_`BBgm<Q4{4(9b
+zj5&&JGksV_nUtlhkf8FYtmY*7-lUYyq%TStF%g$n!xM`Nm9sRM6U2m+3vqraCsMh0
+zktQXX_O3`->gOY6C?UxOJC4K~S4NjqAxpWzwKeX@Kc|+ZOe%4WF_g%8Ugv?`G7&8^
+z9trUm@$sa}Mkr~=tYswjAK;dxm9(S?svwDMBW&9~yt35mZhW#d<C`U@=Rs>1ixb$g
+z-g#;pCS~G0F57|?Pc&y$dA0mmtMgTr);Z4bCFjzzAgYI^Rt&^5TdG>aaaj&m{6`WE
+zlH&?h!z2YUo=WNCR{D9IvGYxpy6RQ|59~Z%+GF@>pF-3zf(=I)PwLO%z!7RKU#i}j
+zqQ+Gk!g+ENZyK&(pDf@)%?94rbmO2VfF>u0A!i$Aoqpt<0c<(jvBT<pmYZukvF_@|
+zOl?2*T%*jx7JRMc(O5T!RNYnG+mCfIa7@AN`d+3a{!bNc=xJE5QnJ@Lhas0A^R9r-
+z_S)5_vDx%_3Ix2n8`JJf27*TKFh0BcVe^dX`D4#%7DsU4X=U*`dj`<pvt!$P7GJzE
+Yy<YI0VzC7;e685=ErUPNWg-Rg8<0n79RL6T
+
+delta 887
+zcma))&ubGw6vx?3+KrP;el(lx+S)eNsHw)qR*RZ6&{{!K3`LrXtp{D}rUa5SW;bdm
+z1uyEM2NUMzLGdE}7rY4dU{TPU-UJWzq<?@Qg5Q@aG4$dbKD_sx_h!EHm~Uerjb=pV
+ztf?|1TQ*mUm6bGaojM}%)?z%uS>1*bn{U{TRW|b0JqNo@efsZ4uDD!VwO0#{v5+;c
+zn&ncOGtMez*|MwVvK5=FT9uiSdDqC-%m!-mmhIS7)7nY8Ia}kRPnz{`7Q;evQ@SN_
+z@kScgcO{Z()hwr8t5Bcd@&roG%LZ7L7s0pkA@I9=7L2>HVA*vJeBnxgUtHI~w0jnO
+z;I{Bo@w{gaNvd}e-0nRLR^^D0l>LbMl|(z&#gY>Lvm+Eb=)H0sOnOqjjyG7YdJ-cY
+zfy_F!Mz?^f;6D3wx47P&7K#<KRNC9<W1|DzmH#xZbCF}CaCL`W2DjNf*zcuxUGdU@
+zra~F9<xR#qC#-cs@@hM#V<owG6&ex=A5G2lT?99MH$V@61U}}+z?YoH@tMcKUwjB0
+z@E-&-e$q|<FnHfj`qQ@Z+K)dZj;qw$7Z?X0s?#8i`bpp<qIZEMFdn=_YOnx)3TD7?
+z=ma<wGXKZ+GnDSNyb-3OzlO=6qLRT~BMa&nVi>_ErRQUoTzqJI{GracD3i1aaXWGb
+zWt));Amt-b`g0U*MCmY!cA|sr$N}pbji1z?8hs~8J0K?Y!JhUdVp!9JqvxP+=|`dA
+F(%)NR$lCw_
+
 diff --git a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
-index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..272881988835a6c3bbc9089f95586d86533259a2 100644
+index 84479dc..d4eaf6e 100644
 --- a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
 +++ b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
 @@ -1,3 +1,9 @@
@@ -12,12 +44,64 @@ index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..272881988835a6c3bbc9089f95586d86
  using System.Text.Json;
  using System.Reflection;
  using Microsoft.UI.Xaml;
-@@ -21,6 +27,111 @@ namespace OpenClaw.Tray.UITests;
+@@ -21,6 +27,163 @@ namespace OpenClaw.Tray.UITests;
  public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper output)
  {
      private bool _nativeProof;
 +    private Window? _privateProofWindow;
 +    private Grid? _privateProofRoot;
++    [Theory]
++    [InlineData("same-position-move")]
++    [InlineData("conditional-move")]
++    public async Task ProviderPopupBoundaryDiagnostic(string arm)
++    {
++        await WithPageAsync(async (page, transport, completed) =>
++        {
++            var picker = Find<ComboBox>(page, "ApiProviderPicker");
++            var scroller = Find<ScrollViewer>(page, "ChoicesScroller");
++            var scrollSettled = true;
++            void Scrolled(object? sender, ScrollViewerViewChangedEventArgs args) => scrollSettled = !args.IsIntermediate;
++            scroller.ViewChanged += Scrolled;
++            try
++            {
++                await InvokeCardAsync(Find<SetupActionCard>(page, "ApiKeysButton"));
++                await TestSupport.WaitForRenderedConditionAsync(
++                    () => Find<StackPanel>(page, "ApiKeyForm").Visibility == Visibility.Visible && picker.IsLoaded,
++                    "API Keys action reveals the provider form");
++                picker.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
++                scroller.UpdateLayout();
++                await OnboardingNativeProof.NextCompositionAsync();
++                await TestSupport.WaitForRenderedConditionAsync(() => scrollSettled, "provider scroller settled");
++                OnboardingNativeProof.AssertFullyVisible(picker, scroller);
++                ProviderArtworkPopupBoundary.Begin(_privateProofWindow!, picker, arm);
++                picker.IsDropDownOpen = true;
++                await TestSupport.WaitForRenderedConditionAsync(
++                    () => picker.ContainerFromIndex(3) is ComboBoxItem { IsLoaded: true }, "original provider inventory mounted");
++                foreach (var index in Enumerable.Range(0, 4))
++                    Assert.Empty(TestSupport.FindDescendants<ProviderArtwork>(
++                        Assert.IsType<ComboBoxItem>(picker.ContainerFromIndex(index))));
++                ProviderArtworkPopupBoundary.Observe(_privateProofWindow!, "opened-and-mounted");
++                await MountedControlCapture.OptionalAsync(_privateProofWindow!, $"popup-{arm}-Light");
++                ProviderArtworkPopupBoundary.Observe(_privateProofWindow!, "after-owner-return");
++                Assert.Equal(-1, picker.SelectedIndex);
++                Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
++                Assert.Equal(0, completed());
++                OnboardingNativeProof.AssertSourceUnchanged();
++            }
++            finally
++            {
++                try { ProviderArtworkPopupBoundary.End(_privateProofWindow!); }
++                finally { picker.IsDropDownOpen = false; scroller.ViewChanged -= Scrolled; }
++            }
++        }, theme: ElementTheme.Light, nativeProof: true, configure: transport => transport.DetectionOverride = new()
++        {
++            Candidates = [], Workspace = "/synthetic-workspace", SetupComplete = false,
++            ManualProviders = [new("llama-app", "Llama app", BrandId: "llama-app"),
++                new("ollama", "Ollama", BrandId: "ollama"), new("llamacpp", "llama.cpp"),
++                new("fixture-unknown", "Unknown provider")],
++        });
++    }
++
 +    [Theory]
 +    [InlineData(ElementTheme.Light)]
 +    [InlineData(ElementTheme.Dark)]
@@ -124,7 +208,7 @@ index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..272881988835a6c3bbc9089f95586d86
 
      [Fact]
      public async Task AiGroups_KeepManualInputSeparateFromAuthenticationInTheMountedPage()
-@@ -2510,12 +2621,26 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2510,12 +2673,26 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                  ? await GatewayAiPreparation.PrepareAsync(transport, preparationOwner, CancellationToken.None) : null;
              var completions = 0;
              var connects = 0;
@@ -157,7 +241,7 @@ index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..272881988835a6c3bbc9089f95586d86
              Frame? frame = null;
              AiSetupPage? page = null;
              IDisposable? navigation = null;
-@@ -2525,18 +2650,21 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2525,18 +2702,21 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                  {
                      OnboardingNativeProof.AssertIsolatedRoots();
                      OnboardingNativeProof.RequireProofDirectory();
@@ -187,7 +271,7 @@ index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..272881988835a6c3bbc9089f95586d86
                  var data = Environment.GetEnvironmentVariable("OPENCLAW_TRAY_DATA_DIR")
                      ?? throw new InvalidOperationException("Set isolated tray data before onboarding UI tests.");
                  var args = new AiSetupPageArgs(new SetupConfig(), data, data,
-@@ -2556,15 +2684,19 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2556,15 +2736,19 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                      });
                  frame = nativeProof ? new Frame() : new Frame { Width = width, Height = 820 };
                  navigation = OnboardingNativeProof.TrackNavigation(frame);
@@ -210,7 +294,7 @@ index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..272881988835a6c3bbc9089f95586d86
                  await ui.YieldToRenderAsync();
                  await assertion(page, transport, () => completions);
              }
-@@ -2578,15 +2710,24 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2578,15 +2762,24 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                  }
                  finally
                  {
@@ -243,7 +327,7 @@ index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..272881988835a6c3bbc9089f95586d86
                      _nativeProof = false;
                      await ui.YieldToRenderAsync();
                  }
-@@ -2642,9 +2783,9 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2642,9 +2835,9 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
 
      private Task InvokeCardAsync(SettingsCard card)
      {
@@ -255,7 +339,7 @@ index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..272881988835a6c3bbc9089f95586d86
          var handler = card.Name switch
          {
              "ApiKeysButton" => "ApiKeys_Click",
-@@ -2859,3 +3000,258 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2859,3 +3052,407 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
          }
      }
  }
@@ -513,4 +597,153 @@ index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..272881988835a6c3bbc9089f95586d86
 +    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
 +    private static extern bool GetUserObjectInformationW(IntPtr handle, int index, StringBuilder value,
 +        uint length, out uint needed);
++}
++
++// Task-only boundary observer; no additional capture backend.
++internal static class ProviderArtworkPopupBoundary
++{
++    private sealed record Context(Window Window, ComboBox Picker, string Arm, string Path, List<object> Events);
++    private static Context? _current;
++    internal static bool IsActive => _current is not null;
++    internal static void Begin(Window window, ComboBox picker, string arm)
++    {
++        Assert.Null(_current);
++        Assert.Contains(arm, new[] { "same-position-move", "conditional-move" });
++        Assert.Equal("popup-boundary-light-v1", Environment.GetEnvironmentVariable("OPENCLAW_PROVIDER_ARTWORK_POPUP_DIAGNOSTIC"));
++        OnboardingNativeProof.AssertSourceUnchanged();
++        var path = Path.Combine(OnboardingNativeProof.RequireProofDirectory(), "popup-" + arm + "-Light.boundary.json");
++        Assert.False(File.Exists(path));
++        _current = new(window, picker, arm, path, []);
++        Observe(window, "before-open");
++    }
++    internal static void Observe(Window window, string phase)
++    {
++        var context = _current;
++        if (context is null) return;
++        Assert.Same(context.Window, window);
++        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
++        var thread = GetWindowThreadProcessId(hwnd, out var pid);
++        Assert.Equal((uint)Environment.ProcessId, pid);
++        Assert.Equal(GetCurrentThreadId(), thread);
++        var desktop = Desktop(thread);
++        Assert.False(string.Equals("Default", desktop, StringComparison.OrdinalIgnoreCase));
++        var root = Assert.IsAssignableFrom<FrameworkElement>(window.Content);
++        var xamlRoot = Assert.IsType<XamlRoot>(root.XamlRoot);
++        var origin = new Point();
++        Assert.True(ClientToScreen(hwnd, ref origin));
++        var inset = NativeProofLayout.ContentTopInset(window.ExtendsContentIntoTitleBar, IsZoomed(hwnd));
++        object Element(FrameworkElement element)
++        {
++            object? screen = null;
++            string? boundsError = null;
++            try
++            {
++                var bounds = element.TransformToVisual(root).TransformBounds(new Windows.Foundation.Rect(0, 0, element.ActualWidth, element.ActualHeight));
++                screen = new { left = origin.X + bounds.X * xamlRoot.RasterizationScale,
++                    top = origin.Y + inset + bounds.Y * xamlRoot.RasterizationScale,
++                    width = bounds.Width * xamlRoot.RasterizationScale, height = bounds.Height * xamlRoot.RasterizationScale };
++            }
++            catch (InvalidOperationException error) { boundsError = error.GetType().Name; }
++            return new { element.IsLoaded, visibility = element.Visibility.ToString(), element.ActualWidth, element.ActualHeight,
++                element.IsHitTestVisible, screen, boundsError };
++        }
++        var rows = Enumerable.Range(0, 4).Select(index =>
++        {
++            var row = context.Picker.ContainerFromIndex(index) as ComboBoxItem;
++            return new { index, mounted = row is not null, element = row is null ? null : Element(row),
++                labels = row is null ? [] : TestSupport.FindDescendants<TextBlock>(row).Select(text => text.Text).ToArray() };
++        }).ToArray();
++        var popups = VisualTreeHelper.GetOpenPopupsForXamlRoot(xamlRoot).Select(popup => new
++        {
++            popup.IsOpen, childType = popup.Child?.GetType().FullName,
++            child = popup.Child is FrameworkElement element ? Element(element) : null,
++        }).ToArray();
++        var windows = new List<object>();
++        var identities = new List<IntPtr>();
++        bool Collect(IntPtr candidate, IntPtr unused) { identities.Add(candidate); return true; }
++        // Enumerate identities on this private desktop, retain only this PID. No other HWND is captured.
++        Assert.True(EnumDesktopWindows(GetThreadDesktop(thread), Collect, IntPtr.Zero));
++        foreach (var candidate in identities)
++        {
++            var candidateThread = GetWindowThreadProcessId(candidate, out var candidatePid);
++            if (candidatePid != pid) continue;
++            Assert.Equal(desktop, Desktop(candidateThread));
++            var hasBounds = GetWindowRect(candidate, out var bounds);
++            var name = new StringBuilder(256);
++            _ = GetClassNameW(candidate, name, name.Capacity);
++            var owners = new List<object>();
++            var seen = new HashSet<IntPtr>();
++            var owner = GetWindow(candidate, 4);
++            while (owner != IntPtr.Zero && seen.Add(owner))
++            {
++                var ownerThread = GetWindowThreadProcessId(owner, out var ownerPid);
++                owners.Add(new { hwnd = owner.ToInt64(), pid = ownerPid, thread = ownerThread,
++                    desktop = ownerPid == pid ? Desktop(ownerThread) : null });
++                if (ownerPid != pid) break;
++                owner = GetWindow(owner, 4);
++            }
++            windows.Add(new { hwnd = candidate.ToInt64(), pid = candidatePid, thread = candidateThread, desktop,
++                className = name.ToString(), visible = IsWindowVisible(candidate), hasBounds, bounds, owners });
++        }
++        Assert.True(GetWindowRect(hwnd, out var sourceBounds));
++        context.Events.Add(new { sequence = context.Events.Count, phase, atUtc = DateTimeOffset.UtcNow,
++            context.Picker.IsDropDownOpen, sourceHwnd = hwnd.ToInt64(), sourcePid = pid, sourceThread = thread,
++            desktop, sourceBounds, popups, rows, ownedDesktopWindows = windows });
++        Save(context, "observing");
++    }
++    internal static bool ShouldMove(Window window)
++    {
++        var context = Assert.IsType<Context>(_current);
++        Assert.Same(context.Window, window);
++        var work = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(window.AppWindow.Id,
++            Microsoft.UI.Windowing.DisplayAreaFallback.Nearest).WorkArea;
++        var position = window.AppWindow.Position;
++        // Both controlled arms must start at the same, already-admitted work-area position.
++        Assert.Equal(work.X, position.X);
++        Assert.Equal(work.Y, position.Y);
++        return context.Arm == "same-position-move" || position.X != work.X || position.Y != work.Y;
++    }
++    internal static void End(Window window)
++    {
++        try
++        {
++            Observe(window, "test-finally-before-close");
++            if (_current is { } context) Save(context, "observed-not-qualified");
++        }
++        finally { _current = null; }
++    }
++    private static void Save(Context context, string state)
++    {
++        File.WriteAllText(context.Path, JsonSerializer.Serialize(new
++        {
++            schema = "provider-popup-boundary-observation-v1", state, context.Arm,
++            qualification = "Light-only controlled observation. No provider-icon or popup-composition qualification.",
++            head = Environment.GetEnvironmentVariable("OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD"),
++            freezeManifestSha256 = Environment.GetEnvironmentVariable("OPENCLAW_UI_PROOF_MANIFEST_SHA256"),
++            assemblySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(ProviderArtworkPopupBoundary).Assembly.Location))),
++            events = context.Events,
++        }, new JsonSerializerOptions { WriteIndented = true, IncludeFields = true }));
++    }
++    private static string Desktop(uint thread)
++    {
++        var handle = GetThreadDesktop(thread);
++        Assert.NotEqual(IntPtr.Zero, handle);
++        var name = new StringBuilder(256);
++        Assert.True(GetUserObjectInformationW(handle, 2, name, 512, out _));
++        return name.ToString();
++    }
++    [StructLayout(LayoutKind.Sequential)] private struct Point { public int X, Y; }
++    [StructLayout(LayoutKind.Sequential)] private struct Bounds { public int Left, Top, Right, Bottom; }
++    private delegate bool EnumThreadWindow(IntPtr window, IntPtr parameter);
++    [DllImport("user32.dll")] private static extern bool EnumDesktopWindows(IntPtr desktop, EnumThreadWindow callback, IntPtr parameter);
++    [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
++    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassNameW(IntPtr window, StringBuilder name, int length);
++    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
++    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
++    [DllImport("user32.dll")] private static extern IntPtr GetThreadDesktop(uint thread);
++    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetUserObjectInformationW(IntPtr handle, int index, StringBuilder value, uint length, out uint needed);
++    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out Bounds bounds);
++    [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr window, ref Point point);
++    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
++    [DllImport("user32.dll")] private static extern bool IsZoomed(IntPtr window);
 +}

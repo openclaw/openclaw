@@ -1,9 +1,9 @@
 {
   "v": 1,
-  "name": "windows-provider-artwork-private-mounted-v1",
+  "name": "windows-provider-popup-boundary-diagnostic-light-v1",
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
   "candidateTree": "d58d740ce7e5beb1b43889e6897ae96cf54370ba",
-  "baselineCaptureTree": "a1c05f702d256b3675ca787bdebf18f588f8db08",
+  "baselineCaptureTree": "c657bbcfc2d034ede260118d8c0093f3f37a96d4",
   "sourceContracts": [
     {
       "path": "Directory.Build.props",
@@ -63,8 +63,8 @@
     },
     {
       "path": "CONTROLLER-STATIC.json",
-      "bytes": 1482,
-      "sha256": "435a35dfa933d21f7ded36512f03a12420fea26c07d15cd6c3c68dbd67622124"
+      "bytes": 1364,
+      "sha256": "0386d8e688c56b993458c6b9178d656079bdbe6bca1932c7723e7ffc2028e680"
     },
     {
       "path": "Initialize-NativeRuntime.ps1",
@@ -73,28 +73,33 @@
     },
     {
       "path": "Invoke-ProviderArtworkCI.ps1",
-      "bytes": 7716,
-      "sha256": "4e23318cbcba57380ee3fa5a35ec940f2ac47a1f3e54b053d31b6bfc55620015"
+      "bytes": 7901,
+      "sha256": "b6e02496cc12204739f1480aed349a38783d27a9e1b674435b195ee421e3ea4e"
     },
     {
       "path": "Invoke-ProviderArtworkProof.ps1",
-      "bytes": 19575,
-      "sha256": "765fc62e57ac1664acf99dc0ccdc60389c1307a4393b0cf1fe63f9a07440975a"
+      "bytes": 17761,
+      "sha256": "b7d1a7c86fd38b87733553ca364e5ae59d73c59ab039e7ca51a825e7db983aff"
+    },
+    {
+      "path": "POPUP-DIAGNOSTIC.md",
+      "bytes": 5312,
+      "sha256": "965ed861e49f96878c1e5a00209e8c6e3f9a2f403db36906e98ac582590c6e85"
     },
     {
       "path": "PRIVATE-CUTOVER.md",
-      "bytes": 4687,
-      "sha256": "6b9c468986e1cb13a03c4d67098f38e02ef66041f6106bd05fbc50e776c839eb"
+      "bytes": 577,
+      "sha256": "71c7d37f854b1dd5fad99694ee7754082a4bfd30f21128398221d0d34e459a8d"
     },
     {
       "path": "PROOF-OVERLAYS.json",
-      "bytes": 2440,
-      "sha256": "8b238a562ff81178b620044101206f12c8b8f9b44d653f6e45f64295b81032e0"
+      "bytes": 3440,
+      "sha256": "42734d1579e013204d280ec0b430c5cfe84f6727416e03cfbdf74ce27bc7071b"
     },
     {
       "path": "PROOF-PLAN.md",
-      "bytes": 4687,
-      "sha256": "6b9c468986e1cb13a03c4d67098f38e02ef66041f6106bd05fbc50e776c839eb"
+      "bytes": 577,
+      "sha256": "71c7d37f854b1dd5fad99694ee7754082a4bfd30f21128398221d0d34e459a8d"
     },
     {
       "path": "Program.cs",
@@ -113,8 +118,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 2556,
-      "sha256": "925b1c99b3b469147687495a2c08ea09d9f1ab0bb243aa904efa5e95bde65a4f"
+      "bytes": 577,
+      "sha256": "71c7d37f854b1dd5fad99694ee7754082a4bfd30f21128398221d0d34e459a8d"
     },
     {
       "path": "REVIEW-RUNTIME2.md",
@@ -128,8 +133,8 @@
     },
     {
       "path": "STATIC-PREPARATION.json",
-      "bytes": 1482,
-      "sha256": "435a35dfa933d21f7ded36512f03a12420fea26c07d15cd6c3c68dbd67622124"
+      "bytes": 1364,
+      "sha256": "0386d8e688c56b993458c6b9178d656079bdbe6bca1932c7723e7ffc2028e680"
     },
     {
       "path": "Save-CalculatedVersion.ps1",
@@ -138,13 +143,18 @@
     },
     {
       "path": "TEST-COST.json",
-      "bytes": 1517,
-      "sha256": "c3b19c26f5aff61726873d5cd569ca62c612bdbc5509f5cd98db27c1d6129292"
+      "bytes": 597,
+      "sha256": "da9257ac5192888f169cd3edf667bcc13a7461245e1b742de6afdb3074c822a2"
     },
     {
       "path": "Test-PacketSyntaxAndStage.ps1",
       "bytes": 4545,
       "sha256": "9d39f26da301934b0d238bb1edf4d7376909c92f0c1f08700bc077aaf0574f5d"
+    },
+    {
+      "path": "W4-FOREGROUND-ALTERNATIVE.md",
+      "bytes": 1876,
+      "sha256": "b43ebcd08488141fcc369bc00dbfd70486f2cdc94e27648ad930f2d749c5a8da"
     },
     {
       "path": "after-private-capture.patch",
@@ -153,8 +163,8 @@
     },
     {
       "path": "baseline-capture.patch",
-      "bytes": 33543,
-      "sha256": "2045e786b8b4762f3bb0d7d3c640f7a0c12160379ad8511ab9ad2e6ca00f0891"
+      "bytes": 47747,
+      "sha256": "91dd12a2900b5de7c651fe527def452941dda870948ff4f6fc1d0b20d5106918"
     },
     {
       "path": "baseline-captures.cs.append",
@@ -163,8 +173,8 @@
     },
     {
       "path": "baseline-postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-      "bytes": 181425,
-      "sha256": "f2a19c39c2c479dcf72508382cd39a8081659ea54c4a0dc8f89804f2cdabfaf9"
+      "bytes": 193647,
+      "sha256": "8daac42573566d1339688c890331a2292d988d828c77b4ea6e351a4f85badda1"
     },
     {
       "path": "candidate-source.json",
@@ -212,6 +222,11 @@
       "sha256": "eb50ede485aa22b8088269e3f3ccc5e516b867c29753bb628e29a583fbe4dada"
     },
     {
+      "path": "private-overlay/ProviderArtworkPopupBoundary.cs",
+      "bytes": 9338,
+      "sha256": "b3f4ee67436b88496f29abe66c8f0d1dbd6c14208d6f320ff0381ec3b631bdc2"
+    },
+    {
       "path": "private-overlay/ProviderArtworkPrivatePresentation.cs",
       "bytes": 17420,
       "sha256": "be0653ecfb025cd5debd895a3fbe740b215bd513d003314d6d9ca3286ba6b892"
@@ -222,14 +237,19 @@
       "sha256": "a6ca3a5029c54751d9bea1c256d9cc63ff998743bba5fe2e8186c7ca71760dc3"
     },
     {
+      "path": "proof-postimages/Before/tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
+      "bytes": 6379,
+      "sha256": "5114c3c7ea6a3ef8795024c961ab2aa24b289d3d1d1be7a9ae459770cb09a0bf"
+    },
+    {
       "path": "proof-postimages/Before/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-      "bytes": 181425,
-      "sha256": "f2a19c39c2c479dcf72508382cd39a8081659ea54c4a0dc8f89804f2cdabfaf9"
+      "bytes": 193647,
+      "sha256": "8daac42573566d1339688c890331a2292d988d828c77b4ea6e351a4f85badda1"
     },
     {
       "path": "source-pins.json",
-      "bytes": 10605,
-      "sha256": "2f19bc175abb41c53e51e671e138365e21d5fb432ac5521256b5ae8fd8638ce5"
+      "bytes": 11736,
+      "sha256": "7abd69814d448bd2865490d5e6378773f8bf1718d2abc3e170ceebedd774096b"
     }
   ],
   "afterCaptureTree": "ba0180569e297f63934a27c540adf006d1834aad"
