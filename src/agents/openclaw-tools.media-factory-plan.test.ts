@@ -258,10 +258,13 @@ describe("optional media tool factory planning", () => {
         }),
       ).toBe(expected);
     }
-    // A key written on the provider entry is usable auth; a local marker is not.
-    Object.assign(config.models?.providers?.custom ?? {}, { apiKey: "ollama-local" });
+    // A key on the provider entry is usable auth; a marker counts only on a local route.
+    const custom = config.models?.providers?.custom ?? {};
+    Object.assign(custom, { apiKey: "ollama-local" });
     expect(available(createAuthStore())).toBe(false);
-    Object.assign(config.models?.providers?.custom ?? {}, { apiKey: "inline-test-key" });
+    Object.assign(custom, { api: "ollama", baseUrl: "http://localhost:11434" });
+    expect(available(createAuthStore())).toBe(true);
+    Object.assign(custom, { api: undefined, baseUrl: "https://vision.example/v1", apiKey: "k" });
     expect(available(createAuthStore())).toBe(true);
   });
 
