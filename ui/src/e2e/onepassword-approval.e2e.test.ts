@@ -187,6 +187,13 @@ suite.define(() => {
               .evaluate((element) => getComputedStyle(element).animationName),
           ).toBe("none");
           expect(Math.abs((await cardHeight()) - readyHeight)).toBeLessThanOrEqual(2);
+          await view
+            .getByText("Nothing opened? Open this chat on a computer with the 1Password app.", {
+              exact: true,
+            })
+            .waitFor();
+          expect(await view.getByRole("button").count()).toBe(0);
+          expect(await view.getByRole("link", { name: "Open again", exact: true }).count()).toBe(1);
           await capture("waiting");
           await expect
             .poll(async () => (await gateway.getRequests("onepassword.autofill.approval")).length)
@@ -205,28 +212,13 @@ suite.define(() => {
             ["expired", "Approval expired"],
             ["unavailable", "Approval link unavailable"],
             ["failed", "Sign-in failed"],
-            ["device_unavailable", "Open this on a computer with 1Password"],
           ]) {
             await page.reload();
             await view.getByRole("heading", { name: "Approve sign-in" }).waitFor();
             await expect
               .poll(async () => (await gateway.getRequests("onepassword.autofill.approval")).length)
               .toBe(1);
-            await gateway.resolveDeferred(
-              "onepassword.autofill.approval",
-              state === "device_unavailable"
-                ? {
-                    ...metadata,
-                    state: "pending",
-                    appLink,
-                    openedAt: Date.now(),
-                    deadline: Date.now() + 120_000,
-                  }
-                : { ...metadata, state },
-            );
-            if (state === "device_unavailable") {
-              await view.getByRole("button", { name: "Don’t have 1Password here?" }).click();
-            }
+            await gateway.resolveDeferred("onepassword.autofill.approval", { ...metadata, state });
             await view.getByText(title!, { exact: true }).waitFor();
             if (state === "settling") {
               expect(Math.abs((await cardHeight()) - readyHeight)).toBeLessThanOrEqual(2);

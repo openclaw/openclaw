@@ -14,7 +14,7 @@ type ApprovalContext = Parameters<
 
 /** A quiet, theme-native glyph; the 1Password mark itself is never altered. */
 function Glyph(props: {
-  kind: "globe" | "check" | "clock" | "denied" | "warning" | "monitor" | "refresh" | "arrow";
+  kind: "globe" | "check" | "clock" | "denied" | "warning" | "refresh" | "arrow";
 }) {
   return (
     <svg
@@ -45,10 +45,6 @@ function Glyph(props: {
       </Show>
       <Show when={props.kind === "warning"}>
         <path d="m10.3 3.9-8.1 14a2 2 0 0 0 1.7 3h16.2a2 2 0 0 0 1.7-3l-8.1-14a2 2 0 0 0-3.4 0ZM12 9v4m0 4h.01" />
-      </Show>
-      <Show when={props.kind === "monitor"}>
-        <rect x="2" y="3" width="20" height="14" rx="2" />
-        <path d="M8 21h8m-4-4v4" />
       </Show>
       <Show when={props.kind === "refresh"}>
         <path d="M3 11a9 9 0 0 1 15.4-6.4L21 7m0-5v5h-5M21 13a9 9 0 0 1-15.4 6.4L3 17m5 0H3v5" />
@@ -175,13 +171,6 @@ export function mountApproval(
       }
     }
   };
-  const unavailableHere = () => {
-    // A browser cannot reliably detect an installed protocol handler. Let the
-    // person report it rather than guessing from focus loss or a navigation timer.
-    stopTimers();
-    generation++;
-    setSnapshot({ ...snapshot(), appLink: undefined, state: "device_unavailable" });
-  };
   const waiting = () => snapshot().state === "pending" && snapshot().openedAt !== undefined;
   const active = () =>
     snapshot().state === "pending" ||
@@ -224,11 +213,6 @@ export function mountApproval(
           title: "Sign-in failed",
           detail: "Ask the agent for a new approval request.",
         };
-      case "device_unavailable":
-        return {
-          title: "Open this on a computer with 1Password",
-          detail: "The 1Password app is required. Ask the agent again from that computer.",
-        };
       default:
         return {
           title: "Couldn’t load approval",
@@ -246,8 +230,6 @@ export function mountApproval(
         return "denied";
       case "expired":
         return "clock";
-      case "device_unavailable":
-        return "monitor";
       case "unavailable":
         return "refresh";
       default:
@@ -284,12 +266,7 @@ export function mountApproval(
           }
         >
           <header class="onepassword-approval__header">
-            <div class="onepassword-approval__mark">
-              <img src={brandMark} alt="" width="44" height="44" />
-            </div>
-            <div class="onepassword-approval__heading">
-              <h3>Approve sign-in</h3>
-            </div>
+            <h3>Approve sign-in</h3>
           </header>
           <p class="onepassword-approval__goal">
             {snapshot().goal ?? "Choose which logins OpenClaw can use for this task."}
@@ -385,17 +362,15 @@ export function mountApproval(
                   <a href={snapshot().appLink} onClick={() => void refresh("opened")}>
                     Open again
                   </a>
-                  <span aria-hidden="true">·</span>
-                  <button type="button" onClick={unavailableHere}>
-                    Don’t have 1Password here?
-                  </button>
                 </div>
+                <p class="onepassword-approval__help">
+                  Nothing opened? Open this chat on a computer with the 1Password app.
+                </p>
               </div>
             </Show>
           </Show>
           <footer class="onepassword-approval__footer">
             <BrandLogo />
-            <span>Passwords never appear in chat.</span>
           </footer>
         </Show>
       </section>

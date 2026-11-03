@@ -31,33 +31,14 @@
   letter-spacing: -0.025em;
 }
 .onepassword-approval__header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
   padding: 22px 24px 0;
-}
-.onepassword-approval__mark {
-  display: grid;
-  place-items: center;
-  flex: 0 0 48px;
-  width: 48px;
-  height: 48px;
-  border: 1px solid rgb(0 0 0 / 7%);
-  border-radius: 13px;
-  background: var(--onepassword-white);
-  box-shadow: 0 2px 3px rgb(0 0 0 / 3%);
-  overflow: hidden;
 }
 .onepassword-approval img {
   display: block;
   object-fit: contain;
 }
-.onepassword-approval__heading {
-  flex: 1;
-  min-width: 0;
-}
 .onepassword-approval .onepassword-approval__goal {
-  padding: 16px 24px 0;
+  padding: 8px 24px 0;
   color: var(--muted);
   overflow-wrap: anywhere;
   font-size: 13px;
@@ -103,7 +84,7 @@
   border-radius: var(--radius-md, 10px);
 }
 .onepassword-approval__actions {
-  min-height: 96px;
+  min-height: 122px;
   padding: 0 24px 20px;
 }
 .onepassword-approval__skeleton-lines {
@@ -169,7 +150,7 @@
   text-align: center;
 }
 .onepassword-approval__waiting {
-  min-height: 96px;
+  min-height: 122px;
   padding: 0 24px 20px;
 }
 .onepassword-approval__waiting-line,
@@ -204,37 +185,26 @@
   font-variant-numeric: tabular-nums;
 }
 .onepassword-approval__waiting-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 10px;
   margin: 5px 0 0 47px;
   color: var(--muted);
   font-size: 12px;
 }
-.onepassword-approval__waiting-actions :is(a, button) {
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  text-decoration: none;
-}
 .onepassword-approval__waiting-actions a {
+  display: inline-block;
+  padding: 4px 0;
+  color: var(--muted);
+  text-decoration: none;
   cursor: pointer;
 }
-.onepassword-approval__waiting-actions button {
-  cursor: default;
-}
-.onepassword-approval__waiting-actions :is(a, button):hover {
+.onepassword-approval__waiting-actions a:hover {
   color: var(--text);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
-.onepassword-approval__waiting-actions button:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 3px;
-  border-radius: var(--radius-sm);
+.onepassword-approval .onepassword-approval__help {
+  margin: 5px 0 0 47px;
+  color: var(--muted);
+  font-size: 11px;
 }
 .onepassword-approval__settling {
   min-height: 76px;
@@ -246,18 +216,10 @@
 }
 .onepassword-approval__footer {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 16px;
-  padding: 13px 24px;
+  padding: 12px 24px;
   border-top: 1px solid var(--border);
-  background: var(--bg-muted, var(--bg));
-  color: var(--muted);
-  font-size: 11px;
-}
-.onepassword-approval__footer svg {
-  width: 12px;
-  height: 12px;
+  background: var(--card);
 }
 .onepassword-approval__outcome {
   display: flex;

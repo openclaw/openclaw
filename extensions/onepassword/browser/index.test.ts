@@ -71,6 +71,11 @@ it("hydrates private metadata and link, then observes only the Gateway while wai
   expect(f.request.mock.calls[1]?.[1]).toMatchObject({ action: "opened" });
   expect(f.container.textContent).toContain("Waiting for you in 1Password");
   expect(f.container.textContent).toContain("1:58");
+  expect(f.container.textContent).toContain(
+    "Nothing opened? Open this chat on a computer with the 1Password app.",
+  );
+  expect(f.container.querySelector("button")).toBeNull();
+  expect(f.container.querySelector("a")?.textContent).toContain("Open again");
   f.request.mockResolvedValue({
     ...metadata,
     state: "resolved",
@@ -113,20 +118,6 @@ it("clears the URL on deadline and disposal, ignores late hydration and releases
   deferred.resolve(ready);
   await tick();
   expect(late.container.innerHTML).toBe("");
-  const waiting = fixture();
-  waiting.request.mockResolvedValue({
-    ...ready,
-    openedAt: Date.now(),
-    deadline: Date.now() + 120_000,
-  });
-  const waitingMount = waiting.mount();
-  await tick();
-  waiting.container.querySelector<HTMLButtonElement>("button")!.click();
-  flush();
-  expect(waiting.container.textContent).toContain("Open this on a computer with 1Password");
-  expect(waiting.container.querySelector("a")).toBeNull();
-  expect(vi.getTimerCount()).toBe(0);
-  waitingMount.dispose();
 });
 
 it("rejects executable non-1Password URLs and gives an actionable owner error without the link", async () => {
