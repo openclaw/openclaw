@@ -124,6 +124,7 @@ const bothHostFiles = new Set([
   "src/agents/code-mode.bridge.lifecycle.test.ts",
   "src/agents/code-mode-engine-parity.test.ts",
   "src/agents/code-mode.failure-phase.test.ts",
+  "src/cli/update-cli/update-command-admission-terminal.test.ts",
   "src/infra/sqlite-database-admission.worker.test.ts",
   "src/infra/sqlite-schema-facts.native.test.ts",
   "src/infra/sqlite-schema-facts.physical-cache.test.ts",
