@@ -23,7 +23,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   async startServer() {
     // CI's prebuilt setup binds stamps to clean source and verifies the asset generation.
-    // Explicit entrypoint prevents a missing build from falling back to source preparation.
     for (const file of [
       "dist/index.js",
       "dist/.buildstamp",
@@ -189,7 +188,6 @@ suite.define(() => {
         hold = "write";
         await level.selectOption({ label: "debug" });
         await expect.poll(() => Boolean(release)).toBe(true);
-        // The fixture starts with error. This must be a real revision-changing writer.
         expect(await cliJson(["config", "get", "logging.consoleLevel", "--json"])).toBe("error");
         const external = await owner.cli(["config", "set", "logging.consoleLevel", "warn"]);
         expect(external.code, external.stderr).toBe(0);
@@ -198,6 +196,8 @@ suite.define(() => {
         await expect.poll(() => indicator.textContent()).toContain("Settings changed elsewhere");
         expect(await cliJson(["config", "get", "logging.level", "--json"])).toBe("error");
         await indicator.getByRole("button", { name: "Reload", exact: true }).click();
+        const confirm = page.getByRole("dialog");
+        await confirm.getByRole("button", { name: "Discard changes", exact: true }).click();
         await expect.poll(selected).toBe("error");
         expect(await cliJson(["config", "get", "logging.consoleLevel", "--json"])).toBe("warn");
       } finally {
