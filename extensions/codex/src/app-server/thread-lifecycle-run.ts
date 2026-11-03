@@ -14,6 +14,7 @@ import {
   isCodexRemoteRuntimeVersionUpgrade,
 } from "./plugin-app-cache-key.js";
 import {
+  hasOnlyAddedCodexPluginApps,
   hasUnchangedCodexPluginThreadPolicy,
   isCodexPluginThreadBindingStale,
 } from "./plugin-thread-binding.js";
@@ -561,11 +562,20 @@ export async function startOrResumeThread(
           );
           assert();
           throwIfAborted();
-          revalidatedPluginInput = hasUnchangedCodexPluginThreadPolicy({
+          const policyComparison = {
             bindingFingerprint: binding.pluginAppsFingerprint,
             bindingInputFingerprint: binding.pluginAppsInputFingerprint,
             config: rebuilt,
-          });
+          };
+          revalidatedPluginInput =
+            hasUnchangedCodexPluginThreadPolicy(policyComparison) ||
+            (verifyUpgradedTurn &&
+              hasOnlyAddedCodexPluginApps({
+                ...policyComparison,
+                bindingPolicyContext: binding.pluginAppPolicyContext,
+              }));
+          // Additions take effect only after the existing cold-resume owner proves
+          // the exact terminal receipt, unloads old config and rechecks scoped policy.
           // Fresh threads consume the same current policy if reuse is rejected.
           prebuiltPluginThreadConfig = rebuilt;
         }
