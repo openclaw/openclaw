@@ -60,6 +60,12 @@ import { enqueueRelayVoiceTranscript } from "./voice.js";
 
 // The relay contract is 20 ms of 24 kHz mono PCM16 per browser event.
 const RELAY_OUTPUT_AUDIO_FRAME_BYTES = 960;
+// A provider-cancelled call accepts no tool result, so this is the model's only signal
+// that the work it announced stopped.
+const PROVIDER_CANCELLED_CONSULT_PROMPT = [
+  "The earlier OpenClaw request was cancelled before it finished, so it produced no result.",
+  "Do not say it finished or report anything from it. If the person still wants it, start the request again.",
+].join(" ");
 
 /** Creates a realtime voice relay session and returns the browser audio contract. */
 export function createTalkRealtimeRelaySession(
@@ -368,6 +374,7 @@ export function createTalkRealtimeRelaySession(
             type: "toolCallCancelled",
             callId: relayCallId,
           });
+          bridgeRef.current?.sendUserMessage?.(PROVIDER_CANCELLED_CONSULT_PROMPT);
         }
         return;
       }
