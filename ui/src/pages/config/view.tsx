@@ -210,7 +210,10 @@ export function Config(props: ConfigProps) {
     const configBusy = props.loading || props.saving || props.applying || props.updating;
     const formBusy = configBusy || props.schemaLoading;
     const mutationAllowed = props.mutationAllowed !== false;
-    const showSectionTabs = props.settingsLayout !== "accordion" && topTabs.length > 1;
+    const showSectionTabs =
+      props.settingsLayout !== "accordion" &&
+      props.settingsLayout !== "stack" &&
+      topTabs.length > 1;
     const showToolbar = showModeToggle || showSectionTabs;
     const showValidityWarning = props.valid === false && !viewState.validityDismissed;
     return {
@@ -457,6 +460,7 @@ export function Config(props: ConfigProps) {
         onOpenRaw={state().openRaw}
         disabled={state().formBusy || !props.formValue || !state().mutationAllowed}
         unsupportedPaths={state().analysis.unsupportedPaths}
+        secretFields={props.secretFields}
         onPatch={props.onFormPatch}
         onRemove={props.onFormRemove}
         activeSection={props.activeSection}
@@ -489,6 +493,7 @@ export function Config(props: ConfigProps) {
         }
         showSectionDocs={props.showSectionDocs}
         sectionPrelude={props.sectionPrelude}
+        curatedSections={props.curatedSections}
         revealSensitive={props.activeSection === "env" && view().envRevealed}
         maskSensitive
         isSensitivePathRevealed={(path) => isSensitivePathRevealed(view(), path)}

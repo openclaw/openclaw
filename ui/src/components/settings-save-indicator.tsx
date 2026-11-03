@@ -4,6 +4,7 @@ import {
   createMemo,
   createOptimistic,
   createSignal,
+  createUniqueId,
   Errored,
   isPending,
   latest,
@@ -26,6 +27,9 @@ export type SettingsSaveIndicatorProps = {
   status: ConfigAutoSaveStatus | "recovery";
   lastError: string | null;
   needsApply: boolean;
+  /** Edits waiting on their autosave, which runs a moment after the last change. */
+  pending: boolean;
+  savedNotice: boolean;
   saving: boolean;
   applying: boolean;
   applyDisabled: boolean;
@@ -46,6 +50,28 @@ function IndicatorAction(props: { label: string; busy: boolean; onClick: () => v
     >
       {props.label}
     </button>
+  );
+}
+
+/** The raw reason opens beside the status instead of stretching it into a paragraph. */
+function FailureReason(props: { reason: string }) {
+  const [open, setOpen] = createSignal(false);
+  const id = createUniqueId();
+  return (
+    <>
+      <button
+        class="settings-save-indicator__reason-toggle"
+        type="button"
+        aria-expanded={open() ? "true" : "false"}
+        aria-controls={id}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {t(open() ? "configView.rejectionDetailsHide" : "configView.rejectionDetails")}
+      </button>
+      <div class="settings-save-indicator__reason" id={id} hidden={!open()}>
+        {props.reason}
+      </div>
+    </>
   );
 }
 
@@ -126,35 +152,62 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
       return "applying";
     }
     if (saving() || status() === "saving") {
-      return undefined;
+      return "saving";
     }
     if (["recovery", "rejected", "error", "paused", "conflict"].includes(status())) {
       return status();
     }
+    if (props.pending) {
+      return "saving";
+    }
+    if (props.savedNotice) {
+      return "saved";
+    }
     return latest(presentation().needsApply) ? "apply" : undefined;
   });
+  function RetryOrDiscard() {
+    return (
+      <div class="settings-save-indicator__actions">
+        <IndicatorAction
+          label={t("configView.retry")}
+          busy={busy()}
+          onClick={() => submit("retry")}
+        />
+        <IndicatorAction
+          label={busy() ? t("common.loading") : t("configView.recoveryReload")}
+          busy={busy()}
+          onClick={() => submit("reload")}
+        />
+      </div>
+    );
+  }
   function Feedback(feedback: { error?: string }) {
     return (
       <div
         class={[
           "settings-save-indicator",
           {
-            "settings-save-indicator--danger": ["recovery", "error", "conflict"].includes(
-              state() ?? "",
-            ),
             "settings-save-indicator--recovery": state() === "recovery",
             "settings-save-indicator--rejected": state() === "rejected",
+            "settings-save-indicator--error": state() === "error",
+            "settings-save-indicator--transient": state() === "saving" || state() === "saved",
+            "settings-save-indicator--saved": state() === "saved",
           },
         ]}
         role="status"
         aria-live="polite"
         aria-busy={busy() ? "true" : undefined}
-        title={feedback.error}
         aria-label={
           feedback.error ? `${t("configView.autoSaveFailed")}: ${feedback.error}` : undefined
         }
       >
         <Switch>
+          <Match when={state() === "saving"}>
+            <span>{t("configView.autoSaveSaving")}</span>
+          </Match>
+          <Match when={state() === "saved"}>
+            <span>{t("configView.autoSaveSaved")}</span>
+          </Match>
           <Match when={state() === "applying"}>
             <span class="settings-save-indicator__spinner" aria-hidden="true">
               <Icon name="loader" />
@@ -162,7 +215,7 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
             <span>{t("configView.applying")}</span>
           </Match>
           <Match when={state() === "recovery"}>
-            <span>{props.lastError}</span>
+            <span class="settings-save-indicator__failure">{props.lastError}</span>
             <IndicatorAction
               label={busy() ? t("common.loading") : t("configView.recoveryReload")}
               busy={busy()}
@@ -172,30 +225,15 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
           <Match when={state() === "rejected"}>
             <span>{t("configView.autoSaveRejected")}</span>
             <span>{t("configView.autoSaveRejectedHint")}</span>
-            <Show when={props.lastError}>
-              <details>
-                <summary>{t("configView.rejectionDetails")}</summary>
-                <span>{props.lastError}</span>
-              </details>
-            </Show>
-            <IndicatorAction
-              label={t("configView.retry")}
-              busy={busy()}
-              onClick={() => submit("retry")}
-            />
-            <IndicatorAction
-              label={busy() ? t("common.loading") : t("configView.recoveryReload")}
-              busy={busy()}
-              onClick={() => submit("reload")}
-            />
+            <Show when={props.lastError}>{(reason) => <FailureReason reason={reason()} />}</Show>
+            <RetryOrDiscard />
           </Match>
           <Match when={state() === "error"}>
-            <span>{t("configView.autoSaveFailed")}</span>
-            <IndicatorAction
-              label={t("configView.retry")}
-              busy={busy()}
-              onClick={() => submit("retry")}
-            />
+            <span class="settings-save-indicator__failure">{t("configView.autoSaveFailed")}</span>
+            <Show when={feedback.error}>
+              {(error) => <FailureReason reason={error().replace(/^GatewayRequestError: /u, "")} />}
+            </Show>
+            <RetryOrDiscard />
           </Match>
           <Match when={state() === "paused"}>
             <span>{t("configView.autoSavePaused")}</span>
@@ -206,7 +244,7 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
             />
           </Match>
           <Match when={state() === "conflict"}>
-            <span>{t("configView.autoSaveConflict")}</span>
+            <span class="settings-save-indicator__failure">{t("configView.autoSaveConflict")}</span>
             <IndicatorAction
               label={busy() ? t("common.loading") : t("common.reload")}
               busy={busy()}

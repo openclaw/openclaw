@@ -46,11 +46,12 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
+import { isAttendedSessionCreator } from "./gateway-personal-caller.js";
 import { respondError } from "./response.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged, emitSessionTitleChanged } from "./session-change-event.js";
 import { registerCommittedSessionCategory } from "./session-create-category.js";
-import { idempotentSessionCreate } from "./session-create-idempotency.js";
+import { idempotentDurableSessionCreate } from "./session-create-durable.js";
 import {
   dispatchSessionCreateInitialTurn,
   resolveSessionCreateInitialTurn,
@@ -89,7 +90,7 @@ import { prepareSessionModelAccountAccess } from "./users-model-account-access.j
 import { assertValidParams } from "./validation.js";
 
 export const sessionCreateHandlers: GatewayRequestHandlers = {
-  "sessions.create": idempotentSessionCreate(async (options) => {
+  "sessions.create": idempotentDurableSessionCreate(async (options) => {
     using diagnostics = startSessionCreateDiagnostics();
     const {
       params,
@@ -110,14 +111,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       context,
     });
     if (uploadError) {
-      respond(false, undefined, uploadError);
-      return;
+      return respond(false, undefined, uploadError);
     }
     const p = structuredClone(params);
     const requiredWorker = prepareRequiredWorkerSessionCreate(p, context.getRuntimeConfig());
     if (requiredWorker.error) {
-      respond(false, undefined, requiredWorker.error);
-      return;
+      return respond(false, undefined, requiredWorker.error);
     }
     const { requiredProfile, automaticEmptyWorkspace } = requiredWorker;
     const requestAuthority = readGatewayRequestMutationAuthority(options);
@@ -129,8 +128,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const emptyWorkspace = p.worktreeSource === "empty";
     const worktreeSelectionError = validateSessionWorktreeSelection(p);
     if (worktreeSelectionError) {
-      respond(false, undefined, worktreeSelectionError);
-      return;
+      return respond(false, undefined, worktreeSelectionError);
     }
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
     const creation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
@@ -495,6 +493,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       onPhase: diagnostics?.mark,
       operatorAuthority: operatorCapture.preparation,
       key: sessionKey,
+      creationOperation: options.sessionCreationOperation,
       agentId: sessionAgentId,
       label: p.label,
       displayName: preparedDisplayName,
@@ -524,6 +523,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       spawnDepth: p.spawnDepth,
       ...resolveSessionCreateRootParameters(p, preparedRoot?.value),
       permissionMode: p.permissionMode,
+      applyAgentPermissionDefault: isAttendedSessionCreator(client),
       ...(p.toolOverrides !== undefined ? { toolOverrides: p.toolOverrides } : {}),
       ...(p.communication !== undefined ? { communication: p.communication } : {}),
       prepareLifecycle,

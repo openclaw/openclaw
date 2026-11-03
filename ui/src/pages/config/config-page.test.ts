@@ -202,13 +202,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("distinguishes explicit values that equal the defaults", () => {
-  const config = { browser: { enabled: true }, tools: { profile: "full" } };
+it("reads the browser and tool settings from config", () => {
+  const config = { browser: { enabled: false }, tools: { profile: "full" } };
   expect(extractQuickSettingsSecurity(config)).toMatchObject({
-    browserEnabled: true,
-    browserEnabledOverridden: true,
+    browserEnabled: false,
     toolProfile: "full",
-    toolProfileOverridden: true,
   });
 });
 
@@ -678,45 +676,35 @@ it.each(["notifications", "usage"] as const)(
   },
 );
 
-it("updates mobile pairing eligibility when connection and admin access are published", () => {
-  const openDevicePairSetup = vi.fn();
+it("sends Privacy & Security rows to the pages that own them", () => {
+  const navigate = vi.fn();
+  const context = configContext({ navigate });
+  const view = mountConfigPage(context, { pageId: "security" });
+  const rows = [...view.container.querySelectorAll<HTMLButtonElement>("button.settings-row--nav")];
+  for (const row of rows) {
+    row.click();
+  }
+  expect(navigate.mock.calls.map(([route]) => route)).toEqual([
+    "infrastructure",
+    "infrastructure",
+    "devices",
+    "devices",
+    "approvals",
+  ]);
+});
+
+it("publishes the running Gateway's auth mode as it changes", () => {
   const context = configContext({
     gateway: { snapshot: { phase: "disconnected", hello: null, client: null } },
     runtimeConfig: { state: { connected: false } },
-    overlays: { openDevicePairSetup },
   });
   const view = mountConfigPage(context, { pageId: "security" });
-  const pairingButton = view.container.querySelector<HTMLButtonElement>(
-    ".security-page button.btn",
-  )!;
-  expect(pairingButton.disabled).toBe(true);
+  const auth = () => view.container.querySelector(".settings-row__control")?.textContent?.trim();
+  expect(auth()).toBe("Unknown");
 
-  context.runtimeConfig.state.connected = true;
-  Object.assign(context.gateway.snapshot, {
-    phase: "connected",
-    hello: { auth: auth() },
-  });
+  Object.assign(context.gateway.snapshot, { hello: { snapshot: { authMode: "password" } } });
   publishConfigSource(context.runtimeConfig);
-  expect(pairingButton.disabled).toBe(false);
-  pairingButton.click();
-  expect(openDevicePairSetup).toHaveBeenCalledOnce();
-
-  Object.assign(context.gateway.snapshot, {
-    hello: { auth: auth(["operator.read"]) },
-  });
-  publishConfigSource(context.gateway);
-  expect(pairingButton.disabled).toBe(true);
-  pairingButton.click();
-  expect(openDevicePairSetup).toHaveBeenCalledOnce();
-
-  Object.assign(context.gateway.snapshot, {
-    hello: { auth: auth() },
-  });
-  publishConfigSource(context.gateway);
-  expect(pairingButton.disabled).toBe(false);
-  context.runtimeConfig.state.connected = false;
-  publishConfigSource(context.runtimeConfig);
-  expect(pairingButton.disabled).toBe(true);
+  expect(auth()).toBe("Password");
 });
 
 it.each([

@@ -428,7 +428,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
       const operation = ensure(podmanParams());
       const createCall = expect.objectContaining({
         command: "podman",
-        globalArgs: [],
+        globalArgs: ["--remote=false"],
         args: expect.arrayContaining(["create", "--name", containerName]),
       });
       if (state === "missing") {
@@ -446,7 +446,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
           state === "changed"
             ? expect.objectContaining({
                 command: "podman",
-                globalArgs: [],
+                globalArgs: ["--remote=false"],
                 args: expect.arrayContaining(["inspect"]),
               })
             : createCall,

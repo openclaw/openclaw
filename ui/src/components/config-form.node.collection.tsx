@@ -104,7 +104,9 @@ type CollectionProps = {
 export function ConfigObject(props: CollectionProps): JSX.Element {
   const object = createMemo(() => resolveConfigObjectFields(props.params), { lazy: true });
   // Native details owns user toggles; refresh its default only when the depth policy changes.
-  const initiallyOpen = createMemo(() => props.params.path.length <= 2);
+  const initiallyOpen = createMemo(
+    () => props.params.path.length <= 2 && !props.params.collapseObjects,
+  );
   // Keep editors after first opening so closing a disclosure preserves drafts and focus targets.
   const [hasOpened, setHasOpened] = createSignal(false);
   const meta = createMemo(
@@ -133,7 +135,7 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
       fallback={fields()}
     >
       <details
-        class="cfg-object cfg-block"
+        class={["cfg-object cfg-block", { "cfg-object--quiet": props.params.collapseObjects }]}
         open={initiallyOpen()}
         onToggle={(event) => {
           if (event.currentTarget.open) {
@@ -154,6 +156,7 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
             </Show>
           </div>
           <div class="settings-row__control">
+            {props.params.summarizeObject?.(props.params.path, props.params.value)}
             <span class="settings-row__chevron cfg-object__chevron">
               <Icon name="chevronRight" />
             </span>

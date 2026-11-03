@@ -7,6 +7,7 @@ import {
   pathKey,
   type JsonSchema,
 } from "../lib/config-form-utils.ts";
+import type { ConfigSecretFields } from "../lib/config/config-secret-fields.ts";
 
 export type ConfigFormProps = {
   schema: JsonSchema | null;
@@ -27,12 +28,26 @@ export type ConfigFormProps = {
   sectionActions?: JSX.Element;
   showSectionDocs?: boolean;
   sectionPrelude?: JSX.Element;
+  /**
+   * Sections a curated page has already explained: its own title, no tier split, and
+   * each group of settings closed until opened.
+   */
+  curatedSections?: Readonly<
+    Record<
+      string,
+      {
+        label: JSX.Element;
+        summarizeObject?: (path: Array<string | number>, value: unknown) => JSX.Element;
+      }
+    >
+  >;
   embedded?: boolean;
   progressive?: boolean;
   revealSensitive?: boolean;
   maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
+  secretFields?: ConfigSecretFields;
   onPatch: (path: Array<string | number>, value: unknown) => void;
   onRemove?: (path: Array<string | number>) => void;
 };
@@ -46,6 +61,8 @@ export type ConfigTierGroupsProps = {
   onHideAdvanced?: () => void;
   renderTier: (node: () => JsonSchema) => JSX.Element;
   commonPrelude?: JSX.Element;
+  /** Show both tiers in one group, with no Advanced disclosure between them. */
+  flat?: boolean;
 };
 
 export {

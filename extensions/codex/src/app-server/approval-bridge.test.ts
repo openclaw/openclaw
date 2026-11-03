@@ -361,6 +361,7 @@ describe("Codex app-server approval bridge", () => {
           tool_name: "exec_command",
           openclaw_approval_mode: "report",
           cwd: "/workspace",
+          session_id: "thread-1",
           turn_id: "turn-1",
           tool_input: {
             command: requestParams.command,

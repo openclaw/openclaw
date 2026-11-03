@@ -16,7 +16,12 @@ import { useAvatarGatewayContext } from "../../components/solid/identity-avatar-
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
-import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsNavRow,
+  SettingsRow,
+  SettingsSection,
+  SettingsValue,
+} from "../../components/solid/settings-ui.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import "../../components/solid/overlay.css";
@@ -33,6 +38,7 @@ import {
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
+import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
@@ -212,7 +218,7 @@ export function AgentOverview(
     avatarOverlay.bindTrigger(avatarTrigger);
     avatarOverlay.setParent(findOverlayParent(avatarTrigger));
     const anchor = createOverlayAnchor(avatarSurface, { sameRoot: true });
-    anchor.update(avatarTrigger, "right-start");
+    anchor.update(avatarTrigger, "bottom-start");
     // Retire the native overlay synchronously when upload authority is revoked.
     const unsubscribeConfig = applicationConfig?.subscribe((nextConfig) => {
       if (!nextConfig.uploadsEnabled) {
@@ -247,10 +253,35 @@ export function AgentOverview(
   );
 
   return (
-    <>
+    <div class="settings-stack agent-overview">
       <SettingsSection
         title={t("agents.identity.title")}
-        description={t("agents.identity.subtitle")}
+        actions={
+          <>
+            <Show when={params.identitySavePending}>
+              <span class="agent-identity-status" role="status">
+                {t("common.saving")}
+              </span>
+            </Show>
+            <For
+              each={params.readData().identityOutcome ? [params.readData().identityOutcome] : []}
+            >
+              {(request) => (
+                <Errored
+                  fallback={(error) => (
+                    <div class="agent-identity-status agent-identity-status--error" role="alert">
+                      {formatUiError(error())}
+                    </div>
+                  )}
+                >
+                  <Loading>
+                    <IdentityCompletion request={request} />
+                  </Loading>
+                </Errored>
+              )}
+            </For>
+          </>
+        }
       >
         <div class="settings-row settings-row--stacked">
           <div class="agent-identity-editor">
@@ -271,76 +302,49 @@ export function AgentOverview(
                 </StrokeIcon>
               </span>
             </button>
-            <div class="agent-identity-editor__content">
-              <div class="agent-identity-editor__fields">
-                <label class="field">
-                  <span>{t("agents.identity.name")}</span>
+            <div class="agent-identity-editor__fields">
+              <label class="field">
+                <span>{t("agents.identity.name")}</span>
+                <input
+                  class="agent-identity-editor__name"
+                  type="text"
+                  maxlength="64"
+                  value={identityName()}
+                  placeholder={t("agents.identity.namePlaceholder")}
+                  disabled={identityBusy()}
+                  onInput={(event) =>
+                    params.onIdentityFieldChange("name", event.currentTarget.value)
+                  }
+                  onBlur={() => params.onIdentitySave()}
+                />
+              </label>
+              <div class="field agent-identity-editor__emoji">
+                <span>{t("agents.identity.emoji")}</span>
+                <div class="agent-identity-editor__emoji-control">
                   <input
                     type="text"
                     maxlength="64"
-                    value={identityName()}
-                    placeholder={t("agents.identity.namePlaceholder")}
+                    aria-label={t("agents.identity.emoji")}
+                    value={identityEmoji()}
                     disabled={identityBusy()}
-                    onInput={(event) =>
-                      params.onIdentityFieldChange("name", event.currentTarget.value)
-                    }
+                    onInput={(event: Event) => {
+                      if (event.currentTarget instanceof HTMLInputElement) {
+                        const emoji = limitEmoji(event.currentTarget.value);
+                        event.currentTarget.value = emoji;
+                        params.onIdentityFieldChange("emoji", emoji);
+                      }
+                    }}
                     onBlur={() => params.onIdentitySave()}
                   />
-                </label>
-                <div class="field agent-identity-editor__emoji">
-                  <span>{t("agents.identity.emoji")}</span>
-                  <div class="agent-identity-editor__emoji-control">
-                    <input
-                      type="text"
-                      maxlength="64"
-                      aria-label={t("agents.identity.emoji")}
-                      value={identityEmoji()}
-                      disabled={identityBusy()}
-                      onInput={(event: Event) => {
-                        if (event.currentTarget instanceof HTMLInputElement) {
-                          const emoji = limitEmoji(event.currentTarget.value);
-                          event.currentTarget.value = emoji;
-                          params.onIdentityFieldChange("emoji", emoji);
-                        }
-                      }}
-                      onBlur={() => params.onIdentitySave()}
-                    />
-                    <AgentEmojiPicker
-                      value={identityEmoji()}
-                      disabled={identityBusy()}
-                      onSelect={(emoji: string) =>
-                        params.onIdentityFieldChange("emoji", limitEmoji(emoji))
-                      }
-                    />
-                  </div>
+                  <AgentEmojiPicker
+                    value={identityEmoji()}
+                    disabled={identityBusy()}
+                    onSelect={(emoji: string) =>
+                      params.onIdentityFieldChange("emoji", limitEmoji(emoji))
+                    }
+                  />
                 </div>
               </div>
-              <Show when={params.identitySavePending}>
-                <span class="settings-row__desc" role="status">
-                  {t("common.saving")}
-                </span>
-              </Show>
-              <For
-                each={params.readData().identityOutcome ? [params.readData().identityOutcome] : []}
-              >
-                {(request) => (
-                  <Errored
-                    fallback={(error) => (
-                      <div
-                        class="settings-row__desc"
-                        role="alert"
-                        style={{ color: "var(--danger)" }}
-                      >
-                        {formatUiError(error())}
-                      </div>
-                    )}
-                  >
-                    <Loading>
-                      <IdentityCompletion request={request} />
-                    </Loading>
-                  </Errored>
-                )}
-              </For>
             </div>
             <div
               ref={(element) => (avatarSurface = element)}
@@ -375,33 +379,6 @@ export function AgentOverview(
         </div>
       </SettingsSection>
       <SettingsSection
-        title={t("agents.overview.title")}
-        description={t("agents.overview.subtitle")}
-      >
-        {renderAgentPanelFacts([
-          [
-            "agents.context.workspace",
-            <openclaw-tooltip prop:content={t("agents.context.openFilesTab")}>
-              <button
-                type="button"
-                class="workspace-link mono"
-                onClick={() => params.onSelectPanel("files")}
-                aria-label={t("agents.context.openFilesTab")}
-              >
-                {context().workspace}
-              </button>
-            </openclaw-tooltip>,
-          ],
-          ["agents.context.primaryModel", <code>{context().model}</code>],
-          ["agents.context.runtime", <code>{context().runtime}</code>],
-          ["agents.context.thinkingDefault", <code>{params.agent.thinkingDefault ?? "-"}</code>],
-          ["agents.context.skillsFilter", context().skillsLabel],
-        ])}
-      </SettingsSection>
-      {params.configDirty ? (
-        <div class="callout warn">{t("agents.overview.unsavedConfig")}</div>
-      ) : undefined}
-      <SettingsSection
         title={t("agents.overview.modelSelection")}
         notice={
           <For
@@ -435,17 +412,35 @@ export function AgentOverview(
             )}
           </For>
         }
-        actions={<AgentConfigButtons {...params} buttonType="button" />}
       >
         <SettingsRow
           title={primaryModelLabel()}
           control={
             <ModelPicker
               label={primaryModelLabel()}
+              title={effectivePrimary() ?? undefined}
               value={selectedPrimary() ?? ""}
               options={primaryModelOptions()}
               disabled={disabled()}
               onChange={(value) => params.onModelChange(params.agent.id, value || null)}
+              onOpen={params.onModelCatalogOpen}
+            />
+          }
+        />
+        <SettingsRow
+          title={t("agents.overview.fallbacks")}
+          control={
+            <MultiSelect
+              class="agent-fallbacks"
+              options={fallbackOptions()}
+              value={fallbackChips()}
+              isExcluded={isPrimaryModel()}
+              getValueKey={normalizeAgentModelRefForConfig}
+              placeholder={t("agents.overview.addFallback")}
+              accessibleLabel={t("agents.overview.fallbacks")}
+              allowCustom={!catalogOwnsChoices()}
+              disabled={disabled()}
+              onChange={(next: string[]) => params.onModelFallbacksChange(params.agent.id, next)}
               onOpen={params.onModelCatalogOpen}
             />
           }
@@ -466,26 +461,42 @@ export function AgentOverview(
           }
         />
         <SettingsRow
-          title={t("agents.overview.fallbacks")}
-          stacked={true}
+          title=""
+          description={params.configDirty ? t("agents.overview.unsavedConfig") : undefined}
           control={
-            <MultiSelect
-              class="agent-fallbacks"
-              options={fallbackOptions()}
-              value={fallbackChips()}
-              isExcluded={isPrimaryModel()}
-              getValueKey={normalizeAgentModelRefForConfig}
-              placeholder={t("agents.overview.addFallback")}
-              accessibleLabel={t("agents.overview.fallbacks")}
-              allowCustom={!catalogOwnsChoices()}
-              disabled={disabled()}
-              onChange={(next: string[]) => params.onModelFallbacksChange(params.agent.id, next)}
-              onOpen={params.onModelCatalogOpen}
-            />
+            <div class="agent-overview__config-actions">
+              <AgentConfigButtons {...params} buttonType="button" />
+            </div>
           }
         />
       </SettingsSection>
-    </>
+      <SettingsSection title={t("agents.context.title")}>
+        <SettingsNavRow
+          title={t("agents.context.workspace")}
+          description={<span class="agent-overview__workspace">{context().workspace}</span>}
+          onClick={() => params.onSelectPanel("files")}
+        />
+        <SettingsNavRow
+          title={t("agents.context.skillsFilter")}
+          control={<SettingsValue value={context().skillsLabel} />}
+          onClick={() => params.onSelectPanel("skills")}
+        />
+        <Show when={params.agent.thinkingDefault}>
+          {(level) => (
+            <SettingsRow
+              title={t("agents.context.thinkingDefault")}
+              control={<SettingsValue value={formatThinkingOverrideLabel(level())} />}
+            />
+          )}
+        </Show>
+        <Show when={context().runtime !== "-"}>
+          <SettingsRow
+            title={t("agents.context.runtime")}
+            control={<SettingsValue mono value={context().runtime} />}
+          />
+        </Show>
+      </SettingsSection>
+    </div>
   );
 }
 

@@ -22,6 +22,7 @@ import type { ToolsCatalogResult } from "../../api/types.ts";
 import {
   SettingsSection,
   SettingsRow,
+  SettingsSegmented,
   SettingsToggle,
   SettingsLoadingSkeleton,
 } from "../../components/solid/settings-ui.tsx";
@@ -309,20 +310,21 @@ export function AgentTools(
           ])}
           <SettingsRow
             title={t("agentTools.quickPresets")}
-            stacked
+            stackedOnNarrow
             control={
               <div class="agent-tools-buttons">
-                <For each={profileOptions()} keyed={(option) => option.id}>
-                  {(option) => (
-                    <button
-                      class={["btn btn--sm", { active: profile() === option().id }]}
-                      disabled={!editable() || props.pending}
-                      onClick={() => params.onProfileChange(params.agentId, option().id, true)}
-                    >
-                      {option().label}
-                    </button>
-                  )}
-                </For>
+                <SettingsSegmented
+                  mode="buttons"
+                  ariaLabel={t("agentTools.quickPresets")}
+                  value={profile()}
+                  options={profileOptions().map((option) => ({
+                    value: option.id,
+                    label: option.label,
+                  }))}
+                  disabled={!editable() || props.pending}
+                  onChange={(id) => params.onProfileChange(params.agentId, id, true)}
+                  onReselect={(id) => params.onProfileChange(params.agentId, id, true)}
+                />
                 <AgentPanelAction
                   label={t("agentTools.inherit")}
                   disabled={!editable() || (props.pending ?? false)}
