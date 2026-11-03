@@ -6,6 +6,7 @@ import {
   DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
+  nativeWebSearchCodecs,
   postTrustedWebToolsJson,
   readCachedSearchPayload,
   readConfiguredSecretString,
@@ -19,10 +20,7 @@ import {
   type SearchConfigRecord,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import {
-  asNonArrayRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDeepSeekModelKeyFallback } from "./model-credential.js";
 
 const SEARCH_URL = "https://api.deepseek.com/v1/tools/search";
@@ -100,46 +98,18 @@ export async function executeDeepSeekSearch(
     return cached;
   }
   const start = Date.now();
-  let omittedResults = false;
-  const results = await postTrustedWebToolsJson(
+  const { results, omittedResults } = await postTrustedWebToolsJson(
     {
       url: SEARCH_URL,
       apiKey,
       timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
       signal,
-      body: { query, count, need_content: false },
+      body: nativeWebSearchCodecs["deepseek.search"].request(SEARCH_URL, query, count).body,
       errorLabel: "DeepSeek",
     },
     async (response) => {
       const data = await readProviderJsonObjectResponse(response, "DeepSeek API error");
-      if (!Array.isArray(data.results)) {
-        throw new Error("DeepSeek API error: malformed JSON response");
-      }
-      return data.results.slice(0, count).flatMap((entry) => {
-        const result = asNonArrayRecord(entry);
-        const url = normalizeOptionalString(result.url);
-        const parsed = url && url.length <= 2_048 ? URL.parse(url) : null;
-        // Conform to the shared result URL contract so a malformed source cannot
-        // route all provider prose through the external-plugin raw compatibility path.
-        if (
-          !parsed ||
-          !["http:", "https:"].includes(parsed.protocol) ||
-          parsed.href.length > 2_048
-        ) {
-          omittedResults = true;
-          return [];
-        }
-        return [
-          {
-            title: normalizeOptionalString(result.title) ?? "",
-            url: parsed.href,
-            snippet:
-              normalizeOptionalString(result.summary) ?? normalizeOptionalString(result.snippet),
-            published: normalizeOptionalString(result.date),
-            siteName: normalizeOptionalString(result.site_name),
-          },
-        ];
-      });
+      return nativeWebSearchCodecs["deepseek.search"].readResults(data, count);
     },
   );
   signal?.throwIfAborted();

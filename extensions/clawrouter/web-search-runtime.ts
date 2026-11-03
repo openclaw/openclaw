@@ -19,7 +19,14 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   fetchClawRouterCapabilityOffers,
   resolveClawRouterCapabilityHttpContext,
+  type ClawRouterCapabilityOffer,
 } from "./capability-offers.js";
+import {
+  assertDeepSeekSearchInput,
+  assertDeepSeekSearchResponse,
+  assertDeepSeekSearchResults,
+  isDeepSeekSearchOffer,
+} from "./search-deepseek.js";
 
 export async function searchClawRouter(
   ctx: Parameters<WebSearchProviderPlugin["createTool"]>[0],
@@ -48,23 +55,16 @@ export async function searchClawRouter(
     throw new Error("Configure a ClawRouter API key for web search");
   }
   const context = resolveClawRouterCapabilityHttpContext(cfg, auth.apiKey);
+  context.headers.delete("x-api-key");
+  context.headers.delete("x-deepseek-api-key");
   const offers = await fetchClawRouterCapabilityOffers({
     context,
     timeoutMs,
     signal: execution?.signal,
+    requireFreshProxyCatalog: (candidates) =>
+      candidates.find(isSearchOffer)?.requestFormat === "deepseek.search",
   });
-  const offer = offers.find((candidate) => {
-    const codec = searchCodec(candidate.requestFormat);
-    return (
-      codec &&
-      candidate.responseFormat === candidate.requestFormat &&
-      candidate.methods.includes(codec.method) &&
-      (candidate.routeKind === "native" || candidate.routeKind === "manifest") &&
-      (!candidate.model ||
-        (Array.isArray(candidate.model.capabilities) &&
-          candidate.model.capabilities.includes("web.search")))
-    );
-  });
+  const offer = offers.find(isSearchOffer);
   const codec = offer && searchCodec(offer.requestFormat);
   if (!offer || !codec) {
     throw new Error("ClawRouter has no eligible search offer with a supported wire format");
@@ -72,6 +72,8 @@ export async function searchClawRouter(
   if (offer.requestFormat === "parallel.search" && query.length > 200) {
     throw new Error("ClawRouter Parallel search accepts at most 200 query characters");
   }
+  const deepseek = offer.requestFormat === "deepseek.search";
+  if (deepseek) assertDeepSeekSearchInput(args, query);
   const request = codec.request(offer.url, query, count);
   execution?.signal?.throwIfAborted();
   execution?.assertCurrent?.();
@@ -100,12 +102,14 @@ export async function searchClawRouter(
       ),
       dispatcherPolicy: context.dispatcherPolicy,
       auditContext: "clawrouter.web-search",
+      ...(deepseek ? { maxRedirects: 0 } : {}),
     },
   );
   try {
     if (!response.ok) {
       throw new Error(`ClawRouter search failed (HTTP ${response.status})`);
     }
+    if (deepseek) assertDeepSeekSearchResponse(response);
     const payload = asOptionalRecord(
       await readProviderJsonResponse(response, "clawrouter.web-search", {
         maxBytes: 1024 * 1024,
@@ -115,6 +119,7 @@ export async function searchClawRouter(
     timeoutMs();
     execution?.signal?.throwIfAborted();
     execution?.assertCurrent?.();
+    if (deepseek) assertDeepSeekSearchResults(payload, count);
     const envelope =
       offer.requestFormat === "brave.search" ? asOptionalRecord(payload?.web) : payload;
     if (!Array.isArray(envelope?.results)) {
@@ -181,3 +186,17 @@ const tavilySearchCodec = {
     });
   },
 };
+
+function isSearchOffer(candidate: ClawRouterCapabilityOffer): boolean {
+  if (candidate.requestFormat === "deepseek.search") return isDeepSeekSearchOffer(candidate);
+  const codec = searchCodec(candidate.requestFormat);
+  return (
+    codec !== undefined &&
+    candidate.responseFormat === candidate.requestFormat &&
+    candidate.methods.includes(codec.method) &&
+    (candidate.routeKind === "native" || candidate.routeKind === "manifest") &&
+    (!candidate.model ||
+      (Array.isArray(candidate.model.capabilities) &&
+        candidate.model.capabilities.includes("web.search")))
+  );
+}
