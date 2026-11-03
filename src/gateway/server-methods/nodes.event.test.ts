@@ -123,47 +123,53 @@ class NodeEventHarness {
   active = () => this.nodeRegistry.getActiveNode();
 }
 
-describe.each(["Gateway-routed", "same-node"] as const)("%s node-hosted MCP questions", (route) => {
+describe.each([
+  { route: "Gateway", questionsEnabled: true },
+  { route: "worker", questionsEnabled: true },
+  { route: "worker", questionsEnabled: false },
+] as const)("$route MCP questions ($questionsEnabled)", ({ route, questionsEnabled }) => {
   installQuestionTestHooks();
 
-  it("returns the answer from the originating session in the MCP tool result", async () => {
+  it("returns the originating user’s answer when granted and declines locally otherwise", async () => {
     vi.useRealTimers();
     const h = new NodeEventHarness();
     const node = h.register("owner");
     const recipient = expectDefined(h.node(), "missing paired node");
     recipient.commands.push(NODE_MCP_TOOLS_CALL_COMMAND);
-    h.context.getRuntimeConfig = () => ({ mcp: { apps: { enabled: true } } });
+    h.context.getRuntimeConfig = () => ({ mcp: { apps: { enabled: questionsEnabled } } });
     const registered = createDeferred();
     const grant = new AbortController();
     const id = randomUUID();
-    h.nodeRegistry.mcpElicitation.register({
-      id,
-      node: recipient,
-      signal: grant.signal,
-      handle: createMcpClientElicitationHandler({
-        sessionKey: requestParams.sessionKey,
-        agentId: requestParams.agentId,
-        assertCurrent: () => grant.signal.throwIfAborted(),
-        gatewayCall: async (method, _options, params) => {
-          if (!isRecord(params)) {
-            throw new Error("Missing question params");
-          }
-          if (method === "question.request") {
-            expect(params.sessionKey).toBe(requestParams.sessionKey);
-          }
-          const [ok, result, error] = await callQuestionRpc(method, params, {
-            client: adminRequestClient,
-          });
-          if (!ok) {
-            throw new Error(error?.message);
-          }
-          if (method === "question.request") {
-            registered.resolve();
-          }
-          return result;
-        },
-      }),
-    });
+    if (questionsEnabled) {
+      h.nodeRegistry.mcpElicitation.register({
+        id,
+        node: recipient,
+        signal: grant.signal,
+        handle: createMcpClientElicitationHandler({
+          sessionKey: requestParams.sessionKey,
+          agentId: requestParams.agentId,
+          assertCurrent: () => grant.signal.throwIfAborted(),
+          gatewayCall: async (method, _options, params) => {
+            if (!isRecord(params)) {
+              throw new Error("Missing question params");
+            }
+            if (method === "question.request") {
+              expect(params.sessionKey).toBe(requestParams.sessionKey);
+            }
+            const [ok, result, error] = await callQuestionRpc(method, params, {
+              client: adminRequestClient,
+            });
+            if (!ok) {
+              throw new Error(error?.message);
+            }
+            if (method === "question.request") {
+              registered.resolve();
+            }
+            return result;
+          },
+        }),
+      });
+    }
     const event = {
       id,
       requestId: randomUUID(),
@@ -226,12 +232,19 @@ describe.each(["Gateway-routed", "same-node"] as const)("%s node-hosted MCP ques
       await http.close();
     });
     async function callTool() {
-      if (route === "same-node") {
+      if (route === "worker") {
         const descriptor = createWorkerLaunchDescriptorForTest({
           assignment: {
             toolAuthority: {
               allowedToolNames: ["choose"],
-              mcpTools: [{ id, server: "fixture", tool: "choose" }],
+              mcpTools: [
+                {
+                  id,
+                  server: "fixture",
+                  tool: "choose",
+                  ...(questionsEnabled && { allowElicitation: true as const }),
+                },
+              ],
             },
           },
         });
@@ -282,6 +295,12 @@ describe.each(["Gateway-routed", "same-node"] as const)("%s node-hosted MCP ques
       return result.payload;
     }
     const result = callTool();
+    if (!questionsEnabled) {
+      await expect(result).resolves.toMatchObject({ structuredContent: { action: "decline" } });
+      expect(gatewayMethods).toEqual([]);
+      expect(questions.list()).toHaveLength(0);
+      return;
+    }
     await awaitGateBeforeSettlement(registered.promise, result, "No question reached the Gateway");
     const question = expectDefined(questions.list()[0], "missing Gateway question");
     expect(question.sessionKey).toBe(requestParams.sessionKey);
@@ -299,7 +318,7 @@ describe.each(["Gateway-routed", "same-node"] as const)("%s node-hosted MCP ques
       structuredContent: { action: "accept", content: { workspace: "engineering" } },
     });
     expect(gatewayMethods).toEqual(
-      route === "same-node" ? ["node.event"] : ["node.event", "node.invoke.result"],
+      route === "worker" ? ["node.event"] : ["node.event", "node.invoke.result"],
     );
     grant.abort();
     expect((await h.send(node, event, "mcp.elicitation")).mock.calls[0]?.[0]).toBe(false);

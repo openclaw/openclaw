@@ -119,8 +119,9 @@ function issueWorkerLaunchToolAuthority(params: WorkerLaunchToolSetup): WorkerTo
     if (execution !== "placement" || !mcp?.node) {
       continue;
     }
-    mcpTools.push({ id, server: mcp.serverName, tool: mcp.toolName });
+    const handle = { id, server: mcp.serverName, tool: mcp.toolName };
     if (!gateway || !node || node.nodeId !== mcp.node.id) {
+      mcpTools.push(handle);
       continue;
     }
     const assertCurrent = () => {
@@ -162,6 +163,7 @@ function issueWorkerLaunchToolAuthority(params: WorkerLaunchToolSetup): WorkerTo
           ),
       }),
     );
+    mcpTools.push({ ...handle, allowElicitation: true });
   }
   return {
     exec: params.exec,

@@ -46,10 +46,6 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
 import { createNodeSession } from "../node-invoke-plugin-policy.test-helpers.js";
-import {
-  replaceConnectedNodePluginTools,
-  removeConnectedNodePluginTools,
-} from "../node-plugin-tool-snapshot.js";
 import { NodeRegistry } from "../node-registry.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
@@ -68,6 +64,7 @@ import {
   createWorkerSessionTurnPlacementProvider,
   placements,
   mockWorkerMcpQuestionAnswer,
+  registerWorkerMcpTestTools,
   openSessionManager,
   readWorkerTurnTranscriptStorageRows,
   root,
@@ -423,7 +420,13 @@ describe("worker turn execution", () => {
     },
   );
 
-  it.each(["local", "local-without-questions", "legacy", "completion-handoff"] as const)(
+  it.each([
+    "local",
+    "local-without-questions",
+    "legacy",
+    "v1-worker",
+    "completion-handoff",
+  ] as const)(
     "grants only the admitted same-node MCP tool to a capable placement (%s)",
     async (scenario) => {
       const supported = scenario !== "legacy";
@@ -431,29 +434,10 @@ describe("worker turn execution", () => {
       await seedActivePlacement();
       const environment = attachedEnvironment();
       environment.nodeDeviceId = "local-node";
-      environment.bootstrapReceipt!.protocolFeatures.push(WORKER_LOCAL_MCP_PROTOCOL_FEATURE);
-      for (const [nodeId, names] of [
-        ["local-node", ["local_search", "local_action", "local_denied"]],
-        ["other-node", ["remote_search"]],
-      ] as const) {
-        replaceConnectedNodePluginTools({
-          nodeId,
-          tools: names.map((name) => ({
-            registered: false,
-            descriptor: {
-              pluginId: "node-mcp",
-              name,
-              description: name,
-              parameters: {
-                type: "object",
-                properties: name === "local_action" ? { action: { type: "string" } } : {},
-              },
-              command: "mcp.tools.call.v1",
-              mcp: { server: "workspace", tool: name },
-            },
-          })),
-        });
-      }
+      environment.bootstrapReceipt!.protocolFeatures.push(
+        scenario === "v1-worker" ? "worker-local-mcp-v1" : WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
+      );
+      registerWorkerMcpTestTools();
       const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
       const node = createNodeSession({ nodeId: "local-node" });
       const nodeRegistry = new NodeRegistry();
@@ -552,9 +536,10 @@ describe("worker turn execution", () => {
           "remote_search",
         ]);
         expect(toolAuthority.allowedToolNames).toEqual(local ? ["local_search"] : []);
-        expect(toolAuthority.mcpTools).toEqual(
+        const handle = { id: expect.any(String), server: "workspace", tool: "local_search" };
+        expect(toolAuthority.mcpTools).toStrictEqual(
           local
-            ? [{ id: expect.any(String), server: "workspace", tool: "local_search" }]
+            ? [{ ...handle, ...(scenario === "local" && { allowElicitation: true }) }]
             : undefined,
         );
         expect(register).toHaveBeenCalledTimes(scenario === "local" ? 1 : 0);
@@ -564,8 +549,6 @@ describe("worker turn execution", () => {
       } finally {
         userInput.mockRestore();
         input.preparedRunAdmission.close();
-        removeConnectedNodePluginTools("local-node");
-        removeConnectedNodePluginTools("other-node");
       }
     },
   );

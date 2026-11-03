@@ -97,7 +97,7 @@ describe("node worker idle retention", () => {
     }));
     const first = input("first-mcp-turn");
     first.descriptor.assignment.toolAuthority.mcpTools = [
-      { id: "allowed", server: "fixture", tool: "lookup" },
+      { id: "allowed", server: "fixture", tool: "lookup", allowElicitation: true },
     ];
     const owner = await f.launch(first);
     const request = {

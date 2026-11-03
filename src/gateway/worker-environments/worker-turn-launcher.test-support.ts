@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -36,6 +36,10 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import {
+  replaceConnectedNodePluginTools,
+  removeConnectedNodePluginTools,
+} from "../node-plugin-tool-snapshot.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import type { MintedWorkerCredential } from "./credential.js";
@@ -607,6 +611,32 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     modelHasVision: true,
     config,
   };
+}
+
+export function registerWorkerMcpTestTools() {
+  for (const [nodeId, names] of [
+    ["local-node", ["local_search", "local_action", "local_denied"]],
+    ["other-node", ["remote_search"]],
+  ] as const) {
+    replaceConnectedNodePluginTools({
+      nodeId,
+      tools: names.map((name) => ({
+        registered: false,
+        descriptor: {
+          pluginId: "node-mcp",
+          name,
+          description: name,
+          parameters: {
+            type: "object",
+            properties: name === "local_action" ? { action: { type: "string" } } : {},
+          },
+          command: "mcp.tools.call.v1",
+          mcp: { server: "workspace", tool: name },
+        },
+      })),
+    });
+    onTestFinished(() => removeConnectedNodePluginTools(nodeId));
+  }
 }
 
 export function mockWorkerMcpQuestionAnswer(input: ReturnType<typeof turn>) {

@@ -132,6 +132,7 @@ const ToolAuthoritySchema = workerProtocolObject({
         id: Identifier,
         server: z.string().min(1),
         tool: z.string().min(1),
+        allowElicitation: z.literal(true).optional(),
       }),
     )
     .min(1)
