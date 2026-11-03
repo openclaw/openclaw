@@ -1,0 +1,3 @@
+# Thirteen regressions prove preparation overlap, bounded fan-out, deduplication,
+# ordered publication, authority revocation, and settlement before cleanup.
+437
