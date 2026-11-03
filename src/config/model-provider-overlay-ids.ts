@@ -63,6 +63,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "qwencloud",
   "requesty",
   "runway",
+  "scaleway",
   "sglang",
   "stepfun",
   "stepfun-plan",

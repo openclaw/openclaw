@@ -82,6 +82,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Radius](/providers/radius)
 - [Requesty (unified router)](/providers/requesty)
 - [Runway](/providers/runway)
+- [Scaleway (Generative APIs)](/providers/scaleway)
 - [SenseAudio](/providers/senseaudio)
 - [SGLang (local models)](/providers/sglang)
 - [StepFun](/providers/stepfun)
