@@ -335,6 +335,9 @@ describe("/learn through the command registry", () => {
     "/learn undo not-a-uuid",
     `/learn undo ${REVIEW_ID} extra`,
     `/learn undo ${REVIEW_ID.slice(0, -1)}`,
+    `/learn undo: ${REVIEW_ID}`,
+    `/learn undo, ${REVIEW_ID}`,
+    `/learn undo; ${REVIEW_ID}`,
   ])("keeps the non-exact undo form %s as an authoring request", async (body) => {
     const params = paramsFor(body);
     params.command.senderIsOwner = false;
@@ -348,14 +351,14 @@ describe("/learn through the command registry", () => {
     const builds: Array<ReadonlySet<string>> = [];
     beforeEach(() => {
       builds.length = 0;
-      registry.memoryCapabilities.push({
+      registry.learnContributions.push({
         pluginId: "contract-memory",
-        memorySlotSelected: true,
-        capability: {
-          learnToolNames: ["memory_save"],
-          learnGuidanceBuilder: ({ availableTools }) => {
+        contribution: {
+          medium: "memory",
+          toolNames: ["memory_save"],
+          buildGuidance: ({ availableTools }) => {
             builds.push(availableTools);
-            return [MEMORY_GUIDANCE];
+            return { lines: [MEMORY_GUIDANCE] };
           },
         },
       });

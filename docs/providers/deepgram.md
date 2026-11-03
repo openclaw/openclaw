@@ -158,6 +158,11 @@ capture proxies take precedence; TLS certificate verification remains enabled.
 | Endpointing     | `...deepgram.endpointingMs`                                             | `800`                                        |
 | Interim results | `...deepgram.interimResults`                                            | `true`                                       |
 
+With interim results enabled and endpointing at most 5000 ms, a provider-detected
+word gap also completes confirmed speech when background noise prevents endpointing.
+The gap is at least 1000 ms and follows `endpointingMs` above that minimum. A long
+pause can therefore split a thought into separate turns; provisional text is never committed.
+
 ```json5
 {
   plugins: {

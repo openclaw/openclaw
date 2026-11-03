@@ -384,15 +384,9 @@ describe("config form scalar integrity", () => {
       );
       expect(input.value).not.toContain("__OPENCLAW_REDACTED__");
       expect(input.readOnly).toBe(true);
-      if (maskSensitive) {
-        expect(input.placeholder).toBe("••••••••");
-      }
-      const eye = expectElement(
-        container.querySelector<HTMLButtonElement>(".settings-secret__toggle"),
-        "stored secret reveal toggle",
-      );
-      expect(eye.disabled).toBe(true);
-      expect(eye.getAttribute("aria-label")).toBe("This editor cannot reveal the stored value.");
+      expect(input.placeholder).toBe("••••••••");
+      // Nothing can reveal it, so no control offers to.
+      expect(container.querySelector(".settings-secret__toggle")).toBeNull();
     },
   );
 

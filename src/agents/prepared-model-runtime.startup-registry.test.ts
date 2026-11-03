@@ -5,6 +5,10 @@ import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
@@ -47,6 +51,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   resetPluginLoaderTestStateForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
@@ -81,6 +86,8 @@ function startupFixture(
       },
     },
   };
+  // Gateway startup publishes config before loading its plugin owners.
+  setRuntimeConfigSnapshot(config);
   const input = { config, workspaceDir, agentDir: workspaceDir, allowGatewaySubagentBinding: true };
   const start = async (onlyPluginIds: string[], channelPluginLoadIntent?: "full") => {
     const metadata = loadPluginMetadataSnapshot({ config, workspaceDir });

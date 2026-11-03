@@ -5,7 +5,6 @@ import { afterEach, expect, it } from "vitest";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { scriptFiles } from "./run-vitest.test-support.js";
-
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 const run = {
   id: 321,
@@ -130,6 +129,7 @@ it.each([
       },
       { ...job, id: 7, name: "checks-node-compact-small-1" },
       { ...job, id: 8, name: "checks-node-release-packed-1" },
+      { ...job, id: 100, name: "checks-node-worker-e2e" },
       ...[
         ["boat"],
         ["boat-small/from=snapshot"],

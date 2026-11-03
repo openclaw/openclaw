@@ -444,7 +444,7 @@ describe("renderSkills", () => {
     render({
       surface: "discovery",
       clawhubSearchError: "rate limited",
-      clawhubInstallMessage: { kind: "success", text: "Installed github" },
+      clawhubInstallMessage: { ref: "other", kind: "success", text: "Installed other" },
       clawhubDetailRef: "github",
       clawhubDetail: githubDetail({ icon }),
       clawhubIconUrls: { [icon]: "blob:clawhub-detail-icon" },
@@ -453,7 +453,7 @@ describe("renderSkills", () => {
     await getRenderedModalDialog(container);
     expect([...container.querySelectorAll(".callout")].map(normalizeText)).toEqual([
       "rate limited Retry",
-      "Installed github",
+      "Installed other",
     ]);
     expect(container.querySelector<HTMLImageElement>(".clawhub-skill-icon--detail")?.src).toBe(
       "blob:clawhub-detail-icon",
