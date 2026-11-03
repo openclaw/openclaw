@@ -4,6 +4,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -667,7 +668,7 @@ export class DraftSubmissionFlow {
     } catch (error) {
       if (!requestSignal.aborted && this.gateway.client === input.client) {
         this.sessionStartup.clear();
-        this.error = error instanceof Error ? error.message : String(error);
+        this.error = formatUiError(error);
         if (instant) {
           await instant.rollback();
         }
