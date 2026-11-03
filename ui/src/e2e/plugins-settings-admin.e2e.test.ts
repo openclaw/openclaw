@@ -333,7 +333,7 @@ suite.define(() => {
           },
         };
         const gateway = await installMockGateway(page, {
-          featureMethods: pluginMethods,
+          featureMethods: [...pluginMethods, "config.patch"],
           operatorScopes: readOnly ? ["operator.read"] : ["operator.read", "operator.admin"],
           methodResponses: {
             ...pluginResponses(),
@@ -417,14 +417,26 @@ suite.define(() => {
         if (readOnly) {
           expect(await reference.isDisabled()).toBe(true);
           expect(await gateway.getRequests("config.set")).toHaveLength(0);
+          expect(await gateway.getRequests("config.patch")).toHaveLength(0);
           return;
         }
         await apiKey.pressSequentially("synthetic-credential", { delay: 30 });
         expect(await apiKey.inputValue()).toBe("synthetic-credential");
         expect(await apiKey.getAttribute("type")).toBe("password");
         await apiKey.press("Tab");
-        const save = await gateway.waitForRequest("config.set");
+        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        await gateway.deferNext("config.patch");
+        await page.getByRole("button", { name: `Save: ${label}`, exact: true }).click();
+        const save = await gateway.waitForRequest("config.patch");
         expect(JSON.parse(String(asRecord(save.params).raw))).toEqual({
+          plugins: {
+            entries: {
+              [manifest.id]: { config: { [section]: { apiKey: "synthetic-credential" } } },
+            },
+          },
+        });
+        const savedConfig = {
           ...credentialConfig,
           plugins: {
             ...credentialConfig.plugins,
@@ -439,7 +451,14 @@ suite.define(() => {
               },
             },
           },
+        };
+        await gateway.setMethodResponse("config.get", {
+          ...configMocks["config.get"],
+          config: savedConfig,
+          raw: JSON.stringify(savedConfig),
+          hash: "credential-saved",
         });
+        await gateway.resolveDeferred("config.patch", { ok: true, hash: "credential-saved" });
         await page.getByRole("button", { name: "Apply changes", exact: true }).waitFor();
         await page.reload();
         await gateway.waitForRequest("config.get");
