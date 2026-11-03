@@ -209,7 +209,7 @@ describe("renderMemoryImport", () => {
     });
 
     const buttons = [
-      ...container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
+      ...container.querySelectorAll<HTMLButtonElement>("openclaw-modal-actions button"),
     ];
     expect(buttons).toMatchObject([{ disabled: true }, { disabled: true }]);
     buttons[0]?.click();
