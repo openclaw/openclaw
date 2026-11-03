@@ -1,28 +1,34 @@
-let currentFds: readonly number[] | undefined;
-let nativeProcessOwner: string | undefined;
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+
+// Lineage is process state. A source host can load this module twice (its own graph and
+// a dist plugin's natively aliased SDK); both copies must see one binding.
+const inherited = resolveGlobalSingleton(
+  Symbol.for("openclaw.inheritedProcessLineage"),
+  (): { fds?: readonly number[]; nativeProcessOwner?: string } => ({}),
+);
 
 export function getInheritedNativeProcessOwner(): string | undefined {
-  return nativeProcessOwner;
+  return inherited.nativeProcessOwner;
 }
 
 export function bindInheritedNativeProcessOwner(entrypoint: string): () => void {
-  nativeProcessOwner = entrypoint;
+  inherited.nativeProcessOwner = entrypoint;
   return () => {
-    if (nativeProcessOwner === entrypoint) {
-      nativeProcessOwner = undefined;
+    if (inherited.nativeProcessOwner === entrypoint) {
+      inherited.nativeProcessOwner = undefined;
     }
   };
 }
 
 export function getInheritedProcessLineageFds(): readonly number[] {
-  return currentFds ?? [];
+  return inherited.fds ?? [];
 }
 
 export function bindInheritedProcessLineageFds(fds: readonly number[]): () => void {
-  currentFds = fds;
+  inherited.fds = fds;
   return () => {
-    if (currentFds === fds) {
-      currentFds = undefined;
+    if (inherited.fds === fds) {
+      inherited.fds = undefined;
     }
   };
 }
