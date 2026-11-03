@@ -1690,6 +1690,7 @@ src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
+src/plugins/plugin-bundled-reload.ts
 src/plugins/plugin-instance-iterator.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-lifecycle-lease-identity.ts
@@ -1852,6 +1853,7 @@ src/process/spawn-broker/resource-client.ts
 src/process/spawn-broker/resource-host.ts
 src/process/spawn-broker/resource-protocol.ts
 src/process/spawn-broker/resource-socket.ts
+src/process/spawn-broker/socket-directory.ts
 src/process/spawn-diagnostics.ts
 src/process/spawn-to-file.ts
 src/process/spawn-utils.ts
@@ -2123,6 +2125,7 @@ src/state/openclaw-state-db-cron-delivery-migration.ts
 src/state/openclaw-state-db-cron-identity-migration.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
+src/state/openclaw-state-db-engine-input.ts
 src/state/openclaw-state-db-engine.ts
 src/state/openclaw-state-db-existing-schema.ts
 src/state/openclaw-state-db-existing-write.ts
