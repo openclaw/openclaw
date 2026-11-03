@@ -7,11 +7,11 @@ import {
   listDismissedChatPullRequests,
   chatBranchId,
 } from "../../../../../extensions/github-repositories/browser/api.ts";
+import type { GatewaySessionRow } from "../../../api/types.ts";
 import {
   pullRequest,
   sessionBranch,
-} from "../../../../../extensions/github-repositories/browser/chat-pull-requests.test-support.ts";
-import type { GatewaySessionRow } from "../../../api/types.ts";
+} from "../../../plugins/github-repositories-integration/chat-pull-requests.test-support.ts";
 import { createGateway, createContext, createSessions } from "../../../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";

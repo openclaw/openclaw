@@ -3,7 +3,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
-import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -57,12 +56,11 @@ async function mountCatalog(
     panel: nextPanel,
   });
   const page = createAgentsPage(context, route(panel));
-  const identity = githubIdentityViewFixture();
+  const base = createBaseParams();
   const mounted = mountSolid(() => (
     <AgentTools
-      {...createBaseParams()}
+      {...base}
       {...page.read().tools}
-      githubIdentity={identity}
       readData={page.read().readData}
       agentId={page.read().selectedAgentId ?? "main"}
     />

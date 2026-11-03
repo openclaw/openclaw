@@ -1,10 +1,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitMergedPullHead } from "../infra/git-read-operations.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   sessionChanges,
   sessionChangeScopeAffectsStoredRows,
 } from "../sessions/session-row-changes.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import {
@@ -118,6 +120,7 @@ export function createRepositorySessionReadHost(deps: {
         assertService();
       };
       assertCurrent();
+      const spawnBroker = getSpawnBroker();
       const readTaskReceipts = createRepositoryTaskPublicationReader(lifetime);
       const prepareRecordRead = (projection: SessionRowProjection, record: MaterializedRow) => {
         const lookup = { key: record.key, agentId: record.agentId };
@@ -206,6 +209,11 @@ export function createRepositorySessionReadHost(deps: {
       };
       const bound = {
         assertCurrent,
+        /** Background review work retains the service process owner, never request context. */
+        runDetached<T>(run: () => T): T {
+          assertCurrent();
+          return runInDetachedAsyncContext(() => runWithSpawnBroker(spawnBroker, run));
+        },
         isViewerConnected(connId: string) {
           assertCurrent();
           return Boolean(deps.getClient(connId));

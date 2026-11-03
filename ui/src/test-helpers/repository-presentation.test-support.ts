@@ -1,5 +1,5 @@
 import type { ControlUiSessionPullRequestSnapshot } from "@openclaw/gateway-protocol";
-import { onTestFinished } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import {
   createSessionAccessoryMount,
   createMobileSessionAccessoryMount,
@@ -36,7 +36,6 @@ export function installRepositoryPresentation(
       retirement.current?.();
     }
   });
-  runtime.start();
   const owner: Omit<ControlUiPluginOwner, "host"> = {
     descriptor: {
       pluginId: "github-repositories",
@@ -59,8 +58,18 @@ export function installRepositoryPresentation(
       widgets: new Map(),
       replacements: new Map(),
       textReferences: new Map(),
+      inlineViews: new Map(),
     },
   };
+  // Presentation fixtures install one local activation, as createTestControlUiPluginHost does.
+  // Catalog loading is covered independently; connection retirement still revokes this host.
+  vi.spyOn(runtime, "isCurrent").mockImplementation(
+    (current) =>
+      current === owner &&
+      !owner.abort.signal.aborted &&
+      context.gateway.snapshot.phase === "connected" &&
+      context.gateway.snapshot.client === client,
+  );
   const base = createControlUiPluginHost(() => context, runtime, owner);
   const listeners = new Set<() => void>();
   const host = base;
@@ -135,6 +144,11 @@ export function installRepositoryPresentation(
       id: "repository",
       placement: "session-context",
       mount: createSessionAccessoryMount(host, repository),
+    });
+    runtime.register(owner, "accessories", {
+      id: "repository-environment",
+      placement: "session-environment",
+      mount: createSessionAccessoryMount(host, repository, true),
     });
     for (const placement of ["root", "page", "activity"] as const) {
       runtime.register(owner, "accessories", {

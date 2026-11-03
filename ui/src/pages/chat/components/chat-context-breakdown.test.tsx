@@ -53,7 +53,7 @@ function mountPage(gateway: ContextGateway, key = "first", empty = false, compac
       presented
       details={{
         currentAgentId: "main",
-        pullRequestsGateway: gateway,
+        gateway: gateway,
         selectedSession: {
           key: `agent:main:${key}`,
           kind: "direct",

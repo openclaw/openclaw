@@ -26,13 +26,7 @@ import {
 } from "./workspace-result-staging.js";
 
 // mock-isolation: Real node/Git/HTTP transfer uses a local origin with no GitHub credentials.
-vi.mock("./repository-github-identity.js", () => ({
-  prepareRepositoryGitHubIdentity: async (_agentId: string, assertCurrent: () => void) => ({
-    token: undefined,
-    assertSelected: assertCurrent,
-    start: async (start: () => Promise<unknown>) => await start(),
-  }),
-}));
+
 const { fixture } = useRepositoryWorkspaceResultFixture();
 
 it("exports current private history and files, then fences a late source edit before handoff", async () => {

@@ -14,6 +14,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayStartupTrace } from "./server-startup-trace.js";
+import { loadWorkerPlacementSessionRuntimeModule } from "./server-worker-placement-session-target.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import {
   createEnvironments,
@@ -25,6 +26,7 @@ import {
 } from "./server-worker-placement.test-support.js";
 import * as workspaceRetention from "./worker-environments/node-workspace-retain-coordinator.js";
 import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
+import { createWorkspacePublicationHost } from "./workspace-publication-provider.js";
 
 const createRuntime = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
 function mockDispatch(overrides: Partial<WorkerPlacementDispatchService> = {}) {
@@ -69,13 +71,26 @@ describe("worker placement startup health lifetime", () => {
     const releasePublication = createDeferredCore();
     mockDispatch();
     const environments = createEnvironments();
-    const runtime = createRuntime({ environments: environments as never });
-    vi.spyOn(runtime.githubPublication, "resumeSessionRequests").mockImplementationOnce(
-      async () => {
-        publicationStarted.resolve();
-        await releasePublication.promise;
-      },
-    );
+    const scheduler = createTestGatewayScheduler();
+    const placements = placementStoreDefaults() as never;
+    const workspacePublicationHost = createWorkspacePublicationHost({
+      scheduler,
+      placements,
+      managedByPlacement: true,
+      getCommittedRuntimeConfig: getRuntimeConfig,
+      loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
+      warn: vi.fn(),
+    });
+    vi.spyOn(workspacePublicationHost, "reconcilePublications").mockImplementationOnce(async () => {
+      publicationStarted.resolve();
+      await releasePublication.promise;
+    });
+    const runtime = createRuntime({
+      environments: environments as never,
+      scheduler,
+      placements,
+      workspacePublicationHost,
+    });
     let ready = false;
     const starting = startRuntime(runtime).then((sidecar) => {
       ready = true;

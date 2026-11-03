@@ -98,6 +98,7 @@ async function prepareGitHubWorkerSource(
     params.assertCurrent();
   };
   const assertAdmission = assertCaller;
+  const repositoryPath = new URL(url).pathname.replace(/\.git$/u, "");
   const prepareIdentity = async (assertPreparationCurrent: () => void) => {
     await assertAgentPrepared();
     assertPreparationCurrent();
@@ -107,7 +108,11 @@ async function prepareGitHubWorkerSource(
       sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
       agentId: request.agentId,
       getCurrentConfig: getConfig,
-      assertActive: assertAgent,
+      assertActive:
+        params.readCredential || params.retainCredentialCleanup ? assertAdmission : assertAgent,
+      readNativeCredential: params.readCredential,
+      allowAppInstallation: params.retainCredentialCleanup !== undefined,
+      requestedRepository: repositoryPath.slice(1),
       refresh: () => refresh(request.agentId),
       allowAnonymous: true,
     }).catch(async (error: unknown) => {
@@ -115,6 +120,10 @@ async function prepareGitHubWorkerSource(
       // Native credential subprocess diagnostics must never enter provider errors.
       throw error instanceof GitHubIdentityError ? error : new GitHubIdentityError("unverified");
     });
+    if (identity.revoke) {
+      params.retainCredentialCleanup?.(identity.revoke);
+    }
+    assertPreparationCurrent();
     assertAgent();
     return identity;
   };
@@ -130,7 +139,6 @@ async function prepareGitHubWorkerSource(
     assertAgent();
     identity.assertSelected();
   };
-  const repositoryPath = new URL(url).pathname.replace(/\.git$/u, "");
   const endpoint = `${gitHubPublicApi.GITHUB_API_BASE_URL}/repos${repositoryPath}`;
   const read = async (
     suffix: string,
@@ -430,20 +438,37 @@ export function createGitHubWorkerSource(
   getConfig: () => OpenClawConfig,
   refresh: (agentId: string) => Promise<void>,
 ): RepositoryWorkerSource {
-  const prepareRead = async (agentId: string, assertCurrent: () => void) => {
+  const prepareRead = async (
+    agentId: string,
+    assertCurrent: () => void,
+    credential?: Pick<
+      Parameters<RepositoryWorkerSource["checkout"]>[0],
+      "url" | "readCredential" | "retainCredentialCleanup"
+    >,
+  ) => {
     const config = getConfig();
-    return await prepareGitHubReadIdentity({
+    const identity = await prepareGitHubReadIdentity({
       config,
       sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
       agentId,
       getCurrentConfig: getConfig,
       assertActive: assertCurrent,
+      readNativeCredential: credential?.readCredential,
+      allowAppInstallation: credential?.retainCredentialCleanup !== undefined,
+      requestedRepository: credential
+        ? new URL(credential.url).pathname.replace(/^\/|\.git$/gu, "")
+        : undefined,
       refresh: () => refresh(agentId),
       allowAnonymous: true,
     }).catch((error: unknown) => {
       assertCurrent();
       throw error instanceof GitHubIdentityError ? error : new GitHubIdentityError("unverified");
     });
+    if (identity.revoke) {
+      credential?.retainCredentialCleanup?.(identity.revoke);
+    }
+    assertCurrent();
+    return identity;
   };
   return {
     isIdentityCurrent({ agentId, identityKey }) {
@@ -513,7 +538,7 @@ export function createGitHubWorkerSource(
     },
     prepare: (input) => prepareGitHubWorkerSource(input, getConfig, refresh),
     async checkout(input) {
-      const identity = await prepareRead(input.agentId, input.assertCurrent);
+      const identity = await prepareRead(input.agentId, input.assertCurrent, input);
       input.assertCurrent();
       identity.assertSelected();
       await performRepositoryCheckout(input.transfer, {

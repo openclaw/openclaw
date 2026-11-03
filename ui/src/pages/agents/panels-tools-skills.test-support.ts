@@ -1,20 +1,22 @@
 import { createComponent, flush } from "solid-js";
 import { vi } from "vitest";
-import {
-  githubIdentityViewFixture,
-  type TestGitHubIdentity,
-} from "../../../../extensions/github-repositories/browser/github-identity.test-support.ts";
-import { GitHubIdentity } from "../../../../extensions/github-repositories/browser/github-settings.test-support.tsx";
 import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../api/types.ts";
+import { githubIdentityViewFixture } from "../../plugins/github-repositories-integration/github-identity.test-support.ts";
+import { GitHubIdentity } from "../../plugins/github-repositories-integration/github-settings.test-support.tsx";
 import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
 import type { AgentTools } from "./panels-tools-skills.tsx";
 
 type Params = Parameters<typeof AgentTools>[0] & {
-  githubIdentity: Omit<TestGitHubIdentity, "dispose">;
-  onOpenGitHubConnections: () => void;
   catalog: ToolsCatalogResult | null;
   effective: ToolsEffectiveResult | null;
 };
+
+/** Render the actual plugin through the generic Settings slot, never a native identity prop. */
+export function renderIdentitySettings(
+  identity: Parameters<typeof GitHubIdentity>[0]["identity"] = githubIdentityViewFixture(),
+) {
+  return () => createComponent(GitHubIdentity, { identity, onOpenConnections: vi.fn() });
+}
 
 /** Reveal the groups whose tool controls a test exercises. */
 export function openToolGroups(container: HTMLElement) {
@@ -26,7 +28,6 @@ export function openToolGroups(container: HTMLElement) {
 }
 
 export function createBaseParams(overrides: Partial<Params> = {}): Params {
-  const githubIdentity = githubIdentityViewFixture();
   const params: Params = {
     readData() {
       return { ...createAgentViewTestProps().readData(), ...this };
@@ -58,15 +59,7 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     effectiveRequest: null,
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: true,
-    githubIdentity,
-    renderSettings: () =>
-      createComponent(GitHubIdentity, {
-        get identity() {
-          return params.githubIdentity;
-        },
-        onOpenConnections: () => params.onOpenGitHubConnections(),
-      }),
-    onOpenGitHubConnections: vi.fn(),
+    renderSettings: renderIdentitySettings(),
     onProfileChange: () => undefined,
     onOverridesChange: () => undefined,
     onConfigReload: async () => undefined,

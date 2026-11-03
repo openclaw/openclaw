@@ -165,11 +165,16 @@ export type ControlUiSettingsContextV2 = Omit<ControlUiSettingsContext, "props" 
   request: ControlUiSettingsClient["request"];
   readConfig: (path: readonly string[]) => unknown;
   registerEnglish: (catalog: Record<string, Record<string, string>>) => void;
+  /** Read through a mounted Settings owner's current snapshot. */
+  projectOwner: <T>(source: { read: () => T; subscribe: (notify: () => void) => () => void }) => {
+    read: () => T;
+    dispose: () => void;
+  };
   copyButton: (
     event: Event,
     text: string,
     idleLabel: string,
-    targets: { label?: HTMLElement; feedback?: HTMLElement },
+    targets: { label?: HTMLElement; feedback?: HTMLElement; announcement?: HTMLElement },
   ) => Promise<boolean>;
   navigateTo: (destination: { page: "profile" | "agent-tools"; hash?: string }) => void;
   /** The config owner serializes and refreshes an external config mutation. */

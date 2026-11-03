@@ -1,4 +1,8 @@
+import { prepareExecutionEnvironmentExclusions } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { GitHubToolIdentityConfig } from "./config-api.js";
 import { GITHUB_PUBLIC_HOST } from "./host-api.js";
+import { CLEARED_GITHUB_CREDENTIALS } from "./host-runtime-api.js";
 import type { PreparedGitHubToolEnvironment } from "./tool-identity.types-api.js";
 
 export const AGENT_GIT_CONFIG_PARAMETERS = "'maintenance.auto=false' 'gc.auto=0'";
@@ -42,5 +46,22 @@ export function applyManagedGitHubIdentityEnvironment(
     ...(env ?? process.env),
     ...Object.fromEntries(Object.keys(overlay.credentialScrubEnv).map((name) => [name, undefined])),
     ...overlay.localIdentityEnv,
+  };
+}
+
+export function githubCredentialEnvironmentExclusions(
+  params: { config: OpenClawConfig; sourceConfig?: OpenClawConfig; env?: NodeJS.ProcessEnv },
+  selected?: GitHubToolIdentityConfig,
+) {
+  const exclusions = prepareExecutionEnvironmentExclusions({
+    config: params.sourceConfig ?? params.config,
+    env: params.env,
+  });
+  return {
+    credentialScrubEnv: {
+      ...(selected ? CLEARED_GITHUB_CREDENTIALS : {}),
+      ...exclusions?.credentialScrubEnv,
+    },
+    excludedStoreNames: exclusions?.excludedStoreNames ?? [],
   };
 }

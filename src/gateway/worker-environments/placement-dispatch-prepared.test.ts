@@ -27,7 +27,6 @@ import { getSessionRepositoryWorkspaceStore } from "../../state/session-reposito
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import type { NodeWorkerPreparedWorkspaceResult } from "../../worker/node-workspace-prepared-protocol.js";
-import * as publicationAvailability from "../github-publication-availability.js";
 import {
   createNodeRegistryRuntime,
   updateNodeRunnerInventory,
@@ -397,27 +396,34 @@ describe("prepared worker dispatch", () => {
         repository: { ...repository, baseCommit: "a".repeat(40) },
       });
       const config: OpenClawConfig = {
-        tools: {
-          github: {
-            kind: "app-installation",
-            profileId: "ghp_00000000000000000000000000000001",
-            app: {
-              appId: 101,
-              installationId: 202,
-              accountId: 303,
-              repositories: [{ id: 404, fullName: "example/project" }],
-              permissions: { contents: "read" },
-              privateKey: generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
-                type: "pkcs8",
-                format: "pem",
-              }),
-              keyVersion: "synthetic-v1",
+        plugins: {
+          entries: {
+            "github-repositories": {
+              config: {
+                system: {
+                  kind: "app-installation",
+                  profileId: "ghp_00000000000000000000000000000001",
+                  app: {
+                    appId: 101,
+                    installationId: 202,
+                    accountId: 303,
+                    repositories: [{ id: 404, fullName: "example/project" }],
+                    permissions: { contents: "read" },
+                    privateKey: generateKeyPairSync("rsa", {
+                      modulusLength: 2048,
+                    }).privateKey.export({
+                      type: "pkcs8",
+                      format: "pem",
+                    }),
+                    keyVersion: "synthetic-v1",
+                  },
+                },
+              },
             },
           },
         },
       };
       setRuntimeConfigSnapshot(config);
-      vi.spyOn(publicationAvailability, "currentGitHubPublicationConfig").mockReturnValue(config);
       const native = await vi.importActual<
         typeof import("../../../extensions/github-repositories/tool-identity-api.js")
       >("../../../extensions/github-repositories/tool-identity-api.js");
@@ -862,7 +868,7 @@ describe("prepared worker dispatch", () => {
         "a".repeat(64),
         "workspace",
       );
-      const { baseCommit, base, repositoryStore, accepted, boundWorkspace } =
+      const { baseCommit, base, current, repositoryStore, accepted, boundWorkspace } =
         await createAcceptedPreparedRepositorySource({
           stagingRoot,
           agentId: REQUEST.agentId,
@@ -972,7 +978,13 @@ describe("prepared worker dispatch", () => {
       });
       const dispatch = harness.service.dispatch({ ...request, runSetupScript });
       if (rejectSource) {
-        await expect(dispatch).rejects.toThrow("prepared repository source");
+        await expect(dispatch).rejects.toThrow(
+          "Prepared repository does not match this session's source",
+        );
+        expect(harness.log).not.toContain("sync");
+        expect(harness.environments.destroy).toHaveBeenCalledWith(ready.environmentId);
+        expect(harness.environments.schedulePreparedRefill).not.toHaveBeenCalled();
+        expect(await repositoryStore.get(accepted.workspaceId)).toEqual(accepted);
         expect(effects).toBe(0);
         expect(harness.log).not.toContain("activation");
         return;

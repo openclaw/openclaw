@@ -4,6 +4,18 @@
   height: 14px;
 }
 
+.chat-pr__checks[open] .chat-pr__checks-chevron svg,
+.chat-ci__job[open] > summary .chat-ci__chevron,
+.chat-ci__skipped[open] > summary .chat-ci__chevron,
+.chat-pr__publication-status[open] .chat-pr__publication-chevron {
+  transform: rotate(180deg);
+}
+
+:is(.chat-composer-neighbor-card, .session-suggestion, .chat-pr.chat-pr) {
+  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
+}
+
 .chat-pr__checks-chevron svg,
 .chat-ci__chevron svg,
 .chat-ci__job-link svg,
@@ -28,6 +40,25 @@
 .chat-prs {
   display: grid;
   gap: 6px;
+}
+
+.chat-pr {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: var(--chat-stack-header-height, 40px);
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 13px;
+}
+
+.chat-pr[data-state="merged"] {
+  border-color: color-mix(in srgb, var(--pr-merged) 18%, var(--border));
+  background: color-mix(in srgb, var(--pr-merged) 12%, var(--panel));
 }
 
 .chat-pr__link {
@@ -152,7 +183,7 @@ button.chat-pr__diff {
   gap: 5px;
   padding: 1px 8px;
   border: 1px solid color-mix(in srgb, currentColor 27%, transparent);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, currentColor 12%, transparent);
   cursor: var(--cursor-action);
   font-size: 12px;
@@ -182,12 +213,7 @@ button.chat-pr__diff {
   display: flex;
 }
 
-.chat-pr__checks[open] .chat-pr__checks-chevron svg {
-  transform: rotate(180deg);
-}
-
-.chat-pr__checks-dot,
-.chat-pr__checks-row-dot {
+.chat-pr__checks-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -202,7 +228,7 @@ button.chat-pr__diff {
   overscroll-behavior: contain;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--menu-radius);
   background: var(--panel);
   box-shadow: var(--shadow-md);
   color: var(--text);
@@ -243,22 +269,6 @@ button.chat-pr__diff {
   align-items: center;
   gap: 5px;
   white-space: nowrap;
-}
-
-.chat-pr__checks-row--passed .chat-pr__checks-row-dot {
-  background: var(--ok);
-}
-
-.chat-pr__checks-row--failed .chat-pr__checks-row-dot {
-  background: var(--danger);
-}
-
-.chat-pr__checks-row--running .chat-pr__checks-row-dot {
-  background: var(--warn);
-}
-
-.chat-pr__checks-row--skipped .chat-pr__checks-row-dot {
-  background: var(--muted);
 }
 
 .chat-pr__checks-row-label {
@@ -355,7 +365,7 @@ button.chat-pr__diff {
   flex: 0 0 auto;
   padding: 4px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
   cursor: var(--cursor-action);
@@ -390,12 +400,6 @@ button.chat-pr__diff {
   font-size: 11px;
   font-weight: 400;
   line-height: 1.5;
-}
-
-openclaw-chat-ci-automation,
-openclaw-chat-ci-details {
-  display: block;
-  min-width: 0;
 }
 
 .chat-ci__jobs {
@@ -447,11 +451,6 @@ openclaw-chat-ci-details {
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
-}
-
-.chat-ci__job[open] > summary .chat-ci__chevron,
-.chat-ci__skipped[open] > summary .chat-ci__chevron {
-  transform: rotate(180deg);
 }
 
 .chat-ci__job-detail {
@@ -618,10 +617,6 @@ openclaw-chat-ci-details {
   display: inline-flex;
 }
 
-.chat-pr__publication-status[open] .chat-pr__publication-chevron {
-  transform: rotate(180deg);
-}
-
 .chat-pr__publication-more {
   display: grid;
   gap: 2px;
@@ -684,6 +679,41 @@ openclaw-chat-ci-details {
   }
 }
 
+.chat-provider-review-dialog__content {
+  overflow-y: auto;
+  max-height: 60dvh;
+}
+
+.chat-provider-review-dialog__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-provider-review-dialog h3 {
+  font-size: 13px;
+}
+
+.chat-provider-review-dialog blockquote {
+  margin-inline: 0;
+  padding-inline-start: 16px;
+  border-inline-start: 3px solid var(--border);
+}
+
+.chat-provider-review .chat-composer-neighbor-card__copy :is(strong, span) {
+  white-space: normal;
+}
+
+.chat-pr__accounts-panel .oc-menu-item__check {
+  display: none;
+}
+
+.chat-pr__checks-overlay {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}
+
 .chat-pr__accounts-panel .oc-menu-item__check {
   display: none;
 }
@@ -701,4 +731,27 @@ openclaw-chat-ci-details {
   font-weight: 700;
   letter-spacing: 0.08em;
   user-select: all;
+}
+
+/* Host controls retain their own DOM root; size the plugin's slot across that boundary. */
+.repository-environment .repository-environment__icon {
+  display: inline-flex;
+  flex: 0 0 var(--details-row-icon-slot, 15px);
+  align-items: center;
+  justify-content: center;
+  width: var(--details-row-icon-slot, 15px);
+  height: var(--details-row-icon-size, 15px);
+  color: var(--muted);
+}
+.repository-environment__icon svg {
+  width: var(--details-row-icon-size, 15px);
+  height: var(--details-row-icon-size, 15px);
+}
+.repository-environment .chat-environment__branch-controls .chat-pr__diff {
+  flex: none;
+  overflow: visible;
+  font-family: var(--font-body);
+  font-size: var(--details-meta-font-size, 12px);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }

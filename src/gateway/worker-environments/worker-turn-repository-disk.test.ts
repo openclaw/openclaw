@@ -9,13 +9,7 @@ import { placements, SESSION_ID } from "./worker-turn-launcher.test-support.js";
 import { useRepositoryWorkspaceResultFixture } from "./workspace-result-repository.test-support.js";
 
 // mock-isolation: Local repository origin; result custody, capture and stores are real.
-vi.mock("./repository-github-identity.js", () => ({
-  prepareRepositoryGitHubIdentity: async (_agentId: string, assertCurrent: () => void) => ({
-    token: undefined,
-    assertSelected: assertCurrent,
-    start: async (start: () => Promise<unknown>) => await start(),
-  }),
-}));
+
 const { fixture } = useRepositoryWorkspaceResultFixture();
 
 it.each(["worker-turn", "remote-exec"] as const)(

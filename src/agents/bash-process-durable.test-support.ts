@@ -175,7 +175,6 @@ async function launch(state: OpenClawTestState, notifyOnExit: boolean) {
       credentialScrubEnv: {},
       localIdentityEnv: { GH_TOKEN: "synthetic-env-secret", GH_HOST: "github.com" },
       excludedStoreNames: ["GH_TOKEN", "GH_HOST"],
-      managedLocalIdentity: true,
     },
     preparedSubagentExecution: false,
   });

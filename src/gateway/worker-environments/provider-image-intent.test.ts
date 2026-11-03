@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import * as checkoutTransfers from "../../plugins/repository-checkout-transfer.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import { nodeArtifacts, pendingNodeEnrollment } from "./provider-lifecycle.test-support.js";
-import * as repositoryIdentity from "./repository-github-identity.js";
 import * as repositoryAdmission from "./repository-project-admission.js";
 import * as support from "./service.test-support.js";
 
@@ -50,7 +50,7 @@ describe("runtime-only image allocation", () => {
 
   it("allocates runtime capacity without repository admission, credentials, or setup", async () => {
     const source = vi.spyOn(repositoryAdmission, "prepareRepositoryWorkerProjectSource");
-    const credential = vi.spyOn(repositoryIdentity, "prepareRepositoryGitHubIdentity");
+    const credential = vi.spyOn(checkoutTransfers, "performRepositoryCheckout");
     const { service, provider } = fixture();
     const intent = await service.prepareProjectIntent("development", imageOptions);
     expect(intent.profileSnapshot.runtimePreparation).toMatchObject({ source: "image" });

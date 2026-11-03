@@ -90,3 +90,10 @@ export {
 export { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 export { ProjectCloneError } from "../projects/project-clone-contract.js";
+
+export {
+  configureProjectCheckoutMaintenance,
+  PROJECT_MAINTENANCE_CONFIG,
+  projectCheckoutGitEnvironment,
+  runProjectGitCommand,
+} from "../projects/project-checkout-maintenance.js";

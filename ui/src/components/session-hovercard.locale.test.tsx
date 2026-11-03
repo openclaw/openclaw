@@ -1,9 +1,15 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
 import { expect, it, onTestFinished } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
+import { createContext, createSessions } from "../test-helpers/app-sidebar.ts";
+import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { installRepositoryPresentation } from "../test-helpers/repository-presentation.test-support.ts";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { SessionHovercard } from "./session-hovercard-solid.tsx";
@@ -11,10 +17,13 @@ import { SessionHovercard } from "./session-hovercard-solid.tsx";
 function mountCard(
   initial: SidebarSessionHovercardRow,
   initialProps: Omit<Parameters<typeof SessionHovercard>[0], "row"> = {},
+  context?: ApplicationContext,
 ) {
   const [row, setRow] = createSignal<SidebarSessionHovercardRow | undefined>(initial);
   const [props, setProps] = createSignal(initialProps);
-  const view = mountSolid(() => <SessionHovercard {...props()} row={row()} />);
+  const view = mountSolid(() => <SessionHovercard {...props()} row={row()} />, {
+    wrapper: context ? createSolidApplicationContextProvider(context).wrapper : undefined,
+  });
   const find = (suffix = "") =>
     view.container.querySelector<HTMLElement>(`.session-hovercard${suffix}`);
   const parts = () => ({
@@ -39,23 +48,34 @@ it("preserves live hovercard content, focus, and translated actions across updat
     placementProfileId: "default",
     attention: { kind: "error", reason: "Failure", sourceSessionKey: "agent:main:example" },
   };
-  const view = mountCard(row, {
-    pullRequests: {
-      status: "ready",
-      rateLimited: false,
-      pullRequests: [
-        {
-          owner: "example",
-          repo: "project",
-          number: 7,
-          branch: "feature",
-          title: "Example request",
-          url: "https://github.com/example/project/pull/7",
-          state: "open",
-        },
-      ],
-    },
+  const key = "agent:main:hovercard-locale";
+  const connection = createApplicationGateway();
+  connection.publish({
+    ...connection.gateway.snapshot,
+    phase: "connected",
+    client: createTestGatewayClient(async () => ({})),
   });
+  const source = createContext(connection.gateway, createSessions("main", [key]));
+  const activation = installRepositoryPresentation(source, () => ({
+    status: "ready",
+    rateLimited: false,
+    pullRequests: [
+      {
+        owner: "example",
+        repo: "project",
+        number: 7,
+        branch: "feature",
+        title: "Example request",
+        url: "https://github.com/example/project/pull/7",
+        state: "open",
+      },
+    ],
+  }));
+  const view = mountCard(
+    row,
+    { session: { sessionKey: key, agentId: "main" } },
+    activation.context,
+  );
   onTestFinished(async () => {
     view.unmount();
     await restoreI18n();

@@ -1,4 +1,4 @@
-import { currentGitHubPublicationConfig } from "../../../extensions/github-repositories/api.js";
+import { currentGitHubPublicationConfig } from "../../../extensions/github-repositories/runtime-api.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";

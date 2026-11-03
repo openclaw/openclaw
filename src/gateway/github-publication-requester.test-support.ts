@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { expect, onTestFinished, vi, type Mock } from "vitest";
-import { currentGitHubPublicationConfig } from "../../extensions/github-repositories/api.js";
+import { currentGitHubPublicationConfig } from "../../extensions/github-repositories/runtime-api.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";

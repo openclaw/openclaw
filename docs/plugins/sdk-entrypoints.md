@@ -601,7 +601,7 @@ before a process effect. The lease and invocation own its lifetime; saved copies
 do not survive release or cancellation. Use `redactOutput` at diagnostic egress.
 This capability is host-local and is never a wire environment override.
 
-`process-runtime` exports `gitMaintenanceEnvironment` and `appendGitConfig` so plugin transports can preserve the host Git maintenance policy while adding command-specific configuration.
+`process-runtime` exports `gitMaintenanceEnvironment` and `appendGitConfig` so plugin transports can preserve the host Git maintenance policy while adding command-specific configuration. Managed checkout transports use `PROJECT_MAINTENANCE_CONFIG` and `configureProjectCheckoutMaintenance` for the canonical four-setting local policy, `projectCheckoutGitEnvironment` for the isolated base environment, and `runProjectGitCommand` to preserve uncertain process-cleanup failures. Maintenance writes retain the caller's current-authority callback, cancellation, process admission, and bounded timeout.
 
 `process-runtime` exports `createBoundedLineFramer` for bounded LF-delimited byte
 streams. It preserves incomplete lines and leaves CR handling to the consumer.

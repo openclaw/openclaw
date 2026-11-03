@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readGitHubConfig } from "../../../extensions/github-repositories/config-api.js";
 import * as checkDetails from "../../../extensions/github-repositories/control-ui-session-pr-check-details-api.js";
-import { createTestControlUiSessionPrSubscriptions as createControlUiSessionPullRequestSubscriptions } from "../../../extensions/github-repositories/control-ui-session-pr-subscriptions.test-support.js";
 import { gitHubPublicApi } from "../../../extensions/github-repositories/public-api.js";
 import { controlUiGitHubHandlers } from "../../../extensions/github-repositories/runtime-api.js";
 import * as githubIdentity from "../../../extensions/github-repositories/tool-identity-api.js";
@@ -32,21 +31,9 @@ import type { GatewayClient, GatewayRequestHandlerOptions, RespondFn } from "./t
 
 const controlUiHandlers = { ...coreControlUiHandlers, ...controlUiGitHubHandlers };
 
-const requestOptions = createControlUiRequestOptions(() => ({
-  agents: { entries: { main: {} } },
-  gateway: {
-    controlUi: {},
-  },
-  plugins: {
-    entries: {
-      "github-repositories": {
-        config: {
-          service: { token: "preview-service-token" },
-        },
-      },
-    },
-  },
-}));
+const requestOptions = createControlUiRequestOptions(() =>
+  configuredGitHub("preview-service-token"),
+);
 
 type RequestExtras = Parameters<typeof requestOptions>[2] &
   Pick<Partial<GatewayRequestHandlerOptions>, "signal" | "hasCurrentClientAuthority">;
@@ -676,7 +663,7 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
   it("reports subscription preparation failures without rejecting the request", async () => {
     const warn = vi.fn();
     const scheduler = createTestGatewayScheduler();
-    const subscriptions = createControlUiSessionPullRequestSubscriptions({
+    const subscriptions = createTestControlUiSessionPrSubscriptions({
       scheduler,
       broadcastToConnIds: vi.fn(),
       prepareRead: async () => {

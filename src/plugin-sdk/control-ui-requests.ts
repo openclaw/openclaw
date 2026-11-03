@@ -48,6 +48,8 @@ export type ControlUiRequests = {
   ) => boolean;
   subscribe: (notify: () => void) => () => void;
   subscribeEvents: (notify: (event: { event: string; payload?: unknown }) => void) => () => void;
+  /** Reuse the current connection’s canonical Cron inventory invalidation policy. */
+  isCronInventoryInvalidation: (event: { event: string; payload?: unknown }) => boolean;
   /** Delegate batching, retries, acknowledgements and visibility to the native lifecycle. */
   createSetSync: (options: ControlUiSetSyncOptions) => ControlUiSetSync;
 };

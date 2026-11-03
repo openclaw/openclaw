@@ -19,7 +19,6 @@ import { reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
 // mock-isolation: Local Git source has no remote account; do not discover host credentials.
-vi.mock("./repository-github-identity.js", () => ({ prepareRepositoryGitHubIdentity: vi.fn() }));
 
 describe("configured repository disk activation", () => {
   support.setupWorkerEnvironmentServiceSuite();

@@ -6,6 +6,7 @@ import {
   registerTestPlugin,
 } from "../plugin-sdk/plugin-test-contracts.js";
 import { isBundledPluginEnabled } from "../plugins/config-state.js";
+import { normalizePluginToolMetadata } from "../plugins/manifest-capability-normalizers.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createPluginToolFactoryContext } from "../plugins/tool-factory-context.js";
@@ -48,6 +49,7 @@ export function resolveGitHubPluginToolsFixture(params: ResolveOpenClawPluginToo
       entry,
       registry,
       context,
+      manifestToolMetadata: normalizePluginToolMetadata(manifest.toolMetadata),
       assertInvocationCurrent: params.options?.assertInvocationCurrent ?? (() => {}),
       bindExecutionCapabilities: (assertCurrent, signal) => ({
         ...bindExecution(assertCurrent, signal),

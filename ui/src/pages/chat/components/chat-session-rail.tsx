@@ -269,7 +269,6 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       <PluginContributions
         kind="session-summary"
         sessionKey={props.sessionKey}
-        agentId={props.agentId ?? undefined}
         presented={props.presented && Boolean(summaryVisible())}
       />
       <div
@@ -390,7 +389,6 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
         props={attachmentProps()}
         disabled={Boolean(attachmentProps().disabled)}
         sessionKey={props.sessionKey}
-        agentId={props.agentId ?? undefined}
         presented={props.presented && Boolean(summaryVisible())}
       />
       <SessionRailComposer

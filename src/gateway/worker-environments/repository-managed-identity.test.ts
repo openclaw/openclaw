@@ -2,23 +2,28 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
-import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearGitHubCredentialVerificationCache,
+  createGitHubRepositorySource,
+} from "../../../extensions/github-repositories/runtime-api.js";
+import { readRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
+import * as checkoutTransfers from "../../plugins/repository-checkout-transfer.js";
+import { createRepositorySourceFixture } from "../../plugins/repository-source.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import * as githubOAuthLifecycle from "../github-oauth-lifecycle.js";
 import {
   repositoryDispatchCredentialReader,
   withRepositoryChatDispatch,
 } from "../repository-dispatch.js";
+import { createRepositorySources } from "../repository-sources.js";
 import type { GatewayClient } from "../server-methods/client-types.js";
 import { createGatewayWorkerDispatchAdmission } from "../server-worker-placement-dispatch-admission.js";
 import { createRequiredWorkerSessionPreparation } from "../server-worker-required-profile.js";
@@ -28,7 +33,6 @@ import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordina
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { prepareRepositoryGitHubIdentity } from "./repository-github-identity.js";
 import {
   createManagedRepositoryProfile,
   createRepositoryPolicySource,
@@ -95,7 +99,16 @@ for (const kind of ["pat", "oauth", "native"] as const) {
         : {}),
       ...(kind === "native"
         ? {}
-        : { tools: { github: { profileId, ...(kind === "oauth" ? { kind } : {}) } } }),
+        : {
+            plugins: {
+              entries: {
+                "github-repositories": {
+                  enabled: true,
+                  config: { system: { profileId, ...(kind === "oauth" ? { kind } : {}) } },
+                },
+              },
+            },
+          }),
       ...(scenario === "no-integration" ||
       scenario === "required-no-integration" ||
       scenario === "selected-during-refresh" ||
@@ -173,17 +186,15 @@ for (const kind of ["pat", "oauth", "native"] as const) {
       Response.json({ id: 202, login: "managed-fixture" }),
     );
     vi.stubGlobal("fetch", verifyCredential);
-    const refresh = vi
-      .spyOn(githubOAuthLifecycle, "requestCurrentGitHubOAuthRefresh")
-      .mockImplementation(async () => {
-        await Promise.resolve();
-        if (scenario === "revoked-during-refresh") {
-          policyCurrent = false;
-        }
-        if (scenario === "selected-during-refresh") {
-          setRuntimeConfigSnapshot({ ...config, gateway: { repositoryIntegration: record.id } });
-        }
-      });
+    const refresh = vi.fn(async () => {
+      await Promise.resolve();
+      if (scenario === "revoked-during-refresh") {
+        policyCurrent = false;
+      }
+      if (scenario === "selected-during-refresh") {
+        setRuntimeConfigSnapshot({ ...config, gateway: { repositoryIntegration: record.id } });
+      }
+    });
     const commands: string[] = [];
     const nodeHome = path.join(root, "node-home");
     await fs.mkdir(nodeHome, { recursive: true });
@@ -210,20 +221,24 @@ for (const kind of ["pat", "oauth", "native"] as const) {
         repositoryWorkspaceId: repository.workspaceId,
       });
     }
+    const sourceFixture = createRepositorySourceFixture(
+      createGitHubRepositorySource(readRuntimeConfig, refresh),
+    );
+    const sources = createRepositorySources(new AbortController().signal, sourceFixture.registry);
+    const performCheckout = checkoutTransfers.performRepositoryCheckout;
+    let retainedStart: Parameters<typeof performCheckout>[1]["start"] | undefined;
+    vi.spyOn(checkoutTransfers, "performRepositoryCheckout").mockImplementation(
+      (transfer, credential) => {
+        retainedStart = credential.start;
+        return performCheckout(transfer, credential);
+      },
+    );
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const harness = await createHarness(support.testState.stateDb, placements, {
       requiresNodeEnrollment: true,
+      getRepositorySources: () => sources,
       resolveWorkspace: async () => ({ kind: "repository", repository }),
     });
-    const originalIntent = harness.environments.prepareProjectIntent;
-    let retainedIdentity: Awaited<ReturnType<typeof prepareRepositoryGitHubIdentity>> | undefined;
-    harness.environments.prepareProjectIntent = async (workerProfileId, request) => {
-      retainedIdentity = await prepareRepositoryGitHubIdentity("main", request!.assertCurrent!, {
-        readNativeCredential: request?.readNativeCredential,
-        repositoryUrl: repository.url,
-      });
-      return originalIntent(workerProfileId, request);
-    };
     // Only allocation and tunnel transport are synthetic; Git, admission, checkpoint, and placement owners run normally.
     const originalTunnel = harness.environments.startTunnel;
     harness.environments.startTunnel = async (request) => ({
@@ -400,7 +415,7 @@ for (const kind of ["pat", "oauth", "native"] as const) {
       expect(result.state).toBe("active");
       const retiredEffect = path.join(root, "retired-effect");
       await expect(
-        retainedIdentity!.start(() => fs.writeFile(retiredEffect, "must not be written")),
+        retainedStart!(() => fs.writeFile(retiredEffect, "must not be written")),
       ).rejects.toThrow("released");
       await expect(fs.stat(retiredEffect)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await fs.readFile(path.join(result.remoteWorkspaceDir!, "tracked.txt"), "utf8")).toBe(

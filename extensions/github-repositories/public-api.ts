@@ -9,6 +9,7 @@ import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderSection,
 } from "openclaw/plugin-sdk/control-ui-link-reader";
+import { createLazyFacadeObjectValue } from "openclaw/plugin-sdk/facade-loader";
 import { isBundledPluginEnabled } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { readGitHubConfig } from "./config-api.js";
@@ -260,7 +261,7 @@ type GitHubTransportApi = Omit<
 
 // Reader and native HTTP consumers share one library and cooldown owner.
 // Importing this public artifact never registers tools or activates the plugin.
-export const gitHubPublicApi: GitHubPublicApi = (() => {
+export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() => {
   const library: GitHubTransportApi = readerApi;
   const resolveScope = (env: NodeJS.ProcessEnv = process.env, host?: string) => {
     const config = getRuntimeConfigSnapshot();
@@ -394,4 +395,4 @@ export const gitHubPublicApi: GitHubPublicApi = (() => {
       );
     },
   };
-})();
+});

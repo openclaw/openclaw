@@ -5,25 +5,25 @@ import type {
   ControlUiContributionSettingsSnapshot as ControlUiSettingsSnapshot,
   ControlUiContributedSettingsView as ControlUiSettingsView,
 } from "openclaw/plugin-sdk/control-ui";
-import { createSignal, onSettled } from "solid-js";
+import { createSignal, onSettled, untrack } from "solid-js";
 import {
   GitHubConnections,
   createIdentityDependencies,
   type SettingsSource,
 } from "./github-connections.tsx";
-import { GitHubIdentity } from "./github-identity-view.tsx";
-import { createGitHubIdentity } from "./github-identity.ts";
+import { GitHubIdentity, createGitHubIdentityView } from "./github-identity-view.tsx";
 import { SettingsContext, english } from "./i18n.ts";
 import { mountPluginContent } from "./render-owned.ts";
 import { readSettingsIdentityConfig } from "./settings-config.ts";
 
 export const pluginId = "github-repositories";
 function AgentIdentity(props: { context: ControlUiSettingsContextV2; source: SettingsSource }) {
-  const deps = createIdentityDependencies(props.context);
-  const identity = createGitHubIdentity(deps);
+  const context = untrack(() => props.context);
+  const deps = createIdentityDependencies(context);
+  const identity = createGitHubIdentityView(deps);
   let profileId: string | null = null;
   const sync = () => {
-    const snapshot = props.source.read();
+    const snapshot = untrack(() => props.source.read());
     if (snapshot.profile !== undefined) {
       profileId = snapshot.profile?.id ?? null;
     }
@@ -39,7 +39,7 @@ function AgentIdentity(props: { context: ControlUiSettingsContextV2; source: Set
             scope: "agent",
             profileId,
             agentId: snapshot.agentId,
-            config: readSettingsIdentityConfig(props.context, snapshot.agentId),
+            config: readSettingsIdentityConfig(context, snapshot.agentId),
           }
         : null,
       statusReadable: snapshot.canRead === true && has("tools.github.status"),

@@ -12,6 +12,7 @@ import { Icon } from "../components/solid/icon.tsx";
 import { LazyViewError } from "../components/solid/lazy-view-error.tsx";
 import { Menu, type MenuEntry } from "../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../components/solid/panel-loading-skeleton.tsx";
+import { SettingsToggle } from "../components/solid/settings-toggle.tsx";
 import { createTextOverflow } from "../components/solid/text-overflow.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
@@ -149,6 +150,16 @@ export function createControlUiPresentationHost(
       active();
       registerControlUiEnglish(catalog);
     },
+    mountToggle: (container, initial) =>
+      mount(container, initial, (props) => (
+        <SettingsToggle
+          {...props}
+          onChange={(checked) => {
+            active();
+            return props.onChange(checked);
+          }}
+        />
+      )),
     mountIcon: (container, initial) =>
       mount(container, initial, (props) => (
         <Icon name={iconName(props.name)} class={props.className} />

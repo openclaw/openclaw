@@ -2,7 +2,7 @@ import path from "node:path";
 import {
   resolveConfiguredGitHubHost,
   parseProjectGitUrl,
-} from "../../../extensions/github-repositories/api.js";
+} from "../../../extensions/github-repositories/runtime-api.js";
 import {
   ErrorCodes,
   errorShape,

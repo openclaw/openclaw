@@ -1,9 +1,5 @@
 import { expect, vi } from "vitest";
 import { repositorySessionPrTarget } from "../../extensions/github-repositories/control-ui-session-pr-read-api.js";
-import {
-  spyOnSessionPrLoader,
-  type SessionPrLoader,
-} from "../../extensions/github-repositories/control-ui-session-pr-subscriptions.test-support.js";
 import { startGitHubSessionPresentation } from "../../extensions/github-repositories/session-presentation-service-api.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -24,6 +20,11 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
 import { createRepositorySessionReadHost } from "./control-ui-session-pr-runtime.js";
+import { prepareSelectedRepositorySessionRead } from "./control-ui-session-pr-source.js";
+import {
+  spyOnSessionPrLoader,
+  type SessionPrLoader,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { installGitHubAccountRpcFixture } from "./github-account-service.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
@@ -38,7 +39,10 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
+import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 
 const METHOD = "controlUi.sessionPullRequests.subscribe";
@@ -308,5 +312,92 @@ export async function withDefaultLoader(
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  }
+}
+
+/** Loader fixtures use the host's session routing, not vendor-specific key parsing. */
+export function resolveSessionPrFixtureRequest(
+  params: { sessionKey: string; agentId?: string },
+  cfg = getRuntimeConfig(),
+) {
+  const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
+  if (!requested.ok) {
+    throw new Error(requested.error.message);
+  }
+  const agentId = requested.agentId;
+  return {
+    agentId,
+    sessionKey: resolveSessionStoreKey({
+      cfg,
+      sessionKey: params.sessionKey,
+      storeAgentId: agentId,
+    }),
+  };
+}
+
+export async function recordSessionPrFixtureCheckout(
+  params: { sessionKey: string; agentId: string },
+  root: string,
+) {
+  const current = await loadGatewaySessionEntryReadOnlyAsync(params.sessionKey, {
+    agentId: params.agentId,
+  });
+  if (current.entry?.spawnedCwd !== root) {
+    await upsertSessionEntryCore(params, { spawnedCwd: root });
+  }
+}
+
+/** Retain the real host session, repository and physical source through the fixture's final read. */
+export async function prepareSessionPrFixtureRead(params: {
+  sessionKey: string;
+  agentId?: string;
+}) {
+  const initial = await loadGatewaySessionEntryReadOnlyAsync(params.sessionKey, {
+    agentId: params.agentId,
+  });
+  const workspace = initial.entry?.repositoryWorkspaceId
+    ? await getSessionRepositoryWorkspaceStore().prepare(initial.entry.repositoryWorkspaceId)
+    : undefined;
+  const selected = await loadGatewaySessionEntryReadOnlyAsync(params.sessionKey, {
+    agentId: params.agentId,
+  });
+  const facts = await prepareSessionMutationFacts({
+    cfg: getRuntimeConfig(),
+    sessionKey: params.sessionKey,
+    agentId: selected.agentId,
+  });
+  const original = facts.readCurrent(getRuntimeConfig()).target.entry;
+  const assertCurrent = () => {
+    const current = facts.readCurrent(getRuntimeConfig()).target.entry;
+    if (
+      current.sessionId !== original.sessionId ||
+      current.lifecycleRevision !== original.lifecycleRevision
+    ) {
+      throw new Error("Session pull-request target changed");
+    }
+  };
+  try {
+    const repository = workspace?.current();
+    const read = prepareSelectedRepositorySessionRead(
+      selected,
+      repository &&
+        repository.workspaceId === selected.entry?.repositoryWorkspaceId &&
+        repository.agentId === selected.agentId &&
+        repository.sessionKey === selected.canonicalKey
+        ? repository
+        : null,
+      { assertCurrent, runSource: (run) => run() },
+    );
+    if (!read) {
+      facts.release();
+      return undefined;
+    }
+    return {
+      read: { ...read, boundPullRequest: selected.entry?.worktree?.githubPullRequest },
+      release: facts.release,
+    };
+  } catch (error) {
+    facts.release();
+    throw error;
   }
 }

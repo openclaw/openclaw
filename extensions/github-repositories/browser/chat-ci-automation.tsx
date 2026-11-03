@@ -1,9 +1,9 @@
 import type { CronJob } from "@openclaw/gateway-protocol";
 /** @jsxImportSource @solidjs/web */
 import { For, Show, type Element } from "solid-js";
+import type { CiAutomationOption, CiAutomationOptions } from "../session-pr-automation-api.ts";
 import { Icon, SettingsToggle, type MenuControls } from "./presentation-components.tsx";
 import { presentationTranslator } from "./presentation-context.ts";
-import type { CiAutomationOption, CiAutomationOptions } from "./session-pr-automation-spec.ts";
 import type { CiAutomationJobs } from "./session-pr-automation.ts";
 
 export type ChatCiAutomationProps = {

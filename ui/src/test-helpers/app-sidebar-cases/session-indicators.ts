@@ -1,5 +1,5 @@
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "@openclaw/gateway-protocol";
 import { describe, expect, it, vi } from "vitest";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../../extensions/github-repositories/browser/api.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";

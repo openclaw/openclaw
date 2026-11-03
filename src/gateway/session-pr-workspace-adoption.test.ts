@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import "../config/sessions/session-entry-patch-delivery.test-support.js";
 import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
-import { createGitHubPublicationProvider } from "../../extensions/github-repositories/api.js";
+import { createGitHubPublicationProvider } from "../../extensions/github-repositories/runtime-api.js";
 import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";

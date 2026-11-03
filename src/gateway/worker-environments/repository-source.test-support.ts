@@ -22,7 +22,7 @@ export function createRepositorySourcesFixture(
 }
 
 /** A local Git transport substitutes I/O for this admitted synthetic remote source. */
-export function createLocalRepositorySourcesFixture() {
+export function createLocalRepositorySourcesFixture(repositoryUrl?: string) {
   const lifetime = new AbortController();
   const unsupported = async (): Promise<never> => {
     throw new Error("Local fixture supports checkout only");
@@ -30,7 +30,7 @@ export function createLocalRepositorySourcesFixture() {
   const fixture = createRepositorySourceFixture({
     id: "local",
     resolve(url) {
-      return url.startsWith("https://repository-fixture.test/")
+      return url === repositoryUrl || url.startsWith("https://repository-fixture.test/")
         ? { url, name: "local fixture" }
         : undefined;
     },

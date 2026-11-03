@@ -6,13 +6,13 @@ import type {
 } from "openclaw/plugin-sdk/control-ui";
 import { createMemo, createSignal, onSettled, untrack } from "solid-js";
 import {
+  createGitHubIdentityView,
   GitHubConnectionError,
   GitHubConnectionSetup,
   GitHubDetails,
   GitHubHealth,
   GitHubUnloadedStatus,
 } from "./github-identity-view.tsx";
-import { createGitHubIdentityView } from "./github-identity-view.tsx";
 import { translator } from "./i18n.ts";
 import {
   SettingsRow,
@@ -35,13 +35,14 @@ export function createIdentityDependencies(context: ControlUiSettingsContext) {
     confirm: context.confirm,
     formatError: context.formatError,
     runExternalMutation,
+    projectOwner: context.projectOwner,
   };
 }
 export function GitHubConnections(props: {
   context: ControlUiSettingsContext;
   source: SettingsSource;
 }) {
-  const context = props.context;
+  const context = untrack(() => props.context);
   const t = translator(context);
   // The mounted owner captures its initial identity; later replacements arrive through sync.
   const initial = untrack(() => context.props);
@@ -57,7 +58,7 @@ export function GitHubConnections(props: {
   let previousCanRead = initial.canRead === true;
   let previousCanAdmin = initial.canAdmin === true;
   const syncIdentities = () => {
-    const current = props.source.read();
+    const current = untrack(() => props.source.read());
     const profileId =
       current.profile === undefined ? observedProfileId : (current.profile?.id ?? null);
     const canRead = current.canRead === true;

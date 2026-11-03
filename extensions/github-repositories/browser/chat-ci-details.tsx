@@ -5,7 +5,19 @@ import type {
   ControlUiSessionPullRequestCheckDetails,
   ControlUiSessionPullRequestCheckStep,
 } from "@openclaw/gateway-protocol";
-import { For, Show, createMemo, createStore, useContext, createEffect } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createSignal,
+  createStore,
+  useContext,
+  createEffect,
+  isPending,
+  latest,
+} from "solid-js";
 import { createCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclosure.ts";
 import { RepositoryCiContext } from "./ci-context.ts";
 import type { MenuControls } from "./presentation-components.tsx";
@@ -22,6 +34,7 @@ export function ChatCiDetails(props: ChatCiDetailsProps) {
   const formatDurationCompact = presentation.formatDuration;
   const formatUiError = presentation.formatError;
   const resolveSafeExternalUrl = presentation.safeExternalUrl;
+  const t = presentationTranslator();
   let hostElement!: HTMLElement;
   const REFRESH_MS = 30_000;
   const CHECK_ORDER = { failed: 0, running: 1, passed: 2, skipped: 3 } as const;
@@ -54,7 +67,6 @@ export function ChatCiDetails(props: ChatCiDetailsProps) {
   } as const;
 
   function CheckStatus(input: { state: CheckState }) {
-    const t = presentationTranslator();
     const label = () => t(CHECK_PRESENTATION[input.state][0]);
     return (
       <span
@@ -95,28 +107,22 @@ export function ChatCiDetails(props: ChatCiDetailsProps) {
       : "";
   }
 
-  /** Presentation-only details: the Gateway owns GitHub discovery, joins, and caching. */
-  type DetailsState = {
-    loading: boolean;
-    result: ControlUiSessionPullRequestCheckDetails | undefined;
-    error: string | null;
-    retryAt: number;
-    expandedJobs: Record<number, boolean>;
-  };
-
-  function createCiDetails() {
-    const t = presentationTranslator();
+  type DetailsState = { retryAt: number; expandedJobs: Record<number, boolean> };
+  function Content() {
     const [state, setState] = createStore<DetailsState>({
-      loading: false,
-      result: undefined,
-      error: null,
       retryAt: 0,
       expandedJobs: {},
     });
+    let boundRequests: typeof services.requests | undefined;
+    const [receipt, setReceipt] = createSignal(
+      Promise.resolve<ControlUiSessionPullRequestCheckDetails | undefined>(undefined),
+    );
+    const read = createMemo(() => receipt());
+    const [scopeRevision, setScope] = createSignal(0);
+    let accepted: ControlUiSessionPullRequestCheckDetails | undefined;
     let target = "";
     let sessionKey = "";
     let stopGateway: (() => void) | undefined;
-    let boundRequests: typeof services.requests | undefined;
     let requestController: AbortController | undefined;
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
     let expansionInitialized = false;
@@ -136,6 +142,9 @@ export function ChatCiDetails(props: ChatCiDetailsProps) {
     );
 
     function bindGateway() {
+      if (boundRequests === services.requests) {
+        return;
+      }
       boundRequests = services.requests;
       stopGateway?.();
       const gateway = services.requests;
@@ -188,16 +197,15 @@ export function ChatCiDetails(props: ChatCiDetailsProps) {
       requestController = undefined;
       clearTimeout(refreshTimer);
       refreshTimer = undefined;
-      setState((draft) => {
-        draft.loading = false;
-      });
+      void setReceipt(Promise.resolve(accepted));
     }
 
     function reset() {
       cancelRequest();
+      accepted = undefined;
+      void setReceipt(Promise.resolve(undefined));
+      setScope((value) => value + 1);
       setState((draft) => {
-        draft.result = undefined;
-        draft.error = null;
         draft.retryAt = 0;
         draft.expandedJobs = {};
       });
@@ -205,16 +213,16 @@ export function ChatCiDetails(props: ChatCiDetailsProps) {
     }
 
     function handleVisibility() {
-      const visible = disclosure.visible();
-      previousVisibility = visible;
-      if (visible) {
-        void load();
+      // Native toggle receipts also update the input observer's visibility baseline.
+      previousVisibility = disclosure.visible();
+      if (previousVisibility) {
+        load();
       } else {
         cancelRequest();
       }
     }
 
-    async function load(): Promise<void> {
+    function load(): void {
       if (!disclosure.visible() || requestController) {
         return;
       }
@@ -223,82 +231,86 @@ export function ChatCiDetails(props: ChatCiDetailsProps) {
         return;
       }
       const pr = props.pullRequest;
-      const scope = services.requests?.capture();
+      const scope = services.requests.capture();
       if (!scope || !services.requests || !pr?.headSha || !props.sessionKey) {
-        setState((draft) => {
-          draft.error = t("chat.pullRequests.checksUnavailable");
-        });
+        const result = Promise.reject(new Error(t("chat.pullRequests.checksUnavailable")));
+        void setReceipt(result);
+        void result.catch(() => {});
         return;
       }
       clearTimeout(refreshTimer);
       const controller = new AbortController();
+      const client = scope;
+      const params = {
+        sessionKey: props.sessionKey,
+        owner: pr.owner,
+        repo: pr.repo,
+        number: pr.number,
+        headSha: pr.headSha,
+      };
       requestController = controller;
-      setState((draft) => {
-        draft.loading = true;
-        draft.error = null;
-      });
       const input = { sessionKey: props.sessionKey, pullRequest: props.pullRequest };
       const current = () =>
         services.isCurrent(input) &&
         disclosure.visible() &&
         requestController === controller &&
         scope.isCurrent();
-      try {
-        const result = await scope.request<ControlUiSessionPullRequestCheckDetails>(
-          "controlUi.sessionPullRequests.checks",
-          {
-            sessionKey: props.sessionKey,
-            owner: pr.owner,
-            repo: pr.repo,
-            number: pr.number,
-            headSha: pr.headSha,
-          },
-          { signal: controller.signal },
-        );
-        if (!current()) {
-          return;
-        }
-        const retryAt =
-          Date.now() + Math.max(0, result.retryAfterMs ?? (result.rateLimited ? 60_000 : 0));
-        setState((draft) => {
-          draft.result = result;
-          draft.retryAt = retryAt;
-          if (!expansionInitialized && result.checks.length > 0) {
-            expansionInitialized = true;
-            const first = result.checks
-              .toSorted((a, b) => CHECK_ORDER[a.state] - CHECK_ORDER[b.state])
-              .find((check) => check.state === "failed" || check.state === "running");
-            if (first) {
-              draft.expandedJobs[first.id] = true;
-            }
+      const pending = request();
+      void setReceipt(pending);
+      // The read boundary observes failures even if this disclosure closes first.
+      void pending.catch(() => {});
+
+      async function request(): Promise<ControlUiSessionPullRequestCheckDetails | undefined> {
+        try {
+          const result = await client.request<ControlUiSessionPullRequestCheckDetails>(
+            "controlUi.sessionPullRequests.checks",
+            params,
+            { signal: controller.signal },
+          );
+          if (!current()) {
+            return accepted;
           }
-          const ids = new Set(result.checks.map((check) => check.id));
-          for (const id of Object.keys(draft.expandedJobs)) {
-            if (!ids.has(Number(id))) {
-              delete draft.expandedJobs[Number(id)];
+          accepted = result;
+          const retryAt =
+            Date.now() + Math.max(0, result.retryAfterMs ?? (result.rateLimited ? 60_000 : 0));
+          setState((draft) => {
+            draft.retryAt = retryAt;
+            if (!expansionInitialized && result.checks.length > 0) {
+              expansionInitialized = true;
+              const first = result.checks
+                .toSorted((a, b) => CHECK_ORDER[a.state] - CHECK_ORDER[b.state])
+                .find((check) => check.state === "failed" || check.state === "running");
+              if (first) {
+                draft.expandedJobs[first.id] = true;
+              }
             }
+            const ids = new Set(result.checks.map((check) => check.id));
+            for (const id of Object.keys(draft.expandedJobs)) {
+              if (!ids.has(Number(id))) {
+                delete draft.expandedJobs[Number(id)];
+              }
+            }
+          });
+          if (retryAt > Date.now()) {
+            scheduleRetryAvailability(retryAt);
+          } else if (result.status === "ready") {
+            // Completed jobs can be rerun on the same head without changing the summary counts.
+            refreshTimer = setTimeout(load, REFRESH_MS);
           }
-        });
-        if (retryAt > Date.now()) {
-          scheduleRetryAvailability(retryAt);
-        } else if (result.status === "ready") {
-          // Completed jobs can be rerun on the same head without changing the summary counts.
-          refreshTimer = setTimeout(() => void load(), REFRESH_MS);
-        }
-      } catch (error) {
-        if (current()) {
-          // Only explicit stale responses authorize retaining previous details.
-          setState((draft) => {
-            draft.result = undefined;
-            draft.error = formatUiError(error, t("chat.pullRequests.checksUnavailable"));
-          });
-        }
-      } finally {
-        if (current()) {
-          requestController = undefined;
-          setState((draft) => {
-            draft.loading = false;
-          });
+          return result;
+        } catch (error) {
+          if (current()) {
+            // Only explicit stale responses authorize retaining previous details.
+            accepted = undefined;
+            throw new Error(formatUiError(error, t("chat.pullRequests.checksUnavailable")), {
+              cause: error,
+            });
+          }
+          return accepted;
+        } finally {
+          if (current()) {
+            requestController = undefined;
+          }
         }
       }
     }
@@ -314,30 +326,14 @@ export function ChatCiDetails(props: ChatCiDetailsProps) {
         Math.min(2_147_483_647, Math.max(0, retryAt - Date.now())),
       );
     }
-    return {
-      state,
-      load,
-      syncInputs,
-      setExpanded: (id: number, open: boolean) => {
-        setState((draft) => {
-          draft.expandedJobs[id] = open;
-        });
-      },
-    };
-  }
 
-  function Content() {
-    const t = presentationTranslator();
-    const retryRef = createMemo(() => props.controls?.ref());
-    const skippedRef = createMemo(() => props.controls?.ref());
-    const model = createCiDetails();
     createEffect(
       () => [services.requests, props.sessionKey, props.pullRequest, props.presented, props.inline],
-      () => model.syncInputs(),
+      () => syncInputs(),
     );
-    const state = model.state;
     const retryWait = () => Math.max(0, state.retryAt - Date.now());
-    const result = () => state.result;
+    const result = createMemo(() => latest(read));
+    const loading = createMemo(() => isPending(read));
     const checks = () => result()?.checks ?? [];
     const jobs = () =>
       checks()
@@ -347,12 +343,9 @@ export function ChatCiDetails(props: ChatCiDetailsProps) {
     const showNotice = () =>
       result()?.rateLimited ||
       result()?.status === "stale" ||
-      state.error ||
       result()?.status === "unavailable" ||
       result()?.error;
     const job = (check: () => ControlUiSessionPullRequestCheck) => {
-      const summaryRef = createMemo(() => props.controls?.ref());
-      const linkRef = createMemo(() => props.controls?.ref());
       const jobState = (): CheckState =>
         check().state === "running" && check().status !== "in_progress" ? "queued" : check().state;
       const url = () =>
@@ -369,21 +362,29 @@ export function ChatCiDetails(props: ChatCiDetailsProps) {
             if (event.target !== event.currentTarget) {
               return;
             }
-            model.setExpanded(check().id, event.currentTarget.open);
+            const id = check().id;
+            const open = event.currentTarget.open;
+            setState((draft) => {
+              draft.expandedJobs[id] = open;
+            });
           }}
         >
-          <summary
-            ref={(element) => summaryRef()?.(element)}
-            class="chat-ci__job-summary"
-            data-form-control={props.menuControls ? "" : undefined}
-          >
-            <CheckStatus state={jobState()} />
-            <span class="chat-ci__name">{check().name}</span>
-            <span class="chat-ci__duration">{duration(check(), jobState() === "running")}</span>
-            <span class="chat-ci__chevron" aria-hidden="true">
-              <Icon name="chevronDown" />
-            </span>
-          </summary>
+          <Show when={{ ref: props.controls?.ref() }} keyed>
+            {(binding) => (
+              <summary
+                ref={binding.ref}
+                class="chat-ci__job-summary"
+                data-form-control={props.menuControls ? "" : undefined}
+              >
+                <CheckStatus state={jobState()} />
+                <span class="chat-ci__name">{check().name}</span>
+                <span class="chat-ci__duration">{duration(check(), jobState() === "running")}</span>
+                <span class="chat-ci__chevron" aria-hidden="true">
+                  <Icon name="chevronDown" />
+                </span>
+              </summary>
+            )}
+          </Show>
           <div class="chat-ci__job-detail">
             <Show
               when={check().steps?.length}
@@ -416,117 +417,151 @@ export function ChatCiDetails(props: ChatCiDetailsProps) {
             </Show>
             <Show when={url()}>
               {(href) => (
-                <a
-                  ref={(element) => linkRef()?.(element)}
-                  data-form-control={props.menuControls ? "" : undefined}
-                  class="chat-ci__job-link"
-                  href={href()}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {t(
-                    check().source === "actions"
-                      ? "chat.pullRequests.openJob"
-                      : "chat.pullRequests.openCheck",
+                <Show when={{ ref: props.controls?.ref() }} keyed>
+                  {(binding) => (
+                    <a
+                      ref={binding.ref}
+                      class="chat-ci__job-link"
+                      href={href()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {t(
+                        check().source === "actions"
+                          ? "chat.pullRequests.openJob"
+                          : "chat.pullRequests.openCheck",
+                      )}
+                      <Icon name="externalLink" />
+                    </a>
                   )}
-                  <Icon name="externalLink" />
-                </a>
+                </Show>
               )}
             </Show>
           </div>
         </details>
       );
     };
+    const notice = (error: () => string | undefined, retry: () => void) => (
+      <div
+        class="chat-ci__notice"
+        role="status"
+        data-state={!error() && result()?.rateLimited ? "rate-limited" : "unavailable"}
+      >
+        <span>
+          {error() ??
+            t(
+              result()?.rateLimited
+                ? "chat.pullRequests.checksRateLimited"
+                : result()?.status === "stale"
+                  ? "chat.pullRequests.checksStale"
+                  : "chat.pullRequests.checksUnavailable",
+            )}
+          {retryWait() > 0
+            ? t("chat.pullRequests.checksRetryAfter", {
+                duration: formatDurationCompact(retryWait()) ?? "",
+              })
+            : undefined}
+        </span>
+        <Show when={{ ref: props.controls?.ref() }} keyed>
+          {(binding) => (
+            <button
+              ref={binding.ref}
+              class="chat-ci__retry"
+              type="button"
+              disabled={loading() || retryWait() > 0}
+              onClick={() => retry()}
+            >
+              {t("common.retry")}
+            </button>
+          )}
+        </Show>
+      </div>
+    );
+    const loadingNotice = () => (
+      <div class="chat-ci__notice" role="status">
+        {t("chat.pullRequests.checksLoading")}
+      </div>
+    );
     return (
-      <>
-        <Show
-          when={state.loading && !result()}
+      <Errored
+        fallback={(error, resetError) => (
+          <>
+            {notice(
+              () => formatUiError(error()),
+              () => {
+                load();
+                resetError();
+              },
+            )}
+            <div class="chat-ci__jobs" aria-busy="false" />
+          </>
+        )}
+      >
+        <Loading
+          on={scopeRevision()}
           fallback={
-            <Show when={showNotice()}>
-              <div
-                class="chat-ci__notice"
-                role="status"
-                data-state={result()?.rateLimited ? "rate-limited" : "unavailable"}
-              >
-                <span>
-                  {state.error ??
-                    t(
-                      result()?.rateLimited
-                        ? "chat.pullRequests.checksRateLimited"
-                        : result()?.status === "stale"
-                          ? "chat.pullRequests.checksStale"
-                          : "chat.pullRequests.checksUnavailable",
-                    )}
-                  {retryWait() > 0
-                    ? t("chat.pullRequests.checksRetryAfter", {
-                        duration: formatDurationCompact(retryWait()) ?? "",
-                      })
-                    : undefined}
-                </span>
-                <button
-                  ref={(element) => retryRef()?.(element)}
-                  class="chat-ci__retry"
-                  type="button"
-                  disabled={state.loading || retryWait() > 0}
-                  onClick={() => {
-                    void model.load();
-                  }}
-                >
-                  {t("common.retry")}
-                </button>
-              </div>
-            </Show>
+            <>
+              {loadingNotice()}
+              <div class="chat-ci__jobs" aria-busy="true" />
+            </>
           }
         >
-          <div class="chat-ci__notice" role="status">
-            {t("chat.pullRequests.checksLoading")}
-          </div>
-        </Show>
-        <div class="chat-ci__jobs" aria-busy={state.loading ? "true" : "false"}>
-          <For each={jobs()} keyed={(check) => check.id}>
-            {job}
-          </For>
-          <Show when={skipped().length}>
-            <details class="chat-ci__skipped">
-              <summary
-                ref={(element) => skippedRef()?.(element)}
-                data-form-control={props.menuControls ? "" : undefined}
-              >
-                <CheckStatus state="skipped" />
-                <span>
-                  {t("chat.pullRequests.checksSkippedCount", { count: String(skipped().length) })}
-                </span>
-                <span class="chat-ci__chevron" aria-hidden="true">
-                  <Icon name="chevronDown" />
-                </span>
-              </summary>
-              <For each={skipped()} keyed={(check) => check.id}>
-                {job}
-              </For>
-            </details>
-          </Show>
           <Show
-            when={
-              result()?.status === "ready" &&
-              !checks().length &&
-              !result()?.rateLimited &&
-              !result()?.error
-            }
+            when={loading() && !result()}
+            fallback={<Show when={showNotice()}>{notice(() => undefined, load)}</Show>}
           >
-            <div class="chat-ci__notice">{t("chat.pullRequests.checksEmpty")}</div>
+            {loadingNotice()}
           </Show>
-        </div>
-      </>
+          <div class="chat-ci__jobs" aria-busy={loading() ? "true" : "false"}>
+            <For each={jobs()} keyed={(check) => check.id}>
+              {job}
+            </For>
+            <Show when={skipped().length}>
+              <details class="chat-ci__skipped">
+                <Show when={{ ref: props.controls?.ref() }} keyed>
+                  {(binding) => (
+                    <summary
+                      ref={binding.ref}
+                      data-form-control={props.menuControls ? "" : undefined}
+                    >
+                      <CheckStatus state="skipped" />
+                      <span>
+                        {t("chat.pullRequests.checksSkippedCount", {
+                          count: String(skipped().length),
+                        })}
+                      </span>
+                      <span class="chat-ci__chevron" aria-hidden="true">
+                        <Icon name="chevronDown" />
+                      </span>
+                    </summary>
+                  )}
+                </Show>
+                <For each={skipped()} keyed={(check) => check.id}>
+                  {job}
+                </For>
+              </details>
+            </Show>
+            <Show
+              when={
+                result()?.status === "ready" &&
+                !checks().length &&
+                !result()?.rateLimited &&
+                !result()?.error
+              }
+            >
+              <div class="chat-ci__notice">{t("chat.pullRequests.checksEmpty")}</div>
+            </Show>
+          </div>
+        </Loading>
+      </Errored>
     );
   }
-
   return (
     <openclaw-chat-ci-details ref={(node) => (hostElement = node)}>
       <Content />
     </openclaw-chat-ci-details>
   );
 }
-
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {

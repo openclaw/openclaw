@@ -1,7 +1,8 @@
 // Control UI tests cover the settings profile page against a mocked Gateway.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, type Page } from "playwright/test";
+import type { UserModelAccount } from "@openclaw/gateway-protocol";
+import { expect, type Page, type Locator } from "playwright/test";
 import { beforeEach, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {

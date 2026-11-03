@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { githubReferenceOptions } from "../test-helpers/github-text-references.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import { htmlFragment, withControlUiBasePath } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";

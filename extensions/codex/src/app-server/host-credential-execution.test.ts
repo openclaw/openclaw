@@ -2,12 +2,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "openclaw/plugin-sdk/plugin-test-contracts";
+import {
   createAgentHarnessHostCapabilitiesForTest,
   createMockPluginRegistry,
+  setActivePluginRegistry,
+  clearActivePluginRegistry,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import githubRepositories from "../../../github-repositories/index.js";
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import {
   buildDynamicToolsForTest,
@@ -29,6 +36,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   resetGlobalHookRunner();
+  clearActivePluginRegistry();
   await cleanupDynamicToolBuildFixture(root, closers);
 });
 
@@ -38,12 +46,19 @@ async function fixture(
   const params = createParams(path.join(root, "session.jsonl"), root);
   params.agentId = "main";
   params.disableTools = false;
+  const identity = { profileId: "ghp_11111111111111111111111111111111" };
   params.config = {
-    tools: {
-      exec: { host: "gateway", mode: options.mode ?? "full" },
-      github: { profileId: "ghp_11111111111111111111111111111111" },
-    },
+    tools: { exec: { host: "gateway", mode: options.mode ?? "full" } },
+    plugins: { entries: { "github-repositories": { config: { system: identity } } } },
   };
+  const registry = createPluginRegistryFixture(params.config);
+  registerVirtualTestPlugin({
+    ...registry,
+    id: "github-repositories",
+    name: "GitHub",
+    register: githubRepositories.register,
+  });
+  setActivePluginRegistry(registry.registry.registry);
   const { hostCapabilities: _unused, ...attempt } = params;
   const host = await createAgentHarnessHostCapabilitiesForTest({
     attempt,
@@ -69,7 +84,7 @@ async function fixture(
     { mode: 0o600 },
   );
   if (options.mutateSelection) {
-    params.config.tools!.github!.profileId = "ghp_22222222222222222222222222222222";
+    identity.profileId = "ghp_22222222222222222222222222222222";
   }
   const nativeExecutionPolicy = await prepareTestNativeExecutionPolicy(params);
   const native = shouldEnableCodexAppServerNativeToolSurface(params, undefined, {

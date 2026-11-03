@@ -8,16 +8,6 @@ import {
   createControlUiSessionPrRead,
   prepareControlUiSessionPrServiceTarget,
 } from "../../extensions/github-repositories/control-ui-session-pr-read-api.js";
-import {
-  createTestSessionPrReadSource,
-  createTestControlUiSessionPrSubscriptions as createControlUiSessionPullRequestSubscriptions,
-  spyOnSessionPrLoader,
-} from "../../extensions/github-repositories/control-ui-session-pr-subscriptions.test-support.js";
-import {
-  githubJson,
-  pullListItem,
-  requestUrl,
-} from "../../extensions/github-repositories/control-ui-session-prs.test-support.js";
 import { controlUiGitHubHandlers as controlUiHandlers } from "../../extensions/github-repositories/runtime-api.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -53,6 +43,12 @@ import {
   withDefaultLoader,
   type Load,
 } from "./control-ui-session-pr-access.test-support.js";
+import {
+  createTestSessionPrReadSource,
+  createTestControlUiSessionPrSubscriptions as createControlUiSessionPullRequestSubscriptions,
+  spyOnSessionPrLoader,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
+import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";

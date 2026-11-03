@@ -1,11 +1,12 @@
 import {
   GitHubBaseRefreshSchema,
-  GitHubPullRequestInspectSchema,
   GitHubPublicationActionSchema,
   GitHubPublicationEditSchema,
   GitHubPublicationEvidenceSchema,
   GitHubPublicationTitleSchema,
+  SessionGitHubPublishParamsSchema,
 } from "@openclaw/gateway-protocol";
+import { stringEnum } from "openclaw/plugin-sdk/core";
 import { Type } from "typebox";
 
 export const publicationOperatorActions = GitHubPublicationActionSchema.properties.action.anyOf.map(
@@ -13,6 +14,7 @@ export const publicationOperatorActions = GitHubPublicationActionSchema.properti
 );
 export const publicationWorkspaceActions = [
   "publish",
+  "readiness",
   "inspect_pr",
   "prepare_pr",
   "refresh_base",
@@ -26,14 +28,15 @@ export const githubPublishToolDefinition = {
   name: "github_publish",
   parameters: Type.Object(
     {
-      pullRequestUrl: Type.Optional(GitHubPullRequestInspectSchema.properties.pullRequestUrl),
+      publishingSessionKey: GitHubPublicationActionSchema.properties.publishingSessionKey,
       ...GitHubBaseRefreshSchema.properties,
       ...GitHubPublicationEditSchema.properties,
       evidence: Type.Optional(GitHubPublicationEvidenceSchema),
-      action: Type.Optional(Type.Enum(publicationWorkspaceActions, { type: "string" })),
+      action: Type.Optional(stringEnum(publicationWorkspaceActions)),
       title: Type.Optional(GitHubPublicationTitleSchema),
       body: GitHubPublicationEditSchema.properties.body,
       draft: Type.Optional(Type.Boolean()),
+      workspacePath: SessionGitHubPublishParamsSchema.properties.workspacePath,
     },
     { additionalProperties: false },
   ),

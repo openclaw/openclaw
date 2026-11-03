@@ -2,10 +2,10 @@
 
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, createUniqueId, Show } from "solid-js";
+import type { GitHubPublicationView } from "./github-publication-owner.ts";
 import type { PresentationValue } from "./native-context.tsx";
 import { projectPresentation } from "./native-context.tsx";
-import { Icon } from "./presentation-components.tsx";
-import { Menu, type MenuControls, type MenuEntry } from "./presentation-components.tsx";
+import { Icon, Menu, type MenuControls, type MenuEntry } from "./presentation-components.tsx";
 import { presentationTranslator } from "./presentation-context.ts";
 
 const avatarInitial = (login: string) =>
@@ -148,4 +148,26 @@ export function GitHubPublicationMenu(props: GitHubPublicationMenuProps) {
       }}
     />
   );
+}
+
+export function githubPublicationSourceLabel(
+  source: string,
+  t: ReturnType<typeof presentationTranslator>,
+): string {
+  return t(
+    source === "personal"
+      ? "githubPublication.personal"
+      : source === "agent-override"
+        ? "githubPublication.agent"
+        : "githubPublication.system",
+  );
+}
+
+export function githubPublicationAvatarUrl(
+  options: GitHubPublicationView["options"],
+  publisher: { source: string; accountId: number },
+): string | undefined {
+  const source = publisher.source === "personal" ? "personal" : "shared";
+  const offered = source === "personal" ? options?.personal?.account : options?.shared;
+  return offered?.accountId === publisher.accountId ? options?.avatarUrls?.[source] : undefined;
 }

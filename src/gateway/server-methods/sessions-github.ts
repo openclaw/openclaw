@@ -5,7 +5,7 @@ import {
   prepareCurrentGitHubPublicationOptionsIdentity,
   isGitHubPublicationSuperseded,
   GitHubIdentityError,
-} from "../../../extensions/github-repositories/api.js";
+} from "../../../extensions/github-repositories/runtime-api.js";
 import {
   ErrorCodes,
   type GatewayCoreRequestParams,

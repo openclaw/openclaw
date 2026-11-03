@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import {
   resolveGitHubHost,
   resolveGitHubApiBaseUrl,
-} from "../../extensions/github-repositories/api.js";
+} from "../../extensions/github-repositories/runtime-api.js";
 import type { GitHubCredentialReader } from "../agents/github-credential-reader.js";
 import { parseEnterpriseGitHubPrincipal } from "../shared/enterprise-github-principal.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";

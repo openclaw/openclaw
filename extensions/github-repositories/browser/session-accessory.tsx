@@ -6,7 +6,7 @@ import type {
   ControlUiHostV2,
   ControlUiSessionOperationFactory,
 } from "openclaw/plugin-sdk/control-ui";
-import { createMemo, createSignal } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import {
   ChatPullRequests,
   hasChatPullRequests,
@@ -28,17 +28,21 @@ import {
   browserDismissalStorage,
   listDismissedChatPullRequests,
   dismissChatPullRequest,
+  repositoryEnvironmentWork,
 } from "./pull-request-dismissal.ts";
 import { pullRequestEnglish } from "./pull-request-english.ts";
 import { mountPluginContent } from "./render-owned.ts";
+import { RepositoryEnvironment } from "./repository-environment.tsx";
 import type { RepositoryBrowserRuntime } from "./repository-runtime.ts";
 import { orderSessionPullRequests } from "./session-pull-request-presentation.ts";
 export function createSessionAccessoryMount(
   host: Pick<ControlUiHostV2, "native" | "presentation" | "sessions">,
   runtime: RepositoryBrowserRuntime,
+  environment = false,
 ): ControlUiSessionAccessory["mount"] {
   const factory = createPublicationFactory(host);
-  return (container, initial) => mountSessionAccessory(container, initial, factory, runtime);
+  return (container, initial) =>
+    mountSessionAccessory(container, initial, factory, runtime, undefined, environment);
 }
 export function createMobileSessionAccessoryMount(
   host: Pick<ControlUiHostV2, "native" | "presentation" | "sessions">,
@@ -55,6 +59,7 @@ function mountSessionAccessory(
   factory: ControlUiSessionOperationFactory<GitHubPublicationPresentationBinding>,
   runtime: RepositoryBrowserRuntime,
   mobile?: "root" | "page" | "activity",
+  environment = false,
 ) {
   let context = initial;
   const native = initial.host.native;
@@ -68,7 +73,10 @@ function mountSessionAccessory(
       return;
     }
     setRevision((value) => value + 1);
-    context.props.onPresenceChange?.(hasChatPullRequests(readPresentation(runtime.store.get(key))));
+    const value = readPresentation(runtime.store.get(key));
+    context.props.onPresenceChange?.(
+      environment ? Boolean(repositoryEnvironmentWork(value)) : hasChatPullRequests(value),
+    );
   }
   const locale = {
     ...presentation,
@@ -114,6 +122,7 @@ function mountSessionAccessory(
       status: snapshot?.status ?? "unavailable",
       publication: publication.view(),
       onDismiss: dismissPullRequest,
+      publishedOnly: !mobile && !environment,
     };
   }
   const currentPresentation = () => {
@@ -217,33 +226,67 @@ function mountSessionAccessory(
                 onRetry={() => runtime.store.refresh(key)}
               />
             ) : (
-              <ChatPullRequests
-                pullRequests={content().pullRequests}
-                branch={content().branch}
-                branchDismissed={content().branchDismissed}
-                status={content().status}
-                sessionKey={(revision(), key)}
-                sessionId={viewContext().props.facts?.session?.sessionId}
-                presented={viewContext().presented}
-                compact={viewContext().props.compact}
-                dismissed={viewContext().props.dismissed}
-                publication={content().publication}
-                onDismiss={dismissPullRequest}
-                onDismissBranch={(branch) => {
-                  if (!currentPresentation()) {
-                    return;
-                  }
-                  const id = chatBranchId(branch);
-                  const currentBranch = runtime.store.get(key)?.branch;
-                  if (!currentBranch || chatBranchId(currentBranch) !== id) {
-                    return;
-                  }
-                  context.signal.throwIfAborted();
-                  dismissChatPullRequest(browserDismissalStorage(), context.props.sessionKey, id);
-                  changed();
-                }}
-                onOpenSessionDiff={viewContext().props.onOpenSessionDiff}
-              />
+              <Show
+                when={environment}
+                fallback={
+                  <ChatPullRequests
+                    pullRequests={content().pullRequests}
+                    branch={content().branch}
+                    branchDismissed={content().branchDismissed}
+                    status={content().status}
+                    sessionKey={(revision(), key)}
+                    sessionId={viewContext().props.facts?.session?.sessionId}
+                    presented={viewContext().presented}
+                    compact={viewContext().props.compact}
+                    dismissed={viewContext().props.dismissed}
+                    publication={content().publication}
+                    onDismiss={dismissPullRequest}
+                    onDismissBranch={(branch) => {
+                      if (!currentPresentation()) {
+                        return;
+                      }
+                      const id = chatBranchId(branch);
+                      const currentBranch = runtime.store.get(key)?.branch;
+                      if (!currentBranch || chatBranchId(currentBranch) !== id) {
+                        return;
+                      }
+                      context.signal.throwIfAborted();
+                      dismissChatPullRequest(
+                        browserDismissalStorage(),
+                        context.props.sessionKey,
+                        id,
+                      );
+                      changed();
+                    }}
+                    onOpenSessionDiff={viewContext().props.onOpenSessionDiff}
+                    publishedOnly
+                  />
+                }
+              >
+                <RepositoryEnvironment
+                  {...content()}
+                  worktree={Boolean(viewContext().props.facts?.session?.worktree)}
+                  sessionKey={(revision(), key)}
+                  presented={viewContext().presented}
+                  onOpenSessionDiff={viewContext().props.onOpenSessionDiff}
+                  onDismissBranch={(branch) => {
+                    if (!currentPresentation()) {
+                      return;
+                    }
+                    const current = runtime.store.get(key)?.branch;
+                    if (!current || chatBranchId(current) !== chatBranchId(branch)) {
+                      return;
+                    }
+                    context.signal.throwIfAborted();
+                    dismissChatPullRequest(
+                      browserDismissalStorage(),
+                      context.props.sessionKey,
+                      chatBranchId(branch),
+                    );
+                    changed();
+                  }}
+                />
+              </Show>
             )}
           </RepositoryCiContext>
         </NativeContext>

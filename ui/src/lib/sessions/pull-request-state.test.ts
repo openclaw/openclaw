@@ -17,6 +17,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { interrupted as personalReview } from "../../pages/chat/chat-github-publication.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { sessionRequest } from "./hydration-family.test-support.ts";
 import {
   createGatewayHarness as baseGateway,
   createTestSessionCapability,

@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import * as cloneRuntime from "../../../extensions/github-repositories/project-clone-runtime-api.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import * as sessionEntries from "../../config/sessions/session-accessor.js";
 import type { WorkerRetentionObservation } from "../../plugins/worker-retention.types.js";
-import * as cloneRuntime from "../../projects/project-clone-runtime.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -23,6 +23,7 @@ import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { writePlacementEnvironmentFixture } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { createRepositorySourcesFixture } from "./repository-source.test-support.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import { createProvider } from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
@@ -35,13 +36,7 @@ import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 import { useRepositoryWorkspaceResultFixture } from "./workspace-result-repository.test-support.js";
 
 // mock-isolation: Git and node transfer use a local origin, never a live GitHub identity.
-vi.mock("./repository-github-identity.js", () => ({
-  prepareRepositoryGitHubIdentity: async (_agentId: string, assertCurrent: () => void) => ({
-    token: undefined,
-    assertSelected: assertCurrent,
-    start: async (start: () => Promise<unknown>) => await start(),
-  }),
-}));
+
 const { fixture } = useRepositoryWorkspaceResultFixture();
 const url = "https://github.com/synthetic/disk-move-fixture.git";
 
@@ -276,6 +271,7 @@ it.each([
         placements,
         environments,
         getConfig: getRuntimeConfig,
+        getRepositorySources: () => createRepositorySourcesFixture(getRuntimeConfig),
       }),
       runMoveBarrier: async (
         request: Parameters<ReturnType<typeof createGatewayWorkerPlacementMoveBarrier>>[0],

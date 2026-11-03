@@ -18,7 +18,7 @@ import {
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
 import { catalogReadMethod } from "../../lib/sessions/catalog-read-method.ts";
-import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";

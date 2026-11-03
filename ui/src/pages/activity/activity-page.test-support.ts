@@ -52,7 +52,7 @@ export function createActivityContext(
   capabilities: Pick<ApplicationContext, "sessions" | "agents" | "agentIdentity">,
   basePath = "",
 ): ApplicationContext {
-  const context = Object.assign(new UnavailableActivityCapabilities(), {
+  const context: ApplicationContext = Object.assign(new UnavailableActivityCapabilities(), {
     gateway: source,
     ...capabilities,
     basePath,

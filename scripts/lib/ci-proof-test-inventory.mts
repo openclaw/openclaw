@@ -4076,7 +4076,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/chat/components/chat-pane-header.test.ts",
   "ui/src/pages/chat/components/chat-picker-overlay.test.ts",
   "ui/src/pages/chat/components/chat-position-rail.test.tsx",
-  "extensions/github-repositories/browser/chat-pull-requests.browser.test.tsx",
+  "ui/src/plugins/github-repositories-integration/chat-pull-requests.browser.test.tsx",
   "ui/src/pages/chat/components/chat-session-workspace.test.ts",
   "ui/src/pages/chat/components/chat-sidebar-region.test.ts",
   "ui/src/pages/chat/components/chat-text-attachment.browser.test.ts",

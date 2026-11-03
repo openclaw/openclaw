@@ -1,11 +1,12 @@
-const repositories = {
+export const repositoryEnglish = {
   chat: {
     pullRequests: {
       linkLabel: "Pull request {reference}: {title}",
       createPr: "Create PR",
-      createPrLabel: "Create a pull request for {branch}",
+      createPrLabel: "{label} for {branch}",
       publishPr: "Publish PR",
       publishing: "Publishing…",
+      creating: "Creating…",
       publicationRequested: "Requested",
       retryPublication: "Retry publication",
       openPublishedPr: "Open PR",
@@ -29,6 +30,7 @@ const repositories = {
       checksRunning: "Running",
       checksSkipped: "Skipped",
       checksTitle: "Checks",
+      automationNoChecks: "No CI checks reported.",
       codeChanges: "Code changes",
       status: "Status",
       rateLimitedShort: "GitHub is limiting updates. PR info may be outdated.",
@@ -38,7 +40,7 @@ const repositories = {
       copyLink: "Copy PR link",
       linkCopied: "PR link copied",
       copyFailed: "Couldn’t copy the PR link. Try again.",
-      hide: "Hide from this session",
+      hide: "Hide",
       details: "Pull request details",
       changedFiles: "{count} files",
       couldNotUpdate: "Couldn’t update this pull request",
@@ -91,7 +93,7 @@ const repositories = {
     },
   },
 };
-const ci = {
+export const ciEnglish = {
   chat: {
     pullRequests: {
       checksQueued: "Queued",
@@ -126,7 +128,6 @@ const ci = {
       automationScheduleDisabled: "Automatically disabled after {count} scheduling errors.",
       automationFailureDisabled: "Automatically disabled after {count} failed runs.",
       automationLastError: "Last error: {error}",
-      automationNoChecks: "No CI checks reported.",
       automationRetry: "Try again",
     },
   },
@@ -136,7 +137,7 @@ export const pullRequestEnglish = {
     pullRequests: "Pull requests",
     taskBranch: "Task branch: {branch}",
     stateUnavailable: "Status unavailable",
-    morePullRequests: "{count} more pull requests",
+    morePullRequests: "{count} more",
     pullRequestLabel: "Pull request #{number}, {state}",
     pullRequestAuthorLabel: "Opened by {login}",
     states: {
@@ -148,12 +149,13 @@ export const pullRequestEnglish = {
     checks: {
       passing: "CI checks passing",
       failing: "CI checks failing",
+      failingCount: "{count} failing",
       pending: "CI checks running",
     },
   },
   sessionsView: { pullRequestCount: "{count} pull requests" },
   chat: {
-    ...repositories.chat,
-    pullRequests: { ...repositories.chat.pullRequests, ...ci.chat.pullRequests },
+    ...repositoryEnglish.chat,
+    pullRequests: { ...repositoryEnglish.chat.pullRequests, ...ciEnglish.chat.pullRequests },
   },
 };

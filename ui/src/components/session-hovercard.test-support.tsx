@@ -48,7 +48,7 @@ export function renderRepositoryHovercard(
               selfUserId={current().selfUserId}
               avatarAuth={current().avatarAuth}
               personActivity={current().personActivity}
-              automationLink={current().automationLink}
+              connected={current().connected}
               session={
                 current().pullRequests
                   ? { sessionKey: "agent:main:work", agentId: "main" }

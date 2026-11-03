@@ -103,8 +103,6 @@ export const CORE_TOOL_DEFINITIONS = [
     ["conversations_turn"],
     ["sessions_send", { executionLocation: "gateway" }],
     ["sessions_spawn", { executionLocation: "gateway" }],
-    ["github_identity_status", { profiles: ["coding"] }],
-    ["github_publish", { profiles: ["coding"] }],
     ["agents_wait", { profiles: ["coding"] }],
     ["sessions_yield"],
     ["subagents"],

@@ -16,6 +16,7 @@ import { resolveNewSessionWhere } from "./preferences.ts";
 type DraftTargetContext = {
   place: {
     requiredPlacement: boolean;
+    remotePlacement: boolean;
     hostedEnvironment: unknown;
     devices: () => DevicePlacementOption[];
     worktree: boolean;

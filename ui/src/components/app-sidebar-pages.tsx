@@ -9,6 +9,7 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { PluginContributions } from "../plugins/control-ui-contributions.solid.tsx";
 import { renderAppSidebarPluginTab, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { McpAppCatalog } from "./mcp-app-catalog.tsx";
@@ -127,11 +128,11 @@ function renderAppSidebarPageEntry(
       <Show
         when={pluginTab()}
         fallback={
-          <openclaw-plugin-contributions
-            prop:kind={"navigation"}
-            prop:navigationKey={entry.key}
-            prop:navigationChildren={false}
-            prop:navigationMenus={host.sidebarMenus}
+          <PluginContributions
+            kind="navigation"
+            navigationKey={entry.key}
+            navigationChildren={false}
+            navigationMenus={host.sidebarMenus}
           />
         }
       >

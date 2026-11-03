@@ -5,9 +5,6 @@ import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import { projectAssistantDisplayContent } from "../../../../src/shared/assistant-display-content.js";
 import { getOrCreateWeakOwnerMap } from "../../../../src/shared/weak-owner-map.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
-import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
@@ -18,11 +15,6 @@ import {
 import { selectedGlobalEventAgentId } from "./chat-agent-id.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import {
-  pullRequestLinksIn,
-  refreshPullRequestsForFinalReply,
-  refreshPullRequestsForStreamedLinks,
-} from "./chat-pull-request-refresh.ts";
 import { clearPendingQueueItemsForRun, readDeliveredQueuedChatSendForRun } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
@@ -88,30 +80,6 @@ function claimTerminalRecovery(state: ChatPageHost, runId: string): boolean {
   claims.set(runId, true);
   pruneMapToMaxSize(claims, MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS);
   return true;
-}
-
-function finalAssistantReplyHasPullRequestLink(
-  state: ChatPageHost,
-  payload: ChatEventPayload | undefined,
-): boolean {
-  if (
-    payload?.state !== "final" ||
-    !visibleSessionMatches(state, payload.sessionKey, payload.agentId)
-  ) {
-    return false;
-  }
-  const finalText = extractText(payload.message);
-  const streamTexts =
-    typeof payload.runId === "string" && payload.runId === state.chatRunId
-      ? [state.chatStream, ...(state.chatStreamSegments ?? []).map((segment) => segment.text)]
-      : [];
-  const isVisible = (text: string | null | undefined) =>
-    typeof text === "string" && text.trim().length > 0 && !isHiddenAssistantStreamText(text);
-  return (
-    ((isVisible(finalText) && !isAssistantHeartbeatAckForDisplay(payload.message)) ||
-      streamTexts.some(isVisible)) &&
-    [finalText, ...streamTexts].some((text) => pullRequestLinksIn(text).length > 0)
-  );
 }
 
 function observerDigestMatchesAuthoritativeRun(
@@ -190,14 +158,6 @@ function applyPageGatewayEvent(
           ) {
             state.observerDigest = null;
           }
-          if (
-            payload?.state === "delta" &&
-            typeof payload.deltaText === "string" &&
-            sessionMatches
-          ) {
-            refreshPullRequestsForStreamedLinks(state, payload.runId, payload.deltaText);
-          }
-          const shouldRefreshPullRequests = finalAssistantReplyHasPullRequestLink(state, payload);
           if (handleChatGatewayEvent(state, payload) === "injected") {
             chatRunPresentation(state).publish();
             return;
@@ -206,9 +166,6 @@ function applyPageGatewayEvent(
             clearPendingQueueItemsForRun(state, terminalPayload.runId);
             // Refresh stale usage after a run; split panes share the Gateway deadline.
             void refreshChatModelAuthStatus(state, terminalPayload.runId);
-          }
-          if (shouldRefreshPullRequests && payload) {
-            refreshPullRequestsForFinalReply(state, payload.runId, payload.message);
           }
           const shouldRecoverMissingTerminal = Boolean(
             recoveryRunId &&

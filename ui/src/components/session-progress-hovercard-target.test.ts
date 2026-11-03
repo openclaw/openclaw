@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../extensions/github-repositories/session-pull-requests-api.ts";
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";

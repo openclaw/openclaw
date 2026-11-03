@@ -135,6 +135,7 @@ export async function executeRepositoryPublication(params: {
       headCommit: row.head_commit,
       contentHost: createRepositoryPublicationContentHostV1({
         session,
+        baseRemoteUrl: target.baseRemoteUrl,
         accountId: row.identity_account_id,
         requesterProfileId: params.requesterProfileId,
         storePath: params.storePath,

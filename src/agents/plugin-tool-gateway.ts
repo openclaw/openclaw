@@ -31,6 +31,7 @@ export function preparePluginToolGatewayCapability(
   context: Pick<OpenClawPluginToolContext, "agentId" | "sessionKey">,
 ) {
   const sandbox = options?.sandbox;
+  const clientCaps = Object.freeze([...(options?.clientCaps ?? [])]);
   let operation = options?.runId ? findSessionControllerOperationByRunId(options.runId) : undefined;
   if (options?.runId === undefined && options?.sessionId) {
     const current = resolveReplyRunForCurrentSessionId(options.sessionId);
@@ -46,6 +47,7 @@ export function preparePluginToolGatewayCapability(
   const workspace = Object.freeze({
     publicationAvailable: options?.githubPublicationAvailable,
     controlAvailable: hasSessionControlAuthority(options?.sessionControlAuthority),
+    workspacePreparationAvailable: !sandbox,
     preparation,
     refreshBaseAvailable: canRefreshWorkspacePublicationBase(sandbox),
     evidenceAvailable: canReadWorkspaceArtifactSource(sandbox),
@@ -101,6 +103,7 @@ export function preparePluginToolGatewayCapability(
       get sessionKey() {
         return currentCaller().sessionKey;
       },
+      clientCaps,
       workspace,
       idempotencyKey(toolCallId) {
         currentCaller();

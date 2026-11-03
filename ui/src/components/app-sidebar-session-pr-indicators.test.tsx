@@ -1,18 +1,18 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import {
-  createGatewayHarness as createReadGateway,
-  flushSync,
-} from "../../../extensions/github-repositories/browser/session-pull-requests.test-support.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../extensions/github-repositories/session-pull-requests-api.ts";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
 } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import "../test-helpers/app-sidebar-suite.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import "../test-helpers/app-sidebar-suite.ts";
+import {
+  createGatewayHarness as createReadGateway,
+  flushSync,
+} from "../plugins/github-repositories-integration/session-pull-requests.test-support.ts";
 import {
   catalogPage,
   createContext,

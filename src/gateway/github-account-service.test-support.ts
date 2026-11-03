@@ -47,6 +47,7 @@ function publicationFixtureApi(
     throw new Error("Unexpected publication operation in authorization fixture");
   };
   return {
+    supportsOrigin: (originUrl) => publication.supportsOrigin?.(originUrl) ?? false,
     performPullRequestAction: (...args) =>
       publication.performPullRequestAction
         ? publication.performPullRequestAction(...args)

@@ -7,6 +7,7 @@ import {
 } from "../../infra/installation-target-context.js";
 import { applyPathPrepend, findPathKey, normalizePathPrepend } from "../../infra/path-prepend.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { resolveSessionAgentIdStrict } from "../agent-scope.js";
 import { capturePreparedExecutionEnvironment } from "../execution-environment.js";
@@ -71,7 +72,7 @@ export function prepareAgentHarnessEnvironment(params: {
       assertCurrent: params.assertCurrent,
       signal: params.signal,
     },
-    params.pluginRegistry,
+    params.pluginRegistry ?? getPluginRuntimeGatewayRequestScope()?.pluginRegistry,
     secrets?.executionEnvironmentExclusions,
   );
   const localProcessEnv = installationTargetEnv(params.installationTarget);

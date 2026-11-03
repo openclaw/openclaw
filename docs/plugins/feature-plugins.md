@@ -730,7 +730,7 @@ Cron inventory readers are available from
 shares page validation without loading the protocol's schema runtime in a browser.
 
 The optional `host.presentation` capability mounts existing native controls:
-menus, icons, activity pills, lazy/error states, tooltips, clipped text and marquees.
+menus, icons, toggles, activity pills, lazy/error states, tooltips, clipped text and marquees.
 It also supplies locale, safe-URL, clipboard and notification services. The optional
 `host.native` capability supplies native diff and disclosure-overlay primitives.
 Dispose mounted handles when their container ends; activation/view retirement also
@@ -746,7 +746,7 @@ execution still checks current registration and action availability.
 ### Session accessories and retained operations
 
 V2 `host.ui.registerAccessory` accepts `ControlUiSessionAccessory` contributions
-for session headers, context strips, rows, hovercards, activity, summaries, and
+for session headers, context strips, Environment content (`session-environment`), rows, hovercards, activity, summaries, and
 mobile Details root/pages/activity. The original `ControlUiAccessory` remains a
 header-only contract. Slots are additive: registering an accessory does not
 replace native GitHub controls or other contributions.

@@ -142,6 +142,16 @@ export default defineControlUiPluginV2({
         }),
       ),
     });
+    const stopEnvironment = host.ui.registerAccessory({
+      id: "repository-environment",
+      placement: "session-environment",
+      mount: lazyView(() =>
+        import("./session-accessory.tsx").then((module) => {
+          host.signal.throwIfAborted();
+          return module.createSessionAccessoryMount(host, runtime, true);
+        }),
+      ),
+    });
     const stopMobile = (["root", "page", "activity"] as const).map((placement) =>
       host.ui.registerAccessory({
         id: `repository-mobile-${placement}`,
@@ -179,6 +189,7 @@ export default defineControlUiPluginV2({
       stopHovercard();
       stopRow();
       stopContext();
+      stopEnvironment();
       stopActivity();
       stopSummary();
       stopReferences();

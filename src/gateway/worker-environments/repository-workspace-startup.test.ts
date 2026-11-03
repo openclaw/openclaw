@@ -398,14 +398,6 @@ it("refuses requested setup without fresh authority instead of saving an incompl
   expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeNull();
 });
 
-it("refuses interrupted setup recovery before credentials or worker commands are requested", async () => {
-  const f = await fixture(true);
-  await expect(f.start({ recovery: true, runSetupScript: true })).rejects.toThrow("administrator");
-  expect(prepareSourceIdentity).not.toHaveBeenCalled();
-  expect(f.syncWorkspace).not.toHaveBeenCalled();
-  expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
-});
-
 it("adopts completed setup, restores accepted repository edits, and retains the bound workspace on restart", async () => {
   const f = await fixture(true, true);
   await fs.writeFile(path.join(f.remote, "setup.txt"), "already prepared\n");

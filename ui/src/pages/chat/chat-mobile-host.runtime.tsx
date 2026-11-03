@@ -434,26 +434,13 @@ export function MobileHostChrome(
           {(page) => {
             const Heading = dynamic(() => page().heading ?? (() => page().title));
             return (
-              <Show
-                when={page().details?.kind === "pull-request"}
-                fallback={
-                  <div
-                    ref={createTextOverflow(() => page().title)}
-                    class="chat-mobile-host__title"
-                    data-details-route={page().details?.kind}
-                  >
-                    <Heading />
-                  </div>
-                }
+              <div
+                ref={createTextOverflow(() => page().title)}
+                class="chat-mobile-host__title"
+                data-details-route={page().details?.kind}
               >
-                <div
-                  class="chat-mobile-host__title"
-                  data-details-route="pull-request"
-                  title={page().title}
-                >
-                  <Heading />
-                </div>
-              </Show>
+                <Heading />
+              </div>
             );
           }}
         </Show>

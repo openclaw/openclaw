@@ -27,7 +27,7 @@ it.each<[string, SessionRowBadgesParams, string]>([
   ["incognito", { incognito: true }, "Incognito session"],
   ["approval", { hasApproval: true }, "Approval needed"],
 ])("renders the %s indicator: %s", (kind, params, label) => {
-  const indicator = renderBadge(params, kind, label);
+  renderBadge(params, kind, label);
 });
 
 it("renders outbox attention and stays quiet when empty", () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createGitHubPublicationProvider } from "../../extensions/github-repositories/publication-provider-api.js";
+import { createGitHubPublicationProvider } from "../../extensions/github-repositories/runtime-api.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
+import { clearGitHubCredentialVerificationCache } from "../../../extensions/github-repositories/runtime-api.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
@@ -64,11 +64,19 @@ describe("runtime image reserve repository dispatch", () => {
         token: TOKEN,
       });
     }
-    support.testState.config.tools = {
-      github:
-        kind === "app-installation"
-          ? effects.selection
-          : { profileId: effects.selection.profileId, ...(kind === "oauth" ? { kind } : {}) },
+    support.testState.config.plugins = {
+      ...support.testState.config.plugins,
+      entries: {
+        ...support.testState.config.plugins?.entries,
+        "github-repositories": {
+          config: {
+            system:
+              kind === "app-installation"
+                ? effects.selection
+                : { profileId: effects.selection.profileId, ...(kind === "oauth" ? { kind } : {}) },
+          },
+        },
+      },
     };
     setRuntimeConfigSnapshot(support.testState.config);
     const owner = ensureProfileForEmail("image-owner@example.invalid");

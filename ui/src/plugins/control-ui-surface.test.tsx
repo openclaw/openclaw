@@ -1,6 +1,6 @@
 import { createSignal, onCleanup } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
-import type { ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiReplacementV2 as ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";

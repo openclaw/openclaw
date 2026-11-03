@@ -105,6 +105,7 @@ export function installSidebarRepository(context: ApplicationContext) {
         signal: abort.signal,
       },
     ],
+    inlineViews: [],
     textReferences: [],
     widgets: [],
     replacements: [],

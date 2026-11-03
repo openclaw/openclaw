@@ -6,7 +6,7 @@ import {
   ciAutomationJobSpec,
   type CiAutomationOption,
   type CiAutomationTarget,
-} from "../../ui/src/lib/session-pr-automation-spec.js";
+} from "../../extensions/github-repositories/session-pr-automation-api.ts";
 import { resolveAdmittedRunActiveAssertion } from "../agents/admitted-run-context.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";

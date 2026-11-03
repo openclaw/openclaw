@@ -1,0 +1,2 @@
+# Prove that cached physical repository origins never cache a live provider host decision, and adapt the existing source/subscription fixtures to the current required contracts.
+41

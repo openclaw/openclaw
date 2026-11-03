@@ -1,4 +1,5 @@
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { observeScrollState } from "../../../components/scroll-state-observer.ts";
 import { progressCardPresentation } from "../../../components/session-progress-card.ts";
 import {

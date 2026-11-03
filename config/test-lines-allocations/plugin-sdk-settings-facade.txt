@@ -1,0 +1,2 @@
+# Prove the real Settings operation facade saves a PAT, while queued authority revocation prevents both staging and configure.
+65

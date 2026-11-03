@@ -5,7 +5,6 @@ import type {
   ToolsGitHubStatusResult,
 } from "@openclaw/gateway-protocol";
 import { generateUUID } from "@openclaw/normalization-core/uuid";
-import { createDeferred as createDeferredCore } from "openclaw/plugin-sdk/concurrency-runtime";
 import type {
   ControlUiSettingsClient as GatewayBrowserClient,
   ControlUiSettingsConfigMutation,
@@ -29,7 +28,7 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
   let personal: PersonalGitHubStatus | null = null;
   let system: GitHubIdentityFacts | null = null;
   let readOwner: RequestOwner | null = null;
-  let retirement = createDeferredCore();
+  let retirement = Promise.withResolvers<void>();
   let statusCompletion: Promise<void> | undefined;
   let mutationCompletion: Promise<void> | undefined;
   let error: string | null = null;
@@ -64,7 +63,7 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
   const busy = () => mutationOwner !== null;
   function retireRequests() {
     retirement.resolve();
-    retirement = createDeferredCore();
+    retirement = Promise.withResolvers<void>();
     readOwner = null;
     mutationOwner = null;
     statusCompletion = undefined;
@@ -489,19 +488,10 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
     const email = draft.email.trim();
     await runMutation(owner, async () => {
       const secretName = `github-setup-${generateUUID().replaceAll("-", "").toLowerCase()}`;
-      let stored = false;
-      try {
-        await owner.client.request("secrets.store.set", {
-          name: secretName,
-          value: draft.token,
-          kind: "secret",
-          allowedHosts: [],
-        });
-        stored = true;
-        if (!isCurrent(owner)) {
-          return false;
-        }
-        const result = await runConfigureMutation(owner, runExternalMutation, {
+      const result = await runConfigureMutation(
+        owner,
+        runExternalMutation,
+        {
           scope: owner.target.scope,
           agentId: owner.target.agentId,
           mode: "managed",
@@ -509,25 +499,19 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
           ...(name || email
             ? { gitAuthor: { ...(name ? { name } : {}), ...(email ? { email } : {}) } }
             : {}),
-        });
-        if (!result.ok) {
-          throw new Error(result.error);
-        }
-        stored = false;
-        applyMutationStatus(
-          owner,
-          result.value,
-          { ...draft, token: "" },
-          result.refresh.ok ? null : result.refresh.error,
-        );
-        return true;
-      } finally {
-        if (stored) {
-          await owner.client
-            .request("secrets.store.delete", { name: secretName })
-            .catch(() => undefined);
-        }
+        },
+        { name: secretName, value: draft.token },
+      );
+      if (!result.ok) {
+        throw new Error(result.error);
       }
+      applyMutationStatus(
+        owner,
+        result.value,
+        { ...draft, token: "" },
+        result.refresh.ok ? null : result.refresh.error,
+      );
+      return true;
     });
   }
 
@@ -598,13 +582,40 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
     owner: SharedRequestOwner,
     runExternalMutation: ControlUiSettingsConfigMutation,
     params: Record<string, unknown>,
+    secret?: { name: string; value: string },
   ) {
     return runExternalMutation(
-      (current) => {
-        if (!isCurrent(owner) || !configurable) {
-          throw new Error("Connection changed before the GitHub identity update started.");
+      async (current) => {
+        const assertCurrent = () => {
+          if (!isCurrent(owner) || !configurable) {
+            throw new Error("Connection changed before the GitHub identity update started.");
+          }
+        };
+        assertCurrent();
+        let staged = false;
+        try {
+          if (secret) {
+            await current.request("secrets.store.set", {
+              ...secret,
+              kind: "secret",
+              allowedHosts: [],
+            });
+            staged = true;
+            assertCurrent();
+          }
+          const result = await current.request<ToolsGitHubStatusResult>(
+            "tools.github.configure",
+            params,
+          );
+          staged = false;
+          return result;
+        } finally {
+          if (staged && secret) {
+            await current
+              .request("secrets.store.delete", { name: secret.name })
+              .catch(() => undefined);
+          }
         }
-        return current.request<ToolsGitHubStatusResult>("tools.github.configure", params);
       },
       {
         canDispatch: () => isCurrent(owner) && configurable,

@@ -1,4 +1,3 @@
-import type { ChatCiDetailsElement } from "../pages/chat/components/chat-ci-details.tsx";
 import { observe, publish } from "./control-ui-card-resource-shared.ts";
 import {
   instanceAssert as assert,
@@ -8,6 +7,7 @@ import {
   type InstanceContext,
   type InstanceGroup,
 } from "./control-ui-instance-resource-fixture.ts";
+import type { CiDetailsTestElement } from "./repository-ci.test-support.tsx";
 const pr = {
   owner: "example",
   repo: "synthetic",
@@ -31,14 +31,11 @@ function checkResult(name: string) {
 }
 
 export async function createInstanceConsumers(context: InstanceContext) {
-  await Promise.all([
-    import("../pages/chat/components/chat-ci-details.tsx"),
-    import("../pages/chat/components/chat-ci-automation-control.tsx"),
-  ]);
+  await import("./repository-ci.test-support.tsx");
   const rows: {
     group: InstanceGroup;
     root: HTMLDetailsElement;
-    detail: ChatCiDetailsElement;
+    detail: CiDetailsTestElement;
     automation: HTMLElement;
   }[] = [];
   return {
@@ -59,8 +56,8 @@ export async function createInstanceConsumers(context: InstanceContext) {
           root.className = "chat-pr__checks";
           const summary = document.createElement("summary");
           summary.textContent = `${label} synthetic CI ${index}`;
-          const detail = document.createElement("openclaw-chat-ci-details");
-          const automation = document.createElement("openclaw-chat-ci-automation");
+          const detail = document.createElement("oc-test-ci-details");
+          const automation = document.createElement("oc-test-ci-automation");
           const props = {
             gateway: group.runtime.context.gateway,
             pullRequest: pr,
@@ -79,7 +76,7 @@ export async function createInstanceConsumers(context: InstanceContext) {
         await settle();
         context.recordMounted(group, group.root.querySelectorAll(".chat-pr__checks").length);
         assert(
-          group.root.querySelectorAll("openclaw-chat-ci-automation").length === count,
+          group.root.querySelectorAll("oc-test-ci-automation").length === count,
           "CI fixture did not mount real automation elements",
         );
         context.capture(`${label}:closed-CI-pairs`);

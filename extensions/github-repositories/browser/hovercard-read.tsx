@@ -1,50 +1,18 @@
 /** @jsxImportSource @solidjs/web */
 
-import type {
-  ControlUiSessionPullRequest,
-  ControlUiSessionPullRequestSnapshot,
-} from "@openclaw/gateway-protocol";
+import type { ControlUiSessionPullRequestSnapshot } from "@openclaw/gateway-protocol";
 import { createMemo, onCleanup, For, Show } from "solid-js";
 import { SessionGitDiff } from "./native-components.tsx";
 import { Icon } from "./presentation-components.tsx";
 import { presentationTranslator } from "./presentation-context.ts";
 import {
-  orderSessionPullRequests,
+  displaySessionPullRequests,
+  type SessionDisplayPullRequest,
   sessionPullRequestStateIcons,
 } from "./session-pull-request-presentation.ts";
 
 const formatGitHubItemReference = (item: { owner: string; repo: string; number: number }) =>
   `${item.owner}/${item.repo}#${item.number}`;
-
-type SessionDisplayPullRequest = Omit<ControlUiSessionPullRequest, "state"> & {
-  state?: ControlUiSessionPullRequest["state"];
-  sourceSessionKey?: string;
-  sourceAgentId?: string;
-};
-
-/** Presentation only: task results never become evidence that the current branch was published. */
-function displaySessionPullRequests(
-  snapshot: ControlUiSessionPullRequestSnapshot | undefined,
-): SessionDisplayPullRequest[] {
-  const requests = new Map<string, SessionDisplayPullRequest>();
-  for (const task of snapshot?.taskPullRequests ?? []) {
-    requests.set(task.url, {
-      owner: task.owner,
-      repo: task.repo,
-      number: task.number,
-      branch: task.branch,
-      url: task.url,
-      title: task.title ?? `${task.owner}/${task.repo}#${task.number}`,
-      ...task.pullRequest,
-      sourceSessionKey: task.sourceSessionKey,
-      sourceAgentId: task.sourceAgentId,
-    });
-  }
-  for (const request of snapshot?.pullRequests ?? []) {
-    requests.set(request.url, { ...requests.get(request.url), ...request });
-  }
-  return orderSessionPullRequests([...requests.values()]);
-}
 
 function PullRequestRow(props: {
   request: SessionDisplayPullRequest;
@@ -63,6 +31,9 @@ function PullRequestRow(props: {
       checks(),
       props.request.additions === undefined ? null : `+${props.request.additions.toLocaleString()}`,
       props.request.deletions === undefined ? null : `−${props.request.deletions.toLocaleString()}`,
+      props.request.sourceSessionKey
+        ? t("sessionHovercard.taskBranch", { branch: props.request.branch })
+        : null,
     ].filter((detail): detail is string => Boolean(detail));
   const stateLabel = () => (checks() ? `${state()} · ${checks()}` : state());
   return (

@@ -1,5 +1,5 @@
 import {
-  appendNativeGitHubPublicationMessage as appendPublicationMessage,
+  appendNativeGitHubPublicationMessage as appendGitHubPublicationMessage,
   type NativeGitHubPublicationContentFactsV1 as RepositoryPublicationContentFactsV1,
 } from "openclaw/plugin-sdk/native-github-publication-host";
 
@@ -24,7 +24,7 @@ export function formatGitHubPublicationContent(params: {
   return {
     title,
     trailers,
-    commitMessage: `${appendPublicationMessage(
+    commitMessage: `${appendGitHubPublicationMessage(
       credit ? `${title}\n\nWorked on by:\n${credit}` : title,
       [...trailers, `OpenClaw-Publication: ${params.requestId}`],
     )}\n`,

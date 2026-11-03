@@ -43,8 +43,8 @@ export {
   ciAutomationJobSpec,
   ciAutomationJobMatches,
   CI_AUTOMATION_OPTIONS,
-} from "./session-pr-automation-spec.ts";
-export type { CiAutomationTarget, CiAutomationOption } from "./session-pr-automation-spec.ts";
+} from "../session-pr-automation-api.ts";
+export type { CiAutomationTarget, CiAutomationOption } from "../session-pr-automation-api.ts";
 export { loadCiAutomationJobs, setCiAutomationEnabled } from "./session-pr-automation.ts";
 
 export { ChatCiAutomationView } from "./chat-ci-automation.tsx";

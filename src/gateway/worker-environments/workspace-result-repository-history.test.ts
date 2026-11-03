@@ -9,13 +9,6 @@ import { requireWorkspaceResultGit as git } from "./workspace-result-git.js";
 import { useRepositoryWorkspaceResultFixture } from "./workspace-result-repository.test-support.js";
 
 // mock-isolation: Local Git origins must not inherit the operator's GitHub login.
-vi.mock("./repository-github-identity.js", () => ({
-  prepareRepositoryGitHubIdentity: async (_agentId: string, assertCurrent: () => void) => ({
-    token: undefined,
-    assertSelected: assertCurrent,
-    start: async (start: () => Promise<unknown>) => await start(),
-  }),
-}));
 
 const { fixture } = useRepositoryWorkspaceResultFixture();
 async function committedFixture(content: string, orphan = false) {

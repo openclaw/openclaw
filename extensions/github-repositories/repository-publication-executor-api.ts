@@ -1,8 +1,8 @@
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   type NativeGitHubPublicationObjectPlan as RepositoryPublicationObjectPlan,
-  nativeGitHubPublicationBaseBranch as publicationBaseBranch,
-  hasNativeGitHubPublicationMessageFooter as hasPublicationMessageFooter,
+  nativeGitHubPublicationBaseBranch as parseGitHubPublicationBaseBranch,
+  hasNativeGitHubPublicationMessageFooter as hasGitHubPublicationMessageFooter,
   NativeGitHubPublicationWorkspaceChangedError as RepositoryPublicationWorkspaceChangedError,
 } from "openclaw/plugin-sdk/native-github-publication-host";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -80,7 +80,10 @@ export async function prepareRepositoryGitHubPublicationTarget(
   }
   let baseBranch = target.fork
     ? target.pullRequest.defaultBranch
-    : publicationBaseBranch(workspace.requestedRef ?? "HEAD", target.pullRequest.defaultBranch);
+    : parseGitHubPublicationBaseBranch(
+        workspace.requestedRef ?? "HEAD",
+        target.pullRequest.defaultBranch,
+      );
   if (!target.fork && baseBranch !== target.pullRequest.defaultBranch) {
     const refs = await api(
       "repos/" + pushRepository + "/git/matching-refs/heads/" + encodeURIComponent(baseBranch),
@@ -335,7 +338,7 @@ export async function executeRepositoryGitHubPublication(params: RepositoryPubli
     if (
       headCommit &&
       remoteHead !== headCommit &&
-      !hasPublicationMessageFooter(
+      !hasGitHubPublicationMessageFooter(
         preparedCommitMessage ?? "",
         content.trailers,
         "OpenClaw-Publication: " + params.request.requestId,

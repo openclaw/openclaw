@@ -21,7 +21,6 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runPublicationCommand } from "./github-publication-git-transport.js";
-import { createNativeGitHubPublicationRuntime } from "./github-publication-runtime.js";
 import { loadWorkerPlacementSessionRuntimeModule } from "./server-worker-placement-session-target.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import {
@@ -33,6 +32,7 @@ import {
 } from "./server-worker-placement.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { sessionIdentity } from "./worker-environments/placement-suite.test-support.js";
+import { createWorkspacePublicationHost } from "./workspace-publication-provider.js";
 
 type RuntimeOptions = Parameters<typeof createGatewayWorkerPlacementRuntime>[0];
 const createRuntime = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
@@ -73,17 +73,18 @@ function startRuntime(
     version: () => 0,
   });
   setDispatchMock(runtimeFactoryMocks.createDispatch, { reconcileActive });
-  const githubPublicationRuntime = createNativeGitHubPublicationRuntime({
+  const workspacePublicationHost = createWorkspacePublicationHost({
+    managedByPlacement: true,
     scheduler,
     loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
     placements,
     getCommittedRuntimeConfig: getRuntimeConfig,
     warn,
   });
-  githubPublicationRuntime.reconcilePublications = async () => onReconciled();
+  workspacePublicationHost.reconcilePublications = async () => onReconciled();
   return startSidecar(
     createRuntime({
-      githubPublicationRuntime,
+      workspacePublicationHost,
       scheduler,
       placements,
       warn,

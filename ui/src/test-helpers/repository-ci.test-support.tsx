@@ -105,6 +105,12 @@ type AutomationInputs = ChatCiAutomationProps & { gateway?: ApplicationGateway }
 type DetailsInputs = ChatCiDetailsProps & { gateway?: ApplicationGateway };
 export type CiAutomationTestElement = SolidBridgeElement<AutomationInputs>;
 export type CiDetailsTestElement = SolidBridgeElement<DetailsInputs>;
+declare global {
+  interface HTMLElementTagNameMap {
+    "oc-test-ci-details": CiDetailsTestElement;
+    "oc-test-ci-automation": CiAutomationTestElement;
+  }
+}
 // These distinct fixture tags never register or replace the plugin's actual host tags.
 defineSolidBridge<AutomationInputs>(
   "oc-test-ci-automation",

@@ -1,4 +1,5 @@
 import type { ControlUiSessionPullRequest } from "@openclaw/gateway-protocol";
+import type { ControlUiMenuItemAttributes } from "openclaw/plugin-sdk/control-ui";
 /** @jsxImportSource @solidjs/web */
 import { createMemo, createSignal, createUniqueId, Show, useContext } from "solid-js";
 import { ChatCiAutomationPanel, ChatCiDetailsPanel } from "./chat-ci-panels.tsx";
@@ -161,7 +162,7 @@ export function PullRequestActions(props: {
     id: "back",
     label: t("common.back"),
     closeOnSelect: false,
-    render: (attributes) => (
+    render: (attributes: ControlUiMenuItemAttributes) => (
       <button {...attributes} class="oc-menu-item chat-pr-menu__back" type="button">
         <span class="oc-menu-item__icon">
           <Icon name="arrowLeft" />
@@ -271,7 +272,7 @@ export function PullRequestActions(props: {
                       id: "checks",
                       label: `${t("chat.pullRequests.checksTitle")}: ${rollup()?.label ?? t("chat.pullRequests.automationNoChecks")}${rollup() ? ` ${rollup()?.count}` : ""}`,
                       closeOnSelect: false,
-                      render: (attributes) => (
+                      render: (attributes: ControlUiMenuItemAttributes) => (
                         <button
                           {...attributes}
                           class="oc-menu-item chat-pr-menu__drill-trigger"
@@ -331,7 +332,7 @@ export function PullRequestActions(props: {
                   id: "monitoring",
                   label: t("chat.pullRequests.ciMonitoring"),
                   closeOnSelect: false,
-                  render: (attributes) => (
+                  render: (attributes: ControlUiMenuItemAttributes) => (
                     <button
                       {...attributes}
                       class="oc-menu-item chat-pr-menu__drill-trigger"

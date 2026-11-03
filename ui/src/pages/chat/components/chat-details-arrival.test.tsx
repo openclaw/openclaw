@@ -271,7 +271,7 @@ it.each([false, true])(
     );
     const onExpandedChange = vi.fn();
     const view = mountDetails({
-      pullRequestsGateway: automationGateway(request).gateway,
+      gateway: automationGateway(request).gateway,
       ...(controlled
         ? { desktopDisclosures: { expanded: { automations: false }, onExpandedChange } }
         : {}),
@@ -299,7 +299,7 @@ it("accepts one replacement-client page while its physical session row is restor
   const oldRequest = createGatewayRequestMock(() => retired.promise);
   const newRequest = createGatewayRequestMock(() => current.promise);
   const source = automationGateway(oldRequest);
-  const view = mountDetails({ pullRequestsGateway: source.gateway });
+  const view = mountDetails({ gateway: source.gateway });
   expect(oldRequest).toHaveBeenCalledOnce();
   const hello = source.gateway.snapshot.hello;
   const client = createTestGatewayClient(newRequest);
@@ -337,7 +337,7 @@ it("resets reveals on physical identity changes without reapplying a pending rev
   const request = createGatewayRequestMock()
     .mockResolvedValueOnce(first)
     .mockReturnValueOnce(appended.promise);
-  const view = mountDetails({ pullRequestsGateway: automationGateway(request).gateway });
+  const view = mountDetails({ gateway: automationGateway(request).gateway });
   await advance();
   const group = () => view.group("automations")!;
   const count = () => group().querySelectorAll(".chat-summary__automation").length;

@@ -4,7 +4,7 @@ import { en } from "./en.ts";
 const enSessionHovercard = {
   sessionHovercard: {
     ariaLabel: en.sessionHovercard.ariaLabel,
-    agentNotepad: "Agent Notepad",
+    agentNotepad: "Task progress",
     linkedChannel: en.sessionHovercard.linkedChannel,
     viaAccount: "Via {account}",
     topicNumber: "Topic {id}",
@@ -38,7 +38,6 @@ const enSessionHovercard = {
     },
     branchLabel: en.sessionHovercard.branchLabel,
     runsOn: en.sessionHovercard.runsOn,
-    machineLabel: en.sessionHovercard.machineLabel,
     machineCpu: en.sessionHovercard.machineCpu,
     machineMemory: en.sessionHovercard.machineMemory,
     more: en.sessionHovercard.more,

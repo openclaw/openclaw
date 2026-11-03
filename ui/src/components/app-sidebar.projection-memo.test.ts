@@ -160,7 +160,7 @@ describe("sidebar projection memo", () => {
     expect(enumerate).not.toHaveBeenCalled();
   });
 
-  it("shares one cached row graph between navigation, geometry and badge consumers", async () => {
+  it("shares one cached row graph between navigation and geometry consumers", async () => {
     const target = session("shared-cached-row", { unread: true });
     const { sidebar, sessions } = await mount([target]);
     const owner = getAppSidebarOwner(sidebar.hostElement)!;
@@ -184,14 +184,11 @@ describe("sidebar projection memo", () => {
     owner.invalidate();
     await settleLitElement(sidebar);
     const navigationRow = owner.findSidebarMenuSessionByKey(target.key);
-    const badgeRow = () => owner.readSessionPullRequestRows().find((row) => row.key === target.key);
     expect(navigationRow).toBeDefined();
-    expect(badgeRow()).toBe(navigationRow);
     expect(owner.reconciledSidebarZone().sessionRows.get(target.key)).toBe(navigationRow);
     await update(sidebar, { activeRouteId: "chat", sessionKey: target.key });
     const selected = owner.findSidebarMenuSessionByKey(target.key);
     expect(selected?.visuallyActive).toBe(true);
-    expect(badgeRow()).toBe(selected);
     expect(owner.reconciledSidebarZone().sessionRows.get(target.key)).toBe(selected);
   });
 

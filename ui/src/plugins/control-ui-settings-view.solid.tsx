@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { onSettled } from "solid-js";
+import { onSettled, untrack } from "solid-js";
 import type {
   ControlUiSettingsContext,
   ControlUiSettingsContextV2,
@@ -18,6 +18,7 @@ import { formatUiExternalText, formatUiError } from "../lib/format-error.ts";
 import { formatDateTimeMs, formatRelativeTimestamp } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { registerControlUiEnglish } from "./control-ui-english.ts";
 import { createControlUiSettingsComponents } from "./control-ui-settings-components.solid.tsx";
 
@@ -193,11 +194,23 @@ export function ControlUiSettingsPresentation(props: {
             current();
             registerControlUiEnglish(catalog);
           },
+          projectOwner(source) {
+            untrack(() => current());
+            const projection = projectOwner(source, (sourceOwner) => sourceOwner.read());
+            const stop = listen(lifetime, "abort", projection.dispose, { once: true });
+            return {
+              read: projection.read,
+              dispose() {
+                stop();
+                projection.dispose();
+              },
+            };
+          },
           copyButton(
             event: Event,
             text: string,
             label: string,
-            targets: { label?: HTMLElement; feedback?: HTMLElement },
+            targets: { label?: HTMLElement; feedback?: HTMLElement; announcement?: HTMLElement },
           ) {
             current();
             return handleCopyButton(event, text, label, targets);

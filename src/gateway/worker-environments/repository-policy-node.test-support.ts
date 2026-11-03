@@ -1,13 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { onTestFinished } from "vitest";
-import { writeManagedGitHubProfileFiles } from "../../agents/github-tool-profile-files.js";
-import { resolveManagedGitHubProfileDir } from "../../agents/github-tool-profile-path.js";
+import {
+  writeManagedGitHubProfileFiles,
+  resolveManagedGitHubProfileDir,
+} from "../../../extensions/github-repositories/runtime-api.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
+import { stageSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -114,3 +118,90 @@ export async function createRepositoryPolicySource(stagingRoot: string) {
   const base = await captureWorkspaceManifest({ root: stagingRoot, baseCommit });
   return { baseCommit, base };
 }
+
+/** A real accepted checkpoint consumed by prepared-node admission and history tests. */
+export async function createAcceptedPreparedRepositorySource({
+  stagingRoot,
+  agentId,
+  sessionKey,
+}: {
+  stagingRoot: string;
+  agentId: string;
+  sessionKey: string;
+}) {
+  const { baseCommit, base } = await createRepositoryPolicySource(stagingRoot);
+  await fs.writeFile(path.join(stagingRoot, "session.txt"), "accepted session change\n");
+  const current = await captureWorkspaceManifest({ root: stagingRoot, baseCommit });
+  const repositoryStore = getSessionRepositoryWorkspaceStore();
+  const created = await repositoryStore.create({
+    agentId,
+    sessionKey,
+    url: "https://github.com/example/project.git",
+    requestedRef: "refs/heads/main",
+    runSetupScript: true,
+    assertCurrent: () => {},
+  });
+  const pinned = await repositoryStore.bindBase({
+    workspaceId: created.workspaceId,
+    expectedRevision: created.revision,
+    baseCommit,
+    baseManifestHash: base.manifestRef,
+    assertCurrent: () => {},
+  });
+  const staged = await stageSessionRepositoryCheckpoint({
+    workspaceId: pinned.workspaceId,
+    expectedRevision: pinned.revision,
+    stagingRoot,
+    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+    currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
+    baseManifestRef: base.manifestRef,
+    currentManifestRef: current.manifestRef,
+    assertCurrent: () => {},
+  });
+  try {
+    await staged.publish();
+  } finally {
+    await staged.discard();
+  }
+  const accepted = (await repositoryStore.get(created.workspaceId))!;
+  const boundWorkspace = {
+    workspaceDir: stagingRoot,
+    sourceManifestRef: base.manifestRef,
+    preparedManifestRef: base.manifestRef,
+  };
+  return { baseCommit, base, current, repositoryStore, accepted, boundWorkspace };
+}
+
+export const PREPARED_REPOSITORY_ADMISSION_CASES = [
+  { sourceCase: "legacy unqualified source with setup", runSetupScript: true },
+  { sourceCase: "legacy unqualified source without setup", runSetupScript: false },
+  {
+    sourceCase: "automatically selected source",
+    runSetupScript: false,
+    preparedRepositorySourceId: "forge-a/repositories",
+  },
+  {
+    sourceCase: "matching explicit source",
+    runSetupScript: false,
+    repositorySourceId: "forge-a/repositories",
+    preparedRepositorySourceId: "forge-a/repositories",
+  },
+  {
+    sourceCase: "different explicit source",
+    runSetupScript: false,
+    repositorySourceId: "forge-b/repositories",
+    preparedRepositorySourceId: "forge-a/repositories",
+    rejectSource: true,
+  },
+  { sourceCase: "forbidden policy", scenario: "forbidden", runSetupScript: false },
+  {
+    sourceCase: "policy revoked after checkpoint",
+    scenario: "revoked-after-checkpoint",
+    runSetupScript: false,
+  },
+  {
+    sourceCase: "policy revoked before command",
+    scenario: "revoked-before-command",
+    runSetupScript: false,
+  },
+];

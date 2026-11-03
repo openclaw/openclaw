@@ -1,4 +1,4 @@
-import { readGitHubConfig } from "../../extensions/github-repositories/api.js";
+import { readGitHubConfig } from "../../extensions/github-repositories/runtime-api.js";
 // Keep external GitHub I/O synthetic while exercising registered admission and current profile state.
 // oxfmt-ignore
 import { commandResult, githubPublicationTestMocks, installGitHubPublicationTestHarness, overrideCommands, createTestGitHubPublicationCoordinator, SESSION_ID, SESSION_KEY } from "./github-publication.test-support.js";

@@ -12,7 +12,12 @@ import {
   Show,
   useContext,
 } from "solid-js";
-import { GitHubPublicationAvatar, GitHubPublicationMenu } from "./chat-github-publication-menu.tsx";
+import {
+  githubPublicationSourceLabel as sourceLabel,
+  githubPublicationAvatarUrl as publisherAvatarUrl,
+  GitHubPublicationAvatar,
+  GitHubPublicationMenu,
+} from "./chat-github-publication-menu.tsx";
 import { RepositoryCiContext } from "./ci-context.ts";
 import {
   personalGitHubPublicationSelection,
@@ -110,16 +115,6 @@ function createPublicationAction(publication: () => GitHubPublicationView) {
   };
 }
 
-function sourceLabel(source: string, t: ReturnType<typeof presentationTranslator>): string {
-  return t(
-    source === "personal"
-      ? "githubPublication.personal"
-      : source === "agent-override"
-        ? "githubPublication.agent"
-        : "githubPublication.system",
-  );
-}
-
 function publicationButtonSelection(publication: GitHubPublicationView) {
   return (
     publication.selection ??
@@ -128,14 +123,6 @@ function publicationButtonSelection(publication: GitHubPublicationView) {
 }
 
 /** Images belong to the offered account, so a different recorded publisher keeps initials. */
-function publisherAvatarUrl(
-  options: GitHubPublicationView["options"],
-  publisher: { source: string; accountId: number },
-): string | undefined {
-  const source = publisher.source === "personal" ? "personal" : "shared";
-  const offered = source === "personal" ? options?.personal?.account : options?.shared;
-  return offered?.accountId === publisher.accountId ? options?.avatarUrls?.[source] : undefined;
-}
 
 /** One eligible-choice projection serves every publication presentation. */
 export function githubPublicationAccountChoices(

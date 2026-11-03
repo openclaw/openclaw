@@ -40,6 +40,7 @@ import { ChatComposer } from "./components/chat-composer.tsx";
 import { ChatConversationHistoryError } from "./components/chat-conversation-history-error.tsx";
 import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
+import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
 import {
   getTranscriptState,

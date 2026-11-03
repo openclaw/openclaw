@@ -538,8 +538,8 @@ it("keeps the rendered preview slot after caching without restoring live run aut
   ).toHaveLength(0);
 });
 
-it("keeps a restored pin's badges after roster handoff until its own descriptor replaces it", () => {
-  const { host, container, dom } = createHost("chip");
+it("keeps a restored pin's badges after roster handoff until its own descriptor replaces it", async () => {
+  const { host, container, context, dom } = createHost("chip");
   const saved = {
     key: "agent:main:pin",
     label: "Saved pin",
@@ -554,17 +554,19 @@ it("keeps a restored pin's badges after roster handoff until its own descriptor 
   };
   host.restoreSidebarSnapshot({ ...emptySnapshot, pinnedSessions: [saved] });
   const [current, setCurrent] = createSignal(restoreSnapshotSession(saved, saved.key));
-  const update = mountObservedHost(host, container, (observedHost) => (
+  const update = mountObservedHost(host, container, context, (observedHost) => (
     <RecentSession host={observedHost} session={current()} />
   ));
   host.releaseSidebarSnapshot();
   update();
   expect(host.sidebarSnapshot).toBeNull();
-  expect(dom.all(".session-row-badge--approval")).toHaveLength(1);
-  expect(dom.all(".session-row-badge--pull-request")).toHaveLength(1);
+  await waitForSolid(() => {
+    expect(dom.all(".session-row-badge--approval")).toHaveLength(1);
+    expect(dom.all(".session-row-badge--pull-request")).toHaveLength(1);
+  });
   setCurrent(projectSidebarSession({ key: saved.key, label: "Current pin", pinned: true }));
   update();
-  expect(dom.all(".session-row-badge")).toHaveLength(0);
+  await waitForSolid(() => expect(dom.all(".session-row-badge")).toHaveLength(0));
 });
 
 it("keeps Users visible despite a cached legacy collapse preference", () => {

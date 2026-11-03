@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { resolveConfiguredGitHubHost } from "../../extensions/github-repositories/api.js";
+import { resolveConfiguredGitHubHost } from "../../extensions/github-repositories/runtime-api.js";
 import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";

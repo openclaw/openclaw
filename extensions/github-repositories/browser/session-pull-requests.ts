@@ -58,6 +58,8 @@ const STRUCTURAL_SESSION_REASONS = new Set<unknown>([
   "rewind",
 ]);
 
+export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
+
 export type SessionPullRequestSnapshotStore = {
   branchKnown: (sessionKey: string) => boolean;
   dispose: () => void;

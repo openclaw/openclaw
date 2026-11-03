@@ -6,9 +6,9 @@ import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-con
 import { preparePublishingSession } from "./github-publication-action-target.js";
 import { qualifyGitHubPublicationSource } from "./github-publication-availability.js";
 import {
-  GitHubPublicationSessionChangedError,
-  GitHubPublicationWorkspaceChangedError,
-} from "./github-publication-failure.js";
+  RepositoryPublicationSessionChangedError as GitHubPublicationSessionChangedError,
+  RepositoryPublicationWorkspaceChangedError as GitHubPublicationWorkspaceChangedError,
+} from "./github-publication-errors.js";
 import { prepareGitHubPublicationOptionsRead } from "./server-methods/github-personal-authorization.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
@@ -101,6 +101,12 @@ export async function readGitHubPublicationReadiness(
   const [source, request] = await Promise.all([
     qualifyGitHubPublicationSource(session, assertAuthority, read.currentSessionRead, {
       readMode: "existing-only",
+      supportsOrigin: (originUrl) => {
+        if (!service) {
+          throw new Error("Publication provider is unavailable.");
+        }
+        return service.supportsOrigin(originUrl);
+      },
     }),
     observeRequest(),
   ]);

@@ -1,8 +1,9 @@
+import { CronAddParamsSchema, type CronJob } from "@openclaw/gateway-protocol";
+import type { readCanonicalCronListPage } from "@openclaw/gateway-protocol/cron-list-page-validation";
+import type { ControlUiSettingsClient } from "openclaw/plugin-sdk/control-ui";
 import { Value } from "typebox/value";
 import { beforeEach, expect, it, vi } from "vitest";
-import { CronAddParamsSchema } from "../../../packages/gateway-protocol/src/schema/cron.js";
-import type { GatewayBrowserClient } from "../../../ui/src/api/gateway.ts";
-import type { CronJob, CronJobsListResult } from "../../../ui/src/api/types.ts";
+type CronJobsListResult = ReturnType<typeof readCanonicalCronListPage<CronJob>>;
 import {
   ciAutomationDeclarationKey as declarationKeyFor,
   ciAutomationJobMatches as matchesJob,
@@ -49,8 +50,8 @@ function page(jobs: CronJob[], overrides: Partial<CronJobsListResult> = {}): Cro
   };
 }
 
-const request = vi.fn<GatewayBrowserClient["request"]>();
-const client = { request } as unknown as GatewayBrowserClient;
+const request = vi.fn<ControlUiSettingsClient["request"]>();
+const client: ControlUiSettingsClient = { request };
 beforeEach(() => request.mockReset());
 const load = (currentTarget = target) =>
   loadCiAutomationJobs(client, currentTarget, new AbortController().signal);

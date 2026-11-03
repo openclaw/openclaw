@@ -39,11 +39,7 @@ import { hasProviderBrandIcon } from "./provider-icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
-import {
-  SessionGlyph,
-  SessionRowBadges,
-  sessionRunVisibility,
-} from "./solid/session-presentation.tsx";
+import { SessionGlyph, sessionRunVisibility } from "./solid/session-presentation.tsx";
 const CATALOG_SESSION_GROUP_LIMIT = 5;
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows use canonical local labels and title snapshots; native catalog
@@ -249,7 +245,6 @@ function renderCatalogHostGroup(
               <span class="sidebar-recent-session__title-row"> {marqueeLabel} </span>
               <span class="sidebar-recent-session__details">
                 <span class="sidebar-recent-session__details-endcap">
-                  {<SessionRowBadges pullRequest={readSession().pullRequest} />}
                   <PluginContributions
                     kind="session-row"
                     sessionKey={key()}

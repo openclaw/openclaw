@@ -5,7 +5,6 @@ import {
   createMemo,
   createOptimistic,
   createSignal,
-  Errored,
   For,
   Loading,
   refresh,
@@ -15,7 +14,6 @@ import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/in
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -73,13 +71,6 @@ export function ProjectPickerContent(props: ProjectChipProps) {
       : gatewayName
         ? t("newSession.gatewayNamed", { name: gatewayName })
         : t("newSession.gateway");
-    const projectSearchAvailable =
-      !props.nativeTerminal &&
-      canCallGatewayMethod(
-        props.params.context?.gateway.snapshot,
-        "projects.searchRemote",
-        "operator.read",
-      );
     const projectAddAvailable =
       !props.nativeTerminal &&
       readSessionMethodAccess(props.params.context?.gateway.snapshot, {
@@ -97,7 +88,6 @@ export function ProjectPickerContent(props: ProjectChipProps) {
       deviceBrowse,
       deviceLabel,
       browserLabel,
-      projectSearchAvailable,
       projectAddAvailable,
     };
   });
@@ -193,18 +183,6 @@ export function ProjectPickerContent(props: ProjectChipProps) {
           ),
         )
       : accepted;
-  });
-  const projectSearchRead = createMemo(() => props.params.place.browser.projectSearchRead);
-  const projectSearchResult = createMemo(() => {
-    const read = projectSearchRead();
-    return read
-      ? read.completed.then((outcome) => {
-          if (outcome && "error" in outcome) {
-            throw outcome.error;
-          }
-          return outcome?.result ?? null;
-        })
-      : null;
   });
   const browseButton = () => (
     <button
@@ -399,67 +377,6 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                 submitting={props.params.submitting}
               />
             ) : undefined}
-            {!view().cloneInput && view().query.length >= 2 && view().projectSearchAvailable ? (
-              <>
-                <div class="new-session-page__menu-title">{t("newSession.githubProjects")}</div>
-                <Errored
-                  fallback={(error) => (
-                    <div class="new-session-page__project-error" role="alert">
-                      {formatUiError(error())}
-                    </div>
-                  )}
-                >
-                  <Loading
-                    on={projectSearchRead()}
-                    fallback={
-                      <div class="new-session-page__project-status" role="status">
-                        {t("common.loading")}
-                      </div>
-                    }
-                  >
-                    {projectSearchResult()?.credential === "missing" ? (
-                      <div class="new-session-page__menu-note">
-                        {t("newSession.githubTokenHint")}
-                      </div>
-                    ) : undefined}
-                    {
-                      <For
-                        each={projectSearchResult()?.projects ?? []}
-                        keyed={(project) => project.cloneUrl}
-                      >
-                        {(project) => {
-                          const icon = <Icon name="book" />;
-                          return (
-                            <SessionMenuItem
-                              item={{
-                                value: `remote-project:${project().fullName}`,
-                                label: project().fullName,
-                                icon,
-                                sub: project().description ?? t("newSession.cloneProject"),
-                                checked:
-                                  !props.params.place.browser.remoteProject?.sourceId &&
-                                  props.params.place.browser.remoteProject?.cloneUrl ===
-                                    project().cloneUrl,
-                                title: project().webUrl,
-                                onSelect: () =>
-                                  props.params.place.selectRemoteProject({
-                                    identity: project().fullName,
-                                    cloneUrl: project().cloneUrl,
-                                    ...(project().defaultBranch
-                                      ? { defaultBranch: project().defaultBranch }
-                                      : {}),
-                                  }),
-                              }}
-                              submitting={props.params.submitting || !view().projectAddAvailable}
-                            />
-                          );
-                        }}
-                      </For>
-                    }
-                  </Loading>
-                </Errored>
-              </>
-            ) : undefined}
             <Show when={!props.nativeTerminal && !view().cloneInput && view().query.length >= 2}>
               <For
                 each={props.params.place.browser.repositorySearchGroups}
@@ -485,7 +402,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                       {(project) => (
                         <SessionMenuItem
                           item={{
-                            value: `remote-project:${group().source.key}:${project().fullName}`,
+                            value: `remote-project:${group().source.key}:${project().cloneUrl}`,
                             label: project().fullName,
                             icon: <Icon name="gitBranch" />,
                             sub: project().description ?? t("newSession.cloneProject"),

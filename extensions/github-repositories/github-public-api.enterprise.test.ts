@@ -1,8 +1,8 @@
-import { afterEach, expect, test, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
-} from "../../src/config/runtime-snapshot.js";
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, expect, test, vi } from "vitest";
 
 afterEach(() => clearRuntimeConfigSnapshot());
 

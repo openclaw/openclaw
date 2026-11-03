@@ -1,7 +1,11 @@
 /** @jsxImportSource @solidjs/web */
 
 import type { JSX } from "@solidjs/web";
-import type { ControlUiIconProps, ControlUiPresentationHost } from "openclaw/plugin-sdk/control-ui";
+import type {
+  ControlUiIconProps,
+  ControlUiPresentationHost,
+  ControlUiToggleProps,
+} from "openclaw/plugin-sdk/control-ui";
 import { createEffect, createMemo, getOwner, onCleanup, untrack, useContext } from "solid-js";
 import { content, hostControl } from "./host-control.tsx";
 import { PresentationContext } from "./presentation-context.ts";
@@ -61,6 +65,10 @@ export function Icon(props: ControlUiIconProps & { class?: string }) {
   const element = hostControl(() => ({ name: props.name, className: props.class }), host.mountIcon);
   element.className = "repository-icon";
   return element;
+}
+export function SettingsToggle(props: ControlUiToggleProps) {
+  const host = useContext(PresentationContext);
+  return hostControl(() => ({ ...props }), host.mountToggle);
 }
 export function Tooltip(props: { content: string; disabled?: boolean; children?: JSX.Element }) {
   const host = useContext(PresentationContext);

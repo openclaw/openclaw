@@ -1546,42 +1546,6 @@ describe("chat state render lifecycle", () => {
     expect(publication).toHaveBeenCalledTimes(5);
   });
 
-  it("forces one PR-chips refresh per PR link seen in the live stream", () => {
-    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(() => 1);
-    const refreshSessionPullRequests = vi.fn(() => true);
-    const state = createStreamEventState({
-      refreshSessionPullRequests,
-    });
-    const delta = (deltaText: string, runId = "run-1") =>
-      emitGatewayEvent(state, "chat", { state: "delta", runId, sessionKey: "main", deltaText });
-
-    delta("working on it ");
-    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
-
-    // Issue links never carry chips.
-    delta("see https://github.com/openclaw/openclaw/issues/42 ");
-    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
-
-    delta("opened https://github.com/openclaw/openclaw/pull/113840 for review ");
-    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(1);
-    expect(refreshSessionPullRequests).toHaveBeenCalledWith({ refresh: true, automatic: true });
-
-    // One refresh reloads all of the branch's PRs; further links in the same
-    // run must not spend more GitHub quota.
-    delta("also https://github.com/openclaw/openclaw/pull/113900 ");
-    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(1);
-
-    // Streaming may split a URL across chunks; the rolling tail rejoins it.
-    delta("continuing https://github.com/openclaw/openclaw/pu", "run-2");
-    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(1);
-    delta("ll/113901 done", "run-2");
-    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(2);
-
-    // A later run announcing the same PR (e.g. its merge) refreshes again.
-    delta("merged https://github.com/openclaw/openclaw/pull/113840 at last", "run-3");
-    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(3);
-  });
-
   it.each([false, true])(
     "schedules effects for the requested commit and cancels on disconnect=%s",
     async (disconnect) => {

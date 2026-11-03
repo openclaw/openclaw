@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { ControlUiSessionPullRequest } from "openclaw/plugin-sdk/native-github-session-read";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
-} from "../../src/config/runtime-snapshot.js";
-import type { ControlUiSessionPullRequest } from "../../src/gateway/control-ui-contract.js";
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { gitHubPublicApi } from "./public-api.js";
 import { isGitHubPublicationSuperseded } from "./publication-relevance-api.js";
 

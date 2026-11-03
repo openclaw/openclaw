@@ -278,3 +278,273 @@
 .chat-session-rail__pr-checks {
   color: var(--muted);
 }
+
+/* Current parent presentation of plugin-owned repository facts. */
+
+.session-hovercard__pr-title {
+  --session-hovercard-fade: var(--session-hovercard-fade-inline);
+
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  @supports (animation-timeline: scroll(self inline)) {
+    animation-name: session-hovercard-fade;
+    animation-duration: 1s;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
+    animation-timeline: scroll(self inline);
+  }
+}
+
+.session-hovercard__pr-list > .session-hovercard__more {
+  padding-inline-start: calc(var(--session-hovercard-context-icon-size) + var(--space-2));
+  line-height: 22px;
+}
+
+.session-hovercard__section--prs {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.session-hovercard__pr-list {
+  display: grid;
+  min-width: 0;
+}
+
+.session-hovercard__pr-list > .session-hovercard__section-title {
+  margin-bottom: var(--space-1);
+}
+
+.session-hovercard__pr-count {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-hovercard__pr-row {
+  display: grid;
+  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-2);
+  min-width: 0;
+  min-height: 22px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+}
+
+.session-hovercard__pr-state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
+}
+
+.session-hovercard__pr-state-icon svg {
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.session-hovercard__pr-row {
+  /* PR rows are anchors; retain the reset instead of inheriting default link styling. */
+  margin-inline: calc(-1 * var(--space-2));
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-decoration: none;
+  transition: background-color 120ms ease;
+}
+
+.session-hovercard__pr-row:hover,
+.session-hovercard__pr-row:focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-hovercard__pr-row[data-state="open"] {
+  --session-pr-state-color: var(--ok);
+}
+
+.session-hovercard__pr-row[data-state="draft"] {
+  --session-pr-state-color: var(--muted);
+}
+
+.session-hovercard__pr-row[data-state="merged"] {
+  --session-pr-state-color: var(--pr-merged);
+}
+
+.session-hovercard__pr-row[data-state="closed"] {
+  --session-pr-state-color: var(--danger);
+}
+
+.session-hovercard__pr-state-icon {
+  color: var(--session-pr-state-color, var(--muted));
+}
+
+.session-hovercard__pr-number {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.session-hovercard__pr-checks {
+  color: var(--danger);
+  font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
+}
+
+.activity-feed__presence-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--bg-elevated);
+  border-radius: var(--radius-full);
+  background: var(--ok);
+}
+
+.activity-feed__presence-dot[data-presence-activity="idle"] {
+  background: var(--presence-idle);
+}
+
+.activity-feed__presence-dot[data-presence-activity="unknown"] {
+  background: var(--muted);
+}
+
+.activity-feed__git {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--control-ui-text-xs);
+}
+
+.activity-feed__git {
+  padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + 28px + var(--space-3));
+}
+
+.activity-feed__pr,
+.activity-feed__branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: var(--bg-elevated);
+  line-height: 1.4;
+}
+
+.activity-feed__pr:hover,
+.activity-feed__pr:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  text-decoration: none;
+}
+
+.activity-feed__git-icon,
+.activity-feed__git-stale {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.activity-feed__git-icon svg,
+.activity-feed__git-stale svg {
+  width: 14px;
+  height: 14px;
+}
+
+.activity-feed__pr[data-state="open"] .activity-feed__git-icon,
+.activity-feed__additions {
+  color: var(--ok);
+}
+
+.activity-feed__pr[data-state="merged"] .activity-feed__git-icon {
+  color: var(--pr-merged);
+}
+
+.activity-feed__pr[data-state="closed"] .activity-feed__git-icon,
+.activity-feed__deletions {
+  color: var(--danger);
+}
+
+.activity-feed__additions,
+.activity-feed__deletions {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-feed__git-stale {
+  color: var(--warn);
+}
+
+[data-pull-request-state="open"] {
+  color: var(--ok);
+}
+
+[data-pull-request-state="merged"] {
+  color: var(--pr-merged);
+}
+
+[data-pull-request-state="closed"] {
+  color: var(--danger);
+}
+
+/* Forced colors would repaint the background these masks show through. */
+@media (forced-colors: active) {
+  .chat-processes__spinner::before {
+    forced-color-adjust: none;
+    color: CanvasText !important;
+  }
+
+  .activity-feed__presence-dot {
+    forced-color-adjust: none;
+    background: CanvasText !important;
+  }
+}
+
+.chat-session-rail__prs,
+.chat-session-rail__pr {
+  display: flex;
+  align-items: center;
+}
+
+.chat-session-rail__prs {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 11px;
+  padding: 0 14px;
+}
+
+.chat-session-rail__pr {
+  gap: 5px;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 10.5px;
+  line-height: 1;
+}
+
+.chat-session-rail__pr:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.chat-session-rail__pr-checks {
+  color: var(--muted);
+}
+
+.chat-session-rail__prompt {
+  min-width: 0;
+  flex: 1 1 auto;
+}

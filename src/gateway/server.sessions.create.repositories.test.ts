@@ -2,7 +2,6 @@ import { getEventListeners } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
-import { loadTestSessionPullRequests as loadControlUiSessionPullRequests } from "../../extensions/github-repositories/control-ui-session-prs.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { appendTranscriptMessage, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import * as gitWorker from "../infra/git-worker.js";
@@ -11,6 +10,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { loadTestSessionPullRequests as loadControlUiSessionPullRequests } from "./control-ui-session-prs.test-support.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { controlUiClient } from "./server.sessions.create.projects.test-support.js";
 import { dispatchInboundMessageMock, testState } from "./test-helpers.js";

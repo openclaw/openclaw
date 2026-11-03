@@ -31,7 +31,6 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import { ActivitySessionAccessories } from "./session-activity-accessories.tsx";
-import { ActivitySessionGit } from "./session-activity-git.tsx";
 import { ActivitySessionMedia } from "./session-activity-media.tsx";
 import { isUnresolvedPerson, UnknownPersonAvatar } from "./session-activity-people.tsx";
 import { ACTIVITY_PHONE_QUERY, sessionActivityOwner } from "./session-activity.ts";
@@ -279,11 +278,6 @@ export function SessionLinkView(props: {
         ) : undefined}
         {phone() ? <InspectRun /> : undefined}
       </div>
-      <ActivitySessionGit
-        context={context}
-        sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}
-        agentId={agentId()}
-      />
       <ActivitySessionAccessories
         context={context}
         sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}

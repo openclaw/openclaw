@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -96,12 +95,11 @@ async function mountEffective(
     panel: next,
   });
   const page = createAgentsPage(context, route(panel));
-  const identity = githubIdentityViewFixture();
+  const base = createBaseParams();
   const mounted = mountSolid(() => (
     <AgentTools
-      {...createBaseParams()}
+      {...base}
       {...page.read().tools}
-      githubIdentity={identity}
       readData={page.read().readData}
       agentId={page.read().selectedAgentId ?? "main"}
     />

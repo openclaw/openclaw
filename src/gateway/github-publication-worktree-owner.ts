@@ -6,9 +6,9 @@ import {
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
-  GitHubPublicationWorkspaceChangedError,
-  GitHubPublicationSessionChangedError,
-} from "./github-publication-failure.js";
+  RepositoryPublicationWorkspaceChangedError as GitHubPublicationWorkspaceChangedError,
+  RepositoryPublicationSessionChangedError as GitHubPublicationSessionChangedError,
+} from "./github-publication-errors.js";
 import type {
   PublicationSessionIdentity,
   PublicationSessionRead,

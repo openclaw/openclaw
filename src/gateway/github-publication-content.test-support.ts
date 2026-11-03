@@ -1,5 +1,5 @@
-import { currentGitHubPublicationConfig } from "../../extensions/github-repositories/publication-availability-api.js";
 import { formatGitHubPublicationContent } from "../../extensions/github-repositories/publication-content-api.js";
+import { currentGitHubPublicationConfig } from "../../extensions/github-repositories/runtime-api.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
 import { prepareRepositoryPublicationContentFacts } from "./github-publication-content.js";

@@ -124,7 +124,7 @@ export function captureSidebarSnapshotModel(
     snapshotSubtitle: row.snapshot
       ? row.snapshotSubtitle
       : resolveSidebarSessionRowSubtitle(host, row),
-    state: sidebarSessionBadgeFacts(host.sessionPullRequests, row),
+    state: sidebarSessionBadgeFacts(row),
   });
   return parseSidebarSnapshot({
     routingDefaults: {

@@ -1,4 +1,4 @@
-import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
+import { readGitHubConfig } from "../../extensions/github-repositories/runtime-api.js";
 // Install publication I/O fixtures before the registered action owner.
 // oxfmt-ignore
 import { createPublicationActionFixture as fixture } from "./github-publication-actions.test-support.js";

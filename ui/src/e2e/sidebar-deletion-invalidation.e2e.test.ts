@@ -1,12 +1,11 @@
 import { expect, it } from "vitest";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
-  installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { installRepositoryGateway as installMockGateway } from "../test-helpers/repository-plugin.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Cross-tab sidebar deletion invalidation" });
@@ -215,18 +214,37 @@ suite.define(() => {
         }
         for (let step = 0; step < 24; step += 1) {
           for (const [index, target] of pages.entries()) {
-            await evaluateControlUiContext(
-              target,
-              (app, tick) => {
-                for (let repeat = 0; repeat < (tick === 0 ? 20 : 1); repeat += 1) {
-                  app.sessions.setPullRequestSummary("agent:main:main", {
-                    state: "open",
-                    numbers: [tick * 20 + repeat + 1],
-                  });
-                }
-              },
-              step,
-            );
+            for (let repeat = 0; repeat < (step === 0 ? 20 : 1); repeat += 1) {
+              const number = step * 20 + repeat + 1;
+              await gateways[index]!.emitGatewayEvent("controlUi.sessionPullRequests.changed", {
+                sessions: {
+                  [retained.key]: {
+                    status: "ready",
+                    rateLimited: false,
+                    discardPrevious: true,
+                    pullRequests: [
+                      {
+                        owner: "synthetic",
+                        repo: "sidebar-fixture",
+                        number,
+                        branch: "feature/sidebar",
+                        title: "Synthetic sidebar pull request",
+                        url: `https://github.com/synthetic/sidebar-fixture/pull/${number}`,
+                        state: "open",
+                      },
+                    ],
+                  },
+                },
+              });
+            }
+            await row(target, retained.key)
+              .first()
+              .locator(
+                '.session-row-badge--pull-request[aria-label^="#' +
+                  (step === 0 ? 20 : step * 20 + 1) +
+                  ' "]',
+              )
+              .waitFor();
             await gateways[index]!.emitGatewayEvent("tick", {});
           }
           await page.clock.runFor(5_000);

@@ -661,7 +661,6 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanelElement) 
         ...fileActions,
         currentFileText,
         retryFileEditor,
-        toggleHtmlSource,
         interact,
         discardFileEdits,
         editFile,

@@ -41,7 +41,6 @@ export function createMobileRootContentFixture(): Extract<
         subagents: "Subagents",
         environment: "Environment",
         context: "Context",
-        pullRequests: "Pull requests",
         automations: "Automations",
         generatedFiles: "Generated files",
         session: "Session",

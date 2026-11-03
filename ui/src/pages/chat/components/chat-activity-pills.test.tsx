@@ -7,7 +7,6 @@ import type {
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createSessionGoalFixture } from "../../../../../src/gateway/session-goal.test-support.js";
-import type { SessionGoal } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";

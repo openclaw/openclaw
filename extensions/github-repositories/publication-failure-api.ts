@@ -45,20 +45,6 @@ export function rejectGitHubPublicationSelection(
   );
 }
 
-/** The session worktree has a branch checked out other than the branch this session publishes. */
-export class GitHubPublicationSessionBranchMismatchError extends GitHubPublicationKnownFailure {
-  constructor(branches: { session: string; checkedOut: string }) {
-    const { session, checkedOut } = branches;
-    super(
-      `The session worktree has branch ${checkedOut} checked out, but this session publishes branch ${session}.`,
-      {
-        code: "workspace_changed",
-        nextAction: `In the session worktree, rename the branch back with \`git branch -m ${checkedOut} ${session}\`, or switch to it with \`git switch ${session}\` if it still exists, then request publication again. Publication only pushes the session branch.`,
-      },
-    );
-  }
-}
-
 export class GitHubPublicationBranchChangedError extends GitHubPublicationKnownFailure {
   constructor(options: { originalPullRequest?: boolean } = {}) {
     super("GitHub publication cannot safely extend the published branch.", {
@@ -201,6 +187,8 @@ export function isDefinitiveGitHubPublicationFailure(error: unknown): boolean {
 export {
   NativeGitHubPublicationRequesterUnavailableError as GitHubPublicationRequesterUnavailableError,
   NativeGitHubPublicationChangePermissionError as GitHubPublicationWorkflowPermissionError,
+} from "openclaw/plugin-sdk/native-github-publication-host";
+export {
   NativeGitHubPublicationWorkspaceChangedError as GitHubPublicationWorkspaceChangedError,
   NativeGitHubPublicationSessionChangedError as GitHubPublicationSessionChangedError,
 } from "openclaw/plugin-sdk/native-github-publication-host";

@@ -1,12 +1,12 @@
 /** @jsxImportSource @solidjs/web */
 
 import type { GitHubIdentityFacts } from "@openclaw/gateway-protocol";
-import type { JSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
+import type { ControlUiSettingsContextV2 } from "openclaw/plugin-sdk/control-ui";
 import {
   action,
   createMemo,
   createOptimistic,
-  from,
   onSettled,
   Errored,
   isPending,
@@ -30,17 +30,15 @@ const EXTERNAL_LINK_TARGET = "_blank";
 const buildExternalLinkRel = () => "noreferrer noopener";
 
 /** The owner admits work synchronously; Solid presents only published snapshots and completion. */
-export function createGitHubIdentityView(deps: Parameters<typeof createGitHubIdentity>[0]) {
+export function createGitHubIdentityView(
+  deps: Parameters<typeof createGitHubIdentity>[0] &
+    Pick<ControlUiSettingsContextV2, "projectOwner">,
+) {
   const owner = createGitHubIdentity(deps);
-  const subscribe = (next: (value: number) => void) => {
-    let revision = 0;
-    next(revision);
-    return owner.subscribe(() => next(++revision));
-  };
-  const revision = createMemo(() => from(subscribe));
-  const read = () => {
-    revision();
-    return owner.read();
+  const projection = deps.projectOwner(owner);
+  const dispose = () => {
+    projection.dispose();
+    owner.dispose();
   };
   const [saving, setSaving] = createOptimistic(false, { equals: false });
   const showSaving = action(function* (completion: Promise<void>) {
@@ -64,10 +62,10 @@ export function createGitHubIdentityView(deps: Parameters<typeof createGitHubIde
     observe();
     return () => {
       stop();
-      owner.dispose();
+      dispose();
     };
   });
-  return { ...owner, read, saving };
+  return { ...owner, read: projection.read, saving, dispose };
 }
 export type GitHubIdentityView = ReturnType<typeof createGitHubIdentityView>;
 
@@ -454,7 +452,7 @@ function GitHubAuthorizationCode(
   );
 }
 
-function ConnectionErrorRow(props: { error: string | null; control?: JSX.Element }) {
+function ConnectionErrorRow(props: { error: string | null; control?: SolidJSX.Element }) {
   const context = useSettings();
   const t = translator(context);
   const formatUiExternalText = context.formatExternalText!;
@@ -474,7 +472,7 @@ export function GitHubConnectionError(props: {
   error: string | null;
   completion?: Promise<void>;
   secondaryCompletion?: Promise<void>;
-  control?: JSX.Element;
+  control?: SolidJSX.Element;
 }) {
   const formatUiError = useSettings().formatError;
 
@@ -653,4 +651,12 @@ export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () =>
       </SettingsSection>
     </openclaw-github-identity>
   );
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-github-identity": HTMLAttributes<HTMLElement>;
+    }
+  }
 }

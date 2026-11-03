@@ -4,6 +4,7 @@ import type {
   SessionPlacementDiskSpace,
   SessionPlacementMachine,
 } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionsPatchMutation } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type {

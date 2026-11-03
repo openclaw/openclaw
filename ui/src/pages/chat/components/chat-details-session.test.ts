@@ -603,9 +603,13 @@ it.each([false, true])(
       setUncommitted(data);
       flush();
       expect(row()).toBeUndefined();
-      expect(
-        view.container.querySelector("[data-details-group=environment], .chat-environment-mobile"),
-      ).toBeNull();
+      if (mobile) {
+        expect(view.container.querySelector(".chat-environment-mobile")).toBeNull();
+      } else {
+        expect(
+          view.container.querySelector<HTMLElement>(".chat-details-desktop-environment")?.hidden,
+        ).toBe(true);
+      }
     }
     for (const data of [
       { ...result, additions: 3, files: [{ ...text, deletions: 0 }] },
@@ -660,7 +664,9 @@ it("reloads missing branchless facts even when Environment was collapsed", async
   expect(retain).not.toHaveBeenCalled();
   setUncommitted(undefined);
   await waitForSolid(() => expect(retain).toHaveBeenCalledOnce());
-  expect(view.container.querySelector('[data-details-group="environment"]')).toBeNull();
+  expect(
+    view.container.querySelector<HTMLElement>(".chat-details-desktop-environment")?.hidden,
+  ).toBe(true);
   setUncommitted(result);
   await waitForSolid(() => expect(stop).toHaveBeenCalledOnce());
   expect(view.container.querySelector('[data-details-group="environment"]')).not.toBeNull();

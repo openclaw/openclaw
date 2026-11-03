@@ -15,7 +15,6 @@ import type { ChatDetailsEnvironmentDesktopProps } from "./chat-details-types.ts
 import { hasEnvironmentTextChanges } from "./chat-environment-content.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { createChatMachinePresentation } from "./chat-pane-placement.tsx";
-import { retainedPublication, showWorkRow } from "./chat-pull-requests.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
@@ -67,29 +66,9 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
       ? result
       : undefined;
   };
-  const published = () => props.work?.publication?.result?.status === "published";
-  const work = () => {
-    const candidate = props.work;
-    // The Gateway omits branch facts when this checkout has a live PR. Keep
-    // uncertain attempts recoverable; a completed failure is not another publish offer.
-    if (
-      !candidate ||
-      published() ||
-      (!candidate.branch &&
-        !candidate.publication?.locked &&
-        candidate.pullRequests.some((pr) => pr.state === "open" || pr.state === "draft"))
-    ) {
-      return undefined;
-    }
-    const publication = candidate.publication;
-    return showWorkRow(candidate) ||
-      (retainedPublication(publication) &&
-        (publication?.result?.status !== "published" || publication.error))
-      ? candidate
-      : undefined;
-  };
+  const [accessoryPresent, setAccessoryPresent] = createSignal(false, { ownedWrite: true });
   const live = createMemo(() => ({
-    branch: workspace()?.branch ?? work()?.branch?.branch,
+    branch: workspace()?.branch,
     worktree: Boolean(session()?.worktree),
   }));
   const facts = () =>
@@ -101,11 +80,18 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
       : undefined,
   );
   const diff = () => {
-    const result = work()?.branch ?? changes();
+    const result = changes();
     return result && hasEnvironmentTextChanges(result) ? result : undefined;
   };
   const hasContent = createMemo(() =>
-    Boolean(machineMenu() || host() || branchName() || work() || facts().worktree || changes()),
+    Boolean(
+      machineMenu() ||
+      host() ||
+      branchName() ||
+      accessoryPresent() ||
+      facts().worktree ||
+      changes(),
+    ),
   );
   // Capture cache availability before the first asynchronous arrival.
   const [initiallyEmpty] = createSignal<boolean>((previous) => previous ?? !hasContent());
@@ -128,75 +114,81 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
         return null;
       }}
     </Show>,
-    <Show when={hasContent()}>
-      {(_available) => {
-        let shell!: HTMLDivElement;
-        const content = (
-          <div ref={(element) => (shell = element)} class="chat-details-desktop-environment">
-            <ChatDetailsDesktopSection
-              section="environment"
-              title={t("chat.sessionDetails.environment")}
-              expanded={expanded()}
-              presented={props.presented}
-              animateContentResize
-              onExpandedChange={(next) => {
-                if (props.expanded === undefined) {
-                  setLocalExpanded(next);
-                }
-                props.onExpandedChange?.(next);
-              }}
-              metadata={
-                <Show when={!expanded()}>
-                  <span class="chat-environment-desktop__summary">
-                    <Show
-                      when={summaryHost()}
-                      fallback={
-                        <Show when={workspace()?.branch}>
-                          {(branch) => {
-                            const overflow = useScrollState(true, false);
-                            return (
-                              <span ref={overflow} class="chat-environment-desktop__branch">
-                                {branch()}
-                              </span>
-                            );
-                          }}
-                        </Show>
-                      }
-                    >
-                      <MachineIcon />
-                      <span ref={createTextOverflow(summaryHost)} title={summaryHost()}>
-                        {summaryHost()}
-                      </span>
-                    </Show>
-                  </span>
-                </Show>
+    (() => {
+      let shell!: HTMLDivElement;
+      const content = (
+        <div
+          ref={(element) => (shell = element)}
+          class="chat-details-desktop-environment"
+          hidden={!hasContent()}
+        >
+          <ChatDetailsDesktopSection
+            section="environment"
+            title={t("chat.sessionDetails.environment")}
+            expanded={expanded()}
+            presented={props.presented}
+            animateContentResize
+            mountWhileCollapsed
+            onExpandedChange={(next) => {
+              if (props.expanded === undefined) {
+                setLocalExpanded(next);
               }
-            >
-              <ChatLazyBoundary>
-                <ChatDetailsEnvironmentBody
-                  {...props}
-                  placement={placement}
-                  expanded={expanded()}
-                  machineMenu={machineMenu()}
-                  host={host()}
-                  branchName={branchName()}
-                  worktree={facts().worktree}
-                  work={work()}
-                  fallbackWork={props.work}
-                  diff={diff()}
-                  changes={changes()}
-                  renderMachineIcon={() => <MachineIcon />}
-                />
-              </ChatLazyBoundary>
-            </ChatDetailsDesktopSection>
-          </div>
-        );
-        // The disclosure must restore its initial body before measuring the whole entrance.
-        onSettled(() =>
-          initiallyEmpty() && props.presented ? animateDetailsDesktopEntrance(shell) : undefined,
-        );
-        return content;
-      }}
-    </Show>,
+              props.onExpandedChange?.(next);
+            }}
+            metadata={
+              <Show when={!expanded()}>
+                <span class="chat-environment-desktop__summary">
+                  <Show
+                    when={summaryHost()}
+                    fallback={
+                      <Show when={workspace()?.branch}>
+                        {(branch) => {
+                          const overflow = useScrollState(true, false);
+                          return (
+                            <span ref={overflow} class="chat-environment-desktop__branch">
+                              {branch()}
+                            </span>
+                          );
+                        }}
+                      </Show>
+                    }
+                  >
+                    <MachineIcon />
+                    <span ref={createTextOverflow(summaryHost)} title={summaryHost()}>
+                      {summaryHost()}
+                    </span>
+                  </Show>
+                </span>
+              </Show>
+            }
+          >
+            <ChatLazyBoundary>
+              <ChatDetailsEnvironmentBody
+                {...props}
+                placement={placement}
+                expanded={expanded()}
+                machineMenu={machineMenu()}
+                host={host()}
+                branchName={branchName()}
+                worktree={facts().worktree}
+                accessoryPresent={accessoryPresent()}
+                accessoryPresented={props.presented && (expanded() || !hasContent())}
+                onAccessoryPresenceChange={setAccessoryPresent}
+                diff={diff()}
+                changes={changes()}
+                renderMachineIcon={() => <MachineIcon />}
+              />
+            </ChatLazyBoundary>
+          </ChatDetailsDesktopSection>
+        </div>
+      );
+      // The disclosure must restore its initial body before measuring the whole entrance.
+      onSettled(() =>
+        initiallyEmpty() && props.presented && hasContent()
+          ? animateDetailsDesktopEntrance(shell)
+          : undefined,
+      );
+      return content;
+    })(),
   ];
 }

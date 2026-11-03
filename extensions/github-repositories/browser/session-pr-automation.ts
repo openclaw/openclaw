@@ -11,7 +11,7 @@ import {
   ciAutomationJobMatches,
   type CiAutomationOption,
   type CiAutomationTarget,
-} from "./session-pr-automation-spec.ts";
+} from "../session-pr-automation-api.ts";
 export type CiAutomationJobs = Partial<Record<CiAutomationOption, CronJob>>;
 
 /** Cron owns durable settings, execution and access; this is only a scoped projection. */

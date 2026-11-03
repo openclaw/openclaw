@@ -6,13 +6,19 @@ import { pathToFileURL } from "node:url";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { Value } from "typebox/value";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import * as oauth from "../../../extensions/github-repositories/account-runtime-api.js";
+import * as publicationTarget from "../../../extensions/github-repositories/publication-target-api.js";
+import {
+  createGitHubPublicationProvider,
+  readRepositoryServices,
+} from "../../../extensions/github-repositories/runtime-api.js";
+import * as identity from "../../../extensions/github-repositories/tool-identity-api.js";
 import { SessionGitHubReadinessResultSchema } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as identity from "../../agents/github-tool-identity.js";
+import { createGitHubPublishTool } from "../../agents/test-helpers/github-plugin-tools.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import * as gatewayTransport from "../../agents/tools/gateway.js";
-import { createGitHubPublishTool } from "../../agents/tools/github-publish-tool.js";
 import { runGit } from "../../agents/worktrees/git.js";
 import { insertRegistryWorktree, updateRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
@@ -63,7 +69,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import * as oauth from "../github-oauth-lifecycle.js";
+import { installGitHubAccountFixture } from "../github-account-service.test-support.js";
 import { digestGitHubPublicationRequest } from "../github-publication-receipt.js";
 import {
   claimGitHubPublicationExecutionFixture,
@@ -71,7 +77,6 @@ import {
   insertRepositoryGitHubPublicationFixture,
 } from "../github-publication-store.test-support.js";
 import { insertGitHubPublicationRequest } from "../github-publication-store.worker.js";
-import * as publicationTarget from "../github-publication-target.js";
 import { createGitHubPublicationCoordinator } from "../github-publication.js";
 import { repositoryGitHubPublicationDigest } from "../github-repository-publication.kernel.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
@@ -102,15 +107,28 @@ async function fixture(
 ) {
   await withReadFixture(async (f) => {
     Object.assign(f.context, createContext([], f.context.getRuntimeConfig));
+    const forbidden = () => {
+      throw new Error("Readiness attempted an external effect or credential preparation");
+    };
+    const refresh = vi.fn(forbidden);
+    const provider = createGitHubPublicationProvider({
+      signal: f.readScheduler.signal,
+      assertCurrent: () => f.readScheduler.signal.throwIfAborted(),
+      getConfig: f.context.getRuntimeConfig,
+      refreshIdentity: refresh,
+      refreshPersonal: refresh,
+    });
     const service = createGitHubPublicationCoordinator({
+      provider,
       placements: createWorkerSessionPlacementStore(),
       getCommittedRuntimeConfig: f.context.getRuntimeConfig,
     });
     f.context.githubPublicationService = service;
-    const forbidden = () => {
-      throw new Error("Readiness attempted an external effect or credential preparation");
-    };
+    const services = readRepositoryServices(f.context);
+    assert(services, "Expected the fixture's registered GitHub account service");
+    installGitHubAccountFixture(f.context, services.oauth, service);
     const effects = [
+      refresh,
       vi.spyOn(service, "requestForSessionV2").mockImplementation(forbidden),
       vi.spyOn(service, "preparePersonalStatus").mockImplementation(forbidden),
       vi.spyOn(service, "personalPending").mockImplementation(forbidden),

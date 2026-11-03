@@ -1,13 +1,13 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
-import {
-  availableIdentity,
-  createIdentityFixture,
-} from "../../../../extensions/github-repositories/browser/github-identity-harness.test-support.ts";
-import { githubIdentityViewFixture } from "../../../../extensions/github-repositories/browser/github-identity.test-support.ts";
 import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../api/types.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
+import {
+  availableIdentity,
+  createIdentityFixture,
+} from "../../plugins/github-repositories-integration/github-identity-harness.test-support.ts";
+import { githubIdentityViewFixture } from "../../plugins/github-repositories-integration/github-identity.test-support.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
 import { mountSolid as mountConnected } from "../../test-helpers/mount-solid.ts";
 import { cleanupSolid } from "../../test-helpers/solid-cleanup.ts";
@@ -16,6 +16,7 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createBaseParams,
   createReadToolCatalog,
+  renderIdentitySettings,
   openToolGroups,
 } from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
@@ -337,14 +338,16 @@ describe("agents tools panel (browser)", () => {
           };
       const scope = inherited ? "agent" : "system";
       const { container } = mountTools({
-        githubIdentity: githubIdentityViewFixture({
-          status: {
-            agentId: "main",
-            selectedScope: scope,
-            selected: { scope, configured: false, identity: inherited ? null : effective },
-            effective,
-          },
-        }),
+        renderSettings: renderIdentitySettings(
+          githubIdentityViewFixture({
+            status: {
+              agentId: "main",
+              selectedScope: scope,
+              selected: { scope, configured: false, identity: inherited ? null : effective },
+              effective,
+            },
+          }),
+        ),
       });
       await settleGitHubIdentity(container);
 
@@ -385,7 +388,11 @@ describe("agents tools panel (browser)", () => {
     const githubIdentity = agentIdentity(client);
     await githubIdentity.startAuthorization();
 
-    mountSolid(AgentTools, createBaseParams({ githubIdentity }), container);
+    mountSolid(
+      AgentTools,
+      createBaseParams({ renderSettings: renderIdentitySettings(githubIdentity) }),
+      container,
+    );
     await settleGitHubIdentity(container);
 
     expect(container.textContent).toContain("ABCD-1234");
@@ -405,7 +412,11 @@ describe("agents tools panel (browser)", () => {
     const client = { request: vi.fn() } as never;
     const githubIdentity = agentIdentity(client);
 
-    const view = mountSolid(AgentTools, createBaseParams({ githubIdentity }), container);
+    const view = mountSolid(
+      AgentTools,
+      createBaseParams({ renderSettings: renderIdentitySettings(githubIdentity) }),
+      container,
+    );
     await settleGitHubIdentity(container);
     expect(container.querySelector(".settings-secret input")).toBeNull();
     expect(container.textContent).toContain("Use a PAT instead");
@@ -417,7 +428,9 @@ describe("agents tools panel (browser)", () => {
 
     view.update(
       createBaseParams({
-        githubIdentity: githubIdentityViewFixture({ ...githubIdentity.read(), busy: true }),
+        renderSettings: renderIdentitySettings(
+          githubIdentityViewFixture({ ...githubIdentity.read(), busy: true }),
+        ),
       }),
     );
     await settleGitHubIdentity(container);

@@ -3,12 +3,7 @@ import {
   createControlUiSessionPrRead,
   prepareControlUiSessionPrServiceTarget,
   type ControlUiSessionPrTarget,
-} from "../../extensions/github-repositories/api.js";
-import {
-  githubJson,
-  pullListItem,
-  requestUrl,
-} from "../../extensions/github-repositories/control-ui-session-prs.test-support.js";
+} from "../../extensions/github-repositories/runtime-api.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
@@ -30,6 +25,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
+import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import { prepareTaskPublicationSessions } from "./control-ui-session-task-prs.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { insertRepositoryGitHubPublicationFixture } from "./github-publication-store.test-support.js";

@@ -242,13 +242,9 @@ export function resolveExecPreparedRunEnvironment(
 /** Both approval replay and immediate launch consume the same captured transport facts. */
 export function resolveExecProcessEnvironment(
   host: ExecHost,
-  environment: ReturnType<typeof resolveExecPreparedRunEnvironment>,
+  environment: NonNullable<ExecToolDefaults["preparedRunEnvironment"]>,
 ) {
   return {
-    githubProfileDir:
-      host === "gateway" && environment.managedLocalIdentity
-        ? environment.localIdentityEnv.GH_CONFIG_DIR
-        : undefined,
     wrapLocalLaunch: host === "gateway" ? environment.wrapLocalLaunch : undefined,
     assertExecutionEnvironmentCurrent: environment.assertCurrent,
     transportCredentialScrubEnv: environment.credentialScrubEnv,

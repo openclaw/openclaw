@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { parseGitHubRemoteUrl } from "../../extensions/github-repositories/runtime-api.js";
 import type { SessionGitHubActionParams } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { canPrepareRepositoryWorkspace } from "../agents/sandbox/github-publication.js";
@@ -21,7 +22,6 @@ import {
   type GitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
 import { prepareManagedWorkspaceReviewBase } from "./github-publication-workspace-review.js";
-import { parseGitHubRemoteUrl } from "./github-remote.js";
 import type { RepositoryPublicationProvider } from "./repository-publication-contract.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { isSessionOwnRequester } from "./session-sharing-policy.js";

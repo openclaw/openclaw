@@ -9,7 +9,7 @@ import {
   gitHubPublicApi,
   githubApiToken,
   resolveConfiguredGitHubHost,
-} from "../../extensions/github-repositories/api.js";
+} from "../../extensions/github-repositories/runtime-api.js";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";

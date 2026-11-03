@@ -555,8 +555,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   protected override presentedChanged(presented: boolean): void {
     if (!presented) {
-      // The hidden frame is parked; retire feedback without releasing its admitted publication.
-      this.publication.binding?.sync(null);
       this.retireDetailsOutputs();
       this.retireHeaderSessionMutations();
       this.dashboardPresentationActivation = undefined;

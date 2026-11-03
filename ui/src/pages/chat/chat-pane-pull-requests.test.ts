@@ -8,9 +8,14 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { installRepositoryPresentation } from "../../test-helpers/repository-presentation.test-support.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+} from "./chat-application-context.test-support.ts";
 import {
   account,
   confirmation,
@@ -19,11 +24,7 @@ import {
   requestId,
   shared,
 } from "./chat-github-publication.test-support.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
-  createRenderTestChatPane,
-} from "./chat-pane.test-support.ts";
+import { createRenderTestChatPane } from "./chat-pane.test-support.ts";
 
 /* @vitest-environment jsdom */
 

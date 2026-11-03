@@ -1,7 +1,8 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
+import * as pluginProcessCommands from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createGitHubPublicationProvider } from "../../extensions/github-repositories/publication-provider-api.js";
+import { createGitHubPublicationProvider } from "../../extensions/github-repositories/runtime-api.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import * as registryRead from "../agents/worktrees/registry-read.js";
 import {
   deleteRegistryWorktree,
@@ -9,6 +10,7 @@ import {
   updateRegistryWorktree,
 } from "../agents/worktrees/registry.js";
 import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
+import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import * as configIo from "../config/io.js";
 import {
@@ -20,6 +22,8 @@ import { memorySessionActorOwners } from "../config/sessions/session-actor-memor
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import type { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as processCommands from "../process/exec.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
@@ -399,7 +403,9 @@ it.each(["session", "identity", "discovery"])(
         },
       );
       expect(
-        await qualifyGitHubPublicationSource(session, () => {}, prepared.readCurrent),
+        await qualifyGitHubPublicationSource(session, () => {}, prepared.readCurrent, {
+          supportsOrigin: provider().supportsOrigin,
+        }),
       ).toMatchObject({
         ok: true,
         custody: { kind: "qualified", source: "worktree" },
@@ -486,4 +492,42 @@ it("retains the memory session outside its async scope and rejects a replacement
     ),
   );
   expect(() => prepared.current()).toThrow();
+});
+
+it("requalifies cached physical origins when the selected provider host changes", async () => {
+  let providerConfig: OpenClawConfig = {
+    plugins: { entries: { "github-repositories": { config: { host: "github.com" } } } },
+  };
+  const selected = createGitHubPublicationProvider({
+    getConfig: () => providerConfig,
+    refreshIdentity: async () => {},
+    refreshPersonal: async () => {},
+    assertCurrent: () => service.signal.throwIfAborted(),
+    signal: service.signal,
+  });
+  const origins = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
+  const nativeCommands = vi.spyOn(processCommands, "runCommandBuffered");
+  const pluginCommands = vi.spyOn(pluginProcessCommands, "runCommandBuffered");
+  using prepared = await prepareGitHubPublicationSession(session.sessionKey, {
+    agentId: session.agentId,
+  });
+  const first = await qualifyGitHubPublicationSource(session, () => {}, prepared.readCurrent, {
+    supportsOrigin: selected.supportsOrigin,
+  });
+  expect(first).toMatchObject({ ok: true, target: { kind: "supported", freshness: "observed" } });
+  if (!first.ok) {
+    throw first.cause;
+  }
+  providerConfig = {
+    plugins: { entries: { "github-repositories": { config: { host: "engineering.ghe.com" } } } },
+  };
+  expect(first.assertCurrent).toThrow("target support changed");
+  const second = await qualifyGitHubPublicationSource(session, () => {}, prepared.readCurrent, {
+    supportsOrigin: selected.supportsOrigin,
+  });
+  expect(second).toMatchObject({ ok: true, target: { kind: "unsupported" } });
+  expect(origins).toHaveBeenCalledOnce();
+  expect(mocks.identity).not.toHaveBeenCalled();
+  expect(nativeCommands).not.toHaveBeenCalled();
+  expect(pluginCommands).not.toHaveBeenCalled();
 });

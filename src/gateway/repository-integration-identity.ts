@@ -1,5 +1,8 @@
+import {
+  resolveGitHubHost,
+  resolveGitHubApiBaseUrl,
+} from "../../extensions/github-repositories/runtime-api.js";
 import type { GitHubCredentialReader } from "../agents/github-credential-reader.js";
-import { resolveGitHubHost, resolveGitHubApiBaseUrl } from "../agents/github-host-runtime.js";
 import { getRepositoryIntegration } from "../plugins/repository-integration-runtime.js";
 import type {
   RepositoryActor,

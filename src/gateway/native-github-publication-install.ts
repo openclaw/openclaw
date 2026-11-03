@@ -116,6 +116,11 @@ export async function installRepositoryPublicationProvider(
   const subscribeWorkerIdentityChanges = provider.subscribeWorkerIdentityChanges;
   const adapter: RepositoryPublicationProvider = {
     id: provider.id,
+    supportsOrigin(originUrl) {
+      signal.throwIfAborted();
+      provider.assertCurrent();
+      return provider.supportsOrigin(originUrl);
+    },
     assertCurrent() {
       signal.throwIfAborted();
       provider.assertCurrent();

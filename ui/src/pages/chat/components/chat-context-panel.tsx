@@ -29,7 +29,7 @@ registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 type ContextPageDetails = Pick<
   ChatDetailsProps,
-  "selectedSession" | "currentAgentId" | "pullRequestsGateway" | "runActive" | "onCompact"
+  "selectedSession" | "currentAgentId" | "gateway" | "runActive" | "onCompact"
 > &
   Pick<ContextCompactProps, "compactionStatus">;
 type Usage = NonNullable<ReturnType<typeof getContextNoticeViewModel>>;
@@ -447,7 +447,7 @@ function ChatContextPage(props: {
   const usage = createMemo(() => getContextNoticeViewModel(props.details.selectedSession));
   return (
     <Show
-      when={usage() && props.details.selectedSession && props.details.pullRequestsGateway}
+      when={usage() && props.details.selectedSession && props.details.gateway}
       fallback={
         <ContextEmpty
           message={t(
@@ -457,7 +457,7 @@ function ChatContextPage(props: {
       }
     >
       <ChatContextReport
-        gateway={props.details.pullRequestsGateway!}
+        gateway={props.details.gateway!}
         session={props.details.selectedSession!}
         agentId={props.details.currentAgentId ?? undefined}
         used={usage()!.used}

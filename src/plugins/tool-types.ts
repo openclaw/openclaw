@@ -54,9 +54,12 @@ export type OpenClawPluginToolModelExecution = {
 export type OpenClawPluginToolGateway = Readonly<{
   agentId: string;
   sessionKey: string;
+  /** Captured presentation hints; invocation authority is checked by the host at each effect. */
+  clientCaps: readonly string[];
   workspace: Readonly<{
     publicationAvailable?: boolean;
     controlAvailable: boolean;
+    workspacePreparationAvailable: boolean;
     preparation: "unavailable" | "in-place" | "handoff";
     refreshBaseAvailable: boolean;
     evidenceAvailable: boolean;

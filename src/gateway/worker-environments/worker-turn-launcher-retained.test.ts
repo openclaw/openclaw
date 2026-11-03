@@ -25,13 +25,7 @@ import {
 import { useRepositoryWorkspaceResultFixture } from "./workspace-result-repository.test-support.js";
 
 // mock-isolation: Local Git origin and provider/node/bundle fixtures; no cloud or model.
-vi.mock("./repository-github-identity.js", () => ({
-  prepareRepositoryGitHubIdentity: async (_agentId: string, assertCurrent: () => void) => ({
-    token: undefined,
-    assertSelected: assertCurrent,
-    start: async (start: () => Promise<unknown>) => await start(),
-  }),
-}));
+
 useRepositoryWorkspaceResultFixture();
 let wire: Awaited<ReturnType<typeof openDiskCleanupTransport>>;
 beforeAll(async () => {
