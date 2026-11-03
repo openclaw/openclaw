@@ -3,6 +3,7 @@ import { getEventStreamCompletion } from "@openclaw/ai/internal/runtime";
 import { resetApiProviders } from "@openclaw/ai/providers";
 import type { AssistantMessageEvent, StreamFn } from "@openclaw/llm-core";
 import { expect, it, vi } from "vitest";
+import { collect } from "../../test/helpers/async-iterable.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
@@ -22,8 +23,7 @@ function runtime(factory: StreamFn) {
 it("registers once, preserves producers and lazy results, and survives builtin refresh", async () => {
   const registry = createApiRegistry();
   const source = createAssistantMessageEventStream();
-  const result = vi.fn(async () => repaired);
-  source.result = result;
+  source.result = vi.fn(async () => repaired);
   const factory = () => source;
   expect(ensureCustomApiRegistered(registry, model.api, factory)).toBe(true);
   expect(ensureCustomApiRegistered(registry, model.api, factory)).toBe(false);
@@ -35,7 +35,7 @@ it("registers once, preserves producers and lazy results, and survives builtin r
   expect(getEventStreamCompletion(stream)).toBe(getEventStreamCompletion(source));
   source.push({ type: "done", reason: "stop", message });
   await expect(getEventStreamCompletion(stream)).resolves.toBe(message);
-  expect(result).not.toHaveBeenCalled();
+  expect(source.result).not.toHaveBeenCalled();
   await expect(stream.result()).resolves.toBe(repaired);
   expect(registry.getApiProvider("openai-responses")).toBeDefined();
 });
@@ -54,7 +54,7 @@ it.for(["sync", "async"])("preserves %s readonly events and independent results"
   const rt = runtime(() => (kind === "sync" ? source : Promise.resolve(source)));
   const stream = rt.stream(model, context),
     result = stream.result();
-  expect(await Array.fromAsync(stream)).toEqual(events);
+  expect(await collect(stream)).toEqual(events);
   await expect(getEventStreamCompletion(stream)).resolves.toBe(message);
   await expect(result).resolves.toBe(repaired);
   await expect(rt.completeSimple(model, context)).resolves.toBe(repaired);
