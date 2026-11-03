@@ -733,8 +733,7 @@ suite.define(() => {
 
     await page.goto(`${suite.server?.baseUrl ?? ""}new`);
     // Playwright check()/isChecked() support role="switch" buttons via aria-checked.
-    const draftToggle = page.getByRole("switch", { name: "Draft", exact: true });
-    await page.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
+    const draftToggle = page.getByRole("switch", { name: /^Draft:/ });
     await draftToggle.waitFor();
 
     await draftToggle.check();
@@ -1007,7 +1006,7 @@ suite.define(() => {
       if (!refused) {
         await expectBrowser(notice).toBeVisible();
       }
-      await expectBrowser(page.locator(".new-session-page__visibility--draft")).toHaveAttribute(
+      await expectBrowser(page.locator(".new-session-page__draft-toggle")).toHaveAttribute(
         "aria-checked",
         "true",
       );

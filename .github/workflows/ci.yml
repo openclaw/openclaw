@@ -6163,9 +6163,21 @@ jobs:
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: *cache_mode
+          cache-mode: "off"
           install-bun: "false"
+          install-deps: "false"
           node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}
+
+      - name: Install iOS screenshot asset dependencies
+        env:
+          CI: "true"
+        run: |
+          pnpm install --frozen-lockfile --prefer-offline --optional \
+            --filter '@openclaw/mermaid-renderer...' \
+            --config.ignore-scripts=false \
+            --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true \
+            --config.side-effects-cache=true
 
       - name: Install iOS screenshot tooling
         run: |
@@ -6411,25 +6423,6 @@ jobs:
         with:
           cache-mode: ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
           install-native-deps: ${{ needs.preflight.outputs.use_compatible_android_ci != 'true' && 'true' || 'false' }}
-
-      - name: Mount Gradle sticky disk
-        if: &android_gradle_sticky_disk_gate vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !(contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt > 1) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
-        with:
-          # One disk per matrix task keeps thin dependency sets off heavier lanes. Gradle owns invalidation.
-          key: ${{ github.repository }}-gradle-v2-${{ matrix.task }}
-          path: /var/tmp/openclaw-gradle
-          # Only successful protected pushes publish. Explicit commit:true refreshes same-size changes.
-          commit: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
-
-      - name: Point Gradle at the sticky disk
-        if: *android_gradle_sticky_disk_gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          sticky_root=/var/tmp/openclaw-gradle
-          mkdir -p "$sticky_root/gradle-user-home"
-          echo "GRADLE_USER_HOME=$sticky_root/gradle-user-home" >> "$GITHUB_ENV"
 
       - name: Restore Robolectric Maven cache
         id: robolectric-cache
@@ -6993,7 +6986,7 @@ jobs:
       - docker-seed-e2e
       - published-driver-update
       - postgres-conformance
-    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft }}
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || github.repository != 'openclaw/openclaw' || github.event.pull_request.head.repo.full_name != github.repository || needs.preflight.outputs.runner_profile == 'github') && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
     outputs:
@@ -7143,7 +7136,7 @@ jobs:
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
             published-driver-update=${{ needs.published-driver-update.result }}|${{ needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha }}
             postgres-conformance=${{ needs.postgres-conformance.result }}|${{ needs.preflight.outputs.run_postgres_conformance }}
-            pr-failure-report=${{ (github.run_attempt != 1 || needs.preflight.outputs.run_checks_node_core_nondist != 'true') && 'skipped' || needs.pr-failure-report.result }}|${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' }}
+            pr-failure-report=${{ (github.run_attempt != 1 || needs.preflight.outputs.run_checks_node_core_nondist != 'true') && 'skipped' || needs.pr-failure-report.result }}|${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
         run: |
           set -euo pipefail
           echo "release fast lane: ${RELEASE_FAST_LANE:-false}"

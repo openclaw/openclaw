@@ -123,6 +123,7 @@ export function createDeferredGatewaySubagentRuntime(
     },
     complete: (...args) => runtime.subagent.complete(...args),
     forkSession: (...args) => runtime.subagent.forkSession(...args),
+    runForkedTurn: (params) => runtime.subagent.runForkedTurn(params),
     run: (...args) => runtime.subagent.run(...args),
     waitForRun: (...args) => runtime.subagent.waitForRun(...args),
     getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),

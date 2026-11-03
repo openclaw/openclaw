@@ -269,13 +269,21 @@ keys or request values. Worktree preparation measures only work required before
 the response; provisioning already deferred to an initial turn stays with that
 turn's lifecycle.
 
-At trace log level, chat startup diagnostics break `detail.attempt.system-prompt`
+Slow chat startup diagnostics break `detail.attempt.system-prompt`
 into sandbox policy,
 tool catalog text, session entry, runtime facts, reference paths, provider
 contributions, memory and watched-session context, project memory, TTS preferences,
 rendering, and reporting. These `detail.attempt.system-prompt.*` phases measure
 elapsed preparation time, including awaited work, without recording prompt content.
 The parent and nested phase totals overlap; do not add them together as CPU time.
+
+`detail.attempt.bundle-tools.*` separates core normalization, MCP configuration,
+runtime acquisition and materialization, LSP startup, policy filtering, bundled
+normalization, final projection, and cleanup after failure. These fixed phases
+appear in the existing `slow chat send` record without trace logging or timeline
+configuration. Workspace bootstrap reads and skill preparation belong to the
+separate `attempt.bootstrap` and `attempt.skills` stages; plugin tool factories
+run in `attempt.tool-base`.
 
 Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;

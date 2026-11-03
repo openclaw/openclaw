@@ -535,9 +535,19 @@ parents as inclusive totals; do not add a parent to its children. Prompt-media
 warnings beginning `Native image:` concern image-file access, not container-image
 validation, and occur outside attempt setup.
 
+Fresh managed sandbox projections also record fixed stages beneath
+`sandbox.workspace_selection.prepare.reconcile`: template selection and cloning,
+checkout packing, indexing and materialization, manifest scanning, publication,
+and cleanup. `dependency.install` separates package installation from
+`dependency.retire`, which includes removing the disposable builder before its
+files can be published. A slow reconcile total can therefore reflect container
+removal even after the installer has exited.
+
 `detail.worktree.managed.*` and `detail.worktree.sandbox.*` carry the worktree
 owner's recorded phase durations, including `templatePrepare`, `templateApply`,
-`checkout`, `runtimeQuiesce`, `runtimeResume`, and `unattributed`. Runtime quiescence
+`templateValidate`, `templateRetire`, `checkout`, `runtimeQuiesce`, `runtimeResume`,
+and `unattributed`. Template retirement includes removing an obsolete generation;
+it is separate from retiring a dependency builder. Runtime quiescence
 and resume include pausing and unpausing sandbox writers around synchronization.
 The top-level `worktree` interval can describe an
 earlier managed checkout; it is not the sandbox work inside `attempt.setup`.

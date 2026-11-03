@@ -213,9 +213,14 @@ bookkeeping available while the installed package is missing. An untouched
 publication preparation is retired and the verified original Gateway restored;
 an interrupted publication completes the recorded candidate, runs post-core
 repair as the same update's continuation, then restarts and verifies the managed
-Gateway. Update history records rollback, success with recovery, or an actionable
-failure. Lost ownership, named data risk, and unverifiable runtime identity still
-keep the Gateway stopped. The helper that starts the update must contain this
+Gateway. A plugin cohort that the killed updater reserved for this update is
+settled by that continuation before Doctor runs; after a restored original,
+the original runtime settles it before the Gateway restarts. If that settlement
+fails, the original Gateway still restarts and update history names
+`openclaw update repair` before the next update. The helper never settles a cohort
+that belongs to another update. Update history records rollback, success with
+recovery, or an actionable failure. Lost ownership, named data risk, and
+unverifiable runtime identity still keep the Gateway stopped. The helper that starts the update must contain this
 change; staging a newer candidate cannot repair an older helper.
 
 During overlapping Gateway restarts, config recovery reads health facts through
