@@ -1424,7 +1424,6 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 
 .callout.danger,
 .callout.warn {
-  border-color: color-mix(in srgb, var(--callout-tone) 34%, var(--border));
   background: linear-gradient(
     135deg,
     color-mix(in srgb, var(--callout-tone) 14%, var(--bg-elevated)) 0%,
@@ -1435,7 +1434,6 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 
 .callout.info,
 .callout.success {
-  border-color: color-mix(in srgb, var(--callout-tone) 25%, transparent);
   background: linear-gradient(
     135deg,
     color-mix(in srgb, var(--callout-tone) 8%, transparent) 0%,
@@ -1536,20 +1534,15 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 }
 
 .lazy-view-error__icon {
-  width: 44px;
-  height: 44px;
   display: grid;
   place-items: center;
-  border-radius: 50%;
-  background: var(--danger-subtle);
   color: var(--danger);
   margin-bottom: 4px;
 }
 
 /* A stale-chunk reload prompt is routine after an update, not a failure. */
 .lazy-view-error--stale .lazy-view-error__icon {
-  background: var(--accent-subtle);
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .lazy-view-error__icon svg {
@@ -2553,9 +2546,9 @@ select.data-table-pagination__size {
 
 .agent-select__chevron svg,
 .agent-select__avatar--icon svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.7px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .agent-select--compact .agent-select__trigger,

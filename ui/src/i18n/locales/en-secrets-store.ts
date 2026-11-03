@@ -4,15 +4,12 @@ import { en } from "./en.ts";
 const enSecretsStore = {
   secretsStore: {
     name: "Name",
-    access: "Access",
     accessMode: "Access mode",
     value: "Value",
     allowedHosts: en.secretsStore.allowedHosts,
     allowedHostsPlaceholder: en.secretsStore.allowedHostsPlaceholder,
     allowedHostsHint:
       "Exact hostnames only, one per line or comma-separated. No wildcards or ports.",
-    noAllowedHosts: "None",
-    updated: "Last updated",
     by: "{time} by {name}",
     actions: "Actions",
     add: "Add",
