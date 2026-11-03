@@ -3,7 +3,7 @@ import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { expect, it } from "vitest";
-import llamaCppProviderDiscovery from "../../provider-discovery.js";
+import { llamaCppProviderDiscovery } from "../../provider-discovery.js";
 import { discoverLlamaServer } from "./discovery.js";
 import { prepareLlamaServerSetup } from "./setup.js";
 

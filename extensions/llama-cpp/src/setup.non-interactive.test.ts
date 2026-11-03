@@ -12,6 +12,9 @@ const { default: plugin } = await import("../index.js");
 const localChoice =
   manifest.providerAuthChoices.find((choice) => choice.method === "local") ??
   assert.fail("managed llama.cpp must declare its local auth choice");
+const cliOption = localChoice.cliOption ?? assert.fail("managed setup CLI option is required");
+const cliFlag = localChoice.cliFlag ?? assert.fail("managed setup CLI flag is required");
+const optionKey = localChoice.optionKey ?? assert.fail("managed setup option key is required");
 
 function setupContext(): ProviderAuthMethodNonInteractiveContext {
   return {
@@ -20,8 +23,8 @@ function setupContext(): ProviderAuthMethodNonInteractiveContext {
     baseConfig: {},
     opts: new Command()
       .exitOverride()
-      .option(localChoice.cliOption)
-      .parse([localChoice.cliFlag], { from: "user" })
+      .option(cliOption)
+      .parse([cliFlag], { from: "user" })
       .opts<Record<string, unknown>>(),
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     resolveApiKey: vi.fn(),
@@ -53,7 +56,7 @@ describe("managed llama.cpp non-interactive onboarding", () => {
 
   it("downloads only embeddings and preserves chat, unrelated providers and auth bindings", async () => {
     const ctx = setupContext();
-    expect(ctx.opts).toEqual({ [localChoice.optionKey]: true });
+    expect(ctx.opts).toEqual({ [optionKey]: true });
     ctx.config.agents = { defaults: { model: { primary: "openai/gpt-5.4" } } };
     ctx.config.models = {
       providers: { other: { baseUrl: "http://localhost:8080/v1", models: [] } },

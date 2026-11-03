@@ -5,7 +5,7 @@ import type {
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import llamaCppProviderDiscovery from "../provider-discovery.js";
+import { llamaCppProviderDiscovery } from "../provider-discovery.js";
 import { LLAMA_CPP_PROVIDER_ID, LLAMA_CPP_PROVIDER_LABEL } from "./defaults.js";
 import { LLAMA_SERVER_DEFAULT_ORIGIN } from "./external-server/defaults.js";
 
