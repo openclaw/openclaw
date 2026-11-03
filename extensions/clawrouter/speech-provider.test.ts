@@ -892,7 +892,11 @@ describe("ClawRouter native Azure SSML speech", () => {
     "rejects invalid XML text before transmission (%j)",
     async (text) => {
       await withFixture(async (fixture) => {
-        expect((await fixture.tts({ cfg: selectAzure(fixture), text })).success).toBe(false);
+        const cfg = selectAzure(fixture);
+        // Check the registered provider before the host's Markdown normalizer can repair NUL.
+        await expect(
+          speech(cfg).synthesize({ ...fixture.request(cfg.tts.providers.clawrouter), cfg, text }),
+        ).rejects.toThrow("valid XML text");
         expect(fixture.requests).toHaveLength(0);
       }, respondAzure);
     },
