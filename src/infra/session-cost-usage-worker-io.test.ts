@@ -150,11 +150,7 @@ it("reads recorded usage across append, rewrite, and rollup replacement without 
         sessionId: "usage-rewrite",
         storePath: database.path,
       });
-      const sessionFile = formatSqliteSessionFileMarker({
-        agentId: scope.agentId,
-        sessionId: scope.sessionId,
-        storePath: database.path,
-      });
+      const sessionFile = formatSqliteSessionFileMarker({ ...scope, storePath: database.path });
       const refresh = () => refreshUsage({ agentId: "main", sessionFiles: [sessionFile] });
       const cached = (reportBudgetBytes?: number) =>
         loadCached({
@@ -293,11 +289,7 @@ it("filters refresh work before reading historical transcripts", async () => {
         });
         return {
           scope,
-          sessionFile: formatSqliteSessionFileMarker({
-            agentId: "main",
-            sessionId,
-            storePath: database.path,
-          }),
+          sessionFile: formatSqliteSessionFileMarker({ ...scope, storePath: database.path }),
         };
       });
       const transact = <T>(write: (owner: typeof database) => T) =>
