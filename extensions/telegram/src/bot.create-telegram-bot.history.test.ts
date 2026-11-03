@@ -134,7 +134,7 @@ it("bounds the automatic window without deleting quiet history after reopen", as
 it("attaches photos the sender posted just before a separate mention", async () => {
   const bot = await createBot(false, true, cfg);
   const now = Math.floor(Date.now() / 1000);
-  const photo = (fileId: string, date: number, sender: typeof from = from) => {
+  const photo = (fileId: string, date: number, sender: Message["from"] = from) => {
     const { text: _text, entities: _entities, ...base } = message("", { chat: group, date });
     return {
       ...base,
@@ -145,10 +145,31 @@ it("attaches photos the sender posted just before a separate mention", async () 
   const stale = photo("stale-photo", now - 300);
   const other = photo("other-photo", now - 5, { ...from, id: 42002, first_name: "Bob" });
   const fresh = photo("fresh-photo", now - 4);
+  const sticker = () => {
+    const {
+      text: _text,
+      entities: _entities,
+      ...base
+    } = message("", { chat: group, date: now - 3 });
+    const fileId = `sticker-${base.message_id}`;
+    return {
+      ...base,
+      sticker: {
+        file_id: fileId,
+        file_unique_id: `${fileId}-u`,
+        type: "regular",
+        width: 512,
+        height: 512,
+        is_animated: false,
+        is_video: false,
+      },
+    };
+  };
   for (const entry of [
     stale,
     other,
     fresh,
+    ...Array.from({ length: 4 }, sticker),
     message("from today", { chat: group, date: now - 2 }),
   ]) {
     await receive(bot, { message: entry });

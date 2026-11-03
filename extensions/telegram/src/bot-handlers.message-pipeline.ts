@@ -508,15 +508,18 @@ export function createTelegramMessagePipeline({
           promptContext,
           senderId: String(senderId),
           sinceMs: params.msg.date * 1000 - SENDER_MEDIA_MAX_AGE_MS,
-        }).slice(-SENDER_MEDIA_LIMIT);
-        const media: TelegramMediaRef[] = [];
+        });
+        const photos = [];
         for (const messageId of messageIds) {
           const node = await getCachedMessage(params.msg.chat.id, messageId);
           const primary = resolveTelegramPrimaryMedia(node?.sourceMessage);
-          const mediaRef =
-            node && primary?.kind === "image"
-              ? await hydrateMedia(node.sourceMessage, primary.fileRef.file_id, node)
-              : undefined;
+          if (node && primary?.kind === "image") {
+            photos.push({ messageId, node, fileId: primary.fileRef.file_id });
+          }
+        }
+        const media: TelegramMediaRef[] = [];
+        for (const { messageId, node, fileId } of photos.slice(-SENDER_MEDIA_LIMIT)) {
+          const mediaRef = await hydrateMedia(node.sourceMessage, fileId, node);
           if (!mediaRef) {
             continue;
           }
