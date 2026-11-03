@@ -22,7 +22,7 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
-    @Test func localDeviceSettingsUseBrandedTypography() throws {
+    @Test func `local device settings use branded typography`() throws {
         let source = try String(
             contentsOf: Self.sourceURL("Settings/DeviceSettings/LocalDeviceSettingsScreen.swift"),
             encoding: .utf8)

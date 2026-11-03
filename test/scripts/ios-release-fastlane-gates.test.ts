@@ -887,7 +887,13 @@ puts JSON.generate(rows)
   });
 
   it("captures each release screen from an independent direct launch", () => {
-    const snapshotUITest = readFileSync(snapshotUITestPath, "utf8");
+    const snapshotUITest = [
+      snapshotUITestPath,
+      path.join(path.dirname(snapshotUITestPath), "OpenClawSnapshotUITests+Chat.swift"),
+      path.join(path.dirname(snapshotUITestPath), "OpenClawSnapshotUITests+Helpers.swift"),
+    ]
+      .map((file) => readFileSync(file, "utf8"))
+      .join("\n");
     const releaseTests = [
       ["testReleaseControlScreenshot", "controlScreenshotTarget"],
       ["testReleaseChatScreenshot", "chatScreenshotTarget"],

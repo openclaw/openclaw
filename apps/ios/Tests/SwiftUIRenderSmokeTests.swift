@@ -35,7 +35,7 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
-    @Test @MainActor func localDeviceSettingsBuildAcrossDeviceWidthsAndTextSizes() {
+    @Test @MainActor func `local device settings build across device widths and text sizes`() {
         var windows: [UIWindow] = []
         defer { windows.forEach { $0.isHidden = true } }
         for width in [320.0, 768.0] {
