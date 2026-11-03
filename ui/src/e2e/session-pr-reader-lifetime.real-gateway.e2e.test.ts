@@ -318,7 +318,7 @@ suite.define(() => {
         const serviceScheduling = await import("../../../src/plugins/service-scheduler.ts");
         const createScheduling = serviceScheduling.createPluginServiceScheduler;
         // Plugin maintenance uses controlled time; Gateway I/O and browser clocks stay real.
-        const subscriptionFactory = vi
+        const serviceSchedulerFactory = vi
           .spyOn(serviceScheduling, "createPluginServiceScheduler")
           .mockImplementation((_gatewayScheduler, runOwned) =>
             createScheduling(refreshScheduler, runOwned),
@@ -332,9 +332,9 @@ suite.define(() => {
             sidecarStartup: "defer",
           });
           await gateway.startupSettled;
-          expect(subscriptionFactory).toHaveBeenCalledOnce();
+          expect(serviceSchedulerFactory).toHaveBeenCalled();
         } finally {
-          subscriptionFactory.mockRestore();
+          serviceSchedulerFactory.mockRestore();
         }
         // Chromium does not consistently apply extraHTTPHeaders to WebSocket upgrades.
         proxy = await createGatewayProxy(state.workspaceDir, {
