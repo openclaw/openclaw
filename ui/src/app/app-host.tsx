@@ -46,6 +46,7 @@ import type { SolidReadinessShell } from "./control-ui-readiness-solid.ts";
 import type { ControlUiReadiness, ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
+import { floatingRefreshNoticeVisible } from "./navigation-surface.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { RouteElements, type RouteElementEvent } from "./route-elements.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
@@ -486,9 +487,16 @@ export class ShellOwner
       if (!state.settingsTakeover && !state.nativeEmbed) {
         Object.assign(this.navigationSidebar, state.sidebarProperties, {
           gatewayStatus: state.gatewayStatus,
+          refreshNotice: state.floatingUpdateCard.refreshInSidebar
+            ? state.floatingUpdateCard
+            : null,
           connectionRecovery: this.connectionRecovery,
           connectionFlagVisible: this.connectionFlagVisible,
-          connectionFlagAllowed: state.navCollapsed && !state.mobileNavLayout,
+          // The floating refresh notice already speaks for the collapsed rail.
+          connectionFlagAllowed:
+            state.navCollapsed &&
+            !state.mobileNavLayout &&
+            !floatingRefreshNoticeVisible(state.floatingUpdateCard),
         });
       }
       this.syncNavigationPresentation(state);

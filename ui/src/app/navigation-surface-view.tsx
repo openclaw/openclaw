@@ -3,7 +3,10 @@ import type { SidebarAttentionElementAttributes } from "../components/sidebar-at
 import { t } from "../lib/reactive/i18n.ts";
 import { ShellComponentBoundary } from "./app-shell-component-boundary.tsx";
 import type { ApplicationContext } from "./context.ts";
-import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
+import {
+  floatingRefreshNoticeVisible,
+  floatingSidebarAttentionVisible,
+} from "./navigation-surface.ts";
 import { isStaleChunkImportError, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
 const UpdateCard = lazy(
@@ -29,6 +32,7 @@ type FloatingUpdateCardProps = {
   updateRun?: ApplicationContext["overlays"]["snapshot"]["updateRun"];
   statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
   refreshRequired: boolean;
+  refreshInSidebar: boolean;
   onRefresh: () => Promise<boolean>;
   onNavigate?: ApplicationContext["navigate"];
 };
@@ -49,19 +53,38 @@ export function FloatingUpdateCard(props: FloatingUpdateCardProps) {
           <SidebarAttention class="sidebar-attention--floating" onNavigate={props.onNavigate} />
         </ShellComponentBoundary>
       </Show>
-      <Show when={!props.compact && props.refreshRequired}>
-        <Errored fallback={null}>
-          <Loading>
-            <UpdateCard
-              class="sidebar-update-card--floating"
-              updateRun={props.updateRun ?? null}
-              statusBanner={props.statusBanner ?? null}
-              refreshRequired={props.refreshRequired}
-              onRefresh={props.onRefresh}
-            />
-          </Loading>
-        </Errored>
+      <Show when={floatingRefreshNoticeVisible(props)}>
+        <ControlUiRefreshNotice
+          placement="floating"
+          updateRun={props.updateRun}
+          statusBanner={props.statusBanner}
+          onRefresh={props.onRefresh}
+        />
       </Show>
     </>
+  );
+}
+
+export type ControlUiRefreshNoticeProps = {
+  placement: "sidebar" | "floating";
+  updateRun?: ApplicationContext["overlays"]["snapshot"]["updateRun"];
+  statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
+  onRefresh: () => Promise<boolean>;
+};
+
+/** The server-updated notice; the sidebar hosts it when visible, otherwise it floats. */
+export function ControlUiRefreshNotice(props: ControlUiRefreshNoticeProps) {
+  return (
+    <Errored fallback={null}>
+      <Loading>
+        <UpdateCard
+          class={`refresh-notice-host--${props.placement}`}
+          updateRun={props.updateRun ?? null}
+          statusBanner={props.statusBanner ?? null}
+          refreshRequired
+          onRefresh={props.onRefresh}
+        />
+      </Loading>
+    </Errored>
   );
 }

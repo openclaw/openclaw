@@ -4,6 +4,7 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
 import { NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT } from "../app/native-link-routing.ts";
 import { formatDateTimeMs } from "../lib/format.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
@@ -14,7 +15,7 @@ import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update
 
 let originalWebkit: PropertyDescriptor | undefined;
 const checkFailure = "Could not check the latest update";
-const reconnectFailure = "Could not refresh. Check your connection and try again.";
+const reconnectFailure = "Couldn't reach the server";
 async function settle() {
   await Promise.resolve();
   flush();
@@ -426,12 +427,12 @@ describe("SidebarUpdateCard", () => {
       .mockReturnValueOnce(third.promise);
     await element.update({ refreshRequired: true, onRefresh });
 
-    element.action()?.click();
+    element.find<HTMLButtonElement>(".refresh-notice__surface")?.click();
     await settle();
 
     await element.update({ refreshRequired: false });
     await element.update({ refreshRequired: true });
-    const action = element.action();
+    const action = element.find<HTMLButtonElement>(".refresh-notice__surface");
     action?.click();
     await settle();
     expect(onRefresh).toHaveBeenCalledTimes(2);
@@ -451,18 +452,36 @@ describe("SidebarUpdateCard", () => {
     expect(element.text()).toContain(reconnectFailure);
     await element.update({ connected: true });
     expect(element.text()).toContain(reconnectFailure);
-    expect(action?.textContent).toContain("Retry now");
+    expect(action?.textContent).toContain("Retry");
     action?.click();
     expect(onRefresh).toHaveBeenCalledTimes(3);
     await settle();
-    expect(element.action()).toBe(action);
+    expect(element.find<HTMLButtonElement>(".refresh-notice__surface")).toBe(action);
     expect(element.text()).not.toContain(reconnectFailure);
     third.resolve(true);
     await settle();
     await element.update({ connected: false });
-    expect(element.action()).toBe(action);
+    expect(element.find<HTMLButtonElement>(".refresh-notice__surface")).toBe(action);
     expect(action?.disabled).toBe(true);
-    expect(action?.textContent).toContain("Reloading");
+    expect(action?.textContent).toContain("Refreshing");
+  });
+
+  it("keeps a guard-blocked refresh out of the connection failure state", async () => {
+    const element = await mount(null);
+    const releaseGuard = registerControlUiReloadGuard(
+      () => false,
+      () => undefined,
+    );
+    try {
+      await element.update({ refreshRequired: true, onRefresh: async () => false });
+      const action = element.find<HTMLButtonElement>(".refresh-notice__surface");
+      action?.click();
+      await vi.waitFor(() => expect(element.text()).toContain("Unsent message in this tab"));
+      expect(element.text()).not.toContain(reconnectFailure);
+      expect(element.find(".sidebar-update-card__status")).toBeNull();
+    } finally {
+      releaseGuard();
+    }
   });
 
   it.each([false, true])(

@@ -27,6 +27,7 @@ import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./nat
 import {
   floatingSidebarAttentionVisible,
   navigationSurfaceIsHidden,
+  refreshNoticeInSidebar,
   NAVIGATION_RAIL_WIDTH,
   type ShellNavigationElements,
 } from "./navigation-surface.ts";
@@ -269,8 +270,25 @@ export function readShellView(host: ShellViewHost) {
       : 0,
     onRetry: callbacks.retryGateway,
   };
+  // Settings and native embeds replace the sidebar, so their notice floats.
+  const refreshInSidebar = () =>
+    controlUiRefreshRequired &&
+    !settingsTakeover &&
+    !nativeEmbed &&
+    refreshNoticeInSidebar({
+      onboarding,
+      navCollapsed: navCollapsed(),
+      navDrawerOpen: navDrawerOpen(),
+      mobileNavLayout,
+    });
+  // The refresh notice takes the badge's place below the phone header.
   const mobileGatewayStatus = () =>
-    mobileNavLayout && !navDrawerOpen() && !nativeEmbed ? gatewayStatus : null;
+    mobileNavLayout &&
+    !navDrawerOpen() &&
+    !nativeEmbed &&
+    !(controlUiRefreshRequired && gatewayStatus.kind === "reload-required")
+      ? gatewayStatus
+      : null;
   const floatingUpdateCard = {
     get navigationSurfaceHidden() {
       return navigationSurfaceHidden();
@@ -281,6 +299,9 @@ export function readShellView(host: ShellViewHost) {
     statusBanner: overlaySnapshot.updateStatusBanner,
     updateRun: overlaySnapshot.updateRun,
     refreshRequired: controlUiRefreshRequired,
+    get refreshInSidebar() {
+      return refreshInSidebar();
+    },
     onRefresh: host.refreshControlUi,
     onNavigate: host.shellNavigation.navigate,
   };

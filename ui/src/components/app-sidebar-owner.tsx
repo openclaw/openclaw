@@ -4,6 +4,7 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import { isSessionRouteId } from "../app-route-paths.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
+import { ControlUiRefreshNotice } from "../app/navigation-surface-view.tsx";
 import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
@@ -603,6 +604,16 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                 <div class="sidebar-shell__connection">
                   <GatewayStatus {...this.gatewayStatus!} row />
                 </div>
+              </Show>
+              <Show when={this.refreshNotice}>
+                {(notice) => (
+                  <ControlUiRefreshNotice
+                    placement="sidebar"
+                    updateRun={notice().updateRun}
+                    statusBanner={notice().statusBanner}
+                    onRefresh={notice().onRefresh}
+                  />
+                )}
               </Show>
             </div>
             <Show when={this.devGitBranch}>

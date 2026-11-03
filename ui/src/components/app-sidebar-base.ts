@@ -3,6 +3,7 @@ import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigati
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
+import type { ControlUiRefreshNoticeProps } from "../app/navigation-surface-view.tsx";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
@@ -32,6 +33,7 @@ export type AppSidebarProps = {
   connected: boolean;
   connectionStatus: GatewayStatus | null;
   gatewayStatus: GatewayStatusProps | null;
+  refreshNotice: Omit<ControlUiRefreshNoticeProps, "placement"> | null;
   connectionRecovery: boolean;
   connectionFlagVisible: boolean;
   connectionFlagAllowed: boolean;
@@ -74,6 +76,7 @@ export const appSidebarProperties = {
   connected: { default: false, attribute: false },
   connectionStatus: { default: null, attribute: false },
   gatewayStatus: { default: null, attribute: false },
+  refreshNotice: { default: null, attribute: false },
   connectionRecovery: { default: false, attribute: false },
   connectionFlagVisible: { default: false, attribute: false },
   connectionFlagAllowed: { default: false, attribute: false },
@@ -119,6 +122,7 @@ export abstract class AppSidebarBase {
   declare connected: AppSidebarProps["connected"];
   declare connectionStatus: AppSidebarProps["connectionStatus"];
   declare gatewayStatus: AppSidebarProps["gatewayStatus"];
+  declare refreshNotice: AppSidebarProps["refreshNotice"];
   declare connectionRecovery: AppSidebarProps["connectionRecovery"];
   declare connectionFlagVisible: AppSidebarProps["connectionFlagVisible"];
   declare connectionFlagAllowed: AppSidebarProps["connectionFlagAllowed"];
