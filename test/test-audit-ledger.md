@@ -151,26 +151,26 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main 942afb6e98e5: add an argv-sensitivity witness to the spawn-identity
-case. Reuse typed start options and vary only argv in a second call. Retain the
-sole physical declaration/case, original input, fingerprint-format assertion
-and synthetic-secret absence assertion. Seven additional test lines; production
-and shared test-line scalar stay unchanged. No hash-algorithm snapshot or new
-production seam.
+Pinned main 942afb6e98e5: add one independent argv-sensitivity comparison
+to the existing spawn-identity test. Preserve the original 64-hex fingerprint
+and secret-absence assertions, original input bytes and one physical
+declaration/case. The second call changes only argv; its fingerprint must differ.
+Production and shared test-line scalar stay unchanged; seven additional test
+lines, with no helper or algorithm snapshot.
 
-The complete selected test and identity owner, configured-command branch,
-determining metadata caller functions, causal history and static routing are
-source-qualified. The candidate owner fault replaces the hash with a constant
-64-character hex string; it has not been executed. Source inspection gives no
-runtime verdict.
+The complete selected suite and identity owner, determining configured-command
+branch, caller functions and causal history are source-qualified. Untouched
+official baseline and clean candidate each pass the one case without skips.
+An actual owner fault returns a constant 64-hex fingerprint: the original suite
+passes; the candidate fails only its new argv comparison. Temporary owner/test
+bytes are restored exactly before the clean run.
 
-Untouched official baseline, original/candidate owner-fault controls, exact byte
-restoration, clean candidate, focused extension checks, fresh review, published
-proof and CI remain pending. All original assertions are retained, so no removal
-scan applies.
+Focused extension checks pass; normal hooks, fresh review, published proof and
+CI are separately recorded. No removal scan applies: every original assertion,
+declaration and input is retained.
 
-This targets OpenClaw's local spawn-identity projection. No native Codex launch,
-model/provider behavior, credential handling, runtime-artifact matching or
+This targets the local OpenClaw spawn-identity projection. No native Codex
+launch, model/provider, credential handling, runtime-artifact matching or live
 authority verdict is claimed.
 
 ## Completed source review
