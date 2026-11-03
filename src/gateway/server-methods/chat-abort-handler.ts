@@ -23,10 +23,10 @@ import {
   cancelCapturedSessionControllerSource,
   captureSessionControllerStop,
   stopSession,
-  type SessionStopHookContext,
 } from "../../sessions/session-controller.stop.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
+import { invalidateExactSessionRunStop } from "../../sessions/session-run-stopped.js";
 import {
   waitForChatAbortAcknowledgment,
   waitForChatAbortTerminalPersistence,
@@ -56,6 +56,7 @@ import {
   abortControlledSubagents,
   descendantAbortError,
 } from "./chat-abort-runtime.js";
+import type { ChatAbortLifecycle } from "./chat-abort-runtime.types.js";
 import {
   abortedPartialPersistenceError,
   captureAbortedPartial,
@@ -70,29 +71,12 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-type ChatAbortLifecycle = {
-  /** Internal composition may advance only after this exact run was cancelled. */
-  onExactRunAborted?: (runId: string) => void;
-  onDescendantsCancelled?: (
-    result: NonNullable<Awaited<ReturnType<typeof abortControlledSubagents>>>,
-  ) => void;
-  cascadeDescendants?: true;
-  yieldedRequesterRunId?: string;
-  hookContext?: SessionStopHookContext;
-};
-
 export async function handleChatAbortRequestWithLifecycle(
   options: GatewayRequestHandlerOptions,
   lifecycle: ChatAbortLifecycle = {},
 ): Promise<void> {
   const { params, respond, context, sessionMutationAuthorization } = options;
-  const { requester, assertRequesterCurrent, narrow } = captureChatAbortAuthority(options);
-  const assertCurrent = () => {
-    assertRequesterCurrent();
-    sessionMutationAuthorization?.assertCurrent();
-    requester.sessionAuthority?.assertCurrent();
-    requester.personalAuthority?.assertCurrent();
-  };
+  const { requester, assertCurrent, narrow } = captureChatAbortAuthority(options);
   if (!assertValidParams(params, validateChatAbortParams, "chat.abort", respond)) {
     return;
   }
@@ -355,6 +339,22 @@ export async function handleChatAbortRequestWithLifecycle(
     sessionId: activeIdentity?.sessionId ?? workerTarget?.sessionId ?? abortSessionEntry?.sessionId,
     runId,
   });
+  if (
+    activeIdentity &&
+    !authorizeRunTarget(
+      active
+        ? activeIdentity
+        : { ...activeIdentity, requester: reserved?.sourceAdapter?.requester },
+    )
+  ) {
+    return;
+  }
+  await invalidateExactSessionRunStop(
+    { agentId: abortAgentId, sessionKey: canonicalAbortSessionKey },
+    runId,
+    assertCurrent,
+    requiredSessionId,
+  );
   let inputWithdrawn = false;
   if (discardPendingInput) {
     if (active && !authorizeRunTarget(getChatRunAbortAuthority(active))) {

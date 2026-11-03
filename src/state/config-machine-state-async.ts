@@ -1,3 +1,4 @@
+import type { PluginReloadOperation } from "../gateway/plugin-reload-operation-store.types.js";
 import { normalizeConfigMachineStateKey } from "./config-machine-state-row.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import {
@@ -35,6 +36,34 @@ export async function readVoiceWakeMachineState(
   return result.row
     ? { value: JSON.parse(result.row.value_json) as unknown, updatedAtMs: result.row.updated_at_ms }
     : undefined;
+}
+
+export async function listConfigMachineStateAsync(
+  keyPrefix: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<Array<{ key: string; value: unknown }>> {
+  const result = await executeExistingOpenClawStateRead(options, {
+    type: "machineState.list",
+    input: { keyPrefix },
+  });
+  return (
+    result?.rows.map((row) => ({
+      key: row.state_key,
+      value: JSON.parse(row.value_json) as unknown,
+    })) ?? []
+  );
+}
+
+/** The writer owns capacity admission and terminal receipt pruning in one transaction. */
+export async function upsertPluginReloadOperationAsync(
+  operation: PluginReloadOperation,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<void> {
+  const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
+  const context = captureOpenClawStateWorkerContext(options);
+  await runOpenClawStateWorkerOperation(context, (scope) =>
+    scope.execute({ type: "machineState.pluginReloadUpsert", input: { operation } }),
+  );
 }
 
 export async function writeConfigMachineStateAsync(

@@ -79,6 +79,10 @@ vi.mock("./server-startup-session-migration.js", () => ({
 vi.mock("./session-restart-resume.js", () => ({
   prepareAgentRestartRecovery: async () => undefined,
 }));
+// mock-isolation: This suite controls preparation I/O; real maintenance custody is covered by restart recovery tests.
+vi.mock("./plugin-reload-operation-gateway.js", () => ({
+  createPluginReloadRestartClaim: async () => async () => false,
+}));
 // mock-isolation: Model preparation stays observable without loading provider plugins.
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   refreshPreparedModelRuntimeSnapshots: mocks.refreshModels,

@@ -13,7 +13,10 @@ import {
   stopSession,
   type SessionStopHookContext,
 } from "../../sessions/session-controller.stop.js";
-import { notifySessionRunStopped } from "../../sessions/session-run-stopped.js";
+import {
+  invalidateExactSessionRunStop,
+  notifySessionRunStopped,
+} from "../../sessions/session-run-stopped.js";
 import { abortChatRunById, type ChatAbortOps } from "../chat-abort.js";
 import { abortControlledSubagents } from "./chat-abort-descendants.js";
 
@@ -84,6 +87,7 @@ export async function stopExactClientRun(params: {
     }
   };
   try {
+    await invalidateExactSessionRunStop({ agentId, sessionKey, sessionId }, runId, assertCurrent);
     await stopSession({
       source: "client-run",
       capture,

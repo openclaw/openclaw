@@ -5,13 +5,44 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
-import { notifySessionRunStopped } from "./session-run-stopped.js";
+import {
+  invalidateSessionRunStopIntents,
+  notifySessionRunStopped,
+  registerSessionRunStopInvalidator,
+} from "./session-run-stopped.js";
 
 afterEach(() => {
   resetGlobalHookRunner();
 });
 
 describe("notifySessionRunStopped", () => {
+  it("awaits durable intent invalidation and propagates a failed journal write", async () => {
+    let finish!: () => void;
+    const durable = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const release = registerSessionRunStopInvalidator(() => durable);
+    const intent = {
+      source: "client-run" as const,
+      sessions: [{ sessionKey: "agent:main:a" }],
+      runIds: ["retired-run"],
+    };
+    let accepted = false;
+    const pending = invalidateSessionRunStopIntents(intent).then(() => {
+      accepted = true;
+    });
+    await Promise.resolve();
+    expect(accepted).toBe(false);
+    finish();
+    await pending;
+    expect(accepted).toBe(true);
+    release();
+    const fail = registerSessionRunStopInvalidator(async () => {
+      throw new Error("disk unavailable");
+    });
+    await expect(invalidateSessionRunStopIntents(intent)).rejects.toThrow("disk unavailable");
+    fail();
+  });
   it("starts run_stopped handlers before returning and never fails the Stop", async () => {
     const seen: PluginHookRunStoppedEvent[] = [];
     let release!: () => void;

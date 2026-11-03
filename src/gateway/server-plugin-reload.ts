@@ -24,10 +24,7 @@ import { waitForPluginRegistryRetirement } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
-import {
-  getGatewayRestartDrainSignal,
-  waitForGatewayRestartFenceSettlement,
-} from "../process/gateway-work-admission.js";
+import { waitForGatewayRestartFenceSettlement } from "../process/gateway-work-admission.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { preparePluginNodeCapabilityPublication } from "./plugin-node-capability.js";
 import type * as PluginBootstrap from "./server-plugin-bootstrap.js";
@@ -36,7 +33,7 @@ import {
   createPluginReloadCleanup,
   createPluginReloadDiagnostics,
 } from "./server-plugin-reload-cleanup.js";
-import { createPluginReloadLifecycle } from "./server-plugin-reload-lifecycle.js";
+import * as Lifecycle from "./server-plugin-reload-lifecycle.js";
 import {
   createPluginReloadRecovery,
   resolvePluginReloadReplacementIds,
@@ -56,11 +53,7 @@ export async function reloadGatewayPlugins(
 ): ReturnType<GatewayReloadHandlerParams["reloadPlugins"]> {
   const { runtime, port, log, loadGatewayPluginBootstrapModule, prepareAttachedPluginRuntime } =
     context;
-  const restartDrainSignal = getGatewayRestartDrainSignal();
-  const drainSignal =
-    params.pluginLifecycle?.waitForDrain && params.pluginLifecycle.drainSignal
-      ? AbortSignal.any([restartDrainSignal, params.pluginLifecycle.drainSignal])
-      : restartDrainSignal;
+  const { restartDrainSignal, drainSignal } = Lifecycle.getSignals(params.pluginLifecycle);
   const { prepareGatewayPluginLoad: preparePlugins } = await loadGatewayPluginBootstrapModule();
   const {
     pluginRuntime,
@@ -96,7 +89,7 @@ export async function reloadGatewayPlugins(
   };
 
   const cache = createPluginCache();
-  const lifecycle = createPluginReloadLifecycle(params.pluginLifecycle?.operationId);
+  const lifecycle = Lifecycle.createPluginReloadLifecycle(params.pluginLifecycle?.operationId);
   const requestedIds = new Set(params.pluginLifecycle?.pluginIds ?? []);
   const { warnings, recordWarning, recordCleanup, cleanup } = createPluginReloadDiagnostics(log);
   const replacePluginIds = resolvePluginReloadReplacementIds(
@@ -153,6 +146,7 @@ export async function reloadGatewayPlugins(
     previousRegistry,
     changedPluginIds,
     waitForDrain: params.pluginLifecycle?.waitForDrain,
+    beforeForceDrain: params.pluginLifecycle?.beforeForceDrain,
     port,
     pluginWorkspaceDir,
     abortSignal: AbortSignal.any([runtime.requestEntryLifetime.signal, restartDrainSignal]),
@@ -715,6 +709,7 @@ export async function reloadGatewayPlugins(
             phase: facts.phase,
             committed: facts.committed,
             ...(runtimeRestorationFailed ? { runtimeRestorationFailed: true } : {}),
+            ...(facts.restored && !runtimeRestorationFailed ? { runtimeRestored: true } : {}),
           },
           { cause: failure },
         );

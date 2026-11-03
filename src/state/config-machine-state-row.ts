@@ -1,7 +1,11 @@
 import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { publishAuthProfileRowsChanged } from "../agents/auth-profiles/persisted-rows-receipt.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 // Row access shared by worker commands and explicit native administration.
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
@@ -83,6 +87,31 @@ export function normalizeConfigMachineStateKey(key: string): string {
     throw new Error("config machine state key must not be empty");
   }
   return normalized;
+}
+
+export function listConfigMachineStateRowsInDatabase(
+  database: EngineConnection,
+  keyPrefix: string,
+) {
+  const prefix = normalizeConfigMachineStateKey(keyPrefix);
+  return executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<ConfigMachineStateDatabase>(database)
+      .selectFrom("config_machine_state")
+      .select(["state_key", "value_json", "updated_at_ms"])
+      .where((expression) =>
+        expression(
+          expression.fn<string>("substr", [
+            "state_key",
+            expression.val(1),
+            expression.val(prefix.length),
+          ]),
+          "=",
+          prefix,
+        ),
+      )
+      .orderBy("state_key"),
+  ).rows;
 }
 
 export function readConfigMachineStateRowInDatabase(database: EngineConnection, key: string) {

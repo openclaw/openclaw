@@ -25,6 +25,7 @@ import {
   type SessionStopExecution,
 } from "../../sessions/session-controller.stop.js";
 import {
+  invalidateSessionRunStopIntents,
   isExplicitRunStopSource,
   notifySessionRunStopped,
 } from "../../sessions/session-run-stopped.js";
@@ -199,6 +200,7 @@ export function prepareChatSessionAbort(
     effects: controllerStop.effects,
   });
   const terminalWrites: Promise<unknown>[] = [];
+  let durableIntentInvalidation: Promise<void> = Promise.resolve();
   const persistSessionAbort = createSessionAbortPersistence({
     sessionKey: params.sessionKey,
     agentId: params.agentId,
@@ -389,6 +391,25 @@ export function prepareChatSessionAbort(
     }
     // Accepted Stop with confirmed authority. The notification never precedes this gate, so a
     // rejected Stop announces nothing.
+    if (isExplicitRunStopSource(params.stopSource)) {
+      const invalidation = invalidateSessionRunStopIntents(
+        {
+          source: params.stopSource,
+          sessions: [
+            {
+              agentId: params.agentId,
+              sessionKey: params.sessionKey,
+              sessionId: params.requiredSessionId,
+            },
+          ],
+          runIds: [],
+        },
+        params.assertCurrent,
+      );
+      durableIntentInvalidation = invalidation;
+      void invalidation.catch(() => undefined);
+      params.assertCurrent?.();
+    }
     if (params.announceRunStopped === true && isExplicitRunStopSource(params.stopSource)) {
       notifySessionRunStopped({
         source: params.stopSource,
@@ -448,6 +469,7 @@ export function prepareChatSessionAbort(
     result,
     abort: abortAuthorizedRuns,
     async finish() {
+      await durableIntentInvalidation;
       let stopFailure: unknown;
       try {
         await stopExecution?.completed;

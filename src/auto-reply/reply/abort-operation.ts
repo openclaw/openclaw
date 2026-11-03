@@ -44,7 +44,10 @@ import {
   type SessionStopHookContext,
   type SessionStopRequest,
 } from "../../sessions/session-controller.stop.js";
-import { notifySessionRunStopped } from "../../sessions/session-run-stopped.js";
+import {
+  invalidateSessionRunStopIntents,
+  notifySessionRunStopped,
+} from "../../sessions/session-run-stopped.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import { resolveAbortCutoffFromContext, shouldPersistAbortCutoff } from "./abort-cutoff.js";
@@ -234,6 +237,7 @@ export function abortSessionRunTargetWithOutcome(params: {
   recordAbortTarget?: SessionStopRequest["recordAbortTarget"];
   stopChildren?: SessionStopRequest["stopChildren"];
   retirements: Promise<void>[];
+  durableIntentInvalidations: Promise<void>[];
 }) {
   let selectedCapture: ChannelStopCapture | undefined;
   const resolveCapture = () =>
@@ -292,6 +296,16 @@ export function abortSessionRunTargetWithOutcome(params: {
       const capture = resolveCapture();
       // The Stop kernel calls afterQueued only after revalidating the captured Stop's live
       // target, so the notification cannot outrun a rejected foreground cancellation.
+      const invalidation = invalidateSessionRunStopIntents(
+        {
+          source: "channel-user",
+          sessions: capture.stoppedSessions,
+          runIds: [],
+        },
+        params.assertCurrent,
+      );
+      params.durableIntentInvalidations.push(invalidation);
+      void invalidation.catch(() => undefined);
       notifySessionRunStopped({
         source: "channel-user",
         sessions: capture.stoppedSessions,
@@ -476,6 +490,7 @@ export async function executeFastAbortRequest(
     });
     const selection: { target: SessionAbortTargetIdentity | null } = { target: null };
     const retirements: Promise<void>[] = [];
+    const durableIntentInvalidations: Promise<void>[] = [];
     let selectedCapture = mainCapture;
     let authorized = false;
     const stopState: { execution?: ReturnType<typeof abortSessionRunTargetWithOutcome> } = {};
@@ -585,6 +600,7 @@ export async function executeFastAbortRequest(
               capture: selectedCapture,
               assertCurrent,
               retirements,
+              durableIntentInvalidations,
               stopChildren: async (applyParentStop) => {
                 try {
                   parentApplied.resolve(await applyParentStop());
@@ -644,6 +660,7 @@ export async function executeFastAbortRequest(
         throw error;
       }
     }, retirements);
+    await Promise.all(durableIntentInvalidations);
     if (!authorized || !executionOutcome) {
       return { handled: false, aborted: false };
     }

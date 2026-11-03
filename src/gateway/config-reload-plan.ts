@@ -1,7 +1,7 @@
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginLifecycleReason } from "../plugins/lifecycle.js";
+import type { PluginLifecycleReason, PluginLifecycleRuntimeApply } from "../plugins/lifecycle.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
 import { isPlainObject } from "../utils.js";
@@ -32,6 +32,9 @@ export type GatewayReloadPlan = {
     operationId: string;
     waitForDrain?: boolean;
     drainSignal?: AbortSignal;
+    beforeForceDrain?: (
+      instances: readonly import("../plugins/plugin-instance-scope.js").PluginInstanceHandle[],
+    ) => Promise<void>;
     expectedSourceDigests?: Readonly<Record<string, string>>;
   };
   restartChannels: Set<ChannelKind>;
@@ -41,6 +44,20 @@ export type GatewayReloadPlan = {
   restartChannelAccounts?: Map<ChannelKind, Set<string>>;
   noopPaths: string[];
 };
+
+export function createPluginLifecycleReloadPlan(
+  params: Parameters<PluginLifecycleRuntimeApply>[0],
+  operationId: string,
+): NonNullable<GatewayReloadPlan["pluginLifecycle"]> {
+  return {
+    pluginIds: params.pluginIds,
+    reason: params.reason,
+    operationId,
+    ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.drainSignal } : {}),
+    expectedSourceDigests: params.expectedSourceDigests,
+    beforeForceDrain: params.beforeForceDrain,
+  };
+}
 
 const RELOAD_ACTIONS = [
   "reloadHooks",

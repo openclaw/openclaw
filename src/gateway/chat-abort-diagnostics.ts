@@ -5,6 +5,7 @@ export type ChatAbortDiagnosticReason =
   | "stop"
   | "timeout"
   | "restart"
+  | "plugin_reload"
   | "archive"
   | "delete"
   | "authority-revoked"

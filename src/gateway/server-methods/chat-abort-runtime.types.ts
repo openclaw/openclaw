@@ -54,3 +54,14 @@ export type ChatSessionAbortResult = {
   warning?: string;
   descendants?: Awaited<ReturnType<typeof abortControlledSubagents>>;
 };
+
+export type ChatAbortLifecycle = {
+  /** Internal composition may advance only after this exact run was cancelled. */
+  onExactRunAborted?: (runId: string) => void;
+  onDescendantsCancelled?: (
+    result: NonNullable<Awaited<ReturnType<typeof abortControlledSubagents>>>,
+  ) => void;
+  cascadeDescendants?: true;
+  yieldedRequesterRunId?: string;
+  hookContext?: SessionStopHookContext;
+};

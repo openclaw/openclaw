@@ -26,8 +26,9 @@ import {
 } from "../../plugins/management-mutations.js";
 import { uninstallManagedPlugin } from "../../plugins/management-uninstall.js";
 import { withPluginLifecycleLeaseAsync } from "../../plugins/plugin-lifecycle-lease.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { handleForcedPluginReload } from "./plugins-force-reload.js";
 import { pluginLifecycleError } from "./plugins-lifecycle-error.js";
+import { assertPluginMutationAuthority } from "./plugins-mutation-authority.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
@@ -48,18 +49,28 @@ function lifecycleHandler<T>(
     lifecycle: PluginLifecycleOptions,
     client: Parameters<GatewayRequestHandler>[0]["client"],
   ) => Promise<PluginLifecycleResult>,
+  handleSpecial?: (
+    params: T,
+    request: Parameters<GatewayRequestHandler>[0],
+  ) => Promise<void> | undefined,
 ): GatewayRequestHandler {
-  return async ({
-    req,
-    params,
-    respond,
-    context,
-    signal,
-    sessionMutationCommitGuard,
-    client,
-    hasCurrentClientAuthority,
-  }) => {
+  return async (request) => {
+    const {
+      req,
+      params,
+      respond,
+      context,
+      signal,
+      sessionMutationCommitGuard,
+      client,
+      hasCurrentClientAuthority,
+    } = request;
     if (!assertValidParams(params, validate, method, respond)) {
+      return;
+    }
+    const special = handleSpecial?.(params, request);
+    if (special) {
+      await special;
       return;
     }
     let captured: ReturnType<typeof capturePluginRuntimeApplications> | undefined;
@@ -71,15 +82,7 @@ function lifecycleHandler<T>(
       }
       const beforePersistentApply = () => {
         // Ordinary reconnects retain the request; credential revocation must fence every effect.
-        if (
-          hasCurrentClientAuthority?.() === false ||
-          (client &&
-            (client.invalidated ||
-              (client.connect.role ?? "operator") !== "operator" ||
-              !client.connect.scopes?.includes(ADMIN_SCOPE)))
-        ) {
-          throw new Error("Plugin mutation authority is no longer active.");
-        }
+        assertPluginMutationAuthority({ client, hasCurrentClientAuthority });
         signal?.throwIfAborted();
         sessionMutationCommitGuard?.();
       };
@@ -162,6 +165,8 @@ export const pluginMutationHandlers: GatewayRequestHandlers = {
     "plugins.reload",
     validatePluginsReloadParams,
     (params, lifecycle) => reloadManagedPlugin({ ...params, ...lifecycle }),
+    (params, request) =>
+      params.force || params.operationId ? handleForcedPluginReload(request, params) : undefined,
   ),
   "plugins.install": lifecycleHandler(
     "plugins.install",

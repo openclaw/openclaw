@@ -116,10 +116,19 @@ export function registerPluginsCli(program: Command) {
     .option("--accept-capabilities", "Accept changed declared capabilities", false)
     .option(
       "--wait",
-      "Wait up to 10 minutes for admitted work; blocks new agent runs; Ctrl-C cancels",
+      "Observe up to 10 minutes of admitted-work drain; without --force, Ctrl-C cancels",
       false,
     )
-    .option("--json", "Print the applied runtime generation", false)
+    .option(
+      "--force",
+      "Interrupt blocking agent runs and continue unfinished work after a safe reload",
+      false,
+    )
+    .option(
+      "--operation-id <id>",
+      "Observe an already accepted --force operation with the same plugin ids",
+    )
+    .option("--json", "Print the applied runtime generation or accepted operation", false)
     .action(async (ids: string[], opts: PluginsReloadOptions) => {
       const { runPluginsReloadCommand } = await import("./plugins-reload-command.js");
       await runPluginsReloadCommand(ids, opts);

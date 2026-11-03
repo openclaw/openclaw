@@ -40,6 +40,18 @@ export const AGENT_RUN_SUPERSEDED_ERROR = "agent run superseded by a newer sessi
 export const AGENT_RUN_RESTART_ABORT_ERROR_CODE = "OPENCLAW_RESTART_ABORT";
 const AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE = "AGENT_RUN_SUPERSEDED_ABORT";
 const AGENT_RUN_DIRECT_ABORT_ERROR_CODE = "OPENCLAW_DIRECT_ABORT";
+const AGENT_RUN_PLUGIN_RELOAD_ABORT_ERROR_CODE = "OPENCLAW_PLUGIN_RELOAD_ABORT";
+export const AGENT_RUN_PLUGIN_RELOAD_STOP_REASON = "plugin_reload" as const;
+
+export function createAgentRunPluginReloadAbortError(): Error {
+  return Object.assign(createAbortError("agent run interrupted for plugin reload maintenance"), {
+    code: AGENT_RUN_PLUGIN_RELOAD_ABORT_ERROR_CODE,
+  });
+}
+
+export function isAgentRunPluginReloadAbortReason(value: unknown): boolean {
+  return hasAgentRunAbortCode(value, AGENT_RUN_PLUGIN_RELOAD_ABORT_ERROR_CODE);
+}
 
 export function createAgentRunDirectAbortError(): Error {
   return Object.assign(createAbortError(AGENT_RUN_ABORTED_ERROR), {
@@ -102,13 +114,15 @@ export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefi
     | typeof AGENT_RUN_ABORTED_STOP_REASON
     | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON
     | typeof AGENT_RUN_SUPERSEDED_STOP_REASON
+    | typeof AGENT_RUN_PLUGIN_RELOAD_STOP_REASON
     | "timeout";
 } {
   if (!signal?.aborted) {
     return {};
   }
-  const stopReason =
-    isAgentRunRestartAbortReason(signal.reason) || isGatewayRestartDrainError(signal.reason)
+  const stopReason = isAgentRunPluginReloadAbortReason(signal.reason)
+    ? AGENT_RUN_PLUGIN_RELOAD_STOP_REASON
+    : isAgentRunRestartAbortReason(signal.reason) || isGatewayRestartDrainError(signal.reason)
       ? AGENT_RUN_RESTART_ABORT_STOP_REASON
       : isAgentRunSupersededAbortReason(signal.reason)
         ? AGENT_RUN_SUPERSEDED_STOP_REASON
@@ -165,6 +179,9 @@ export function resolveAgentRunErrorLifecycleFields(
     return abortFields;
   }
   // A run-owned controller can stop work without aborting its caller's signal.
+  if (isAgentRunPluginReloadAbortReason(error)) {
+    return { aborted: true, stopReason: AGENT_RUN_PLUGIN_RELOAD_STOP_REASON };
+  }
   if (isAgentRunDirectAbortReason(error)) {
     return { aborted: true, stopReason: "aborted" };
   }

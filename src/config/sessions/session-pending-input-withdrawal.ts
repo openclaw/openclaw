@@ -30,7 +30,7 @@ type WithdrawalScope = SessionAccessScope & { agentId: string; sessionId: string
 type WithdrawalSelection =
   | { runId: string }
   | { inputIds: readonly string[] }
-  | { lifecycleGeneration: string };
+  | { lifecycleGeneration: string; queuedInputIds?: readonly string[] };
 
 class PendingInputOwnedError extends Error {
   constructor(readonly inputIds: string[]) {
@@ -195,10 +195,11 @@ export async function dismissRetiredSessionPendingInputs(
 export async function interruptOrphanedSessionPendingInputs(
   scope: WithdrawalScope,
   assertCurrent: () => void,
+  queuedInputIds: readonly string[] = [],
 ): Promise<void> {
   await withdrawSessionPendingInputs(
     scope,
-    { lifecycleGeneration: getAgentEventLifecycleGeneration() },
+    { lifecycleGeneration: getAgentEventLifecycleGeneration(), queuedInputIds },
     assertCurrent,
   );
 }

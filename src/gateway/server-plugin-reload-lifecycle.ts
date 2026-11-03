@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import type { PluginReplacementOutcome } from "../plugins/plugin-instance.js";
+import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { createPluginReloadChannels } from "./server-plugin-reload-channels.js";
 import type { createPluginReloadRecovery } from "./server-plugin-reload-recovery.js";
@@ -131,4 +132,15 @@ export function createPluginReloadLifecycle(requestedOperationId?: string) {
       return result.value;
     },
   };
+}
+
+export function getSignals(
+  options: { drainSignal?: AbortSignal; waitForDrain?: boolean } | undefined,
+) {
+  const restartDrainSignal = getGatewayRestartDrainSignal();
+  const drainSignal =
+    options?.waitForDrain && options.drainSignal
+      ? AbortSignal.any([restartDrainSignal, options.drainSignal])
+      : restartDrainSignal;
+  return { restartDrainSignal, drainSignal };
 }

@@ -167,6 +167,7 @@ A plugin selected through `plugins.load.paths` is operator-managed. Named update
 openclaw plugins reload <ids...>
 openclaw plugins reload <ids...> --json
 openclaw plugins reload <ids...> --wait
+openclaw plugins reload <ids...> --force --wait --accept-capabilities --json
 ```
 
 Reload discovered plugins after editing their TypeScript source, imported helpers,
@@ -232,6 +233,56 @@ It requires a Gateway-hosted conversation with turn-yield support. Stop cancels
 a pending handoff; it never force-releases leases or rolls back a committed reload.
 The handoff is process-local: if the Gateway exits before delivery, inspect the
 plugin state before retrying. Plain CLI reloads are not intercepted or deferred.
+
+### Forced reload
+
+Use `--force` when a running native conversation holds the plugin generation,
+including an agent that is executing the reload command in its own exec or
+code-mode cell. The Gateway validates the requested sources and capability
+consent before interrupting any run. It first offers the existing opt-in
+cooperative handover, then interrupts the exact remaining supported owners.
+Unrelated sessions are not stopped. Physical plugin leases still have to drain;
+force never unloads code that is executing or drops a lease to manufacture success.
+
+A forced reload is a durable Gateway operation. Without `--wait`, JSON output
+returns `status: "accepted"` and an `operationId`; this is not confirmation that
+the replacement finished. With `--wait`, the command observes the final runtime
+receipt. Closing the socket or pressing Ctrl-C only stops that observer after
+acceptance; it does not cancel the operation. Observe the same operation again
+without submitting another replacement:
+
+```bash
+openclaw plugins reload <ids...> --force --wait --operation-id <operationId> --json
+```
+
+The operation owns its bounded ten-minute drain independently of `--wait`.
+There is no caller-disconnect cancellation after acceptance. Stop in an affected
+conversation cancels its pending automatic continuation, not the reload itself.
+The existing no-force behavior, including Ctrl-C cancellation of ordinary
+`--wait`, is unchanged.
+
+Before interruption, the Gateway records continuation and queued-input custody.
+After a new generation commits, or a healthy prior generation is explicitly
+restored, unfinished conversations continue from their existing transcripts and
+report the operation outcome. Completed tool effects are not replayed, and
+retained queued messages keep their FIFO order. The killed exec need not print
+its final stdout. A completed reply that is only retaining cleanup does not
+receive a redundant wake.
+
+Automatic continuation currently requires a normal native conversation with
+durable input custody. Cron, ACP, subagent, incognito, archived, and replaced
+sessions are not redirected into ordinary agent turns. Mapped unsupported owners
+reject preparation before forced interruption. Unmapped runtime, service, or raw
+cleanup holders are not forcibly canceled and still have to settle; they can make
+the operation time out after eligible native owners were interrupted. A timeout
+never unloads live code.
+
+After a Gateway crash, startup reconciles the same operation and its deduplicated
+continuation identities against the newly published runtime; it does not replay
+an uncertain activation. Reset, archive, explicit Stop, or lost destination
+authority prevents automatic continuation. If no healthy runtime is proven,
+the saved operation and Gateway logs retain a recovery error instead of waking
+work against the failed generation.
 
 ### Inspect retained references
 

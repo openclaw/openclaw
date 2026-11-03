@@ -24,7 +24,7 @@ export async function resolvePluginBatchReload(): Promise<PluginInstallBatchRelo
         const result = await gateway<PluginsReloadResult>("plugins.reload", {
           plugins,
         });
-        if (!result.runtime) {
+        if (result.status === "accepted" || !result.runtime) {
           throw new Error(
             "Gateway did not confirm the plugin batch runtime generation. Inspect plugin status before retrying.",
           );

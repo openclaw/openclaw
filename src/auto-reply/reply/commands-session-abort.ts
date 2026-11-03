@@ -71,6 +71,7 @@ async function executeChannelUserStop(params: Parameters<CommandHandler>[0]) {
   const capture = captureAbortTarget(params, abortTarget);
   abortTarget.sessionId = capture.sessionId;
   const retirements: Promise<void>[] = [];
+  const durableIntentInvalidations: Promise<void>[] = [];
   const assertCurrent = () => {
     if (params.opts?.isCommandTargetCurrent?.sessionSource) {
       params.opts.isCommandTargetCurrent.sessionSource();
@@ -93,6 +94,7 @@ async function executeChannelUserStop(params: Parameters<CommandHandler>[0]) {
   const stop = abortSessionRunTargetWithOutcome({
     capture,
     retirements,
+    durableIntentInvalidations,
     assertCurrent,
     hookContext: {
       sessionKey: abortTarget.key ?? params.sessionKey ?? "",
@@ -137,6 +139,7 @@ async function executeChannelUserStop(params: Parameters<CommandHandler>[0]) {
       }),
   });
   return await completeAbortRetirements(async () => {
+    await Promise.all(durableIntentInvalidations);
     const outcome = await stop.completed;
     return commandReply(
       formatAbortReplyText(

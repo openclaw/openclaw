@@ -130,6 +130,10 @@ export function activateGatewayAgentDatabaseStartup(params: {
         });
         assertMigrationCurrent();
         const { prepareAgentRestartRecovery } = await import("./session-restart-resume.js");
+        const { createPluginReloadRestartClaim } =
+          await import("./plugin-reload-operation-gateway.js");
+        const claimResume = await createPluginReloadRestartClaim(params.context, signal);
+        assertMigrationCurrent();
         const recoverInputs = await prepareAgentRestartRecovery({
           context: params.context,
           agentId,
@@ -137,6 +141,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
           signal,
           assertCurrent: assertMigrationCurrent,
           log: params.log,
+          claimResume,
         });
         return {
           recoverInputs,

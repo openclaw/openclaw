@@ -8,6 +8,7 @@ import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-sur
 import { diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
+  createPluginLifecycleReloadPlan,
   isNoopGatewayReloadPlan,
   listConfigReloadRefinementPrefixes,
   resolveConfigReloadMetadata,
@@ -278,3 +279,40 @@ describe("Gateway core reload policy", () => {
     expect(resolveConfigReloadMetadata(path).kind).toBe(restart ? "restart" : "hot");
   });
 });
+
+it.each([true, false, undefined])(
+  "maps lifecycle reload params without changing authority or drain semantics (%s)",
+  (waitForDrain) => {
+    const pluginIds = ["example"];
+    const expectedSourceDigests = { example: "source-digest" };
+    const drainSignal = new AbortController().signal;
+    const beforeForceDrain = async () => {};
+    const assertInvokerOwned = () => {};
+    const plan = createPluginLifecycleReloadPlan(
+      {
+        config: {},
+        pluginIds,
+        reason: "reload",
+        waitForDrain,
+        drainSignal,
+        expectedSourceDigests,
+        beforeForceDrain,
+        assertInvokerOwned,
+      },
+      "operation-identity",
+    );
+    expect(plan).toEqual({
+      pluginIds,
+      reason: "reload",
+      operationId: "operation-identity",
+      ...(waitForDrain ? { waitForDrain: true, drainSignal } : {}),
+      expectedSourceDigests,
+      beforeForceDrain,
+    });
+    expect(plan.pluginIds).toBe(pluginIds);
+    expect(plan.expectedSourceDigests).toBe(expectedSourceDigests);
+    expect(plan.beforeForceDrain).toBe(beforeForceDrain);
+    expect(plan).not.toHaveProperty("config");
+    expect(plan).not.toHaveProperty("assertInvokerOwned");
+  },
+);

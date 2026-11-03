@@ -169,6 +169,12 @@ export function captureChatAbortAuthority(options: GatewayRequestHandlerOptions)
       authority.sessionScope === "operator.sessions.write" ||
       requester.sessionAuthority !== undefined,
     assertRequesterCurrent: authority.assertCurrent,
+    assertCurrent: () => {
+      authority.assertCurrent();
+      sessionMutationAuthorization?.assertCurrent();
+      requester.sessionAuthority?.assertCurrent();
+      requester.personalAuthority?.assertCurrent();
+    },
   };
 }
 

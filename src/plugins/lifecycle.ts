@@ -34,6 +34,8 @@ export class PluginRuntimeApplicationError extends Error {
       committed: boolean;
       /** The failed replacement also could not restore model/reply publication. */
       runtimeRestorationFailed?: true;
+      /** Explicit evidence that failed activation republished the healthy prior generation. */
+      runtimeRestored?: true;
     },
     options?: ErrorOptions,
   ) {
@@ -121,6 +123,10 @@ export type PluginLifecycleRuntimeApply = (params: {
   /** Explicit reload admission wait; cancellation never owns recovery or published cleanup. */
   waitForDrain?: boolean;
   drainSignal?: AbortSignal;
+  /** Gateway maintenance owns cancellation; physical generation leases still own quiescence. */
+  beforeForceDrain?: (
+    instances: readonly import("./plugin-instance-scope.js").PluginInstanceHandle[],
+  ) => Promise<void>;
   expectedSourceDigests?: Readonly<Record<string, string>>;
   /** Private invoker authority; never part of the published runtime receipt. */
   assertInvokerOwned?: () => void;

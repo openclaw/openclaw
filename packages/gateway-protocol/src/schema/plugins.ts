@@ -718,15 +718,27 @@ export const PluginsReloadParamsSchema = closedObject({
     uniqueItems: true,
   }),
   waitForDrain: Type.Optional(Type.Boolean()),
+  force: Type.Optional(Type.Boolean()),
+  operationId: Type.Optional(NonEmptyString),
   acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
 });
-export const PluginsReloadResultSchema = closedObject({
+const PluginsReloadAppliedResultSchema = closedObject({
   ok: Type.Literal(true),
+  status: Type.Optional(Type.Literal("applied")),
   pluginIds: Type.Array(NonEmptyString, { minItems: 1, maxItems: MAX_PLUGIN_RELOAD_TARGETS }),
   restartRequired: Type.Boolean(),
   runtime: PluginRuntimeApplicationSchema,
   warnings: Type.Optional(Type.Array(Type.String())),
 });
+export const PluginsReloadResultSchema = Type.Union([
+  PluginsReloadAppliedResultSchema,
+  closedObject({
+    ok: Type.Literal(true),
+    status: Type.Literal("accepted"),
+    operationId: NonEmptyString,
+    pluginIds: Type.Array(NonEmptyString, { minItems: 1, maxItems: MAX_PLUGIN_RELOAD_TARGETS }),
+  }),
+]);
 
 /** Request payload for removing one installed plugin and its managed files. */
 export const PluginsUninstallParamsSchema = closedObject({
@@ -753,14 +765,6 @@ export const PluginsSetEnabledParamsSchema = closedObject({
 
 export const PluginsSetEnabledResultSchema = closedObject(PluginsInstallResultSchema.properties);
 
-export type PluginCatalogEntry = Static<typeof PluginCatalogEntrySchema>;
-export type ControlUiPluginTab = Static<typeof ControlUiPluginTabSchema>;
-export type ControlUiPluginWidgetKind = Static<typeof ControlUiPluginWidgetKindSchema>;
-export type PluginRuntimeStatus = Static<typeof PluginRuntimeStatusSchema>;
-export type PluginsListParams = Static<typeof PluginsListParamsSchema>;
-export type PluginsListResult = Static<typeof PluginsListResultSchema>;
-export type PluginsInspectParams = Static<typeof PluginsInspectParamsSchema>;
-export type PluginsInspectResult = Static<typeof PluginsInspectResultSchema>;
 export type PluginOverviewCapabilities = Static<typeof PluginOverviewCapabilitiesSchema>;
 export type PluginHookGrant = Static<typeof PluginHookGrantSchema>;
 export type PluginInspectSource = Static<typeof PluginInspectSourceSchema>;
@@ -768,42 +772,9 @@ export type PluginDeclaredSurface = Static<typeof PluginDeclaredSurfaceSchema>;
 export type PluginInstalledComponents = Static<typeof PluginInstalledComponentsSchema>;
 export type PluginOperatorGrants = Static<typeof PluginOperatorGrantsSchema>;
 export type PluginInstallTrust = Static<typeof PluginInstallTrustSchema>;
-export type PluginsSearchParams = Static<typeof PluginsSearchParamsSchema>;
-export type PluginsSearchResult = Static<typeof PluginsSearchResultSchema>;
-export type PluginDiscoveryCategory = Static<typeof PluginDiscoveryCategorySchema>;
-export type PluginDiscoveryCatalogFacts = Static<typeof PluginDiscoveryCatalogFactsSchema>;
-export type PluginDiscoveryLocalFacts = Static<typeof PluginDiscoveryLocalFactsSchema>;
-export type PluginDiscoveryEntry = Static<typeof PluginDiscoveryEntrySchema>;
-export type PluginDiscoveryDetail = Static<typeof PluginDiscoveryDetailSchema>;
-export type PluginsCatalogBrowseParams = Static<typeof PluginsCatalogBrowseParamsSchema>;
-export type PluginsCatalogBrowseResult = Static<typeof PluginsCatalogBrowseResultSchema>;
-export type PluginsCatalogCategoriesParams = Static<typeof PluginsCatalogCategoriesParamsSchema>;
-export type PluginsCatalogCategoriesResult = Static<typeof PluginsCatalogCategoriesResultSchema>;
-export type PluginsCatalogGetParams = Static<typeof PluginsCatalogGetParamsSchema>;
-export type PluginsCatalogGetResult = Static<typeof PluginsCatalogGetResultSchema>;
-export type PluginsInstallParams = Static<typeof PluginsInstallParamsSchema>;
-export type PluginsInstallResult = Static<typeof PluginsInstallResultSchema>;
-export type PluginsRefreshParams = Static<typeof PluginsRefreshParamsSchema>;
-export type PluginsRefreshResult = Static<typeof PluginsRefreshResultSchema>;
-export type PluginReloadTarget = Static<typeof PluginReloadTargetSchema>;
-export type PluginsReloadParams = Static<typeof PluginsReloadParamsSchema>;
-export type PluginsReloadResult = Static<typeof PluginsReloadResultSchema>;
-export type PluginRuntimeApplication = Static<typeof PluginRuntimeApplicationSchema>;
-export type PluginsChangedEvent = Static<typeof PluginsChangedEventSchema>;
-export type PluginsUninstallParams = Static<typeof PluginsUninstallParamsSchema>;
-export type PluginsUninstallResult = Static<typeof PluginsUninstallResultSchema>;
-export type PluginsSetEnabledParams = Static<typeof PluginsSetEnabledParamsSchema>;
-export type PluginsSetEnabledResult = Static<typeof PluginsSetEnabledResultSchema>;
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
-export type PluginControlUiDescriptor = Static<typeof PluginControlUiDescriptorSchema>;
-export type PluginsUiDescriptorsParams = Static<typeof PluginsUiDescriptorsParamsSchema>;
-export type PluginsUiDescriptorsResult = Static<typeof PluginsUiDescriptorsResultSchema>;
-export type PluginControlUiModule = Static<typeof PluginControlUiModuleSchema>;
-export type PluginControlUiDiagnostic = Static<typeof PluginControlUiDiagnosticSchema>;
-export type PluginsControlUiCatalog = Static<typeof PluginsControlUiCatalogSchema>;
-export type PluginsControlUiReloadParams = Static<typeof PluginsControlUiReloadParamsSchema>;
 export type PluginControlUiActivation = Static<typeof PluginControlUiActivationSchema>;
-export type PluginsSessionActionParams = Static<typeof PluginsSessionActionParamsSchema>;
-export type PluginsSessionActionResult = Static<typeof PluginsSessionActionResultSchema>;
+
+export type * from "./plugins.types.js";

@@ -88,9 +88,11 @@ export function createPluginReloadCleanup({
   retainRetirement,
   replacementOperation,
   waitForDrain = false,
+  beforeForceDrain,
 }: {
   replacementOperation?: import("../plugins/plugin-instance.js").PluginReplacementOperation;
   waitForDrain?: boolean;
+  beforeForceDrain?: (instances: readonly PluginInstanceHandle[]) => Promise<void>;
   previousRegistry: PluginRegistry;
   changedPluginIds: Set<string>;
   port: number;
@@ -359,6 +361,7 @@ export function createPluginReloadCleanup({
     const instances = previousInstances(pluginIds);
     const predecessors = pendingPredecessors();
     const observedInstances = [...instances, ...predecessors.flatMap((owner) => owner.instances)];
+    await beforeForceDrain?.(observedInstances);
     const holds = instances.map((instance) => ({
       pluginId: instance.pluginId,
       count: instance.retainedWorkCount + (includeCalls ? instance.ordinaryCallCount : 0),

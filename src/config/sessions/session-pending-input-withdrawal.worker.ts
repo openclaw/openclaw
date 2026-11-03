@@ -59,7 +59,11 @@ export function readOrphanedSessionPendingInputTargetsInWorker(
 export type SessionPendingInputWithdrawal = {
   sessionKey: string;
   sessionId: string;
-} & ({ runId: string } | { inputIds: readonly string[] } | { lifecycleGeneration: string });
+} & (
+  | { runId: string }
+  | { inputIds: readonly string[] }
+  | { lifecycleGeneration: string; queuedInputIds?: readonly string[] }
+);
 
 export type RetiredPendingInputDismissalOutcome =
   | { kind: "dismissed"; inputIds: string[]; runIds: string[]; missingIds: string[] }
@@ -109,7 +113,7 @@ export function discardSessionPendingInputInWorker(
         const entry = readSessionEntryRow(current, input.sessionKey, "list")?.entry;
         const marked =
           entry?.sessionId === input.sessionId
-            ? (entry.resumeAfterRestart?.queuedInputIds ?? [])
+            ? [...(entry.resumeAfterRestart?.queuedInputIds ?? []), ...(input.queuedInputIds ?? [])]
             : [];
         admit("transaction");
         // A crash has no restart marker. Retain its text as a resendable failed send;

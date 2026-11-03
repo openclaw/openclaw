@@ -66,10 +66,26 @@ export async function runGatewayStartupObservers(params: {
       }
       const { resumeMarkedSessions } = await import("./session-restart-resume.js");
       try {
-        await resumeMarkedSessions({ context, signal: params.signal, log: params.log });
+        const { createPluginReloadRestartClaim } =
+          await import("./plugin-reload-operation-gateway.js");
+        const claimResume = await createPluginReloadRestartClaim(context, params.signal);
+        await resumeMarkedSessions({
+          context,
+          signal: params.signal,
+          log: params.log,
+          claimResume,
+        });
       } catch (error) {
         params.signal.throwIfAborted();
         params.log.warn(`Restart resume discovery failed: ${String(error)}`);
+      }
+      try {
+        const { recoverPluginReloadOperations } =
+          await import("./plugin-reload-operation-gateway.js");
+        await recoverPluginReloadOperations(context, params.signal);
+      } catch (error) {
+        params.signal.throwIfAborted();
+        params.log.warn(`Plugin reload recovery failed: ${String(error)}`);
       }
       if (!params.signal.aborted && !params.isClosing?.()) {
         // Retained FIFO inputs must own their ordinary queue slots before reconnecting sends.

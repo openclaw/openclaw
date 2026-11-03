@@ -43,7 +43,7 @@ import {
   activeSessionOperations,
   hasCommittedReplyOperationOutcome,
 } from "../sessions/session-controller.state.js";
-import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { withAgentInputRecovery } from "../state/agent-database-preparation-context.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
@@ -51,6 +51,7 @@ import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { recordRestartResumeFailure } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
+import type * as Restart from "./session-restart-resume.types.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 const GATEWAY_RESTART_RESUME_TEXT =
@@ -67,6 +68,7 @@ type SessionIdentity = {
   sessionKey: string;
   storePath: string;
   sessionId?: string;
+  sourceRunId?: string;
   hadBackgroundExec?: true;
   needsResume: boolean;
 };
@@ -115,6 +117,7 @@ async function persistRunningSessions(
     agentId?: string;
     storePath?: string;
     sessionId?: string;
+    sourceRunId?: string;
     hadBackgroundExec?: true;
     needsResume?: boolean;
   }) => {
@@ -143,10 +146,12 @@ async function persistRunningSessions(
         storePath,
         sessionKey: root.sessionKey,
         sessionId: root.sessionKey === input.sessionKey ? input.sessionId : undefined,
+        sourceRunId: root.sessionKey === input.sessionKey ? input.sourceRunId : undefined,
         hadBackgroundExec: input.hadBackgroundExec,
         needsResume: input.needsResume !== false,
       });
     } else {
+      existing.sourceRunId ??= root.sessionKey === input.sessionKey ? input.sourceRunId : undefined;
       existing.needsResume ||= input.needsResume !== false;
       if (input.hadBackgroundExec) {
         existing.hadBackgroundExec = true;
@@ -186,7 +191,12 @@ async function persistRunningSessions(
     }
     const run = getAgentRunContext(runId);
     if (run?.sessionKey) {
-      add({ sessionKey: run.sessionKey, agentId: run.agentId, sessionId: run.sessionId });
+      add({
+        sessionKey: run.sessionKey,
+        agentId: run.agentId,
+        sessionId: run.sessionId,
+        sourceRunId: operation?.abortSignal.aborted ? undefined : runId,
+      });
     }
   }
   for (const root of listLiveSubagentRootSessions()) {
@@ -260,6 +270,9 @@ async function persistRunningSessions(
               ...entry,
               resumeAfterRestart: {
                 queuedInputIds: queued.queuedInputIds,
+                ...((session.sourceRunId ?? entry.lifecycleRunId)
+                  ? { sourceRunId: session.sourceRunId ?? entry.lifecycleRunId }
+                  : {}),
                 ...(session.hadBackgroundExec ? { hadBackgroundExec: true } : {}),
               },
             },
@@ -276,34 +289,9 @@ async function persistRunningSessions(
   }
 }
 
-type RestartResumeParams = {
-  context: GatewayRequestContext;
-  signal: AbortSignal;
-  log: { warn: (message: string) => void };
-};
-
-type RestartStoreTarget = {
-  agentId: string;
-  physicalAgentId: string;
-  storePath: string;
-  env?: NodeJS.ProcessEnv;
-};
-type PreparedRestartStore = {
-  target: RestartStoreTarget;
-  entries: Awaited<ReturnType<typeof readSessionEntrySummariesInWorker>>;
-  orphaned: Awaited<ReturnType<typeof listOrphanedSessionPendingInputTargets>>;
-};
-
 // Initial discovery and deferred preparation share one operation per physical store.
 // The Gateway lifetime owns the promises; completed stores must not rescan new inputs as orphans.
-const restartRecovery = new WeakMap<
-  object,
-  {
-    ready: Deferred;
-    allowUnmarked: boolean;
-    stores: Map<string, Promise<void>>;
-  }
->();
+const restartRecovery = new WeakMap<object, Restart.RecoveryState>();
 function getRestartRecovery(context: GatewayRequestContext) {
   const owner = context.agentDatabaseStartup ?? context;
   let recovery = restartRecovery.get(owner);
@@ -315,9 +303,9 @@ function getRestartRecovery(context: GatewayRequestContext) {
 }
 
 async function discoverRestartSessionStores(
-  params: RestartResumeParams,
+  params: Restart.RestartResumeParams,
   env?: NodeJS.ProcessEnv,
-): Promise<RestartStoreTarget[]> {
+): Promise<Restart.RestartStoreTarget[]> {
   const { context, signal } = params;
   signal.throwIfAborted();
   const cfg = context.getRuntimeConfig();
@@ -345,12 +333,12 @@ async function discoverRestartSessionStores(
 }
 
 async function prepareRestartStore(
-  params: RestartResumeParams,
-  target: RestartStoreTarget,
-): Promise<PreparedRestartStore | undefined> {
+  params: Restart.RestartResumeParams,
+  target: Restart.RestartStoreTarget,
+): Promise<Restart.PreparedRestartStore | undefined> {
   const { signal, log } = params;
   const recovery = getRestartRecovery(params.context);
-  let entries: PreparedRestartStore["entries"];
+  let entries: Restart.PreparedRestartStore["entries"];
   try {
     entries = (await readSessionEntrySummariesInWorker(target)).filter(
       ({ entry }) => entry.resumeAfterRestart || entry.mainRestartRecovery || entry.lifecycleRunId,
@@ -365,12 +353,12 @@ async function prepareRestartStore(
     log.warn(`Skipped restart resume for agent ${target.agentId}: ${String(error)}`);
     return undefined;
   }
-  let orphaned: PreparedRestartStore["orphaned"] = [];
+  let orphaned: Restart.PreparedRestartStore["orphaned"] = [];
   try {
-    orphaned = await listOrphanedSessionPendingInputTargets(
-      target,
-      entries.flatMap(({ entry }) => entry.resumeAfterRestart?.queuedInputIds ?? []),
-    );
+    orphaned = await listOrphanedSessionPendingInputTargets(target, [
+      ...entries.flatMap(({ entry }) => entry.resumeAfterRestart?.queuedInputIds ?? []),
+      ...((await (params.claimResume ?? recovery.claimResume)?.queuedInputIds?.(target)) ?? []),
+    ]);
     signal.throwIfAborted();
   } catch (error) {
     signal.throwIfAborted();
@@ -380,8 +368,8 @@ async function prepareRestartStore(
 }
 
 function resumePreparedRestartStore(
-  params: RestartResumeParams,
-  prepared: PreparedRestartStore,
+  params: Restart.RestartResumeParams,
+  prepared: Restart.PreparedRestartStore,
 ): Promise<void> {
   const recovery = getRestartRecovery(params.context);
   let work = recovery.stores.get(prepared.target.storePath);
@@ -390,7 +378,11 @@ function resumePreparedRestartStore(
       withAgentInputRecovery(
         params.context.agentDatabaseStartup,
         prepared.target.physicalAgentId,
-        () => resumeRestartStore(params, prepared),
+        () =>
+          resumeRestartStore(
+            { ...params, claimResume: recovery.claimResume ?? params.claimResume },
+            prepared,
+          ),
       ),
     );
     recovery.stores.set(prepared.target.storePath, work);
@@ -400,13 +392,15 @@ function resumePreparedRestartStore(
 
 /** Capture data during preparation; admit it only after the native borrow and startup prerequisites. */
 export async function prepareAgentRestartRecovery(
-  params: RestartResumeParams & {
+  params: Restart.RestartResumeParams & {
     agentId: string;
     env: NodeJS.ProcessEnv;
     assertCurrent: () => void;
   },
 ): Promise<(() => Promise<void>) | undefined> {
-  const prepared: PreparedRestartStore[] = [];
+  const recovery = getRestartRecovery(params.context);
+  recovery.claimResume ??= params.claimResume;
+  const prepared: Restart.PreparedRestartStore[] = [];
   for (const target of await discoverRestartSessionStores(params, params.env)) {
     if (target.physicalAgentId !== params.agentId) {
       continue;
@@ -423,7 +417,7 @@ export async function prepareAgentRestartRecovery(
   }
   // Do not retain assertCurrent: it belongs to the temporary preparation borrow.
   const { context, signal, log } = params;
-  const ready = getRestartRecovery(context).ready.promise;
+  const ready = recovery.ready.promise;
   return async () => {
     await racePromiseWithAbortSignal(ready, signal);
     await runWithGatewayIndependentRootWorkAdmission(
@@ -431,7 +425,10 @@ export async function prepareAgentRestartRecovery(
         withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
           for (const store of prepared) {
             signal.throwIfAborted();
-            await resumePreparedRestartStore({ context, signal, log }, store);
+            await resumePreparedRestartStore(
+              { context, signal, log, claimResume: recovery.claimResume },
+              store,
+            );
           }
         }),
       "startup:agent-session-resume",
@@ -441,10 +438,11 @@ export async function prepareAgentRestartRecovery(
 }
 
 /** Markers admit immediately; crash adoption requires a Gateway-wide marker decision. */
-export async function resumeMarkedSessions(params: RestartResumeParams): Promise<void> {
+export async function resumeMarkedSessions(params: Restart.RestartResumeParams): Promise<void> {
   const recovery = getRestartRecovery(params.context);
-  const stores: PreparedRestartStore[] = [];
-  let targets: RestartStoreTarget[];
+  recovery.claimResume = params.claimResume ?? recovery.claimResume;
+  const stores: Restart.PreparedRestartStore[] = [];
+  let targets: Restart.RestartStoreTarget[];
   try {
     targets = await discoverRestartSessionStores(params);
     for (const target of targets) {
@@ -501,8 +499,8 @@ export async function resumeMarkedSessions(params: RestartResumeParams): Promise
 }
 
 async function resumeRestartStore(
-  { context, signal, log }: RestartResumeParams,
-  { target, entries, orphaned }: PreparedRestartStore,
+  { context, signal, log, claimResume }: Restart.RestartResumeParams,
+  { target, entries, orphaned }: Restart.PreparedRestartStore,
 ): Promise<void> {
   const summary = createRestartResumeSummary("startup");
   for (const { sessionKey } of entries) {
@@ -517,10 +515,14 @@ async function resumeRestartStore(
     const window = context.restartResumeWindow;
     const recovery = getRestartRecovery(context);
     signal.throwIfAborted();
+    const queuedInputIds = (await claimResume?.queuedInputIds?.(target)) ?? [];
+    signal.throwIfAborted();
     for (const session of orphaned) {
       try {
-        await interruptOrphanedSessionPendingInputs({ ...target, ...session }, () =>
-          signal.throwIfAborted(),
+        await interruptOrphanedSessionPendingInputs(
+          { ...target, ...session },
+          () => signal.throwIfAborted(),
+          queuedInputIds,
         );
       } catch (error) {
         signal.throwIfAborted();
@@ -544,7 +546,7 @@ async function resumeRestartStore(
           sessionKeys: [sessionKey],
           assertCommitAllowed: () => signal.throwIfAborted(),
           requireWriteSuccess: true,
-          update: (current) => {
+          update: async (current) => {
             const selected = current.find((row) => row.sessionKey === sessionKey)?.entry;
             if (!selected) {
               return { result: undefined };
@@ -575,6 +577,16 @@ async function resumeRestartStore(
             if (!marker && !selected.mainRestartRecovery && !orphanedRun) {
               return { result: undefined };
             }
+            const maintenanceClaimed =
+              (await claimResume?.({
+                agentId: parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
+                sessionKey,
+                sessionId: selected.sessionId,
+                lifecycleRevision: selected.lifecycleRevision,
+                sourceRunId: marker?.sourceRunId ?? selected.lifecycleRunId,
+                queuedInputIds: marker?.queuedInputIds ?? [],
+              })) === true;
+            signal.throwIfAborted();
             const entry = {
               ...selected,
               resumeAfterRestart: undefined,
@@ -593,7 +605,7 @@ async function resumeRestartStore(
             };
             interrupted = Boolean(orphanedRun && !marker);
             return {
-              result: marker ? { entry, marker } : undefined,
+              result: !maintenanceClaimed && marker ? { entry, marker } : undefined,
               replacements: [{ sessionKey, entry }],
             };
           },

@@ -19,6 +19,7 @@ import {
   captureSessionQueuedInputsForRestart,
   listSessionPendingInputs,
   readSessionPendingInput,
+  readSessionQueuedInputPage,
 } from "../config/sessions/session-pending-input-history.js";
 import * as pendingInputWithdrawal from "../config/sessions/session-pending-input-withdrawal.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
@@ -572,3 +573,190 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
       await live!.settled?.();
     }
   }));
+
+it("preserves journal-only queued custody while settling unrelated startup orphans", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    assert(database);
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:journal-only",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    replaceSessionEntrySync(target, { sessionId: "journal-only", updatedAt: Date.now() });
+    const entry = loadExactSessionEntry(target)?.entry;
+    assert(entry, "expected canonical session fixture");
+    const receipts = [];
+    for (const name of ["owned", "unowned"]) {
+      const receipt = await stageSessionPendingInput(
+        { ...target, sessionId: entry.sessionId },
+        {
+          runId: name,
+          message: {
+            role: "user",
+            content: name,
+            timestamp: Date.now(),
+            idempotencyKey: name + ":user",
+          },
+          assertCurrent() {},
+        },
+      );
+      assert(receipt, "expected accepted queue fixture");
+      receipts.push(receipt);
+      if (name === "owned") {
+        const captured = await captureSessionQueuedInputsForRestart({
+          ...target,
+          sessionId: entry.sessionId,
+        });
+        captured.preserve();
+      }
+      receipt.finish("interrupted");
+      await receipt.settled?.();
+    }
+    const [owned, unowned] = receipts;
+    assert(owned && unowned);
+    database.db
+      .prepare(
+        "UPDATE session_pending_inputs SET state = 'queued', lifecycle_generation = 'previous-process' WHERE input_id IN (?, ?)",
+      )
+      .run(owned.inputId, unowned.inputId);
+    const { savePluginReloadOperation } = await import("./plugin-reload-operation-store.js");
+    await savePluginReloadOperation({
+      id: "journal-only",
+      pluginIds: ["example"],
+      state: "reloading",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      continuations: [
+        {
+          agentId: "main",
+          sessionKey: target.sessionKey,
+          sessionId: entry.sessionId,
+          sourceRunId: "source",
+          recoverySource: { kind: "unavailable" },
+          queuedInputIds: [owned.inputId],
+          state: "pending",
+        },
+        {
+          agentId: "other",
+          sessionKey: "agent:other:queue",
+          sessionId: "other",
+          sourceRunId: "other",
+          recoverySource: { kind: "unavailable" },
+          queuedInputIds: [unowned.inputId],
+          state: "pending",
+        },
+      ],
+    });
+    const context = createContext([], () => cfg);
+    context.resolveGatewayContext = () => context;
+    const signal = new AbortController().signal;
+    const { createPluginReloadRestartClaim } = await import("./plugin-reload-operation-gateway.js");
+    const claimResume = await createPluginReloadRestartClaim(context, signal);
+    const warn = vi.fn();
+    await resumeMarkedSessions({ context, signal, log: { warn }, claimResume });
+    expect(warn.mock.calls).toEqual([]);
+    expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+    const queued = await readSessionQueuedInputPage(
+      { ...target, sessionId: entry.sessionId },
+      { queuedInputIds: [owned.inputId, unowned.inputId] },
+    );
+    expect(queued.rows).toMatchObject([{ input_id: owned.inputId, state: "queued" }]);
+    expect(queued.rows).toHaveLength(1);
+    expect(
+      await readSessionPendingInput({ ...target, sessionId: entry.sessionId }, unowned.inputId),
+    ).toMatchObject({ state: "cancelled" });
+  }));
+
+it.each(["prepared", "startup"] as const)(
+  "uses the %s maintenance claim through cached deferred agent recovery without an ordinary wake",
+  (mode) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:deferred-maintenance",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      };
+      replaceSessionEntrySync(target, { sessionId: "deferred-maintenance", updatedAt: Date.now() });
+      const entry = loadExactSessionEntry(target)?.entry;
+      assert(entry, "expected canonical deferred session");
+      replaceSessionEntrySync(target, {
+        ...entry,
+        resumeAfterRestart: { sourceRunId: "source", queuedInputIds: ["marker-queue"] },
+      });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
+      const { savePluginReloadOperation, readPluginReloadOperation } =
+        await import("./plugin-reload-operation-store.js");
+      await savePluginReloadOperation({
+        id: "deferred-maintenance",
+        pluginIds: ["example"],
+        state: "succeeded",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        continuations: [
+          {
+            agentId: "main",
+            sessionKey: target.sessionKey,
+            sessionId: entry.sessionId,
+            sourceRunId: "source",
+            recoverySource: { kind: "unavailable" },
+            queuedInputIds: [],
+            state: "pending",
+          },
+        ],
+      });
+      const context = createContext([], () => cfg);
+      context.resolveGatewayContext = () => context;
+      const signal = new AbortController().signal;
+      context.agentDatabaseStartup = createAgentDatabaseStartupObservation(
+        new Map<string, PendingAgentDatabaseRecovery>(),
+        signal,
+      );
+      const params = { context, signal, log: { warn: vi.fn() } };
+      const handoff = await import("../auto-reply/reply/session-event-handoff.js");
+      const ordinary = vi.spyOn(handoff, "enqueueSessionEventForHost").mockReturnValue({
+        id: "ordinary",
+        cancel: () => false,
+        accepted: Promise.resolve({ ok: true }),
+        settled: Promise.resolve({
+          status: "completed",
+          executionStarted: false,
+          delivered: false,
+        }),
+      });
+      try {
+        const { createPluginReloadRestartClaim } =
+          await import("./plugin-reload-operation-gateway.js");
+        const realClaim = await createPluginReloadRestartClaim(context, signal);
+        const claimResume = Object.assign(vi.fn(realClaim), realClaim);
+        // Either preparation or the global observer can be first to supply custody.
+        const prepared = await prepareAgentRestartRecovery({
+          ...params,
+          ...(mode === "prepared" ? { claimResume } : {}),
+          agentId: "main",
+          env: process.env,
+          assertCurrent() {},
+        });
+        expect(params.log.warn.mock.calls).toEqual([]);
+        assert(prepared, "expected the prepared restart marker");
+        const recovering = prepared();
+        await resumeMarkedSessions({ ...params, ...(mode === "startup" ? { claimResume } : {}) });
+        await recovering;
+        await resumeMarkedSessions({ ...params, claimResume });
+        expect(params.log.warn.mock.calls).toEqual([]);
+        expect(claimResume).toHaveBeenCalledTimes(1);
+        expect(ordinary).not.toHaveBeenCalled();
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+        expect(
+          (await readPluginReloadOperation("deferred-maintenance"))?.continuations[0]
+            ?.queuedInputIds,
+        ).toEqual(["marker-queue"]);
+      } finally {
+        ordinary.mockRestore();
+      }
+    }),
+);

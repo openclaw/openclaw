@@ -683,7 +683,7 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Written only by committed graceful shutdown, consumed by the next startup. */
-  resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true };
+  resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true; sourceRunId?: string };
   /** Upgrade-only cycle; remove once stable includes the restart redesign (#185730). */
   mainRestartRecovery?: { cycleId: string };
 };

@@ -45,6 +45,7 @@ import {
 } from "../embedded-agent-subscribe.callback.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelFallbackAvailability } from "../model-selection-config.js";
+import { ownPluginReloadRun } from "../plugin-reload-runs.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   runOutsidePreparedModelRuntimePluginGenerationScope,
@@ -278,12 +279,12 @@ async function runEmbeddedAgentForSession(
         } = resolvePreparedRuntimeWorkspaces(params);
         startupStages.mark("workspace");
         const config = params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG;
-        const requestedAgentDir =
-          params.agentDir ?? resolveAgentDir(config, requestedWorkspaceResolution.agentId);
+        const agentId = requestedWorkspaceResolution.agentId;
+        const requestedAgentDir = params.agentDir ?? resolveAgentDir(config, agentId);
         const retainIdleRunOwner = params.config === undefined;
         const requestedRuntimeSelection = resolveInitialEmbeddedRunModel({
           config,
-          agentId: requestedWorkspaceResolution.agentId,
+          agentId,
           provider: params.provider,
           model: params.model,
         });
@@ -297,13 +298,13 @@ async function runEmbeddedAgentForSession(
         const runtimePluginSelections = resolveEmbeddedRuntimePluginSelections({
           run: params,
           config,
-          agentId: requestedWorkspaceResolution.agentId,
+          agentId,
           manifestPlugins: pluginMetadataSnapshot,
           requestedModel: requestedRuntimeSelection,
         });
         const preparedInput = {
           config,
-          agentId: requestedWorkspaceResolution.agentId,
+          agentId,
           agentDir: requestedAgentDir,
           // Shared credential inheritance stays anchored to its compatibility owner;
           // the selected session agent already owns this prepared runtime.
@@ -366,6 +367,7 @@ async function runEmbeddedAgentForSession(
               laneController.setLaneTaskDeadline(undefined);
             });
           preparedRuntimeResource = preparedModelRuntimeLease;
+          preparedRuntimeResource = ownPluginReloadRun(params, agentId, preparedModelRuntimeLease);
           startupStages.mark("prepared-runtime");
           const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
           let preparedLeaseActive = true;
