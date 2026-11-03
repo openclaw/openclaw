@@ -79,6 +79,19 @@ it.each([
           running: true,
           stopped: true,
           serviceEnv: env,
+          windowsTaskAutoStartRecovery: {
+            suspended: Promise.resolve(true),
+            beginMutation() {},
+            assertRecoveryCurrent() {},
+            handoff() {},
+            interrupted: () => false,
+            complete: async () => {},
+            restore: vi.fn(async (_safe, guard, assertCurrent) => {
+              assertCurrent?.();
+              await guard?.();
+              expect(onGatewayStartAttempted).not.toHaveBeenCalled();
+            }),
+          },
           serviceUpdateVerdict: {
             kind: "owned" as const,
             root,
@@ -121,6 +134,9 @@ it.each([
         return { healthy: true, runtime: { status: "running" } };
       });
       mocks.restart.mockImplementation(async (params) => {
+        expect(
+          opts.preManagedServiceStop.windowsTaskAutoStartRecovery.restore,
+        ).toHaveBeenCalledOnce();
         params.onGatewayStartAttempted?.();
         expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
         expect(params.opts.run).toBe(opts.updateRun);

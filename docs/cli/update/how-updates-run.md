@@ -772,6 +772,13 @@ repair applies when the updated driver runs the next upgrade; it cannot change
 an already-running 2026.9.5 updater. If that older driver stops with recovery
 pending, use the installed version's `openclaw update repair`.
 
+Windows recovery retains its task-restoration handle through final Gateway
+verification and re-enables the task before admitted recovery activation.
+Re-enabling autostart alone does not count as a Gateway start. Existing recorded
+safety refusals still prevent recovery activation. This repair belongs to the
+running updater; installing a newer candidate cannot change an older updater’s
+recovery orchestration.
+
 If you interrupt while Windows task autostart is initially being suspended, the
 updater restores its prior autostart setting before exiting. Restoration still
 requires the original live update owner and task identity. This interruption

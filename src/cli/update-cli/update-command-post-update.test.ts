@@ -17,6 +17,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { registerMaintenanceCommands } from "../program/register.maintenance.js";
 import { registerCurrentCoreServiceReceiptTests } from "./update-command-current-core-service-receipt.test-support.js";
+import * as failureRecovery from "./update-command-failure-recovery.js";
 import {
   createManagedServiceIdentityFixture,
   registerServiceInstallationConvergenceTests,
@@ -34,6 +35,7 @@ import {
   taskRecovery,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
+import * as serviceRecovery from "./update-command-service-recovery.js";
 import { registerWrapperRetirementFinalizationTests } from "./update-command-wrapper-finalization.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -303,7 +305,8 @@ describe("successful update finalization ordering", () => {
         },
       );
       const recovery = taskRecovery((phase) => events.push(phase));
-      mocks.restartService.mockImplementationOnce(async () => {
+      mocks.restartService.mockImplementationOnce(async ({ onGatewayStartAttempted }) => {
+        onGatewayStartAttempted?.();
         events.push("start");
         return "ok";
       });
@@ -337,7 +340,7 @@ describe("successful update finalization ordering", () => {
       expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("restore"));
       expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("start"));
       expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("activation-attempt"));
-      expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("restore"));
+      expect(events.indexOf("restore")).toBeLessThan(events.indexOf("activation-attempt"));
       expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("start"));
       expect(mocks.restartService).toHaveBeenCalledOnce();
       expect(mocks.stopService).not.toHaveBeenCalled();
@@ -444,6 +447,66 @@ describe("successful update finalization ordering", () => {
       mocks.printResult.mock.lastCall?.[0],
     );
   });
+
+  it.each([false, true])(
+    "retains Windows recovery through final verification (settlement fails=%s)",
+    async (settlementFails) => {
+      const events: string[] = [];
+      const settlementError = new Error("late task settlement failed");
+      const recovery = taskRecovery();
+      recovery.complete.mockImplementation(async (safe?: boolean) => {
+        events.push("complete:" + safe);
+        if (safe && settlementFails) {
+          throw settlementError;
+        }
+      });
+      vi.spyOn(serviceRecovery, "admitInstalledGatewayRecovery").mockResolvedValue(false);
+      vi.spyOn(failureRecovery, "verifyUpdateFailureRecovery").mockImplementation(
+        async ({ result }) => {
+          events.push("verify");
+          return {
+            ...result,
+            recovery: { serviceRestartSafe: true, version: "1.0.0", service: "healthy" },
+          };
+        },
+      );
+      const failure = await finishSuccessfulPackageSwitch(
+        {
+          restartEnvironment: process.env,
+          windowsTaskAutoStartRecovery: recovery,
+        },
+        {
+          shouldRestart: false,
+          result: {
+            status: "error",
+            mode: "npm",
+            root: "/tmp/openclaw-update",
+            reason: "initiating-failure",
+            steps: [],
+            durationMs: 0,
+          },
+        },
+      ).catch((error: unknown) => error);
+      expect(failure).toMatchObject({ result: { status: "error", reason: "initiating-failure" } });
+      expect(events).toEqual(
+        settlementFails
+          ? ["verify", "complete:true", "complete:false"]
+          : ["verify", "complete:true"],
+      );
+      if (settlementFails) {
+        expect(failure).toMatchObject({
+          result: {
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                name: "windows-task-autostart-recovery",
+                stderrTail: settlementError.message,
+              }),
+            ]),
+          },
+        });
+      }
+    },
+  );
 
   registerWrapperRetirementFinalizationTests({ tempDirs, mocks });
 

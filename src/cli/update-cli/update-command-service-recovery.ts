@@ -488,6 +488,14 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       await before.windowsTaskAutoStartRecovery?.restore(true, checkOriginal, assertOriginal);
       await checkOriginal();
     } else {
+      await before.windowsTaskAutoStartRecovery?.restore(
+        true,
+        async () => {
+          await readCurrentService();
+        },
+        assertCurrent,
+      );
+      assertCurrent();
       await runUpdatedInstallGatewayCommand(
         {
           onGatewayStartAttempted: params.onGatewayStartAttempted,

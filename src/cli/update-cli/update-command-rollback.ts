@@ -569,9 +569,6 @@ export async function rollbackFailedUpdate(params: {
         }
       : stopped;
     failureReason = "service-revalidation-failed";
-    if (stopped.windowsTaskAutoStartRecovery) {
-      params.onGatewayStartAttempted?.();
-    }
     await stopped.windowsTaskAutoStartRecovery?.restore(
       true,
       createWindowsTaskAutoStartGuard({

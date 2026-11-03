@@ -202,14 +202,10 @@ export async function resumePostUpdateWindowsAutoStart(
   result: UpdateRunResult,
   readStopped: () => PreManagedServiceStop | undefined,
   callbacks?: {
-    beforeAttempt: () => void;
     onFailure: (cause: unknown) => Promise<unknown>;
   },
 ): Promise<void> {
   try {
-    if (callbacks && readStopped()?.windowsTaskAutoStartRecovery) {
-      callbacks.beforeAttempt();
-    }
     const stopped = readStopped();
     await stopped?.windowsTaskAutoStartRecovery?.restore(
       true,
@@ -229,4 +225,37 @@ export async function resumePostUpdateWindowsAutoStart(
     // The attempted restore already failed; reporting must not attempt it again.
     await callbacks.onFailure(cause);
   }
+}
+
+/** Preserve the initiating failure when final task restoration also fails. */
+export async function settlePostUpdateWindowsAutoStartFailure(
+  params: Pick<FinishUpdateParams, "root">,
+  finalResult: UpdateRunResult,
+  result: Pick<UpdateRunResult, "status" | "reason">,
+  cause: unknown,
+  readStopped: () => PreManagedServiceStop | undefined,
+): Promise<{ cause: unknown }> {
+  let failure = cause;
+  try {
+    await readStopped()?.windowsTaskAutoStartRecovery?.complete(false);
+  } catch (cleanupError) {
+    failure = new AggregateError(
+      [cause, cleanupError],
+      `Windows task restoration and compensation failed: ${formatErrorMessage(cause)}; ${formatErrorMessage(cleanupError)}`,
+    );
+  }
+  defaultRuntime.error(`Failed to restore Windows Scheduled Task autostart: ${String(failure)}`);
+  finalResult.status = "error";
+  finalResult.reason =
+    result.status === "error" ? result.reason : "windows-task-autostart-restore-failed";
+  finalResult.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+  finalResult.steps = finalResult.steps.concat({
+    name: "windows-task-autostart-recovery",
+    command: "openclaw update",
+    cwd: finalResult.root ?? params.root,
+    durationMs: 0,
+    exitCode: 1,
+    stderrTail: formatErrorMessage(failure),
+  });
+  return { cause: failure };
 }
