@@ -735,6 +735,8 @@ describe("update-cli", () => {
       const updatePromise = updateCommand({
         yes: true,
         restart: phase === "service pre-stop inspection",
+      }).catch((cause: unknown) => {
+        throw new Error(`${getLogOutput()}\n${getErrorOutput()}`, { cause });
       });
       try {
         await Promise.race([
@@ -806,11 +808,9 @@ describe("update-cli", () => {
     suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
     resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
 
-    try {
-      await updateCommand({ yes: true, restart: false });
-    } catch (cause) {
+    await updateCommand({ yes: true, restart: false }).catch((cause: unknown) => {
       throw new Error(`${getLogOutput()}\n${getErrorOutput()}`, { cause });
-    }
+    });
 
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeDefined();
