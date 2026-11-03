@@ -1534,20 +1534,15 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 }
 
 .lazy-view-error__icon {
-  width: 44px;
-  height: 44px;
   display: grid;
   place-items: center;
-  border-radius: 50%;
-  background: var(--danger-subtle);
   color: var(--danger);
   margin-bottom: 4px;
 }
 
 /* A stale-chunk reload prompt is routine after an update, not a failure. */
 .lazy-view-error--stale .lazy-view-error__icon {
-  background: var(--accent-subtle);
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .lazy-view-error__icon svg {
