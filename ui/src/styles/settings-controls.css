@@ -69,8 +69,9 @@ select.settings-select:not([multiple]) {
   flex-wrap: nowrap;
 }
 
-/* The parent selector also wins over the shared .btn hover/active chrome. */
-.settings-segmented > .settings-segmented__btn {
+/* Tooltip wrappers keep the same segment chrome and focus treatment.
+   The parent selector also wins over the shared .btn hover/active chrome. */
+:is(.settings-segmented, .settings-segmented > openclaw-tooltip) > .settings-segmented__btn {
   display: inline-flex;
   flex: 1 1 auto;
   align-items: center;
@@ -92,32 +93,39 @@ select.settings-select:not([multiple]) {
     box-shadow var(--duration-normal) var(--ease-out);
 }
 
-.settings-segmented--compact > .settings-segmented__btn {
+:is(.settings-segmented--compact, .settings-segmented--compact > openclaw-tooltip)
+  > .settings-segmented__btn {
   padding: 0 6px;
   font-size: 10px;
 }
 
-.settings-segmented > .settings-segmented__btn--active,
-.settings-segmented > .settings-segmented__btn:has(> input:checked) {
+:is(.settings-segmented, .settings-segmented > openclaw-tooltip) > .settings-segmented__btn--active,
+:is(.settings-segmented, .settings-segmented > openclaw-tooltip)
+  > .settings-segmented__btn:has(> input:checked) {
   background: var(--segmented-selected);
   color: var(--text-strong);
   box-shadow: var(--shadow-sm);
 }
 
-:where(.settings-segmented) > .settings-segmented__btn:hover {
+:where(.settings-segmented, .settings-segmented > openclaw-tooltip)
+  > .settings-segmented__btn:hover {
   color: var(--text);
 }
 
-:where(.settings-segmented) > .settings-segmented__btn:focus-visible,
-.settings-segmented > .settings-segmented__btn:has(> input:focus-visible) {
+:where(.settings-segmented, .settings-segmented > openclaw-tooltip)
+  > .settings-segmented__btn:focus-visible,
+:is(.settings-segmented, .settings-segmented > openclaw-tooltip)
+  > .settings-segmented__btn:has(> input:focus-visible) {
   outline: none;
   color: var(--text);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-:where(.settings-segmented) > .settings-segmented__btn:is(:disabled, [aria-disabled="true"]),
+:where(.settings-segmented, .settings-segmented > openclaw-tooltip)
+  > .settings-segmented__btn:is(:disabled, [aria-disabled="true"]),
 .settings-toggle:has(input:is(:disabled, [aria-disabled="true"])),
-.settings-segmented > .settings-segmented__btn:has(> input:is(:disabled, [aria-disabled="true"])) {
+:is(.settings-segmented, .settings-segmented > openclaw-tooltip)
+  > .settings-segmented__btn:has(> input:is(:disabled, [aria-disabled="true"])) {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -160,14 +168,18 @@ select.settings-select:not([multiple]) {
 }
 
 @media (forced-colors: active) {
-  :where(.settings-segmented) > .settings-segmented__btn--active,
-  .settings-segmented > .settings-segmented__btn:has(> input:checked) {
+  :where(.settings-segmented, .settings-segmented > openclaw-tooltip)
+    > .settings-segmented__btn--active,
+  :is(.settings-segmented, .settings-segmented > openclaw-tooltip)
+    > .settings-segmented__btn:has(> input:checked) {
     text-decoration: underline 2px;
     text-underline-offset: 3px;
   }
 
-  :where(.settings-segmented) > .settings-segmented__btn:focus-visible,
-  .settings-segmented > .settings-segmented__btn:has(> input:focus-visible) {
+  :where(.settings-segmented, .settings-segmented > openclaw-tooltip)
+    > .settings-segmented__btn:focus-visible,
+  :is(.settings-segmented, .settings-segmented > openclaw-tooltip)
+    > .settings-segmented__btn:has(> input:focus-visible) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }
@@ -312,7 +324,9 @@ select.settings-select {
     min-height: var(--settings-control-height);
   }
 
-  :root .settings-segmented > .settings-segmented__btn {
+  :root
+    :is(.settings-segmented, .settings-segmented > openclaw-tooltip)
+    > .settings-segmented__btn {
     min-height: calc(var(--settings-control-height) - 6px);
   }
 
