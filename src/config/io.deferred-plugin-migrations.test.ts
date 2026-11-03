@@ -209,6 +209,64 @@ describe("config IO with deferred plugin migrations", () => {
     },
   );
 
+  it.each([
+    "guidance",
+    "pluginId",
+    "configPaths",
+    "validationExcludedPaths",
+    "requiresStateMigration",
+    "requiresDoctorInspection",
+  ] as const)(
+    "compares pending migration requirements rather than %s display guidance",
+    async (change) => {
+      const { configPath, env, ioOptions } = fixture();
+      const pluginPath = ["plugins", "entries", "sample", "config"];
+      const source = {
+        gateway: { mode: "local", port: 18789 },
+        plugins: { entries: { sample: { config: { region: "us-en" } } } },
+      };
+      const original = JSON.stringify(source);
+      fs.writeFileSync(configPath, original);
+      const pending = { ...pendingPlugin, configPaths: [pluginPath] };
+      await recordDeferredPluginMigrations({ env, pending: [pending] });
+      const changed = {
+        ...pending,
+        ...(change === "guidance"
+          ? { reason: "Inspection remains pending.", command: "openclaw doctor --fix" }
+          : change === "pluginId"
+            ? { pluginId: "other" }
+            : change === "configPaths"
+              ? { configPaths: [["session", "store"]] }
+              : change === "validationExcludedPaths"
+                ? { validationExcludedPaths: [pluginPath] }
+                : change === "requiresStateMigration"
+                  ? { requiresStateMigration: true as const }
+                  : { requiresDoctorInspection: true as const }),
+      };
+      const io = createConfigIO({ ...ioOptions, deferredPluginMigrations: [pending] });
+      const write = io.writeConfigFile(
+        { ...source, gateway: { mode: "local", port: 18790 } },
+        {
+          ...repairOptions,
+          beforeCommit: async () => {
+            await recordDeferredPluginMigrations({ env, pending: [changed] });
+          },
+        },
+      );
+      if (change === "guidance") {
+        await write;
+        expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
+          ...source,
+          gateway: { mode: "local", port: 18790 },
+        });
+        expect(readDeferredPluginMigrations({ env })).toEqual([changed]);
+      } else {
+        await expect(write).rejects.toBeInstanceOf(DeferredPluginMigrationConflictError);
+        expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+      }
+    },
+  );
+
   it("protects include-owned inputs claimed after mutation planning", async () => {
     const { root, configPath, env, ioOptions } = fixture();
     const includePath = path.join(root, "session.json");
