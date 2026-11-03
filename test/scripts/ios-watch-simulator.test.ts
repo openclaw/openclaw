@@ -19,7 +19,7 @@ def lane(*); end
 alias private_lane lane
 load ARGV.fetch(0)
 
-def available_simulator_devices; []; end
+def available_simulator_devices(**); []; end
 module Open3
   def self.capture3(*arguments)
     raise "unexpected command" unless arguments == ["xcrun", "simctl", "list", "runtimes", "--json"]

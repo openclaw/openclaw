@@ -1,3 +1,5 @@
+require "open3"
+
 # Opt-in phase and incident evidence. Resource sampling belongs to ios-resource-timeline.mjs.
 class ScreenshotDiagnostics
   attr_reader :events
@@ -27,6 +29,49 @@ class ScreenshotDiagnostics
       event["durationSeconds"] = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).round(2)
       event["startup"] = startup_facts(log_path) if log_path
       persist
+    end
+  end
+
+  def inventory_query(command)
+    event = @events.last
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    elapsed = -> { ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000).round(3) }
+    sample = { "startedAt" => Time.now.utc.iso8601(3) }
+    stdout, stderr, status = Open3.popen3(*command) do |input, output, error, waiter|
+      sample["spawnReturnedMs"] = elapsed.call
+      input.close
+      readers = [output, error].map do |stream|
+        Thread.new do
+          first = stream.read(1)
+          first_at = elapsed.call if first
+          rest = stream.read
+          finished = elapsed.call
+          [(first || +"").force_encoding(rest.encoding) << rest, first_at, finished]
+        end
+      end
+      result = waiter.value
+      # Parent-observed completion can itself be delayed by runner scheduling.
+      sample["childWaitReturnedMs"] = elapsed.call
+      captured = readers.map(&:value)
+      %w[stdout stderr].zip(captured).each do |name, (data, first_at, eof_at)|
+        sample["#{name}Bytes"] = data.bytesize
+        sample["#{name}FirstByteMs"] = first_at
+        sample["#{name}EofMs"] = eof_at
+      end
+      [captured[0][0], captured[1][0], result]
+    end
+    sample["capturedMs"] = elapsed.call
+    sample["exitCode"] = status.exitstatus
+    sample["terminationSignal"] = status.termsig
+    handling_started = elapsed.call
+    yield stdout, stderr, status
+  ensure
+    if sample
+      sample["resultHandlingMs"] = (elapsed.call - handling_started).round(3) if handling_started
+      sample["totalMs"] = elapsed.call
+      sample["outcome"] = $! ? "failed" : "succeeded"
+      # Persist with the existing phase boundary, adding no filesystem probes or writes.
+      (event["inventoryQueries"] ||= []) << sample
     end
   end
 

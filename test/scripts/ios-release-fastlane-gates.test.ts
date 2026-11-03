@@ -1022,7 +1022,7 @@ end
 def snapshot_devices
   ["iPhone 17 Pro Max", "iPad Pro 13-inch"]
 end
-def available_simulator_devices
+def available_simulator_devices(**)
   [
     { "name" => "iPhone 17 Pro Max", "udid" => "iphone-template", "deviceTypeIdentifier" => "iphone-type", "runtime" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0", "state" => "Shutdown" },
     { "name" => "iPad Pro 13-inch", "udid" => "older-ipad", "deviceTypeIdentifier" => "ipad-type", "runtime" => "com.apple.CoreSimulator.SimRuntime.iOS-26-0", "state" => "Shutdown" },
@@ -1722,6 +1722,76 @@ puts JSON.generate(results)
     }
     for (const entry of rows) {
       expect(entry.owned, entry.scenario).toEqual([]);
+    }
+  });
+
+  it("times real inventory command I/O without retaining output or changing query failures", () => {
+    const source = String.raw`
+require "json"
+require "tmpdir"
+require "rbconfig"
+require "time"
+require "open3"
+require ARGV.fetch(0)
+module UI
+  def self.user_error!(message); raise message; end
+end
+${functionDefinition(readFastfile(), "available_simulator_devices")}
+Dir.mktmpdir("inventory-command-") do |root|
+  executable = File.join(root, "xcrun")
+  File.write(executable, "#!#{RbConfig.ruby}\n" + <<~'FIXTURE')
+    require "json"
+    abort "unexpected command" unless ARGV == %w[simctl list devices available --json]
+    File.open(ENV.fetch("CALLS"), "a") { |file| file.puts "query" }
+    STDERR.write("PRIVATE-DIAGNOSTIC")
+    exit 7 if ENV.fetch("CASE") == "command-error"
+    STDOUT.write(ENV.fetch("CASE") == "invalid-json" ? "PRIVATE-INVALID-JSON" :
+      JSON.generate({ "devices" => { "runtime" => [{ "name" => "Téléphone", "state" => "Booted" }] } }))
+  FIXTURE
+  File.chmod(0755, executable)
+  ENV["PATH"] = root
+  ENV["CALLS"] = File.join(root, "calls")
+  rows = %w[success command-error invalid-json].map do |scenario|
+    ENV["CASE"] = scenario
+    File.write(ENV.fetch("CALLS"), "")
+    saved = nil
+    diagnostics = ScreenshotDiagnostics.new { saved = JSON.generate(diagnostics.events) }
+    devices = nil
+    error_kind = nil
+    begin
+      diagnostics.measure("boot") { devices = available_simulator_devices(diagnostics: diagnostics) }
+    rescue => error
+      error_kind = error.message.split(":", 2).first
+    end
+    { scenario: scenario, devices: devices, error: error_kind,
+      calls: File.readlines(ENV.fetch("CALLS")).length, event: JSON.parse(saved).fetch(0) }
+  end
+  puts JSON.generate(rows)
+end
+`;
+    const helper = path.join(path.dirname(fastfilePath), "screenshot_diagnostics.rb");
+    const result = spawnSync("ruby", ["-e", source, helper], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toMatch(/PRIVATE-|inventory-command-/);
+    const rows = JSON.parse(result.stdout);
+    expect(rows[0].devices).toEqual([{ name: "Téléphone", state: "Booted", runtime: "runtime" }]);
+    expect(rows[1].error).toBe("Failed to list simulator devices");
+    expect(rows[2].error).toBe("Invalid JSON from simctl device list");
+    for (const row of rows) {
+      expect(row.calls).toBe(1);
+      expect(row.event.outcome).toBe(row.scenario === "success" ? "succeeded" : "failed");
+      const [sample] = row.event.inventoryQueries;
+      expect(row.event.inventoryQueries).toHaveLength(1);
+      expect(sample.exitCode).toBe(row.scenario === "command-error" ? 7 : 0);
+      expect(sample.stderrBytes).toBe(18);
+      expect(sample.stdoutBytes).toBeGreaterThanOrEqual(0);
+      expect(sample.spawnReturnedMs).toBeGreaterThanOrEqual(0);
+      expect(sample.stderrFirstByteMs).toBeGreaterThanOrEqual(sample.spawnReturnedMs);
+      expect(sample.stderrEofMs).toBeGreaterThanOrEqual(sample.stderrFirstByteMs);
+      expect(sample.capturedMs).toBeGreaterThanOrEqual(sample.childWaitReturnedMs);
+      expect(sample.capturedMs).toBeGreaterThanOrEqual(sample.stdoutEofMs);
+      expect(sample.totalMs).toBeGreaterThanOrEqual(sample.capturedMs);
+      expect(sample.resultHandlingMs).toBeGreaterThanOrEqual(0);
     }
   });
 

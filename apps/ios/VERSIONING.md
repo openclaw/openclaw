@@ -239,6 +239,16 @@ GitHub retains both files and fixture PNGs in
 `ios-screenshots-<run-id>-<run-attempt>`. Raw Xcode logs and XCTest result bundles
 are excluded from the uploaded diagnostics.
 
+During the temporary inventory investigation, the existing post-boot, post-idle,
+and post-capture exclusivity queries also record `inventoryQueries` under their
+phase. Each query records elapsed milliseconds for process launch return, first
+stdout/stderr byte, stdout/stderr EOF, parent-observed child completion, completed
+output collection, and result handling (status validation and JSON decoding).
+It retains byte counts and exit status, without command arguments or output.
+These parent-observed timings can include scheduler delay; child completion is
+not an exact kernel exit timestamp. The probe adds no inventory queries or
+artifact writes and leaves exclusivity checks enabled.
+
 ## Apple bundle mapping
 
 Gateway `2026.7.2`, revision `1`, build `3` maps to:

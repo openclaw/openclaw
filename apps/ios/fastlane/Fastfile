@@ -202,17 +202,20 @@ def watch_snapshot_device
   raw.empty? ? DEFAULT_WATCH_SNAPSHOT_DEVICE : raw
 end
 
-def available_simulator_devices
-  stdout, stderr, status = Open3.capture3("xcrun", "simctl", "list", "devices", "available", "--json")
-  unless status.success?
-    detail = stderr.to_s.strip
-    detail = stdout.to_s.strip if detail.empty?
-    UI.user_error!("Failed to list simulator devices: #{detail}")
-  end
+def available_simulator_devices(diagnostics: nil)
+  command = ["xcrun", "simctl", "list", "devices", "available", "--json"]
+  decode = lambda do |stdout, stderr, status|
+    unless status.success?
+      detail = stderr.to_s.strip
+      detail = stdout.to_s.strip if detail.empty?
+      UI.user_error!("Failed to list simulator devices: #{detail}")
+    end
 
-  JSON.parse(stdout).fetch("devices").flat_map do |runtime, devices|
-    devices.map { |device| device.merge("runtime" => runtime) }
+    JSON.parse(stdout).fetch("devices").flat_map do |runtime, devices|
+      devices.map { |device| device.merge("runtime" => runtime) }
+    end
   end
+  diagnostics ? diagnostics.inventory_query(command, &decode) : decode.call(*Open3.capture3(*command))
 rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from simctl device list: #{e.message}")
 end
@@ -272,7 +275,7 @@ def require_idle_screenshot_simulators!
 end
 
 def require_exclusive_screenshot_simulator!(udid, diagnostics)
-  devices = available_simulator_devices
+  devices = available_simulator_devices(diagnostics: diagnostics)
   active = devices.select { |device| device.fetch("state") != "Shutdown" }
   diagnostics.events.last["activeSimulatorCount"] = active.length if diagnostics
   others = active.reject { |device| device.fetch("udid") == udid }
