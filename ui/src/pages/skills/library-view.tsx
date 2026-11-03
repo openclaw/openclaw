@@ -67,7 +67,9 @@ export function SkillLibrary(props: {
       <SettingsSection title={t(`skillLibrary.${current().view}`)} count={entries().length}>
         <Show
           when={entries().length > 0}
-          fallback={<SettingsEmpty message={t("skillLibrary.empty")} />}
+          fallback={
+            <SettingsEmpty message={t(query() ? "skillLibrary.noMatches" : "skillLibrary.empty")} />
+          }
         >
           <For each={entries()} keyed={(entry) => entry.skillId}>
             {(entry) => (
