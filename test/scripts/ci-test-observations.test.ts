@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createCiTestObservationCapture } from "../../scripts/lib/ci-test-observation-capture.mts";
 import { collectTestObservations } from "../../scripts/lib/ci-test-observations.mjs";
 
 const context = {
@@ -57,6 +58,219 @@ const dependencies = {
 };
 
 describe("CI observation export", () => {
+  it.each([false, true])(
+    "captures native outcomes and dependencies without log contents (failed=%s)",
+    (failed) => {
+      const directory = mkdtempSync(path.join(tmpdir(), "ci-observation-capture-"));
+      try {
+        const cacheDirectory = path.join(directory, "vite");
+        mkdirSync(cacheDirectory);
+        writeFileSync(path.join(cacheDirectory, "dependencies.json"), JSON.stringify(dependencies));
+        const configFile = path.join(directory, "vitest.config.ts");
+        const includeFile = path.join(directory, "include.txt");
+        const configuration = { pool: "forks", isolate: false };
+        writeFileSync(configFile, "export default {};");
+        writeFileSync(includeFile, file.file);
+        const capture = createCiTestObservationCapture({
+          repositoryRoot: process.cwd(),
+          cacheDirectory,
+          configFiles: [configFile],
+          configuration,
+          graphConfiguration: { files: [configFile], settings: configuration },
+          env: {
+            GITHUB_REPOSITORY: "example/project",
+            GITHUB_RUN_ID: "100",
+            GITHUB_RUN_ATTEMPT: "2",
+            OPENCLAW_VITEST_OBSERVATION_DIR: directory,
+            OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+          },
+        });
+        expect(capture).toBeDefined();
+        const [inventory, ...outcomes] = receipts({ failed });
+        const first = /\[vitest:(\w+)\] (.*)/u.exec(inventory!)!;
+        capture!.record(first[1]!, JSON.parse(first[2]!));
+        const initial = JSON.parse(readFileSync(path.join(directory, "observations.json"), "utf8"));
+        expect(initial.observations.invocations).toMatchObject([
+          { complete: false, files: [{ outcome: "unknown", cases: null, dependencies: null }] },
+        ]);
+        expect(initial.preExecution.observations).toEqual(initial.observations);
+        expect(initial.preExecution.graphInputs).toMatchObject({
+          version: 1,
+          profile: "unit-fast",
+        });
+        // Global setup and tests run after inventory; neither may rewrite its input identity.
+        writeFileSync(configFile, "export default { changed: true };");
+        writeFileSync(includeFile, "src/changed.test.ts");
+        configuration.pool = "threads";
+        for (const line of outcomes) {
+          const match = /\[vitest:(\w+)\] (.*)/u.exec(line)!;
+          capture!.record(match[1]!, JSON.parse(match[2]!));
+        }
+        const text = readFileSync(path.join(directory, "observations.json"), "utf8");
+        expect(text).not.toContain("must not be copied");
+        expect(text).not.toContain(directory);
+        expect(text).not.toContain(process.cwd());
+        expect(JSON.parse(text).preExecution).toEqual(initial.preExecution);
+        expect(JSON.parse(text).observations.context).toEqual(initial.observations.context);
+        expect(JSON.parse(text)).toMatchObject({
+          source: { runId: "100", runAttempt: "2" },
+          observations: {
+            context: {
+              repository: "example/project",
+              revision: expect.stringMatching(/^[a-f0-9]{40}$/u),
+            },
+            invocations: [
+              {
+                complete: true,
+                files: [
+                  {
+                    outcome: failed ? "failed" : "passed",
+                    dependencies: ["src/example.test.ts", "src/example.ts"],
+                  },
+                ],
+              },
+            ],
+          },
+        });
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("separates membership from graph inputs without hiding semantic changes", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ci-graph-inputs-"));
+    try {
+      const configFile = path.join(directory, "vitest.config.ts");
+      const setupFile = path.join(directory, "setup.ts");
+      const includeFile = path.join(directory, "include.txt");
+      writeFileSync(configFile, "export default {};");
+      writeFileSync(setupFile, "export {};");
+      const settings = { pool: "threads", alias: { find: /^example$/u, replacement: "./a.ts" } };
+      const capture = (name: string, graphSettings: unknown = settings, env = {}) => {
+        const selected = `src/${name}.test.ts`;
+        writeFileSync(includeFile, selected);
+        const observer = createCiTestObservationCapture({
+          repositoryRoot: process.cwd(),
+          cacheDirectory: directory,
+          configFiles: [configFile],
+          configuration: { ...settings, include: [selected] },
+          graphConfiguration: { files: [configFile, setupFile], settings: graphSettings },
+          env: {
+            OPENCLAW_VITEST_OBSERVATION_DIR: directory,
+            OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+            OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: includeFile,
+            ...env,
+          },
+        })!;
+        observer.record("inventory", {
+          version: 1,
+          dependencyRoot: "",
+          invocation: name,
+          runtime: "node",
+          runtimeVersion: process.version,
+          platform: process.platform,
+          arch: process.arch,
+          files: [{ ...file, file: selected }],
+        });
+        return JSON.parse(readFileSync(path.join(directory, "observations.json"), "utf8"));
+      };
+      const first = capture("first");
+      const second = capture("second");
+      expect(second.observations.context.configDigest).not.toBe(
+        first.observations.context.configDigest,
+      );
+      expect(second.observations.context.environmentDigest).not.toBe(
+        first.observations.context.environmentDigest,
+      );
+      expect(second.preExecution.graphInputs).toEqual(first.preExecution.graphInputs);
+      for (const changed of [
+        capture("first", { ...settings, pool: "forks" }),
+        capture("first", { ...settings, alias: { ...settings.alias, find: /^different$/u } }),
+        capture("first", settings, { OPENCLAW_TEST_WORKERS: "2" }),
+      ]) {
+        expect(changed.preExecution.graphInputs).not.toEqual(first.preExecution.graphInputs);
+      }
+      writeFileSync(setupFile, "export const changed = true;");
+      expect(capture("first").preExecution.graphInputs).not.toEqual(first.preExecution.graphInputs);
+      writeFileSync(setupFile, "export {};");
+      writeFileSync(configFile, "export default { changed: true };");
+      expect(capture("first").preExecution.graphInputs).not.toEqual(first.preExecution.graphInputs);
+      for (const invalid of [{ resolver: () => "unknown" }, new Map(), { timeout: Infinity }]) {
+        const unsupported = capture("first", invalid);
+        expect(unsupported.preExecution.graphInputs).toBeNull();
+        expect(unsupported.observations.invocations[0].files[0].outcome).toBe("unknown");
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps interrupted observations incomplete when native dependencies are missing", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ci-observation-capture-"));
+    try {
+      const capture = createCiTestObservationCapture({
+        repositoryRoot: process.cwd(),
+        cacheDirectory: directory,
+        configFiles: [],
+        configuration: {},
+        env: { OPENCLAW_VITEST_OBSERVATION_DIR: directory },
+      });
+      for (const line of receipts({ interrupted: true })) {
+        const match = /\[vitest:(\w+)\] (.*)/u.exec(line)!;
+        capture!.record(match[1]!, JSON.parse(match[2]!));
+      }
+      expect(
+        JSON.parse(readFileSync(path.join(directory, "observations.json"), "utf8")),
+      ).toMatchObject({
+        observations: {
+          invocations: [
+            {
+              complete: false,
+              files: [{ complete: false, outcome: "unknown", dependencies: null }],
+            },
+          ],
+        },
+      });
+      const unavailable = createCiTestObservationCapture({
+        repositoryRoot: path.join(directory, "missing"),
+        cacheDirectory: directory,
+        configFiles: [],
+        configuration: {},
+        env: { OPENCLAW_VITEST_OBSERVATION_DIR: directory },
+      });
+      expect(() => unavailable!.record("run", {})).not.toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves the incomplete snapshot when terminal receipts cannot be exported", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ci-observation-capture-"));
+    try {
+      const capture = createCiTestObservationCapture({
+        repositoryRoot: process.cwd(),
+        cacheDirectory: directory,
+        configFiles: [],
+        configuration: {},
+        env: { OPENCLAW_VITEST_OBSERVATION_DIR: directory },
+      })!;
+      const events = receipts().map((line) => {
+        const match = /\[vitest:(\w+)\] (.*)/u.exec(line)!;
+        return { kind: match[1]!, value: JSON.parse(match[2]!) };
+      });
+      capture.record(events[0]!.kind, events[0]!.value);
+      const target = path.join(directory, "observations.json");
+      const initial = readFileSync(target, "utf8");
+      capture.record(events[1]!.kind, events[1]!.value);
+      capture.record(events[1]!.kind, events[1]!.value);
+      expect(() => capture.record(events[2]!.kind, events[2]!.value)).not.toThrow();
+      expect(readFileSync(target, "utf8")).toBe(initial);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("exports through the operator command", () => {
     const root = mkdtempSync(path.join(tmpdir(), "ci-observations-"));
     try {

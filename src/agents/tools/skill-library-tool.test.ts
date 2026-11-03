@@ -5,7 +5,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { resultText } from "../code-mode.test-support.js";
-import { createLibrarySkillWorkshopTool } from "./skill-workshop-tool-library.js";
+import { createSkillLibraryTool } from "./skill-library-tool.js";
 
 const entry: SkillLibraryEntry = {
   skillId: "00000000-0000-4000-8000-000000000001",
@@ -32,7 +32,7 @@ const file = (name: string, bytes = privateBytes): SkillLibraryFile => ({
 const readResult = (files: SkillLibraryFile[]) => ({ entry, content, files, revisions: [] });
 
 function libraryTool(invoke: SkillLibraryAuthoringCapability["invoke"]) {
-  return createLibrarySkillWorkshopTool({
+  return createSkillLibraryTool({
     target: "personal",
     defaultTarget: "personal",
     multipleProfiles: true,
