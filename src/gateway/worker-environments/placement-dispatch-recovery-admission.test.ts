@@ -187,8 +187,8 @@ describe("placement recovery session admission with persisted placements", () =>
         if (!admit) {
           throw new Error("Recovery requires coordinator admission");
         }
-        return admit(ids, async (mode) => {
-          await run(mode);
+        return admit(ids, async (recoveryMode) => {
+          await run(recoveryMode);
           await hold.wait();
         });
       }),

@@ -176,7 +176,7 @@ try {
   let projectionReads = 0;
   let evidenceSubjects = 0;
   let identityInventories = 0;
-  const listIdentities = placements.listSessionIdentitiesAsync;
+  const listIdentities = placements.listSessionIdentitiesAsync.bind(placements);
   placements.listSessionIdentitiesAsync = async () => {
     identityInventories++;
     const identities = await listIdentities();
