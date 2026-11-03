@@ -13,6 +13,7 @@ import {
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
 import { buildMcpToolSchema } from "../../gateway/mcp-http.schema.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveBundleMcpServerInstructions } from "../agent-bundle-mcp-instructions.js";
 import {
@@ -21,7 +22,11 @@ import {
   startMcpHttpFixture,
 } from "../agent-bundle-mcp-lifecycle.test-support.js";
 import { setSessionMcpRuntimeScheduler } from "../agent-bundle-mcp-manager-api.js";
-import { disposeAllSessionMcpRuntimes } from "../agent-bundle-mcp-tools.js";
+import {
+  acquireSessionMcpRuntime,
+  disposeAllSessionMcpRuntimes,
+  materializeBundleMcpToolsForRun,
+} from "../agent-bundle-mcp-tools.js";
 import {
   createClaudeMcpCliBackend,
   testing as cliBackendsTesting,
@@ -31,6 +36,9 @@ import {
   createCliRunnerPrepareFixture,
   createTestMcpLoopbackClientGrant,
 } from "../cli-runner.test-helpers.js";
+import { createMcpProofPluginRegistry } from "../mcp-connection-resolver.test-fixtures.js";
+import { requesterIdentity } from "../mcp-oauth.test-harness.js";
+import { saveMcpOAuthAccessTokenForTest } from "../mcp-oauth.test-support.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
 import { mockCliMcpPreparation } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
@@ -42,6 +50,44 @@ const PROBE_SERVER_INSTRUCTIONS =
   "\nPROBE_TAIL: preserve the complete native guidance.";
 
 const claudeBackend = createClaudeMcpCliBackend();
+
+/** Answers `whoami` with the credential each call presented; records every call. */
+async function startIdentityServer() {
+  const calls: string[] = [];
+  const server = await startMcpHttpFixture(async (request, response) => {
+    if (request.method !== "POST") {
+      response.writeHead(request.method === "DELETE" ? 200 : 405).end();
+      return;
+    }
+    const authorization = request.headers.authorization ?? "none";
+    if (!["none", "Bearer shared", "Bearer alice", "Bearer bob"].includes(authorization)) {
+      response.writeHead(401).end();
+      return;
+    }
+    const message = await readMcpFixtureMessage<{ protocolVersion?: string }>(request);
+    if (message.method === "tools/call") {
+      calls.push(authorization);
+    }
+    const result =
+      message.method === "initialize"
+        ? {
+            protocolVersion: message.params?.protocolVersion,
+            capabilities: { tools: {} },
+            serverInfo: { name: "notes", version: "1" },
+          }
+        : message.method === "tools/list"
+          ? { tools: [{ name: "whoami", inputSchema: { type: "object" } }] }
+          : message.method === "tools/call"
+            ? { content: [{ type: "text", text: `as ${authorization}` }] }
+            : undefined;
+    if (!result) {
+      response.writeHead(202).end();
+      return;
+    }
+    replyMcpFixtureResult(response, message, result);
+  });
+  return { url: `${server.url}/mcp`, calls, close: server.close };
+}
 
 async function startProbeServer() {
   const state = { calls: 0 };
@@ -314,6 +360,126 @@ describe("configured MCP servers on CLI turns", () => {
       );
       expect(turns[2]).toEqual(turns[0]);
       expect(probeServer.calls).toBe(deny.length > 0 ? 0 : childAllow ? 2 : 3);
+    },
+  );
+  it.each(["shared", "per-requester OAuth", "resolver"] as const)(
+    "binds %s MCP servers to each claude-cli turn's sender with one stable catalog",
+    async (mode) => {
+      const { sessionTarget } = fixture.session;
+      const server = await startIdentityServer();
+      const registry = createMcpProofPluginRegistry();
+      const notes =
+        mode === "shared"
+          ? {
+              transport: "streamable-http" as const,
+              url: server.url,
+              headers: { Authorization: "Bearer shared" },
+            }
+          : mode === "per-requester OAuth"
+            ? {
+                transport: "streamable-http" as const,
+                url: server.url,
+                auth: "oauth" as const,
+                oauth: { identity: "per-requester" as const },
+              }
+            : { transport: "streamable-http" as const };
+      if (mode === "resolver") {
+        // The resolver hands out each requester's own credential; bob has none.
+        registry.apiFor("notes-plugin").registerMcpServerConnectionResolver({
+          serverName: "notes",
+          resolve: async ({ requesterSenderId }) =>
+            requesterSenderId === "alice"
+              ? { url: server.url, headers: { Authorization: "Bearer alice" } }
+              : null,
+        });
+      }
+      if (mode === "per-requester OAuth") {
+        await saveMcpOAuthAccessTokenForTest(
+          requesterIdentity("notes", server.url, "alice"),
+          "alice",
+        );
+      }
+      const config: OpenClawConfig = {
+        session: { store: sessionTarget.storePath },
+        plugins: { enabled: false },
+        tools: { allow: ["read", "notes__*"] },
+        mcp: { servers: { notes } },
+      };
+      const requester = { messageChannel: "telegram", agentAccountId: "bot" } as const;
+      const turns: Array<{ listed: string[]; result?: string }> = [];
+      const scheduler = createTestGatewayScheduler();
+      try {
+        await setSessionMcpRuntimeScheduler(scheduler);
+        await withPluginRuntimeRegistryScope(registry.registry, async () => {
+          // alice, a senderless turn (completion or automation), bob, alice again.
+          for (const senderId of ["alice", undefined, "bob", "alice"]) {
+            const context = await fixture.prepare({
+              sessionKey: sessionTarget.sessionKey,
+              sessionId: sessionTarget.sessionId,
+              provider: "claude-cli",
+              model: "opus",
+              modelHasVision: false,
+              sourceReplyDeliveryMode: "automatic",
+              config,
+              ...requester,
+              ...(senderId ? { senderId } : {}),
+            });
+            try {
+              const minted = mintGrant.mock.lastCall?.[0];
+              const scoped = await resolveMcpLoopbackScopedTools({
+                cfg: config,
+                context: minted!.context,
+                admittedRunContext: context.params.admittedRunContext,
+                ...(minted!.bundledTools ? { bundledTools: minted!.bundledTools } : {}),
+              });
+              const tool = scoped.tools.find((entry) => entry.name.startsWith("notes__"));
+              turns.push({
+                listed: buildMcpToolSchema(scoped.tools)
+                  .map((entry) => JSON.stringify(entry))
+                  .toSorted(),
+                result: tool ? getTextContent(await tool.execute("whoami", {})) : undefined,
+              });
+            } finally {
+              await context.preparedBackend.cleanup?.();
+            }
+          }
+          // The embedded runner acquires the same owner with the turn's sender.
+          const embedded = await materializeBundleMcpToolsForRun({
+            ...(await acquireSessionMcpRuntime({
+              sessionId: "embedded-session",
+              workspaceDir: fixture.session.dir,
+              cfg: config,
+              requesterSenderId: "alice",
+              ...requester,
+            })),
+          });
+          try {
+            const tool = embedded.tools.find((entry) => entry.name === "notes__whoami");
+            expect(tool && getTextContent(await tool.execute("whoami", {}))).toBe(turns[0]?.result);
+          } finally {
+            await embedded.dispose();
+          }
+        });
+      } finally {
+        await disposeAllSessionMcpRuntimes();
+        await scheduler.stop();
+        await server.close();
+      }
+      // Every turn lists the same definitions, so Claude's cached prefix survives.
+      for (const turn of turns) {
+        expect(turn.listed).toEqual(turns[0]?.listed);
+      }
+      expect(turns[0]?.listed.some((entry) => entry.includes('"notes__whoami"'))).toBe(true);
+      if (mode === "shared") {
+        expect(turns.map((turn) => turn.result)).toEqual(Array(4).fill("as Bearer shared"));
+        return;
+      }
+      expect(turns[0]?.result).toBe("as Bearer alice");
+      expect(turns[3]?.result).toBe("as Bearer alice");
+      // No turn borrows another requester's credential.
+      expect(turns[1]?.result).toContain("this turn has no verified user");
+      expect(turns[2]?.result).toMatch(/not connected|needs requester sign-in/);
+      expect(server.calls).toEqual(["Bearer alice", "Bearer alice", "Bearer alice"]);
     },
   );
 });

@@ -259,7 +259,11 @@ requester cap, refuses the call before it reaches the server. Every request to a
 configured server (tool calls, resource reads, prompt fetches) rechecks the turn's
 grant just before it is sent. Each listed server's `initialize` instructions are
 passed to the CLI whole, in server-name order.
-Requester-scoped servers need a verified sender and are not offered on these turns.
+Requester-scoped servers (per-requester OAuth or a plugin connection resolver) are
+listed on every turn once the session has seen their tools, and before that as their
+sign-in tool. Each call uses the current turn's verified sender. A turn without one,
+such as a completion, an automation or a subagent run, refuses the call with an
+explicit error and never uses another account.
 
 Existing sessions that stored the implicit automatic policy also retain continuity.
 OpenClaw records the current policy when the next turn completes.
