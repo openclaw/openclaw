@@ -267,7 +267,11 @@ describe("ClawRouter native xAI Responses replay", () => {
       });
       const stored = structuredClone(context);
       const second = await (await hostStream(model, context, options)).result();
-      expect(second.content).toContainEqual({ type: "text", text: "Synthetic answer" });
+      expect(second.content).toContainEqual({
+        type: "text",
+        text: "Synthetic answer",
+        textSignature: JSON.stringify({ v: 1, id: "msg_fixture" }),
+      });
       expect(second.stopReason).toBe("stop");
       const replay = wires[1]?.body.input;
       expect(replay).toEqual(
