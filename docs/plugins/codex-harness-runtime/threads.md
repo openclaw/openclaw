@@ -17,6 +17,12 @@ approvals reviewer, and service tier to app-server. Switching from
 `openai/gpt-5.5` to `openai/gpt-5.2` keeps the thread binding but asks Codex to
 continue with the newly selected model.
 
+If a continuation needs to replace an idle managed thread while a native child
+still holds its subscription, the request waits for that child to settle within
+the existing startup deadline. Stop or reset cancels the waiting request. Active
+foreground claims and additional subscription holds retain their existing refusal
+behavior; the wait never releases another task's protection.
+
 Supervised bindings are the exception. The OpenClaw model picker stays locked,
 and resumes omit model and provider overrides so Codex restores the saved
 thread's persisted model and provider. A separate native Codex control can

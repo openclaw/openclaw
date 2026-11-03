@@ -391,7 +391,7 @@ describe("startCodexAttemptThread", () => {
     resumed.releaseSharedClientLease();
   });
 
-  it("retires the startup client when its deadline ends a wait for a retired owner's exit", async () => {
+  it("preserves the unwritten startup client when its deadline ends an owner-exit wait", async () => {
     const fixture = await bindToRetiredLeasedOwner();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const timedOut = readError(fixture.startOn(fixture.healthy, undefined, 1_000));
@@ -399,10 +399,17 @@ describe("startCodexAttemptThread", () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(isCodexAppServerStartupError(await timedOut, "timed_out")).toBe(true);
-    expect(fixture.healthy.stdinDestroyed).toBe(true);
+    expect(fixture.healthy.stdinDestroyed).toBe(false);
     expect(fixture.owner.process.exitCode).toBeNull();
     expect(readHarnessRequestMethods(fixture.healthy)).not.toContain("thread/resume");
+    const successor = fixture.startOn(fixture.healthy);
     fixture.releaseOwnerPeer();
+    const resumed = await successor;
+    expect(resumed.client).toBe(fixture.healthy.client);
+    expect(fixture.ownerExitCodesAtResume).toEqual([0]);
+    expect(fixture.start).toHaveBeenCalledTimes(2);
+    resumed.turnRoute.release();
+    resumed.releaseSharedClientLease();
   });
 
   it.each([
