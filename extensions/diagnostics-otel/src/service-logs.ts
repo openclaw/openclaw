@@ -16,7 +16,12 @@ import {
 } from "./service-attributes.js";
 import { normalizeOtelLogString } from "./service-content-normalization.js";
 import { observeOtlpExporterHealth, type ExporterHealthUpdate } from "./service-exporter-health.js";
-import { errorCategory, formatError } from "./service-exporter.js";
+import {
+  createShutdownAwareOtlpExporter,
+  errorCategory,
+  formatError,
+  resolveOtlpExporterTimeouts,
+} from "./service-exporter.js";
 import { contextForTraceContext, normalizedTrustedTraceContext } from "./service-trace-context.js";
 import type { OtelHttpAgentFactory, OtelHttpAgentOptions, OtelLogger } from "./service-types.js";
 
@@ -37,6 +42,7 @@ export function createDiagnosticsLogExporter(params: {
   emitExporterEvent: (event: ExporterHealthUpdate) => void;
   flushIntervalMs?: number;
   headers?: Record<string, string>;
+  isShuttingDown: () => boolean;
   logger: OtelLogger;
   logsToOtlp: boolean;
   logsToStdout: boolean;
@@ -50,6 +56,7 @@ export function createDiagnosticsLogExporter(params: {
     emitExporterEvent,
     flushIntervalMs,
     headers,
+    isShuttingDown,
     logger,
     logsToOtlp,
     logsToStdout,
@@ -69,13 +76,26 @@ export function createDiagnosticsLogExporter(params: {
     ...(logsToStdout ? (["stdout"] as const) : []),
   ];
   if (logsToOtlp) {
-    const logExporter = observeOtlpExporterHealth(
-      new OTLPLogExporter({
-        ...(logUrl ? { url: logUrl } : {}),
-        ...(headers ? { headers } : {}),
-        ...(logHttpAgentOptions ? { httpAgentOptions: logHttpAgentOptions } : {}),
-      }),
-      { emitExporterEvent, signal: "logs" },
+    const logTimeouts = resolveOtlpExporterTimeouts("LOGS");
+    const createLogExporter = (timeoutMillis: number) =>
+      observeOtlpExporterHealth(
+        new OTLPLogExporter({
+          timeoutMillis,
+          ...(logUrl ? { url: logUrl } : {}),
+          ...(headers ? { headers } : {}),
+          ...(logHttpAgentOptions ? { httpAgentOptions: logHttpAgentOptions } : {}),
+        }),
+        { emitExporterEvent, signal: "logs" },
+      );
+    const normalLogExporter = createLogExporter(logTimeouts.normal);
+    const shutdownLogExporter =
+      logTimeouts.shutdown === logTimeouts.normal
+        ? normalLogExporter
+        : createLogExporter(logTimeouts.shutdown);
+    const logExporter = createShutdownAwareOtlpExporter(
+      normalLogExporter,
+      shutdownLogExporter,
+      isShuttingDown,
     );
     const logProcessor = new BatchLogRecordProcessor({
       exporter: logExporter,

@@ -134,6 +134,7 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
         intent: "logging",
         argv: ["config", "set", "logging.level", "debug"],
       },
+      configSetJsonFile("diagnostics-otel", "diagnostics-otel", "diagnostics.otel"),
     ],
   ],
   [

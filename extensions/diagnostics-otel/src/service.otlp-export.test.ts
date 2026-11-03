@@ -1,6 +1,8 @@
+import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import { context, diag, propagation, trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
@@ -27,6 +29,7 @@ import {
   clearOtelGlobals,
   createOtelContext,
   emitRealSdkSignals,
+  getReportedExporterHealth,
   registeredOtelGlobals,
   registeredOtelLogs,
   startOtelService,
@@ -47,8 +50,10 @@ function releasePreloadedOtelGlobals() {
 async function collectSignals(
   configure: (ctx: ReturnType<typeof createOtelContext>, endpoint: string) => void,
   flags = { traces: true, metrics: true, logs: true },
+  responseDelayForRequest: number | ((count: number) => number) = 0,
+  expectShutdownFailure = false,
 ) {
-  const receiver = await startOtlpReceiver();
+  const receiver = await startOtlpReceiver(undefined, responseDelayForRequest);
   onTestFinished(() => receiver.close());
   releasePreloadedOtelGlobals();
   const { service, ctx } = await startOtelService({
@@ -57,7 +62,11 @@ async function collectSignals(
     configure: (serviceContext) => configure(serviceContext, receiver.endpoint),
   });
   await emitRealSdkSignals();
-  await service.stop?.(ctx);
+  if (expectShutdownFailure) {
+    await expect(service.stop?.(ctx)).rejects.toThrow("Request timed out");
+  } else {
+    await service.stop?.(ctx);
+  }
   return { requests: receiver.requests, ctx };
 }
 
@@ -131,6 +140,161 @@ test.each([
   },
   30_000,
 );
+
+test("keeps regular metric requests open while bounding the shutdown flush", async () => {
+  const receiver = await startOtlpReceiver(
+    () => 200,
+    (count) => (count === 1 ? 1_650 : 0),
+  );
+  onTestFinished(() => receiver.close());
+  releasePreloadedOtelGlobals();
+  const { service, ctx } = await startOtelService({
+    endpoint: receiver.endpoint,
+    metrics: true,
+    traces: false,
+    logs: false,
+    flushIntervalMs: 1_000,
+  });
+  await emitRealSdkSignals("normal-export-timeout-proof");
+  await receiver.waitForRequest();
+  // An in-flight regular export keeps its normal timeout; the final flush uses the short
+  // shutdown timeout.
+  await service.stop?.(ctx);
+
+  expect(receiver.requests.filter((request) => request.url === "/v1/metrics")).toHaveLength(2);
+  expect(
+    getReportedExporterHealth(ctx).some(
+      (event) => event.signal === "metrics" && event.status === "failure",
+    ),
+  ).toBe(false);
+}, 10_000);
+
+test("honors shared and signal-specific timeouts through real exporters", async () => {
+  process.env.OTEL_EXPORTER_OTLP_TIMEOUT = "100";
+  process.env.OTEL_EXPORTER_OTLP_METRICS_TIMEOUT = "600";
+  process.env.OTEL_EXPORTER_OTLP_LOGS_TIMEOUT = "600";
+  const { requests, ctx } = await collectSignals(() => {}, undefined, 300, true);
+  const health = getReportedExporterHealth(ctx);
+
+  expect(new Set(requests.map((request) => request.url))).toEqual(
+    new Set(["/v1/traces", "/v1/metrics", "/v1/logs"]),
+  );
+  expect(health.some((event) => event.signal === "traces" && event.status === "failure")).toBe(
+    true,
+  );
+  expect(health.some((event) => event.signal === "metrics" && event.status === "failure")).toBe(
+    false,
+  );
+  expect(health.some((event) => event.signal === "logs" && event.status === "failure")).toBe(false);
+}, 10_000);
+
+test("lets the process exit after an unavailable metric collector hits the shutdown default", async () => {
+  const unavailable = await startOtlpReceiver();
+  await unavailable.close();
+  const serviceUrl = new URL("./service.js", import.meta.url).href;
+  const helpersUrl = new URL("./service.test-helpers.js", import.meta.url).href;
+  const childSource = `
+    const { createDiagnosticsOtelService } = await import(${JSON.stringify(serviceUrl)});
+    const { clearOtelGlobals, createOtelContext, emitRealSdkSignals, getReportedExporterHealth } = await import(${JSON.stringify(helpersUrl)});
+    const { performance } = await import("node:perf_hooks");
+    clearOtelGlobals();
+    process.env.OPENCLAW_OTEL_PRELOADED = "0";
+    const ctx = createOtelContext(process.env.CANDIDATE_OTLP_ENDPOINT, {
+      metrics: true,
+      traces: false,
+      logs: false,
+      flushIntervalMs: 60000,
+    });
+    const service = createDiagnosticsOtelService();
+    await service.start(ctx);
+    await emitRealSdkSignals("shutdown-process-proof");
+    console.log("OTEL_SHUTDOWN_READY");
+    const stopStartedAt = performance.now();
+    await service.stop?.(ctx);
+    const metricFailureReported = getReportedExporterHealth(ctx).some(
+      (event) => event.signal === "metrics" && event.status === "failure",
+    );
+    console.log("OTEL_SHUTDOWN_COMPLETE:" + JSON.stringify({
+      stopDurationMs: performance.now() - stopStartedAt,
+      metricFailureReported,
+    }));
+  `;
+  const startedAt = performance.now();
+  const childResult = await new Promise<{
+    code: number | null;
+    stderr: string;
+    stdout: string;
+    startupDurationMs: number | undefined;
+    exitAfterStopMs: number | undefined;
+  }>((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        path.resolve(process.cwd(), "scripts/tsx.mjs"),
+        "--input-type=module",
+        "-e",
+        childSource,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          CANDIDATE_OTLP_ENDPOINT: unavailable.endpoint,
+          OPENCLAW_OTEL_PRELOADED: "0",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let stderr = "";
+    let stdout = "";
+    let readyAt: number | undefined;
+    let stopCompletedAt: number | undefined;
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout = `${stdout}${chunk.toString("utf8")}`.slice(-4_000);
+      if (readyAt === undefined && stdout.includes("OTEL_SHUTDOWN_READY")) {
+        readyAt = performance.now();
+      }
+      if (stopCompletedAt === undefined && stdout.includes("OTEL_SHUTDOWN_COMPLETE:")) {
+        stopCompletedAt = performance.now();
+      }
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr = `${stderr}${chunk.toString("utf8")}`.slice(-4_000);
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(
+        new Error(
+          `diagnostics-otel child process exceeded the 25-second watchdog; ready=${readyAt !== undefined}; stdout=${stdout}; stderr=${stderr}`,
+        ),
+      );
+    }, 25_000);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      const finishedAt = performance.now();
+      resolve({
+        code,
+        stderr,
+        stdout,
+        startupDurationMs: readyAt === undefined ? undefined : readyAt - startedAt,
+        exitAfterStopMs: stopCompletedAt === undefined ? undefined : finishedAt - stopCompletedAt,
+      });
+    });
+  });
+
+  expect(childResult.code, childResult.stderr).toBe(0);
+  expect(childResult.startupDurationMs).toBeDefined();
+  const shutdownResult = childResult.stdout.match(/OTEL_SHUTDOWN_COMPLETE:(\{[^\n]+\})/u)?.[1];
+  expect(shutdownResult).toBeDefined();
+  expect(JSON.parse(shutdownResult!).stopDurationMs).toBeLessThan(2_500);
+  expect(JSON.parse(shutdownResult!).metricFailureReported).toBe(true);
+  expect(childResult.exitAfterStopMs).toBeLessThan(500);
+}, 30_000);
 
 test("merges exporter headers with config and required protobuf precedence", async () => {
   process.env.OTEL_EXPORTER_OTLP_HEADERS =
