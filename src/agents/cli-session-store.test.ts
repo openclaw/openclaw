@@ -523,3 +523,47 @@ it("still publishes a newly minted native id after a mid-turn clear", async ({ f
 
   expect(getCliSessionBinding(f.read()!, "claude-cli")?.sessionId).toBe(freshId);
 });
+
+it("does not re-publish a fork successor another writer cleared mid-turn", async ({ f }) => {
+  const resumedId = "cli-session-resumed";
+  const successorId = "cli-session-fork-successor";
+  const sessionStore = await f.seed(boundEntry(resumedId));
+  // Fork already published successor Y into the working expectedSession.
+  sessionStore[f.target.sessionKey] = boundEntry(successorId, {
+    sessionId: sessionStore[f.target.sessionKey]!.sessionId,
+    lifecycleRevision: sessionStore[f.target.sessionKey]!.lifecycleRevision,
+    activeWriterRunId: sessionStore[f.target.sessionKey]!.activeWriterRunId,
+  });
+  const cleared = makeSessionEntry({
+    sessionId: sessionStore[f.target.sessionKey]!.sessionId,
+    lifecycleRevision: sessionStore[f.target.sessionKey]!.lifecycleRevision,
+    activeWriterRunId: sessionStore[f.target.sessionKey]!.activeWriterRunId,
+  });
+  await seedSessionStore(f.target.storePath, { [f.target.sessionKey]: cleared });
+
+  await f.publish(nativeResult(successorId), { resumedCliSessionId: resumedId });
+
+  expect(getCliSessionBinding(f.read()!, "claude-cli")).toBeUndefined();
+});
+
+it("does not re-publish a fork successor another writer replaced mid-turn", async ({ f }) => {
+  const resumedId = "cli-session-resumed";
+  const successorId = "cli-session-fork-successor";
+  const replacementId = "cli-session-replacement";
+  const sessionStore = await f.seed(boundEntry(resumedId));
+  sessionStore[f.target.sessionKey] = boundEntry(successorId, {
+    sessionId: sessionStore[f.target.sessionKey]!.sessionId,
+    lifecycleRevision: sessionStore[f.target.sessionKey]!.lifecycleRevision,
+    activeWriterRunId: sessionStore[f.target.sessionKey]!.activeWriterRunId,
+  });
+  const replaced = boundEntry(replacementId, {
+    sessionId: sessionStore[f.target.sessionKey]!.sessionId,
+    lifecycleRevision: sessionStore[f.target.sessionKey]!.lifecycleRevision,
+    activeWriterRunId: sessionStore[f.target.sessionKey]!.activeWriterRunId,
+  });
+  await seedSessionStore(f.target.storePath, { [f.target.sessionKey]: replaced });
+
+  await f.publish(nativeResult(successorId), { resumedCliSessionId: resumedId });
+
+  expect(getCliSessionBinding(f.read()!, "claude-cli")?.sessionId).toBe(replacementId);
+});

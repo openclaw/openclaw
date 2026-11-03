@@ -250,15 +250,21 @@ export async function persistCliSessionBindingResult(
         if (!params.preserveBinding) {
           const resumedId = params.resumedCliSessionId?.trim();
           const resultSessionId = meta?.cliSessionBinding?.sessionId?.trim();
-          // Another writer cleared/replaced the binding this turn resumed; do not
-          // re-publish the retired id during settle (agent_end can clear before settle).
-          if (
-            meta?.clearCliSessionBinding !== true &&
-            resumedId &&
-            resultSessionId === resumedId
-          ) {
+          // Protect the admitted resume id and any successor already published into
+          // this turn's working expectedSession (forks update expectedSession in place).
+          // Another writer may clear/replace that id before settle; do not resurrect it.
+          const expectedPublishedId = getCliSessionBinding(
+            expectedSession,
+            params.provider,
+          )?.sessionId?.trim();
+          const protectedId =
+            resultSessionId &&
+            (resultSessionId === resumedId || resultSessionId === expectedPublishedId)
+              ? resultSessionId
+              : undefined;
+          if (meta?.clearCliSessionBinding !== true && protectedId) {
             const storedId = getCliSessionBinding(entry, params.provider)?.sessionId?.trim();
-            if (storedId !== resumedId) {
+            if (storedId !== protectedId) {
               return false;
             }
           }
