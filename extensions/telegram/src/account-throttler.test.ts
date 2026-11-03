@@ -430,7 +430,7 @@ it("marks typing held back at the gate or in its queue as unsent, unlike Telegra
   const atGate = failure(typing(api, 3));
   const errors = await Promise.all([telegramFlood, queued, atGate]);
   const heldBack = {
-    description: expect.stringMatching(/\(flood wait active; request not sent\)$/),
+    description: expect.stringMatching(/\(flood wait active; replaceable update not sent\)$/),
   };
   expect(errors).toMatchObject([
     { error_code: 429, description: "Too Many Requests: retry after 30" },

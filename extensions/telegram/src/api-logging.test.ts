@@ -201,3 +201,39 @@ it.each([
     ]);
   },
 );
+
+it("logs a final the flood wait kept from Telegram past the delivery budget", async () => {
+  const token = "123:final-over-budget";
+  onTestFinished(() => releaseAccountThrottler(token));
+  const methods: string[] = [];
+  const api = new Api(token, {
+    fetch: asTelegramClientFetch(async (input: unknown) => {
+      methods.push(String(input).slice(String(input).lastIndexOf("/") + 1));
+      return refusal(429, "Too Many Requests: retry after 600", 600);
+    }),
+  });
+  api.config.use(
+    getOrCreateAccountThrottler(
+      token,
+      () => (prev, method, payload, signal) => prev(method, payload, signal),
+    ).transformer,
+  );
+
+  // A ten-minute flood on a preview edit outlasts the five-minute budget a final may wait.
+  await expect(
+    runReplaceableTelegramRequest(() => api.editMessageText(42, 7, "preview")),
+  ).rejects.toMatchObject({ error_code: 429 });
+  await expect(
+    withTelegramApiErrorLogging({
+      operation: "sendMessage",
+      fn: () => api.sendMessage(42, "final"),
+    }),
+  ).rejects.toMatchObject({ error_code: 429 });
+
+  expect(methods).toEqual(["editMessageText"]);
+  expect(logs.apiError.mock.calls).toEqual([
+    [
+      "telegram sendMessage failed: Call to 'sendMessage' failed! (429: Too Many Requests: retry after 600 (flood wait exceeds delivery budget; request not sent))",
+    ],
+  ]);
+});

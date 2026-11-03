@@ -16,15 +16,18 @@ type TelegramApiLoggingParams<T> = {
 
 const fallbackLogger = createSubsystemLogger("telegram/api");
 
-/** Ends the description of the synthetic 429 the account limiter returns for a request it held back. */
-export const TELEGRAM_UNSENT_FLOOD_SUFFIX = "; request not sent)";
+/**
+ * Ends the description of the synthetic 429 the account limiter returns for a replaceable
+ * update (typing, preview) it skipped on purpose. A final it could not send keeps "request not sent".
+ */
+export const TELEGRAM_SKIPPED_UPDATE_SUFFIX = "; replaceable update not sent)";
 
-/** True when the account limiter held the request back, so it never reached Telegram. */
-function isTelegramUnsentFloodError(err: unknown): boolean {
+/** True when the account limiter skipped a replaceable update, so it never reached Telegram. */
+function isTelegramSkippedUpdateError(err: unknown): boolean {
   return (
     err instanceof GrammyError &&
     err.error_code === 429 &&
-    err.description.endsWith(TELEGRAM_UNSENT_FLOOD_SUFFIX)
+    err.description.endsWith(TELEGRAM_SKIPPED_UPDATE_SUFFIX)
   );
 }
 
@@ -59,8 +62,8 @@ export async function withTelegramApiErrorLogging<T>(
   try {
     return await fn();
   } catch (err) {
-    // The limiter already warned once about the flood wait that held this request back.
-    if (!isTelegramUnsentFloodError(err) && (!shouldLog || shouldLog(err))) {
+    // A skipped replaceable update is the limiter's choice, not an API failure; it warns once per flood wait.
+    if (!isTelegramSkippedUpdateError(err) && (!shouldLog || shouldLog(err))) {
       const transport = formatTelegramTransportDiagnostics(err);
       const errText =
         err instanceof HttpError || transport

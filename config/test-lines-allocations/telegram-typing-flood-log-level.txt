@@ -1,2 +1,2 @@
-# Typing the flood gate held back stays out of the Telegram API error log.
-134
+# Typing the flood gate skipped stays out of the Telegram API error log; finals it could not send still log.
+170
