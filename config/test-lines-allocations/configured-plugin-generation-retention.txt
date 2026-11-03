@@ -1,0 +1,3 @@
+41
+# Source 5918b1d7bf4bca308322e0c0a7f5b5acb1311d48; src/gateway/server-retained-plugin-cleanup.ts plus server-startup-finish.ts include absolute/home-relative executable and asset paths in startup/current config among protected plugin generation roots.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
