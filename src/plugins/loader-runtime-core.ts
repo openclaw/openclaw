@@ -301,7 +301,6 @@ export function* loadOpenClawPluginsSteps(
                 nodes: options.runtimeOptions?.nodes ?? borrowedNodes,
               },
             });
-    const runtime = runtimeOwner.runtime;
     const capabilityCatalogContext =
       options.capabilityCatalogContext ??
       options.capabilityCatalog?.context ??
