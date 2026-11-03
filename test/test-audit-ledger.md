@@ -145,25 +145,35 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main 93d234d422e0: remove one literal backslash-x1b absence assertion
-already implied by the retained exact outerrOUTERR output assertion on the same
-aggregate. Keep all fourteen physical declarations/eighteen registered cases,
-every input/table row and all other assertions. Production, request-owner checks,
-final update assertion and shared test-line scalar stay unchanged; one fewer
-test line.
+Pinned main 93d234d422e0: remove only the literal backslash-x1b absence
+predicate already implied by the retained exact outerrOUTERR assertion on the
+same aggregate. All fourteen physical declarations/eighteen registered cases,
+every table row/input and all other assertions remain. Production, request-owner
+identity, final update assertion and shared test-line scalar are unchanged;
+one fewer test line.
 
-The complete selected fixture, actual exec runtime, runtime fixture/support and
+The complete selected fixture, actual exec owner, runtime fixture/support and
 streaming sanitizer are source-qualified. Determining production call edges,
-history and unchanged sanitizer/broker siblings were inspected. The exact
-interleaved stdout/stderr case and all four chunks remain. The intended owner
-fault shares stdout parser state with stderr; it has not been executed.
+selected history and unchanged sanitizer/broker siblings were inspected. The
+interleaved stdout/stderr case retains all four chunks.
 
-The untouched official baseline, original/candidate shared-parser fault controls,
-exact owner/test restoration, clean candidate, all seven removal scan phases,
-focused checks, fresh review, published proof and CI remain pending.
-Static agents-tools discovery is not execution. This is controlled-supervisor
-exec-owner proof; no real shell, PTY, Gateway, provider or native process verdict
-is claimed.
+Untouched official agents-core baseline and clean candidate pass all eighteen
+without skips. An actual exec-owner fault shares the stdout parser with stderr;
+both original and candidate fail only the retained exact-output keeper with the
+same corrupted aggregate, seventeen other passes each. Temporary owner/test
+bytes are restored exactly before the clean run. The initial route-only verifier
+expected agents-tools; the successful official baseline used agents-core. The
+verifier and control driver were corrected using that recorded proof, without
+repeating the baseline. Type ownership remains the separate agents-tools shard.
+
+All seven removal phases completed. Only the production scan and production
+export-wrapper phase fail; both reproduce the same unused Doctor memory-
+provenance export on exact original sources. Full-tree exports, both unused-file
+phases and script exports pass. No passing phase was repeated or finding
+suppressed. Focused checks pass; normal hooks, fresh review, published proof
+and CI are separately recorded.
+This exercises the actual exec owner through a controlled supervisor; no real
+shell, PTY, Gateway, provider or native process verdict is claimed.
 
 ## Completed source review
 
