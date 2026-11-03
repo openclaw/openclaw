@@ -252,74 +252,80 @@ it("captures prefixed destination names and preserves them when rolling back bef
 
 describe.skipIf(!connection)("database port command PostgreSQL conformance", () => {
   it("privately adds the first-use deletion phase when porting a current-schema journal", async () => {
-    await fixture(async ({ state, client }) => {
-      assert(client);
-      openOpenClawStateDatabase({ env: state.env });
-      await closeOpenClawStateDatabaseAsync();
-      const shared = state.statePath("state", "openclaw.sqlite");
-      {
-        using db = openNodeSqliteDatabase(shared);
-        db.exec(`
+    await fixture(
+      async ({ state, client }) => {
+        assert(client);
+        openOpenClawStateDatabase({ env: state.env });
+        await closeOpenClawStateDatabaseAsync();
+        const shared = state.statePath("state", "openclaw.sqlite");
+        {
+          using db = openNodeSqliteDatabase(shared);
+          db.exec(`
           ALTER TABLE agent_deletion_journal DROP COLUMN phase;
           ALTER TABLE agent_database_leases ADD COLUMN unported_data TEXT;
           INSERT INTO agent_deletion_journal (agent_id, agent_dir, workspace_dir, sessions_dir, created_at)
           VALUES ('retired', '/retired/agent', '/retired/workspace', '/retired/sessions', 17);
         `);
-        assertOpenClawStateDatabaseForMaintenance(db, { pathname: shared });
-      }
-      const unported = hash(shared);
-      await expect(doctorDatabasePort({ to: "postgres", dryRun: true })).rejects.toThrow(
-        "Unknown or missing columns in agent_database_leases",
-      );
-      expect(hash(shared)).toBe(unported);
-      {
-        using db = openNodeSqliteDatabase(shared);
-        db.exec("ALTER TABLE agent_database_leases DROP COLUMN unported_data");
-      }
-      const original = hash(shared);
-      const preview = await doctorDatabasePort({ to: "postgres", dryRun: true });
-      expect(preview).toMatchObject({ migrations: [shared] });
-      expect(hash(shared)).toBe(original);
-      const ported = await doctorDatabasePort({ to: "postgres" });
-      const anchor = readBackupEngine(shared);
-      assert(anchor.engine === "postgres");
-      {
-        using credentials = openClientCredentialCustody(state.env);
-        assert(credentials);
-        expect(readClientCredentialReceipt(credentials.database)).toMatchObject({
-          phase: "complete",
-          receipt: {
-            source: { kind: "canonical", engine: "postgres", identity: anchor.storeId },
-            sharedFile: readClientCredentialFileIdentity(shared),
-          },
+          assertOpenClawStateDatabaseForMaintenance(db, { pathname: shared });
+        }
+        const unported = hash(shared);
+        await expect(doctorDatabasePort({ to: "postgres", dryRun: true })).rejects.toThrow(
+          "Unknown or missing columns in agent_database_leases",
+        );
+        expect(hash(shared)).toBe(unported);
+        {
+          using db = openNodeSqliteDatabase(shared);
+          db.exec("ALTER TABLE agent_database_leases DROP COLUMN unported_data");
+        }
+        const original = hash(shared);
+        const preview = await doctorDatabasePort({ to: "postgres", dryRun: true });
+        expect(preview).toMatchObject({ migrations: [shared] });
+        expect(hash(shared)).toBe(original);
+        const ported = await doctorDatabasePort({ to: "postgres" });
+        const anchor = readBackupEngine(shared);
+        assert(anchor.engine === "postgres");
+        {
+          using credentials = openClientCredentialCustody(state.env);
+          assert(credentials);
+          expect(readClientCredentialReceipt(credentials.database)).toMatchObject({
+            phase: "complete",
+            receipt: {
+              source: { kind: "canonical", engine: "postgres", identity: anchor.storeId },
+              sharedFile: readClientCredentialFileIdentity(shared),
+            },
+          });
+        }
+        expect(
+          (
+            await client.query(
+              `SELECT agent_id, phase, created_at FROM "${anchor.namespace}".agent_deletion_journal`,
+            )
+          ).rows,
+        ).toEqual([{ agent_id: "retired", phase: null, created_at: "17" }]);
+        assert("manifest" in ported && typeof ported.manifest === "string");
+        const saved = JSON.parse(
+          fs.readFileSync(ported.manifest, "utf8"),
+        ) as recovery.DatabasePortManifest;
+        const captured = saved.targets.find(
+          (target) => target.original.engine === "sqlite" && target.original.path === shared,
+        );
+        assert(captured);
+        using originalDb = openNodeSqliteDatabase(captured.originalCapture.path, {
+          readOnly: true,
         });
-      }
-      expect(
-        (
-          await client.query(
-            `SELECT agent_id, phase, created_at FROM "${anchor.namespace}".agent_deletion_journal`,
-          )
-        ).rows,
-      ).toEqual([{ agent_id: "retired", phase: null, created_at: "17" }]);
-      assert("manifest" in ported && typeof ported.manifest === "string");
-      const saved = JSON.parse(
-        fs.readFileSync(ported.manifest, "utf8"),
-      ) as recovery.DatabasePortManifest;
-      const captured = saved.targets.find(
-        (target) => target.original.engine === "sqlite" && target.original.path === shared,
-      );
-      assert(captured);
-      using originalDb = openNodeSqliteDatabase(captured.originalCapture.path, { readOnly: true });
-      expect(
-        originalDb
-          .prepare("PRAGMA table_info(agent_deletion_journal)")
-          .all()
-          .map((column) => column.name),
-      ).not.toContain("phase");
-      expect(
-        originalDb.prepare("SELECT agent_id, created_at FROM agent_deletion_journal").all(),
-      ).toEqual([{ agent_id: "retired", created_at: 17 }]);
-    }, true);
+        expect(
+          originalDb
+            .prepare("PRAGMA table_info(agent_deletion_journal)")
+            .all()
+            .map((column) => column.name),
+        ).not.toContain("phase");
+        expect(
+          originalDb.prepare("SELECT agent_id, created_at FROM agent_deletion_journal").all(),
+        ).toEqual([{ agent_id: "retired", created_at: 17 }]);
+      },
+      true,
+      { store: "state" },
+    );
   }, 120_000);
 
   it("reconnects after a committed PostgreSQL transaction loses its reply before authorizing the anchor", async () => {
