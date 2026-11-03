@@ -100,6 +100,7 @@ export type SessionDatabaseWorkerLane = {
   native: boolean;
   pending: number;
   idleTimer?: NodeJS.Timeout;
+  idleSince?: number;
   rotation?: Promise<void>;
 };
 

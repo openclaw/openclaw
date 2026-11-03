@@ -726,7 +726,7 @@ it("releases pressure subscriptions after native settlement and rearms reopened 
   expect(observed.unregister).not.toHaveBeenCalled();
   const retirement = createDeferredCore();
   observed.rotate.mockReturnValueOnce(retirement.promise);
-  pressure.publish(undefined);
+  pressure.publish(true);
   const rotation = historyLane.rotation;
   assert(rotation);
   try {
@@ -749,7 +749,7 @@ it("releases pressure subscriptions after native settlement and rearms reopened 
   expect(pressure.hasSubscribers).toBe(true);
   const reopenedRetirement = createDeferredCore();
   observed.rotate.mockReturnValueOnce(reopenedRetirement.promise);
-  pressure.publish(undefined);
+  pressure.publish(true);
   const reopenedRotation = historyLane.rotation;
   assert(reopenedRotation);
   const successor = request.read();
@@ -757,7 +757,7 @@ it("releases pressure subscriptions after native settlement and rearms reopened 
   await Promise.all([reopenedRotation, successor]);
   // The queued successor retains its newly opened native reader.
   expect(pressure.hasSubscribers).toBe(true);
-  pressure.publish(undefined);
+  pressure.publish(true);
   await historyLane.rotation;
   expect(pressure.hasSubscribers).toBe(false);
 

@@ -90,6 +90,7 @@ const MIN_STALLED_EMBEDDED_RUN_ABORT_MS = 5 * 60_000;
 const STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER = 3;
 const RECENT_DIAGNOSTIC_ACTIVITY_MS = 120_000;
 const DIAGNOSTIC_HEARTBEAT_INTERVAL_MS = 30_000;
+const MEMORY_PRESSURE_INTERVAL_MS = 1_000;
 const loadStuckSessionRecoveryRuntime = createLazyRuntimeModule(
   () => import("./diagnostic-stuck-session-recovery.runtime.js"),
 );
@@ -496,6 +497,7 @@ function formatSessionActivityLogFields(activity: DiagnosticSessionActivitySnaps
 }
 
 let heartbeatJob: GatewayScheduledJob | undefined;
+let memoryPressureJob: GatewayScheduledJob | undefined;
 let detachHeartbeatOwner: (() => void) | undefined;
 let lastDiagnosticHeartbeatTickAt: number | undefined;
 let updateHeartbeatOptions:
@@ -577,8 +579,6 @@ export function startGatewayDiagnosticHeartbeat(
       return;
     }
     if (!reconcileObservations()) {
-      // Critical pressure still retires idle Workers without diagnostic collection or callbacks.
-      emitDiagnosticMemorySample(undefined, false);
       return;
     }
     emitChildProcessSpawnSample();
@@ -840,6 +840,17 @@ export function startGatewayDiagnosticHeartbeat(
     run: tick,
   });
   heartbeatJob = job;
+  // Startup can exhaust memory before the first diagnostic heartbeat.
+  memoryPressureJob = scheduler.schedule({
+    id: "diagnostic-memory-pressure",
+    atMs: scheduler.now() + MEMORY_PRESSURE_INTERVAL_MS,
+    everyMs: MEMORY_PRESSURE_INTERVAL_MS,
+    run: () => {
+      if (!scheduler.signal.aborted && heartbeatJob === job) {
+        emitDiagnosticMemorySample(undefined, false);
+      }
+    },
+  });
   const stopOwnedHeartbeat = () => {
     if (heartbeatJob === job) {
       stopGatewayDiagnosticHeartbeat();
@@ -857,6 +868,8 @@ export function stopGatewayDiagnosticHeartbeat() {
   detachHeartbeatOwner = undefined;
   heartbeatJob?.cancel();
   heartbeatJob = undefined;
+  memoryPressureJob?.cancel();
+  memoryPressureJob = undefined;
   updateHeartbeatOptions = undefined;
   stopDiagnosticObservations();
 }

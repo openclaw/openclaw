@@ -111,7 +111,8 @@ export class WorkerTaskPoolCore<Input, Output> {
   private readonly resumeCompute = () => this.dispatch();
   private closedError?: Error;
   private nextTaskId = 0;
-  private readonly retireIdleOnPressure = () => this.retirement.retireIdle(this.resourceClosures);
+  private readonly retireIdleOnPressure = (critical: unknown) =>
+    this.retirement.retireIdle(this.resourceClosures, critical === true);
   private readonly expireTasks = () => expireWorkerTasks(this.queue, this.slots, this.timeout);
 
   constructor(

@@ -144,7 +144,58 @@ it("preserves independent tool-loop and poll-backoff policy when diagnostic obse
   expect(recordCommandPoll(current, "fixture-command", false)).toBe(30_000);
 });
 
-it("keeps pressure sampling silent and reconciles diagnostic options on one cadence", async () => {
+it.each(["stop", "abort"] as const)(
+  "protects startup memory before diagnostics and stays quiet after %s",
+  async (finish) => {
+    const { clock, scheduler, events } = heartbeatFixture(true, 0);
+    const pressure = channel("openclaw.memory.critical");
+    const critical = vi.fn();
+    const readMemoryUsage = process.memoryUsage;
+    const criticalRss = totalmem();
+    Object.assign(
+      vi.spyOn(process, "memoryUsage").mockImplementation(() => ({
+        ...readMemoryUsage(),
+        rss: criticalRss,
+      })),
+      { rss: () => criticalRss },
+    );
+    pressure.subscribe(critical);
+    cleanups.unshift(() => pressure.unsubscribe(critical));
+    const opts = heartbeatOptions();
+    setDiagnosticsEnabledForProcess(false);
+    startGatewayDiagnosticHeartbeat(scheduler, undefined, opts);
+    startGatewayDiagnosticHeartbeat(scheduler, undefined, opts);
+
+    await clock.advanceBy(1_000);
+    expect(critical).toHaveBeenCalledTimes(1);
+    expectCalls(0, ...Object.values(opts));
+    expect(events).toEqual([]);
+
+    setDiagnosticsEnabledForProcess(true);
+    startGatewayDiagnosticHeartbeat(scheduler, undefined, opts);
+    await clock.advanceBy(28_999);
+    expect(critical).toHaveBeenCalledTimes(2);
+    expectCalls(0, ...Object.values(opts));
+    await clock.advanceBy(1);
+    expectCalls(1, opts.emitMemorySample, opts.sampleLiveness, opts.getConfig);
+    expect(opts.recoverStuckSession).not.toHaveBeenCalled();
+    await waitForDiagnosticEventsDrained();
+    const observed = events.length;
+
+    if (finish === "stop") {
+      stopGatewayDiagnosticHeartbeat();
+    } else {
+      scheduler.beginClose();
+    }
+    await clock.advanceBy(30_000);
+    await waitForDiagnosticEventsDrained();
+    expect(critical).toHaveBeenCalledTimes(2);
+    expectCalls(1, opts.emitMemorySample, opts.sampleLiveness, opts.getConfig);
+    expect(events).toHaveLength(observed);
+  },
+);
+
+it("keeps pressure sampling silent while reconciling diagnostic options", async () => {
   const { clock, scheduler, events } = heartbeatFixture(true);
   const pressure = channel("openclaw.memory.critical");
   const critical = vi.fn();
@@ -207,7 +258,7 @@ it("keeps pressure sampling silent and reconciles diagnostic options on one cade
   const observed = events.length;
   await clock.advanceBy(5 * 60_000);
   await waitForDiagnosticEventsDrained();
-  expect(critical).toHaveBeenCalledTimes(2);
+  expect(critical).toHaveBeenCalledTimes(5);
   expect(events).toHaveLength(observed);
   expectCalls(0, ...passive, latest.recoverStuckSession);
   expectCalls(1, latest.emitMemorySample, latest.sampleLiveness, latest.getConfig);
@@ -221,7 +272,7 @@ it("keeps pressure sampling silent and reconciles diagnostic options on one cade
   // Explicit heartbeat config is also authoritative; recovery config is a separate lookup.
   startGatewayDiagnosticHeartbeat(scheduler, { diagnostics: { enabled: false } }, latest);
   await clock.advanceBy(30_000);
-  expect(critical).toHaveBeenCalledTimes(3);
+  expect(critical).toHaveBeenCalledTimes(7);
   expect(latest.emitMemorySample).toHaveBeenCalledTimes(2);
   expectCalls(0, ...passive, warn);
   expect(childSamples).toHaveBeenCalledTimes(3);
@@ -230,7 +281,7 @@ it("keeps pressure sampling silent and reconciles diagnostic options on one cade
   await scheduler.stop();
   startGatewayDiagnosticHeartbeat(scheduler, undefined, latest);
   await clock.advanceBy(30_000);
-  expect(critical).toHaveBeenCalledTimes(3);
+  expect(critical).toHaveBeenCalledTimes(7);
   expect(latest.emitMemorySample).toHaveBeenCalledTimes(2);
 });
 
