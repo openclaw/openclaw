@@ -1135,16 +1135,16 @@ openclaw-plugins-page
   gap: 0 var(--space-3);
   min-width: 0;
 }
-.plugin-metadata__facts dt,
+/* Group labels use the shared section title, so the rail reads like the sections beside it. */
 .plugin-metadata__section h2,
 .plugin-catalog-detail__security h2 {
   margin: 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 400;
 }
 .plugin-metadata__facts dt {
   flex: none;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
 }
 .plugin-metadata__facts dd {
   min-width: 0;

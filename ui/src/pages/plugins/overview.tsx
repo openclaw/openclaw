@@ -43,7 +43,7 @@ function renderPluginSecurityAudit(status: string, auditUrl: string | null | und
       target="_blank"
       rel="noopener noreferrer"
     >
-      <h2>
+      <h2 class="settings-section__heading oc-settings-section-title">
         {t("pluginsPage.detailSecurity")}
         <span title={t("pluginsPage.detailSecurityAudit")}>{<Icon name="info" />}</span>
       </h2>
@@ -233,7 +233,9 @@ export function renderPluginMetadata(
       ) : undefined}
       {categories.length ? (
         <section class="plugin-metadata__section">
-          <h2>{t("pluginsPage.detailCategories")}</h2>
+          <h2 class="settings-section__heading oc-settings-section-title">
+            {t("pluginsPage.detailCategories")}
+          </h2>
           <div class="plugin-metadata__categories">
             <For each={categories}>{(category) => <span class="chip">{category}</span>}</For>
           </div>
