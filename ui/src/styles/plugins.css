@@ -892,6 +892,43 @@
   contain-intrinsic-block-size: auto 40px;
 }
 
+.plugins-settings-row__status {
+  display: flex;
+}
+
+/* On a phone the description keeps its width; the status reads below it. */
+@media (max-width: 640px) {
+  .settings-row.plugins-settings-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: var(--space-2);
+    align-items: center;
+  }
+
+  .plugins-settings-row > :first-child {
+    grid-row: 1 / span 2;
+    align-self: start;
+  }
+
+  .plugins-settings-row > .settings-row__control {
+    display: contents;
+  }
+
+  .plugins-settings-row > .settings-row__text,
+  .plugins-settings-row__status {
+    grid-column: 2;
+  }
+
+  .plugins-settings-row .settings-row__chevron {
+    grid-row: 1 / span 2;
+    grid-column: 3;
+  }
+
+  .plugins-settings-row > .plugins-row-message {
+    grid-column: 1 / -1;
+  }
+}
+
 .plugins-settings-row__link {
   min-width: 0;
   padding: 0;
