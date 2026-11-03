@@ -126,8 +126,9 @@ function ModelReadiness(props: ModelProvidersViewProps) {
                       : t("modelProviders.readiness.modelRequired")
                   }
                 />
+                {/* An open API key form holds the page's one accent action until it closes. */}
                 <button
-                  class="btn primary"
+                  class={["btn", { primary: !props.keyEditorProvider }]}
                   data-models-connect
                   disabled={configMutationDisabled(props) || props.loginBusy}
                   title={props.mutationBlockedReason ?? ""}

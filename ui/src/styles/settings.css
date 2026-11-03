@@ -715,10 +715,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
   display: none;
 }
 
-.settings-group--danger {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
-}
-
 .settings-disclosure__summary {
   list-style: none;
 }
@@ -1899,6 +1895,7 @@ textarea.settings-input {
 
 /* The footnote starts where the log rows' text does, at every width. */
 openclaw-approvals-page .data-table-pagination {
+  border-top: 0;
   padding-inline: calc(var(--space-1) + var(--space-2));
 }
 
@@ -2058,6 +2055,54 @@ openclaw-approvals-page .data-table-pagination__info {
   .approval-log__chevron {
     grid-area: 1 / 4;
   }
+}
+
+/* Each grant is one exact command with one action, so the whole command stays
+   visible and nothing hides behind a disclosure. */
+.standing-grants {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+}
+
+.standing-grants__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-4);
+  padding: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.standing-grants__automation,
+.standing-grants__command,
+.standing-grants__meta {
+  grid-column: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.standing-grants__command {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: inherit;
+}
+
+.standing-grants__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-3);
+  color: var(--muted);
+}
+
+.standing-grants__revoke {
+  grid-area: 1 / 2 / span 3;
+  align-self: start;
 }
 
 /* Quiet-hours details stay connected to their toggle without changing row controls. */
@@ -2252,30 +2297,49 @@ openclaw-approvals-page .data-table-pagination__info {
 }
 
 .settings-sidebar__subitem {
+  padding-block: 4px;
+}
+
+.settings-sidebar__subitem-text {
   display: flex;
-  align-items: center;
-  min-height: 28px;
-  margin-inline-start: 24px;
-  padding: 0 9px;
-  border-radius: var(--radius-sm);
-  color: var(--text);
+  flex-direction: column;
+  min-width: 0;
 }
 
 .settings-sidebar__subitem:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  background: var(--surface-hover);
 }
 
 .settings-sidebar__subitem--active {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+  background: var(--surface-selected);
 }
 
-.settings-sidebar__subitem-label {
-  font-size: calc(12.5px * var(--control-ui-text-scale));
-  font-weight: 500;
+.settings-sidebar__subitem--active:hover {
+  background: var(--surface-selected-hover);
+}
+
+/* One selected row: the section you jumped to, not it and its page. */
+.settings-sidebar__item--active:not(:hover):has(~ .settings-sidebar__subitem--active) {
+  background: transparent;
+}
+
+.settings-sidebar__subitem-label,
+.settings-sidebar__subitem-page {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.settings-sidebar__subitem-label {
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+}
+
+.settings-sidebar__subitem-page {
+  color: var(--muted);
+  font-size: calc(11.5px * var(--control-ui-text-scale));
+  opacity: 0.8;
 }
 
 .settings-sidebar__footer {

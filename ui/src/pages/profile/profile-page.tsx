@@ -17,7 +17,6 @@ import {
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/index.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ScopeUpgradeOwner } from "../../app/device-scope-upgrade-owner.runtime.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { ScopeUpgradeActions, scopeUpgradeText } from "../../components/scope-upgrade-actions.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
@@ -34,6 +33,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  SettingsPageHeader,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { GitHubConnections } from "../../features/github-connections/github-connections.tsx";
@@ -527,14 +527,14 @@ export function ProfilePage() {
 
   return (
     <openclaw-profile-page>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <h1 class="page-title">{titleForRoute("profile")}</h1>
-            <div class="page-subtitle">
-              {subtitleForRoute("profile")} <LearnMoreLink url={PROFILE_DOCS_URL} />
-            </div>
-          </div>
+      <SettingsPageHeader
+        title={titleForRoute("profile")}
+        subtitle={
+          <>
+            {subtitleForRoute("profile")} <LearnMoreLink url={PROFILE_DOCS_URL} />
+          </>
+        }
+        actions={
           <Show when={view().connected}>
             <RefreshButton
               class="profile-refresh"
@@ -544,8 +544,8 @@ export function ProfilePage() {
               onClick={() => state.refreshManually()}
             />
           </Show>
-        </section>
-      </ShellLayoutBoundary>
+        }
+      />
       <SettingsWorkspace>
         <SettingsPage>
           <Show
