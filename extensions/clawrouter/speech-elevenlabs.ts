@@ -131,19 +131,12 @@ export async function synthesizeElevenLabsSpeech(params: {
 }) {
   const { request: req, remaining } = params;
   const overrides = req.providerOverrides ?? {};
+  const base = readElevenLabsSpeechConfig(req.providerConfig);
   const config = readElevenLabsSpeechConfig({
-    ...req.providerConfig,
+    ...base,
     ...overrides,
-    model:
-      overrides.model ??
-      overrides.modelId ??
-      req.providerConfig.model ??
-      req.providerConfig.modelId,
-    voice:
-      overrides.voice ??
-      overrides.voiceId ??
-      req.providerConfig.voice ??
-      req.providerConfig.voiceId,
+    model: overrides.model ?? overrides.modelId ?? base.model,
+    voice: overrides.voice ?? overrides.voiceId ?? base.voice,
   });
   if (req.target === "voice-note" || req.target === "telephony") {
     throw new Error("ClawRouter ElevenLabs voice-note and telephony output are not qualified");
@@ -178,7 +171,9 @@ export async function synthesizeElevenLabsSpeech(params: {
       candidate.responseFormat === "audio.binary" &&
       (candidate.routeKind === "native" || candidate.routeKind === "manifest"),
   );
-  if (!offer) throw new Error("ClawRouter ElevenLabs speech has no eligible supported offer");
+  if (!offer) {
+    throw new Error("ClawRouter ElevenLabs speech has no eligible supported offer");
+  }
   const body = buildElevenLabsSpeechRequestBody({
     text: req.text,
     modelId: config.model,
@@ -188,10 +183,13 @@ export async function synthesizeElevenLabsSpeech(params: {
     languageCode: config.languageCode,
   });
   const query: Record<string, string> = { output_format: OUTPUT_FORMAT };
-  if (config.latencyTier !== undefined)
+  if (config.latencyTier !== undefined) {
     query.optimize_streaming_latency = String(config.latencyTier);
+  }
   const url = new URL(offer.url);
-  if (offer.routeKind === "native") url.search = new URLSearchParams(query).toString();
+  if (offer.routeKind === "native") {
+    url.search = new URLSearchParams(query).toString();
+  }
   const headers = new Headers(http.headers);
   headers.set("Content-Type", "application/json");
   headers.set("Accept", "audio/mpeg");

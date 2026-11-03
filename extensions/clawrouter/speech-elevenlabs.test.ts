@@ -103,6 +103,44 @@ describe("ClawRouter native ElevenLabs speech", () => {
     },
   );
 
+  it.each(["native", "manifest"] as const)(
+    "applies explicit TTS voice overrides after configured speaker selection on %s",
+    async (routeKind) => {
+      await withFixture(async (fixture) => {
+        const cfg = selectElevenLabs(fixture);
+        fixture.catalog.routeKind = routeKind;
+        Object.assign(cfg.tts.providers.clawrouter, {
+          speakerVoiceId: "syntheticSpeaker123",
+        });
+        expect((await fixture.tts({ cfg })).success).toBe(true);
+        expect(fixture.requests[0]).toMatchObject(
+          routeKind === "native"
+            ? {
+                url: "/v1/native/elevenlabs/v1/text-to-speech/syntheticSpeaker123?output_format=mp3_44100_128",
+              }
+            : { body: { pathParams: { voice_id: "syntheticSpeaker123" } } },
+        );
+        const synthesize = (voice: string) =>
+          fixture.tts({
+            cfg,
+            overrides: { providerOverrides: { clawrouter: { voice } } },
+          });
+        expect((await synthesize("syntheticOverride123")).success).toBe(true);
+        expect(fixture.requests).toHaveLength(2);
+        expect(fixture.requests[1]).toMatchObject(
+          routeKind === "native"
+            ? {
+                url: "/v1/native/elevenlabs/v1/text-to-speech/syntheticOverride123?output_format=mp3_44100_128",
+              }
+            : { body: { pathParams: { voice_id: "syntheticOverride123" } } },
+        );
+        expect((await synthesize("../foreign")).success).toBe(false);
+        expect(fixture.catalogRequests).toEqual(["Bearer fixture-router", "Bearer fixture-router"]);
+        expect(fixture.requests).toHaveLength(2);
+      }, respondElevenLabs);
+    },
+  );
+
   it.each([
     { observedAt: "2000-01-01T00:00:00Z" },
     { authType: "access" },
@@ -205,14 +243,22 @@ describe("ClawRouter native ElevenLabs speech", () => {
       },
       (res) => {
         res.setHeader("content-type", failure === "mime" ? "audio/ogg" : "audio/mpeg");
-        if (failure === "partial") res.statusCode = 206;
-        if (failure === "range") res.setHeader("content-range", "bytes 0-15/100");
-        if (failure === "encoding") res.setHeader("content-encoding", "gzip");
+        if (failure === "partial") {
+          res.statusCode = 206;
+        }
+        if (failure === "range") {
+          res.setHeader("content-range", "bytes 0-15/100");
+        }
+        if (failure === "encoding") {
+          res.setHeader("content-encoding", "gzip");
+        }
         if (failure === "truncated") {
           res.setHeader("content-length", ELEVENLABS_MP3.length + 1);
           res.setHeader("connection", "close");
         }
-        if (failure === "oversized") res.setHeader("content-length", 16 * 1024 * 1024 + 1);
+        if (failure === "oversized") {
+          res.setHeader("content-length", 16 * 1024 * 1024 + 1);
+        }
         if (failure === "redirect") {
           res.statusCode = 307;
           res.setHeader("location", "/replayed-speech");

@@ -153,6 +153,7 @@ describe("Talk catalog-selected ClawRouter speech", () => {
                       ? {
                           upstreamProvider: "elevenlabs",
                           speakerVoiceId: "syntheticVoice1234567",
+                          voiceAliases: { narrator: "syntheticOverride123" },
                           latencyTier: 2,
                         }
                       : azure
@@ -251,6 +252,14 @@ describe("Talk catalog-selected ClawRouter speech", () => {
                         },
                 },
               ]);
+              if (eleven) {
+                const aliased = await invokeTalkSpeakDirect({
+                  text: "Synthetic Talk speech",
+                  voiceId: "Narrator",
+                });
+                expect(aliased).toMatchObject({ ok: true });
+                expect(calls.slice(2)).toEqual(calls.slice(0, 2));
+              }
               eligible = false;
               const denied = await invokeTalkSpeakDirect({ text: "Do not synthesize" });
               expect(denied).toMatchObject({
@@ -260,6 +269,7 @@ describe("Talk catalog-selected ClawRouter speech", () => {
               expect(calls.map((call) => call.url)).toEqual([
                 "/v1/catalog",
                 postedRoute,
+                ...(eleven ? ["/v1/catalog", postedRoute] : []),
                 "/v1/catalog",
               ]);
             } finally {
