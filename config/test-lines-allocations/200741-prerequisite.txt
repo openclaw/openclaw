@@ -1,0 +1,2 @@
+112
+# Host-only session-event silence through real admission/CLI enforcement, required/public controls, and SDK boundary regression.

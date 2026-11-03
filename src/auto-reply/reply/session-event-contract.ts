@@ -117,6 +117,8 @@ export type SessionEventOptions = {
   preserveOccurrenceOnRejection?: true;
   /** An explicitly silent source records its result without transport delivery. */
   deliver?: boolean;
+  /** Host-owned: the producer's prompt permits NO_REPLY; input provenance never selects it. */
+  replyExpectation?: "optional";
   /** Host producer remains live through admission, execution and delivery. */
   assertCurrent?: () => void;
 };

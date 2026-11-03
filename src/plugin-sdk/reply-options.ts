@@ -9,6 +9,7 @@ type PublicReplyOptions<T> = T extends undefined
   ? undefined
   : Omit<
       T,
+      | "replyExpectation"
       | "internalEventExecution"
       | "onReplyOperationAdmitted"
       | "onReplyOperationOwned"
@@ -59,6 +60,7 @@ export function publicReplyOptions(
     return undefined;
   }
   const publicOptions = { ...options };
+  Reflect.deleteProperty(publicOptions, "replyExpectation");
   Reflect.deleteProperty(publicOptions, "internalEventExecution");
   Reflect.deleteProperty(publicOptions, "onReplyOperationAdmitted");
   Reflect.deleteProperty(publicOptions, "onReplyOperationOwned");

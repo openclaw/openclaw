@@ -218,11 +218,13 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const groupIntro = isGroupChat
     ? buildGroupIntro({ activation: conversation.activation, defaultActivation })
     : "";
-  const terminalReplyExpectation = resolveSourceReplyExpectation({
-    ctx: promptSessionCtx,
-    cfg,
-    scheduledAutomation: opts?.scheduledAutomation !== undefined,
-  });
+  const terminalReplyExpectation =
+    opts?.replyExpectation ??
+    resolveSourceReplyExpectation({
+      ctx: promptSessionCtx,
+      cfg,
+      scheduledAutomation: opts?.scheduledAutomation !== undefined,
+    });
   const replyOperationRunState = resolveReplyOperationRunState(opts);
   const setReplyCompletion = (evidence: Parameters<typeof resolveReplyCompletion>[1]) => {
     if (replyOperationRunState) {

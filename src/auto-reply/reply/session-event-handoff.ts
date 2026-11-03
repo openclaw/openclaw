@@ -30,7 +30,7 @@ import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js"
 import {
   prepareCronRunContinuationCleanup,
   prepareScheduledAutomationStart,
-  resolveScheduledSessionReplyOptions,
+  resolveSessionEventReplyOptions,
   settleSessionEventTurn,
   type ScheduledAutomationAdmission,
 } from "./session-event-automation.js";
@@ -521,7 +521,7 @@ function enqueueSessionEventAttempt(
             !isCronSessionKey(sessionKey) &&
             !hasSessionEventOriginatingCaller(target),
           scheduledAutomation: options.scheduledAutomation,
-          ...resolveScheduledSessionReplyOptions(options.scheduledAutomation),
+          ...resolveSessionEventReplyOptions(options),
           operatorAuthority: options.scheduledAutomation?.operatorAuthority ?? operatorAuthority,
           admittedSessionSettings: settings,
           toolsAllow,
