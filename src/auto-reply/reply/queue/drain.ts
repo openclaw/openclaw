@@ -41,6 +41,7 @@ import { resolveCollectedRun } from "./collected-run.js";
 import {
   assertSingleAdmissionOwner,
   collectRuntimeMetadata,
+  collectCurrentInboundContext,
   createOverflowSummaryRetrySource,
   getFollowupOriginRouting,
   hasExclusiveTurnAdmission,
@@ -701,6 +702,7 @@ async function runSyntheticOverflowSummary(params: {
   source: FollowupRun;
   sources: FollowupRun[];
   prompt: string;
+  currentInboundContext?: FollowupRun["currentInboundContext"];
   abortSignal?: AbortSignal;
   onAdmitted?: () => void | Promise<void>;
   runFollowup: (run: FollowupRun) => Promise<void>;
@@ -740,6 +742,7 @@ async function runSyntheticOverflowSummary(params: {
   let admitted = false;
   await params.runFollowup({
     prompt: params.prompt,
+    currentInboundContext: params.currentInboundContext,
     sourceTurnId: runtimeMetadata.sourceTurnId,
     queueAbortSignal: params.source.queueAbortSignal,
     transcriptPrompt: params.prompt,
@@ -812,7 +815,8 @@ async function drainOverflowSummaryGroup(params: {
   if (!source) {
     return false;
   }
-  const summaryLines = resolveQueueSummaryLines(params.queue, sources).slice(-params.queue.cap);
+  const summarizedSources = params.queue.cap > 0 ? sources.slice(-params.queue.cap) : sources;
+  const summaryLines = resolveQueueSummaryLines(params.queue, summarizedSources);
   const prompt = previewQueueSummaryPrompt({
     state: {
       droppedCount: sources.length,
@@ -833,6 +837,7 @@ async function drainOverflowSummaryGroup(params: {
       runSyntheticOverflowSummary({
         source,
         sources,
+        currentInboundContext: collectCurrentInboundContext(summarizedSources),
         prompt,
         abortSignal,
         onAdmitted,

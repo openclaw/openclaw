@@ -1043,7 +1043,7 @@ describe("followup queue collect routing", () => {
     expect(q.calls).toHaveLength(2);
     expect(q.calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(q.calls[0]?.currentInboundEventKind).toBe("room_event");
-    expect(q.calls[0]?.currentInboundContext).toBeUndefined();
+    expect(q.calls[0]?.currentInboundContext).toEqual({ text: "dropped context" });
     expect(q.calls[0]?.abortSignal).toBeUndefined();
     expect(q.calls[1]?.prompt).toBe("live ambient");
     expect(q.calls[1]?.currentInboundEventKind).toBe("room_event");
@@ -1429,9 +1429,9 @@ describe("followup queue collect routing", () => {
       "room_event",
     );
     expect(getExistingFollowupQueue(q.key)?.summarySources[0]?.turnAdoptionLifecycle).toBeDefined();
-    expect(
-      getExistingFollowupQueue(q.key)?.summarySources[0]?.currentInboundContext,
-    ).toBeUndefined();
+    expect(getExistingFollowupQueue(q.key)?.summarySources[0]?.currentInboundContext).toEqual({
+      text: "dropped context",
+    });
     q.start(runFollowup);
     releaseRetry.resolve();
     await q.done.promise;
@@ -1439,6 +1439,7 @@ describe("followup queue collect routing", () => {
     expect(q.calls[1]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(q.calls[1]?.prompt).toContain("- dropped ambient");
     expect(q.calls[1]?.currentInboundEventKind).toBe("room_event");
+    expect(q.calls[1]?.currentInboundContext).toEqual({ text: "dropped context" });
     await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(onComplete).toHaveBeenCalledTimes(1);
   });
