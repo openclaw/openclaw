@@ -16,7 +16,7 @@ import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import * as admission from "../process/gateway-work-admission.js";
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
-import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";

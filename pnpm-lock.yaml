@@ -2327,7 +2327,17 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/skill-workshop:
+    dependencies:
+      '@openclaw/gateway-protocol':
+        specifier: workspace:*
+        version: link:../../packages/gateway-protocol
+      typebox:
+        specifier: 1.4.3
+        version: 1.4.3
     devDependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../../packages/normalization-core
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk

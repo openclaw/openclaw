@@ -23,7 +23,6 @@ import type {
   SessionsYieldCallback,
   SessionsYieldRuntimeClaim,
 } from "./tools/sessions-yield-tool.js";
-import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factory.js";
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
@@ -78,8 +77,6 @@ export type OpenClawSharedToolsOptions = {
    * boundary should opt out explicitly.
    */
   wrapBeforeToolCallHook?: boolean;
-  /** Run-owned Workshop options: background-review guard. */
-  skillWorkshop?: SkillWorkshopRunOptions;
   /** Run-owner-granted personal-library authority; adds `skill_library`. */
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   webFetchHostnameAllowlistRef?: { value?: string[] };
