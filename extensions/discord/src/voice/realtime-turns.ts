@@ -316,14 +316,14 @@ export class DiscordRealtimeTurns {
     }
     this.pendingWakeNameFollowup = {
       context,
-      expiresAt: Date.now() + DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS,
+      expiresAt: performance.now() + DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS,
     };
   }
 
   private consumePendingWakeNameFollowup(): DiscordRealtimeSpeakerContext | undefined {
     const pending = this.pendingWakeNameFollowup;
     this.pendingWakeNameFollowup = undefined;
-    if (!pending || Date.now() > pending.expiresAt) {
+    if (!pending || performance.now() > pending.expiresAt) {
       return undefined;
     }
     this.consumePendingSpeakerContext();
