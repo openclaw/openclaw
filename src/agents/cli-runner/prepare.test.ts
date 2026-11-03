@@ -143,6 +143,7 @@ import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import {
   createCliMcpTool,
   createJsonlStdinBackendConfig,
+  registerCliMcpPreparationFailureTests,
   registerCliMcpPreparationTests,
   setRawCliBackendForPrepareTest,
 } from "./prepare-mcp.test-support.js";
@@ -635,6 +636,7 @@ describe("prepareCliRunContext", () => {
       mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
       bindMcpLoopbackClientGrantAdmission: vi.fn(() => true),
       revokeMcpLoopbackClientGrant: vi.fn(() => true),
+      revokeMintedMcpLoopbackClientGrant: vi.fn(() => true),
       resolveMcpLoopbackPolicyTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
@@ -1266,86 +1268,9 @@ describe("prepareCliRunContext", () => {
     }
   });
 
-  it("cleans generated Gemini MCP settings when auth preparation fails", async () => {
-    let generatedSystemSettingsPath: string | undefined;
-    const getActiveMcpLoopbackRuntime = vi.fn(createLoopbackRuntime);
-    const prepareExecution = vi.fn(async (ctx: unknown) => {
-      generatedSystemSettingsPath = (ctx as { env?: Record<string, string> }).env
-        ?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
-      throw new Error("Gemini auth profile was selected but no credential material was found");
-    });
-    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
-    setRawCliBackendForPrepareTest({
-      id: "google-gemini-cli",
-      pluginId: "google",
-      bundleMcp: true,
-      bundleMcpMode: "gemini-system-settings",
-      prepareExecution,
-      config: createArgBackendConfig("gemini", ["--prompt", "{prompt}"], "json"),
-    });
-    setCliRunnerPrepareTestDeps({
-      getActiveMcpLoopbackRuntime,
-      revokeMcpLoopbackClientGrant,
-    });
-
-    await expect(
-      fixture.prepare({
-        sessionKey: "agent:main:main",
-        provider: "google-gemini-cli",
-        model: "gemini-3.1-pro-preview",
-        config: {},
-      }),
-    ).rejects.toThrow(/no credential material/);
-
-    expect(generatedSystemSettingsPath).toBeTruthy();
-    expect(fs.existsSync(generatedSystemSettingsPath ?? "")).toBe(false);
-    expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
-  });
-
-  it("cleans prepared MCP and skills plugin dirs when mid-prepare reference lookup fails", async () => {
-    const { dir } = fixture.session;
-    const tempEnvSnapshot = captureEnv(["TMPDIR", "TMP", "TEMP"]);
-    const tempRoot = path.join(dir, "tmp");
-    const skillsPluginDir = path.join(dir, "claude-skills-plugin");
-    const skillsCleanup = vi.fn(async () => {
-      fs.rmSync(skillsPluginDir, { recursive: true, force: true });
-    });
-    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
-    fs.mkdirSync(tempRoot, { recursive: true });
-    fs.mkdirSync(skillsPluginDir, { recursive: true });
-    setTestEnvValue("TMPDIR", tempRoot);
-    setTestEnvValue("TMP", tempRoot);
-    setTestEnvValue("TEMP", tempRoot);
-    const getActiveMcpLoopbackRuntime = vi.fn(createLoopbackRuntime);
-    setCliRunnerPrepareTestDeps({
-      getActiveMcpLoopbackRuntime,
-      revokeMcpLoopbackClientGrant,
-      prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
-        args: ["--plugin-dir", skillsPluginDir],
-        cleanup: skillsCleanup,
-      })),
-      resolveOpenClawReferencePaths: vi.fn(async () => {
-        throw new Error("reference path lookup failed");
-      }),
-    });
-
-    try {
-      await expect(
-        fixture.prepare({
-          sessionKey: "agent:main:main",
-          config: createCliBackendConfig({ bundleMcp: true }),
-        }),
-      ).rejects.toThrow("reference path lookup failed");
-
-      expect(skillsCleanup).toHaveBeenCalledOnce();
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
-      expect(fs.existsSync(skillsPluginDir)).toBe(false);
-      expect(
-        fs.readdirSync(tempRoot).filter((entry) => entry.startsWith("openclaw-cli-mcp-")),
-      ).toEqual([]);
-    } finally {
-      tempEnvSnapshot.restore();
-    }
+  registerCliMcpPreparationFailureTests({
+    getFixture: () => fixture,
+    createConfig: () => createCliBackendConfig({ bundleMcp: true }),
   });
 
   it("prepares side questions without agent-turn context, tools, hooks, or reusable sessions", async () => {
@@ -2460,7 +2385,7 @@ describe("prepareCliRunContext", () => {
     }));
     const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
-    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+    const revokeMintedMcpLoopbackClientGrant = vi.fn(() => true);
     const resolveMcpLoopbackScopedTools = vi.fn((_scope: McpProjectionParams) => ({
       agentId: "main",
       tools: [
@@ -2482,7 +2407,7 @@ describe("prepareCliRunContext", () => {
       activateMcpLoopbackClientGrantCapture,
       deactivateMcpLoopbackClientGrantCapture,
       mintMcpLoopbackClientGrant,
-      revokeMcpLoopbackClientGrant,
+      revokeMintedMcpLoopbackClientGrant,
       resolveMcpLoopbackScopedTools,
     });
     setRawCliBackendForPrepareTest(createNativeArgMcpBackend());
@@ -4173,7 +4098,7 @@ describe("prepareCliRunContext", () => {
     const { dir } = fixture.session;
     const skill = createWeatherSkillFixture(dir, true);
     const preparedExecutionCleanup = vi.fn(async () => undefined);
-    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+    const revokeMintedMcpLoopbackClientGrant = vi.fn(() => true);
     setCliBackendForPrepareTest({
       id: "claude-cli",
       pluginId: "anthropic",
@@ -4183,7 +4108,7 @@ describe("prepareCliRunContext", () => {
     setCliRunnerPrepareTestDeps({
       prepareClaudeCliSkillsPlugin,
       getActiveMcpLoopbackRuntime: vi.fn(createLoopbackRuntime),
-      revokeMcpLoopbackClientGrant,
+      revokeMintedMcpLoopbackClientGrant,
     });
 
     const context = await fixture.prepare({
@@ -4211,7 +4136,9 @@ describe("prepareCliRunContext", () => {
       await context.preparedBackend.cleanup?.();
       expect(fs.existsSync(skillPath)).toBe(true);
       expect(preparedExecutionCleanup).toHaveBeenCalledOnce();
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
+      expect(revokeMintedMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ token: "loopback-token" }),
+      );
 
       const nextTurn = await fixture.prepare({
         provider: "claude-cli",
@@ -4229,7 +4156,7 @@ describe("prepareCliRunContext", () => {
       expect(fs.existsSync(unusedPluginDir ?? "")).toBe(false);
       expect(fs.existsSync(skillPath)).toBe(true);
       expect(preparedExecutionCleanup).toHaveBeenCalledTimes(2);
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledTimes(2);
+      expect(revokeMintedMcpLoopbackClientGrant).toHaveBeenCalledTimes(2);
     } finally {
       await releaseSkills?.();
     }
