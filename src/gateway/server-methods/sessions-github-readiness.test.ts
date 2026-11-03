@@ -105,49 +105,53 @@ async function fixture(
   run: (f: ReadFixture) => Promise<void>,
   options: Parameters<typeof withReadFixture>[1] = {},
 ) {
-  await withReadFixture(async (f) => {
-    Object.assign(f.context, createContext([], f.context.getRuntimeConfig));
-    const forbidden = () => {
-      throw new Error("Readiness attempted an external effect or credential preparation");
-    };
-    const refresh = vi.fn(forbidden);
-    const provider = createGitHubPublicationProvider({
-      signal: f.readScheduler.signal,
-      assertCurrent: () => f.readScheduler.signal.throwIfAborted(),
-      getConfig: f.context.getRuntimeConfig,
-      refreshIdentity: refresh,
-      refreshPersonal: refresh,
-    });
-    const service = createGitHubPublicationCoordinator({
-      provider,
-      placements: createWorkerSessionPlacementStore(),
-      getCommittedRuntimeConfig: f.context.getRuntimeConfig,
-    });
-    f.context.githubPublicationService = service;
-    const services = readRepositoryServices(f.context);
-    assert(services, "Expected the fixture's registered GitHub account service");
-    installGitHubAccountFixture(f.context, services.oauth, service);
-    const effects = [
-      refresh,
-      vi.spyOn(service, "requestForSessionV2").mockImplementation(forbidden),
-      vi.spyOn(service, "preparePersonalStatus").mockImplementation(forbidden),
-      vi.spyOn(service, "personalPending").mockImplementation(forbidden),
-      vi.spyOn(identity, "prepareGitHubPublicationIdentity").mockImplementation(forbidden),
-      vi.spyOn(identity, "prepareGitHubPublicationOptionsIdentity").mockImplementation(forbidden),
-      vi.spyOn(oauth, "requestCurrentGitHubOAuthRefresh").mockImplementation(forbidden),
-      vi.spyOn(publicationTarget, "prepareGitHubPublicationTarget").mockImplementation(forbidden),
-      vi.spyOn(gatewayTransport, "callGatewayTool").mockImplementation(forbidden),
-    ];
-    try {
-      await run(f);
-    } finally {
-      for (const effect of effects) {
-        expect(effect).not.toHaveBeenCalled();
-        effect.mockRestore();
+  await withReadFixture(
+    async (f) => {
+      Object.assign(f.context, createContext([], f.context.getRuntimeConfig));
+      const forbidden = () => {
+        throw new Error("Readiness attempted an external effect or credential preparation");
+      };
+      const refresh = vi.fn(forbidden);
+      const provider = createGitHubPublicationProvider({
+        signal: f.readScheduler.signal,
+        assertCurrent: () => f.readScheduler.signal.throwIfAborted(),
+        getConfig: f.context.getRuntimeConfig,
+        refreshIdentity: refresh,
+        refreshPersonal: refresh,
+      });
+      const service = createGitHubPublicationCoordinator({
+        provider,
+        placements: createWorkerSessionPlacementStore(),
+        getCommittedRuntimeConfig: f.context.getRuntimeConfig,
+      });
+      f.context.githubPublicationService = service;
+      const services = readRepositoryServices(f.context);
+      assert(services, "Expected the fixture's registered GitHub account service");
+      f.stopAccount();
+      installGitHubAccountFixture(f.context, services.oauth, service);
+      const effects = [
+        refresh,
+        vi.spyOn(service, "requestForSessionV2").mockImplementation(forbidden),
+        vi.spyOn(service, "preparePersonalStatus").mockImplementation(forbidden),
+        vi.spyOn(service, "personalPending").mockImplementation(forbidden),
+        vi.spyOn(identity, "prepareGitHubPublicationIdentity").mockImplementation(forbidden),
+        vi.spyOn(identity, "prepareGitHubPublicationOptionsIdentity").mockImplementation(forbidden),
+        vi.spyOn(oauth, "requestCurrentGitHubOAuthRefresh").mockImplementation(forbidden),
+        vi.spyOn(publicationTarget, "prepareGitHubPublicationTarget").mockImplementation(forbidden),
+        vi.spyOn(gatewayTransport, "callGatewayTool").mockImplementation(forbidden),
+      ];
+      try {
+        await run(f);
+      } finally {
+        for (const effect of effects) {
+          expect(effect).not.toHaveBeenCalled();
+          effect.mockRestore();
+        }
+        expect(f.personalConnectionStatus).not.toHaveBeenCalled();
       }
-      expect(f.personalConnectionStatus).not.toHaveBeenCalled();
-    }
-  }, options);
+    },
+    { ...options, projection: false },
+  );
 }
 
 async function call(f: ReadFixture, params: Record<string, unknown> = {}, internal = false) {

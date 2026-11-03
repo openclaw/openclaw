@@ -6,6 +6,10 @@ import { vi } from "vitest";
 import { repositoryProjectHandlers } from "../../../extensions/github-repositories/runtime-api.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
@@ -14,6 +18,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
 import { installGitHubAccountRpcFixture } from "../github-account-service.test-support.js";
+import { createRepositorySources } from "../repository-sources.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
@@ -89,24 +94,28 @@ export async function invokeProjectMethod(
   } = { result: null };
   const releaseForegroundWork = retainSessionListForegroundWork();
   let ownedProjection: SessionRowProjection | undefined;
+  const resources = new LegacyPluginSdkResourceHost();
   try {
     ownedProjection =
       !projection && method === "projects.list" && (profileId || params.includeObserved)
         ? await createSessionRowProjection({ cfg, modelCatalog: [] })
         : undefined;
+    const registry =
+      method === "projects.add" ? installGitHubAccountRpcFixture(getConfig()) : undefined;
     const context = bindSessionRowProjection(
       {
         getRuntimeConfig: getConfig,
         trackExecution: trackAsyncWork,
-        repositorySources: createRepositorySourcesFixture(getConfig),
+        repositorySources: registry
+          ? createRepositorySources(lifetime.signal ?? new AbortController().signal, registry)
+          : createRepositorySourcesFixture(getConfig),
       },
       () => projection ?? ownedProjection,
     ) as GatewayRequestContext;
     context.resolveGatewayContext = () => context;
+    bindLegacyPluginSdkResourceHost(context.resolveGatewayContext, resources);
     const handler =
-      method === "projects.add"
-        ? installGitHubAccountRpcFixture(getConfig()).gatewayHandlers[method]
-        : handlers[method];
+      method === "projects.add" ? registry?.gatewayHandlers[method] : handlers[method];
     await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
       handler!({
         ...lifetime,
@@ -125,6 +134,7 @@ export async function invokeProjectMethod(
     );
     return capture.result;
   } finally {
+    await resources.close();
     ownedProjection?.dispose();
     releaseForegroundWork();
   }

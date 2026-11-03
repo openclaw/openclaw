@@ -164,17 +164,29 @@ describe("control UI session PR subscriptions", () => {
     "refreshes=$refresh for facts=$facts, invalidated=$invalidated",
     async ({ facts, invalidated, refresh }) => {
       const readSource = createTestSessionPrReadSource();
-      const readCurrent = vi.fn(async () => ({
-        sessionId: "session-id",
-        params: { sessionKey: "session", agentId: "main" },
-        identity: "session",
-        readSource,
-        source: null,
-      }));
+      let revision = 0;
+      const readCurrent = vi.fn(async () => {
+        const captured = revision;
+        return {
+          sessionId: "session-id",
+          params: { sessionKey: "session", agentId: "main" },
+          identity: "session",
+          readSource,
+          source: null,
+          assertCurrent() {
+            if (captured !== revision) {
+              throw new Error("Watcher grant changed");
+            }
+          },
+        };
+      });
       const active = start({ prepareRead: async () => readCurrent });
       await active.replace("reader", ["session"]);
       readCurrent.mockClear();
       broadcastToConnIds.mockClear();
+      if (invalidated === true) {
+        revision++;
+      }
       sessionChanges.emit({
         sessionKey: "session",
         facts:

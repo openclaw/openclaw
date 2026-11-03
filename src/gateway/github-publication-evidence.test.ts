@@ -1,4 +1,3 @@
-import { readGitHubConfig } from "../../extensions/github-repositories/runtime-api.js";
 // Install publication I/O fixtures before the registered action owner.
 // oxfmt-ignore
 import { createPublicationActionFixture as fixture } from "./github-publication-actions.test-support.js";
@@ -8,6 +7,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
 import { updateGitHubToolIdentityConfig } from "../../extensions/github-repositories/tool-identity-config-api.js";
 import { createSandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";

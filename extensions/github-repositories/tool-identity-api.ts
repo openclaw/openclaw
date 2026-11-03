@@ -565,27 +565,25 @@ export async function prepareGitHubReadIdentity(
 ): Promise<PreparedGitHubSourceReadIdentity> {
   const selected = resolveGitHubToolIdentity(params);
   const { profileId, kind } = selected.source === "system-detected" ? {} : selected.config;
-  const assertSelected = composeSessionEntryCommitGuards([
-    params.assertActive,
-    () => {
-      params.readNativeCredential?.assertCurrent?.();
-      const current = resolveGitHubToolIdentity({
-        config: params.getCurrentConfig(),
-        agentId: params.agentId,
-      });
-      if (
-        current.source !== selected.source ||
-        (current.source !== "system-detected" &&
-          (current.config.profileId !== profileId ||
-            current.config.kind !== kind ||
-            (kind === "app-installation" &&
-              selected.source !== "system-detected" &&
-              !isDeepStrictEqual(current.config, selected.config))))
-      ) {
-        throw new GitHubIdentityError("changed");
-      }
-    },
-  ]);
+  const assertSelected = composeSessionEntryCommitGuards([params.assertActive], (assertSources) => {
+    assertSources();
+    params.readNativeCredential?.assertCurrent?.();
+    const current = resolveGitHubToolIdentity({
+      config: params.getCurrentConfig(),
+      agentId: params.agentId,
+    });
+    if (
+      current.source !== selected.source ||
+      (current.source !== "system-detected" &&
+        (current.config.profileId !== profileId ||
+          current.config.kind !== kind ||
+          (kind === "app-installation" &&
+            selected.source !== "system-detected" &&
+            !isDeepStrictEqual(current.config, selected.config))))
+    ) {
+      throw new GitHubIdentityError("changed");
+    }
+  });
   const caller = { assertCurrent: assertSelected, startCurrent: params.startActive };
   // Managed profiles bypass native bearer lookup, not the repository policy that owns it.
   if (

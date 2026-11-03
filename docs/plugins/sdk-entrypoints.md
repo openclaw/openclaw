@@ -74,7 +74,10 @@ retains request authority and accepted handoff custody; plugins do not receive a
 administrative Gateway client. Read-only `clientCaps` records the invoking client's
 capabilities, and `workspace.workspacePreparationAvailable` reports whether that
 invocation can prepare its workspace. These facts support tool presentation;
-existing host guards still authorize dispatch and workspace effects.
+existing host guards still authorize dispatch and workspace effects. A handoff that
+needs the invoking user after the turn yields can set `retainRequester: true`; the
+existing host continuation captures that selection while current and revalidates
+its retained authority. The plugin cannot supply a replacement identity.
 
 ## Where each section moved
 

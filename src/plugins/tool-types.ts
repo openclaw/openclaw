@@ -78,6 +78,8 @@ export type OpenClawPluginToolGateway = Readonly<{
     params: Record<string, unknown>;
     signal?: AbortSignal;
     fenceSuccessors?: true;
+    /** Keep the selected requester under the host continuation's live authority. */
+    retainRequester?: true;
     formatResult: (payload: Record<string, unknown>) => string;
   }) => Promise<Awaited<ReturnType<AnyAgentTool["execute"]>>>;
 }>;

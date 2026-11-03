@@ -24,7 +24,11 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
-import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
+import {
+  createFixture,
+  createRpcResponseCapture,
+  sessionKey,
+} from "./control-ui-session-pr-access.test-support.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import { prepareTaskPublicationSessions } from "./control-ui-session-task-prs.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
@@ -499,7 +503,7 @@ it("projects three descendant receipts without mixing the parent's current branc
 });
 
 async function passive(client = fixture.client) {
-  const respond = vi.fn();
+  const { received, respond } = createRpcResponseCapture();
   await handleGatewayRequest({
     req: {
       type: "req",
@@ -512,7 +516,7 @@ async function passive(client = fixture.client) {
     isWebchatConnect: () => false,
     respond,
   });
-  expect(respond).toHaveBeenCalledWith(true, { subscribed: true }, undefined);
+  expect(received).toHaveBeenCalledWith(true, { subscribed: true }, undefined);
   await fixture.subscriptions.pollNow();
 }
 

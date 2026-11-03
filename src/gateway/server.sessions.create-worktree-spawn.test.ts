@@ -37,12 +37,14 @@ import { createDeferredCore } from "../shared/deferred.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
-import { createWorktreeSpawnRepositoryFixture } from "./server.sessions.create-worktree-spawn.test-support.js";
+import {
+  createWorktreeSpawnRepositoryFixture,
+  worktreeSpawnConnection as connection,
+} from "./server.sessions.create-worktree-spawn.test-support.js";
 import {
   controlUiClient,
   settleWorkspaceRuns,
@@ -82,19 +84,6 @@ const parentCreateParams = {
   worktreeName: "parent",
   worktreeBaseRef: "main",
 };
-function connection(backend = false, scopes = ["operator.write"]) {
-  return {
-    minProtocol: 1,
-    maxProtocol: 1,
-    scopes,
-    client: {
-      id: backend ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CONTROL_UI,
-      version: "test",
-      platform: backend ? "node" : "web",
-      mode: backend ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.WEBCHAT,
-    },
-  };
-}
 const adminRequest = { client: { connect: connection(false, ["operator.admin"]) } };
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let repository: string;

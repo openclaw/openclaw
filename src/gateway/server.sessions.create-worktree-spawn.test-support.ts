@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -48,5 +49,19 @@ export function createWorktreeSpawnRepositoryFixture(seedRoot: string) {
     await fs.cp(`${seed}.git`, `${root}.git`, { recursive: true });
     await execFileAsync("git", ["-C", root, "remote", "set-url", "origin", `${root}.git`]);
     return await fs.realpath(root);
+  };
+}
+
+export function worktreeSpawnConnection(backend = false, scopes = ["operator.write"]) {
+  return {
+    minProtocol: 1,
+    maxProtocol: 1,
+    scopes,
+    client: {
+      id: backend ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CONTROL_UI,
+      version: "test",
+      platform: backend ? "node" : "web",
+      mode: backend ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.WEBCHAT,
+    },
   };
 }

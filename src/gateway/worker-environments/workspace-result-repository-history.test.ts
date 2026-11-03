@@ -55,6 +55,7 @@ it.each(["restart", "fork"] as const)(
     await git(artifacts, ["gc", "--prune=now", "--quiet"]);
     await fs.rm(f.remote, { recursive: true });
     const restored = await syncSessionRepositoryWorkspace({
+      getRepositorySources: () => f.sources,
       ...sessionTarget,
       repository,
       tunnel: f.tunnel,

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -129,4 +130,8 @@ export function runtimeManagedRun(input: SpawnInput, stdout = ""): ManagedRun {
     cancel: vi.fn(),
     wait: vi.fn(async () => createRunExit()),
   };
+}
+
+export function exactCommandMarker(command: string): string {
+  return `=command:${crypto.createHash("sha256").update(command.trim()).digest("hex").slice(0, 16)}`;
 }

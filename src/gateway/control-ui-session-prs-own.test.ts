@@ -23,6 +23,11 @@ vi.mock("../process/exec.js", async (original) => ({
   runCommandBuffered: io.command,
 }));
 
+vi.mock("openclaw/plugin-sdk/process-runtime", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandBuffered: io.command,
+}));
+
 const headCommit = "a".repeat(40);
 const baseCommit = "b".repeat(40);
 function gitRef(repository: string, repositoryId: number, branch: string, commit: string) {

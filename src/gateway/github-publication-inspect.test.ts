@@ -1,10 +1,10 @@
-import { readGitHubConfig } from "../../extensions/github-repositories/runtime-api.js";
 // Keep external GitHub I/O synthetic while exercising registered admission and current profile state.
 // oxfmt-ignore
 import { commandResult, githubPublicationTestMocks, installGitHubPublicationTestHarness, overrideCommands, createTestGitHubPublicationCoordinator, SESSION_ID, SESSION_KEY } from "./github-publication.test-support.js";
 import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
 import { SessionGitHubPullRequestInspectResultSchema } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createGitHubPublishTool } from "../agents/test-helpers/github-plugin-tools.js";

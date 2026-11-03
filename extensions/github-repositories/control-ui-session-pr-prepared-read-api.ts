@@ -392,7 +392,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
             assertReadCurrent();
             try {
               const result = await load(target.params, undefined, {
-                target,
+                target: selectedRead ? { ...target, read: selectedRead } : target,
                 sourceIdentity,
                 sourceScope,
                 readTaskPublications: selectedRead?.readTaskPublications,

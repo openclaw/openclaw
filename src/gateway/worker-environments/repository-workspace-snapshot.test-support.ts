@@ -18,6 +18,7 @@ import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.
 import type { openDiskCleanupTransport } from "./placement-disk-cleanup.test-support.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { createLocalRepositorySourcesFixture } from "./repository-source.test-support.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import { createProvider } from "./service.test-support.js";
@@ -252,10 +253,12 @@ export async function openRepositoryCaptureTransport(
       "-m",
       "base",
     ]);
+    const repositoryUrl = "https://repository-fixture.test/capture.git";
+    const sources = createLocalRepositorySourcesFixture(repositoryUrl);
     const store = getSessionRepositoryWorkspaceStore();
     const created = await store.create({
       ...sessionTarget,
-      url: pathToFileURL(origin).href,
+      url: repositoryUrl,
       runSetupScript: false,
       assertCurrent,
     });
@@ -266,9 +269,20 @@ export async function openRepositoryCaptureTransport(
       authorize: assertCurrent,
     });
     const synced = await syncSessionRepositoryWorkspace({
+      getRepositorySources: () => sources,
       ...sessionTarget,
       repository: created,
-      tunnel,
+      tunnel: {
+        ...tunnel,
+        syncWorkspace: (request) =>
+          tunnel.syncWorkspace({
+            ...request,
+            source:
+              request.source.kind === "repository" && request.source.url === repositoryUrl
+                ? { ...request.source, url: pathToFileURL(origin).href }
+                : request.source,
+          }),
+      },
       generation: 1,
       assertCurrent,
     });
@@ -304,6 +318,7 @@ export async function openRepositoryCaptureTransport(
     events.length = 0;
     wire.commands.length = 0;
     return {
+      sources,
       repository,
       original,
       records,

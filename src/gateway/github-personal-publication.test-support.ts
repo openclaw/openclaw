@@ -288,3 +288,16 @@ export async function createForeignPublicationSession(otherOwner: string, incogn
     entry: { ...original(key).entry, ...entry },
   }));
 }
+
+export function createPersonalPublicationRequests(generation: () => string) {
+  return {
+    request: () => personalPublicationRequest({ generation: generation() }, "personal-publish"),
+    confirmation: (requestId: string, requestDigest: string) => ({
+      sessionKey: SESSION_KEY,
+      requestId,
+      requestDigest,
+      generation: generation(),
+      account,
+    }),
+  };
+}

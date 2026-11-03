@@ -147,6 +147,7 @@ export function preparePluginToolGatewayCapability(
           operation,
           requestOwners,
           onYield: options?.onYield,
+          senderIsOwner: options?.senderIsOwner,
           run: ({ assertCurrent, signal }) =>
             withGatewayToolCallerIdentity(
               {

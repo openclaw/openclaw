@@ -113,11 +113,15 @@ vi.mock("../agents/worktrees/git.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/worktrees/git.js")>()),
   runGit: async () => ({ code: 0, stdout: "https://github.com/example/project.git" }),
 }));
+// mock-isolation: environment routing must not spawn maintenance Git for synthetic checkouts.
+vi.mock("./project-checkout-maintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./project-checkout-maintenance.js")>()),
+  configureProjectCheckoutMaintenance: vi.fn(),
+}));
 // mock-isolation: environment routing must not spawn Git against synthetic checkout paths.
 vi.mock("../../extensions/github-repositories/project-clone-runtime-api.js", () => ({
   ProjectCloneError: class extends Error {},
   cloneProjectCheckout: mocks.clone,
-  configureProjectCheckoutMaintenance: vi.fn(),
   refreshProjectCheckout: mocks.refresh,
   ensureProjectCheckoutCommit: vi.fn(),
 }));

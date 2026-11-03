@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { clearGitHubCredentialVerificationCache } from "../../../extensions/github-repositories/runtime-api.js";
+import {
+  clearGitHubCredentialVerificationCache,
+  createGitHubRepositorySource,
+} from "../../../extensions/github-repositories/runtime-api.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
+import { createRepositorySourceFixture } from "../../plugins/repository-source.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -13,6 +17,7 @@ import {
   repositoryDispatchCredentialReader,
   withRepositoryChatDispatch,
 } from "../repository-dispatch.js";
+import { createRepositorySources } from "../repository-sources.js";
 import type { GatewayClient } from "../server-methods/client-types.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { imageReserveEffectsFixture } from "./image-reserve-effects.test-support.js";
@@ -274,7 +279,16 @@ describe("runtime image reserve repository dispatch", () => {
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
+    const sourceFixture = createRepositorySourceFixture(
+      createGitHubRepositorySource(
+        () => support.testState.config,
+        async () => {},
+      ),
+      registry,
+    );
+    const sources = createRepositorySources(new AbortController().signal, sourceFixture.registry);
     const harness = await createHarness(support.testState.stateDb, placements, {
+      getRepositorySources: () => sources,
       environmentService: service,
       resolveWorkspace: async () => ({ kind: "repository", repository: accepted }),
       isCurrentNodePlacement: () => true,

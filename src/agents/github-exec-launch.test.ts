@@ -1,6 +1,5 @@
 import { spawn, spawnSync, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -183,7 +182,9 @@ describe.skipIf(process.platform === "win32")("GitHub launch source runtimes", (
         );
         const args = literalArgs;
         const argv = [
-          ...(runtime === "bun" ? [] : ["--import", createRequire(import.meta.url).resolve("tsx")]),
+          ...(runtime === "bun"
+            ? []
+            : ["--import", new URL("../../scripts/tsx.mjs", import.meta.url).href]),
           driver,
           profile,
           target,

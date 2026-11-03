@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import * as publicationIdentity from "../../../extensions/github-repositories/publication-availability-api.js";
 import * as publicationTransport from "../../../extensions/github-repositories/publication-git-transport-api.js";
 import { createGitHubPublicationProvider } from "../../../extensions/github-repositories/publication-provider-api.js";
@@ -9,6 +9,7 @@ import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
 import { withPreparedEmbeddedGatewayTools } from "../../agents/embedded-agent-runner/run/attempt-gateway-tools.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { resolveGitHubPluginToolsFixture } from "../../agents/github-plugin-tools.test-support.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import {
@@ -21,6 +22,7 @@ import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { captureGatewayAuthPolicy } from "../../gateway/auth-policy.js";
+import { installPublicationRpcFixture } from "../../gateway/github-account-service.test-support.js";
 import { createGitHubPublicationCoordinator } from "../../gateway/github-publication.js";
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
@@ -38,6 +40,10 @@ import { createOperatorClient } from "../../gateway/server-plugin-in-process-dis
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
@@ -78,6 +84,16 @@ vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
   runEmbeddedAgent: sessionRunner.runEmbedded,
 }));
 
+// mock-isolation: Discovery is synthetic; plugin factories and scheduled authority stay real.
+vi.mock("../../agents/openclaw-plugin-tools.js", () => ({
+  resolveOpenClawPluginToolsForOptions: (
+    params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
+  ) => resolveGitHubPluginToolsFixture(params),
+  resolveOpenClawPluginToolsForOptionsAsync: async (
+    params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
+  ) => resolveGitHubPluginToolsFixture(params),
+}));
+
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 await Promise.all([
   import("../../auto-reply/dispatch.js"),
@@ -96,7 +112,7 @@ const toolConstructionPlan = {
   includeShellTools: false,
   includeChannelTools: false,
   includeOpenClawTools: true,
-  includePluginTools: false,
+  includePluginTools: true,
 };
 
 beforeEach(() => {
@@ -152,6 +168,9 @@ it.each([
   const { context } = fixture;
   const resolveGatewayContext = () => context;
   context.resolveGatewayContext = resolveGatewayContext;
+  const resources = new LegacyPluginSdkResourceHost();
+  bindLegacyPluginSdkResourceHost(resolveGatewayContext, resources);
+  onTestFinished(() => resources.close());
   const profile = ensureProfileForEmail("scheduled-operator@example.test");
   const client = createOperatorClient({
     profileId: profile.id,
@@ -414,6 +433,7 @@ it.each([
     getCommittedRuntimeConfig: () => config,
   });
   context.githubPublicationService = coordinator;
+  await installPublicationRpcFixture(context, coordinator);
   const receipt = vi
     .spyOn(coordinator, "latestShared")
     .mockResolvedValue({ result: publication, confirmation: null });

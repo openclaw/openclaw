@@ -1,9 +1,14 @@
 import { StatementSync } from "node:sqlite";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  expireUserGitHubAccessToken,
+  updateUserGitHubConnection,
+} from "../../state/user-github-connections.test-support.js";
 import { preparePersonalProfileAction } from "./personal-profile-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import { network, tokens } from "./users-github.test-support.js";
 
 export function preparePersonalGitHubPoll(owner: string) {
   updateUserGitHubConnection(
@@ -41,4 +46,16 @@ export async function expectReceiptBackedPersonalGitHubAuthority(options: {
   } finally {
     reads.restore();
   }
+}
+
+export async function preparePendingPersonalGitHubRefresh<T>(
+  owner: string,
+  personal: { refresh: (owner: string) => Promise<T> },
+) {
+  expireUserGitHubAccessToken(owner);
+  const refresh = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
+  network.refresh.mockReturnValueOnce(refresh.promise);
+  const pending = personal.refresh(owner);
+  await vi.waitFor(() => expect(network.refresh).toHaveBeenCalledOnce());
+  return { refresh, pending };
 }

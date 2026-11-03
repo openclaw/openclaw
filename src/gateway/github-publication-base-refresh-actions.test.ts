@@ -169,7 +169,9 @@ it("recovers a retargeted guest PR, retains saved data and publishes the resolve
   mocks.runCommand.mockImplementation(
     async (argv: string[], options?: { input?: string; env?: NodeJS.ProcessEnv }) => {
       if (argv.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"))) {
-        const selected = argv.some((arg) => arg.endsWith(`/${destination}`)) ? destination : "main";
+        const selected = argv.some((arg) => arg.endsWith(`/${encodeURIComponent(destination)}`))
+          ? destination
+          : "main";
         return commandResult(
           JSON.stringify({
             ref: `refs/heads/${selected}`,
@@ -186,12 +188,17 @@ it("recovers a retargeted guest PR, retains saved data and publishes the resolve
       }
       if (argv.includes("fetch") && (argv.includes(partialBase) || argv.includes("--stdin"))) {
         expect(argv).toContain("https://github.com/openclaw/openclaw.git");
-        expect(options?.env?.GIT_CONFIG_KEY_1).toBe("credential.helper");
-        expect(options?.env?.GIT_CONFIG_VALUE_1).toBe("");
-        expect(options?.env?.GIT_CONFIG_KEY_2).toBe(
-          "http.https://github.com/openclaw/openclaw.git.extraHeader",
+        const config = Object.fromEntries(
+          Array.from({ length: Number(options?.env?.GIT_CONFIG_COUNT ?? 0) }, (_, i) => [
+            options?.env?.[`GIT_CONFIG_KEY_${i}`],
+            options?.env?.[`GIT_CONFIG_VALUE_${i}`],
+          ]),
         );
-        expect(options?.env?.GIT_CONFIG_VALUE_2).toMatch(/^Authorization: Basic /);
+        expect(config).toMatchObject({
+          "credential.helper": "",
+          "http.https://github.com/openclaw/openclaw.git.extraHeader":
+            expect.stringMatching(/^Authorization: Basic /),
+        });
         if (argv.includes("--stdin")) {
           contentFetches++;
           if (rejectContentFetch) {

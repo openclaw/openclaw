@@ -27,11 +27,7 @@ import {
 } from "./publication-git-transport-api.js";
 import { inspectOwnGitHubPullRequest } from "./publication-inspect-api.js";
 import { assertExistingPullRequestWriteAccess } from "./publication-pr-preflight-api.js";
-import {
-  sameGitHubPublisherSelection,
-  prepareGitHubPublisher,
-  readGitHubPublisher,
-} from "./publication-publisher-api.js";
+import { prepareGitHubPublisher, readGitHubPublisher } from "./publication-publisher-api.js";
 import {
   readPublishedGitHubPullRequest,
   findGitHubPublicationPullRequest,
@@ -155,19 +151,20 @@ export function createGitHubPublicationProvider(owner: {
           input.action.assertCurrent();
           bound.assertCurrent();
         },
+        // Capture the verified account in the receipt before claim rebinds its stored selection.
         prepare: async (assertWorkspace) =>
-          prepareGitHubPublisher(input.action.agentId, provenance, {
+          prepareGitHubPublisher(input.action.agentId, undefined, {
             prepare: () =>
               preparePersonalGitHubPublicationSelection(
                 bound,
                 assertWorkspace,
                 owner.refreshPersonal,
               ),
-            isCurrent: (current) => {
+            isCurrent: () => {
               input.action.assertCurrent();
               assertWorkspace();
               bound.assertCurrent();
-              return sameGitHubPublisherSelection(current, selected);
+              return true;
             },
           }),
       };

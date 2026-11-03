@@ -1,3 +1,14 @@
+// Install synthetic Git transport before personal fixtures load the vendor identity graph.
+// oxfmt-ignore
+import {
+  SESSION_ID,
+  SESSION_KEY,
+  commands,
+  createTestGitHubPublicationCoordinator,
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+  persistClaimPublicationWorkspace,
+} from "./github-publication.test-support.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -10,15 +21,6 @@ import {
 } from "./github-personal-publication.test-support.js";
 import { readPersonalGitHubPublicationAsync } from "./github-publication-store-async.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
-import {
-  SESSION_ID,
-  SESSION_KEY,
-  commands,
-  createTestGitHubPublicationCoordinator,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-  persistClaimPublicationWorkspace,
-} from "./github-publication.test-support.js";
 import {
   REQUEST,
   seedActivePlacement,

@@ -8,6 +8,7 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
+import { listProjectRegistry } from "../../projects/project-registry.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -126,10 +127,30 @@ export function useRepositoryWorkspaceResultFixture() {
       runSetupScript,
       assertCurrent: () => {},
     });
+    const sources = createLocalRepositorySourcesFixture(
+      repositoryUrl,
+      undefined,
+      async ({ requiredCommit, signal, assertCurrent }) => {
+        const project = (await listProjectRegistry({})).find((entry) => entry.repoRoot === origin);
+        assertCurrent();
+        if (!project) {
+          throw new Error("Register the local fixture origin before Gateway materialization");
+        }
+        if (requiredCommit) {
+          await requireGit(origin, ["cat-file", "-e", `${requiredCommit}^{commit}`], {
+            timeoutMs: 10_000,
+            signal,
+          });
+          assertCurrent();
+        }
+        return { project, assertCurrent, refresh: async () => assertCurrent() };
+      },
+    );
     await upsertSessionEntryCore(sessionTarget, {
       sessionId: SESSION_ID,
       updatedAt: Date.now(),
       repositoryWorkspaceId: repository.workspaceId,
+      repositorySourceId: sources.resolve(repositoryUrl).id,
       ...(incognito ? { incognito: true } : {}),
     });
     const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
@@ -154,6 +175,7 @@ export function useRepositoryWorkspaceResultFixture() {
       sessionId: SESSION_ID,
       ownerSignal,
       isOwnerCurrent: () => true,
+      supportsGitResults: async () => true,
       workspaceTransfer: service,
       runWorkspaceCommand: async (command) =>
         await runtime.exec(
@@ -184,11 +206,10 @@ export function useRepositoryWorkspaceResultFixture() {
         });
       },
     };
-    const sources = createLocalRepositorySourcesFixture(repositoryUrl);
     const synced = await syncSessionRepositoryWorkspace({
       getRepositorySources: () => sources,
       ...sessionTarget,
-      repository: { ...repository, url: pathToFileURL(origin).href },
+      repository,
       tunnel,
       generation: 1,
       runSetupScript,
@@ -347,6 +368,7 @@ export function useRepositoryWorkspaceResultFixture() {
     });
     return {
       ...operations,
+      sources,
       origin,
       remote,
       store,

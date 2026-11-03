@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { registerGitHubAgentTools } from "../../../extensions/github-repositories/agent-tools-api.js";
 import type { SessionGitHubPublicationResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { withinTest } from "../../../test/helpers/promise.js";
@@ -27,6 +27,10 @@ import { readSessionMessagesAsync } from "../../gateway/session-transcript-reade
 import * as exec from "../../infra/exec-request-context.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
@@ -266,7 +270,11 @@ it.for([
           ],
           () => config,
         );
-        context.resolveGatewayContext = () => context;
+        const resolveGatewayContext = () => context;
+        context.resolveGatewayContext = resolveGatewayContext;
+        const resources = new LegacyPluginSdkResourceHost();
+        bindLegacyPluginSdkResourceHost(resolveGatewayContext, resources);
+        onTestFinished(() => resources.close());
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
           const admission = expectDefined(params.preparedRunAdmission, "resumed guest admission");
           const admittedRunContext = await admission.admit("gateway", params.runId);
@@ -519,7 +527,7 @@ it.for([
             {
               client,
               context,
-              resolveGatewayContext: () => context,
+              resolveGatewayContext,
               isWebchatConnect: () => false,
             },
             () =>

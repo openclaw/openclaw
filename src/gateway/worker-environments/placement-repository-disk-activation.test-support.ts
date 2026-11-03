@@ -20,11 +20,14 @@ import {
   createRepositoryNodeFixture,
   createRepositoryPolicySource,
 } from "./repository-policy-node.test-support.js";
+import { createLocalRepositorySourcesFixture } from "./repository-source.test-support.js";
 import * as support from "./service.test-support.js";
 import { stageSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
+import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import { readWorkspaceResultGit, requireWorkspaceResultGit } from "./workspace-result-git.js";
 
 export const ORIGINAL_RESOURCE: WorkerResourceReceipt = {
   version: 1,
@@ -73,10 +76,41 @@ export async function repositoryActivationFixture(
   });
   const origin = path.join(state.root, "origin");
   const { baseCommit, base } = await createRepositoryPolicySource(origin);
+  const repositoryUrl = "https://repository-fixture.test/activation.git";
+  const tree = await requireWorkspaceResultGit(origin, ["rev-parse", `${baseCommit}^{tree}`]);
+  const blob = await requireWorkspaceResultGit(origin, ["rev-parse", `${baseCommit}:tracked.txt`]);
+  const sources = createLocalRepositorySourcesFixture(repositoryUrl, async ({ assertCurrent }) => ({
+    repositoryId: "local_fixture",
+    identityKey: "local-fixture",
+    private: true,
+    baseCommit,
+    tree,
+    assertCurrent,
+    confirmAdmission: async () => assertCurrent(),
+    revalidate: async () => assertCurrent(),
+    readTree: async (sha) => {
+      if (sha !== tree) {
+        throw new Error("Unexpected activation fixture tree");
+      }
+      return [{ path: "tracked.txt", type: "blob", mode: "100644", sha: blob }];
+    },
+    readBlob: async (sha) => {
+      if (sha !== blob) {
+        throw new Error("Unexpected activation fixture blob");
+      }
+      return (
+        await readWorkspaceResultGit(origin, ["cat-file", "blob", sha], {
+          maxOutputBytes: 1024 * 1024,
+        })
+      ).toString("utf8");
+    },
+    prepareGitPack: ({ temporaryRoot, signal }) =>
+      prepareWorkerWorkspaceGitPack({ root: origin, baseCommit, temporaryRoot, signal }),
+  }));
   const repositories = getSessionRepositoryWorkspaceStore();
   let repository = await repositories.create({
     ...REQUEST,
-    url: pathToFileURL(origin).href,
+    url: repositoryUrl,
     assertCurrent() {},
   });
   if (options.acceptedCheckpoint) {
@@ -225,7 +259,15 @@ export async function repositoryActivationFixture(
         environmentId,
         ownerEpoch,
         ...actions,
-        syncWorkspace: vi.fn(actions.syncWorkspace),
+        syncWorkspace: vi.fn((request) =>
+          actions.syncWorkspace({
+            ...request,
+            source:
+              request.source.kind === "repository" && request.source.url === repositoryUrl
+                ? { ...request.source, url: pathToFileURL(origin).href }
+                : request.source,
+          }),
+        ),
         reconcileWorkspace: vi.fn(actions.reconcileWorkspace),
         measureLaunchTurn: vi.fn(),
         readLaunchToolNames: async () => [],
@@ -256,6 +298,7 @@ export async function repositoryActivationFixture(
     },
   });
   const harness = await createHarness(state.stateDb, placements, {
+    getRepositorySources: () => sources,
     environmentService: service,
     resolveWorkspace: async () => ({
       kind: "repository",

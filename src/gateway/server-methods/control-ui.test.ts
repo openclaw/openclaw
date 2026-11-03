@@ -8,7 +8,7 @@ import {
 } from "../../../extensions/github-repositories/public-api.js";
 import { controlUiGitHubHandlers } from "../../../extensions/github-repositories/runtime-api.js";
 import * as githubIdentity from "../../../extensions/github-repositories/tool-identity-api.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -26,10 +26,17 @@ import {
   createTestControlUiSessionPrSubscriptions,
   createTestSessionPrReadSource,
 } from "../control-ui-session-pr-subscriptions.test-support.js";
-import { startTestRepositorySessionPresentation } from "../github-account-service.test-support.js";
-import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
+import {
+  startTestRepositorySessionPresentation,
+  createTestRepositorySessionPresentation,
+} from "../github-account-service.test-support.js";
+import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
+import {
+  createControlUiRequestOptions,
+  controlUiGitHubConfig as configuredGitHub,
+} from "./control-ui-request.test-support.js";
 import { controlUiHandlers as coreControlUiHandlers } from "./control-ui.js";
-import { identifiedClient } from "./sessions-sharing.test-support.js";
+import { identifiedClient, soloClient } from "./sessions-sharing.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const controlUiHandlers = { ...coreControlUiHandlers, ...controlUiGitHubHandlers };
@@ -88,24 +95,6 @@ function runtime(getRuntimeConfig: () => OpenClawConfig) {
 
 function githubTarget(number: number, repo = "openclaw", owner = "openclaw") {
   return { kind: "issue", number, owner, repo };
-}
-
-function configuredGitHub(token: string): OpenClawConfig {
-  return {
-    agents: { entries: { main: {} } },
-    gateway: {
-      controlUi: {},
-    },
-    plugins: {
-      entries: {
-        "github-repositories": {
-          config: {
-            service: { token },
-          },
-        },
-      },
-    },
-  };
 }
 
 const json = (value: unknown) => new Response(JSON.stringify(value));
@@ -500,13 +489,7 @@ describe("controlUi.githubPreview", () => {
     const { respond, send } = fixture("githubPreview");
     await send({ ...target, ...(refresh !== undefined ? { refresh } : {}) });
     if (valid) {
-      expect(loadPreview).toHaveBeenCalledExactlyOnceWith(
-        target,
-        undefined,
-        undefined,
-        true,
-        undefined,
-      );
+      expect(loadPreview).toHaveBeenCalledExactlyOnceWith(target, undefined, undefined, true);
       expectReply(respond, preview);
     } else {
       expect(loadPreview).not.toHaveBeenCalled();
@@ -589,6 +572,7 @@ describe("controlUi.githubPreview", () => {
 describe("controlUi.sessionPullRequests.subscribe", () => {
   it("acknowledges pending preparation and preserves refresh through a sidebar replacement", async () => {
     const held = createDeferred();
+    const preparing = createDeferred();
     const scheduler = createTestGatewayScheduler();
     const broadcastToConnIds = vi.fn();
     const readSource = createTestSessionPrReadSource();
@@ -600,6 +584,7 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
       scheduler,
       broadcastToConnIds,
       prepareRead: async (_connId, session) => {
+        preparing.resolve();
         await held.promise;
         return async () => ({
           identity: session.sessionKey,
@@ -610,15 +595,28 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
       },
       load,
     });
+    const client = { ...soloClient(), connId: "conn-control-ui" };
+    const context = createContext();
+    const service = await createTestRepositorySessionPresentation(
+      context,
+      scheduler,
+      client,
+      subscriptions.replace,
+    );
     const { respond, send } = fixture("sessionPullRequests.subscribe");
     const request = send(
       { sessionKeys: ["agent:main:main"], refreshSessionKeys: ["agent:main:main"] },
       {
-        client: { connId: "conn-control-ui" },
-        context: { controlUiSessionPullRequests: subscriptions },
+        client,
+        context,
       },
     );
     try {
+      await awaitGateBeforeSettlement(
+        preparing.promise,
+        request,
+        "Subscription preparation did not start",
+      );
       await Promise.resolve();
       expectReply(respond, { subscribed: true });
       expect(broadcastToConnIds).not.toHaveBeenCalled();
@@ -626,8 +624,8 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
       await send(
         { sessionKeys: ["agent:main:main"], passiveSessionKeys: ["agent:main:sidebar"] },
         {
-          client: { connId: "conn-control-ui" },
-          context: { controlUiSessionPullRequests: subscriptions },
+          client,
+          context,
         },
       );
       expect(respond).toHaveBeenCalledTimes(2);
@@ -659,6 +657,7 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
       held.resolve();
       await request;
       await subscriptions.stop();
+      await service.stop();
       await scheduler.stop();
     }
   });

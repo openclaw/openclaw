@@ -7,6 +7,7 @@ import {
   LegacyPluginSdkResourceHost,
 } from "../../plugins/legacy-sdk-resource-host.js";
 import { performRepositoryCheckout } from "../../plugins/repository-checkout-transfer.js";
+import type { RepositorySourceV1 } from "../../plugins/repository-source-types.js";
 import { createRepositorySourceFixture } from "../../plugins/repository-source.test-support.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createRepositorySources } from "../repository-sources.js";
@@ -26,7 +27,11 @@ export function createRepositorySourcesFixture(
 }
 
 /** A local Git transport substitutes I/O for this admitted synthetic remote source. */
-export function createLocalRepositorySourcesFixture(repositoryUrl?: string) {
+export function createLocalRepositorySourcesFixture(
+  repositoryUrl?: string,
+  prepare?: NonNullable<RepositorySourceV1["worker"]>["prepare"],
+  prepareProject?: RepositorySourceV1["prepare"],
+) {
   const lifetime = new AbortController();
   const unsupported = async (): Promise<never> => {
     throw new Error("Local fixture supports checkout only");
@@ -38,10 +43,10 @@ export function createLocalRepositorySourcesFixture(repositoryUrl?: string) {
         ? { url, name: "local fixture" }
         : undefined;
     },
-    prepare: unsupported,
+    prepare: prepareProject ?? unsupported,
     worker: {
       isIdentityCurrent: ({ identityKey }) => identityKey === "local-fixture",
-      prepare: unsupported,
+      prepare: prepare ?? unsupported,
       async checkout({ transfer, assertCurrent }) {
         await performRepositoryCheckout(transfer, {
           assertCurrent,

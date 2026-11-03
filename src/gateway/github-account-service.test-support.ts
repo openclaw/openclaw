@@ -18,7 +18,10 @@ import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gate
 import { getGatewayServiceLifetime } from "../plugins/runtime/gateway-service-owner.js";
 import { startPluginServices } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { createRepositorySessionReadHost } from "./control-ui-session-pr-runtime.js";
+import {
+  createRepositorySessionReadHost,
+  type RepositorySessionPresentation,
+} from "./control-ui-session-pr-runtime.js";
 import { createRepositorySources } from "./repository-sources.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -291,4 +294,37 @@ export async function startTestRegisteredPublicationProvider() {
     throw new Error("The registered plugin did not install its publication provider.");
   }
   return { api, stop };
+}
+
+export async function createTestRepositorySessionPresentation(
+  context: GatewayRequestContext,
+  scheduler: GatewayScheduler,
+  client: GatewayClient & { connId: string },
+  replace: RepositorySessionPresentation["replace"],
+) {
+  context.getClientConnIds = (filter) => new Set(!filter || filter(client) ? [client.connId] : []);
+  const host = createRepositorySessionReadHost({
+    signal: scheduler.signal,
+    getRuntimeConfig: context.getRuntimeConfig,
+    getSessionRowProjection: () => getSessionRowProjection(context),
+    getClient: (connId) => (client.connId === connId ? client : undefined),
+    resolveGatewayContext: () => context,
+    broadcastToConnIds: vi.fn(),
+  });
+  context.repositorySessions = host;
+  const serviceScheduler = createTestPluginServiceScheduler(scheduler);
+  const { startGitHubSessionPresentation } =
+    await import("../../extensions/github-repositories/session-presentation-service-api.js");
+  const service = startGitHubSessionPresentation({
+    scheduler: serviceScheduler,
+    getConfig: context.getRuntimeConfig,
+    reads: host.bindService(scheduler.signal, () => scheduler.signal.throwIfAborted()),
+  });
+  service.presentation.replace = replace;
+  return {
+    stop: async () => {
+      await service.stop();
+      await serviceScheduler.stop();
+    },
+  };
 }

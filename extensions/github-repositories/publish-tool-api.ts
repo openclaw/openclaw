@@ -221,6 +221,7 @@ export function createGitHubPublishTool(
           params,
           signal,
           fenceSuccessors: true,
+          ...(method === "sessions.github.action" ? { retainRequester: true as const } : {}),
           // Only PR import can return repository-sized path lists.
           formatResult: (result) =>
             method === "sessions.github.publish"

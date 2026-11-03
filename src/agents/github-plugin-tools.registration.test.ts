@@ -40,12 +40,12 @@ function expectToolNamed(tools: ReturnType<typeof createOpenClawTools>, name: st
 }
 
 describe("GitHub plugin tool construction through the host", () => {
-  it("exposes GitHub publication only from a prepared session capability", () => {
+  it("keeps known publication tools offered while the Gateway owns execution admission", () => {
     expect(hasTool(createOpenClawTools(), "github_publish")).toBe(false);
     expect(hasTool(createOpenClawTools(), "github_identity_status")).toBe(false);
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_publish"),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_identity_status"),
     ).toBe(true);
@@ -74,8 +74,8 @@ describe("GitHub plugin tool construction through the host", () => {
       publishing: false,
       deny: false,
       managed: true,
-      expected: false,
-      actions: false,
+      expected: true,
+      actions: true,
     },
     {
       scope: "operator.write",
@@ -115,7 +115,7 @@ describe("GitHub plugin tool construction through the host", () => {
       deny: false,
       managed: true,
       expected: true,
-      actions: false,
+      actions: true,
     },
     {
       scope: "operator.write",
@@ -134,7 +134,7 @@ describe("GitHub plugin tool construction through the host", () => {
       actions: true,
     },
   ])(
-    "projects PR actions for $scope, publishing=$publishing, deny=$deny, managed=$managed",
+    "preserves offered PR actions for $scope, publishing=$publishing, deny=$deny, managed=$managed",
     async ({ scope, publishing, deny, managed, expected, actions }) => {
       const cfg = withDefaultRoster(deny ? { tools: { deny: ["github_publish"] } } : {});
       const sessionKey = "agent:main:nonpublishing-parent";
@@ -248,7 +248,7 @@ describe("GitHub plugin tool construction through the host", () => {
       available: true,
       expected: false,
     },
-    { name: "unavailable publication", config: {}, available: false, expected: false },
+    { name: "unavailable publication", config: {}, available: false, expected: true },
     { name: "unprepared publication", config: {}, available: undefined, expected: false },
   ] satisfies {
     name: string;
@@ -287,7 +287,14 @@ describe("GitHub plugin tool construction through the host", () => {
         },
       });
       expect(hasTool(tools, "github_publish")).toBe(expected);
-      if (expected) {
+      if (expected && available === false) {
+        const tool = expectToolNamed(tools, "github_publish");
+        expect(Value.Check(tool.parameters, { action: "publish" })).toBe(false);
+        await expect(tool.execute("publish-1", { action: "publish" })).rejects.toThrow(
+          "This session cannot publish its workspace",
+        );
+        expect(call).not.toHaveBeenCalled();
+      } else if (expected) {
         await expectToolNamed(tools, "github_publish").execute("publish-1", {
           title: "Publish fix",
         });

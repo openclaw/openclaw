@@ -39,7 +39,7 @@ describe("github_identity_status tool", () => {
       },
       expect.objectContaining({ sessionMutationCommitGuard: expect.any(Function) }),
     );
-    expect(JSON.stringify(result)).toContain("Ask the operator");
+    expect(JSON.stringify(result)).toContain("github_identity_settings");
   });
 
   it("gives manual guidance for an older Control UI", async () => {

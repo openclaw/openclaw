@@ -73,6 +73,24 @@ export async function preparePublishedPullRequestTarget(
   return prepared;
 }
 
+/** Host source facts and receipts select one current workspace publication target. */
+export async function prepareRepositoryPublicationWorkspaceTarget(params: {
+  worktree: ManagedWorktreeRecord;
+  provider: RepositoryPublicationProvider;
+  publisher: RepositoryPublicationPublisher;
+  pullRequest?: SessionGitHubPullRequestBinding;
+  session?: PublicationSessionIdentity;
+  assertCurrent: () => void;
+}): Promise<RepositoryPublicationTarget> {
+  const initial = await params.provider.prepareTarget({
+    ...(await readRepositoryPublicationTargetFacts(params)),
+    ...(params.pullRequest ? { pullRequest: params.pullRequest } : {}),
+    publisher: params.publisher,
+    assertCurrent: params.assertCurrent,
+  });
+  return await preparePublishedPullRequestTarget(params, initial);
+}
+
 /** Preserve a dispatched attempt's recorded destination until its effects are reconciled. */
 export async function prepareGitHubPublicationExecutionTarget(params: {
   worktree: ManagedWorktreeRecord;
@@ -88,30 +106,18 @@ export async function prepareGitHubPublicationExecutionTarget(params: {
   assertCurrent: () => void;
 }): Promise<{ status: "reconcile" } | { status: "ready"; target: RepositoryPublicationTarget }> {
   const { row } = params;
-  const source = await readRepositoryPublicationTargetFacts(params);
-  const initial = await params.provider.prepareTarget({
-    ...source,
-    pullRequest: params.pullRequest,
-    publisher: params.publisher,
-    assertCurrent: params.assertCurrent,
+  const target = await prepareRepositoryPublicationWorkspaceTarget({
+    ...params,
+    session:
+      row.identity_source === "personal"
+        ? undefined
+        : {
+            agentId: row.agent_id,
+            sessionKey: row.session_key,
+            sessionId: row.session_id,
+            lifecycleRevision: params.lifecycleRevision,
+          },
   });
-  const target = await preparePublishedPullRequestTarget(
-    {
-      session:
-        row.identity_source === "personal"
-          ? undefined
-          : {
-              agentId: row.agent_id,
-              sessionKey: row.session_key,
-              sessionId: row.session_id,
-              lifecycleRevision: params.lifecycleRevision,
-            },
-      provider: params.provider,
-      publisher: params.publisher,
-      assertCurrent: params.assertCurrent,
-    },
-    initial,
-  );
   const expected = params.expectedTarget;
   if (
     expected &&

@@ -19,13 +19,16 @@ import {
   createCodeModeTools,
 } from "./code-mode.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { resolveGitHubPluginToolsFixture } from "./github-plugin-tools.test-support.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 vi.mock("./openclaw-plugin-tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-plugin-tools.js")>()),
-  resolveOpenClawPluginToolsForOptions: () => [],
+  resolveOpenClawPluginToolsForOptions: (
+    params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
+  ) => resolveGitHubPluginToolsFixture(params),
 }));
 
 type ToolOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;

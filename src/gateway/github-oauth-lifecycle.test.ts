@@ -1042,6 +1042,7 @@ describe("GitHub OAuth refresh and maintenance", () => {
       profileDir: expect.stringContaining(OLD_PROFILE),
       token: TOKENS.accessToken,
       expectedAccountId: ACCOUNT.accountId,
+      assertCurrent: expect.any(Function),
     });
     expect(selectedIdentity("system")).toEqual(configured);
     expect(mocks.updateConfig).not.toHaveBeenCalled();

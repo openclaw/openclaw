@@ -13,8 +13,14 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "./control-ui-contract.js";
-import type { RepositorySessionReads } from "./control-ui-session-pr-runtime.js";
-import { prepareSelectedRepositorySessionRead } from "./control-ui-session-pr-source.js";
+import {
+  createRepositorySessionReadHost,
+  type RepositorySessionReads,
+} from "./control-ui-session-pr-runtime.js";
+import {
+  guardRepositorySessionRead,
+  prepareSelectedRepositorySessionRead,
+} from "./control-ui-session-pr-source.js";
 import type {
   PreparedRepositorySessionRead,
   RepositorySessionObservation,
@@ -68,7 +74,7 @@ export function createTestControlUiSessionPrSubscriptions(options: Options) {
   }
   const sources = new WeakMap<RepositorySessionObservation, PreparedRepositorySessionRead>();
   const source = createTestSessionPrReadSource();
-  const normalize = (input: TestSessionPrTarget): ControlUiSessionPrTarget => {
+  const normalize = (input: TestSessionPrTarget, viewer = false): ControlUiSessionPrTarget => {
     if (
       input.read &&
       input.observation &&
@@ -102,8 +108,14 @@ export function createTestControlUiSessionPrSubscriptions(options: Options) {
     if (!selected) {
       throw new Error("Missing resource fixture source");
     }
+    const admitted = viewer
+      ? guardRepositorySessionRead(selected, {
+          assertCurrent: input.assertCurrent ?? (() => {}),
+          readTaskPublications: selected.readTaskPublications,
+        })
+      : selected;
     const prepared = {
-      ...selected,
+      ...admitted,
       viewerProfileId: input.ownGitHubProfileId,
       ownGitHubIdentity: input.ownGitHubIdentity,
       boundPullRequest: input.githubPullRequest,
@@ -122,6 +134,14 @@ export function createTestControlUiSessionPrSubscriptions(options: Options) {
       observation: prepared,
     };
   };
+  const readChanges = createRepositorySessionReadHost({
+    signal: scheduler.signal,
+    getRuntimeConfig: getConfig,
+    getSessionRowProjection: () => options.getSessionRowProjection?.(),
+    getClient: () => undefined,
+    resolveGatewayContext: () => undefined,
+    broadcastToConnIds: options.broadcastToConnIds,
+  }).bindService(scheduler.signal, () => scheduler.signal.throwIfAborted());
   const reads: RepositorySessionReads = {
     runDetached: (run) => run(),
     assertCurrent: () => scheduler.signal.throwIfAborted(),
@@ -154,7 +174,7 @@ export function createTestControlUiSessionPrSubscriptions(options: Options) {
       return async () => {
         const read = await selected;
         const target = await read?.();
-        return target ? normalize(target).read : undefined;
+        return target ? normalize(target, true).read : undefined;
       };
     },
     prepareServiceRead: async () => undefined,
@@ -166,7 +186,7 @@ export function createTestControlUiSessionPrSubscriptions(options: Options) {
       return await selected.withSource(run);
     },
     invalidate() {},
-    subscribeChanges: () => () => {},
+    subscribeChanges: readChanges.subscribeChanges,
     installPresentation: () => () => {},
   };
   const serviceScheduler = createPluginServiceScheduler(scheduler).scheduler;

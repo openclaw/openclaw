@@ -42,6 +42,7 @@ import {
   callPersonalPublicationRpc,
   createForeignPublicationSession,
   createPersonalPublicationFixture,
+  createPersonalPublicationRequests,
   preparePersonalPublicationProfileCatalog,
   readPersonalPublicationFixtureStatus,
   personalPublicationAccount as account,
@@ -74,21 +75,10 @@ describe("personal publication authority and recovery", () => {
   let generation: string;
   let placements: ReturnType<typeof createWorkerSessionPlacementStore>;
   let coordinator: ReturnType<typeof createTestGitHubPublicationCoordinator>;
-  const request = () => ({
-    sessionKey: SESSION_KEY,
-    idempotencyKey: "personal-publish",
-    selection: { source: "personal" as const, generation, account },
-  });
+  const { request, confirmation } = createPersonalPublicationRequests(() => generation);
   const readReceipt = (requestId: string) =>
     readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, { requestId });
 
-  const confirmation = (requestId: string, requestDigest: string) => ({
-    sessionKey: SESSION_KEY,
-    requestId,
-    requestDigest,
-    generation,
-    account,
-  });
   const status = (requestId: string) =>
     readPersonalPublicationFixtureStatus({ coordinator, action }, requestId);
 

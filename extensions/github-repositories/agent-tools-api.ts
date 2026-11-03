@@ -23,10 +23,7 @@ export function registerGitHubAgentTools(api: OpenClawPluginApi): void {
         if (gateway?.workspace.publicationAvailable === false) {
           inheritToolPolicy?.(githubPublishToolDefinition);
         }
-        return gateway &&
-          (gateway.workspace.publicationAvailable === true ||
-            (gateway.workspace.publicationAvailable === false &&
-              gateway.workspace.controlAvailable))
+        return gateway?.workspace.publicationAvailable !== undefined
           ? createGitHubPublishTool(gateway)
           : null;
       },

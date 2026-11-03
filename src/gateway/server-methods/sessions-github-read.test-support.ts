@@ -5,6 +5,7 @@ import {
 } from "../../../extensions/github-repositories/personal-oauth-api.js";
 import { personalGitHubStatusAsync as personalGitHubStatus } from "../../../extensions/github-repositories/personal-status-api.js";
 import * as publicationAvailability from "../../../extensions/github-repositories/publication-availability-api.js";
+import { createGitHubPublicationProvider } from "../../../extensions/github-repositories/runtime-api.js";
 import type { SessionGitHubStatusResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/io.js";
@@ -138,6 +139,7 @@ export async function withReadFixture(
     scopes?: string[];
     others?: "none" | "view";
     foreign?: boolean;
+    projection?: boolean;
   } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -176,7 +178,9 @@ export async function withReadFixture(
       },
     );
     const fixture = createFixture(profile, options.scopes);
-    await initializeSessionReadContext(fixture.context);
+    if (options.projection !== false) {
+      await initializeSessionReadContext(fixture.context);
+    }
     const profileCatalog = await prepareUserProfileCatalog();
     try {
       await run(fixture);
@@ -204,7 +208,16 @@ function createFixture(
     );
   }
   let connected = true;
+  const readScheduler = createTestGatewayScheduler();
+  const provider = createGitHubPublicationProvider({
+    signal: readScheduler.signal,
+    assertCurrent: () => readScheduler.signal.throwIfAborted(),
+    getConfig: getRuntimeConfig,
+    refreshIdentity: async () => {},
+    refreshPersonal: async () => {},
+  });
   const publication = {
+    supportsOrigin: provider.supportsOrigin,
     sharedStatus: vi.fn().mockResolvedValue(receipt),
     latestShared: vi.fn().mockResolvedValue(receipt),
     personalStatusAsync: vi.fn(),
@@ -235,7 +248,6 @@ function createFixture(
   const methods = createRequestGatewayMethodRegistry();
   context.getGatewayMethodRegistry = () => methods;
   context.resolveGatewayContext = () => context;
-  const readScheduler = createTestGatewayScheduler();
   const readHost = createRepositorySessionReadHost({
     signal: readScheduler.signal,
     getRuntimeConfig,
@@ -256,7 +268,7 @@ function createFixture(
     knownMergedHeads: async () => [],
     pollNow: async () => {},
   });
-  installGitHubAccountFixture(
+  const stopAccount = installGitHubAccountFixture(
     context,
     {
       personal: { ...personalLifecycle, status: personalConnectionStatus },
@@ -293,6 +305,7 @@ function createFixture(
     personalStatus: publication.personalStatusAsync,
     personalLifecycle,
     readScheduler,
+    stopAccount,
     personalConnectionStatus,
     requestForSession: publication.requestForSessionV2,
     pullRequests,

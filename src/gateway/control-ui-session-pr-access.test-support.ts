@@ -10,6 +10,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -153,6 +157,8 @@ export async function createFixture(
   context.getRuntimeConfig = getRuntimeConfig;
   const resolveGatewayContext = () => context;
   context.resolveGatewayContext = resolveGatewayContext;
+  const resources = new LegacyPluginSdkResourceHost();
+  bindLegacyPluginSdkResourceHost(resolveGatewayContext, resources);
   installGitHubAccountRpcFixture(getRuntimeConfig());
   const readHost = createRepositorySessionReadHost({
     signal: scheduler.signal,
@@ -169,6 +175,7 @@ export async function createFixture(
     stop: async () => {
       await native.stop();
       await scheduler.stop();
+      await resources.close();
     },
   };
   const presentation = native.presentation;

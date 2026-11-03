@@ -147,10 +147,7 @@ export function createGitHubPublicationCoordinator(params: {
   });
   return {
     ...methods,
-    supportsOrigin: (originUrl: string) => {
-      assertCurrent();
-      return provider.supportsOrigin(originUrl);
-    },
+    supportsOrigin: (originUrl: string) => provider.supportsOrigin(originUrl),
     performPullRequestAction: (
       input: Parameters<RepositoryPublicationProvider["performPullRequestAction"]>[0],
     ) => provider.performPullRequestAction(input),

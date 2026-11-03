@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, test, vi } from "vitest";
 import {
   clearGitHubCredentialVerificationCache,
+  createGitHubRepositorySource,
   resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,
 } from "../../extensions/github-repositories/runtime-api.js";
@@ -11,6 +12,7 @@ import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/ses
 import { NodeWorkerWorkspaceRuntime } from "../node-host/node-worker-workspace.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
+import { createRepositorySourceFixture } from "../plugins/repository-source.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { captureSessionControllerStop, stopSession } from "../sessions/session-controller.stop.js";
@@ -19,6 +21,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createRepositorySources } from "./repository-sources.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
@@ -112,6 +115,11 @@ test.each(["allowed", "policy", "source", "stop", "caller"] as const)(
       },
     });
     setActivePluginRegistry(builder.registry);
+    const sourceFixture = createRepositorySourceFixture(
+      createGitHubRepositorySource(config.getRuntimeConfig, async () => {}),
+      builder,
+    );
+    const sources = createRepositorySources(new AbortController().signal, sourceFixture.registry);
     const verify = vi.fn(async () => Response.json({ id: 202, login: "fixture" }));
     vi.stubGlobal("fetch", verify);
     const origin = path.join(dir, "origin");
@@ -122,6 +130,7 @@ test.each(["allowed", "policy", "source", "stop", "caller"] as const)(
     const entry = () => loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
     const harness = await createHarness(database, placements, {
       requiresNodeEnrollment: true,
+      getRepositorySources: () => sources,
       resolveWorkspace: async () => {
         const workspaceId = entry()?.repositoryWorkspaceId;
         if (!workspaceId) {
@@ -268,6 +277,7 @@ test.each(["allowed", "policy", "source", "stop", "caller"] as const)(
       getRuntimeConfig: config.getRuntimeConfig,
       getClientConnIds: () => new Set([client.connId]),
     });
+    context.repositorySources = sources;
     context.workerPlacementDispatchService = { ...coordinated, withRequiredSession: prepare };
     context.workerSessionPlacementService = placements;
     await initializeSessionReadContext(context);

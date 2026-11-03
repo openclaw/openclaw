@@ -619,6 +619,9 @@ export async function qualifyGitHubPublicationSource(
     );
     check();
     const supportsOrigin = options.supportsOrigin(target.value);
+    if (!supportsOrigin) {
+      repositoryOrigins.deleteValue(target.value);
+    }
     return {
       ok: true,
       custody: { kind: "qualified", source: "worktree" },

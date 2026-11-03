@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -38,7 +37,10 @@ import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { captureProcessUnhandledRejections } from "./bash-tools.exec-runtime.test-support.js";
+import {
+  captureProcessUnhandledRejections,
+  exactCommandMarker,
+} from "./bash-tools.exec-runtime.test-support.js";
 import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
@@ -75,10 +77,6 @@ const INLINE_EVAL_HIT = {
   flag: "-c",
   argv: ["python3", "-c", "print(1)"],
 };
-
-function exactCommandMarker(command: string): string {
-  return `=command:${crypto.createHash("sha256").update(command.trim()).digest("hex").slice(0, 16)}`;
-}
 
 const pendingResultMock = vi.hoisted(() => vi.fn());
 const allowlistMock = vi.hoisted(() => vi.fn<() => MockAllowlistResult>());

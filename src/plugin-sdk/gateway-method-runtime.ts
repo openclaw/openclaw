@@ -1,5 +1,5 @@
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
-import { dispatchGatewayMethodInProcessRaw } from "../gateway/server-plugins.js";
+import { dispatchGatewayMethodInProcessRaw } from "../gateway/server-plugin-in-process-dispatch.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 
 /** Error envelope returned by in-process Gateway method dispatch. */

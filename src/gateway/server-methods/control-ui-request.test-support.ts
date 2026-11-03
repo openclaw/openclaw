@@ -19,3 +19,21 @@ export function createControlUiRequestOptions(getRuntimeConfig: () => OpenClawCo
     };
   };
 }
+
+export function controlUiGitHubConfig(token: string): OpenClawConfig {
+  return {
+    agents: { entries: { main: {} } },
+    gateway: {
+      controlUi: {},
+    },
+    plugins: {
+      entries: {
+        "github-repositories": {
+          config: {
+            service: { token },
+          },
+        },
+      },
+    },
+  };
+}

@@ -3,11 +3,12 @@ import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginRegistryFixture,
-  registerVirtualTestPlugin,
+  registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import {
   createAgentHarnessHostCapabilitiesForTest,
   createMockPluginRegistry,
+  createPluginRecord,
   setActivePluginRegistry,
   clearActivePluginRegistry,
   initializeGlobalHookRunner,
@@ -15,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import githubRepositories from "../../../github-repositories/index.js";
+import githubManifest from "../../../github-repositories/openclaw.plugin.json" with { type: "json" };
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import {
   buildDynamicToolsForTest,
@@ -52,10 +54,14 @@ async function fixture(
     plugins: { entries: { "github-repositories": { config: { system: identity } } } },
   };
   const registry = createPluginRegistryFixture(params.config);
-  registerVirtualTestPlugin({
+  registerTestPlugin({
     ...registry,
-    id: "github-repositories",
-    name: "GitHub",
+    record: createPluginRecord({
+      id: githubManifest.id,
+      name: "GitHub",
+      contracts: githubManifest.contracts,
+      dashboard: githubManifest.dashboard,
+    }),
     register: githubRepositories.register,
   });
   setActivePluginRegistry(registry.registry.registry);
@@ -63,6 +69,7 @@ async function fixture(
   const host = await createAgentHarnessHostCapabilitiesForTest({
     attempt,
     pluginId: "codex",
+    pluginRegistry: registry.registry.registry,
     ...(options.assertCurrent
       ? {
           operatorSource: {

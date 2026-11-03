@@ -30,6 +30,10 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import * as secretsRuntime from "../../secrets/runtime-state.js";
 import {
@@ -75,6 +79,7 @@ import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import {
   expectReceiptBackedPersonalGitHubAuthority,
   preparePersonalGitHubPoll,
+  preparePendingPersonalGitHubRefresh,
 } from "./users-github.authority.test-support.js";
 
 type AuthorityChange = Parameters<Parameters<typeof observeUserGitHubConnectionAuthority>[0]>[0];
@@ -84,6 +89,7 @@ let lifecycle: ReturnType<typeof createGitHubOAuthLifecycle>;
 let config: OpenClawConfig;
 let clients: Set<GatewayClient>;
 let context: GatewayRequestContext;
+let resources: LegacyPluginSdkResourceHost;
 let alice: GatewayClient;
 let bob: GatewayClient;
 let profileCatalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>>;
@@ -128,14 +134,7 @@ function blockAlice() {
   setUserProfileRole(owner(), "blocked");
   invalidateOperatorRolePolicy(owner());
 }
-async function pendingRefresh() {
-  expireUserGitHubAccessToken(owner());
-  const refresh = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
-  network.refresh.mockReturnValueOnce(refresh.promise);
-  const pending = lifecycle.personal.refresh(owner());
-  await vi.waitFor(() => expect(network.refresh).toHaveBeenCalledOnce());
-  return { refresh, pending };
-}
+const pendingRefresh = () => preparePendingPersonalGitHubRefresh(owner(), lifecycle.personal);
 
 beforeEach(async () => {
   state = await createOpenClawTestState({ scenario: "minimal", applyEnv: true });
@@ -163,11 +162,15 @@ beforeEach(async () => {
       ),
     logGateway: { warn: vi.fn() },
   } as unknown as GatewayRequestContext;
+  context.resolveGatewayContext = () => context;
+  resources = new LegacyPluginSdkResourceHost();
+  bindLegacyPluginSdkResourceHost(context.resolveGatewayContext, resources);
   installGitHubAccountFixture(context, lifecycle);
   installGitHubAccountRpcFixture(config);
 });
 afterEach(async () => {
   await lifecycle.stop();
+  await resources.close();
   profileCatalog.release();
   await state.cleanup();
   clearRuntimeConfigSnapshot();
@@ -344,9 +347,12 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     await withoutMainThreadSql(async () => {
       await lifecycle.personal.refresh(owner());
       expect(network.refresh).toHaveBeenCalledOnce();
-      expect(await rpc(alice, "users.github.disconnect")).toHaveBeenCalledWith(true, {
-        disconnected: true,
-      });
+      expect(await rpc(alice, "users.github.disconnect")).toHaveBeenCalledWith(
+        true,
+        { disconnected: true },
+        undefined,
+        undefined,
+      );
     });
   });
 

@@ -23,7 +23,6 @@ import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { writePlacementEnvironmentFixture } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import { createRepositorySourcesFixture } from "./repository-source.test-support.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import { createProvider } from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
@@ -265,13 +264,14 @@ it.each([
     });
     return {
       ...barriers,
+      getRepositorySources: () => f.sources,
       environmentService: environments,
       resolveWorkspace,
       prepareGatewayMove: createRepositoryGatewayMovePreparation({
         placements,
         environments,
         getConfig: getRuntimeConfig,
-        getRepositorySources: () => createRepositorySourcesFixture(getRuntimeConfig),
+        getRepositorySources: () => f.sources,
       }),
       runMoveBarrier: async (
         request: Parameters<ReturnType<typeof createGatewayWorkerPlacementMoveBarrier>>[0],

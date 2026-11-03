@@ -91,6 +91,7 @@ it.for([
       };
       const wake = vi.spyOn(f.environments, "ensureRetainedRunning");
       const context = createGatewayRequestContext(makeContextParams());
+      context.repositorySources = f.sources;
       context.workerEnvironmentService = f.environments;
       context.workerSessionPlacementService = placements;
       context.workerRepositoryWorkspaceMutationService = createRepositoryWorkspaceMutationService({

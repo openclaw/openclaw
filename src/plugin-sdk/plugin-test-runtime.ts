@@ -8,6 +8,8 @@ import type {
 } from "../agents/isolated-completion.adapter.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 
@@ -120,6 +122,7 @@ async function admitPluginHarnessRunForTest(params: {
 export async function createAgentHarnessHostCapabilitiesForTest(params: {
   attempt: AgentHarnessHostTestAttempt;
   pluginId: string;
+  pluginRegistry?: PluginRegistry;
   nativeModelPolicySupport?: "exact";
   operatorSource?: PluginHarnessTestOperatorSource;
 }) {
@@ -129,11 +132,18 @@ export async function createAgentHarnessHostCapabilitiesForTest(params: {
     await import("../agents/harness/host-capability.test-support.js");
   const admission = await admitPluginHarnessRunForTest(params);
   const admittedRunContext = admission.admittedRunContext;
-  const host = createAgentHarnessHostCapabilities({
-    attempt: { ...params.attempt, admittedRunContext },
-    pluginId: params.pluginId,
-    nativeModelPolicySupport: params.nativeModelPolicySupport,
-  });
+  const createHost = () =>
+    createAgentHarnessHostCapabilities({
+      attempt: { ...params.attempt, admittedRunContext },
+      pluginId: params.pluginId,
+      nativeModelPolicySupport: params.nativeModelPolicySupport,
+    });
+  const host = params.pluginRegistry
+    ? withPluginRuntimeGatewayRequestScope(
+        { pluginRegistry: params.pluginRegistry, isWebchatConnect: () => false },
+        createHost,
+      )
+    : createHost();
   harnessHostAdmissionsForTest.set(host.capabilities, admission);
   return {
     capabilities: host.capabilities,
