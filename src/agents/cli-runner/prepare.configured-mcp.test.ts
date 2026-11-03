@@ -51,46 +51,8 @@ const PROBE_SERVER_INSTRUCTIONS =
 
 const claudeBackend = createClaudeMcpCliBackend();
 
-/** Answers `whoami` with the credential each call presented; records every call. */
-async function startIdentityServer() {
-  const calls: string[] = [];
-  const server = await startMcpHttpFixture(async (request, response) => {
-    if (request.method !== "POST") {
-      response.writeHead(request.method === "DELETE" ? 200 : 405).end();
-      return;
-    }
-    const authorization = request.headers.authorization ?? "none";
-    if (!["none", "Bearer shared", "Bearer alice", "Bearer bob"].includes(authorization)) {
-      response.writeHead(401).end();
-      return;
-    }
-    const message = await readMcpFixtureMessage<{ protocolVersion?: string }>(request);
-    if (message.method === "tools/call") {
-      calls.push(authorization);
-    }
-    const result =
-      message.method === "initialize"
-        ? {
-            protocolVersion: message.params?.protocolVersion,
-            capabilities: { tools: {} },
-            serverInfo: { name: "notes", version: "1" },
-          }
-        : message.method === "tools/list"
-          ? { tools: [{ name: "whoami", inputSchema: { type: "object" } }] }
-          : message.method === "tools/call"
-            ? { content: [{ type: "text", text: `as ${authorization}` }] }
-            : undefined;
-    if (!result) {
-      response.writeHead(202).end();
-      return;
-    }
-    replyMcpFixtureResult(response, message, result);
-  });
-  return { url: `${server.url}/mcp`, calls, close: server.close };
-}
-
 async function startProbeServer() {
-  const state = { calls: 0 };
+  const state = { calls: 0, authorizations: [] as string[] };
   const server = await startMcpHttpFixture(async (request, response) => {
     if (request.method !== "POST") {
       response.writeHead(request.method === "DELETE" ? 200 : 405).end();
@@ -102,6 +64,7 @@ async function startProbeServer() {
     }>(request);
     if (message.method === "tools/call") {
       state.calls += 1;
+      state.authorizations.push(request.headers.authorization ?? "none");
     }
     const result =
       message.method === "initialize"
@@ -134,6 +97,8 @@ async function startProbeServer() {
   });
   return {
     port: new URL(server.url).port,
+    url: `${server.url}/mcp`,
+    authorizations: state.authorizations,
     get calls() {
       return state.calls;
     },
@@ -366,7 +331,7 @@ describe("configured MCP servers on CLI turns", () => {
     "binds %s MCP servers to each claude-cli turn's sender with one stable catalog",
     async (mode) => {
       const { sessionTarget } = fixture.session;
-      const server = await startIdentityServer();
+      const server = await startProbeServer();
       const registry = createMcpProofPluginRegistry();
       const notes =
         mode === "shared"
@@ -437,7 +402,9 @@ describe("configured MCP servers on CLI turns", () => {
                 listed: buildMcpToolSchema(scoped.tools)
                   .map((entry) => JSON.stringify(entry))
                   .toSorted(),
-                result: tool ? getTextContent(await tool.execute("whoami", {})) : undefined,
+                result: tool
+                  ? getTextContent(await tool.execute("echo", { word: "hi" }))
+                  : undefined,
               });
             } finally {
               await context.preparedBackend.cleanup?.();
@@ -454,8 +421,10 @@ describe("configured MCP servers on CLI turns", () => {
             })),
           });
           try {
-            const tool = embedded.tools.find((entry) => entry.name === "notes__whoami");
-            expect(tool && getTextContent(await tool.execute("whoami", {}))).toBe(turns[0]?.result);
+            const tool = embedded.tools.find((entry) => entry.name === "notes__echo");
+            expect(tool && getTextContent(await tool.execute("echo", { word: "hi" }))).toBe(
+              turns[0]?.result,
+            );
           } finally {
             await embedded.dispose();
           }
@@ -469,17 +438,18 @@ describe("configured MCP servers on CLI turns", () => {
       for (const turn of turns) {
         expect(turn.listed).toEqual(turns[0]?.listed);
       }
-      expect(turns[0]?.listed.some((entry) => entry.includes('"notes__whoami"'))).toBe(true);
+      expect(turns[0]?.listed.some((entry) => entry.includes('"notes__echo"'))).toBe(true);
       if (mode === "shared") {
-        expect(turns.map((turn) => turn.result)).toEqual(Array(4).fill("as Bearer shared"));
+        expect(turns.map((turn) => turn.result)).toEqual(Array(4).fill("probe:hi"));
+        expect(server.authorizations).toEqual(Array(5).fill("Bearer shared"));
         return;
       }
-      expect(turns[0]?.result).toBe("as Bearer alice");
-      expect(turns[3]?.result).toBe("as Bearer alice");
+      expect(turns[0]?.result).toBe("probe:hi");
+      expect(turns[3]?.result).toBe("probe:hi");
       // No turn borrows another requester's credential.
       expect(turns[1]?.result).toContain("this turn has no verified user");
       expect(turns[2]?.result).toMatch(/not connected|needs requester sign-in/);
-      expect(server.calls).toEqual(["Bearer alice", "Bearer alice", "Bearer alice"]);
+      expect(server.authorizations).toEqual(Array(3).fill("Bearer alice"));
     },
   );
 });
