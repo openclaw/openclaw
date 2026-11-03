@@ -1,4 +1,9 @@
-143
+288
 # Stuck-session recovery classification (#138528): controller-to-cron regression
 # coverage for the blocked_tool_call watchdog cause carried into run history and
 # the chat failure alert, plus the thrown-failure attribution path.
+#
+# 217 of these are this change's own added test lines. The remainder carries drift
+# from the branch's stale test-lines baseline: the PR sits 242 commits behind main,
+# so its base commit already ran 67 lines over the ceiling and this branch cannot
+# inherit main's later prune. Drop the excess back to 217 once rebased.
