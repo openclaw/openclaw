@@ -9,7 +9,8 @@ import {
 import { clearHealthChecksForTest } from "./health-check-registry.js";
 
 const registerBundledHealthChecks = vi.hoisted(() => vi.fn());
-vi.mock("./bundled-health-checks.js", () => ({
+vi.mock("./bundled-health-checks.js", async (original) => ({
+  ...(await original<typeof import("./bundled-health-checks.js")>()),
   registerBundledHealthChecks,
   collectDeclaredPluginDoctorHealthChecks: () => ({ checks: [], findings: [] }),
 }));

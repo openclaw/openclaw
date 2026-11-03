@@ -116,8 +116,10 @@ suite.define(() => {
       },
       "feature/old",
     );
-    await publicationAction(page, "Publish PR").click();
-    const openPr = page.getByRole("link", { name: "Open PR", exact: true });
+    await publicationAction(page, "Create PR").click();
+    const openPr = page.locator(
+      '.chat-pr__link[href="https://github.com/openclaw/openclaw/pull/42"]',
+    );
     await openPr.waitFor();
     const key = await waitForWatchedSessionKey(gateway);
     // Local Git facts remain fresh even while the remote PR inventory is backed off.
@@ -139,7 +141,7 @@ suite.define(() => {
     });
     await expect.poll(() => openPr.count()).toBe(0);
     await showPublicationBranch(gateway, "feature/new");
-    await expect.poll(() => publicationAction(page, "Publish PR").isEnabled()).toBe(true);
+    await expect.poll(() => publicationAction(page, "Create PR").isEnabled()).toBe(true);
     expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(1);
   });
 

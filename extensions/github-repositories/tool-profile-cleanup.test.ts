@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const oauthMocks = vi.hoisted(() => ({ list: vi.fn() }));
 const directoryReadState = vi.hoisted(() => ({
@@ -11,7 +11,8 @@ const directoryReadState = vi.hoisted(() => ({
   errorCode: "EBUSY",
 }));
 
-vi.mock("./github-oauth-records.js", () => ({
+vi.mock("openclaw/plugin-sdk/native-github-account-host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/native-github-account-host")>()),
   listGitHubOAuthRecords: oauthMocks.list,
 }));
 vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => {
@@ -33,8 +34,8 @@ vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => {
 import {
   resolveManagedGitHubAgentKey,
   resolveManagedGitHubProfileRoot,
-} from "../../extensions/github-repositories/tool-identity-api.js";
-import { cleanupRetiredManagedGitHubProfiles } from "../../extensions/github-repositories/tool-profile-cleanup-api.js";
+} from "./tool-identity-api.js";
+import { cleanupRetiredManagedGitHubProfiles } from "./tool-profile-cleanup-api.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const makeProfileId = (digit: string) => `ghp_${digit.repeat(32)}`;

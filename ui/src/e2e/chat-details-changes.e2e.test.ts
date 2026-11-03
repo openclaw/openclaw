@@ -5,6 +5,7 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gat
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { GITHUB_REPOSITORY_PLUGIN } from "../test-helpers/repository-plugin.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
   publicationMethods,
@@ -80,6 +81,7 @@ suite.define(() => {
                 }),
           };
           const gateway = await installMockGateway(page, {
+            nativePlugins: [GITHUB_REPOSITORY_PLUGIN],
             featureMethods: [...publicationMethods, "sessions.diff"],
             workspace: "/workspace/openclaw",
             workspaceGit: true,

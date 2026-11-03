@@ -1,27 +1,56 @@
+import path from "node:path";
 import { onTestFinished } from "vitest";
-import { githubExecutionEnvironment } from "../../extensions/github-repositories/execution-environment-api.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "../plugin-sdk/test-helpers/contracts-testkit.js";
 import { isBundledPluginEnabled } from "../plugins/config-state.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
+import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import {
+  loadBundledPluginFacade,
+  resolveBundledPluginPublicModulePath,
+} from "../test-utils/bundled-plugin-public-surface.js";
+
+const entry = resolveBundledPluginPublicModulePath({
+  pluginId: "github-repositories",
+  artifactBasename: "index.ts",
+});
+const loadedManifest = loadPluginManifest(path.dirname(entry));
+if (!loadedManifest.ok) {
+  throw new Error(loadedManifest.error);
+}
+const manifest = loadedManifest.manifest;
+const { default: repositoryPlugin } = await loadBundledPluginFacade<{
+  default: OpenClawPluginDefinition;
+}>({ pluginId: "github-repositories", artifactBasename: "index.ts" });
+const declaredRegister = repositoryPlugin.register;
+if (!declaredRegister) {
+  throw new Error("The GitHub repository entry did not declare its register operation");
+}
+const registerRepositoryPlugin = declaredRegister;
 
 /** Exercise the real registrar/instance binding without starting account or network services. */
 export function createGitHubExecutionFixture(config: OpenClawConfig) {
   const fixture = createPluginRegistryFixture(config);
-  const record = createPluginRecord({ id: "github-repositories", origin: "bundled" });
+  const record = createPluginRecord({
+    id: manifest.id,
+    source: entry,
+    origin: "bundled",
+    contracts: manifest.contracts,
+    repositorySources: manifest.repositorySources,
+    dashboard: manifest.dashboard,
+  });
   if (isBundledPluginEnabled(config, record.id)) {
     registerTestPlugin({
       ...fixture,
       record,
-      register(api) {
-        api.registerExecutionEnvironment(githubExecutionEnvironment);
-      },
+      register: registerRepositoryPlugin,
     });
     onTestFinished(async () => {
       await getPluginInstance(record)?.dispose();

@@ -15,7 +15,8 @@ import {
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
 // Plugin discovery is in-memory; registration, factory contexts, callbacks and tool policy are real.
-vi.mock("./openclaw-plugin-tools.js", () => ({
+vi.mock("./openclaw-plugin-tools.js", async (original) => ({
+  ...(await original<typeof import("./openclaw-plugin-tools.js")>()),
   resolveOpenClawPluginToolsForOptions: (
     params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
   ) => resolveGitHubPluginToolsFixture(params),
@@ -287,7 +288,7 @@ describe("GitHub plugin tool construction through the host", () => {
         },
       });
       expect(hasTool(tools, "github_publish")).toBe(expected);
-      if (expected && available === false) {
+      if (expected && !available) {
         const tool = expectToolNamed(tools, "github_publish");
         expect(Value.Check(tool.parameters, { action: "publish" })).toBe(false);
         await expect(tool.execute("publish-1", { action: "publish" })).rejects.toThrow(

@@ -13,6 +13,7 @@ import type {
 } from "../../../src/gateway/server-methods/types.js";
 import { uiCommandHandlers } from "../../../src/gateway/server-methods/ui-command.js";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
+import { GITHUB_REPOSITORY_PLUGIN } from "../test-helpers/repository-plugin.ts";
 import {
   captureUiProof,
   chatSessionListResponse,
@@ -40,6 +41,7 @@ suite.define(() => {
         const context = await suite.newBrowserContext({ viewport: { width: 1100, height: 800 } });
         const page = await context.newPage();
         const gateway = await installMockGateway(page, {
+          nativePlugins: [GITHUB_REPOSITORY_PLUGIN],
           sessionKey: source,
           featureMethods: [
             ...defaultControlUiFeatureMethods,
@@ -201,7 +203,7 @@ suite.define(() => {
     await requester.gateway.waitForRequest("tools.github.status", {
       match: { agentId: "main", selectedScope: "agent" },
     });
-    const identity = requester.page.locator("openclaw-github-identity");
+    const identity = requester.page.locator("openclaw-github-identity .settings-section");
     await identity.waitFor();
     await identity.scrollIntoViewIfNeeded();
     await captureUiProof(suite, requester.page, "github-reconnect", "after.png");

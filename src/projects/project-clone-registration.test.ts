@@ -25,7 +25,8 @@ const fixture = vi.hoisted(() => {
 });
 
 vi.mock("node:fs/promises", () => ({ default: { rm: fixture.remove } }));
-vi.mock("../state/openclaw-state-worker-context.js", () => ({
+vi.mock("../state/openclaw-state-worker-context.js", async (original) => ({
+  ...(await original<typeof import("../state/openclaw-state-worker-context.js")>()),
   captureOpenClawStateWorkerContext: () => ({
     admission: { databasePath: "/synthetic/state/openclaw.sqlite" },
   }),
@@ -48,7 +49,10 @@ vi.mock("./project-checkout.js", () => ({
   },
 }));
 
-vi.mock("./project-registry.js", () => ({ listProjectRegistry: async () => [] }));
+vi.mock("./project-registry.js", async (original) => ({
+  ...(await original<typeof import("./project-registry.js")>()),
+  listProjectRegistry: async () => [],
+}));
 // mock-isolation: clone outcomes are synthetic and must not run Git or access the network.
 vi.mock(
   "../../extensions/github-repositories/project-clone-runtime-api.js",
@@ -60,7 +64,8 @@ vi.mock(
   }),
 );
 
-vi.mock("../state/openclaw-state-lease-worker-operation.js", () => ({
+vi.mock("../state/openclaw-state-lease-worker-operation.js", async (original) => ({
+  ...(await original<typeof import("../state/openclaw-state-lease-worker-operation.js")>()),
   runWithOpenClawStateLeaseWorker: async (
     _lease: OpenClawStateLeaseContext,
     _context: unknown,

@@ -280,7 +280,7 @@ suite.define(() => {
       await plainRow.hover();
       const plainArchive = plainRow.locator("[data-sidebar-session-archive] svg");
       await ui.visible(plainArchive);
-      expect(ui.centerX(await ui.bounds(pullRequestIcon.locator(".session-css-icon")))).toBeCloseTo(
+      expect(ui.centerX(await ui.bounds(pullRequestIcon.locator("svg")))).toBeCloseTo(
         ui.centerX(await ui.bounds(plainArchive)),
         1,
       );
@@ -345,7 +345,7 @@ suite.define(() => {
         .toBe(true);
       await expect.poll(() => state.isVisible()).toBe(true);
       await ui.expectCount(row.locator(".session-glyph__ring"), 0);
-      const prIcon = row.locator("[data-pull-request-state='open'] .session-css-icon");
+      const prIcon = row.locator("[data-pull-request-state='open'] svg");
       expect(
         await prIcon.evaluate((icon) => {
           const { width, height } = icon.getBoundingClientRect();

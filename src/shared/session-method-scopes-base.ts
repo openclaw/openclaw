@@ -19,6 +19,8 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "mentions.list",
   "models.list",
   "progressCard.get",
+  "plugins.controlUi.list",
+  "plugins.controlUi.report",
   "projects.list",
   "projects.checkoutOptions",
   "session.suggestions.list",

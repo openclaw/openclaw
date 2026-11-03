@@ -1,4 +1,4 @@
-import { GITHUB_ACTIONS_BINDING_ID } from "../../extensions/github-repositories/board-capabilities-api.js";
+import { GITHUB_ACTIONS_BINDING_ID } from "./legacy-github-actions-grant.js";
 
 export const CORE_BOARD_DATA_BINDING_IDS = [
   "sessions.list",

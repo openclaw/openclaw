@@ -5,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import type { WebSocket } from "ws";
-import { gitHubPublicApi } from "../../extensions/github-repositories/public-api.js";
 import {
   buildGatewayConnectAuth,
   selectGatewayConnectAuth,
@@ -30,6 +29,7 @@ import {
   setUserProfileRole,
 } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { gitHubAccountApi } from "./native-github-account-api.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import type { GatewayServer } from "./server-public.js";
@@ -223,7 +223,7 @@ function stubGitHubUserLookups(users: Record<string, { id: number; login: string
   // Load the source plugin before opening sockets and starting handshake deadlines.
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
   vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
-  const githubApiOrigin = gitHubPublicApi.GITHUB_API_ORIGIN;
+  const githubApiOrigin = gitHubAccountApi.GITHUB_API_ORIGIN;
   const realFetch = globalThis.fetch;
   const github = { requests: [] as string[], quotaExhausted: false };
   const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {

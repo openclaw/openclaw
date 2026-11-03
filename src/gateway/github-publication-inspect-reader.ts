@@ -1,4 +1,4 @@
-import { resolveConfiguredGitHubHost } from "../../extensions/github-repositories/host-api.js";
+import { resolveConfiguredGitHubHost } from "./native-github-host-realm.js";
 import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { captureGitHubPublicationActionAuthority } from "./github-publication-requester.js";

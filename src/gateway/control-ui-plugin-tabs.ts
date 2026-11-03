@@ -15,6 +15,7 @@ import { controlUiPluginAssetPrefix } from "./control-ui-plugin-assets-contract.
 import { isControlUiPluginAllowed } from "./control-ui-plugin-policy.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
+  authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
   READ_SCOPE,
   type OperatorScope,
@@ -223,7 +224,8 @@ export function listControlUiPluginTabAuthGrants(
   callerScopes: readonly string[],
 ): ControlUiPluginTabAuthGrant[] {
   const registry = getPluginRegistryForContext();
-  if (!registry || !authorizeOperatorScopesForRequiredScope(READ_SCOPE, callerScopes).allowed) {
+  const nativeAdmission = authorizeOperatorScopesForMethod("plugins.controlUi.list", callerScopes);
+  if (!registry || !nativeAdmission.allowed) {
     return [];
   }
   const grants = new Map<string, ControlUiPluginTabAuthGrant>();
@@ -242,8 +244,12 @@ export function listControlUiPluginTabAuthGrants(
       pluginId: plugin.id,
       path: assetPath,
       match: "prefix",
-      scopes: [READ_SCOPE],
+      scopes: [nativeAdmission.sessionScope ?? READ_SCOPE],
     });
+  }
+  // Native browser modules retain session-only access; Gateway tabs keep their broader boundary.
+  if (!authorizeOperatorScopesForRequiredScope(READ_SCOPE, callerScopes).allowed) {
+    return [...grants.values()];
   }
   for (const tab of projectControlUiPluginTabs(registry.controlUiDescriptors ?? [], callerScopes)) {
     if (!tab.path) {

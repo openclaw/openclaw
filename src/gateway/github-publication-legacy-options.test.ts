@@ -1,3 +1,11 @@
+// Register synthetic I/O before the actual plugin identity and publication graph loads.
+// oxfmt-ignore
+import {
+  NEW_HEAD,
+  commands,
+  installGitHubPublicationTestHarness,
+  root,
+} from "./github-publication.test-support.js";
 import fs from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { removeTempDirectoryAsync } from "../infra/sqlite-readonly-location-cleanup.js";
@@ -15,12 +23,6 @@ import {
   claimGitHubPublicationExecutionFixture,
   createGitHubPublicationExecutionStoreFixture,
 } from "./github-publication-store.test-support.js";
-import {
-  NEW_HEAD,
-  commands,
-  installGitHubPublicationTestHarness,
-  root,
-} from "./github-publication.test-support.js";
 import { insertSharedWorktreeReceipt } from "./github-shared-publication.test-support.js";
 
 installGitHubPublicationTestHarness();

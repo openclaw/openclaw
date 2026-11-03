@@ -7,7 +7,7 @@ import type {
   SessionGitHubStatusResult,
 } from "@openclaw/gateway-protocol";
 import { readGitHubPublicationSelectionRejectedError } from "@openclaw/gateway-protocol/gateway-error-details";
-import { generateUUID } from "@openclaw/normalization-core/uuid";
+import { generateUUID } from "openclaw/plugin-sdk/control-ui";
 import type {
   ControlUiSessionOperationOwner,
   ControlUiSessionOperationFactory,
@@ -555,7 +555,12 @@ export class GitHubPublicationOwner {
 
   private view(presentation: Presentation): GitHubPublicationView | undefined {
     const scope = presentation.scope;
-    if (!scope || !this.presented(presentation) || !presentation.lifetime) {
+    if (
+      !scope ||
+      !this.presentations.has(presentation) ||
+      !this.owner.isCurrent() ||
+      !scope.isCurrent()
+    ) {
       return undefined;
     }
     // Retained panes project settlement while hidden; invoking these callbacks
@@ -577,7 +582,7 @@ export class GitHubPublicationOwner {
     return {
       readiness: {
         read: this.readCompletion?.promise ?? null,
-        retired: presentation.lifetime.promise,
+        retired: presentation.lifetime?.promise ?? Promise.resolve(),
       },
       activity: this.activity,
       canPublishShared: scope.canPublishShared,

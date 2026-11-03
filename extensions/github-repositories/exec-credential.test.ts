@@ -2,8 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { SecureFileReadResult } from "@openclaw/fs-safe/secure-file";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 const permissions = vi.hoisted(() => ({
   inspect: vi.fn(),
@@ -15,8 +14,8 @@ vi.mock("openclaw/plugin-sdk/file-access-runtime", async (importOriginal) => ({
   readSecureFile: permissions.read,
 }));
 
-import { readGitHubExecToken } from "../../extensions/github-repositories/exec-credential-api.js";
-import { writeManagedGitHubProfileFiles } from "../../extensions/github-repositories/tool-profile-files-api.js";
+import { readGitHubExecToken } from "./exec-credential-api.js";
+import { writeManagedGitHubProfileFiles } from "./tool-profile-files-api.js";
 
 // Emulate Windows directory ACL inheritance at the fs-safe OS boundary. File
 // contents still use the filesystem, so the launcher reads the writer's token.
@@ -38,7 +37,7 @@ vi.mock("@openclaw/fs-safe/root", async (importOriginal) => {
   };
 });
 
-let platformMock: ReturnType<typeof mockProcessPlatform> | undefined;
+let platformMock: MockInstance<() => NodeJS.Platform> | undefined;
 let profileDir: string;
 const privateAcl = {
   ok: true,
@@ -76,7 +75,7 @@ beforeEach(async () => {
   });
   permissions.inspect.mockReset().mockResolvedValue(privateAcl);
   permissions.read.mockReset().mockImplementation(readHosts);
-  platformMock = mockProcessPlatform("win32");
+  platformMock = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 });
 
 afterEach(async () => {

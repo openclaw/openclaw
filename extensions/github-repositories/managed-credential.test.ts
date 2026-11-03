@@ -1,28 +1,42 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred as createDeferredCore } from "openclaw/plugin-sdk/concurrency-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveCommandEnv } from "openclaw/plugin-sdk/process-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
+import { readGitHubConfig } from "./config-api.js";
 import {
   clearGitHubCredentialVerificationCache,
   pollGitHubOAuthDeviceToken,
   refreshGitHubOAuthToken,
-} from "../../extensions/github-repositories/oauth-api.js";
-import { clearNativeGitHubTokenCache } from "../../extensions/github-repositories/read-identity-api.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCommandEnv } from "../process/exec-spawn.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { commandResult as result } from "./github-identity.test-support.js";
+} from "./oauth-api.js";
+import { clearNativeGitHubTokenCache } from "./read-identity-api.js";
+
+function result(stdout = "", code = 0, stderr = "") {
+  return {
+    stdout: Buffer.from(stdout),
+    stderr: Buffer.from(stderr),
+    code,
+    signal: null,
+    killed: false,
+    termination: "exit" as const,
+  };
+}
 
 const commands = vi.hoisted(() => ({ run: vi.fn() }));
-vi.mock("../process/exec.js", () => ({ runCommandBuffered: commands.run }));
-vi.mock("./github-oauth-records.js", () => ({
+vi.mock("openclaw/plugin-sdk/process-runtime", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandBuffered: commands.run,
+}));
+vi.mock("openclaw/plugin-sdk/native-github-account-host", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/native-github-account-host")>()),
   inspectGitHubOAuthRecord: () => ({ state: "missing" }),
 }));
 
@@ -34,7 +48,7 @@ import {
   refreshManagedGitHubProfile,
   resolveGitHubToolIdentityStatus,
   resolveManagedGitHubProfileDir,
-} from "../../extensions/github-repositories/tool-identity-api.js";
+} from "./tool-identity-api.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const account = { id: 202, login: "managed-user", avatar_url: null };

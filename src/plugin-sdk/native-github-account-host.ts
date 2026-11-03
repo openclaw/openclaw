@@ -73,3 +73,16 @@ export type {
   LegacyGitHubOAuthService,
   LegacyPersonalGitHubService,
 } from "../gateway/github-oauth-lifecycle-host.types.js";
+
+// Native identity and receipt realms are independent of optional repository services.
+export {
+  GITHUB_PUBLIC_HOST,
+  resolveConfiguredGitHubHost,
+  resolveConfiguredGitHubApiBaseUrl,
+} from "../gateway/native-github-host-realm.js";
+
+/** Native sign-in and repository readers share the canonical service credential selector. */
+export {
+  githubApiToken,
+  hasConfiguredGitHubApiCredential,
+} from "../gateway/native-github-service-credential.js";

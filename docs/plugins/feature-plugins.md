@@ -170,6 +170,16 @@ Export `defineControlUiPlugin({ id, activate(host) })` from the browser entry.
 Its id must match the plugin manifest. Register contributions through
 `host.ui`; each registration returns a disposer.
 
+For browser operation IDs, import `generateUUID` from
+`openclaw/plugin-sdk/control-ui`. It uses Web Crypto and reports an error when
+secure UUID generation is unavailable.
+
+Session-only readers can load the native browser catalog and its scoped assets,
+and report activation for their live Control UI connection. Their grants retain
+the session scope. Each contributed backend operation keeps its own authorization;
+catalog reload, cross-client activation status, and custom Gateway tabs retain
+their existing broader permissions.
+
 | Registration                            | Host placement                                                                                                                          |
 | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `registerPage` and `registerNavigation` | Plugin-owned routes and sidebar destinations.                                                                                           |
@@ -740,8 +750,15 @@ menus, icons, toggles, activity pills, lazy/error states, tooltips, clipped text
 It also supplies locale, safe-URL, clipboard and notification services. The optional
 `host.native` capability supplies native diff and disclosure-overlay primitives.
 Dispose mounted handles when their container ends; activation/view retirement also
-revokes retained handles. `host.navigation.openExternal` opens only allowed URLs
-in an isolated new tab.
+revokes retained handles. `presentation.translate` is public-catalog lookup and
+interpolation owned by global i18n, so retained translations remain usable after
+view or activation retirement. Catalog registration, subscriptions, native controls,
+and all request or mutation capabilities retain their lifetime checks.
+`presentation.mountLinkPreviews` wraps plugin content with the native link-preview
+owner. Supply existing snapshot metadata as `previewSeeds` to render useful previews
+while enrichment is pending; the host retains connection, reader admission, cache,
+and teardown ownership. Seeds are display facts and never grant reader access.
+`host.navigation.openExternal` opens only allowed URLs in an isolated new tab.
 
 Session actions can provide `observe(target, changed)`. Visible native session
 menus own that interest and call its disposer on close, withdrawal, or plugin

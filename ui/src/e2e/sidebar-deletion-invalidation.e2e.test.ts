@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
@@ -150,9 +152,14 @@ suite.define(() => {
             awaitInitialRoster: false,
             sessionKey: retained.key,
             sessions: [retained, deleted],
+            featureMethods: [
+              ...defaultControlUiFeatureMethods,
+              SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+            ],
             heldMethods: ["connect"],
             historyMessages: [{ role: "assistant", content: "Retained synthetic transcript." }],
             methodResponses: {
+              [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
               "sessions.list": {
                 ts: 1,
                 path: "",
@@ -191,6 +198,7 @@ suite.define(() => {
           await target
             .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
             .waitFor();
+          await gateway.waitForRequest(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
         }
         for (const target of pages) {
           await target.evaluate(() => {

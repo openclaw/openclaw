@@ -17,6 +17,7 @@ import {
 import { buildExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
 import type { ExecSessionDefaults } from "../exec-defaults.js";
+import { resolveGitHubPluginToolsFixture } from "../github-plugin-tools.test-support.js";
 import { createAgentHarnessHostCapabilities } from "../harness/host-capability.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import {
@@ -28,6 +29,17 @@ import type { EmbeddedRunAttemptInternalParams } from "./run/internal-params.js"
 import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
 import { resolveEmbeddedRunEffectiveModel } from "./run/model-harness.js";
 import { prepareAndDispatchEmbeddedRunAttempt as dispatch } from "./run/run-attempt-dispatch.js";
+
+// Discovery is synthetic; the registered plugin factories and tool policy metadata remain real.
+vi.mock("../openclaw-plugin-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../openclaw-plugin-tools.js")>()),
+  resolveOpenClawPluginToolsForOptions: (
+    params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
+  ) => resolveGitHubPluginToolsFixture(params),
+  resolveOpenClawPluginToolsForOptionsAsync: async (
+    params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
+  ) => resolveGitHubPluginToolsFixture(params),
+}));
 
 const mocks = vi.hoisted(() => ({
   runAttempt: vi.fn(),

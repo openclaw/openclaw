@@ -6,8 +6,8 @@ import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.js";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
+import { installRepositoryGateway as installMockGateway } from "../test-helpers/repository-plugin.ts";
 import { expectAttribute, expectCount, expectText } from "./activity-assertions.test-support.ts";
 import {
   activityPolishFixture,

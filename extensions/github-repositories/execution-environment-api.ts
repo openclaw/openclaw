@@ -8,6 +8,7 @@ import { isBundledPluginEnabled } from "openclaw/plugin-sdk/plugin-config-runtim
 import { getShellConfig } from "openclaw/plugin-sdk/process-runtime";
 import { readGitHubAgentIdentity } from "./config-api.js";
 import { buildGitHubExecLaunchArgv } from "./exec-launch-api.js";
+import { formatGitHubCoauthor } from "./git-attribution-api.js";
 import { CLEARED_GITHUB_CREDENTIALS } from "./host-api.js";
 import { prepareGitHubToolEnvironment } from "./tool-identity-api.js";
 
@@ -36,6 +37,11 @@ function prepare(input: ExecutionEnvironmentPreparationV1): PreparedExecutionEnv
 
 export const githubExecutionEnvironment: ExecutionEnvironmentProviderV1 = {
   id: "github-repositories",
+  formatGitCoauthor(input) {
+    return isBundledPluginEnabled(input.config, "github-repositories")
+      ? formatGitHubCoauthor(input)
+      : undefined;
+  },
   prepare,
   async prepareSandbox(input) {
     input.assertCurrent();

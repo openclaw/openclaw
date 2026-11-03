@@ -160,7 +160,14 @@ describe("explicit GitHub publication", () => {
       }
       await vi.waitFor(() => expect(changed).toHaveBeenCalled());
       controller.sync(retainedScope);
-      expect(controller.view()).toBeUndefined();
+      expect(controller.view()).toMatchObject(
+        outcome === "published"
+          ? { result: { status: "published", requestId } }
+          : {
+              error: expect.stringContaining("Publication response"),
+              locked: outcome === "unknown",
+            },
+      );
       void ready.onPublish?.();
       ready.onSelect?.("personal");
       void ready.onRefresh();

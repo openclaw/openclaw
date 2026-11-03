@@ -1,7 +1,6 @@
 // WebSocket message-handler health tests cover post-connect startup-unavailable and health-gated dispatch.
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { gitHubPublicApi } from "../../../../extensions/github-repositories/public-api.js";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   ErrorCodes,
@@ -30,6 +29,7 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { HealthSummary } from "../../health/types.js";
+import { gitHubAccountApi } from "../../native-github-account-api.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import {
   HEALTH_REFRESH_INTERVAL_MS,
@@ -1331,7 +1331,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       retryAfterMs: 1_000,
     },
     {
-      error: new gitHubPublicApi.ControlUiGitHubError(429, "private upstream failure", {
+      error: new gitHubAccountApi.ControlUiGitHubError(429, "private upstream failure", {
         retryAtMs: 1_800_000_090_000,
       }),
       message: "GitHub is rate limiting profile verification",

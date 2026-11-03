@@ -1158,7 +1158,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/embedded-agent-subscribe.tools.test.ts",
   "src/agents/exec-auto-reviewer.test.ts",
   "src/agents/failover/provider-structured-signals.test.ts",
-  "extensions/github-repositories/github-managed-credential.test.ts",
+  "extensions/github-repositories/managed-credential.test.ts",
   "src/agents/harness/acp-native-approval-effect.process.test.ts",
   "src/agents/harness/context-engine-lifecycle.test.ts",
   "src/agents/harness/context-engine-turn-attempt.test.ts",

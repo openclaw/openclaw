@@ -681,9 +681,16 @@ it("retires captured requests and native controls with their view and activation
   expect(captured?.isCurrent()).toBe(true);
   const pending = captured!.request("fixture.read", {});
   const container = document.createElement("div");
-  const icon = expectDefined(host.presentation, "presentation").mountIcon(container, {
-    name: "plug",
-  });
+  const presentation = expectDefined(host.presentation, "presentation");
+  const translate = presentation.translate;
+  const registerEnglish = presentation.registerEnglish;
+  const icon = presentation.mountIcon(container, { name: "plug" });
+  const previewContainer = document.createElement("div");
+  const previewProps = { child: document.createElement("a"), previewSeeds: [] };
+  const previews = presentation.mountLinkPreviews(previewContainer, previewProps);
+  expect(previewContainer.firstElementChild?.localName).toBe(
+    "openclaw-link-reader-hovercard-provider",
+  );
   expect(container.childNodes.length).toBeGreaterThan(0);
   const popup = vi.spyOn(window, "open").mockReturnValue(null);
   host.navigation.openExternal("javascript:alert(1)");
@@ -699,12 +706,22 @@ it("retires captured requests and native controls with their view and activation
   await expect(pending).rejects.toThrow("view has ended");
   expect(captured?.isCurrent()).toBe(false);
   expect(container.childNodes).toHaveLength(0);
+  expect(previewContainer.childNodes).toHaveLength(0);
+  expect(() => previews.update(previewProps)).toThrow("view has ended");
+  expect(() => presentation.mountLinkPreviews(previewContainer, previewProps)).toThrow(
+    "view has ended",
+  );
+  expect(translate("common.cancel")).toBe("Cancel");
+  expect(() => registerEnglish({ retiredView: { label: "Not registered" } })).toThrow(
+    "view has ended",
+  );
   expect(() => icon.update({ name: "plug" })).toThrow("view has ended");
   expect(() => host.navigation.openExternal("https://example.test/stale")).toThrow(
     "view has ended",
   );
   const baseCapture = activation.host.requests.capture;
   activation.dispose();
+  expect(translate("common.cancel")).toBe("Cancel");
   expect(() => baseCapture()).toThrow("activation has ended");
 });
 
@@ -760,7 +777,10 @@ it("retires plugin operation effects with their activation while preserving pane
   const { host, view } = scopedHost(activation.host);
   const binding = host.sessions.attachOperation!(target, factory)!;
   const pending = binding.run();
-  expect(request).toHaveBeenCalledWith("fixture.write", undefined);
+  expect(request).toHaveBeenCalledWith("fixture.write", undefined, {
+    signal: expect.any(AbortSignal),
+    retainSentResultOnAbort: true,
+  });
   view.abort();
   const replacement = activation.host.sessions.attachOperation!(target, factory)!;
   expect(replacement.matches(target)).toBe(true);

@@ -1,3 +1,10 @@
+// Register synthetic I/O before the actual plugin identity and publication graph loads.
+// oxfmt-ignore
+import {
+  SESSION_KEY,
+  commands,
+  installGitHubPublicationTestHarness,
+} from "./github-publication.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -12,11 +19,6 @@ import {
   claimRepositoryGitHubPublicationFixture,
   insertRepositoryGitHubPublicationFixture,
 } from "./github-publication-store.test-support.js";
-import {
-  SESSION_KEY,
-  commands,
-  installGitHubPublicationTestHarness,
-} from "./github-publication.test-support.js";
 import { readPendingRepositoryGitHubPublication } from "./github-repository-publication-store.js";
 import {
   repositoryReceipt,

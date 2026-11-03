@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
-import { parseGitHubRemoteUrl } from "../../extensions/github-repositories/runtime-api.js";
 import { unavailableDiffRevision, type DiffReadTiming } from "../infra/diff-read-timing.js";
 import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { GitCommandTimeoutError, requireGitCommandOutput } from "../infra/git-exec.js";
@@ -23,6 +22,7 @@ import {
   readRemoteRevisions,
   resolveBranchLanding,
 } from "./control-ui-session-prs-landing.js";
+import { parseGitHubRemoteUrl } from "./github-remote.js";
 
 /** Bound PR-list fanout for checkouts that track one branch on several forks. */
 const MAX_FORK_HEAD_CANDIDATES = 3;

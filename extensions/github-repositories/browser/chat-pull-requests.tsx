@@ -1,12 +1,13 @@
 /** @jsxImportSource @solidjs/web */
 
-import { Errored, Loading, Show, lazy, onSettled, useContext } from "solid-js";
+import { Errored, Loading, Repeat, Show, lazy, onSettled, useContext } from "solid-js";
+import { chatPullRequestRows } from "./chat-pull-request-rows.ts";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 import { RepositoryCiContext } from "./ci-context.ts";
 import { hostControl } from "./host-control.tsx";
 import { ContentPresentation } from "./native-context.tsx";
 import { PresentationContext } from "./presentation-context.ts";
-import { hasChatPullRequests } from "./pull-request-dismissal.ts";
+import { hasChatPullRequests, showWorkRow } from "./pull-request-dismissal.ts";
 export type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 export { hasChatPullRequests } from "./pull-request-dismissal.ts";
 
@@ -57,9 +58,35 @@ export function ChatPullRequests(props: ChatPullRequestsProps) {
       >
         <Loading
           fallback={
-            <div class="chat-prs">
-              {hostControl(() => ({ status: "loading" as const }), host.mountLazyState)}
-            </div>
+            <Show
+              when={props.compact}
+              fallback={
+                <div class="chat-prs">
+                  {hostControl(() => ({ status: "loading" as const }), host.mountLazyState)}
+                </div>
+              }
+            >
+              <div
+                class="chat-prs"
+                role="status"
+                aria-busy="true"
+                aria-label={host.translate("common.loading")}
+              >
+                <Repeat
+                  count={
+                    !props.publishedOnly && showWorkRow(props)
+                      ? 1
+                      : chatPullRequestRows(props).length
+                  }
+                >
+                  {() => (
+                    <div class="chat-pr chat-pr--compact chat-pr--summary" aria-hidden="true">
+                      <span class="skeleton skeleton-line skeleton-line--long" />
+                    </div>
+                  )}
+                </Repeat>
+              </div>
+            </Show>
           }
         >
           <Content {...props} />

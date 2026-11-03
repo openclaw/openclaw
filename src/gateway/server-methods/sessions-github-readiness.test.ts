@@ -127,8 +127,8 @@ async function fixture(
       f.context.githubPublicationService = service;
       const services = readRepositoryServices(f.context);
       assert(services, "Expected the fixture's registered GitHub account service");
-      f.stopAccount();
-      installGitHubAccountFixture(f.context, services.oauth, service);
+      await f.stopAccount();
+      f.stopAccount = await installGitHubAccountFixture(f.context, services.oauth, service);
       const effects = [
         refresh,
         vi.spyOn(service, "requestForSessionV2").mockImplementation(forbidden),

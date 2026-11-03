@@ -19,71 +19,218 @@ import { getGatewayServiceLifetime } from "../plugins/runtime/gateway-service-ow
 import { startPluginServices } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createRepositorySessionReadHost } from "./control-ui-session-pr-runtime.js";
+import type { RepositoryPublicationHostBinding } from "./repository-publication-contract.js";
 import type { RepositorySessionPresentation } from "./repository-session-read.types.js";
 import { createRepositorySources } from "./repository-sources.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import {
+  bindWorkspacePublicationHost,
+  readWorkspacePublicationHost,
+} from "./workspace-publication-binding.js";
 
-/** Synthetic HTTP transport still uses the real Gateway-owned account service lookup. */
-export function installGitHubAccountFixture(
+/** RPC admission fixtures inject one coordinator; provider bootstrap has its own real service proof. */
+export async function installGitHubAccountFixture(
   context: GatewayRequestContext,
   oauth: RepositoryServices["oauth"],
   publication?: Partial<NonNullable<RepositoryServices["publication"]>>,
 ) {
   context.resolveGatewayContext ??= () => context;
-  const stop = installRepositoryServices(
-    getGatewayServiceLifetime(context),
-    { oauth, ...(publication ? { publication: publicationFixtureApi(publication) } : {}) },
-    new AbortController().signal,
-  );
+  const lifetime = new AbortController();
+  const signal = AbortSignal.any([lifetime.signal, getGatewayServiceLifetime(context)]);
+  let stopServices: (() => void) | undefined;
+  let stopped = false;
+  const stop = async () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    lifetime.abort();
+    stopServices?.();
+  };
   onTestFinished(stop);
+  let api: RepositoryServices["publication"];
+  if (publication) {
+    const { createGitHubPublicationProvider } =
+      await import("../../extensions/github-repositories/runtime-api.js");
+    const assertCurrent = () => {
+      signal.throwIfAborted();
+      if (readWorkspacePublicationHost(context) !== binding) {
+        throw new Error("The publication fixture owner changed");
+      }
+    };
+    const provider = createGitHubPublicationProvider({
+      signal,
+      assertCurrent,
+      getConfig: context.getRuntimeConfig,
+      refreshIdentity: (agentId) => oauth.refreshEffectiveIdentity(agentId),
+      refreshPersonal: (profileId) => oauth.personal.refresh(profileId),
+    });
+    const unavailable = (): never => {
+      throw new Error("Unexpected publication operation in authorization fixture");
+    };
+    const selectedApi: NonNullable<RepositoryServices["publication"]> = {
+      ...publicationFixtureApi(publication, assertCurrent),
+      supportsOrigin(originUrl) {
+        assertCurrent();
+        return publication.supportsOrigin?.(originUrl) ?? provider.supportsOrigin(originUrl);
+      },
+      async performPullRequestAction(input) {
+        assertCurrent();
+        const result = await (publication.performPullRequestAction?.(input) ?? unavailable());
+        assertCurrent();
+        return result;
+      },
+      async inspectPullRequest(input) {
+        assertCurrent();
+        const result = await (publication.inspectPullRequest?.(input) ?? unavailable());
+        assertCurrent();
+        return result;
+      },
+      async readOptionsIdentity(input) {
+        assertCurrent();
+        const result = await (publication.readOptionsIdentity?.(input) ??
+          provider.readOptionsIdentity(input));
+        assertCurrent();
+        input.assertCurrent();
+        return result;
+      },
+      async preparePersonalAccountStatus(action) {
+        assertCurrent();
+        if (publication.preparePersonalAccountStatus) {
+          const prepared = await publication.preparePersonalAccountStatus(action);
+          assertCurrent();
+          return {
+            status: prepared.status,
+            assertCurrent() {
+              assertCurrent();
+              prepared.assertCurrent();
+            },
+          };
+        }
+        const status = await oauth.personal.status(action);
+        assertCurrent();
+        return {
+          status,
+          assertCurrent() {
+            assertCurrent();
+            oauth.personal.revalidateStatus(action, status);
+          },
+        };
+      },
+      async isPublicationSuperseded(snapshot, readPublished) {
+        assertCurrent();
+        const result = await (publication.isPublicationSuperseded?.(snapshot, readPublished) ??
+          provider.isPublicationSuperseded(snapshot, readPublished));
+        assertCurrent();
+        return result;
+      },
+    };
+    // This fixture is the host caller, not a second publication startup/recovery runtime.
+    const binding: RepositoryPublicationHostBinding = {
+      readApi() {
+        if (signal.aborted) {
+          return undefined;
+        }
+        assertCurrent();
+        return selectedApi;
+      },
+      captureProviderAuthority(pluginId) {
+        if (signal.aborted || pluginId !== provider.id) {
+          return undefined;
+        }
+        assertCurrent();
+        return assertCurrent;
+      },
+      async install() {
+        throw new Error("Synthetic RPC fixtures cannot install a second publication owner");
+      },
+    };
+    bindWorkspacePublicationHost(context.resolveGatewayContext() ?? context, binding);
+    api = selectedApi;
+  }
+  stopServices = installRepositoryServices(
+    getGatewayServiceLifetime(context),
+    { oauth, ...(api ? { publication: api } : {}) },
+    signal,
+  );
   return stop;
 }
-/** Authorization fixtures supply their native operation under the real service lookup. */
+/** Keep synthetic receipt I/O observable through late-installed spies at its actual owner. */
 function publicationFixtureApi(
   publication: Partial<NonNullable<RepositoryServices["publication"]>>,
-): NonNullable<RepositoryServices["publication"]> {
+  assertCurrent: () => void,
+): Omit<
+  NonNullable<RepositoryServices["publication"]>,
+  | "supportsOrigin"
+  | "performPullRequestAction"
+  | "inspectPullRequest"
+  | "readOptionsIdentity"
+  | "preparePersonalAccountStatus"
+  | "isPublicationSuperseded"
+> {
   const unavailable = (): never => {
     throw new Error("Unexpected publication operation in authorization fixture");
   };
   return {
-    supportsOrigin: (originUrl) => publication.supportsOrigin?.(originUrl) ?? false,
-    performPullRequestAction: (...args) =>
-      publication.performPullRequestAction
-        ? publication.performPullRequestAction(...args)
-        : unavailable(),
-    inspectPullRequest: (...args) =>
-      publication.inspectPullRequest ? publication.inspectPullRequest(...args) : unavailable(),
-    preparePullRequest: (...args) =>
-      publication.preparePullRequest ? publication.preparePullRequest(...args) : unavailable(),
-    refreshBase: (...args) =>
-      publication.refreshBase ? publication.refreshBase(...args) : unavailable(),
-    requestForSessionV2: (...args) =>
-      publication.requestForSessionV2 ? publication.requestForSessionV2(...args) : unavailable(),
-    requestPersonalForSessionV2: (...args) =>
-      publication.requestPersonalForSessionV2
+    preparePullRequest: (...args) => {
+      assertCurrent();
+      return publication.preparePullRequest
+        ? publication.preparePullRequest(...args)
+        : unavailable();
+    },
+    refreshBase: (...args) => {
+      assertCurrent();
+      return publication.refreshBase ? publication.refreshBase(...args) : unavailable();
+    },
+    requestForSessionV2: (...args) => {
+      assertCurrent();
+      return publication.requestForSessionV2
+        ? publication.requestForSessionV2(...args)
+        : unavailable();
+    },
+    requestPersonalForSessionV2: (...args) => {
+      assertCurrent();
+      return publication.requestPersonalForSessionV2
         ? publication.requestPersonalForSessionV2(...args)
-        : unavailable(),
-    confirmPersonalV2: (...args) =>
-      publication.confirmPersonalV2 ? publication.confirmPersonalV2(...args) : unavailable(),
-    preparePersonalStatus: (...args) =>
-      publication.preparePersonalStatus
+        : unavailable();
+    },
+    confirmPersonalV2: (...args) => {
+      assertCurrent();
+      return publication.confirmPersonalV2 ? publication.confirmPersonalV2(...args) : unavailable();
+    },
+    preparePersonalStatus: (...args) => {
+      assertCurrent();
+      return publication.preparePersonalStatus
         ? publication.preparePersonalStatus(...args)
-        : unavailable(),
-    personalStatusAsync: (...args) =>
-      publication.personalStatusAsync ? publication.personalStatusAsync(...args) : unavailable(),
-    personalPending: (...args) =>
-      publication.personalPending ? publication.personalPending(...args) : unavailable(),
-    sharedStatus: (...args) =>
-      publication.sharedStatus ? publication.sharedStatus(...args) : unavailable(),
-    latestShared: (...args) =>
-      publication.latestShared ? publication.latestShared(...args) : unavailable(),
-    latestPublishedShared: (...args) =>
-      publication.latestPublishedShared
+        : unavailable();
+    },
+    personalStatusAsync: (...args) => {
+      assertCurrent();
+      return publication.personalStatusAsync
+        ? publication.personalStatusAsync(...args)
+        : unavailable();
+    },
+    personalPending: (...args) => {
+      assertCurrent();
+      return publication.personalPending ? publication.personalPending(...args) : unavailable();
+    },
+    sharedStatus: (...args) => {
+      assertCurrent();
+      return publication.sharedStatus ? publication.sharedStatus(...args) : unavailable();
+    },
+    latestShared: (...args) => {
+      assertCurrent();
+      return publication.latestShared ? publication.latestShared(...args) : unavailable();
+    },
+    latestPublishedShared: (...args) => {
+      assertCurrent();
+      return publication.latestPublishedShared
         ? publication.latestPublishedShared(...args)
-        : unavailable(),
+        : unavailable();
+    },
   };
 }
 export async function installPublicationRpcFixture(
@@ -100,9 +247,9 @@ export async function installPublicationRpcFixture(
     getConfig: context.getRuntimeConfig,
     warn: () => {},
   });
-  const stop = installGitHubAccountFixture(context, oauth, publication);
+  const stop = await installGitHubAccountFixture(context, oauth, publication);
   onTestFinished(async () => {
-    stop();
+    await stop();
     await oauth.stop();
     await serviceScheduler.stop();
     await scheduler.stop();

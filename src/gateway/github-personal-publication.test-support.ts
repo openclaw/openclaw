@@ -1,3 +1,12 @@
+// Register synthetic I/O before the actual plugin identity and publication graph loads.
+// oxfmt-ignore
+import {
+  SESSION_ID,
+  SESSION_KEY,
+  createTestGitHubPublicationCoordinator,
+  githubPublicationTestMocks,
+  overrideCommands,
+} from "./github-publication.test-support.js";
 import { randomUUID } from "node:crypto";
 import { afterEach, expect, onTestFinished, vi } from "vitest";
 import { createGitHubOAuthLifecycle } from "../../extensions/github-repositories/oauth-lifecycle-api.js";
@@ -18,13 +27,6 @@ import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { installGitHubAccountFixture } from "./github-account-service.test-support.js";
 import type { PersonalGitHubSessionActionV2 } from "./github-personal-publication.js";
-import {
-  SESSION_ID,
-  SESSION_KEY,
-  createTestGitHubPublicationCoordinator,
-  githubPublicationTestMocks,
-  overrideCommands,
-} from "./github-publication.test-support.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { preparePersonalGitHubSessionActionV2 } from "./server-methods/github-personal-authorization.js";
@@ -235,7 +237,8 @@ export async function callPersonalPublicationRpc(
     warn() {},
   });
   const rpcContext = { ...context };
-  const uninstall = installGitHubAccountFixture(
+  rpcContext.resolveGatewayContext = () => rpcContext;
+  const uninstall = await installGitHubAccountFixture(
     rpcContext,
     { ...oauth, personal: { ...oauth.personal, status: personalGitHubStatus } },
     coordinator,
@@ -250,7 +253,7 @@ export async function callPersonalPublicationRpc(
     });
     return respond.mock.calls[0]!;
   } finally {
-    uninstall();
+    await uninstall();
     await oauth.stop();
     await serviceScheduler.stop();
     await scheduler.stop();

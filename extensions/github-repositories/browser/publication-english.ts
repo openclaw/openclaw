@@ -3,7 +3,7 @@ export const publicationEnglish = {
     title: "Publication",
     publishAsLabel: "Publish as",
     personal: "My GitHub",
-    system: "System",
+    system: "System GitHub",
     agent: "Agent override",
     publishAs: "Publish as @{account}",
     account: "Publication account",

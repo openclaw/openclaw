@@ -6,6 +6,7 @@ import {
 } from "../../extensions/github-repositories/public-api.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
+import { gitHubAccountApi } from "./native-github-account-api.js";
 
 const repoUrl = "https://api.github.com/repos/owner/repo";
 const now = 1_800_000_000_000;
@@ -90,6 +91,15 @@ it.each([
       )
       .mockImplementation(async () => new Response("{}"));
     const read = async (path: string, token = "quota-token") => {
+      if (resource === "core" && path === sibling) {
+        return (
+          await gitHubAccountApi.fetchGitHubJsonPage(
+            `https://api.github.com${path}`,
+            fetchMock,
+            token,
+          )
+        ).value;
+      }
       const response = await request(fetchMock, {
         url: `https://api.github.com${path}`,
         token,
@@ -105,7 +115,9 @@ it.each([
       retryAfterMs: 90_000,
     });
     clock.mockReturnValue(now + 10_000);
-    await expect(read(sibling)).rejects.toMatchObject({
+    const siblingRead = read(sibling);
+    await expect(siblingRead).rejects.toBeInstanceOf(api.ControlUiGitHubError);
+    await expect(siblingRead).rejects.toMatchObject({
       statusCode: 429,
       retryAfterMs: 80_000,
     });

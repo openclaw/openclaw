@@ -23,9 +23,18 @@ import {
   validateUsersUnlinkAuthProfileParams,
   validateUsersListModelAccountsParams,
   validateUsersSelectModelAccountParams,
+  type UsersLinkChannelIdentityParams,
+  validateUsersLinkChannelIdentityParams,
+  validateUsersListChannelIdentitiesParams,
+  validateUsersUnlinkChannelIdentityParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { UserChannelIdentityConflictError } from "../../state/user-channel-identities.js";
+import {
+  changeCanonicalUserChannelIdentity,
+  listCanonicalUserChannelIdentities,
+} from "../../state/user-channel-identity-operations.js";
 import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
@@ -78,7 +87,12 @@ import {
   prepareProfileMutationAccess,
   prepareUserProfileAdministration,
 } from "./users-profile-access.js";
-import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
+import {
+  assertValidParams,
+  defineValidatedGatewayHandler,
+  defineValidatedGatewayMethod,
+  type Validator,
+} from "./validation.js";
 
 function refreshConnectedProfile(
   context: GatewayRequestHandlerOptions["context"],
@@ -164,6 +178,40 @@ function connectHandler<P extends { profileId?: string }>(
   );
 }
 
+function identityError(error: unknown) {
+  return errorShape(
+    error instanceof UserChannelIdentityConflictError ||
+      error instanceof UserProfileNotFoundError ||
+      error instanceof UserProfileOwnerError
+      ? ErrorCodes.INVALID_REQUEST
+      : ErrorCodes.UNAVAILABLE,
+    formatErrorMessage(error),
+  );
+}
+
+function identityMutationHandler(
+  method: "users.linkChannelIdentity" | "users.unlinkChannelIdentity",
+  validate: Validator<UsersLinkChannelIdentityParams>,
+  action: "link" | "unlink",
+) {
+  return defineValidatedGatewayMethod(
+    method,
+    validate,
+    async (options) => {
+      const { params, respond } = options;
+      const assertCurrent = await prepareUserProfileAdministration(options);
+      const result = await changeCanonicalUserChannelIdentity(
+        action,
+        params.profileId,
+        params.identity,
+        { assertCurrent },
+      );
+      respond(true, result.kind === "linked" ? result.link : { removed: result.removed });
+    },
+    identityError,
+  );
+}
+
 export const usersHandlers: GatewayRequestHandlers = {
   "users.listAuthLinks": connectHandler(
     "users.listAuthLinks",
@@ -219,6 +267,28 @@ export const usersHandlers: GatewayRequestHandlers = {
     "users.authConnect.catalog",
     validateUsersAuthConnectCatalogParams,
     (service, action) => service.catalog(action),
+  ),
+  "users.linkChannelIdentity": identityMutationHandler(
+    "users.linkChannelIdentity",
+    validateUsersLinkChannelIdentityParams,
+    "link",
+  ),
+  "users.unlinkChannelIdentity": identityMutationHandler(
+    "users.unlinkChannelIdentity",
+    validateUsersUnlinkChannelIdentityParams,
+    "unlink",
+  ),
+  "users.listChannelIdentities": defineValidatedGatewayMethod(
+    "users.listChannelIdentities",
+    validateUsersListChannelIdentitiesParams,
+    async (options) => {
+      const { params, respond } = options;
+      const assertCurrent = await prepareUserProfileAdministration(options);
+      const links = await listCanonicalUserChannelIdentities(params.profileId);
+      assertCurrent();
+      respond(true, { links });
+    },
+    identityError,
   ),
   ...usersPersonalFileHandlers,
   ...usersChannelIdentityHandlers,

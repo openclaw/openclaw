@@ -9,9 +9,16 @@ import {
   bindPersonalGitHubPublicationSelection,
   preparePersonalGitHubPublicationSelection,
 } from "./personal-publication-api.js";
-import { personalGitHubStatusAsync } from "./personal-status-api.js";
+import {
+  personalGitHubStatusAsync,
+  resolvePersonalGitHubStatus,
+  revalidatePersonalGitHubStatus,
+} from "./personal-status-api.js";
 import { performGitHubPullRequestAction } from "./publication-actions-api.js";
-import { prepareCurrentGitHubPublicationIdentity } from "./publication-availability-api.js";
+import {
+  prepareCurrentGitHubPublicationIdentity,
+  prepareCurrentGitHubPublicationOptionsIdentity,
+} from "./publication-availability-api.js";
 import { formatGitHubPublicationContent } from "./publication-content-api.js";
 import {
   resolveGitHubPublicationFailure,
@@ -33,6 +40,7 @@ import {
   findGitHubPublicationPullRequest,
   reconcileGitHubPublicationPullRequest,
 } from "./publication-pull-requests-api.js";
+import { isGitHubPublicationSuperseded } from "./publication-relevance-api.js";
 import {
   prepareBoundGitHubPublication,
   prepareGitHubPublicationTarget,
@@ -43,6 +51,7 @@ import {
   hasUnapprovedGitHubPublicationWorkflowChanges,
   isGitHubPublicationWorkflowPath,
 } from "./publication-workflows-api.js";
+import { GitHubIdentityError } from "./read-identity-api.js";
 import { parseGitHubRemoteUrl } from "./remote-api.js";
 import {
   executeRepositoryGitHubPublication,
@@ -168,6 +177,45 @@ export function createGitHubPublicationProvider(owner: {
             },
           }),
       };
+    },
+    async readOptionsIdentity(input) {
+      const current = () => {
+        assertCurrent();
+        input.assertCurrent();
+      };
+      current();
+      try {
+        const identity = await prepareCurrentGitHubPublicationOptionsIdentity(
+          input.agentId,
+          current,
+        );
+        current();
+        return { identity };
+      } catch (error) {
+        current();
+        return {
+          identity: null,
+          unavailableReason: error instanceof GitHubIdentityError ? error.reason : "unverified",
+        };
+      }
+    },
+    async preparePersonalAccountStatus(action) {
+      assertCurrent();
+      const status = await resolvePersonalGitHubStatus(action);
+      assertCurrent();
+      return {
+        status,
+        assertCurrent() {
+          assertCurrent();
+          revalidatePersonalGitHubStatus(action, status);
+        },
+      };
+    },
+    async isPublicationSuperseded(snapshot, readPublished) {
+      assertCurrent();
+      const result = await isGitHubPublicationSuperseded(snapshot, readPublished);
+      assertCurrent();
+      return result;
     },
     async readPersonalSelection(action) {
       const status = await personalGitHubStatusAsync(action);

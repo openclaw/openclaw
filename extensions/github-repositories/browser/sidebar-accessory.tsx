@@ -119,19 +119,21 @@ export function createSidebarAccessoryMount(
       return (
         <PresentationContext value={locale}>
           <Show when={badge()}>
-            <Tooltip content={badge()?.label ?? ""}>
-              <span
-                class="session-row-badge session-row-badge--pull-request"
-                data-pull-request-state={badge()?.state}
-                role="img"
-                aria-label={badge()?.label}
-              >
-                <Icon name={badge()?.icon ?? "gitPullRequest"} />
-                <Show when={badge()?.count}>
-                  <span aria-hidden="true">{badge()?.count}</span>
-                </Show>
-              </span>
-            </Tooltip>
+            <span class="session-row-badges">
+              <Tooltip content={badge()?.label ?? ""}>
+                <span
+                  class="session-row-badge session-row-badge--pull-request"
+                  data-pull-request-state={badge()?.state}
+                  role="img"
+                  aria-label={badge()?.label}
+                >
+                  <Icon name={badge()?.icon ?? "gitPullRequest"} />
+                  <Show when={badge()?.count}>
+                    <span aria-hidden="true">{badge()?.count}</span>
+                  </Show>
+                </span>
+              </Tooltip>
+            </span>
           </Show>
         </PresentationContext>
       );

@@ -48,7 +48,7 @@ export const receipt = {
   confirmation: null,
 };
 
-export type ReadFixture = ReturnType<typeof createFixture>;
+export type ReadFixture = Awaited<ReturnType<typeof createFixture>>;
 const avatarUrl = (accountId: number) => `https://avatars.githubusercontent.com/u/${accountId}?v=4`;
 export const optionsResult = (overrides: Record<string, unknown> = {}) => {
   const personalAccount = (overrides.personal as { account?: { accountId: number } } | undefined)
@@ -88,7 +88,7 @@ export function expectNoPersonalReads(fixture: ReadFixture) {
 }
 
 export async function withHeldReceipt(
-  fixture: ReturnType<typeof createFixture>,
+  fixture: Awaited<ReturnType<typeof createFixture>>,
   source: "personal" | "shared" | "status",
   run: (
     respond: ReturnType<typeof vi.fn>,
@@ -130,7 +130,7 @@ export async function withHeldReceipt(
 }
 
 export async function withReadFixture(
-  run: (fixture: ReturnType<typeof createFixture>) => Promise<void>,
+  run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
   options: {
     personal?: boolean;
     scopes?: string[];
@@ -174,7 +174,7 @@ export async function withReadFixture(
           : {}),
       },
     );
-    const fixture = createFixture(profile, options.scopes);
+    const fixture = await createFixture(profile, options.scopes);
     if (options.projection !== false) {
       await initializeSessionReadContext(fixture.context);
     }
@@ -182,6 +182,7 @@ export async function withReadFixture(
     try {
       await run(fixture);
     } finally {
+      await fixture.stopAccount();
       await fixture.personalLifecycle.stop();
       await fixture.readScheduler.stop();
       profileCatalog.release();
@@ -189,7 +190,7 @@ export async function withReadFixture(
   });
 }
 
-function createFixture(
+async function createFixture(
   profile?: ReturnType<typeof ensureProfileForEmail>,
   scopes = ["operator.read"],
 ) {
@@ -265,7 +266,7 @@ function createFixture(
     knownMergedHeads: async () => [],
     pollNow: async () => {},
   });
-  const stopAccount = installGitHubAccountFixture(
+  const stopAccount = await installGitHubAccountFixture(
     context,
     {
       personal: { ...personalLifecycle, status: personalConnectionStatus },

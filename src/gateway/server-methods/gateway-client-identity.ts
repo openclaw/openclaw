@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { gitHubPublicApi } from "../../../extensions/github-repositories/public-api.js";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
@@ -15,6 +14,7 @@ import type { UserTurnInput } from "../../sessions/user-turn-transcript.types.js
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
+import { gitHubAccountApi } from "../native-github-account-api.js";
 import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import type { GatewayClient, GatewayRequestOptions } from "./shared-types.js";
@@ -29,7 +29,7 @@ export function authenticatedProfileUnavailableError(cause?: unknown): ErrorShap
   const rateLimited =
     cause instanceof Error &&
     cause.name === "ControlUiGitHubError" &&
-    cause instanceof gitHubPublicApi.ControlUiGitHubError &&
+    cause instanceof gitHubAccountApi.ControlUiGitHubError &&
     cause.statusCode === 429;
   return errorShape(
     ErrorCodes.UNAVAILABLE,

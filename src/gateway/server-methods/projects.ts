@@ -1,9 +1,5 @@
 import path from "node:path";
 import {
-  resolveConfiguredGitHubHost,
-  parseProjectGitUrl,
-} from "../../../extensions/github-repositories/runtime-api.js";
-import {
   ErrorCodes,
   errorShape,
   type ProjectRecord,
@@ -41,6 +37,7 @@ import {
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
 } from "../method-scopes.js";
+import { resolveConfiguredGitHubHost } from "../native-github-host-realm.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveSessionCreateAgentId } from "../session-request-agent.js";
@@ -150,17 +147,26 @@ export const projectsHandlers: GatewayRequestHandlers = {
         assertMemoryProjectStoresCurrent(memoryStores, keys, assertCurrent);
       const registryProjects = await listProjectRegistry(cfg);
       diagnostics?.mark("sessions");
-      const githubHost = resolveConfiguredGitHubHost(cfg);
+      const assertRepositoryDisplaysCurrent: Array<() => void> = [];
       const projects = registryProjects.map((project) => {
-        // The registry already owns discovery. Project identity never grants repository access.
-        const repository = project.originUrl
-          ? parseProjectGitUrl(project.originUrl, githubHost)
-          : null;
+        let repositoryIdentity: string | undefined;
+        if (project.originUrl) {
+          try {
+            const selected = context.repositorySources?.resolve(project.originUrl);
+            if (selected) {
+              selected.assertCurrent();
+              repositoryIdentity = selected.display?.identity;
+              if (repositoryIdentity) {
+                assertRepositoryDisplaysCurrent.push(selected.assertCurrent);
+              }
+            }
+          } catch {
+            // Optional source presentation does not hide an already discoverable project.
+          }
+        }
         return {
           ...sanitizeProjectRecord(project),
-          ...(repository
-            ? { repositoryIdentity: new URL(repository.url).pathname.slice(1, -4) }
-            : {}),
+          ...(repositoryIdentity ? { repositoryIdentity } : {}),
         };
       });
       const canWrite = () =>
@@ -229,6 +235,13 @@ export const projectsHandlers: GatewayRequestHandlers = {
           ...(writable && observedProjects ? observedProjects.usedSessions : []),
         ]),
       );
+      try {
+        for (const assertDisplayCurrent of assertRepositoryDisplaysCurrent) {
+          assertDisplayCurrent();
+        }
+      } catch {
+        throw new ProjectListingChangedError();
+      }
       // Read-safe identity describes only already discoverable projects. Host paths, origins,
       // folders, and observed checkouts remain write-scoped placement details.
       respond(

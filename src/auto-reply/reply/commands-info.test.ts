@@ -1,5 +1,6 @@
 // Tests info-style command responses, including effective tool inventory.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveGitHubPluginToolsFixture } from "../../agents/github-plugin-tools.test-support.js";
 import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
@@ -21,6 +22,17 @@ import type { HandleCommandsParams } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
 
 // Tests info-style commands that report context, status, skills, and session exports.
+
+// Discovery is synthetic; the registered plugin factories and tool policy metadata remain real.
+vi.mock("../../agents/openclaw-plugin-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/openclaw-plugin-tools.js")>()),
+  resolveOpenClawPluginToolsForOptions: (
+    params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
+  ) => resolveGitHubPluginToolsFixture(params),
+  resolveOpenClawPluginToolsForOptionsAsync: async (
+    params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
+  ) => resolveGitHubPluginToolsFixture(params),
+}));
 
 const buildExportTrajectoryCommandReplyMock = vi.hoisted(() =>
   vi.fn(async () => ({ text: "exported" })),

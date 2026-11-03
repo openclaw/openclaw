@@ -272,6 +272,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/model-fallback.personal-profile.test.ts",
   "src/agents/model-fallback.personal-cooldown.test.ts",
   "src/agents/agent-runtime-config.secret-owners.test.ts",
+  "src/agents/git-coauthor-attribution.test.ts",
   "src/plugin-sdk/provider-auth-runtime.test.ts",
   "src/agents/auth-profiles.sqlite-store.test.ts",
   "src/agents/auth-profiles.readonly-sync.test.ts",

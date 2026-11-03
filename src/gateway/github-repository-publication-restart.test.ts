@@ -1,3 +1,12 @@
+// Register synthetic I/O before the actual plugin identity and publication graph loads.
+// oxfmt-ignore
+import {
+  SESSION_ID,
+  SESSION_KEY,
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+  root,
+} from "./github-publication.test-support.js";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
@@ -8,13 +17,6 @@ import {
   personalPublicationAccount,
   restartPersonalPublicationFixture,
 } from "./github-personal-publication.test-support.js";
-import {
-  SESSION_ID,
-  SESSION_KEY,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-  root,
-} from "./github-publication.test-support.js";
 import { readRepositoryGitHubPublicationInDatabase } from "./github-repository-publication-store.worker.js";
 import {
   createRepositoryPublicationFixture,

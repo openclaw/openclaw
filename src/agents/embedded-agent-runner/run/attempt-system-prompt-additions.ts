@@ -4,6 +4,7 @@ import {
 } from "../../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasPairedCardRenderer } from "../../../infra/device-pairing.js";
+import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
@@ -17,6 +18,7 @@ const PROGRESS_CARD_SYSTEM_PROMPT =
 
 /** Prepares host-owned additions before either embedded or plugin harness dispatch. */
 export async function prepareAttemptSystemPromptAdditions(params: {
+  registry?: PluginRegistry;
   agentId: string;
   authProfileId?: string;
   config?: OpenClawConfig;
@@ -83,6 +85,7 @@ export async function prepareAttemptSystemPromptAdditions(params: {
     }
   }
   const gitCoauthorPrompt = await resolveSessionGitCoauthorPrompt({
+    registry: params.registry,
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,

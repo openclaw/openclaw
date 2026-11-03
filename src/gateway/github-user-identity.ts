@@ -5,11 +5,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  gitHubPublicApi,
-  githubApiToken,
-  resolveConfiguredGitHubHost,
-} from "../../extensions/github-repositories/runtime-api.js";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -33,6 +28,9 @@ import type {
   GitHubIdentityPreparationTiming,
 } from "./github-user-identity.types.js";
 import { firstHeaderValue } from "./http-header-value.js";
+import { gitHubAccountApi } from "./native-github-account-api.js";
+import { resolveConfiguredGitHubHost } from "./native-github-host-realm.js";
+import { githubApiToken } from "./native-github-service-credential.js";
 
 const CLOUDFLARE_ACCESS_USER_HEADER = "cf-access-authenticated-user-email";
 const CLOUDFLARE_ACCESS_ASSERTION_HEADER = "cf-access-jwt-assertion";
@@ -152,13 +150,13 @@ async function fetchCloudflareAccessIdentity(
     const response = await fetchImpl(`${issuer.origin}${CLOUDFLARE_ACCESS_IDENTITY_PATH}`, {
       headers: { Cookie: `CF_Authorization=${assertion}` },
       redirect: "manual",
-      signal: AbortSignal.timeout(gitHubPublicApi.GITHUB_REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(gitHubAccountApi.GITHUB_REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
       await response.body?.cancel().catch(() => {});
       throw new Error("identity response was not successful");
     }
-    const body = await gitHubPublicApi.readBoundedResponse(response, ACCESS_IDENTITY_MAX_BYTES);
+    const body = await gitHubAccountApi.readBoundedResponse(response, ACCESS_IDENTITY_MAX_BYTES);
     payload = JSON.parse(body.toString("utf8"));
   } catch {
     // Never attach the underlying fetch error: request errors may retain the bearer cookie.
@@ -226,13 +224,13 @@ export async function resolveGitHubUserIdentityByLogin(
   let payload: unknown;
   try {
     const request = async (requestToken: string | undefined) => {
-      const { value } = await gitHubPublicApi.fetchGitHubJsonPage(
-        `${gitHubPublicApi.GITHUB_API_ORIGIN}/users/${encodeURIComponent(requestedLogin)}`,
+      const { value } = await gitHubAccountApi.fetchGitHubJsonPage(
+        `${gitHubAccountApi.GITHUB_API_ORIGIN}/users/${encodeURIComponent(requestedLogin)}`,
         fetch,
         requestToken,
         {
           signal: options?.signal,
-          apiBaseUrl: gitHubPublicApi.GITHUB_API_ORIGIN,
+          apiBaseUrl: gitHubAccountApi.GITHUB_API_ORIGIN,
         },
       );
       return value;
@@ -240,19 +238,19 @@ export async function resolveGitHubUserIdentityByLogin(
     payload =
       options?.allowAnonymousRetry === false
         ? await request(token)
-        : await gitHubPublicApi.withOptionalGitHubAuth(token, request);
+        : await gitHubAccountApi.withOptionalGitHubAuth(token, request);
   } catch (error) {
-    if (error instanceof gitHubPublicApi.ControlUiGitHubError) {
+    if (error instanceof gitHubAccountApi.ControlUiGitHubError) {
       throw error;
     }
-    throw new gitHubPublicApi.ControlUiGitHubError(502, "GitHub request failed");
+    throw new gitHubAccountApi.ControlUiGitHubError(502, "GitHub request failed");
   }
   if (!isRecord(payload)) {
-    throw new gitHubPublicApi.ControlUiGitHubError(502, "GitHub response was not an object");
+    throw new gitHubAccountApi.ControlUiGitHubError(502, "GitHub response was not an object");
   }
   const accountId = payload.id;
   if (!Number.isSafeInteger(accountId) || typeof accountId !== "number" || accountId <= 0) {
-    throw new gitHubPublicApi.ControlUiGitHubError(
+    throw new gitHubAccountApi.ControlUiGitHubError(
       502,
       "GitHub response omitted a valid account id",
     );
@@ -262,11 +260,11 @@ export async function resolveGitHubUserIdentityByLogin(
 
 function parseGitHubUserIdentity(accountId: number, payload: unknown): ResolvedGitHubUserIdentity {
   if (!isRecord(payload) || payload.id !== accountId) {
-    throw new gitHubPublicApi.ControlUiGitHubError(502, "GitHub account id did not match");
+    throw new gitHubAccountApi.ControlUiGitHubError(502, "GitHub account id did not match");
   }
   const login = typeof payload.login === "string" ? normalizeGitHubLogin(payload.login) : undefined;
   if (!login) {
-    throw new gitHubPublicApi.ControlUiGitHubError(502, "GitHub response omitted a valid login");
+    throw new gitHubAccountApi.ControlUiGitHubError(502, "GitHub response omitted a valid login");
   }
   return { accountId, login, name: readNonBlankString(payload.name) };
 }
@@ -281,7 +279,7 @@ function resolveGitHubUserIdentityById(
     pending: new Map(),
   };
   identityMetadataCaches.set(fetchImpl, cache);
-  const key = `${accountId}:${gitHubPublicApi.githubApiCredentialCacheScope(token)}`;
+  const key = `${accountId}:${gitHubAccountApi.githubApiCredentialCacheScope(token)}`;
   const cached = cache.values.get(key);
   if (cached && cached.expiresAt > Date.now()) {
     return Promise.resolve({ identity: cached.identity, refreshed: false });
@@ -291,8 +289,8 @@ function resolveGitHubUserIdentityById(
     key,
     async () => {
       try {
-        const response = await gitHubPublicApi.fetchGitHubApi(
-          `${gitHubPublicApi.GITHUB_API_ORIGIN}/user/${accountId}`,
+        const response = await gitHubAccountApi.fetchGitHubApi(
+          `${gitHubAccountApi.GITHUB_API_ORIGIN}/user/${accountId}`,
           fetchImpl,
           token,
           undefined,
@@ -300,16 +298,16 @@ function resolveGitHubUserIdentityById(
           cached?.etag,
           undefined,
           undefined,
-          gitHubPublicApi.GITHUB_API_ORIGIN,
+          gitHubAccountApi.GITHUB_API_ORIGIN,
         );
         let identity: ResolvedGitHubUserIdentity;
         if (response.status === 304 && cached?.etag) {
-          await gitHubPublicApi.discardResponse(response);
+          await gitHubAccountApi.discardResponse(response);
           identity = cached.identity;
         } else {
           identity = parseGitHubUserIdentity(
             accountId,
-            await gitHubPublicApi.readGitHubJsonResponse(response),
+            await gitHubAccountApi.readGitHubJsonResponse(response),
           );
         }
         const rawEtag =
@@ -329,7 +327,7 @@ function resolveGitHubUserIdentityById(
       } catch (error) {
         if (
           cache.pending.get(key) === promise &&
-          error instanceof gitHubPublicApi.ControlUiGitHubError &&
+          error instanceof gitHubAccountApi.ControlUiGitHubError &&
           !error.retryable
         ) {
           cache.values.delete(key);
@@ -419,7 +417,7 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   };
   // A retryable GitHub outage may reuse only an exact binding verified earlier.
   const reuseVerifiedBinding = async (error: unknown, binding: CachedGitHubIdentityBinding) => {
-    if (!(error instanceof gitHubPublicApi.ControlUiGitHubError && error.retryable)) {
+    if (!(error instanceof gitHubAccountApi.ControlUiGitHubError && error.retryable)) {
       return undefined;
     }
     params.assertCurrent?.();
@@ -583,7 +581,7 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     let lookup: GitHubIdentityLookup;
     try {
       lookup = await measure("profileGitHubMetadataMs", () =>
-        gitHubPublicApi.withOptionalGitHubAuth(token, (requestToken) =>
+        gitHubAccountApi.withOptionalGitHubAuth(token, (requestToken) =>
           resolveGitHubUserIdentityById(accessAccountId, requestToken, fetch),
         ),
       );
@@ -603,9 +601,9 @@ export function createAuthenticatedGitHubIdentitySync(params: {
         params.assertCurrent?.();
         return { profileId: profile.id, updatedAt: profile.updatedAt };
       }
-      throw error instanceof gitHubPublicApi.ControlUiGitHubError
+      throw error instanceof gitHubAccountApi.ControlUiGitHubError
         ? error
-        : new gitHubPublicApi.ControlUiGitHubError(502, "GitHub request failed");
+        : new gitHubAccountApi.ControlUiGitHubError(502, "GitHub request failed");
     }
     params.assertCurrent?.();
     if (!lookup.refreshed) {

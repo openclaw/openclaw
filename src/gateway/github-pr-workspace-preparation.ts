@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { parseGitHubRemoteUrl } from "../../extensions/github-repositories/runtime-api.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { canPrepareRepositoryWorkspace } from "../agents/sandbox/github-publication.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -18,6 +17,7 @@ import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
 import { prepareOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
 import { captureGitHubPublicationActionAuthority } from "./github-publication-requester.js";
 import { prepareManagedWorkspaceReviewBase } from "./github-publication-workspace-review.js";
+import { parseGitHubRemoteUrl } from "./github-remote.js";
 import type {
   PullRequestPreparationInput,
   RepositoryPublicationProvider,

@@ -19,6 +19,7 @@ import { createTeamScaleSidebarListOwner } from "../test-helpers/control-ui-side
 import { installTeamScaleSidebarPresentation } from "../test-helpers/control-ui-sidebar-presentation.test-support.ts";
 import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiTeamScaleFixture } from "../test-helpers/control-ui-team-scale-fixture.ts";
+import { GITHUB_REPOSITORY_PLUGIN } from "../test-helpers/repository-plugin.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { chooseSidebarOwner } from "./sidebar-session-menu.test-support.ts";
 
@@ -96,7 +97,11 @@ suite.define(() => {
           );
           const gateway = await installMockGateway(
             page,
-            { ...fixture.scenario, heldMethods: ["connect"] },
+            {
+              ...fixture.scenario,
+              nativePlugins: [GITHUB_REPOSITORY_PLUGIN],
+              heldMethods: ["connect"],
+            },
             {
               requestHandlers: {
                 "sessions.list": async (value) => {

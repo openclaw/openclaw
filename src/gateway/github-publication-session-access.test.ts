@@ -86,7 +86,7 @@ describe("local checkout publication", () => {
             },
             context: {
               ...createDirectChatContext({ getRuntimeConfig }),
-              githubPublicationService: f.coordinator,
+              ...f.guestSource.context,
             },
             client: f.guestSource.client,
             isWebchatConnect: () => false,
@@ -193,8 +193,8 @@ describe("local checkout publication", () => {
       const requester = f.guestSource;
       const context = {
         ...createDirectChatContext({ getRuntimeConfig }),
+        ...f.guestSource.context,
         workerSessionPlacementService: f.placements,
-        githubPublicationService: f.coordinator,
       };
       const invoke = async (handoff = true, workspacePath = source.cwd) => {
         const respond = vi.fn();
@@ -417,7 +417,7 @@ describe("registered session GitHub publication access", () => {
       };
       await handleGatewayRequest({
         req: { type: "req", id: params.idempotencyKey, method: "sessions.github.publish", params },
-        context: Object.assign(f.guestSource.context, { githubPublicationService: f.coordinator }),
+        context: f.guestSource.context,
         client:
           actor === "system"
             ? createSyntheticPluginRuntimeClient({

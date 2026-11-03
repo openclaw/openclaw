@@ -1,12 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  readRepositoryServices,
-  prepareCurrentGitHubPublicationOptionsIdentity,
-  isGitHubPublicationSuperseded,
-  GitHubIdentityError,
-} from "../../../extensions/github-repositories/runtime-api.js";
-import {
   ErrorCodes,
   type GatewayCoreRequestParams,
   errorShape,
@@ -35,11 +29,13 @@ import { performSessionGitHubInspection } from "../github-publication-inspect.js
 import { readGitHubPublicationReadiness } from "../github-publication-readiness.js";
 import { prepareGitHubPublicationRequesterV2 } from "../github-publication-requester.js";
 import type { PublicationSessionIdentity } from "../github-publication-session.types.js";
+import type { RepositoryPublicationApi } from "../repository-publication-contract.js";
 import { adoptUnboundPullRequestWorkspace } from "../session-pr-workspace-adoption.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { resolveLocalWorkspaceOwner } from "../worker-environments/local-workspace-projection.js";
 import { SessionWorkspaceReservationBusyError } from "../worker-environments/placement-workspace-reservation.kernel.js";
+import { readWorkspacePublicationHost } from "../workspace-publication-binding.js";
 import { respondError } from "./response.js";
 import { prepareSessionCreateRequestedCwd } from "./session-create-root.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -87,14 +83,14 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
         return;
       }
     }
-    const publication = readRepositoryServices(options.context)?.publication;
+    const publication = readWorkspacePublicationHost(options.context)?.readApi();
     const respond = options.respond;
     // Request authority is bound to this exact options object, not its enumerable fields.
     options.respond = (...args) => {
       if (
         args[0] &&
         publication &&
-        readRepositoryServices(options.context)?.publication !== publication
+        readWorkspacePublicationHost(options.context)?.readApi() !== publication
       ) {
         throw new Error("The repository publisher stopped; retry from the current service.");
       }
@@ -144,7 +140,8 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
 async function isSessionPublicationSuperseded(
   options: Pick<GatewayRequestHandlerOptions, "client" | "context">,
   session: PublicationSessionIdentity,
-  snapshot: Parameters<typeof isGitHubPublicationSuperseded>[0],
+  publication: RepositoryPublicationApi,
+  snapshot: Parameters<RepositoryPublicationApi["isPublicationSuperseded"]>[0],
   assertCurrent: () => void,
 ): Promise<boolean> {
   const { client, context } = options;
@@ -162,7 +159,7 @@ async function isSessionPublicationSuperseded(
     },
     session,
     async (target) =>
-      isGitHubPublicationSuperseded(snapshot, async () => {
+      publication.isPublicationSuperseded(snapshot, async () => {
         assertCurrent();
         if (!target) {
           return undefined;
@@ -186,7 +183,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     validateSessionGitHubActionParams,
     async (options) => {
       if (options.params.action === "prepare_pr") {
-        const service = readRepositoryServices(options.context)?.publication;
+        const service = readWorkspacePublicationHost(options.context)?.readApi();
         if (!service) {
           throw new Error("Repository publication service is unavailable.");
         }
@@ -252,7 +249,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       using _ = {
         [Symbol.dispose]: admitted.release,
       };
-      const service = readRepositoryServices(options.context)?.publication;
+      const service = readWorkspacePublicationHost(options.context)?.readApi();
       if (!service) {
         throw new Error("Repository publication service is unavailable.");
       }
@@ -280,7 +277,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     async (options) => {
       const { params, respond, context, sessionMutationAuthorization } = options;
 
-      const coordinator = readRepositoryServices(context)?.publication;
+      const coordinator = readWorkspacePublicationHost(context)?.readApi();
       if (!coordinator) {
         respondError(
           respond,
@@ -446,19 +443,15 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             deadline.signal,
           );
 
-          const coordinator = readRepositoryServices(options.context)?.publication;
+          const coordinator = readWorkspacePublicationHost(options.context)?.readApi();
           if (!coordinator) {
             options.respond(false, undefined, publicationStateUnavailableError());
             return;
           }
-          const service = readRepositoryServices(options.context)?.oauth?.personal;
-          if (read.personal.kind === "eligible" && !service) {
-            throw new Error("GitHub connections are unavailable; retry after Gateway startup.");
-          }
           const action = read.personal.kind === "eligible" ? read.personal.action : null;
           const session = read.currentSession();
           const assertResponseCurrent = () => {
-            if (readRepositoryServices(options.context)?.publication !== coordinator) {
+            if (readWorkspacePublicationHost(options.context)?.readApi() !== coordinator) {
               throw new Error("The repository publisher stopped; retry its current options.");
             }
             read.assertSessionUnchanged(session);
@@ -466,25 +459,30 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           let sharedUnavailableReason: SessionGitHubOptionsResult["sharedUnavailableReason"];
           // Independent account and receipt owners can read concurrently. The response
           // still revalidates the same session and personal authority after all awaits.
-          const [identity, personalSnapshot, pendingPersonal, latestShared] = await Promise.all([
-            prepareCurrentGitHubPublicationOptionsIdentity(
-              read.session.agentId,
-              assertResponseCurrent,
-            ).catch((error: unknown) => {
-              sharedUnavailableReason =
-                error instanceof GitHubIdentityError ? error.reason : "unverified";
-              return null;
-            }),
-            action ? service!.status(action) : null,
-            action ? coordinator.personalPending(action, session) : null,
-            coordinator.latestShared(
-              session,
-              options.params.idempotencyKey,
-              (snapshot) =>
-                isSessionPublicationSuperseded(options, session, snapshot, assertResponseCurrent),
-              read.currentSessionRead,
-            ),
-          ]);
+          const [optionsIdentity, personalSnapshot, pendingPersonal, latestShared] =
+            await Promise.all([
+              coordinator.readOptionsIdentity({
+                agentId: read.session.agentId,
+                assertCurrent: assertResponseCurrent,
+              }),
+              action ? coordinator.preparePersonalAccountStatus(action) : null,
+              action ? coordinator.personalPending(action, session) : null,
+              coordinator.latestShared(
+                session,
+                options.params.idempotencyKey,
+                (snapshot) =>
+                  isSessionPublicationSuperseded(
+                    options,
+                    session,
+                    coordinator,
+                    snapshot,
+                    assertResponseCurrent,
+                  ),
+                read.currentSessionRead,
+              ),
+            ]);
+          const { identity } = optionsIdentity;
+          sharedUnavailableReason = optionsIdentity.unavailableReason;
           let shared: SessionGitHubOptionsResult["shared"] = identity
             ? {
                 source: identity.source,
@@ -509,10 +507,8 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             }
           }
           assertResponseCurrent();
-          const personal =
-            action && personalSnapshot
-              ? service!.revalidateStatus(action, personalSnapshot)
-              : personalSnapshot;
+          personalSnapshot?.assertCurrent();
+          const personal = personalSnapshot?.status ?? null;
           // Personal publication accounts are always issued by github.com.
           const avatarUrls = {
             ...(shared && identity?.host
@@ -551,7 +547,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         await import("./github-personal-authorization.js");
       using read = await prepareGitHubPublicationOptionsRead(options, options.params);
 
-      const service = readRepositoryServices(options.context)?.publication;
+      const service = readWorkspacePublicationHost(options.context)?.readApi();
       if (!service) {
         options.respond(false, undefined, publicationStateUnavailableError());
         return;
@@ -586,7 +582,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     "sessions.github.confirm",
     validateSessionGitHubConfirmParams,
     async (options) => {
-      const service = readRepositoryServices(options.context)?.publication;
+      const service = readWorkspacePublicationHost(options.context)?.readApi();
       if (!service) {
         throw new Error("GitHub publication is unavailable.");
       }

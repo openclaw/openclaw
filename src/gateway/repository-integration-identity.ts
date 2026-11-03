@@ -1,7 +1,3 @@
-import {
-  resolveGitHubHost,
-  resolveGitHubApiBaseUrl,
-} from "../../extensions/github-repositories/runtime-api.js";
 import type { GitHubCredentialReader } from "../agents/github-credential-reader.js";
 import { getRepositoryIntegration } from "../plugins/repository-integration-runtime.js";
 import type {
@@ -9,6 +5,7 @@ import type {
   RepositoryOperation,
 } from "../plugins/repository-integration.types.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
+import { resolveGitHubHost, resolveGitHubApiBaseUrl } from "./native-github-host-realm.js";
 type RepositoryCredential = { claim: RepositoryOperation; assertCurrent: () => void };
 
 /** Native lifetimes surround policy; plugins never replace current session/profile owners. */

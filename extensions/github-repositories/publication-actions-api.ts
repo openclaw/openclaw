@@ -1,10 +1,10 @@
 import type { SessionGitHubActionResult } from "@openclaw/gateway-protocol";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactToolPayloadText as redactToolDetail } from "openclaw/plugin-sdk/logging-core";
 import type {
   NativeGitHubPublicationActionInput as RepositoryPublicationActionInput,
   NativeGitHubPublicationActionResult as RepositoryPublicationActionResult,
 } from "openclaw/plugin-sdk/native-github-publication-host";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { pullRequestState } from "./publication-action-state-api.js";
 import {
   assertExpectedSharedGitHubPublisher,

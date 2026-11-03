@@ -156,6 +156,8 @@ export function createSessionRetainedOperations(host: Host) {
         entry = undefined;
       }
       if (!entry) {
+        const requestLifetime = new AbortController();
+        let stopLifetime: (() => void) | undefined;
         // Pending deletion can roll back; only confirmed retirement discards custody.
         const current = () =>
           entry !== undefined &&
@@ -170,7 +172,10 @@ export function createSessionRetainedOperations(host: Host) {
               if (!current()) {
                 throw new Error("This session operation has ended.");
               }
-              const result = await connection.client.request<T>(method, params);
+              const result = await connection.client.request<T>(method, params, {
+                signal: requestLifetime.signal,
+                retainSentResultOnAbort: true,
+              });
               if (!current()) {
                 throw new Error("This session operation has ended.");
               }
@@ -212,7 +217,10 @@ export function createSessionRetainedOperations(host: Host) {
           retained: false,
           routeKey,
           operation,
-          stop: () => {},
+          stop: () => {
+            stopLifetime?.();
+            requestLifetime.abort();
+          },
           onError:
             lifecycle?.onError ??
             ((error) => {
@@ -228,7 +236,7 @@ export function createSessionRetainedOperations(host: Host) {
         entries.set(key, entry);
         if (lifecycle) {
           const created = entry;
-          entry.stop = listen(lifecycle.signal, "abort", () => retire(key, created), {
+          stopLifetime = listen(lifecycle.signal, "abort", () => retire(key, created), {
             once: true,
           });
         }

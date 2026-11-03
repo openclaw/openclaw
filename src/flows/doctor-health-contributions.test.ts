@@ -240,7 +240,8 @@ vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
     mocks.collectStalePluginRuntimeSymlinkHealthFindings,
 }));
 
-vi.mock("./bundled-health-checks.js", () => ({
+vi.mock("./bundled-health-checks.js", async (original) => ({
+  ...(await original<typeof import("./bundled-health-checks.js")>()),
   registerBundledHealthChecks: mocks.registerBundledHealthChecks,
   collectDeclaredPluginDoctorHealthChecks: () => ({ checks: [], findings: [] }),
 }));

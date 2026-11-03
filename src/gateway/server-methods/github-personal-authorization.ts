@@ -1,7 +1,10 @@
-import { currentGitHubPublicationConfig } from "../../../extensions/github-repositories/runtime-api.js";
-import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshotMetadata,
+  readRuntimeConfig,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRolePolicyAuthority } from "../../state/user-channel-identity-operations.js";
 import { captureResidentUserProfileAccess } from "../../state/user-profile-list.js";
@@ -44,7 +47,7 @@ async function prepareOptionsSession(
   assertCurrent: () => void,
 ) {
   assertCurrent();
-  const cfg = currentGitHubPublicationConfig();
+  const cfg = getActiveSecretsRuntimeConfigSnapshot()?.config ?? readRuntimeConfig();
   // Memory actors belong to the caller's storage context.
   if (isIncognitoSessionKey(sessionKey)) {
     return prepareGitHubPublicationSession(sessionKey, { agentId, cfg, assertCurrent });

@@ -4,7 +4,7 @@ import type {
   UsersGitHubStatusResult,
   ToolsGitHubStatusResult,
 } from "@openclaw/gateway-protocol";
-import { generateUUID } from "@openclaw/normalization-core/uuid";
+import { generateUUID } from "openclaw/plugin-sdk/control-ui";
 import type {
   ControlUiSettingsClient as GatewayBrowserClient,
   ControlUiSettingsConfigMutation,

@@ -1,5 +1,21 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+/** A consented, host-verified identity; formatting never grants repository authority. */
+export type GitCoauthorFormatInputV1 = Readonly<{
+  config: OpenClawConfig;
+  agentId: string;
+  /** Explicit publication realm, when different from the configured default. */
+  issuer?: string;
+  excludeSubject?: string;
+  identity: Readonly<{
+    issuer: string;
+    subject: string;
+    name: string;
+    verifiedEmail?: string;
+  }>;
+}>;
+export type FormattedGitCoauthorV1 = Readonly<{ name: string; trailer: string }>;
+
 /** Nonsecret facts prepared by an admitted optional execution owner. */
 export type PreparedExecutionEnvironment = Readonly<{
   credentialScrubEnv: Readonly<Record<string, string>>;
@@ -33,6 +49,11 @@ export type PreparedSandboxExecutionEnvironment = Omit<
   }>;
 export type ExecutionEnvironmentProviderV1 = {
   id: string;
+  /** Pure formatting only: undefined declines this issuer; null deliberately omits this identity. */
+  formatGitCoauthor?(
+    this: void,
+    input: GitCoauthorFormatInputV1,
+  ): FormattedGitCoauthorV1 | null | undefined;
   prepare(this: void, input: ExecutionEnvironmentPreparationV1): PreparedExecutionEnvironment;
   prepareSandbox?(
     this: void,

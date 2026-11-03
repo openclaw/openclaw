@@ -1,9 +1,13 @@
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import { registerPluginDashboardCapabilities } from "../plugins/dashboard-capabilities.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
+import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 
 describe("show_widget prompt", () => {
@@ -11,7 +15,46 @@ describe("show_widget prompt", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it("discovers active host capabilities with usable contracts", () => {
+  it("discovers active host capabilities with usable contracts", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const registry = await loadOpenClawPluginsAsync({
+        config: {
+          plugins: {
+            allow: ["github-repositories"],
+            load: {
+              paths: [path.resolve(import.meta.dirname, "../../extensions/github-repositories")],
+            },
+            entries: { "github-repositories": { enabled: true } },
+          },
+        },
+        onlyPluginIds: ["github-repositories"],
+        activate: false,
+        cache: false,
+        pluginSdkResolution: "src",
+        preferBuiltPluginArtifacts: false,
+      });
+      const record = registry.plugins.find((entry) => entry.id === "github-repositories");
+      if (!record || record.status !== "loaded") {
+        throw new Error(record?.error ?? "Expected the actual GitHub plugin registration");
+      }
+      const instance = getPluginInstance(record);
+      if (!instance) {
+        throw new Error("Expected the managed GitHub plugin instance");
+      }
+      try {
+        setActivePluginRegistry(registry);
+        const tool = createShowWidgetTool();
+        const instructions = JSON.stringify(tool.parameters) + tool.description;
+        expect(instructions).toContain("With a usable connected agent GitHub identity");
+        expect(instructions).toContain("Identity is checked before save");
+        expect(instructions).toContain("github.actions.runs");
+        expect(instructions).toContain("github.actions.runs:owner/repo");
+      } finally {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        await instance.dispose();
+      }
+    });
+
     const registry = createEmptyPluginRegistry();
     const handler = () => {};
     registry.gatewayHandlers["fixture.list"] = handler;
@@ -57,10 +100,6 @@ describe("show_widget prompt", () => {
     setActivePluginRegistry(registry);
     const tool = createShowWidgetTool();
     const instructions = JSON.stringify(tool.parameters) + tool.description;
-    expect(instructions).toContain("With a usable connected agent GitHub identity");
-    expect(instructions).toContain("Identity is checked before save");
-    expect(instructions).toContain("github.actions.runs");
-    expect(instructions).toContain("github.actions.runs:owner/repo");
     expect(instructions).toContain("fixture.list");
     expect(instructions).toContain("List fixture items");
     expect(instructions).toContain("fixture.dispatch");

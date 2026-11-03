@@ -2,11 +2,10 @@ import { spawn, spawnSync, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { quotePowerShellArg, getShellConfig } from "openclaw/plugin-sdk/process-runtime";
+import { withMockedWindowsPlatform } from "openclaw/plugin-sdk/test-node-mocks";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildGitHubExecLaunchArgv } from "../../extensions/github-repositories/exec-launch-api.js";
-import { quotePowerShellArg } from "../cli/quote-cli-arg.js";
-import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
-import { getShellConfig } from "./shell-utils.js";
+import { buildGitHubExecLaunchArgv } from "./exec-launch-api.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -165,10 +164,7 @@ describe.skipIf(process.platform === "win32")("GitHub launch source runtimes", (
         );
         const driver = path.join(root, "driver.mts");
         // Exercise the source route in each runtime; real exec tests cover prepared artifacts.
-        const source = new URL(
-          "../../extensions/github-repositories/exec-launch-api.js",
-          import.meta.url,
-        ).href;
+        const source = new URL("./exec-launch-api.js", import.meta.url).href;
         await fs.writeFile(
           driver,
           `

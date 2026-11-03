@@ -10,6 +10,7 @@ import {
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { resolveGitHubPluginToolsFixture } from "../../agents/github-plugin-tools.test-support.js";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
@@ -168,6 +169,17 @@ function expectStopped(outcome: unknown, stop: Error, change: string, ...mocks: 
     expectNoCalls(...mocks);
   }
 }
+
+// Discovery is synthetic; the registered plugin factories and tool policy metadata remain real.
+vi.mock("../../agents/openclaw-plugin-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/openclaw-plugin-tools.js")>()),
+  resolveOpenClawPluginToolsForOptions: (
+    params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
+  ) => resolveGitHubPluginToolsFixture(params),
+  resolveOpenClawPluginToolsForOptionsAsync: async (
+    params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
+  ) => resolveGitHubPluginToolsFixture(params),
+}));
 
 const captureFailure = (error: unknown) => error;
 

@@ -25,7 +25,12 @@ type InferredApi = Pick<
 > &
   Pick<
     RepositoryPublicationProvider,
-    "supportsOrigin" | "inspectPullRequest" | "performPullRequestAction"
+    | "supportsOrigin"
+    | "inspectPullRequest"
+    | "performPullRequestAction"
+    | "readOptionsIdentity"
+    | "preparePersonalAccountStatus"
+    | "isPublicationSuperseded"
   >;
 expectTypeOf<RepositoryPublicationApi>().toEqualTypeOf<InferredApi>();
 expectTypeOf<InferredApi>().toEqualTypeOf<RepositoryPublicationApi>();

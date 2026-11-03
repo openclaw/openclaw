@@ -1,5 +1,4 @@
 import { onTestFinished } from "vitest";
-import { createGitHubRepositorySource } from "../../../extensions/github-repositories/repository-source-api.js";
 import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -10,8 +9,16 @@ import { performRepositoryCheckout } from "../../plugins/repository-checkout-tra
 import type { RepositorySourceV1 } from "../../plugins/repository-source-types.js";
 import { createRepositorySourceFixture } from "../../plugins/repository-source.test-support.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createRepositorySources } from "../repository-sources.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
+
+const { createGitHubRepositorySource } = await loadBundledPluginFacade<{
+  createGitHubRepositorySource(
+    getRuntimeConfig: () => OpenClawConfig,
+    refresh: (agentId: string) => Promise<void>,
+  ): RepositorySourceV1;
+}>({ pluginId: "github-repositories", artifactBasename: "runtime-api.ts" });
 
 /** Real source admission and lifetime wrappers; individual suites substitute only transport I/O. */
 export function createRepositorySourcesFixture(

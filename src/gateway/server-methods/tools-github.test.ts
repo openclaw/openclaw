@@ -96,7 +96,7 @@ async function invoke(
 ) {
   const respond = vi.fn();
   const context = { getRuntimeConfig: () => ({}) };
-  const uninstall = installGitHubAccountFixture(context as never, oauth as never);
+  const uninstall = await installGitHubAccountFixture(context as never, oauth as never);
   await expectDefined(
     toolsGitHubHandlers[method],
     `${method} handler`,
@@ -108,7 +108,7 @@ async function invoke(
     req: { type: "req", id: "req-github", method },
     isWebchatConnect: () => false,
   });
-  uninstall();
+  await uninstall();
   return respond;
 }
 

@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { resolveConfiguredGitHubHost } from "../../extensions/github-repositories/runtime-api.js";
 import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -18,6 +17,7 @@ import {
 import type { createRepositoryTaskPublicationReader } from "./control-ui-session-task-prs.js";
 import { withRepositoryTaskAudience } from "./control-ui-session-task-prs.js";
 import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
+import { resolveConfiguredGitHubHost } from "./native-github-host-realm.js";
 import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 import {
   authorizeCurrentOperatorRoleScopes,
@@ -368,24 +368,19 @@ export function createRepositoryViewerRead(params: {
             const ownReader = captureOwnGitHubPullRequestReader(actorProfile, () =>
               resolveConfiguredGitHubHost(getRuntimeConfig()),
             );
+            const assertOwnReaderCurrent = () => {
+              target.assertCurrent();
+              ownReader.assertCurrent();
+            };
             return {
               ...target,
               boundPullRequest: binding,
               viewerProfileId: actorProfile,
               ownGitHubIdentity: ownReader.identity,
-              assertCurrent() {
-                target.assertCurrent();
-                ownReader.assertCurrent();
-              },
-              async inspectBoundPullRequest() {
-                const { readOwnGitHubPullRequest } =
-                  await import("../../extensions/github-repositories/publication-inspect-api.js");
-                return await readOwnGitHubPullRequest({
-                  pullRequestUrl: binding.url,
-                  agentId: target.session.agentId,
-                  reader: ownReader,
-                  assertCurrent: target.assertCurrent,
-                });
+              assertCurrent: assertOwnReaderCurrent,
+              preparedOwnPullRequestReader: {
+                ...ownReader,
+                assertCurrent: assertOwnReaderCurrent,
               },
             };
           }

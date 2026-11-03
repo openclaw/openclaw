@@ -18,7 +18,14 @@ export function createGitHubRepositorySource(
     id: "repositories",
     worker: createGitHubWorkerSource(getRuntimeConfig, refresh),
     resolve(raw) {
-      return parseProjectGitUrl(raw, resolveConfiguredGitHubHost(getRuntimeConfig())) ?? undefined;
+      const host = resolveConfiguredGitHubHost(getRuntimeConfig());
+      const repository = parseProjectGitUrl(raw, host);
+      return repository
+        ? {
+            ...repository,
+            display: { identity: new URL(repository.url).pathname.slice(1, -4), host },
+          }
+        : undefined;
     },
     async prepare(input) {
       const config = getRuntimeConfig();

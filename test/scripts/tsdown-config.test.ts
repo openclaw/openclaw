@@ -187,7 +187,7 @@ const workerBuildTargets = [
     "src/infra/worker-native-lifecycle.worker.ts",
   ],
   ["receiver", "worker/workspace-rsync-receiver", "src/worker/workspace-rsync-receiver.ts"],
-  ["github-launcher", "worker/github-exec-launcher", "src/agents/github-exec-launcher.ts"],
+  ["github-launcher", "worker/github-exec-launcher", "src/worker/github-exec-launcher.ts"],
   ["service-relay", "worker/service-child-relay", "src/process/supervisor/service-child-relay.ts"],
   [
     "service-group-anchor",

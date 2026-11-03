@@ -152,9 +152,9 @@ export function ChatCiDetails(props: ChatCiDetailsProps) {
       // Revoke in-flight request scopes on every connection edge, before later acknowledgments.
       stopGateway = gateway?.subscribe(() => {
         reset();
-        queueMicrotask(() => void load());
+        queueMicrotask(load);
       });
-      queueMicrotask(() => void load());
+      queueMicrotask(load);
     }
 
     function syncTarget() {

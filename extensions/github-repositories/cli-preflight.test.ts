@@ -1,17 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { assertGitHubCliAvailable } from "../../extensions/github-repositories/cli-preflight-api.js";
-import { clearExecutablePathCache } from "../infra/executable-path.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
-
-afterEach(() => {
-  clearExecutablePathCache();
-});
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
+import { assertGitHubCliAvailable } from "./cli-preflight-api.js";
 
 describe("GitHub CLI preflight", () => {
   it("recognizes an installation immediately after a missing-CLI retry", async () => {
-    await withTestDir({ prefix: "openclaw-github-cli-" }, async (binDir) => {
+    await withTempDir("openclaw-github-cli-", async (binDir) => {
       const executableName = process.platform === "win32" ? "gh.cmd" : "gh";
       const executablePath = path.join(binDir, executableName);
       const env = {

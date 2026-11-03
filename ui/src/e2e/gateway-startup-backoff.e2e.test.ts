@@ -2,9 +2,9 @@ import { expect, it } from "vitest";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
-  installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { installRepositoryGateway as installMockGateway } from "../test-helpers/repository-plugin.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { openChatPublication } from "./chat-details.test-support.ts";
 import {

@@ -154,6 +154,17 @@ export function scopeControlUiHost(
       return Reflect.get(target, property, receiver);
     },
   });
+  const presentation = host.presentation;
+  const translate = presentation?.translate;
+  const presentationServices = presentation && services(presentation);
+  const scopedPresentation =
+    presentationServices &&
+    new Proxy(presentationServices, {
+      get(target, property, receiver) {
+        // Catalog lookup is not view authority; every effectful service remains scoped.
+        return property === "translate" ? translate : Reflect.get(target, property, receiver);
+      },
+    });
   return {
     // Project the public contract explicitly; activation-only preparation must not escape a view.
     apiVersion: host.apiVersion,
@@ -188,7 +199,7 @@ export function scopeControlUiHost(
     sessions: services(host.sessions, { observe: 1 }),
     requests: scopedRequests,
     native: host.native ? services(host.native) : undefined,
-    presentation: host.presentation ? services(host.presentation) : undefined,
+    presentation: scopedPresentation,
     agents: services(host.agents),
     navigation: services(host.navigation),
     dock: host.dock ? services(host.dock) : undefined,

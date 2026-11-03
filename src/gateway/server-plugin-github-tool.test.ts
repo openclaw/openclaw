@@ -1,9 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
-import { clearGitHubCredentialVerificationCache } from "../../extensions/github-repositories/oauth-api.js";
 import { clearNativeGitHubTokenCache } from "../../extensions/github-repositories/read-identity-api.js";
-import { controlUiGitHubHandlers as controlUiHandlers } from "../../extensions/github-repositories/runtime-api.js";
+import {
+  clearGitHubCredentialVerificationCache,
+  controlUiGitHubHandlers as controlUiHandlers,
+} from "../../extensions/github-repositories/runtime-api.js";
 import {
   resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,

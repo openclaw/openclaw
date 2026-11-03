@@ -5,8 +5,8 @@ import {
   validateToolsGitHubConfigureParams,
   validateToolsGitHubStatusParams,
 } from "@openclaw/gateway-protocol";
-import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { getActiveSecretsRuntimeConfigSnapshot } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveAgentIdOrRespondError,
   defineValidatedGatewayHandler,
@@ -136,7 +136,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
       } catch (error) {
         // Credential setup causes must be safe even in raw file logs.
         log.warn(
-          `tools-github: GitHub identity setup failed: ${formatErrorMessage(error, { redact: redactToolPayloadText })}`,
+          `tools-github: GitHub identity setup failed: ${redactToolPayloadText(formatErrorMessage(error))}`,
         );
         respond(
           false,

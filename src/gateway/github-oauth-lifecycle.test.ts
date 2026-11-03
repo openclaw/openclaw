@@ -966,7 +966,7 @@ describe("GitHub OAuth refresh and maintenance", () => {
     const context = createGatewayRequestContext(contextParams);
     const resolveGatewayContext = () => context;
     context.resolveGatewayContext = resolveGatewayContext;
-    const uninstall = installGitHubAccountFixture(context, lifecycle);
+    const uninstall = await installGitHubAccountFixture(context, lifecycle);
     const requestRefresh = () =>
       withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
         requestCurrentGitHubOAuthRefresh("main"),
@@ -999,7 +999,7 @@ describe("GitHub OAuth refresh and maintenance", () => {
     expect(mocks.createProfileId).not.toHaveBeenCalled();
     expect(refreshedTokens).toEqual([TOKENS.accessToken]);
     await expectStoredOAuth(OLD_PROFILE, { refreshToken: TOKENS.refreshToken });
-    uninstall();
+    await uninstall();
     await requestRefresh();
     expect(mocks.refreshToken).toHaveBeenCalledOnce();
   });

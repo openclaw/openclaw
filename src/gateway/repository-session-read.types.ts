@@ -67,19 +67,34 @@ export type RepositorySessionObservation = {
   readonly worktree?: Readonly<{ id: string; repoRoot: string; branch: string }>;
 };
 
+type RecordedPublication = {
+  url: string;
+  headCommit?: string;
+  publisher: {
+    agentId: string;
+    source: string;
+    profileId: string | null;
+    accountId: number;
+    login: string | null;
+  };
+};
+export type RepositoryPublicationOwnPullRequestReader = {
+  host: string;
+  accountIds: number[];
+  publication: RecordedPublication | undefined;
+  operatorWrite: boolean;
+  identity: string;
+  assertCurrent: () => void;
+};
+
 /** Every operation is bound to the actual selecting owner, separate from cached observations. */
 export type PreparedRepositorySessionRead = RepositorySessionObservation & {
   readonly boundPullRequest?: import("../config/sessions/types.js").SessionGitHubPullRequestBinding;
   /** Restricted session-only readers retain their exact linked profile, never a general service read. */
   readonly viewerProfileId?: string;
   readonly ownGitHubIdentity?: string;
-  readonly inspectBoundPullRequest?: () => Promise<{
-    result: import("../../packages/gateway-protocol/src/schema/session-github-publication.js").SessionGitHubPullRequestInspectResult;
-    assertCurrent: () => void;
-    assertIdentityCurrent: () => void;
-    details: unknown;
-    credential?: { token: string; apiBaseUrl: string; assertCurrent: () => void };
-  }>;
+  /** Exact admitted viewer/account facts; vendor reads keep transport credentials private. */
+  readonly preparedOwnPullRequestReader?: RepositoryPublicationOwnPullRequestReader;
   readonly taskAudienceKey?: string;
   readonly includesTaskPublications: boolean;
   assertCurrent: () => void;

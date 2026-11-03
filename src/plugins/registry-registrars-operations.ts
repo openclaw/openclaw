@@ -284,6 +284,8 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       typeof provider.id !== "string" ||
       !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/u.test(provider.id) ||
       typeof provider.prepare !== "function" ||
+      (provider.formatGitCoauthor !== undefined &&
+        typeof provider.formatGitCoauthor !== "function") ||
       (provider.prepareSandbox !== undefined && typeof provider.prepareSandbox !== "function")
     ) {
       reportRegistrationError(

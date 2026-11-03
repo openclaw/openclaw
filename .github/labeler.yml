@@ -944,6 +944,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/github/**"
+          - "extensions/github-repositories/**"
           - "docs/plugins/github.md"
 "extensions: github-copilot":
   - changed-files:

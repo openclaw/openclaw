@@ -1,5 +1,7 @@
+import type { ControlUiSessionPullRequest } from "../../packages/gateway-protocol/src/control-ui-session-pull-requests.js";
 import type {
   SessionGitHubPullRequestInspectResult,
+  SessionGitHubOptionsResult,
   SessionGitHubBaseRefreshResult,
   SessionGitHubPullRequestPrepareResult,
   SessionGitHubPublishParams,
@@ -10,6 +12,7 @@ import type {
   SessionGitHubPublicationPublished,
   SessionGitHubPublicationResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import type { PersonalGitHubStatus } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
 import type {
   GitHubPublicationRequesterV2,
@@ -23,9 +26,12 @@ import type {
 import type { RepositoryPublicationContentHostV1 } from "./repository-publication-content-contract.js";
 import type { RepositoryPublicationFailure } from "./repository-publication-errors.js";
 import type { RepositoryPublicationGitTransfer } from "./repository-publication-git-transfer.js";
+import type { RepositoryPublicationOwnPullRequestReader } from "./repository-session-read.types.js";
 import type { RepositoryWorkerIdentityTransfer } from "./repository-worker-identity-transfer.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/shared-types.js";
 import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+
+export type { RepositoryPublicationOwnPullRequestReader } from "./repository-session-read.types.js";
 
 /** Facts required by the existing native GitHub receipt backend; never credential authority. */
 export type NativeGitHubPublisherProvenance = Readonly<{
@@ -101,26 +107,6 @@ export type RepositoryPublicationPersonalAction = {
   owner: string;
   assertCurrent: () => void;
 };
-type RecordedPublication = {
-  url: string;
-  headCommit?: string;
-  publisher: {
-    agentId: string;
-    source: string;
-    profileId: string | null;
-    accountId: number;
-    login: string | null;
-  };
-};
-export type RepositoryPublicationOwnPullRequestReader = {
-  host: string;
-  accountIds: number[];
-  publication: RecordedPublication | undefined;
-  operatorWrite: boolean;
-  identity: string;
-  assertCurrent: () => void;
-};
-
 export type RepositoryPublicationPersonalSessionAction = RepositoryPublicationPersonalAction &
   PublicationSessionIdentity &
   Pick<GitHubPublicationRequesterV2, "version" | "signal" | "prepareSource"> & {
@@ -230,6 +216,36 @@ export type RepositoryPublicationProvider = {
       preparation?: { idempotencyKey: string; hasRequest: () => boolean };
     },
   ): Promise<RepositoryPublicationPersonalBinding>;
+  /** Display-only account facts; the provider retains all authentication state. */
+  readOptionsIdentity(
+    this: void,
+    input: { agentId: string; assertCurrent(this: void): void },
+  ): Promise<{
+    identity: {
+      source: NonNullable<SessionGitHubOptionsResult["shared"]>["source"];
+      host: string | undefined;
+      account: { accountId: number; login: string };
+      stale?: true;
+    } | null;
+    unavailableReason?: SessionGitHubOptionsResult["sharedUnavailableReason"];
+  }>;
+  /** The returned assertion retains this exact account-status read, not a later selection. */
+  preparePersonalAccountStatus(
+    this: void,
+    action: RepositoryPublicationPersonalAction,
+  ): Promise<{ status: PersonalGitHubStatus; assertCurrent(this: void): void }>;
+  isPublicationSuperseded(
+    this: void,
+    snapshot: {
+      repository: string | null;
+      branch: string;
+      sourceHeadCommit: string | null;
+      workspaceTree: string | null;
+    },
+    readPublished: () => Promise<
+      { pullRequests: readonly ControlUiSessionPullRequest[]; assertCurrent(): void } | undefined
+    >,
+  ): Promise<boolean>;
   readPersonalSelection(
     this: void,
     action: RepositoryPublicationPersonalAction,
@@ -442,10 +458,16 @@ export type RepositoryPublicationApi = {
   ) => Promise<SessionGitHubStatusResult | null>;
 } & Pick<
   RepositoryPublicationProvider,
-  "supportsOrigin" | "inspectPullRequest" | "performPullRequestAction"
+  | "supportsOrigin"
+  | "inspectPullRequest"
+  | "performPullRequestAction"
+  | "readOptionsIdentity"
+  | "preparePersonalAccountStatus"
+  | "isPublicationSuperseded"
 >;
 /** The binding retains only operations its consumers use, never the host composition factory. */
 export type RepositoryPublicationHostBinding = {
+  readApi(): RepositoryPublicationApi | undefined;
   captureProviderAuthority(pluginId: string): (() => void) | undefined;
   install(
     next: RepositoryPublicationProvider,

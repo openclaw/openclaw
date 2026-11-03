@@ -27,6 +27,7 @@ export type {
   ControlUiSessionOperationBinding,
 } from "./control-ui-session-operation.js";
 export { createSessionHeaderLink } from "./control-ui-session-link.js";
+export { generateUUID } from "../../packages/normalization-core/src/uuid.js";
 export type {
   ControlUiAgentPickerProps,
   ControlUiComponentHandle,
@@ -558,6 +559,7 @@ export type {
 export type { ControlUiNativeHost } from "./control-ui-native.js";
 export type {
   ControlUiPresentationHost,
+  ControlUiLinkPreviewsProps,
   ControlUiIconProps,
   ControlUiToggleProps,
   ControlUiMarqueeOptions,

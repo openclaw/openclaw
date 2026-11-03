@@ -1,4 +1,3 @@
-import { GITHUB_ACTIONS_BINDING_ID } from "../../extensions/github-repositories/board-capabilities-api.js";
 import {
   ErrorCodes,
   errorShape,
@@ -9,6 +8,7 @@ import { CORE_BOARD_DATA_BINDING_IDS } from "../boards/board-host-capability-ids
 import { BoardValidationError } from "../boards/board-layout.js";
 import { BoardEventPayloadError } from "../boards/board-notices.js";
 import type { BoardStore, BoardSessionTarget } from "../boards/board-store.js";
+import { GITHUB_ACTIONS_BINDING_ID } from "../boards/legacy-github-actions-grant.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,

@@ -18,7 +18,8 @@ import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js
 
 const parentKey = "agent:main:dashboard:parent";
 // The policy fixture owns discovery; plugin factory registration and policy metadata remain real.
-vi.mock("./openclaw-plugin-tools.js", () => ({
+vi.mock("./openclaw-plugin-tools.js", async (original) => ({
+  ...(await original<typeof import("./openclaw-plugin-tools.js")>()),
   resolveOpenClawPluginToolsForOptions: (
     params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
   ) => resolveGitHubPluginToolsFixture(params),

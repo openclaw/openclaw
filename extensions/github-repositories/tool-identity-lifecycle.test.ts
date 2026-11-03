@@ -1,6 +1,6 @@
+import type { NativeGitHubOAuthRecord as GitHubOAuthRecord } from "openclaw/plugin-sdk/native-github-account-host";
 import { describe, expect, it } from "vitest";
-import { resolveGitHubPublicationAccessExpiry } from "../../extensions/github-repositories/tool-identity-lifecycle-api.js";
-import type { GitHubOAuthRecord } from "./github-oauth-records.js";
+import { resolveGitHubPublicationAccessExpiry } from "./tool-identity-lifecycle-api.js";
 
 const record: GitHubOAuthRecord = {
   version: 1,

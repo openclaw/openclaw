@@ -34,7 +34,6 @@ export {
   listAgentEntriesWithSource,
   listAgentIds,
   resolveConfiguredAgentId,
-  resolveMutableAgentEntry,
   toAgentEntriesRecord,
   resolveAgentConfig,
   resolveAgentContextLimits,

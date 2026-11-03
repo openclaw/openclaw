@@ -301,8 +301,6 @@ src/agents/configured-provider-fallback.ts
 src/agents/configured-provider-model.ts
 src/agents/defaults.ts
 src/agents/glob-pattern.ts
-src/agents/github-host-runtime.ts
-src/agents/github-host.ts
 src/agents/internal-runtime-context.ts
 src/agents/mcp-oauth-store-error.ts
 src/agents/model-auth-policy.ts
@@ -887,7 +885,6 @@ src/gateway/control-ui-session-diff-revision.ts
 src/gateway/control-ui-session-prs-git.runtime.ts
 src/gateway/control-ui-session-prs-landing.ts
 src/gateway/github-publication-base.ts
-src/gateway/github-remote.ts
 src/gateway/github-repository-publication-snapshot.ts
 src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
@@ -2588,7 +2585,6 @@ src/boards/board-layout.ts
 src/boards/board-report.ts
 src/boards/board-store.ts
 src/boards/board-website.ts
-src/boards/github-actions-capability.ts
 src/boards/session-actor-board-memory.ts
 src/chat/sender-identity.ts
 src/chat/work-context.ts
@@ -2891,3 +2887,10 @@ src/plugins/installed-plugin-snapshot-candidates.ts
 src/plugins/installed-plugin-snapshot-candidates.kernel.ts
 src/plugins/installed-plugin-snapshot-candidates.types.ts
 src/plugins/plugin-source-snapshot-publication.ts
+src/plugin-sdk/dashboard.ts
+src/plugin-sdk/string-normalization-runtime.ts
+src/plugins/dashboard-data-binding-scope.ts
+src/shared/shell-quote.ts
+src/shared/text/chat-display.ts
+src/gateway/github-remote.ts
+src/boards/legacy-github-actions-grant.ts

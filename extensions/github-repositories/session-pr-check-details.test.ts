@@ -1,12 +1,34 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { loadControlUiSessionPullRequestChecks } from "../../extensions/github-repositories/control-ui-session-pr-check-details-api.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import type { ControlUiSessionPullRequest } from "openclaw/plugin-sdk/native-github-session-read";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
-import type { ControlUiSessionPullRequest } from "./control-ui-contract.js";
-import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { loadControlUiSessionPullRequestChecks } from "./control-ui-session-pr-check-details-api.js";
+
+function githubJson(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+function requestUrl(input: RequestInfo | URL | undefined): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.href : (input?.url ?? "");
+}
+function pullListItem(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    number: 103469,
+    title: "fix(macos): tighten the link-browser tab header",
+    html_url: "https://github.com/openclaw/openclaw/pull/103469",
+    state: "open",
+    draft: false,
+    merged_at: null,
+    head: { sha: "a".repeat(40) },
+    base: { ref: "main", repo: { name: "openclaw", owner: { login: "openclaw" } } },
+    ...overrides,
+  };
+}
 
 const headSha = "a".repeat(40);
 const target = {

@@ -2,7 +2,7 @@ import type {
   SessionGitHubPublicationPublished,
   SessionGitHubPullRequestInspectResult,
 } from "@openclaw/gateway-protocol";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function pullRequestState(
   value: unknown,

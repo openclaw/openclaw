@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareGitHubPublicationTarget } from "../../../extensions/github-repositories/publication-target-api.js";
+import { prepareGitHubPublicationTarget } from "../../../extensions/github-repositories/runtime-api.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runGit } from "../../agents/worktrees/git.js";

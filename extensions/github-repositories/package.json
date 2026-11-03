@@ -40,7 +40,15 @@
     ".": "./index.ts",
     "./config-api.js": "./config-api.ts",
     "./public-api.js": "./public-api.ts",
+    "./remote-api.js": "./remote-api.ts",
     "./reader-identity-api.js": "./reader-identity-api.ts",
-    "./tool-identity-api.js": "./tool-identity-api.ts"
+    "./tool-identity-api.js": "./tool-identity-api.ts",
+    "./account-runtime-api.js": "./account-runtime-api.ts",
+    "./host-api.js": "./host-api.ts",
+    "./host-runtime-api.js": "./host-runtime-api.ts",
+    "./project-url-api.js": "./project-url-api.ts",
+    "./publication-availability-api.js": "./publication-availability-api.ts",
+    "./publication-relevance-api.js": "./publication-relevance-api.ts",
+    "./read-identity-api.js": "./read-identity-api.ts"
   }
 }

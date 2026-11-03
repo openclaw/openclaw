@@ -18,8 +18,8 @@ describe("shared native contract fixture CI scope", () => {
   });
 
   it.each([
-    "src/agents/github-exec-launcher.ts",
-    "src/agents/github-exec-credential.ts",
+    "src/worker/github-exec-launcher.ts",
+    "src/worker/worker-github-credentials.ts",
     "src/shared/worker-bundle-hash.ts",
     "src/worker/workspace-rsync-receiver.ts",
     "src/gateway/worker-environments/workspace-sync.ts",

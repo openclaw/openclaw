@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import * as ts from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
+import { isDeclaredExtensionPublicSurfaceImport } from "../../plugin-sdk/test-helpers/public-artifacts.js";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
@@ -100,7 +101,13 @@ function readRepoSource(file: string): string {
 }
 
 function isAllowedBundledExtensionImport(specifier: string): boolean {
-  return /(?:^|\/)extensions\/[^/]+\/(?:api|runtime-api)\.js$/u.test(specifier);
+  return (
+    /(?:^|\/)extensions\/[^/]+\/(?:api|runtime-api)\.js$/u.test(specifier) ||
+    isDeclaredExtensionPublicSurfaceImport(
+      specifier,
+      (pluginId) => JSON.parse(readRepoSource(`extensions/${pluginId}/package.json`)).exports,
+    )
+  );
 }
 
 function collectBundledExtensionImports(source: string): string[] {

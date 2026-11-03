@@ -1,8 +1,15 @@
-import { afterAll, beforeAll, expect, it } from "vitest";
+import path from "node:path";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
+import type { ExecutionEnvironmentProviderV1 } from "../plugins/execution-environment-types.js";
+import { createExecutionEnvironmentFixture } from "../plugins/execution-environment.test-support.js";
+import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -13,16 +20,44 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { resolveGitCoauthorAttribution } from "./git-coauthor-attribution.js";
+import { prepareCliSystemPrompt } from "./cli-runner/prompt-context.js";
+import {
+  resolveGitCoauthorAttribution,
+  prepareGitCoauthorAttribution,
+} from "./git-coauthor-attribution.js";
+import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 
 let sharedState: OpenClawTestState;
+let githubRegistry: PluginRegistry;
 
 beforeAll(async () => {
   sharedState = await createOpenClawTestState({ scenario: "minimal" });
   await captureRuntimeConfigAsyncReader()();
+  githubRegistry = await loadOpenClawPluginsAsync({
+    config: {
+      plugins: {
+        allow: ["github-repositories"],
+        load: {
+          paths: [path.resolve(import.meta.dirname, "../../extensions/github-repositories")],
+        },
+        entries: { "github-repositories": { enabled: true } },
+      },
+    },
+    onlyPluginIds: ["github-repositories"],
+    activate: false,
+    cache: false,
+    pluginSdkResolution: "src",
+    preferBuiltPluginArtifacts: false,
+  });
+  expect(githubRegistry.plugins.find((entry) => entry.id === "github-repositories")?.status).toBe(
+    "loaded",
+  );
 });
 
 afterAll(async () => {
+  for (const record of githubRegistry.plugins) {
+    await getPluginInstance(record)?.dispose();
+  }
   await sharedState.cleanup();
 });
 
@@ -36,7 +71,9 @@ async function withSession<T>(
   const work = new AsyncWorkScope();
   try {
     const scope = sessionScope(`agent:main:${sessionId}`);
-    return await work.track(() => fn(scope, sharedState));
+    return await withPluginRuntimeRegistryScope(githubRegistry, () =>
+      work.track(() => fn(scope, sharedState)),
+    );
   } finally {
     await work.drain();
   }
@@ -270,5 +307,69 @@ it("uses current identity and consent for inherited credit without counting it t
     setCredit(later.id, true);
     expect((await read())?.logins).toEqual(["current-contributor", "later-contributor"]);
     expect(await readCredit(scope, { sessionId: "replaced-child" })).toBeUndefined();
+    expect(
+      await readCredit(scope, {
+        config: { plugins: { entries: { "github-repositories": { enabled: false } } } },
+      }),
+    ).toBeUndefined();
+  });
+});
+
+it("formats current, consented contributors through a non-GitHub provider in CLI prompts without preparing execution", async () => {
+  await withSession("plugin-coauthor-format", async (scope, state) => {
+    await upsertSessionEntryCore(scope, { sessionId: "plugin-coauthor-format", updatedAt: 1 });
+    const allowed = linkedProfile("plugin-contributor", 9501);
+    const denied = linkedProfile("private-contributor", 9502);
+    participant(scope, allowed, 1);
+    participant(scope, denied, 2);
+    setCredit(denied.id, false);
+    const prepare = vi.fn(() => {
+      throw new Error("Prompt credit must not prepare execution identity");
+    });
+    const format = vi.fn<NonNullable<ExecutionEnvironmentProviderV1["formatGitCoauthor"]>>(
+      ({ identity }) =>
+        identity.issuer === "github.com"
+          ? {
+              name: identity.name,
+              trailer: `Co-authored-by: ${identity.name} (Forge) <${identity.subject}+${identity.name}@users.noreply.github.com>`,
+            }
+          : undefined,
+    );
+    const fixture = createExecutionEnvironmentFixture({
+      id: "fake-forge",
+      prepare,
+      formatGitCoauthor: format,
+    });
+    const input = { ...scope, config: {}, registry: fixture.registry };
+    const prepared = await prepareGitCoauthorAttribution(input);
+    const trailer =
+      "Co-authored-by: plugin-contributor (Forge) <9501+plugin-contributor@users.noreply.github.com>";
+    expect(prepared.attribution).toEqual({ trailers: [trailer], logins: ["plugin-contributor"] });
+    const prompt = await resolveSessionGitCoauthorPrompt(input);
+    expect(prompt).toBe(
+      `Git co-authors: add these exact trailers to every commit you make from this session.\n${trailer}`,
+    );
+    const cli = await fixture.run(() =>
+      prepareCliSystemPrompt({
+        config: {},
+        agentId: "main",
+        sessionKey: scope.sessionKey,
+        sessionId: "plugin-coauthor-format",
+        workspaceDir: state.workspaceDir,
+        tools: [],
+        modelDisplay: "fixture/local",
+      }),
+    );
+    expect(cli).toContain(prompt);
+    expect(format.mock.calls.every(([call]) => call.identity.subject === "9501")).toBe(true);
+    expect(prepare).not.toHaveBeenCalled();
+    setCredit(allowed.id, false);
+    expect(prepared.isCurrent()).toBe(false);
+    expect(await resolveGitCoauthorAttribution(input)).toBeUndefined();
+    setCredit(allowed.id, true);
+    const current = await prepareGitCoauthorAttribution(input);
+    expect(current.isCurrent()).toBe(true);
+    await fixture.instance.dispose();
+    expect(current.isCurrent()).toBe(false);
   });
 });

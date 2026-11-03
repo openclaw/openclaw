@@ -1,6 +1,8 @@
+import { parseGitHubLinkParams } from "@openclaw/github/targets-api.js";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 import type { GitHubPublicationView } from "./github-publication-owner.ts";
+import { chatPullRequestId } from "./pull-request-ids.ts";
 export { chatPullRequestId, chatBranchId } from "./pull-request-ids.ts";
 
 const DISMISSED_STORAGE_KEY = "openclaw.chat.dismissedPullRequests";
@@ -25,6 +27,23 @@ export function retainedPublication(publication: GitHubPublicationView | undefin
   );
 }
 
+/** A published receipt bridges the PR until its independent snapshot arrives. */
+export function publicationPullRequestTarget(publication: GitHubPublicationView | undefined) {
+  const result = publication?.result;
+  const url = result?.status === "published" ? URL.parse(result.url) : null;
+  const target = url ? parseGitHubLinkParams({ url: url.href }, url.hostname)?.target : undefined;
+  return target?.kind === "pull" ? target : undefined;
+}
+
+export function publicationPullRequest(
+  publication: GitHubPublicationView | undefined,
+  pullRequests: readonly Parameters<typeof chatPullRequestId>[0][],
+) {
+  const target = publication?.error ? undefined : publicationPullRequestTarget(publication);
+  const id = target && chatPullRequestId(target);
+  return id ? pullRequests.find((request) => chatPullRequestId(request) === id) : undefined;
+}
+
 export function showWorkRow(props: ChatPullRequestsProps): boolean {
   return Boolean(
     (!props.branchDismissed && props.branch) ||
@@ -41,6 +60,9 @@ export function showWorkRow(props: ChatPullRequestsProps): boolean {
 export function repositoryEnvironmentWork(
   props: ChatPullRequestsProps,
 ): ChatPullRequestsProps | undefined {
+  if (props.branch) {
+    return props;
+  }
   if (
     props.publication?.result?.status === "published" ||
     (!props.branch &&

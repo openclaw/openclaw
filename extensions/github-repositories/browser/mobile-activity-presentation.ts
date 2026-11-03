@@ -4,6 +4,7 @@ import type {
 } from "@openclaw/gateway-protocol";
 import type { ControlUiPresentationHost } from "openclaw/plugin-sdk/control-ui";
 import type { GitHubPublicationView } from "./github-publication-owner.ts";
+import { publicationPullRequestTarget } from "./pull-request-dismissal.ts";
 type Translate = ControlUiPresentationHost["translate"];
 type PillView = Parameters<ControlUiPresentationHost["mountActivityPill"]>[1]["view"];
 type Badge = NonNullable<PillView["badge"]>;
@@ -99,8 +100,11 @@ export function publicationView(view: GitHubPublicationView, t: Translate): Pill
     };
   }
   if (view.result?.status === "published") {
+    const target = publicationPullRequestTarget(view);
     return {
-      label: t("chat.activityPills.publication.published"),
+      label: target
+        ? t("chat.activityPills.pullRequest.number", { number: String(target.number) })
+        : t("chat.activityPills.publication.published"),
       icon: "gitPullRequest",
       badge: {
         icon: "check",

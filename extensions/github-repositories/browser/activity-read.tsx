@@ -3,19 +3,52 @@ import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "@openclaw/gateway-protocol";
-import { For, Show } from "solid-js";
+import type { ControlUiLinkReaderPreview } from "openclaw/plugin-sdk/control-ui-link-reader";
+import { For, Show, useContext } from "solid-js";
+import { content, hostControl } from "./host-control.tsx";
 import { SessionGitDiff } from "./native-components.tsx";
 import { Icon } from "./presentation-components.tsx";
-import { presentationTranslator } from "./presentation-context.ts";
+import { PresentationContext, presentationTranslator } from "./presentation-context.ts";
 import { sessionPullRequestStateIcons } from "./session-pull-request-presentation.ts";
 
 export function ActivityRead(props: {
   branch?: ControlUiSessionBranch;
   pullRequests: readonly ControlUiSessionPullRequest[];
   stale: boolean;
+  sessionKey?: string;
+  agentId?: string;
 }) {
   const t = presentationTranslator();
-  return (
+  const presentation = useContext(PresentationContext);
+  const preview = (pr: ControlUiSessionPullRequest): ControlUiLinkReaderPreview => ({
+    url: pr.url,
+    title: pr.title,
+    subtitle: `${pr.owner}/${pr.repo} #${pr.number}`,
+    badge: {
+      label: t(`activity.git.${pr.state}`),
+      tone:
+        pr.state === "merged"
+          ? "accent"
+          : pr.state === "open"
+            ? "positive"
+            : pr.state === "closed"
+              ? "negative"
+              : "neutral",
+    },
+    author: pr.author?.login,
+    authorUrl: pr.author?.login
+      ? `https://github.com/${encodeURIComponent(pr.author.login)}`
+      : undefined,
+    metadata: [
+      ...(pr.additions === undefined
+        ? []
+        : [{ label: "", value: `+${pr.additions}`, tone: "positive" as const }]),
+      ...(pr.deletions === undefined
+        ? []
+        : [{ label: "", value: `−${pr.deletions}`, tone: "negative" as const }]),
+    ],
+  });
+  const child = content(() => (
     <div class="activity-feed__git">
       <Show when={props.branch}>
         {(branch) => (
@@ -67,5 +100,14 @@ export function ActivityRead(props: {
         </span>
       </Show>
     </div>
+  ));
+  return hostControl(
+    () => ({
+      child,
+      previewSeeds: props.pullRequests.map(preview),
+      sessionKey: props.sessionKey,
+      agentId: props.agentId,
+    }),
+    presentation.mountLinkPreviews,
   );
 }

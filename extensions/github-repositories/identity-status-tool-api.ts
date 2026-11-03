@@ -1,6 +1,6 @@
 import type { ToolsGitHubStatusResult } from "@openclaw/gateway-protocol";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { bindAgentToolAvailability } from "openclaw/plugin-sdk/tool-plugin";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
@@ -10,8 +10,7 @@ const GITHUB_IDENTITY_STATUS_PARAMETERS = Type.Object({}, { additionalProperties
 export function createGitHubIdentityStatusTool(
   gateway: NonNullable<OpenClawPluginToolContext<2>["gateway"]>,
 ): AnyAgentTool {
-  let githubIdentitySettingsAvailable =
-    gateway.clientCaps?.includes("ui-agent-github-settings") === true;
+  let githubIdentitySettingsAvailable = gateway.clientCaps.includes("ui-agent-github-settings");
   const tool: AnyAgentTool = {
     label: "GitHub Identity Status",
     name: "github_identity_status",
@@ -42,7 +41,7 @@ export function createGitHubIdentityStatusTool(
       const callableScreen = callableTools.get("screen");
       const offeredScreen = offeredTools.get("screen");
       githubIdentitySettingsAvailable =
-        gateway.clientCaps?.includes("ui-agent-github-settings") === true &&
+        gateway.clientCaps.includes("ui-agent-github-settings") &&
         callableScreen !== undefined &&
         schemaIncludesAction(callableScreen.parameters, "github_identity_settings");
       const githubIdentitySettingsOffered =

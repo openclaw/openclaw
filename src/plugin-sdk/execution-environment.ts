@@ -1,5 +1,7 @@
 /** Prepared optional execution contributions; process and sandbox custody remain host-owned. */
 export type {
+  GitCoauthorFormatInputV1,
+  FormattedGitCoauthorV1,
   ExecutionEnvironmentProviderV1,
   ExecutionEnvironmentPreparationV1,
   SandboxExecutionEnvironmentPreparationV1,

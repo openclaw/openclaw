@@ -1,4 +1,3 @@
-import { readRepositoryServices } from "../../extensions/github-repositories/account-runtime-api.js";
 import type { SessionGitHubActionParams } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -6,18 +5,19 @@ import { prepareGitHubPublicationSession } from "./github-publication-availabili
 import { prepareOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import { readWorkspacePublicationHost } from "./workspace-publication-binding.js";
 export async function performSessionGitHubInspection(
   options: Omit<GatewayRequestHandlerOptions, "params"> & {
     params: Extract<SessionGitHubActionParams, { action: "inspect_pr" }>;
   },
 ): Promise<void> {
   const { params } = options;
-  const service = readRepositoryServices(options.context)?.publication;
+  const service = readWorkspacePublicationHost(options.context)?.readApi();
   if (!service) {
     throw new Error("Repository publication service is unavailable.");
   }
   const assertService = () => {
-    if (readRepositoryServices(options.context)?.publication !== service) {
+    if (readWorkspacePublicationHost(options.context)?.readApi() !== service) {
       throw new Error("Repository publication service is unavailable.");
     }
   };

@@ -8,6 +8,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createOpenClawCodingToolsInternal } from "../../agents/agent-tools.js";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
+import { resolveGitHubPluginToolsFixture } from "../../agents/github-plugin-tools.test-support.js";
 import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -25,6 +26,17 @@ import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { registerWorkerDelegationPolicyTests } from "./worker-session-tool-executor.delegation.suite.js";
 import { registerWorkerGatewayToolExecutionTests } from "./worker-session-tool-executor.gateway-tools.suite.js";
 import { registerWorkerSpawnStartupTests } from "./worker-session-tool-executor.startup.suite.js";
+// Discovery is synthetic; the registered plugin factories and tool policy metadata remain real.
+vi.mock("../../agents/openclaw-plugin-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/openclaw-plugin-tools.js")>()),
+  resolveOpenClawPluginToolsForOptions: (
+    params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
+  ) => resolveGitHubPluginToolsFixture(params),
+  resolveOpenClawPluginToolsForOptionsAsync: async (
+    params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
+  ) => resolveGitHubPluginToolsFixture(params),
+}));
+
 const {
   workerSessionToolTestMocks,
   SOURCE,
@@ -122,7 +134,7 @@ describe("worker session tool topology", () => {
                 includeShellTools: false,
                 includeChannelTools: false,
                 includeOpenClawTools: true,
-                includePluginTools: false,
+                includePluginTools: true,
               },
               conversationCapabilityProfile: resolveConversationCapabilityProfile({
                 config,

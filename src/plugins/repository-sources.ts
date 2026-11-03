@@ -35,18 +35,26 @@ export function resolvePluginRepositorySource(
     );
   }
   const { entry, resolved, id } = matches[0]!;
+  const resolvedUrl = resolved.url;
+  const name = resolved.name;
+  // Display changes appear on the next resolution; they never retire checkout authority.
+  const display = resolved.display && {
+    identity: resolved.display.identity,
+    ...(resolved.display.host !== undefined ? { host: resolved.display.host } : {}),
+  };
   entry.assertCurrent();
   const assertCurrent = () => {
     assertBoundCurrent();
     entry.assertCurrent();
-    if (entry.provider.resolve(url)?.url !== resolved.url) {
+    if (entry.provider.resolve(url)?.url !== resolvedUrl) {
       throw new Error("Repository source changed; select it again.");
     }
   };
   return {
     id,
-    name: resolved.name,
-    url: resolved.url,
+    name,
+    url: resolvedUrl,
+    ...(display ? { display } : {}),
     assertCurrent,
     async prepare(input: Omit<Parameters<typeof entry.provider.prepare>[0], "url">) {
       const assertSourceCurrent = () => {
@@ -57,7 +65,7 @@ export function resolvePluginRepositorySource(
       assertSourceCurrent();
       const prepared = await entry.provider.prepare({
         ...input,
-        url: resolved.url,
+        url: resolvedUrl,
         assertCurrent: assertSourceCurrent,
       });
       assertSourceCurrent();
@@ -120,7 +128,7 @@ export function resolvePluginRepositorySource(
       assertSourceCurrent();
       const prepared = await restore({
         ...input,
-        url: resolved.url,
+        url: resolvedUrl,
         assertCurrent: assertSourceCurrent,
       });
       const assertPrepared = () => {
@@ -155,7 +163,7 @@ export function resolvePluginRepositorySource(
       assertSourceCurrent();
       const prepared = await worker.prepare({
         ...input,
-        url: resolved.url,
+        url: resolvedUrl,
         assertCurrent: assertSourceCurrent,
       });
       input.signal?.throwIfAborted();
@@ -213,7 +221,7 @@ export function resolvePluginRepositorySource(
         assertRepositoryDispatchAdmission(input.readCredential);
       };
       assertSourceCurrent();
-      await worker.checkout({ ...input, url: resolved.url, assertCurrent: assertSourceCurrent });
+      await worker.checkout({ ...input, url: resolvedUrl, assertCurrent: assertSourceCurrent });
       assertSourceCurrent();
     },
   };

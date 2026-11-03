@@ -5,7 +5,6 @@ ui/src/app/router-outlet-presentation.ts	1
 ui/src/app/router-outlet.tsx	1
 ui/src/app/shell-layout-traits-solid.tsx	1
 ui/src/components/app-sidebar-render.tsx	1
-ui/src/components/app-sidebar-session-pr-indicators.ts	1
 ui/src/components/app-sidebar.tsx	1
 ui/src/components/board/board-mcp-app-content.tsx	1
 ui/src/components/board/board-view.tsx	1
@@ -57,7 +56,6 @@ ui/src/pages/chat/components/chat-composer.tsx	1
 ui/src/pages/chat/components/chat-detail-panel.tsx	1
 ui/src/pages/chat/components/chat-details.tsx	1
 ui/src/pages/chat/components/chat-message-bubble-view.tsx	1
-ui/src/pages/chat/components/chat-pull-request-checks.tsx	1
 ui/src/pages/chat/components/chat-question-answer-controls.tsx	1
 ui/src/pages/chat/components/chat-read-aloud.tsx	1
 ui/src/pages/chat/solid-render-lifecycle.ts	1

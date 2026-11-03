@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
+  type ControlUiSessionPullRequestSnapshot,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
@@ -76,12 +77,12 @@ function pullRequest(
 function publicationState(
   branch: string,
   details: { additions?: number; deletions?: number; createUrl?: string } = {},
-) {
+): ControlUiSessionPullRequestSnapshot {
   return {
     pullRequests: [],
     branch: { owner: "openclaw", repo: "openclaw", branch, additions: 2, deletions: 1, ...details },
     rateLimited: false,
-    status: "ok",
+    status: "ready",
   };
 }
 
@@ -706,7 +707,7 @@ suite.define(() => {
         createUrl: "https://github.com/openclaw/openclaw/pull/new/openclaw/reconciled-publication",
       },
       rateLimited: false,
-      status: "ok",
+      status: "ready",
     });
     await openDetailsPullRequests(page);
     await pollCount(
@@ -737,7 +738,7 @@ suite.define(() => {
         createUrl: "https://github.com/openclaw/openclaw/pull/new/openclaw/reconciled-publication",
       },
       rateLimited: false,
-      status: "ok",
+      status: "ready",
     });
     await openChatPublication(page);
     await pollCount(environment.getByRole("button", { name: "Create PR", exact: true })).toBe(1);

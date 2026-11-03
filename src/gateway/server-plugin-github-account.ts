@@ -1,10 +1,8 @@
-import {
-  gitHubPublicApi,
-  githubApiToken,
-} from "../../extensions/github-repositories/public-api.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveGitHubUserIdentityByLogin } from "./github-user-identity.js";
+import { gitHubAccountApi } from "./native-github-account-api.js";
+import { githubApiToken } from "./native-github-service-credential.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { withInProcessGatewayRead } from "./server-plugin-in-process-dispatch.js";
 import { canTrustedOfficialPluginRequestScopes } from "./server-plugin-subagent-runtime.js";
@@ -47,7 +45,7 @@ export async function resolveTrustedPluginGitHubAccount(
         return { accountId, login: canonicalLogin };
       } catch (error) {
         assertActive();
-        if (error instanceof gitHubPublicApi.ControlUiGitHubError) {
+        if (error instanceof gitHubAccountApi.ControlUiGitHubError) {
           return {
             error: {
               statusCode: error.statusCode,

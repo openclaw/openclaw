@@ -1,3 +1,13 @@
+// Register synthetic I/O before the actual plugin identity and publication graph loads.
+// oxfmt-ignore
+import {
+  SESSION_ID,
+  SESSION_KEY,
+  commandResult,
+  createTestGitHubPublicationCoordinator,
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+} from "./github-publication.test-support.js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { preparePersonalGitHubSessionReceiptDeletion } from "../state/github-personal-publication-lifecycle.js";
@@ -11,14 +21,6 @@ import {
 import { RepositoryPublicationProviderUnavailableError } from "./github-publication-errors.js";
 import { createGitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import { claimRepositoryGitHubPublicationAsync } from "./github-publication-store-async.js";
-import {
-  SESSION_ID,
-  SESSION_KEY,
-  commandResult,
-  createTestGitHubPublicationCoordinator,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-} from "./github-publication.test-support.js";
 import { listRepositoryGitHubPublicationsInDatabase } from "./github-repository-publication-read.worker.js";
 import { readRepositoryGitHubPublicationInDatabase } from "./github-repository-publication-store.worker.js";
 import { captureCheckpoint } from "./github-repository-publication-workspace.js";

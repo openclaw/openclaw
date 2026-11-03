@@ -51,10 +51,10 @@ export function RepositoryPresentation(props: Inputs & { children: JSX.Element }
       },
     });
   });
-  const presentation = createControlUiPresentationHost(
-    () => abort.signal.throwIfAborted(),
-    abort.signal,
-  );
+  const presentation = createControlUiPresentationHost(() => {
+    abort.signal.throwIfAborted();
+    return { gateway: source() };
+  }, abort.signal);
   presentation.registerEnglish(publicationEnglish);
   presentation.registerEnglish(pullRequestEnglish);
   onCleanup(() => {

@@ -80,3 +80,5 @@ export async function captureNativeGitHubSessionRequestRead() {
 }
 
 export type { RepositoryReadCredentialPreparation as NativeGitHubReadCredentialPreparation } from "../gateway/repository-session-read.types.js";
+
+export { parseGitHubRemoteUrl } from "../gateway/github-remote.js";

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readSecureFile } from "openclaw/plugin-sdk/file-access-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseDocument } from "yaml";
 import { resolveConfiguredGitHubHost } from "./host-api.js";
 

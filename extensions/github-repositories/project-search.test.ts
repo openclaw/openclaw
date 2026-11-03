@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { searchRemoteProjects } from "../../extensions/github-repositories/project-search-api.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { createDeferred as createDeferredCore } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
-import { createDeferredCore } from "../shared/deferred.js";
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { searchRemoteProjects } from "./project-search-api.js";
 
 function repository(fullName: string, description?: string, updatedAt?: string) {
   const [owner, name] = fullName.split("/");

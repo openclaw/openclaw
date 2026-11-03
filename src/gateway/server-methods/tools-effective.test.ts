@@ -7,6 +7,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
 import * as conversationToolPolicyPipeline from "../../agents/conversation-tool-policy-pipeline.js";
 import * as toolSchemaRuntime from "../../agents/embedded-agent-runner/tool-schema-runtime.js";
+import { resolveGitHubPluginToolsFixture } from "../../agents/github-plugin-tools.test-support.js";
 import type { SandboxToolPolicy } from "../../agents/sandbox/types.js";
 import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
@@ -58,6 +59,17 @@ function makeSession(
     ...overrides,
   };
 }
+
+// Discovery is synthetic; the registered plugin factories and tool policy metadata remain real.
+vi.mock("../../agents/openclaw-plugin-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/openclaw-plugin-tools.js")>()),
+  resolveOpenClawPluginToolsForOptions: (
+    params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
+  ) => resolveGitHubPluginToolsFixture(params),
+  resolveOpenClawPluginToolsForOptionsAsync: async (
+    params: Parameters<typeof resolveGitHubPluginToolsFixture>[0],
+  ) => resolveGitHubPluginToolsFixture(params),
+}));
 
 const runtimeMocks = vi.hoisted(() => ({
   deliveryContextFromSession: vi.fn(() => ({

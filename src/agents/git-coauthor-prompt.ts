@@ -1,6 +1,7 @@
 import { isMainGitContributorScope } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { resolveGitCoauthorAttribution } from "./git-coauthor-attribution.js";
@@ -35,6 +36,7 @@ export async function resolveRequestGitCoauthorPrompt(params: {
 }
 
 export async function resolveSessionGitCoauthorPrompt(params: {
+  registry?: PluginRegistry;
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
@@ -68,6 +70,7 @@ export async function resolveSessionGitCoauthorPrompt(params: {
       sessionKey: params.sessionKey,
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       storePath: params.storePath,
+      registry: params.registry,
     });
     const trailers = attribution?.trailers;
     return trailers?.length

@@ -4,7 +4,9 @@ import { projectsHandlers } from "./projects.js";
 import { invokeProjectMethod } from "./projects.test-support.js";
 
 test("projects.list projects raw Enterprise origins into read-safe identity without credentials or placement", async () => {
-  const cfg = { gateway: { github: { host: "ghe.example.test" } } };
+  const cfg = {
+    plugins: { entries: { "github-repositories": { config: { host: "ghe.example.test" } } } },
+  };
   using _ = vi.spyOn(registry, "listProjectRegistry").mockResolvedValue([
     {
       id: "console",

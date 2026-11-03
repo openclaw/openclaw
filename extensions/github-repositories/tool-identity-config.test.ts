@@ -1,17 +1,18 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readGitHubConfig } from "./config-api.js";
 
 const mocks = vi.hoisted(() => ({
-  mutateConfigFileWithRetry: vi.fn(),
+  mutateAgentScopedPluginConfig:
+    vi.fn<typeof import("openclaw/plugin-sdk/config-mutation").mutateAgentScopedPluginConfig>(),
 }));
 
-vi.mock("../config/mutate.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/mutate.js")>()),
-  mutateConfigFileWithRetry: mocks.mutateConfigFileWithRetry,
+vi.mock("openclaw/plugin-sdk/config-mutation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/config-mutation")>()),
+  mutateAgentScopedPluginConfig: mocks.mutateAgentScopedPluginConfig,
 }));
 
-import { updateGitHubToolIdentityConfig } from "../../extensions/github-repositories/tool-identity-config-api.js";
+import { updateGitHubToolIdentityConfig } from "./tool-identity-config-api.js";
 
 describe("GitHub identity config mutation", () => {
   it.each([undefined, false, true])(
@@ -40,9 +41,14 @@ describe("GitHub identity config mutation", () => {
           },
         },
       };
-      mocks.mutateConfigFileWithRetry.mockImplementation(async ({ mutate }) => {
-        await mutate(draft);
-        return { nextConfig: draft };
+      mocks.mutateAgentScopedPluginConfig.mockImplementation(async (selection, mutate) => {
+        expect(selection).toEqual({
+          pluginId: "github-repositories",
+          agent: { id: "main", createIfMissing: expect.any(Boolean) },
+        });
+        const plugin = draft.plugins!.entries![selection.pluginId]!;
+        plugin.config = await mutate(plugin.config);
+        return draft;
       });
 
       await updateGitHubToolIdentityConfig({

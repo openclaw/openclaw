@@ -165,7 +165,7 @@ beforeEach(async () => {
   context.resolveGatewayContext = () => context;
   resources = new LegacyPluginSdkResourceHost();
   bindLegacyPluginSdkResourceHost(context.resolveGatewayContext, resources);
-  installGitHubAccountFixture(context, lifecycle);
+  await installGitHubAccountFixture(context, lifecycle);
   installGitHubAccountRpcFixture(config);
 });
 afterEach(async () => {

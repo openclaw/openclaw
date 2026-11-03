@@ -504,10 +504,18 @@ async function loadControlUiSessionBranchPullRequests(
           | undefined;
         let preparedDetails: unknown;
         if (ownProfileId) {
-          if (!target.read?.inspectBoundPullRequest) {
+          const selectedRead = target.read;
+          const reader = selectedRead?.preparedOwnPullRequestReader;
+          if (!selectedRead || !reader) {
             throw new Error("The current reader cannot inspect this pull request");
           }
-          const inspected = await target.read.inspectBoundPullRequest();
+          const { readOwnGitHubPullRequest } = await import("./publication-inspect-api.js");
+          const inspected = await readOwnGitHubPullRequest({
+            pullRequestUrl: binding.url,
+            agentId: selectedRead.session.agentId,
+            reader,
+            assertCurrent,
+          });
           inspected.assertCurrent();
           const selected = inspected.result;
           if (

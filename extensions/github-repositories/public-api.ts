@@ -1,15 +1,10 @@
 import * as readerApi from "@openclaw/github/api.js";
-import {
-  assertSecretOwnerAvailable,
-  isTrustedSecretSurfaceUnavailableError,
-  SecretSurfaceUnavailableError,
-} from "openclaw/plugin-sdk/channel-secret-owner-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isTrustedSecretSurfaceUnavailableError } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
 import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderSection,
 } from "openclaw/plugin-sdk/control-ui-link-reader";
-import { isBundledPluginEnabled } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { githubApiToken } from "openclaw/plugin-sdk/native-github-account-host";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { readGitHubConfig } from "./config-api.js";
 import { resolveConfiguredGitHubApiBaseUrl, resolveConfiguredGitHubHost } from "./host-api.js";
@@ -182,68 +177,10 @@ type GitHubPublicApi = {
   ) => Promise<unknown>;
 };
 
-/** Host credential selection uses canonical config and degradation state. */
-export function githubApiToken(
-  env: NodeJS.ProcessEnv = process.env,
-  config: OpenClawConfig | null = getRuntimeConfigSnapshot(),
-  host?: string,
-): string | undefined {
-  const selectedHost = host ?? resolveConfiguredGitHubHost(config);
-  const configured = readGitHubConfig(config).service?.token;
-  const credentialHost =
-    readGitHubConfig(config).service?.host?.trim().toLowerCase() || "github.com";
-  if (configured !== undefined && (host === undefined || credentialHost === selectedHost)) {
-    if (credentialHost !== selectedHost) {
-      throw new SecretSurfaceUnavailableError({
-        ownerKind: "capability",
-        ownerId: "plugins.entries.github-repositories.config.service.token",
-        state: "unavailable",
-        paths: ["plugins.entries.github-repositories.config.service.host"],
-        refKeys: [],
-        reason:
-          "service credential host does not match plugins.entries.github-repositories.config.host",
-      });
-    }
-    const enabled = isBundledPluginEnabled(config ?? {}, "github-repositories");
-    // Independent sign-in must not activate disabled plugin SecretRefs.
-    if (enabled || typeof configured === "string") {
-      if (enabled) {
-        assertSecretOwnerAvailable(
-          "capability",
-          "plugins.entries.github-repositories.config.service.token",
-        );
-      }
-      const token = typeof configured === "string" ? configured.trim() : "";
-      if (!token) {
-        throw new SecretSurfaceUnavailableError({
-          ownerKind: "capability",
-          ownerId: "plugins.entries.github-repositories.config.service.token",
-          state: "unavailable",
-          paths: ["plugins.entries.github-repositories.config.service.token"],
-          refKeys: [],
-          reason: "secret reference was not materialized by the active runtime",
-        });
-      }
-      return token;
-    }
-  }
-  return selectedHost === "github.com"
-    ? env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim() || undefined
-    : undefined;
-}
-
-export function hasConfiguredGitHubApiCredential(
-  env: NodeJS.ProcessEnv,
-  config: OpenClawConfig,
-): boolean {
-  return (
-    (readGitHubConfig(config).service?.token !== undefined &&
-      (readGitHubConfig(config).service?.host?.trim().toLowerCase() || "github.com") ===
-        resolveConfiguredGitHubHost(config)) ||
-    (resolveConfiguredGitHubHost(config) === "github.com" &&
-      Boolean(env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim()))
-  );
-}
+export {
+  githubApiToken,
+  hasConfiguredGitHubApiCredential,
+} from "openclaw/plugin-sdk/native-github-account-host";
 
 type GitHubTransportApi = Omit<
   GitHubPublicApi,

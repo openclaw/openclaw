@@ -1,13 +1,24 @@
-import {
-  createGitHubIdentityStatusTool as createIdentityTool,
-  createGitHubPublishTool as createPublishTool,
-} from "../../../extensions/github-repositories/runtime-api.js";
+import type { OpenClawPluginToolContext } from "../../plugins/tool-types.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import type { resolveOpenClawPluginToolsForOptions } from "../openclaw-plugin-tools.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { preparePluginToolGatewayCapability } from "../plugin-tool-gateway.js";
+import type { AnyAgentTool } from "../tools/common.js";
 import type { InProcessGatewayCaller } from "../tools/in-process-gateway.js";
 
-export { githubPublishToolDefinition } from "../../../extensions/github-repositories/runtime-api.js";
+type Gateway = NonNullable<OpenClawPluginToolContext<2>["gateway"]>;
+const {
+  createGitHubIdentityStatusTool: createIdentityTool,
+  createGitHubPublishTool: createPublishTool,
+  githubPublishToolDefinition,
+} = await loadBundledPluginFacade<{
+  createGitHubIdentityStatusTool(gateway: Gateway): AnyAgentTool;
+  createGitHubPublishTool(gateway: Gateway, options?: { preview?: true }): AnyAgentTool;
+  githubPublishToolDefinition: Parameters<
+    NonNullable<OpenClawPluginToolContext<2>["inheritToolPolicy"]>
+  >[0];
+}>({ pluginId: "github-repositories", artifactBasename: "runtime-api.ts" });
+export { githubPublishToolDefinition };
 const gatewayMethods = [
   "tools.github.status",
   "sessions.github.action",

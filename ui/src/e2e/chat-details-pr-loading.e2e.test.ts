@@ -12,6 +12,8 @@ import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { prepareNativeControlUiPluginFixtures } from "../test-helpers/control-ui-plugin-fixture.ts";
+import { GITHUB_REPOSITORY_PLUGIN } from "../test-helpers/repository-plugin.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
 import {
@@ -92,6 +94,7 @@ suite.define(() => {
         };
         const gateway = await installMockGateway(page, {
           ...scenario,
+          nativePlugins: [GITHUB_REPOSITORY_PLUGIN],
           featureMethods: publicationMethods,
           deferredMethods: ["sessions.github.options"],
           methodResponses: {
@@ -102,56 +105,76 @@ suite.define(() => {
             },
           },
         });
-        const module = await holdModuleResponse(
-          page,
-          controlUiE2eBuiltModuleRequest(
-            "ui/src/pages/chat/components/chat-pull-requests-content.tsx",
-          ),
+        const prepared = await prepareNativeControlUiPluginFixtures([GITHUB_REPOSITORY_PLUGIN]);
+        const presenters = [...prepared.assets].filter(
+          ([name, asset]) =>
+            name.endsWith(".js") && asset.body.includes(Buffer.from("chat-pr__checks-menu-header")),
         );
-        await page.goto(suite.server.baseUrl + "chat");
-        const details = await openChatDetails(page);
-        const key = await waitForWatchedSessionKey(gateway);
-        await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-          sessions: {
-            [key]: {
-              status: "ready",
-              rateLimited: false,
-              pullRequests: receipt ? [pullRequest(43), pullRequest(44)] : [pullRequest(42)],
-            },
+        expect(presenters).toHaveLength(1);
+        const [presenterPath, presenter] = presenters[0]!;
+        const requested = Promise.withResolvers<void>();
+        void requested.promise.catch(() => {});
+        const onClose = () =>
+          requested.reject(new Error("Page closed before loading the PR presenter"));
+        page.once("close", onClose);
+        const loaded = Promise.withResolvers<void>();
+        await page.route(
+          (url) => url.pathname === presenterPath,
+          async (route) => {
+            requested.resolve();
+            await loaded.promise;
+            await route.fulfill({ status: 200, ...presenter });
           },
-        });
-        await module.request;
-        if (receipt) {
-          await gateway.resolveDeferred("sessions.github.options");
+        );
+        try {
+          await page.goto(suite.server.baseUrl + "chat");
+          const details = await openChatDetails(page);
+          const key = await waitForWatchedSessionKey(gateway);
+          await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+            sessions: {
+              [key]: {
+                status: "ready",
+                rateLimited: false,
+                pullRequests: receipt ? [pullRequest(43), pullRequest(44)] : [pullRequest(42)],
+              },
+            },
+          });
+          await requested.promise;
+          if (receipt) {
+            await gateway.resolveDeferred("sessions.github.options");
+          }
+          const group = details.locator('[data-details-group="pull-requests"]');
+          await group.locator('[role="status"][aria-busy="true"]').waitFor();
+          if (!receipt) {
+            await capture(page, details, group, "loading");
+          }
+          const count = receipt ? 3 : 1;
+          await nextPaint(page);
+          const loading = await group.boundingBox();
+          const people = details.locator('[data-details-group="people"] > summary');
+          const peopleNode = await people.elementHandle();
+          await people.click();
+          await expect.poll(() => people.getAttribute("aria-expanded")).toBe("true");
+          await people.focus();
+          loaded.resolve();
+          await expect.poll(() => group.locator(".chat-pr[data-state]").count()).toBe(count);
+          await group.locator('[aria-busy="true"]').waitFor({ state: "detached" });
+          expect(
+            await peopleNode!.evaluate(
+              (element) => element.isConnected && element === document.activeElement,
+            ),
+          ).toBe(true);
+          expect(await people.getAttribute("aria-expanded")).toBe("true");
+          expect((await group.boundingBox())!.height).toBeCloseTo(loading!.height, 0);
+          if (!receipt) {
+            await capture(page, details, group, "ready");
+          }
+          expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+          expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
+        } finally {
+          page.off("close", onClose);
+          loaded.resolve();
         }
-        const group = details.locator('[data-details-group="pull-requests"]');
-        await group.locator('[role="status"][aria-busy="true"]').waitFor();
-        if (!receipt) {
-          await capture(page, details, group, "loading");
-        }
-        const count = receipt ? 3 : 1;
-        await nextPaint(page);
-        const loading = await group.boundingBox();
-        const people = details.locator('[data-details-group="people"] > summary');
-        const peopleNode = await people.elementHandle();
-        await people.click();
-        await expect.poll(() => people.getAttribute("aria-expanded")).toBe("true");
-        await people.focus();
-        module.release();
-        await expect.poll(() => group.locator(".chat-pr[data-state]").count()).toBe(count);
-        await group.locator('[aria-busy="true"]').waitFor({ state: "detached" });
-        expect(
-          await peopleNode!.evaluate(
-            (element) => element.isConnected && element === document.activeElement,
-          ),
-        ).toBe(true);
-        expect(await people.getAttribute("aria-expanded")).toBe("true");
-        expect((await group.boundingBox())!.height).toBeCloseTo(loading!.height, 0);
-        if (!receipt) {
-          await capture(page, details, group, "ready");
-        }
-        expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
-        expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
       });
     },
   );

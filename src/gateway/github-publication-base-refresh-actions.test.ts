@@ -308,7 +308,6 @@ it("recovers a retargeted guest PR, retains saved data and publishes the resolve
         {
           client: f.guestSource.client,
           context: Object.assign(createRequestContext(), f.guestSource.context, {
-            githubPublicationService: f.coordinator,
             workerSessionPlacementService: f.placements,
           }),
           signal,

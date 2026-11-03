@@ -69,6 +69,8 @@ export function createActivityAccessoryMount(
           <NativeContext value={native}>
             <Show when={branch() || pullRequests().length}>
               <ActivityRead
+                sessionKey={(revision(), context.props.sessionKey)}
+                agentId={(revision(), context.props.agentId)}
                 branch={branch()}
                 pullRequests={pullRequests()}
                 stale={snapshot()?.status !== "ready" || !context.host.connection.connected}

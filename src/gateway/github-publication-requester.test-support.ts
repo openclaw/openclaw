@@ -1,3 +1,12 @@
+// Register synthetic I/O before the actual plugin identity and publication graph loads.
+// oxfmt-ignore
+import {
+  createRealPublicationWorkspace,
+  createTestGitHubPublicationCoordinator,
+  overrideCommands,
+  persistPublicationTestSession,
+  root,
+} from "./github-publication.test-support.js";
 import { fileURLToPath } from "node:url";
 import { expect, onTestFinished, vi, type Mock } from "vitest";
 import { currentGitHubPublicationConfig } from "../../extensions/github-repositories/runtime-api.js";
@@ -30,13 +39,6 @@ import { installPublicationRpcFixture } from "./github-account-service.test-supp
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
-import {
-  createRealPublicationWorkspace,
-  createTestGitHubPublicationCoordinator,
-  overrideCommands,
-  persistPublicationTestSession,
-  root,
-} from "./github-publication.test-support.js";
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";

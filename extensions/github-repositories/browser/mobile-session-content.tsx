@@ -22,7 +22,11 @@ import { pullRequestView, publicationView } from "./mobile-activity-presentation
 import { ContentPresentation } from "./native-context.tsx";
 import { Icon } from "./presentation-components.tsx";
 import { PresentationContext, presentationTranslator } from "./presentation-context.ts";
-import { chatPullRequestId, retainedPublication } from "./pull-request-dismissal.ts";
+import {
+  chatPullRequestId,
+  publicationPullRequest,
+  retainedPublication,
+} from "./pull-request-dismissal.ts";
 
 type Context = Parameters<ControlUiSessionAccessory["mount"]>[1];
 
@@ -65,7 +69,11 @@ export function MobileSessionContent(props: {
   const publicationVisible = () =>
     Boolean(
       props.content.publication &&
-      (!props.content.branchDismissed || retainedPublication(props.content.publication)),
+      !publicationPullRequest(props.content.publication, props.content.pullRequests) &&
+      (props.placement === "activity"
+        ? (!props.content.branchDismissed && props.content.branch) ||
+          retainedPublication(props.content.publication)
+        : !props.content.branchDismissed || retainedPublication(props.content.publication)),
     );
   const entry = (id: string, label: string) => (
     <button
@@ -93,6 +101,9 @@ export function MobileSessionContent(props: {
     );
   const dismiss = (request: ControlUiSessionPullRequest) => {
     if (current() && selected() === request && page() === "pull-request") {
+      if (publicationPullRequest(props.content.publication, [request])) {
+        void props.content.publication?.onNewAction?.();
+      }
       if (props.onDismiss(request)) {
         props.context.props.onDetailsBack?.();
       }

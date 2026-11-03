@@ -1,5 +1,11 @@
 @import "./repository-chat.css";
 @import "./chat-pull-request-presenters.css";
+.session-row-badge--pull-request svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  stroke-width: 1.6;
+}
 .session-row-badge--pull-request[data-pull-request-state="open"] {
   color: var(--ok);
 }

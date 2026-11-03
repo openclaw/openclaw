@@ -1,14 +1,11 @@
 import { randomBytes } from "node:crypto";
-import {
-  resolveGitHubHost,
-  resolveGitHubApiBaseUrl,
-} from "../../extensions/github-repositories/runtime-api.js";
 import { parseEnterpriseGitHubPrincipal } from "../shared/enterprise-github-principal.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import {
   readFactoryRepositoryAdmission,
   type FactoryGitHubProofClaim,
 } from "./factory-github-repository-admission.js";
+import { resolveGitHubHost, resolveGitHubApiBaseUrl } from "./native-github-host-realm.js";
 import type { RepositoryIdentityPreparation } from "./repository-session-read.types.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 

@@ -494,9 +494,6 @@ a.activity-current-work__row:hover {
   flex-wrap: wrap;
   gap: var(--space-2);
   font-size: var(--control-ui-text-xs);
-}
-
-.activity-feed__note {
   color: var(--muted);
 }
 

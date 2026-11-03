@@ -1,23 +1,37 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveCommandEnv } from "openclaw/plugin-sdk/process-runtime";
+import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
-import type { GitHubToolIdentityConfig } from "../../extensions/github-repositories/config-api.js";
-import { clearGitHubCredentialVerificationCache } from "../../extensions/github-repositories/oauth-api.js";
-import { clearNativeGitHubTokenCache } from "../../extensions/github-repositories/read-identity-api.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SecretInput } from "../config/types.secrets.js";
-import { resolveCommandEnv } from "../process/exec-spawn.js";
-import { commandResult } from "./github-identity.test-support.js";
+import { readGitHubConfig } from "./config-api.js";
+import type { GitHubToolIdentityConfig } from "./config-api.js";
+import { clearGitHubCredentialVerificationCache } from "./oauth-api.js";
+import { clearNativeGitHubTokenCache } from "./read-identity-api.js";
+
+function commandResult(stdout = "", code = 0, stderr = "") {
+  return {
+    stdout: Buffer.from(stdout),
+    stderr: Buffer.from(stderr),
+    code,
+    signal: null,
+    killed: false,
+    termination: "exit" as const,
+  };
+}
 
 const { run } = vi.hoisted(() => ({ run: vi.fn() }));
 const oauthMocks = vi.hoisted(() => ({ inspect: vi.fn() }));
 
 // mock-isolation: Capture credential subprocess requests without executing host Git or gh.
-vi.mock("../process/exec.js", () => ({ runCommandBuffered: run }));
-vi.mock("./github-oauth-records.js", () => ({
+vi.mock("openclaw/plugin-sdk/process-runtime", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandBuffered: run,
+}));
+vi.mock("openclaw/plugin-sdk/native-github-account-host", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/native-github-account-host")>()),
   inspectGitHubOAuthRecord: oauthMocks.inspect,
 }));
 
@@ -32,7 +46,7 @@ import {
   resolveManagedGitHubAgentKey,
   resolveManagedGitHubProfileDir,
   resolveSystemGitHubIdentityStatus,
-} from "../../extensions/github-repositories/tool-identity-api.js";
+} from "./tool-identity-api.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const previewConfig = (token: SecretInput) => ({
