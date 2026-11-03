@@ -4,7 +4,6 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getMemorySearchManager } from "../../extensions/memory-core/runtime-api.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { createClientCredentialMigrationFixture } from "../infra/client-credential-migration.test-support.js";
@@ -18,9 +17,11 @@ import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifec
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { isSqlitePathOnBtrfs } from "../infra/sqlite-wal-filesystem.js";
 import { readMemorySearchManagerStatus } from "../memory-host-sdk/host/types.js";
+import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
@@ -35,6 +36,10 @@ import {
   createDoctorNoCowToolFixture,
 } from "./doctor-sqlite-nocow.test-support.js";
 import * as updateCaptureCleanup from "./update-capture-cleanup.js";
+
+const { getMemorySearchManager } = await loadBundledPluginFacade<
+  Pick<MemoryPluginRuntime, "getMemorySearchManager">
+>({ pluginId: "memory-core", artifactBasename: "runtime-api.js" });
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
