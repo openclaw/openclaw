@@ -940,10 +940,20 @@
   scrollbar-gutter: stable;
 }
 
-.memory-page__link {
-  color: var(--accent);
-  font-size: 12.5px;
-  white-space: nowrap;
+.memory-page__nav-row {
+  text-decoration: none;
+}
+
+.curated-settings__disclosure svg {
+  transition: transform 140ms ease;
+}
+
+.curated-settings__disclosure[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.curated-settings__details {
+  padding-inline-start: var(--space-4);
 }
 
 .mcp-command-card__grid {

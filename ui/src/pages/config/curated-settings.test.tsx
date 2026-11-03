@@ -82,12 +82,8 @@ const selectedSegment = (container: HTMLElement) =>
 
 it("defaults phases on unless explicitly disabled", () => {
   const container = renderInto({ enabled: true, phases: { deep: { enabled: false } } });
-  const queries = getQueriesForElement(container);
   const checked = (title: string) =>
-    queries
-      .getByText(title, { selector: ".settings-section__heading" })
-      .closest(".settings-section")
-      ?.querySelector<HTMLInputElement>(".settings-toggle__input")?.checked;
+    rowFor(container, title).querySelector<HTMLInputElement>(".settings-toggle__input")?.checked;
   expect(["Light phase", "Deep phase", "REM phase"].map(checked)).toEqual([true, false, true]);
 });
 
