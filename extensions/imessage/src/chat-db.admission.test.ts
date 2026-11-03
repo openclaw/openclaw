@@ -41,12 +41,12 @@ it.for(["open", "read"] as const)(
   "keeps storage responsive during a blocked chat.db %s",
   async (phase, { signal }) => {
     const gate = new Int32Array(new SharedArrayBuffer(8));
-    const previous: unknown = getEnvironmentData(CHAT_DB_ADMISSION_GATE);
+    assert.equal(getEnvironmentData(CHAT_DB_ADMISSION_GATE), undefined);
     setEnvironmentData(CHAT_DB_ADMISSION_GATE, {
       gate: gate.buffer,
       phase,
     } satisfies AdmissionGate);
-    onTestFinished(() => setEnvironmentData(CHAT_DB_ADMISSION_GATE, previous));
+    onTestFinished(() => setEnvironmentData(CHAT_DB_ADMISSION_GATE, undefined));
     const storage = await open(databasePath());
     // Fill the ordinary pool so a foreign read would share a storage carrier.
     const sibling = await open(databasePath());
