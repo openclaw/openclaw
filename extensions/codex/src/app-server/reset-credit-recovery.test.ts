@@ -109,6 +109,19 @@ describe("earned Codex reset-credit inventory", () => {
     }), accountId, Date.now())).toBeUndefined();
   });
 
+  it("rejects duplicated and out-of-range credit detail rows", () => {
+    const valid = {
+      id: "same", resetType: "codexRateLimits", status: "available", expiresAt: null,
+    };
+    expect(chooseEarnedCodexResetCredit(blocked({
+      availableCount: 2, credits: [valid, valid],
+    }), accountId, Date.now())).toBeUndefined();
+    expect(chooseEarnedCodexResetCredit(blocked({
+      availableCount: 1,
+      credits: [{ ...valid, expiresAt: 8_640_000_000_001 }],
+    }), accountId, Date.now())).toBeUndefined();
+  });
+
   it("never spends earned credits when purchased monetary credits are available", () => {
     for (const credits of [{ hasCredits: true }, { unlimited: true }]) {
       expect(chooseEarnedCodexResetCredit({
@@ -207,6 +220,15 @@ describe("earned Codex reset-credit recovery", () => {
       profileId: "openai:second",
     });
     expect(h.claim).not.toHaveBeenCalled();
+  });
+
+  it("rejects unbound native account identities before reserving a spend", async () => {
+    const h = harness({ accountId: () => undefined });
+    expect(await recoverWithEarnedCodexReset(h.options)).toEqual({
+      status: "not-eligible",
+    });
+    expect(h.claim).not.toHaveBeenCalled();
+    expect(h.consume).not.toHaveBeenCalled();
   });
 
   it("refuses to spend when any authorized profile has a non-quota failure", async () => {
