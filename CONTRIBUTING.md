@@ -167,10 +167,10 @@ Use `OPENCLAW_FORMAT_TOOL=oxfmt pnpm format` to force oxfmt. The linked referenc
 covers the pinned fork, supported platforms, overrides, fallbacks, and CI parity.
 Dedicated artifact formatters are listed in the [formatter caller inventory](scripts/README.md#formatting-and-lint-selection).
 
-The normal `pnpm install` setup enables the repository's pre-commit formatting hook
-when `core.hooksPath` is unset. Existing hook selections, including an explicitly
-empty value, are preserved. Git scopes initialization to the current checkout.
-With multiple worktrees, automatic setup requires `extensions.worktreeConfig`;
+Outside CI, the normal `pnpm install` setup enables the repository's pre-commit
+formatting hook when `core.hooksPath` is unset. Existing hook selections, including
+an explicitly empty value, are preserved. Git scopes initialization to the current
+checkout. With multiple worktrees, automatic setup requires `extensions.worktreeConfig`;
 otherwise Git reports a warning and installation continues without changing hook
 settings. The repository owner can enable per-worktree configuration following
 [Git's configuration guidance](https://git-scm.com/docs/git-worktree#_configuration_file).
