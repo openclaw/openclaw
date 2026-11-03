@@ -286,7 +286,7 @@ it.each([false, true])(
     });
     params.hostCapabilities = host.capabilities;
     interceptRetention(async (retain, stopped) => {
-      host.close();
+      await host.close();
       sourceRevoked = revoked;
       return retain(stopped);
     });
@@ -344,7 +344,7 @@ it.each([false, true])(
       }
     } finally {
       await harness.notify(childTurnCompletedNotification({ status: "completed" }));
-      host.close();
+      await host.close();
     }
   },
 );

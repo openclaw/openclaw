@@ -294,7 +294,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
           throw new Error("Successor start rejected");
         }
         if (failure === "revoked") {
-          closeHost?.();
+          await closeHost?.();
         }
         if (failure === "conflict") {
           expect(

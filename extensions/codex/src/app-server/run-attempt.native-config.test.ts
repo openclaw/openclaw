@@ -519,9 +519,17 @@ describe("Codex native configuration", () => {
         await run.catch(() => undefined);
         allowedControl?.release();
         sourceControl?.release();
-        closeHost();
-        await harness.dispose?.();
-        await transport.client.closeAndWait();
+        const closed: PromiseSettledResult<unknown>[] = await Promise.allSettled([
+          closeHost(),
+          harness.dispose?.(),
+        ]);
+        closed.push(...(await Promise.allSettled([transport.client.closeAndWait()])));
+        const failures = closed.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Native policy fixture cleanup failed");
+        }
       }
       expect(policyListeners.size).toBe(0);
     },
@@ -844,7 +852,7 @@ it.each(["restore", "fresh"] as const)(
       await client.notify(turnStartedNotification("unqualified-turn"));
       if (yielded) {
         await parent.unregister();
-        host.close();
+        await host.close();
       }
       policy = {
         models: [{ provider: "test-provider", model: "allowed" }],
@@ -861,7 +869,7 @@ it.each(["restore", "fresh"] as const)(
           monitor.captureModelSource({ threadId: "parent-thread", turnId: "parent-a" }),
         ).rejects.toThrow("execution was cancelled");
         await parent.unregister();
-        host.close();
+        await host.close();
       } else {
         expect(cancelForeground).not.toHaveBeenCalled();
       }
@@ -899,7 +907,7 @@ it.each(["restore", "fresh"] as const)(
       sibling.release();
       await monitor.dispose();
       await parent.unregister();
-      host.close();
+      await host.close();
     }
     expect(listeners.size).toBe(0);
   },

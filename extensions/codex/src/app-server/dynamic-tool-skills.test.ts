@@ -14,7 +14,7 @@ const {
 } = await import("./dynamic-tool-build.test-support.js");
 
 let tempDir: string;
-const hostCapabilityClosers: Array<() => void> = [];
+const hostCapabilityClosers: Array<() => Promise<void>> = [];
 
 beforeEach(async () => {
   tempDir = await setupDynamicToolBuildFixture();

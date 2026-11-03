@@ -26,7 +26,7 @@ const {
   cleanupDynamicToolBuildFixture,
 } = await import("./dynamic-tool-build.test-support.js");
 
-const hostCapabilityClosers: Array<() => void> = [];
+const hostCapabilityClosers: Array<() => Promise<void>> = [];
 let tempDir: string;
 let workspaceDir: string;
 let params: ReturnType<typeof createParams>;

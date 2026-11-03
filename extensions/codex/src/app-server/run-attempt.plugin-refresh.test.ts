@@ -495,9 +495,15 @@ describe("managed Codex plugin refresh", () => {
         abort.abort("fixture cleanup");
         finishInterrupt?.();
         await settled;
-        closeHost();
+        const closed: PromiseSettledResult<unknown>[] = await Promise.allSettled([closeHost()]);
         start.mockRestore();
-        await harness.client.closeAndWait();
+        closed.push(...(await Promise.allSettled([harness.client.closeAndWait()])));
+        const failures = closed.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Plugin refresh fixture cleanup failed");
+        }
       }
     },
   );

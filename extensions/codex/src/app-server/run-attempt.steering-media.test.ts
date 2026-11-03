@@ -578,7 +578,7 @@ describe("Codex active-run steering media", () => {
             release();
             releaseReplacement = registerSteeringWorkspace(fixture, prepare);
           } else {
-            closeHost();
+            await closeHost();
           }
           prepared.resolve("Attachments prepared.");
           await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(false), fastWait);
@@ -588,9 +588,12 @@ describe("Codex active-run steering media", () => {
         });
       } finally {
         prepared.resolve("Attachments prepared.");
-        closeHost();
-        release();
-        releaseReplacement?.();
+        try {
+          await closeHost();
+        } finally {
+          release();
+          releaseReplacement?.();
+        }
       }
     },
   );
@@ -615,7 +618,7 @@ describe("Codex active-run steering media", () => {
         }
         if (method === "question.resolve") {
           answer.resolve(result);
-          closeHost();
+          await closeHost();
           return {};
         }
         throw new Error(`unexpected question method: ${method}`);
@@ -646,9 +649,15 @@ describe("Codex active-run steering media", () => {
         expect(onAttemptTimeout).not.toHaveBeenCalled();
         expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
       } finally {
-        closeHost();
+        const closing = closeHost();
         answer.resolve(result);
-        await question;
+        const closed = await Promise.allSettled([closing, question]);
+        const failures = closed.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Question fixture cleanup failed");
+        }
       }
     });
   });
@@ -701,8 +710,9 @@ describe("Codex active-run steering media", () => {
           fastWait,
         );
         expect(accepted).not.toHaveBeenCalled();
-        closeHost();
+        const closing = closeHost();
         prepared.resolve(fixture.message);
+        await closing;
         // Host closure does not settle the queue itself: rejection here comes
         // from the authority check after the real hydrator returns.
         await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(false), fastWait);
@@ -710,8 +720,9 @@ describe("Codex active-run steering media", () => {
         expect(fixture.recorder.persistApproved).not.toHaveBeenCalled();
         expect(await fixture.readSteeredMessages()).toEqual([]);
       } finally {
-        closeHost();
+        const closing = closeHost();
         prepared.resolve(fixture.message);
+        await closing;
       }
     });
   });

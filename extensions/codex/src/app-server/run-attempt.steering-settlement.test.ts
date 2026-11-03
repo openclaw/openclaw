@@ -155,8 +155,16 @@ async function createFixture() {
       try {
         await Promise.allSettled([run, ...notifications, ...(lock ? [lock.writer] : [])]);
       } finally {
-        closeHost();
-        await disposePluginRegistryInstances(registration.registry);
+        const closed = await Promise.allSettled([
+          closeHost(),
+          disposePluginRegistryInstances(registration.registry),
+        ]);
+        const failures = closed.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Steering fixture cleanup failed");
+        }
       }
     },
     readMessages: () => readTranscriptMessagesByIdentity(params),

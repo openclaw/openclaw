@@ -210,10 +210,22 @@ async function withSurface(
     if (!tool) {
       controller.abort();
     }
+    const failures: unknown[] = [];
     for (const cleanup of cleanups.toReversed()) {
-      await cleanup(tool ? "Tool result test complete" : "Permission test complete");
+      try {
+        await cleanup(tool ? "Tool result test complete" : "Permission test complete");
+      } catch (error) {
+        failures.push(error);
+      }
     }
-    host.close();
+    try {
+      await host.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Agents API tool fixture cleanup failed");
+    }
   }
 }
 

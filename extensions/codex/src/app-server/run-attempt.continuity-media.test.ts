@@ -129,7 +129,7 @@ describe("Codex attachment continuity", () => {
       }
       abort.abort("test cleanup");
       await run.catch(() => undefined);
-      closeHost();
+      await closeHost();
     }
   });
 
@@ -213,7 +213,7 @@ describe("Codex attachment continuity", () => {
     } finally {
       abort.abort("test cleanup");
       await run;
-      closeHost();
+      await closeHost();
     }
   });
   it.each(["current", "closed"] as const)(
@@ -294,7 +294,7 @@ describe("Codex attachment continuity", () => {
           prepareContextMedia: async (request) => {
             const prepared = await prepare(request);
             expect(prepared.images).toHaveLength(1);
-            closeHost();
+            await closeHost();
             return prepared;
           },
         };
@@ -337,7 +337,7 @@ describe("Codex attachment continuity", () => {
       } finally {
         abort.abort("test cleanup");
         await run.catch(() => undefined);
-        closeHost();
+        await closeHost();
       }
     },
   );

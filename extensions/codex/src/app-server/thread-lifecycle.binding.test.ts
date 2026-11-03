@@ -62,6 +62,7 @@ import { registerRequiredRootThreadPolicyTests } from "./thread-lifecycle-rooted
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import { registerThreadWebSearchBindingTests } from "./thread-lifecycle-web-search.test-support.js";
 import {
+  closeLeasedCodexLifecycleFixture,
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
   DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
@@ -854,7 +855,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       expect(request.mock.calls.some(([method]) => method.startsWith("thread/"))).toBe(false);
       let successor: typeof sibling;
       if (revocation === "host") {
-        closeHost();
+        await closeHost();
       } else {
         fixture.notify({
           method: revocation as "thread/closed" | "thread/archived",
@@ -2203,7 +2204,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       const pending = startOrResumeThread(common).catch((cause: unknown) => cause);
       if (revokeHost) {
         await cleanupEntered.promise;
-        closeHost();
+        await closeHost();
         cleanupProceed.resolve();
       }
       const error = await pending;
@@ -2550,7 +2551,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       const params = { ...createParams(sessionFile, workspaceDir), agentDir };
       const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
       const controller = new AbortController();
-      const wire = await createLeasedLifecycleWireClient(agentDir, ({ method }) => {
+      const wire = await createLeasedLifecycleWireClient(agentDir, async ({ method }) => {
         if (method === "config/read") {
           return { config: {}, origins: {}, layers: [] };
         }
@@ -2563,7 +2564,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         if (condition === "aborted") {
           controller.abort(new Error("preparation canceled"));
         } else if (condition === "closed-host") {
-          closeHost();
+          await closeHost();
         } else if (condition === "parent-owned") {
           return {
             thread: {
@@ -2603,9 +2604,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
           new Set(wire.writes.map((message) => (JSON.parse(message) as RpcRequest).method)),
         ).toEqual(new Set(["config/read", "configRequirements/read", "thread/read"]));
       } finally {
-        closeHost();
-        releaseLeasedSharedCodexAppServerClient(wire.client);
-        await wire.client.closeAndWait();
+        await closeLeasedCodexLifecycleFixture(wire.client, closeHost);
       }
     },
   );

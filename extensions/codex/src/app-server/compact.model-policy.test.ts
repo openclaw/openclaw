@@ -274,7 +274,7 @@ it.each([
         controller.abort();
         await pending?.catch(() => undefined);
         await harness.client.closeAndWait();
-        host.close();
+        await host.close();
       }
     });
   },

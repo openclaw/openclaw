@@ -50,7 +50,7 @@ describeLive("Codex app-server approval requester real-binary bridge", () => {
         authProfileId: null,
         timeoutMs: 120_000,
       });
-      let closeHost: (() => void) | undefined;
+      let closeHost: (() => Promise<void>) | undefined;
       try {
         const listed = await client.request<CodexModelListResponse>(
           "model/list",
@@ -157,8 +157,13 @@ describeLive("Codex app-server approval requester real-binary bridge", () => {
         );
         expect(agentEvents.filter((event) => event.stream === "approval")).toEqual([]);
       } finally {
-        closeHost?.();
-        await client.closeAndWait();
+        const closed = await Promise.allSettled([closeHost?.(), client.closeAndWait()]);
+        const failures = closed.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Approval fixture cleanup failed");
+        }
       }
     });
   }, 240_000);

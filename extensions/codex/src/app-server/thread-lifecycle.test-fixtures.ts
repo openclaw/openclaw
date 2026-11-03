@@ -391,6 +391,22 @@ export async function createLeasedCodexLifecycleHarness(
   return Object.assign(harness, { acquireOptions });
 }
 
+/** Keep the leased transport alive until the admitted host has closed. */
+export async function closeLeasedCodexLifecycleFixture(
+  client: CodexAppServerClient,
+  closeHost: () => Promise<void>,
+): Promise<void> {
+  const closed: PromiseSettledResult<unknown>[] = await Promise.allSettled([closeHost()]);
+  releaseLeasedSharedCodexAppServerClient(client);
+  closed.push(...(await Promise.allSettled([client.closeAndWait()])));
+  const failures = closed.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Lifecycle fixture cleanup failed");
+  }
+}
+
 type ThreadLifecycleTestHostCapability = {
   capabilities: EmbeddedRunAttemptParams["hostCapabilities"];
   close: () => void;

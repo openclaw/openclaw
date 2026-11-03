@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 /** Builds a bundled-plugin Gateway runtime backed by the real session projection and handlers. */
 export async function createTestPluginGatewayRuntime(params: {
@@ -135,12 +136,35 @@ export async function createAgentHarnessHostCapabilitiesForTest(params: {
     nativeModelPolicySupport: params.nativeModelPolicySupport,
   });
   harnessHostAdmissionsForTest.set(host.capabilities, admission);
+  let closing: Promise<void> | undefined;
   return {
     capabilities: host.capabilities,
     close: () => {
+      if (closing) {
+        return closing;
+      }
+      const settled = createDeferredCore();
+      closing = settled.promise;
       harnessHostAdmissionsForTest.delete(host.capabilities);
-      host.close();
-      admission.close();
+      const errors: unknown[] = [];
+      try {
+        host.close();
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        admission.close();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length === 1) {
+        settled.reject(errors[0]);
+      } else if (errors.length > 1) {
+        settled.reject(new AggregateError(errors, "Test host close failed"));
+      } else {
+        settled.resolve();
+      }
+      return closing;
     },
   };
 }

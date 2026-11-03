@@ -248,7 +248,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
-    closeHostCapabilities();
+    await closeHostCapabilities();
     await nativeHookRelayUnregisterQueue.flush();
   });
 
@@ -314,7 +314,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
-    closeHostCapabilities();
+    await closeHostCapabilities();
     await nativeHookRelayUnregisterQueue.flush();
   });
 

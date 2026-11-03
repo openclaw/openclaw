@@ -114,7 +114,7 @@ describeLive("Agents API isolated hosted execution", () => {
             hostCapabilities: { ...host.capabilities, createToolSurfaceAsync: construction },
           });
         } finally {
-          host.close();
+          await host.close();
         }
       };
       let remoteId: string | undefined;
