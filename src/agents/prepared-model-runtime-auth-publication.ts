@@ -74,7 +74,7 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     PreparedModelRuntimeOwner,
     {
       error: AuthProfileStoreUnreadableError;
-      generation: number;
+      members: { owner: PreparedModelRuntimeOwner; generation: number }[];
       profileSetChanged: boolean;
       retryAfter: number;
     }
@@ -87,15 +87,22 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     if (
       !failed ||
       Date.now() < failed.retryAfter ||
-      failed.generation !== owner.generation ||
-      failed.error !== owner.refreshError
+      failed.members.some(
+        (member) =>
+          member.generation !== member.owner.generation ||
+          failed.error !== member.owner.refreshError ||
+          !member.owner.needsRefresh,
+      )
     ) {
       return undefined;
     }
     assertPreparedModelRuntimeAdmissionCanWait(owner);
     this.#failedReads.delete(owner);
-    const transaction = this.enqueue([owner], failed.profileSetChanged);
-    transaction.ownerGates.get(owner)!.dispatchRetry = true;
+    const members = failed.members.map((member) => member.owner);
+    const transaction = this.enqueue(members, failed.profileSetChanged);
+    for (const member of members) {
+      transaction.ownerGates.get(member)!.dispatchRetry = true;
+    }
     return transaction;
   }
 
@@ -117,6 +124,7 @@ export class PreparedModelRuntimeAuthPublicationOwner {
       });
     transaction.profileSetChanged ||= profileSetChanged;
     for (const owner of invalidatedOwners) {
+      this.#failedReads.delete(owner);
       let gate = transaction.ownerGates.get(owner);
       if (!gate) {
         gate = createDeferredCore<PreparedModelRuntimeSnapshot>();
@@ -356,16 +364,29 @@ export class PreparedModelRuntimeAuthPublicationOwner {
             transaction &&
             this.rejectComponentOwners(transaction, componentOwners, failure, retrying) > 0
           ) {
-            const owner = componentOwners.length === 1 ? currentOwners[0] : undefined;
+            const configured = currentOwners.filter((owner) => owner.provenance === "configured");
+            const owner = configured.length === 1 ? configured[0] : undefined;
             if (
-              owner?.provenance === "configured" &&
+              owner &&
               failure instanceof AuthProfileStoreUnreadableError &&
-              owner.refreshError === failure &&
-              owner.needsRefresh
+              currentOwners.length === componentOwners.length &&
+              currentOwners.every(
+                (member) =>
+                  (member === owner || member.provenance === "run") &&
+                  member.input.agentId === owner.input.agentId &&
+                  member.input.agentDir === owner.input.agentDir &&
+                  member.refreshError === failure &&
+                  member.needsRefresh,
+              )
             ) {
+              // A completed turn can retain a run owner beside the configured owner. Recover
+              // their original atomic component together, without admitting another agent.
               this.#failedReads.set(owner, {
                 error: failure,
-                generation: owner.generation,
+                members: currentOwners.map((member) => ({
+                  owner: member,
+                  generation: member.generation,
+                })),
                 profileSetChanged: transaction.profileSetChanged,
                 retryAfter: gates[0]?.dispatchRetry ? Date.now() + FAILED_AUTH_READ_COOLDOWN_MS : 0,
               });
