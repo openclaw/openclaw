@@ -469,9 +469,10 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         sections={sections()}
         nativeSessionsHaveMore={host().sessionData.sessionsResult?.hasMore === true}
         nativeSessionsLoading={host().sessionData.sessionsLoading}
-        // Only a flat, time-ordered list appends older rows at its end. Grouped
-        // and people-sorted views place them inside earlier sections, so those
-        // keep the explicit button.
+        // Grouped and people-sorted views place older rows inside earlier
+        // sections, so they keep the explicit button. The flat list mostly
+        // appends; when Created order or catalog sections put a page above the
+        // fold, the observer still loads at most one page per entry into view.
         autoLoadMore={
           host().effectiveSessionsGrouping() === "none" &&
           host().effectiveSessionSortMode() !== "people"

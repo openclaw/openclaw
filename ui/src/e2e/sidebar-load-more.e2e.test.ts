@@ -84,6 +84,8 @@ suite.define(() => {
     async (grouping, autoLoads) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const pageSize = 40;
+        // The chat pane follows the mocked cursor too; only sidebar pages count here.
+        const sidebarOlderPage = { offset: pageSize, source: "sidebar" };
         const rows = Array.from({ length: pageSize + 1 }, (_, index) =>
           sessionRow("agent:main:thread-" + index, "Conversation " + index, 1000 - index),
         );
@@ -122,12 +124,12 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         const more = sidebar.getByRole("button", { name: "Load more sessions", exact: true });
         await more.waitFor();
-        const olderPageRequests = () => gateway.getRequests("sessions.list", { offset: pageSize });
+        const olderPageRequests = () => gateway.getRequests("sessions.list", sidebarOlderPage);
         expect(await olderPageRequests()).toEqual([]);
 
         await more.scrollIntoViewIfNeeded();
         if (autoLoads) {
-          await gateway.waitForRequest("sessions.list", { match: { offset: pageSize } });
+          await gateway.waitForRequest("sessions.list", { match: sidebarOlderPage });
           await more.waitFor({ state: "detached" });
           return;
         }
@@ -140,7 +142,7 @@ suite.define(() => {
         );
         expect(await olderPageRequests()).toEqual([]);
         await more.click();
-        await gateway.waitForRequest("sessions.list", { match: { offset: pageSize } });
+        await gateway.waitForRequest("sessions.list", { match: sidebarOlderPage });
       });
     },
   );
