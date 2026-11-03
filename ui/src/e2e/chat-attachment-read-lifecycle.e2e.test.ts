@@ -273,7 +273,6 @@ suite.define(() => {
             code: "UNAVAILABLE",
             message: "Synthetic rewind failed; draft retained.",
           });
-          await page.locator(".chat-error details > summary").click();
           await page
             .getByText("Synthetic rewind failed; draft retained.", { exact: false })
             .first()

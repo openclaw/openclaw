@@ -306,7 +306,8 @@ function ChatErrorNotice(props: {
   actionAvailable?: boolean;
 }) {
   const displayError = () => props.displayError ?? formatWebUiIconErrorText(props.error);
-  const title = () => props.summary ?? t("chat.errorSummary");
+  const title = () =>
+    props.summary ?? (displayError().trim().split(/\r?\n/u)[0]?.trim() || t("chat.errorSummary"));
   const hasDetails = () => {
     const detail = displayError().trim();
     return detail !== "" && detail !== title();

@@ -76,6 +76,14 @@ it.each([false, true])("collapses a replacement diagnostic (mobile=%s)", async (
     expect(container.querySelector("details")?.open).toBe(false);
   });
 });
+it("preserves caller-owned recovery instructions in request notices", async () => {
+  const error = "Session is busy; wait for the current run to finish.";
+  const { container } = publishedNotices<TopbarProps>(renderChatTopbarNotices, { error });
+  await waitForSolid(() => {
+    expect(container.querySelector(".chat-error strong")?.textContent).toBe(error);
+    expect(container.querySelector("details")).toBeNull();
+  });
+});
 const failedPlacement = (error: string) => ({
   sessionKey: "agent:main:failed-start",
   phase: "failed" as const,
@@ -291,13 +299,17 @@ it.each(["refresh", "details", "message"] as const)(
     );
     expect(notice.querySelector(".chat-error__dismiss")).toBeNull();
     const details = notice.querySelector("details");
-    expect(details?.open).toBe(false);
-    expect(details?.querySelector("summary .chat-copy-btn")).toBeNull();
-    details!.open = true;
-    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
-    expect(details?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(
-      t("chat.copyError"),
-    );
+    if (variant === "message") {
+      expect(details).toBeNull();
+    } else {
+      expect(details?.open).toBe(false);
+      expect(details?.querySelector("summary .chat-copy-btn")).toBeNull();
+      details!.open = true;
+      expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
+      expect(details?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(
+        t("chat.copyError"),
+      );
+    }
     const refresh = notice.querySelector<HTMLButtonElement>(".chat-error__refresh");
     if (variant === "refresh") {
       refresh!.click();
