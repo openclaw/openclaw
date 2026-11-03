@@ -124,6 +124,45 @@ function isAuthoritativelyAvailable(raw: unknown, accountId: string | undefined)
   return isSelectedAccount(raw, accountId) && object(raw)?.ordinaryUsageAllowed === true;
 }
 
+type ScanResult =
+  | { status: "available"; profileId: string }
+  | { status: "candidate"; profileId: string; credit: CreditChoice }
+  | { status: "not-eligible" };
+
+type RecoveryOptions = Parameters<typeof recoverWithEarnedCodexReset>[0];
+
+/**
+ * Inspect the entire previously authorized chain before considering any
+ * irreversible spend. A later healthy account always wins over an earlier
+ * account's earned credit. Errors do not widen the set of eligible accounts.
+ */
+async function scanAllowedProfiles(params: RecoveryOptions): Promise<ScanResult> {
+  let target: Extract<ScanResult, { status: "candidate" }> | undefined;
+  for (const profileId of params.orderedProfileIds) {
+    if (params.signal?.aborted) {
+      throw new Error("Codex reset recovery cancelled");
+    }
+    await params.assertCurrent(profileId);
+    if (!(await params.isResettableBlocked(profileId))) {
+      return { status: "not-eligible" };
+    }
+    const account = params.accountId(profileId);
+    const limits = await params.readLimits(profileId, params.signal);
+    await params.assertCurrent(profileId);
+    if (isAuthoritativelyAvailable(limits, account)) {
+      return { status: "available", profileId };
+    }
+    if (!isResettableExhaustion(limits, account)) {
+      return { status: "not-eligible" };
+    }
+    const credit = chooseEarnedCodexResetCredit(limits, account, Date.now());
+    if (!target && credit) {
+      target = { status: "candidate", profileId, credit };
+    }
+  }
+  return target ?? { status: "not-eligible" };
+}
+
 /**
  * One bounded recovery cycle. The caller must provide a cross-process SQLite
  * claim that atomically enforces a spend cap and persists the idempotency key
@@ -139,6 +178,16 @@ export async function recoverWithEarnedCodexReset(params: {
   signal?: AbortSignal;
   /** Fresh selection within the same authorized ordered chain. */
   firstAvailable: () => Promise<string | undefined>;
+  /**
+   * The auth owner confirms each profile is blocked specifically by a
+   * resettable subscription limit, not auth, billing, transport or a 5xx.
+   */
+  isResettableBlocked: (profileId: string) => Promise<boolean>;
+  /**
+   * Shared-state claim must atomically enforce the rolling cap and prevent
+   * uncertain spends across every account in this candidate chain.
+   * A crash retry MUST return the same durable idempotency key.
+   */
   /** Atomically owns a durable attempt for this profile or refuses the claim. */
   claim: (profileId: string, maxPer24Hours: number) => Promise<CodexResetClaim>;
   /** Must revalidate selection, account identity, and credential generation. */
@@ -168,22 +217,33 @@ export async function recoverWithEarnedCodexReset(params: {
   ) {
     return { status: "not-eligible" };
   }
-  let available: string | undefined;
+  if (new Set(params.orderedProfileIds).size !== params.orderedProfileIds.length) {
+    return { status: "not-eligible" };
+  }
+  const checkedAvailable = async () => {
+    const selected = await params.firstAvailable();
+    if (selected && !params.orderedProfileIds.includes(selected)) {
+      throw new Error("Auth selection escaped authorized profile chain");
+    }
+    return selected;
+  };
+  let selection: ScanResult;
   try {
-    available = await params.firstAvailable();
+    const available = await checkedAvailable();
+    if (available) {
+      return { status: "available", profileId: available };
+    }
+    selection = await scanAllowedProfiles(params);
   } catch {
     return { status: "uncertain" };
   }
-  if (available) {
-    return params.orderedProfileIds.includes(available)
-      ? { status: "available", profileId: available }
-      : { status: "uncertain" };
+  if (selection.status === "available") {
+    return { status: "available", profileId: selection.profileId };
   }
-  // Existing ordering is authoritative; never widen the chain.
-  const profileId = params.orderedProfileIds[0];
-  if (!profileId) {
+  if (selection.status !== "candidate") {
     return { status: "not-eligible" };
   }
+  const profileId = selection.profileId;
   let claim: CodexResetClaim;
   try {
     claim = await params.claim(profileId, params.maxPer24Hours);
@@ -192,6 +252,9 @@ export async function recoverWithEarnedCodexReset(params: {
   }
   if (claim.status !== "owned") {
     return { status: claim.status };
+  }
+  if (!claim.attemptId.trim() || !claim.idempotencyKey.trim()) {
+    return { status: "uncertain" };
   }
   let settled = false;
   const settle = async (status: Parameters<typeof params.settle>[2]) => {
@@ -204,19 +267,19 @@ export async function recoverWithEarnedCodexReset(params: {
       return { status: "not-eligible" };
     }
     // A peer may have recovered any candidate before this durable claim settled.
-    const currentAvailable = await params.firstAvailable();
+    const currentAvailable = await checkedAvailable();
     if (currentAvailable) {
-      if (!params.orderedProfileIds.includes(currentAvailable)) {
-        await settle("uncertain");
-        return { status: "uncertain" };
-      }
       await settle("not-needed");
       return { status: "available", profileId: currentAvailable };
     }
-    await params.assertCurrent(profileId);
-    const before = await params.readLimits(profileId, params.signal);
-    const credit = chooseEarnedCodexResetCredit(before, params.accountId(profileId), Date.now());
-    if (!credit) {
+    // Recheck the ENTIRE chain after taking durable ownership. A peer may have
+    // restored a different permitted account while we were claiming.
+    const current = await scanAllowedProfiles(params);
+    if (current.status === "available") {
+      await settle("not-needed");
+      return { status: "available", profileId: current.profileId };
+    }
+    if (current.status !== "candidate" || current.profileId !== profileId) {
       await settle("not-needed");
       return { status: "not-eligible" };
     }
@@ -229,7 +292,7 @@ export async function recoverWithEarnedCodexReset(params: {
     const raw = await params.consume({
       profileId,
       idempotencyKey: claim.idempotencyKey,
-      ...(credit.creditId ? { creditId: credit.creditId } : {}),
+      ...(current.credit.creditId ? { creditId: current.credit.creditId } : {}),
       signal: params.signal,
     });
     const outcome = object(raw)?.outcome;
@@ -242,13 +305,19 @@ export async function recoverWithEarnedCodexReset(params: {
       await settle("uncertain");
       return { status: "uncertain" };
     }
-    if (outcome === "reset" || outcome === "alreadyRedeemed") {
-      await params.assertCurrent(profileId);
-      const after = await params.readLimits(profileId, params.signal);
-      if (isAuthoritativelyAvailable(after, params.accountId(profileId))) {
+    // All official outcomes need a fresh authoritative read. In particular,
+    // nothingToReset can race a natural quota renewal; it is not permission to
+    // clear a locally blocked state without observing the account.
+    await params.assertCurrent(profileId);
+    const after = await params.readLimits(profileId, params.signal);
+    await params.assertCurrent(profileId);
+    if (isAuthoritativelyAvailable(after, params.accountId(profileId))) {
+      if (outcome === "reset" || outcome === "alreadyRedeemed") {
         await settle("restored");
         return { status: "restored", profileId };
       }
+      await settle("not-needed");
+      return { status: "available", profileId };
     }
     await settle("not-restored");
     return { status: "not-restored", outcome };
