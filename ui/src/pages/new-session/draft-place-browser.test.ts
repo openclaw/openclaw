@@ -83,8 +83,6 @@ function createBrowser(
       data,
       isConnected: true,
       isAdmin: false,
-      canStartAsDraft: false,
-      visibility: "normal",
       cloudProfileId: "",
       pendingPlacement: { sessionKey: "", gatewayUrl: "", recoveryScope: "" },
       agentsHydrated: false,
@@ -95,7 +93,6 @@ function createBrowser(
       changed: vi.fn(),
       updateComplete: () => Promise.resolve(),
       onInvalidate,
-      onVisibilityRetired: vi.fn(),
       onCloudProfileCleared: vi.fn(),
       onCloudState: vi.fn(),
       onPendingPlacementReset: vi.fn(),
@@ -492,7 +489,11 @@ describe("DraftGatewayState", () => {
     const request = vi.fn(async () => ({ status: "ok", entries: {} }));
     const fixture = createBrowser(request);
     fixture.context.gateway.snapshot.selfUser = { id: "profile-one" };
-    fixture.hello.features.methods.push("users.prefs.get", "users.prefs.set");
+    fixture.hello.features.methods = [
+      ...fixture.hello.features.methods,
+      "users.prefs.get",
+      "users.prefs.set",
+    ];
     fixture.gateway.synchronize(fixture.context.gateway);
     expect(fixture.gateway.preferenceLoading).toBe(true);
     fixture.gateway.disconnect();
@@ -548,7 +549,7 @@ describe("DraftGatewayState", () => {
       () => ({ environments: [], profiles: [] }),
     );
     const fixture = createBrowser(request, undefined, false);
-    fixture.hello.features.methods.push("system.info");
+    fixture.hello.features.methods = [...fixture.hello.features.methods, "system.info"];
     fixture.hello.auth.scopes.push("operator.write");
     fixture.browser.browser.setDraft("/draft-folder");
     fixture.update();
@@ -595,7 +596,7 @@ describe("DraftGatewayState", () => {
     const fixture = createBrowser((method) =>
       method === "projects.list" ? Promise.resolve({ projects: [] }) : oldName.promise,
     );
-    fixture.hello.features.methods.push("system.info");
+    fixture.hello.features.methods = [...fixture.hello.features.methods, "system.info"];
     fixture.update();
     fixture.context.gateway.snapshot.client = createTestGatewayClient((method) =>
       method === "projects.list" ? Promise.resolve({ projects: [] }) : newName.promise,
@@ -634,7 +635,7 @@ describe("DraftGatewayState", () => {
         return result;
       });
       const fixture = createBrowser(request);
-      fixture.hello.features.methods.push("system.info");
+      fixture.hello.features.methods = [...fixture.hello.features.methods, "system.info"];
       await readSystemInfo(fixture.context.gateway);
       fixture.update();
       await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Current Gateway"));

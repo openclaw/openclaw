@@ -161,7 +161,7 @@ it.each(["agent:work:current", "global"])(
         expectedSessionId: before.sessionId,
       }),
     );
-    expect(state.chatError).toContain("Failed to update permissions");
+    expect(state.chatError).toContain("Couldn't change permissions");
     const view = mountSolid(ChatPermissionPicker, controls().permissionPicker, container);
     const picker = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
     expect(picker.getAttribute("aria-label")).toContain(

@@ -15,6 +15,7 @@ import {
   resolveSubagentConfiguredModelSelection,
   resolveSubagentSpawnModelSelection,
 } from "../../model-selection.js";
+import { buildThinkingCatalog } from "../../model-thinking-default-core.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
@@ -73,7 +74,12 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   if (thinkingPlan.status === "error") {
     const { provider, model } = splitModelRef(requestedModel);
     // The hint is provider/model-specific because valid thinking levels vary by backend.
-    const hint = formatThinkingLevels(provider, model);
+    const hint = formatThinkingLevels(
+      provider,
+      model,
+      ", ",
+      buildThinkingCatalog({ cfg: params.cfg, provider, model }),
+    );
     return {
       status: "error" as const,
       resolvedModel: requestedModel,

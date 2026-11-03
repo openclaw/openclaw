@@ -336,7 +336,7 @@ export function createBoardWidgetPutSnapshot(
     {
       tabId,
       ...(params.placement?.after ? { after: params.placement.after } : {}),
-      move: params.placement?.tabId !== undefined || params.placement?.after !== undefined,
+      move: tabId !== existing?.tabId || params.placement?.after !== undefined,
     },
   );
   return {

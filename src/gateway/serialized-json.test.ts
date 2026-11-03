@@ -73,7 +73,10 @@ describe("serialized Gateway response arrays", () => {
       const messages = [{ role: "assistant", content: 'é🦞\\\"\n__RAW_JSON_0__' }, null];
       const bytes = Buffer.from(`prefix${JSON.stringify(messages)}suffix`);
       const carrier = new SerializedJsonArray(bytes.subarray(6, -6));
+      const activity = [{ messageId: "tool", items: [{ title: 'Read 雪🦞\\"\n' }] }];
+      const activityCarrier = new SerializedJsonArray(Buffer.from(JSON.stringify(activity)));
       const materialize = vi.spyOn(carrier, "materialize");
+      const materializeActivity = vi.spyOn(activityCarrier, "materialize");
       const frame = {
         type: "res",
         id: "request",
@@ -81,6 +84,7 @@ describe("serialized Gateway response arrays", () => {
         payload: {
           omitted: undefined,
           messages: carrier,
+          activity: activityCarrier,
           nullable: null,
           values: [undefined, null],
           marker: '"messages":__RAW_JSON_0__',
@@ -94,6 +98,7 @@ describe("serialized Gateway response arrays", () => {
         ok: true,
         payload: {
           messages,
+          activity,
           nullable: null,
           values: [null, null],
           marker: '"messages":__RAW_JSON_0__',
@@ -112,9 +117,11 @@ describe("serialized Gateway response arrays", () => {
         throw new Error("Expected segmented worker response");
       }
       expect(encoded.segments).toContain(carrier.bytes);
+      expect(encoded.segments).toContain(activityCarrier.bytes);
       expect(encoded.toString()).toBe(JSON.stringify(wireExpected));
       expect(JSON.parse(encoded.toString())).toEqual(wireExpected);
       expect(materialize).not.toHaveBeenCalled();
+      expect(materializeActivity).not.toHaveBeenCalled();
     },
   );
 

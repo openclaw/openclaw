@@ -37,6 +37,7 @@ const spawnState = freshSpawnState();
 
 const registryMocks = vi.hoisted(() => ({
   readRegistryEntry: vi.fn(),
+  readRegisteredSandboxRuntimeIds: vi.fn(),
   removeRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
   completeSandboxRegistryReservation: vi.fn(),
@@ -80,9 +81,10 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   const globalArgs: string[] = [];
   let args = rawArgs;
   if (command === "podman") {
-    while (args[0] === "--url" || args[0] === "--identity") {
-      globalArgs.push(...args.slice(0, 2));
-      args = args.slice(2);
+    while (["--url", "--identity", "--remote=false"].includes(args[0] ?? "")) {
+      const width = args[0] === "--remote=false" ? 1 : 2;
+      globalArgs.push(...args.slice(0, width));
+      args = args.slice(width);
     }
   }
   const envFileIndex = args.indexOf("--env-file");
@@ -260,6 +262,7 @@ export function createSandboxContainerTestHarness() {
     Object.assign(spawnState, freshSpawnState());
     resolveDockerSourceNamespace.mockResolvedValue(undefined);
     registryMocks.readRegistryEntry.mockClear();
+    registryMocks.readRegisteredSandboxRuntimeIds.mockClear().mockResolvedValue([]);
     registryMocks.removeRegistryEntry.mockClear().mockResolvedValue(undefined);
     registryMocks.updateRegistry.mockClear().mockResolvedValue(undefined);
     registryMocks.completeSandboxRegistryReservation.mockClear().mockResolvedValue(undefined);

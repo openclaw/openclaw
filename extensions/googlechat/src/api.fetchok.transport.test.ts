@@ -174,7 +174,13 @@ describe("Google Chat real guarded transport", () => {
           request.on("end", () => {
             requests.push({ method: request.method, path: request.url, body });
             response.writeHead(200, { "Content-Type": "application/json" });
-            response.end(JSON.stringify({ name: `spaces/AAA/messages/${requests.length}` }));
+            response.end(
+              JSON.stringify(
+                request.method === "GET" && request.url === "/v1/spaces/AAA"
+                  ? { name: "spaces/AAA", spaceType: "SPACE" }
+                  : { name: `spaces/AAA/messages/${requests.length}` },
+              ),
+            );
           });
         });
 
@@ -207,8 +213,11 @@ describe("Google Chat real guarded transport", () => {
           expect(requests.map(({ method, path }) => ({ method, path }))).toEqual([
             { method: "POST", path: "/v1/spaces/AAA/messages" },
             { method: "POST", path: "/v1/spaces/AAA/messages" },
+            { method: "GET", path: "/v1/spaces/AAA" },
           ]);
-          const messages: Array<{ text: string }> = requests.map(({ body }) => JSON.parse(body));
+          const messages: Array<{ text: string }> = requests
+            .filter(({ method }) => method === "POST")
+            .map(({ body }) => JSON.parse(body));
           expect(messages).toEqual([{ text: `*${paragraph}*` }, { text: "\n\n[x] done" }]);
           expect(messages.every(({ text }) => Buffer.byteLength(text, "utf8") <= 32_000)).toBe(
             true,

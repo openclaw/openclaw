@@ -1,0 +1,2 @@
+45
+# Real refresh lock regression protects bounded direct reports and marked stale totals with fake time.

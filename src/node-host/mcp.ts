@@ -14,7 +14,7 @@ import {
   McpSdkCompatibilityError,
   mcpCallToolResultSchema,
 } from "../agents/mcp-sdk-compatibility.js";
-import { isMcpToolAllowed } from "../agents/mcp-tool-filter.js";
+import { createMcpToolFilter } from "../agents/mcp-tool-filter.js";
 import {
   normalizeMcpToolCatalog,
   type McpToolCatalogMetadata,
@@ -27,6 +27,8 @@ import {
   NODE_MCP_TOOLS_CALL_COMMAND,
 } from "../infra/node-commands.js";
 import { VERSION } from "../version.js";
+import type { NodeHostClient } from "./client.js";
+import { bindNodeMcpElicitation } from "./mcp-elicitation.js";
 
 const NODE_MCP_PLUGIN_ID = "node-mcp";
 const NODE_MCP_DESCRIPTION_MAX_CHARS = 1_024;
@@ -47,6 +49,7 @@ type NodeHostMcpTransport = Pick<
 
 type NodeHostMcpSession = NodeHostMcpTransport & {
   client: Client;
+  withElicitation?: ReturnType<typeof bindNodeMcpElicitation>;
   connected: boolean;
   toolCallTimeoutMs: number;
   abortController: AbortController;
@@ -84,6 +87,7 @@ export class NodeHostMcpError extends Error {
 export type NodeHostMcpManager = Awaited<ReturnType<typeof startNodeHostMcpManager>>;
 
 type NodeHostMcpManagerDeps = {
+  elicitationClient?: NodeHostClient;
   onDescriptorsChanged?: () => void;
   signal?: AbortSignal;
 };
@@ -290,10 +294,12 @@ export async function startNodeHostMcpManager(
     signal: AbortSignal,
     resetRetryDelay = false,
   ) => {
+    // Node-host tools use their own descriptor names, so filters stay raw-only here.
+    const isToolAllowed = createMcpToolFilter(state.config.toolFilter);
     const normalized = await listAllMcpTools(session.client, session.requestTimeoutMs, signal).then(
       (tools) =>
         normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
-          isMcpToolAllowed(state.config.toolFilter, toolName) ? "include" : "exclude",
+          isToolAllowed(toolName) ? "include" : "exclude",
         ),
     );
     if (closed || state.current !== session) {
@@ -326,6 +332,9 @@ export async function startNodeHostMcpManager(
         const client = new Client(
           { name: "openclaw-node-host", version: VERSION },
           {
+            ...(deps.elicitationClient
+              ? { capabilities: { elicitation: { form: {}, url: {} } } }
+              : {}),
             jsonSchemaValidator: createMcpJsonSchemaValidator(),
             versionNegotiation: { mode: "legacy" },
             listChanged: {
@@ -340,6 +349,9 @@ export async function startNodeHostMcpManager(
         const createdSession: NodeHostMcpSession = {
           ...resolved,
           client,
+          ...(deps.elicitationClient
+            ? { withElicitation: bindNodeMcpElicitation(client, deps.elicitationClient) }
+            : {}),
           connected: false,
           toolCallTimeoutMs: resolveMcpRequestTimeoutMs(
             state.config,
@@ -480,6 +492,7 @@ export async function startNodeHostMcpManager(
       server: string;
       tool: string;
       arguments?: Record<string, unknown>;
+      elicitationId?: string;
       timeoutMs?: number;
       signal?: AbortSignal;
     }) {
@@ -505,17 +518,28 @@ export async function startNodeHostMcpManager(
         clampPositiveTimerTimeoutMs(params.timeoutMs) ?? NODE_MCP_TOOL_CALL_TIMEOUT_MS;
       const validateResult = session.toolMetadata?.validatorForCall(params.tool);
       try {
-        const result = await session.client.request(
-          {
-            method: "tools/call",
-            params: { name: params.tool, arguments: params.arguments ?? {} },
-          },
-          mcpCallToolResultSchema,
-          {
-            timeout: Math.min(requestedTimeoutMs, session.toolCallTimeoutMs),
-            ...(params.signal ? { signal: params.signal } : {}),
-          },
-        );
+        const timeout = Math.min(requestedTimeoutMs, session.toolCallTimeoutMs);
+        const call = (options: { timeout: number; signal?: AbortSignal }) =>
+          session.client.request(
+            {
+              method: "tools/call",
+              params: { name: params.tool, arguments: params.arguments ?? {} },
+            },
+            mcpCallToolResultSchema,
+            options,
+          );
+        const result = session.withElicitation
+          ? await session.withElicitation(
+              params.elicitationId,
+              {
+                timeout,
+                signal: params.signal
+                  ? AbortSignal.any([params.signal, session.abortController.signal])
+                  : session.abortController.signal,
+              },
+              call,
+            )
+          : await call({ timeout, ...(params.signal ? { signal: params.signal } : {}) });
         validateResult?.(result);
         return result;
       } catch (error) {

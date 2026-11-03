@@ -67,8 +67,8 @@ export type ClawHubInstallParams = ClawHubSkillRef & {
   logger?: Logger;
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  /** True when a Claw lifecycle caller already owns package coordination. */
-  clawManaged?: boolean;
+  /** True when a Template lifecycle caller already owns package coordination. */
+  templateManaged?: boolean;
   beforePersistentApply?: () => void;
   beforePersistentEffect?: () => void | Promise<void>;
   assertOwned?: () => void;
@@ -248,7 +248,7 @@ export async function checkClawHubSkillTrust(
     baseUrl: params.baseUrl,
     logger: params.logger,
     mode: params.force ? "update" : "install",
-    confirmOnUpdate: params.clawManaged === true,
+    confirmOnUpdate: params.templateManaged === true,
     confirmInstall: params.confirmInstall,
   });
   return result.ok
@@ -271,9 +271,12 @@ export async function performClawHubSkillInstall(
         : normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
     if (
       params.deferCommit &&
-      (!params.clawManaged || !params.force || !params.expectedClawHubState || !params.assertOwned)
+      (!params.templateManaged ||
+        !params.force ||
+        !params.expectedClawHubState ||
+        !params.assertOwned)
     ) {
-      throw new Error("Deferred skill replacement requires a guarded Claw-managed update.");
+      throw new Error("Deferred skill replacement requires a guarded Template-managed update.");
     }
     const files = resolveWorkspaceClawHubSkills(params.workspaceDir);
     const registry = resolveClawHubBaseUrl(params.baseUrl);

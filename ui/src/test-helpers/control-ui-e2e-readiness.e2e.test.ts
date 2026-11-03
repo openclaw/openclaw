@@ -6,6 +6,7 @@ import { createControlUiE2eSuite } from "../e2e/control-ui-e2e-suite.test-suppor
 import { openChatPanels } from "./chat-layout-menu.ts";
 import { waitForConfirmModal, waitForControlUiGatewayReady } from "./control-ui-e2e-readiness.ts";
 import {
+  controlUiE2eWaitTimeoutMs as timeout,
   defaultControlUiFeatureMethods,
   installMockGateway,
   navigateToControlUiSession,
@@ -155,19 +156,19 @@ suite.define(() => {
         await gateway.resolveDeferred("sessions.list");
         expect((await navigation)?.ok()).toBe(true);
         expect(await row.count()).toBe(1);
-        expect(
-          await page.evaluate(() => {
-            const snapshot = window.openclawControlUi?.snapshot();
-            return {
-              ready: snapshot?.ready,
-              routeReady: snapshot?.routeReady,
-              rosterReady: snapshot?.rosterReady,
-              published:
-                document.querySelector("openclaw-app")?.getAttribute("data-openclaw-ready") ===
-                String(snapshot?.generation),
-            };
-          }),
-        ).toEqual({ ready: true, routeReady: true, rosterReady: true, published: true });
+        await expect
+          .poll(() =>
+            page.evaluate(() => {
+              const snapshot = window.openclawControlUi?.snapshot();
+              return {
+                ...snapshot,
+                published:
+                  document.querySelector("openclaw-app")?.getAttribute("data-openclaw-ready") ===
+                  String(snapshot?.generation),
+              };
+            }),
+          )
+          .toMatchObject({ ready: true, routeReady: true, rosterReady: true, published: true });
       }
       expect(await page.goto("about:blank")).toBeNull();
       expect(await page.reload()).toBeNull();
@@ -228,18 +229,17 @@ suite.define(() => {
         if (!offline) {
           await navigateToControlUiSession(page, key);
         }
-        await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready === true);
-        const snapshot = await page.evaluate(() => window.openclawControlUi?.snapshot());
-        expect(snapshot).toMatchObject({
-          booted: true,
-          gatewayPhase: offline ? "reconnecting" : "connected",
-          sessionKey: key,
-          terminalActivationReady: true,
-          route: { matches: [{ routeId: "chat" }] },
-        });
-        if (!offline) {
-          expect(snapshot).toMatchObject({ routeReady: true, rosterReady: true });
-        }
+        await expect
+          .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot()), { timeout })
+          .toMatchObject({
+            ready: true,
+            booted: true,
+            gatewayPhase: offline ? "reconnecting" : "connected",
+            sessionKey: key,
+            terminalActivationReady: true,
+            route: { matches: [{ routeId: "chat" }] },
+            ...(offline ? {} : { routeReady: true, rosterReady: true }),
+          });
         expect(requests).toHaveLength(1);
       });
     },

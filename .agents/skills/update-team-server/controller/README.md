@@ -57,6 +57,20 @@ the Gateway. The native backup remains on disk. This also applies to
 `ROLLBACK_FAILED` with the candidate still selected. An absent or unverifiable
 candidate follows the existing compatibility-checked rollback path.
 
+Native transaction roots under `<runtime-home>/.openclaw-update/` stay on disk
+until the controller next prunes releases with no activation journal present:
+before a deployment, after an accepted one, and in `--cleanup`. Without a
+journal, an earlier transaction's pre-migration snapshot can only undo state
+that was since accepted. Roots whose receipt is absent (Doctor never ran),
+`migrated`, `restored`, or `finished` are then retired: the runtime account
+removes their contents and the controller removes the emptied directory,
+printing `RETIRED_NATIVE_UPDATE`. A `backed-up`, `failed`, `restoring-config`,
+or unreadable receipt stays with a `RETAIN unsettled native update` line for
+the operator. The current deployment keeps its own root until the next prune,
+so a failed `update finish` can be retried. Displaced candidate databases sit
+beside the live databases and are not touched. This change requires
+complete-pair adoption; landing it does not deploy it.
+
 An interruption while the native owner publishes restored database files can
 require explicit recovery of the retained backup and displaced files. Database
 publication is not resumable per file; recovery fails closed instead of starting
@@ -154,6 +168,27 @@ this estimate does not predict production downtime.
 Complete any transaction created by the former controller using its original
 installed closure before adopting this version. Its edge-specific journals and
 rehearsal artifacts are not inputs to the generic update path.
+
+## Explicit operator recovery
+
+`--operator-restart-current SHA PID START_TICKS` recovers an unresponsive Gateway
+on its current sealed release under the canonical lock. It requires three direct
+HTTP timeouts with no response, retains generation and protected-state checks,
+and records operator intent and verified recovery. It does not promote a release
+or promise preservation of in-memory work.
+
+The system unit must use `KillMode=control-group` or `KillMode=mixed`,
+`SendSIGKILL=yes`, and a bounded `TimeoutStopUSec`. Both modes apply the final
+kill to all remaining processes in the cgroup. The shipped `mixed` policy first
+signals only the Gateway, allowing it to drain its children; systemd kills the
+remaining processes after the Gateway exits or the stop timeout expires.
+`KillMode=process`/`none`, disabled final killing, and infinite timeouts remain
+refused. See [systemd.kill](https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html).
+
+Adopt the complete reviewed controller closure using the procedure below before
+using this recovery with `mixed`. No service-unit edit, daemon reload, or Gateway
+restart is part of controller adoption. Any subsequent operator recovery requires
+its own incident authorization and coordinated restart window.
 
 ## Installed closure
 

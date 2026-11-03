@@ -69,7 +69,7 @@ function fallbackCase(route: string, href: string, reader = false, input = "poin
   return {
     route,
     routeId: route === "chat" ? "chat" : "about",
-    selector: `${route === "chat" ? ".chat-group.assistant a" : "openclaw-about-page .about-hero__link"}[href="${href}"]`,
+    selector: `${route === "chat" ? ".chat-group.assistant a" : "openclaw-about-page nav a"}[href="${href}"]`,
     reader,
     input,
   };
@@ -182,6 +182,9 @@ suite.define(() => {
         );
         await assertBounds(card, width, height);
 
+        // Leave the repository preview before hovering the link underneath it.
+        await page.mouse.move(0, 0);
+        await expect.poll(() => card.count()).toBe(0);
         const github = page.getByRole("link", { name: "project update", exact: true });
         await github.hover();
         await page

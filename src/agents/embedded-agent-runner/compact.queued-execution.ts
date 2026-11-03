@@ -28,6 +28,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { prepareCliHistoryCompactionBoundary } from "../cli-runner/history-boundary.js";
+import { readCompactionTranscriptBytes } from "../compaction-transcript-bytes.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { buildCompactionFailureResult } from "./compact-reasons.js";
@@ -237,16 +238,16 @@ export async function executeQueuedContextEngineCompaction(input: {
           compactionConfig?.maxActiveTranscriptBytes,
         );
         if (maxActiveTranscriptBytes !== null && maxActiveTranscriptBytes > 0) {
-          const { readSessionTranscriptAccountingAsync } =
-            await import("../../gateway/session-transcript-readers.js");
+          const pressureBytes = await readCompactionTranscriptBytes({
+            target: runtimeTarget,
+            rawBytes: undefined,
+            maxBytes: maxActiveTranscriptBytes,
+            runtime: preparedParams,
+            contextTokenBudget,
+            signal: params.abortSignal,
+          });
           assertCallerActive();
-          const snapshot = await readSessionTranscriptAccountingAsync(
-            runtimeTarget,
-            { includeByteSize: true, includeUsage: false },
-            params.abortSignal,
-          );
-          assertCallerActive();
-          if (snapshot.byteSize !== undefined && snapshot.byteSize >= maxActiveTranscriptBytes) {
+          if (pressureBytes !== undefined && pressureBytes >= maxActiveTranscriptBytes) {
             preflightCompactionTrigger = "transcript_bytes";
           }
         }

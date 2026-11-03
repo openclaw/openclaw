@@ -1,0 +1,142 @@
+name: PR tooling Darwin
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - ".github/workflows/pr-tooling-darwin.yml"
+      - ".github/actions/setup-node-env/**"
+      - ".github/actions/setup-pnpm-store-cache/**"
+      - "scripts/pr"
+      - "scripts/pr-lib/**"
+      - "scripts/pnpm-runner.mts"
+      - "scripts/lib/**"
+      # CI planners are Linux-owned; retain inputs used by native worker preparation.
+      - "!scripts/lib/ci-*.mts"
+      - "!scripts/lib/ci-*.mjs"
+      - "scripts/lib/ci-test-timings.mts"
+      - "scripts/lib/ci-test-timings-schema.mts"
+      - "scripts/lib/ci-test-timings-refit.mts"
+      - "scripts/lib/ci-node-test-groups-codec.mts"
+      - "scripts/lib/ci-static-check-evidence.mjs"
+      - "scripts/run-vitest*"
+      - "scripts/vitest-process-group.mts"
+      - "scripts/test-projects*"
+      - "scripts/tsx.mjs"
+      - "scripts/windows-cmd-helpers.mjs"
+      - "test/scripts/pr-*"
+      # Keep helpers broad; only the test entrypoints below execute on Darwin.
+      - "!test/scripts/pr-*.test.ts"
+      - "test/scripts/pr-dependency-cache.test.ts"
+      - "test/scripts/pr-wrappers.test.ts"
+      - "test/scripts/pr-materialized-anchor.test.ts"
+      - "test/scripts/pr-operation-lock.test.ts"
+      - "test/scripts/pr-git-invocation.test.ts"
+      - "!test/scripts/pr-ci-sweeper*"
+      - "test/scripts/exited-descendant-reaper.test-support.ts"
+      - "test/helpers/**"
+      - "!test/helpers/**/*.test.ts"
+      - "test/vitest/**"
+      - "test/setup*.ts"
+      - "test/test-home-policy.mts"
+      - "src/test-utils/**"
+      - "vitest.config.ts"
+      - "tsconfig*.json"
+      - "test/tsconfig.json"
+      - "node-version.*"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".npmrc"
+      - "patches/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Skipped draft events must not evict useful pending or running PR proof.
+  group: >-
+    ${{ github.event.pull_request.draft
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}
+  cancel-in-progress: true
+
+jobs:
+  darwin:
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: "/bin/bash --noprofile --norc -e -o pipefail {0}"
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      OPENCLAW_VITEST_RUNTIME: node
+      OPENCLAW_VITEST_MAX_WORKERS: "1"
+    steps:
+      - name: Checkout PR source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Verify source and native runner before repository execution
+        run: |
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          printf 'source_head=%s\n' "$EXPECTED_HEAD"
+          printf 'source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          printf 'workflow_sha=%s\n' "$EXPECTED_WORKFLOW_SHA"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "false"
+          cache-mode: "off"
+
+      - name: Verify runtime and source identities
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          node -e '
+            const assert = require("node:assert/strict");
+            assert.equal(process.platform, "darwin");
+            assert.equal(process.arch, "arm64");
+            assert.equal(process.versions.node, "24.22.1");
+            console.log(JSON.stringify({ node: process.version, platform: process.platform, arch: process.arch }));
+          '
+          python3 -I -B -c '
+          import json, platform
+          assert platform.system() == "Darwin"
+          assert platform.machine() == "arm64"
+          print(json.dumps({"python": platform.python_version(), "platform": platform.system(), "arch": platform.machine()}))
+          '
+          pnpm --version
+          git --version
+          command -v gh
+          gh --version
+          printf 'source_head=%s\n' "$(git rev-parse HEAD)"
+          printf 'source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          printf 'workflow_sha=%s\n' "$EXPECTED_WORKFLOW_SHA"
+
+      - name: Test native Darwin process identity
+        run: python3 -I -B test/scripts/pr-darwin-process-identity.test.py
+
+      - name: Test dependency cache lifetime
+        run: node scripts/run-vitest.mjs test/scripts/pr-dependency-cache.test.ts --maxWorkers=1
+
+      - name: Test PR wrappers
+        run: node scripts/run-vitest.mjs test/scripts/pr-wrappers.test.ts --maxWorkers=1
+
+      - name: Test materialized anchors
+        run: node scripts/run-vitest.mjs test/scripts/pr-materialized-anchor.test.ts --maxWorkers=1
+
+      - name: Test operation locks
+        run: node scripts/run-vitest.mjs test/scripts/pr-operation-lock.test.ts --maxWorkers=1
+
+      - name: Test selected Git with native GitHub CLI
+        run: node scripts/run-vitest.mjs test/scripts/pr-git-invocation.test.ts --maxWorkers=1

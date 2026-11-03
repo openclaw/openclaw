@@ -1,7 +1,7 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { WorkspaceConflictNotice } from "../pages/chat/components/chat-workspace-conflict.tsx";
+import { ChatComposerNoticesContent } from "../pages/chat/chat-view-notices-content.tsx";
 import { DevicePairSetup } from "../pages/devices/view-pairing.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
@@ -81,8 +81,12 @@ const surfaces = [
   {
     name: "workspace conflict command",
     View: (props: { text: string }) => (
-      <WorkspaceConflictNotice
-        conflict={{ paths: [props.text], stagedResultRef: "refs/openclaw/worker-results/test" }}
+      <ChatComposerNoticesContent
+        messages={[]}
+        workspaceConflict={{
+          paths: [props.text],
+          stagedResultRef: "refs/openclaw/worker-results/test",
+        }}
       />
     ),
     selector: ".chat-workspace-conflict-path-actions button",

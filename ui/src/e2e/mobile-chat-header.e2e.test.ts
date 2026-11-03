@@ -161,9 +161,13 @@ suite.define(() => {
 
           const project = header.locator(".chat-pane__workspace-chip", { hasText: "openclaw" });
           await project.waitFor();
+          const titleBox = (await header.locator(".mobile-header__title-text").boundingBox())!;
+          const projectBox = (await project.boundingBox())!;
+          expect(titleBox.y).toBeLessThan(projectBox.y);
+          // The project reads as the title's subtitle: line centers stay within 17px.
           expect(
-            (await header.locator(".mobile-header__title-text").boundingBox())!.y,
-          ).toBeLessThan((await project.boundingBox())!.y);
+            projectBox.y + projectBox.height / 2 - (titleBox.y + titleBox.height / 2),
+          ).toBeLessThanOrEqual(17);
           await header.getByRole("button", { name: "People", exact: true }).waitFor();
 
           const details = await openChatDetails(page);

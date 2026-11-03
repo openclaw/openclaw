@@ -4,9 +4,12 @@ Run one fixed workload against two **already-built** revisions from this tooling
 checkout. All state, logs, profiles, and results go under a new output directory.
 The controller creates its own loopback listeners on free ports >=40000. It never
 connects to an existing Gateway, discovers credentials, or drives a real browser.
-Both builds must support the database schemas written by the tooling checkout's
-fixture generator. A schema mismatch is a setup failure; the harness never
-downstamps databases or bypasses Gateway schema admission.
+Each arm runs its built `doctor --fix --non-interactive` against its isolated
+fixture before Gateway readiness, warmup, and measurement. Service repair is
+disabled through the external-supervisor policy. Use a tooling checkout whose
+fixture schema both builds can read or migrate forward; newer fixture schemas
+cannot be downgraded. Doctor failures or subsequent schema admission failures
+are setup failures; the harness never downstamps databases or bypasses admission.
 The Gateway's instrumentation loader uses native Node type stripping and resolves
 source-only `.js` imports to TypeScript without applying tsconfig aliases.
 Already-built JavaScript stays byte-for-byte native: a transforming loader can
@@ -21,6 +24,46 @@ node --import ./scripts/tsx.mjs scripts/perf/team-shape-stress.ts \
   --output "$PWD/.local/team-stress-comparison" \
   --minutes 10 --pairs 2
 ```
+
+On an isolated Linux box, add `--exec-io-storm` to exercise agent-exec IO isolation.
+The mock model starts one persistent background writer per foreground runner through
+the real Code Mode exec tool. Each writer repeatedly writes buffered random data and
+calls `fdatasync`, retaining at most 128 MiB under the fresh arm's state directory.
+Writers record cgroup membership, `io.max`, `io.stat`, and bytes written every ten
+seconds in `agent-exec-io-<runner>.jsonl`; the harness requires progress during the
+measurement. Teardown requests graceful termination; writers then remove their data.
+An expiry bounds orphaned runs if teardown fails. Do not use this against Team or
+other production state.
+
+This mode also imports identical instrumentation into both Gateway revisions.
+`agent-exec-io-commits.json` records counts, failures, p50/p95/p99/max duration of
+main-thread `DatabaseSync.exec` explicit `COMMIT` attempts during the canonical
+measurement window, plus Gateway/agent-exec cgroup IO snapshots. It excludes worker
+transactions, implicit commits, and commits embedded in multi-statement SQL. No SQL
+or message content is retained. A separate `autocommitMutations` histogram measures
+successful native `exec`/`run`/`get`/`all` single-statement
+`INSERT`/`UPDATE`/`DELETE`/`REPLACE` calls outside explicit transactions. SQL comments
+are ignored; `WITH`/CTEs and statement batches are excluded.
+Those durations include statement execution and automatic commit; they are not
+isolated COMMIT timings and may include temporary-table mutations. Streaming
+iteration is excluded and counted. Coverage counters and prototype-wrapper checks
+distinguish absent main-thread writes from missing instrumentation. `result.json` includes these results and writer
+artifact paths. Use the existing telemetry's event-loop tails and `hostLoadAverage`
+for stalls and host context; zero commit samples cannot establish commit latency.
+Writer byte receipts have ten-second granularity, whereas commit timing follows the
+measurement start/stop messages. Allocation passes retain their usual traced scope.
+
+`workerCommits` pools actual native explicit COMMIT samples from the Gateway's Node
+workers, separately from the main-thread metrics. Shared histograms retain samples
+after workers retire and compute percentiles from pooled samples. A shared gate
+excludes setup and teardown; COMMIT calls entering within the window retain their
+full duration even if they finish after its end. Stop waits up to 45 seconds for
+these calls and rejects an incomplete capture. Coverage records instrumented worker
+counts plus thread and dynamically loaded backend basenames (including the session
+writer). Identities mark workers observed entering a measured COMMIT. Construction
+and preload counts are cumulative, including retired workers. CommonJS eval workers
+(which skip Node import preloads) are counted as excluded; subprocess-backed database
+owners are also outside this metric.
 
 Defaults are 10,800 deterministic sessions, 65 permanent operator WebSocket
 clients (plus brief reconnect probes), four concurrent mock-provider turns per
@@ -37,7 +80,7 @@ that dozens of synthetic external plugins would introduce.
 
 The seeded mix is 4,300 finished unarchived subagents, 4,400 archived dashboards,
 400 active dashboards, 200 explicit sessions, and 1,500 other sessions including
-small channel/cron cohorts. Four agents are configured; retained rows initially
+small channel/cron cohorts. Four agents are configured by default (`--agents 8` selects eight); retained rows initially
 belong to `main`. Transcripts contain 128 MiB of deterministic, incompressible
 message content with a skewed size distribution. This reproduces session shape,
 not a byte-for-byte copy of a production database. Retained runs are settled collectors
@@ -175,7 +218,8 @@ Missing array-buffer details alone do not invalidate a complete heap census.
 
 For a separate worker-retention diagnostic pass, add `--worker-heap-snapshot`.
 This forwards the workload's existing retained-worker instrumentation and captures
-the largest SQLite-store, model-catalog, and Git-operation worker after the measured window.
+the largest SQLite-store, model-catalog, Git-operation, shared-state read, and
+session-archive worker after the measured window.
 The worker profiler and explicit collections make this diagnostic evidence;
 use an ordinary timing pass for latency and GC acceptance.
 
@@ -273,7 +317,8 @@ with the complete scenario mix. Check recorded tool events before claiming that
 any requested behavior was actually exercised.
 
 After the final injection, the controller polls every input's public history until
-accepted inputs settle and their sessions are inactive, or ten minutes pass.
+accepted inputs settle (apart from deliberate crash loss) and their sessions are
+inactive, or ten minutes pass.
 The overall campaign deadline remains a hard bound and may shorten this wait;
 `settlement` records the effective deadline and observed finish. Still-unresolved
 accepted inputs become `timed-out`, never implicitly successful or silently active
@@ -284,6 +329,12 @@ a final assistant message. Quoted markers, commentary, and promises do not count
 Subagent prompts ask for independent, self-contained checks without specifying
 tool arguments or requesting checkouts; successful child launches still require
 recorded evidence.
+
+Graceful restarts resume running root sessions through ordinary inputs. Deliberate
+SIGKILL writes no resume markers: unanswered inputs sent before that crash in its
+active sessions are recorded as accepted crash loss. New post-restart inputs must
+still settle. The dry provider inspects its exact effect marker before appending
+again, following the resume instruction without adding runtime effect replay.
 
 Use `--candidate /path/to/reviewed-checkout` to replay this tooling against another
 revision. Prepare that checkout's build first; `dist/entry.js` is required, matching

@@ -4,7 +4,7 @@ import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { enableHostDesktop as enableHostDesktopConfig } from "../../components/desktop/host-desktop-setup.ts";
 import { t } from "../../i18n/index.ts";
@@ -12,6 +12,7 @@ import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-mod
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
 import {
   loadSystemsInventory,
@@ -28,6 +29,22 @@ import {
 
 const TELEMETRY_SAMPLE_LIMIT = 120;
 
+const UNPLACED = JSON.stringify([null, null]);
+
+const PHONE_WIDTH_QUERY = "(max-width: 640px)";
+
+// Worker lifecycle is only reported by environments.list; a placement change signals it moved.
+function placementFact(payload: unknown): [sessionKey: string, fact: string] | undefined {
+  if (!isRecord(payload) || typeof payload.sessionKey !== "string" || !("placement" in payload)) {
+    return undefined;
+  }
+  const placement = isRecord(payload.placement) ? payload.placement : undefined;
+  return [
+    payload.sessionKey,
+    JSON.stringify([placement?.state ?? null, placement?.environmentId ?? null]),
+  ];
+}
+
 export type SystemsSortMode = "name" | "online-first" | "offline-first";
 export type SystemsStatusFilter = "all" | "online" | "offline";
 
@@ -38,7 +55,8 @@ type SystemsState = {
   query: string;
   sortMode: SystemsSortMode;
   statusFilter: SystemsStatusFilter;
-  showStats: boolean;
+  /** The operator's toggle choice; null until they make one. */
+  showStats: boolean | null;
   showDetails: boolean;
   desktopSetupError: string | null;
   backups: BackupStatusResult | null;
@@ -56,12 +74,15 @@ export function createSystems(context: ApplicationContext) {
     query: "",
     sortMode: "online-first",
     statusFilter: "all",
-    showStats: true,
+    showStats: null,
     showDetails: false,
     desktopSetupError: null,
     backups: null,
     backupsError: null,
   };
+  const phoneWidth = globalThis.matchMedia?.(PHONE_WIDTH_QUERY);
+  // A phone opens on the remote desktop; an explicit toggle wins at every width.
+  const statsVisible = () => state.showStats ?? !phoneWidth?.matches;
   const storageProbes = new Map<string, StorageLocationsProbeResult>();
   const presentationScope = gatewayPresentationScope(context.gateway);
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
@@ -84,7 +105,15 @@ export function createSystems(context: ApplicationContext) {
 
   const connected = () => current() && context.gateway.snapshot.phase === "connected";
 
-  const needsInventoryRefresh = () => state.inventory === null || refreshQueued !== undefined;
+  // Provider teardown and boot finish without a session event; the page tick follows them.
+  const needsInventoryRefresh = () =>
+    state.inventory === null ||
+    refreshQueued !== undefined ||
+    state.inventory.environments.some(
+      (environment) =>
+        environment.type === "worker" &&
+        (environment.status === "starting" || environment.status === "stopping"),
+    );
 
   const sampledAtMs = () => state.inventory?.gatewaySampledAtMs ?? null;
 
@@ -430,11 +459,14 @@ export function createSystems(context: ApplicationContext) {
     },
     storageProbeRead: (name: string) => storageProbeRequests.get(name)?.read ?? null,
     desktopAvailable,
+    desktopAccessDenied: () =>
+      !hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
     selected,
     hostDesktopEnabled,
     desktopSetupBusy,
     canEnableHostDesktop,
     telemetryHistory,
+    statsVisible,
     select(id: string): void {
       if (!current() || !id.trim()) {
         return;
@@ -469,7 +501,19 @@ export function createSystems(context: ApplicationContext) {
         return;
       }
       let location = context.router.getState().location;
+      // Keyed by session from events, so sessions outside the loaded list still refresh workers.
+      const placements = new Map<string, string>();
       subscriptions = [
+        ...(phoneWidth
+          ? [
+              listen(phoneWidth, "change", () => {
+                notify();
+                if (state.showStats === null && !phoneWidth.matches) {
+                  void refreshTelemetry();
+                }
+              }),
+            ]
+          : []),
         context.router.subscribe((next) => {
           if (next.location !== location) {
             location = next.location;
@@ -501,7 +545,15 @@ export function createSystems(context: ApplicationContext) {
             cancelBackups();
             storageProbes.clear();
           }
+          const placement =
+            event.event === "sessions.changed" ? placementFact(event.payload) : undefined;
+          const placementChanged =
+            placement !== undefined && (placements.get(placement[0]) ?? UNPLACED) !== placement[1];
+          if (placementChanged) {
+            placements.set(placement[0], placement[1]);
+          }
           if (
+            placementChanged ||
             event.event === "presence" ||
             event.event === "node.pair.resolved" ||
             event.event === "node.runnerInventory.changed" ||

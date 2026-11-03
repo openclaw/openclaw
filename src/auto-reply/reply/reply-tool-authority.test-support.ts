@@ -56,8 +56,6 @@ export function toolAuthorityOverlay(
     runtimePluginToolGrant: run.run.runtimePluginToolGrant,
     toolsAllow: run.toolsAllow,
     disableTools: run.disableTools === true,
-    forceRestartSafeTools: run.forceRestartSafeTools,
-    forceCodeModeTools: run.forceCodeModeTools,
     traceAuthorized: run.run.traceAuthorized === true,
     approvalReviewerDeviceId: run.run.approvalReviewerDeviceId,
     clientCaps: run.run.clientCaps,

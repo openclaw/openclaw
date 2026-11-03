@@ -43,11 +43,15 @@ node --import ./scripts/tsx.mjs scripts/bench-control-ui-interactions.ts \
   --retained-heap --pairs 1 --output <memory-artifact-parent>
 ```
 
-`--retained-heap` invokes `HeapProfiler.collectGarbage` before action metrics and
-tracing start, then again after the action metrics and trace interval close. It
-adds `retainedHeap.beforeBytes`, `afterBytes`, and `deltaBytes` alongside the
-unforced heap endpoints. This collection is labeled GC-controlled proof in the
-manifest; keep its timing results separate from normal CPU comparisons.
+`--retained-heap` uses the existing retention collector before action metrics and
+tracing start, then after the action metrics and trace interval close. Both
+milestones preserve the synthetic request history, collect garbage twice, and save
+full heap snapshots plus DOM, live/disposed Solid owner, timer and listener counts.
+`retainedHeap.before` and `after` contain these summaries and artifact names;
+`beforeBytes`, `afterBytes`, and `deltaBytes` preserve the heap endpoints. These
+observations are diagnostic, with timing distributions excluded from comparisons.
+Request history remains part of these whole-page snapshots so setup cursors and
+cumulative request assertions keep their existing meaning.
 The long-stream fixture releases consumed response arrays before both heap
 endpoints so its synthetic response queue is not mistaken for UI retention.
 
@@ -84,22 +88,24 @@ cards; use catalog search to find offscreen plugins. `data-catalog-scroll` recor
 the mounted window and retained cards after scrolling to the final entry. The catalog
 `-100ms` variants delay only the browse RPC, not the whole network.
 
-| Scenario                     | Measured action and visible assertion                                         |
-| ---------------------------- | ----------------------------------------------------------------------------- |
-| `data-plugins-render`        | Open installed-plugin settings; assert 1,000 rows.                            |
-| `data-plugins-filter`        | Type a label prefix; assert 100 matching rows.                                |
-| `data-plugins-refresh`       | Deliver a plugin-change receipt; await the updated 1,000-row inventory.       |
-| `data-plugins-scroll`        | Scroll the final installed plugin into view.                                  |
-| `data-catalog-load-more`     | Append the final 100-item cursor page to 900 existing cards.                  |
-| `data-catalog-search`        | Search through the debounced Gateway query; assert 100 results.               |
-| `data-agent-selection`       | Reopen the hydrated 300-agent selector and select its final agent.            |
-| `data-agent-selection-100ms` | Repeat hydrated selection with 100 ms simulated identity-RPC round trips.     |
-| `data-agent-skills-render`   | Reveal the Skills panel; assert 1,000 skill rows.                             |
-| `data-agent-skills-filter`   | Filter to the final skill; assert one row.                                    |
-| `data-agent-skills-refresh`  | Refresh skills; await the report and preserved rows.                          |
-| `data-agent-skills-scroll`   | Scroll the final skill into view.                                             |
-| `data-agent-tools-render`    | Reveal Tools; assert 1,000 summaries and record mounted detail panels.        |
-| `data-agent-tool-disclosure` | Open one tool; assert its effective-access details and record mounted panels. |
+| Scenario                      | Measured action and visible assertion                                                                 |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `data-plugins-render`         | Open installed-plugin settings; assert 1,000 rows.                                                    |
+| `data-plugins-filter`         | Type a label prefix; assert 100 matching rows.                                                        |
+| `data-plugins-refresh`        | Deliver a plugin-change receipt; await the updated 1,000-row inventory.                               |
+| `data-plugins-scroll`         | Scroll the final installed plugin into view.                                                          |
+| `data-catalog-load-more`      | Append the final 100-item cursor page to 900 existing cards.                                          |
+| `data-catalog-search`         | Search through the debounced Gateway query; assert 100 results.                                       |
+| `data-agent-selection`        | Reopen the hydrated 300-agent selector and select its final agent.                                    |
+| `data-agent-selection-100ms`  | Repeat hydrated selection with 100 ms simulated identity-RPC round trips.                             |
+| `data-agent-reopen-retention` | Explicit-only diagnostic: close/reopen the hydrated selector ten times.                               |
+| `data-agent-skills-render`    | Reveal the Skills panel; assert 1,000 skill rows.                                                     |
+| `data-agent-skills-filter`    | Filter to the final skill; assert one row.                                                            |
+| `data-agent-skills-refresh`   | Refresh skills; await the report and preserved rows.                                                  |
+| `data-agent-skills-scroll`    | Scroll the final skill into view.                                                                     |
+| `data-agent-tools-render`     | Reveal Tools; assert 40 groups and the 1,000-tool preview, recording mounted cards and detail panels. |
+| `data-agent-tool-group`       | Open one group; assert its 25 tool summaries and record mounted cards and detail panels.              |
+| `data-agent-tool-disclosure`  | Open one tool; assert its effective-access details and record mounted panels.                         |
 
 ## Activity and logs
 
@@ -196,6 +202,35 @@ dashboard `sessions.list` and preview `board.get` for first render, and preview
 delay their named listing or search RPC. Other scenarios install no network delay.
 Gateway callbacks use the existing mock transport;
 Usage filtering/paging and session-window selection reuse production owners.
+
+Agent selection also records `agentAvatarsInitial`, `agentAvatarsRetained`, and
+`agentAvatarsFinal` alongside the outer-row identity probe. These compare the
+avatar elements before reopening and after selection; they count retained final
+elements, not transient construction. The first open, first close, and warm
+reopen must keep all 300 avatars; the measured interval must issue zero identity
+requests. Post-selection retention remains observational so the same scenario
+runs on a baseline that replaces inner content when selection changes.
+
+Run `data-agent-reopen-retention` with `--retained-heap` separately from timing.
+Its two milestones are after the first hydrated open/close and after ten more
+same-selection open/close cycles. All avatar observation handles are disposed
+before each GC snapshot. Compare the exact same milestones for base, candidate,
+and A/A control; reject growing live owners, DOM nodes, detached nodes, or active
+timers/listeners after warmup. Report any constant candidate heap increase at
+both milestones separately; do not call the retained 300-row cache a leak or
+invent a byte cap. A positive heap slope without structural attribution needs
+inspection of the retained snapshots before acceptance.
+
+Run the separate `data-agent-selection-retention` diagnostic with `--retained-heap`
+to distinguish warmed selection cost from accumulation. It first selects agents
+0001, 0149, 0299, then main through the real menu before the first GC checkpoint.
+The measured phase repeats that four-selection cycle ten times and returns to
+main before the second checkpoint, retaining the same 300-agent roster throughout.
+The baseline may replace its inner avatars on each selection; report that
+observationally and require full inner-avatar retention only on the candidate.
+Compare structural counts and post-GC heap growth separately from the constant
+candidate-versus-base heap difference. This is finite selection-lifecycle proof,
+not roster-refresh, whole-page disposal, or arbitrary-duration leak proof.
 
 The workload does not invent sort controls on pages without them. Plugin-provided
 views and heavy iframe documents belong to their separate lane. Mobile coverage
