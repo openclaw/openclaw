@@ -951,7 +951,9 @@ node --import ./scripts/tsx.mjs scripts/perf/restart-lane-flood-measure.ts \
 ```
 
 The optional fixture is copied into isolated state; its workspace is read by the
-synthetic agent. Use independent baseline and candidate builds, run serial A/A
+synthetic agent. The public usage RPC waits for its cold projection to become fresh
+before starting the interrupted turns; `fixtureWarmupMs` records that setup cost.
+Use independent baseline and candidate builds, run serial A/A
 controls and counterbalanced A/B pairs, and keep host load comparable. Output
 separates restart startup, resume dispatch from first resume, and new cron
 request-to-model latency. `--profile` adds per-process queue-owner wait samples,

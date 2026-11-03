@@ -8,6 +8,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
+import type { CostUsageSummary } from "../src/infra/session-cost-usage.types.js";
 import { createDeferredCore } from "../src/shared/deferred.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import {
@@ -176,6 +177,7 @@ export async function measureRestartLaneFlood(options: {
   });
   const keys = Array.from({ length: count }, (_, id) => `agent:main:dashboard:lane-resume-${id}`);
   let client: GatewayClient | undefined;
+  let fixtureWarmupMs = 0;
   let lanes: Lane[] = [];
   const wait = <T>(value: Promise<T>) =>
     withinTest(Promise.race([value, failure.promise]), options.signal);
@@ -201,6 +203,26 @@ export async function measureRestartLaneFlood(options: {
       options.signal,
     );
     options.onProgress?.("initial client connected");
+    if (options.fixture) {
+      const started = performance.now();
+      // Finish cold fixture backfill before interrupting the measured turns.
+      for (;;) {
+        const usage: CostUsageSummary = await wait(
+          client.request<CostUsageSummary>(
+            "usage.cost",
+            { agentId: "main" },
+            { timeoutMs: 300_000 },
+          ),
+        );
+        options.onProgress?.(`fixture usage ${JSON.stringify(usage.cacheStatus)}`);
+        if (usage.cacheStatus?.status === "fresh") {
+          break;
+        }
+        await delay(1_000, undefined, { signal: options.signal });
+      }
+      fixtureWarmupMs = performance.now() - started;
+      options.onProgress?.(`fixture usage ready after ${Math.round(fixtureWarmupMs)}ms`);
+    }
     const jobs: string[] = [];
     for (let id = 0; id < 12; id++) {
       const job = await client.request<{ id: string }>("cron.add", {
@@ -335,6 +357,7 @@ export async function measureRestartLaneFlood(options: {
     const result = {
       count,
       serviceMs,
+      fixtureWarmupMs,
       cronOutcomes,
       lanesAtRecoveryAdmission: lanes,
       firstResumeAfterRestartMs: first - epoch,
