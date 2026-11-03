@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import {
   presenceViewerActivity,
@@ -7,6 +7,7 @@ import {
   projectPresenceViewers,
 } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { sidebarPinnedSessionRows } from "./app-sidebar-personal-navigation.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import {
@@ -28,11 +29,28 @@ function RosterLoadMore(props: {
   host: SidebarSessionListHost;
   hasMore: boolean;
   loading: boolean;
+  autoLoad: boolean;
 }) {
+  const [button, setButton] = createSignal<HTMLButtonElement>();
+  // One page per entry into view: the button has to leave and come back before
+  // the next load, so a page whose rows land off-screen or a failed load never
+  // turns into a request loop. The button stays as the manual fallback.
+  createIntersectionObserver(
+    () => {
+      const target = button();
+      return props.autoLoad && target ? [target] : [];
+    },
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        void props.host.loadMoreSidebarSessions();
+      }
+    },
+  );
   return (
     <Show when={props.hasMore}>
       <div class="sidebar-session-pagination sidebar-session-pagination--roster">
         <button
+          ref={setButton}
           type="button"
           class="sidebar-session-pagination__button"
           aria-label={
@@ -123,6 +141,7 @@ export function renderSessionList(params: {
   sections: RenderableSessionSection[];
   nativeSessionsHaveMore: boolean;
   nativeSessionsLoading: boolean;
+  autoLoadMore: boolean;
   catalogs: SessionCatalogRenderSnapshot;
   catalogRenderer: SessionCatalogGroupsRenderer;
 }) {
@@ -135,6 +154,7 @@ export function renderSessionList(params: {
         host={host()}
         hasMore={params.nativeSessionsHaveMore}
         loading={params.nativeSessionsLoading}
+        autoLoad={params.autoLoadMore}
       />
       {renderPersonalSessionEmpty(
         host(),

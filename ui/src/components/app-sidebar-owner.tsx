@@ -469,6 +469,13 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         sections={sections()}
         nativeSessionsHaveMore={host().sessionData.sessionsResult?.hasMore === true}
         nativeSessionsLoading={host().sessionData.sessionsLoading}
+        // Only a flat, time-ordered list appends older rows at its end. Grouped
+        // and people-sorted views place them inside earlier sections, so those
+        // keep the explicit button.
+        autoLoadMore={
+          host().effectiveSessionsGrouping() === "none" &&
+          host().effectiveSessionSortMode() !== "people"
+        }
         catalogRenderer={Catalog}
         catalogs={{
           catalogs: catalogs(),
