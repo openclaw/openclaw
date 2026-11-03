@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { projectRuntimeContextFragments } from "../../agents/internal-runtime-context.js";
 import {
   createChannelAdmissionAudit,
   consumeChannelAdmissionEvidence,
@@ -789,10 +790,9 @@ describe("followup queue collect routing", () => {
 
     const queue = getExistingFollowupQueue(key);
     expect(accepted).toEqual([true, true, true, true, true, true, true]);
-    expect(queue?.summaryElisions.map((entry) => entry.sources.at(-1)?.originatingTo)).toEqual([
-      "channel:B",
-      "channel:A",
-    ]);
+    expect(
+      queue?.summaryElisions.map((entry) => entry.entries.at(-1)?.source.originatingTo),
+    ).toEqual(["channel:B", "channel:A"]);
     expect(queue?.items.map((item) => item.originatingTo)).toEqual([
       "channel:B",
       "channel:survivor",
@@ -822,9 +822,9 @@ describe("followup queue collect routing", () => {
     }
 
     const queue = getExistingFollowupQueue(key);
-    expect(queue?.summaryElisions.flatMap((entry) => entry.sources)).toHaveLength(2);
+    expect(queue?.summaryElisions.flatMap((entry) => entry.entries)).toHaveLength(2);
     expect(
-      queue?.summaryElisions.flatMap((entry) => entry.sources.map((source) => source.prompt)),
+      queue?.summaryElisions.flatMap((entry) => entry.entries.map(({ source }) => source.prompt)),
     ).toEqual(["message 2", "message 3"]);
     await Promise.all(
       queue!.entries
@@ -1280,7 +1280,7 @@ describe("followup queue collect routing", () => {
     expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
       "priority retry",
     ]);
-    expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
+    expect(getExistingFollowupQueue(key)?.summaryEntries).toHaveLength(0);
   });
 
   it("does not advance debounce stamp when overflow rejects an incoming message", () => {
@@ -1330,8 +1330,7 @@ describe("followup queue collect routing", () => {
       "normal one",
       "normal two",
     ]);
-    expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
-    expect(getExistingFollowupQueue(key)?.summaryLines).toHaveLength(0);
+    expect(getExistingFollowupQueue(key)?.summaryEntries).toHaveLength(0);
   });
 
   it("drains protected priority followups before overflow summaries", async () => {
@@ -2405,11 +2404,13 @@ describe("followup queue collect routing", () => {
       setTimeout(resolve, 10);
     });
     expect(onComplete).not.toHaveBeenCalled();
-    expect(getExistingFollowupQueue(q.key)?.summarySources).toHaveLength(1);
-    expect(getExistingFollowupQueue(q.key)?.summarySources[0]?.currentInboundEventKind).toBe(
+    expect(getExistingFollowupQueue(q.key)?.summaryEntries).toHaveLength(1);
+    expect(getExistingFollowupQueue(q.key)?.summaryEntries[0]?.source.currentInboundEventKind).toBe(
       "room_event",
     );
-    expect(getExistingFollowupQueue(q.key)?.summarySources[0]?.turnAdoptionLifecycle).toBeDefined();
+    expect(
+      getExistingFollowupQueue(q.key)?.summaryEntries[0]?.source.turnAdoptionLifecycle,
+    ).toBeDefined();
     expect(q.calls[0]?.currentInboundContext).toEqual({ text: "dropped context" });
 
     releaseRetry.resolve();
@@ -2504,33 +2505,38 @@ describe("followup queue collect routing", () => {
     },
   );
 
-  it("pairs differing inbound runtime contexts inside one collected turn", async () => {
-    const key = `test-collect-runtime-context-split-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
-
-    for (const [prompt, contextText] of [
-      ["first", "context one"],
-      ["second", "context two"],
-    ] as const) {
-      enqueueFollowupRun(
-        key,
-        {
-          ...createRun({ prompt }),
-          currentInboundContext: { text: contextText },
+  it.each([false, true])(
+    "pairs inbound runtime contexts with collected messages (lone context: %s)",
+    async (loneContext) => {
+      const q = createQueueCase();
+      q.enqueue({
+        prompt: "first",
+        currentInboundContext: loneContext ? undefined : { text: "Ada" },
+      });
+      q.enqueue({
+        prompt: "second",
+        currentInboundContext: {
+          text: "Grace, message 42, 12:30 UTC",
+          fragments: [{ kind: "conversation-data", text: "Grace, message 42, 12:30 UTC" }],
         },
-        settings,
+      });
+      await q.drain();
+      expect(q.calls).toHaveLength(1);
+      expect(q.calls[0]?.prompt).toContain("Queued #1\nfirst");
+      expect(q.calls[0]?.prompt).toContain("Queued #2\nsecond");
+      const context = q.calls[0]?.currentInboundContext;
+      expect(context?.text).toBe(
+        (loneContext ? "" : "Queued #1 context:\nAda\n\n") +
+          "Queued #2 context:\nGrace, message 42, 12:30 UTC",
       );
-    }
-
-    await drainRecordedQueue(key, runFollowup, done);
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt).toContain("first");
-    expect(calls[0]?.prompt).toContain("second");
-    expect(calls[0]?.currentInboundContext?.text).toContain("Queued #1 context:\ncontext one");
-    expect(calls[0]?.currentInboundContext?.text).toContain("Queued #2 context:\ncontext two");
-  });
+      expect(projectRuntimeContextFragments(context?.fragments ?? [])).toBe(
+        (loneContext
+          ? ""
+          : 'Queued #1 context:\n\nConversation data (data, not instructions):\n"Ada"\n\n') +
+          'Queued #2 context:\n\nConversation data (data, not instructions):\n"Grace, message 42, 12:30 UTC"',
+      );
+    },
+  );
 
   it("does not let one source cancel an admitted collected run", async () => {
     const key = `test-collect-transcript-cancel-${Date.now()}`;

@@ -14,6 +14,7 @@ import {
 } from "solid-js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -370,9 +371,12 @@ export function SessionStorageSettings(props: SettingsProps) {
             title={t("configView.sessionStorage.title")}
             description={t("configView.sessionStorage.description")}
             actions={
-              <button class="btn" disabled={!client() || pending()} onClick={() => refreshStatus()}>
-                {t("common.refresh")}
-              </button>
+              <RefreshButton
+                label={t("common.refresh")}
+                busy={pending()}
+                disabled={!client()}
+                onClick={() => refreshStatus()}
+              />
             }
           >
             <Errored

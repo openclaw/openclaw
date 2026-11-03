@@ -27,7 +27,11 @@ The **Connect provider** search and command palette session-settings workspace
 search use the same comparison-only matching. Filtering does not start sign-in or
 change the selected provider, machine, or project.
 
-Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
+Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact. Where custom entry is supported, choose **Custom model…** to enter a provider/model reference.
+
+Custom model text stays in the field while background data refreshes, without
+saving before the field's normal commit event. A newly committed model value
+still replaces the displayed value.
 
 When the Gateway rejects an invalid setting, **Settings not applied** keeps your draft and offers **Show reason**, **Retry**, and **Discard draft and reload**. Discard removes all unsaved configuration edits and reloads the saved settings. Edits entered while Discard waits for an earlier save remain pending; newer Form edits resume autosaving, and newer Raw edits remain available to save. Clearing a text field is an edit, not a discard: settings that accept an empty string keep that explicit value.
 
@@ -48,6 +52,8 @@ Model pickers show the authentication methods available to the selected agent. I
 Open panels share provider sign-in status. Configuration edits keep that status until the Gateway publishes updated authentication information; credential changes, reconnects, and expiry deadlines still refresh it.
 
 During first-run **Model Setup**, reloading the browser resumes an unfinished provider wizard on the same running Gateway without repeating your answers. Continue from its current question, or choose **Cancel** to release provider choices once the Gateway confirms cancellation. Unsubmitted input is not saved. If the Gateway restarted or no longer has the wizard, **Check again** refreshes the current setup without starting another provider attempt; the recovery guard remains until a model can be verified or the pending attempt expires.
+
+If a provider rejects a text reply, the wizard returns keyboard focus to that field so you can correct it without clicking back. Your draft is kept, and sensitive replies remain masked.
 
 ## Environment identity
 
@@ -444,6 +450,21 @@ Form edits save automatically. If the connection changes while edits are pending
 autosave pauses until you choose **Save** to keep them or **Reload Config** to
 discard them and load the current configuration. A successful reload resumes
 autosave for new edits; an offline reload keeps the pending draft.
+
+**Channels** are the exception: channel settings save only when you select
+**Save**. They hold connection settings such as bot tokens, and writing a
+half-typed value can restart the channel against it, so they don't autosave.
+While a channel has edits, its dialog footer shows **Unsaved changes** with
+**Discard** and **Save**. Closing the dialog with Escape, a click outside it,
+or the close button asks whether to save, discard, or keep editing; **Run
+setup** asks the same before setup starts. Leaving the page keeps the edits
+without saving them: a notice names every channel with edits, and each of those
+channels shows **Unsaved changes** in the list until you save or discard.
+If a field you edited was changed elsewhere in the meantime, Save writes
+nothing and names the field: **Reload** takes the newer value, **Overwrite**
+keeps yours. If the connection drops during Save, the dialog checks the saved
+configuration once reconnected and shows whether the change was saved.
+
 Devices node-binding controls also pause while configuration reloads, so a pending
 read cannot overwrite a new selection.
 

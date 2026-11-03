@@ -107,7 +107,14 @@ config.gateway.controlUi.allowedOrigins = [`http://127.0.0.1:${port}`];
 config.memory = { search: { enabled: false } };
 config.plugins.slots = { memory: "none" };
 // Background reviews share the agent model and would consume its ordered tool fixtures.
-config.skills = { ...config.skills, workshop: { autonomous: { mode: "off" } } };
+config.plugins.entries = {
+  ...config.plugins.entries,
+  "skill-workshop": { config: { autonomous: { mode: "off" } } },
+};
+config.meta = {
+  ...config.meta,
+  migrations: { ...config.meta?.migrations, skillWorkshopPlugin: true },
+};
 applyMockOpenAiModelConfig(config, { mockPort: port + 1 });
 // Utility summaries must not consume the agent mock's ordered tool-response script.
 config.models.providers["heap-rig-utility"] = {

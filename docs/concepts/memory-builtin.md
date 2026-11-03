@@ -178,7 +178,8 @@ including providers loaded on demand, without waiting for a search or turn. If
 reload fails after draining managers, recovery restarts their previous services
 and schedules their index activation before reporting the previous runtime restored.
 Service stop joins pending activation before closing its managers. Memory Core running only as
-another memory plugin's consolidation sidecar does not start these indexes automatically.
+another memory plugin's consolidation sidecar does not start these indexes automatically, and it
+does not register `memory_search` or `memory_get`; the selected memory plugin owns recall.
 
 When the index identity reports an OpenClaw chunking-implementation change,
 a normal or CLI search rebuilds it before returning results. The rebuild uses

@@ -31,6 +31,7 @@ import type { PaneOutboxRecovery } from "../chat-outbox-recovery.tsx";
 import type { ChatPaneModelControl } from "../chat-pane-model-control.tsx";
 import type { ChatRealtimeView } from "../chat-realtime.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
+import type { ChatSessionStateSnapshot } from "../chat-session-state-snapshot.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
@@ -174,6 +175,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   sessions: SessionsListResult | null;
   /** The pane resolves aliases and agent ownership; absence must not reuse an unowned row. */
   selectedSession?: GatewaySessionRow;
+  contextUsage?: ChatSessionStateSnapshot["contextUsage"];
   toolOverrides?: SessionToolOverrides;
   capabilityMenu?: ChatComposerCapabilityMenuSource;
   providerUsage?: ProviderUsageDisplayProps;

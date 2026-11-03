@@ -19,6 +19,7 @@ import type {
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   RetryAction,
   SettingsEmpty,
@@ -35,8 +36,9 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { i18n } from "../../i18n/lib/translate.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { configSecretFields } from "../../lib/config/config-secret-fields.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
@@ -55,6 +57,16 @@ import { SearchSetup, AdvancedSearchSettings } from "./search-setup.tsx";
 registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerSettingsEnglish);
+
+/** Results arrive unvalidated, and the page renders these fields without further checks. */
+function isSearchStatus(value: unknown): value is WebSearchStatusResult {
+  const status = asNullableRecord(value);
+  return Boolean(
+    asNullableRecord(status?.route) &&
+    asNullableRecord(status?.model) &&
+    Array.isArray(status?.providers),
+  );
+}
 
 export function SearchPage() {
   const context = useApplication();
@@ -214,11 +226,11 @@ export function SearchPage() {
         if (!current()) {
           return;
         }
-        const status = await scope.client.request<WebSearchStatusResult>(
-          "webSearch.status",
-          selected,
-        );
+        const status = await scope.client.request("webSearch.status", selected);
         if (current()) {
+          if (!isSearchStatus(status)) {
+            throw new UserFacingError(t("searchPage.statusNotReady"));
+          }
           setModels(catalog?.models ?? []);
           setResult(status);
           if (!status.providers.some((provider) => provider.id === setupProvider())) {
@@ -537,13 +549,12 @@ export function SearchPage() {
                       title={t("searchPage.health")}
                       description={t("searchPage.untestedHint")}
                       actions={
-                        <button
-                          class="btn btn--sm"
-                          disabled={loading() || testing() || !gateway.connected}
+                        <RefreshButton
+                          label={t("searchPage.refresh")}
+                          busy={loading()}
+                          disabled={testing() || !gateway.connected}
                           onClick={() => void load()}
-                        >
-                          {t("searchPage.refresh")}
-                        </button>
+                        />
                       }
                     >
                       <Loading on={testRequest()} fallback={<TestHealth pending />}>
@@ -656,6 +667,7 @@ export function SearchPage() {
                             getPresentationLifetime={() => credentialPresentation.lifetime}
                             canEdit={canEdit}
                             busy={busy}
+                            secretFields={configSecretFields(context)}
                             commit={(path, value) =>
                               providerId === setupProvider()
                                 ? patch(renderScope, path, value)
@@ -674,6 +686,7 @@ export function SearchPage() {
                       state={configState}
                       canEdit={canEdit}
                       busy={busy}
+                      secretFields={configSecretFields(context)}
                       commit={(path, value) => patch(renderScope, path, value)}
                     />
                   </>

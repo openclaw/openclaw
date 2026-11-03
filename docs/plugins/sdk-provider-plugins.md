@@ -725,6 +725,14 @@ each adapter keeps its own replacement/null policy. The stream mapper preserves
 synchronous returns without importing the embedded runner. These are bundled
 implementation helpers, not new third-party SDK contracts.
 
+The optional fourth argument to `wrapProviderPayloadHook`, `inputObserver`,
+defaults to `false`. Set it to `true` only when both policy callbacks preserve
+retained input items and their nested content. Settings-only policies can then
+reuse prepared input instead of cloning history. The wrapped caller hook still
+receives editable input when needed; its current requirements are checked per
+request, including live extension-handler registration and removal. This flag
+does not change callback order or the adapter's replacement/null policy.
+
 `applyOpenAICompletionsToolReasoning` shares the native tools/reasoning wire
 policy with pass-through adapters through that private seam. Callers qualify
 the endpoint and normalize vendor-prefixed model IDs before applying it.
@@ -841,3 +849,13 @@ A rejected or lost deletion reply retains cleanup custody. The host can retry
 that exact deletion after restart even when live inspection labels are gone.
 Legacy providers and persisted rows with no receipt keep their existing contract;
 receipt-bearing rows refuse providers that no longer advertise this capability.
+
+### Native web search codecs
+
+`openclaw/plugin-sdk/provider-web-search` exports `nativeWebSearchCodecs` for
+Brave web search, Exa search, Parallel REST search and SearXNG JSON search.
+Each format declares its HTTP method, builds its native query/body, and projects
+results with the native plugin's untrusted-content marking and result metadata.
+The native plugins and ClawRouter use the same codecs. Callers own credentials,
+endpoint admission, SSRF policy, cancellation, response limits and caching; a
+codec does not grant permission to execute an offer or establish its billing.

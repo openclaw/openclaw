@@ -132,6 +132,7 @@ function probeOwnership(
   fs.writeFileSync(
     resourceFile,
     `
+    import { EventEmitter } from "node:events";
     import fs from "node:fs";
     export const resolvePlaywrightChromiumExecutablePath = () => "/fixture/chromium";
     export const canRunPlaywrightChromium = () => ${options.available !== false};
@@ -139,7 +140,12 @@ function probeOwnership(
       executablePath: () => "/fixture/chromium",
       launchServer: async () => {
         if (!canRunPlaywrightChromium()) throw new Error("fixture Chromium is unavailable");
-        return { wsEndpoint: () => "ws://fixture/chromium", close: async () => {} };
+        const browserProcess = Object.assign(new EventEmitter(), { stderr: null });
+        return {
+          process: () => browserProcess,
+          wsEndpoint: () => "ws://fixture/chromium",
+          close: async () => { browserProcess.emit("exit", 0, null); },
+        };
       },
     };
     export const assertUiE2ePreflight = async () => {

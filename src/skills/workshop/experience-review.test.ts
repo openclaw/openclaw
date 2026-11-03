@@ -36,6 +36,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { WorkshopChange } from "./changes.kernel.js";
+import { workshopPluginConfig } from "./config.test-support.js";
 import { scheduleSkillExperienceReview } from "./experience-review-default.js";
 import * as experienceReview from "./experience-review.js";
 import { runSkillExperienceReview } from "./experience-review.js";
@@ -352,6 +353,7 @@ it.each(["off", "tool-policy"] as const)(
   "admits a due review under the current config, so %s refuses it",
   async (restriction) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const schedule = vi.spyOn(globalThis, "setTimeout");
     try {
       const prepare = vi.spyOn(experienceReview, "prepareSkillExperienceReviewCandidate");
       expect(
@@ -369,10 +371,10 @@ it.each(["off", "tool-policy"] as const)(
         config: candidate.config,
         source: candidate.source,
       });
-      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+      await vi.waitFor(() => expect(schedule).toHaveBeenCalledWith(expect.any(Function), 30_000));
       const current =
         restriction === "off"
-          ? { ...candidate.config, skills: { workshop: { autonomous: { mode: "off" as const } } } }
+          ? workshopPluginConfig({ autonomous: { mode: "off" } }, candidate.config)
           : { ...candidate.config, tools: { ...candidate.config.tools, deny: ["skill_workshop"] } };
       setRuntimeConfigSnapshot(current);
       await vi.advanceTimersByTimeAsync(30_000);
@@ -381,6 +383,7 @@ it.each(["off", "tool-policy"] as const)(
       await expect(prepare.mock.results[0]?.value).resolves.toBeUndefined();
       expect(mocks.runEmbeddedAgent).not.toHaveBeenCalled();
     } finally {
+      schedule.mockRestore();
       vi.useRealTimers();
     }
   },

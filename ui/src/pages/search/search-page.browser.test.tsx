@@ -111,6 +111,42 @@ describe("Search settings", () => {
     };
   }
 
+  it.each([
+    ["an empty", {}],
+    ["a routeless", { ...ready, route: undefined }],
+  ])("offers a retry when the Gateway sends %s status", async (_name, partial) => {
+    const page = await mount({
+      result: partial as unknown as WebSearchStatusResult,
+      waitReady: false,
+    });
+    await waitForSolid(() =>
+      expect(page.element.querySelector('[role="alert"]')?.textContent).toContain(
+        "Search settings are not ready",
+      ),
+    );
+    expect(page.input("Search query")).toBeNull();
+
+    page.setResult(ready);
+    page.click("Retry");
+    await page.settle();
+    await waitForSolid(() => expect(page.input("Search query")).not.toBeNull());
+    expect(page.element.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("keeps accepted controls when a refresh returns a partial status", async () => {
+    const page = await mount();
+    const query = page.input("Search query");
+
+    page.setResult({} as WebSearchStatusResult);
+    page.click("Refresh search status");
+    await waitForSolid(() =>
+      expect(page.element.querySelector('[role="alert"]')?.textContent).toContain(
+        "Search settings are not ready",
+      ),
+    );
+    expect(page.input("Search query")).toBe(query);
+  });
+
   it("preserves drafts through status and config read recovery", async () => {
     const page = await mount();
     const query = page.edit("Search query", "Keep my search draft", false);
@@ -121,6 +157,7 @@ describe("Search settings", () => {
     await waitForSolid(() => expect(page.calls("webSearch.status")).toHaveLength(2));
 
     expect(page.button("Refresh search status").disabled).toBe(true);
+    expect(page.button("Refresh search status").getAttribute("aria-busy")).toBe("true");
     expect(page.button("Test search").disabled).toBe(true);
     expect(page.input("Search query")).toBe(query);
     page.expectText(i18n.t("searchPage.loading"));

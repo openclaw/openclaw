@@ -49,6 +49,7 @@ function saveOptions(
     canDispatch: () => true,
     isCurrent: () => true,
     onSaved: vi.fn(),
+    onRetry: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   };
 }
 
