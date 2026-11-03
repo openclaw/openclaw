@@ -54,8 +54,8 @@ export type LoginGateProps = LoginFailureFeedbackParams & {
   showGatewaySecret: boolean;
   onGatewayUrlChange: (value: string) => void;
   onSecretChange: (value: string) => void;
-  /** Connect with the owner handoff this browser collected after host approval. */
-  onBrowserPaired: (bootstrapToken: string) => void;
+  /** Connect to the issuing Gateway with the owner handoff this browser collected. */
+  onBrowserPaired: (bootstrapToken: string, gatewayUrl: string) => void;
   onToggleGatewaySecret: () => void;
   onConnect: () => void;
   onOpenGatewaySettings?: () => void;
@@ -151,6 +151,7 @@ function LoginForm(
     props.feedback?.placement === "form" ? props.feedback.field : undefined;
   const connect = () => {
     props.cancelRefresh();
+    props.pair.cancel();
     props.model.onConnect();
   };
   const submitOnEnter = (event: KeyboardEvent) => {
@@ -333,6 +334,7 @@ function StatusBody(
           class="btn login-gate__connect"
           onClick={() => {
             props.cancelRefresh();
+            props.pair.cancel();
             props.model.onConnect();
           }}
         >
@@ -431,7 +433,8 @@ function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): 
   const [refreshing, setRefreshing] = createOptimistic(false);
   const pair = createLoginGateBrowserPair({
     basePath: () => normalizeBasePath(model().resourceBasePath),
-    onPaired: (bootstrapToken) => model().onBrowserPaired(bootstrapToken),
+    gatewayUrl: () => model().gatewayUrl,
+    onPaired: (bootstrapToken, gatewayUrl) => model().onBrowserPaired(bootstrapToken, gatewayUrl),
   });
   const [now, setNow] = createSignal(Date.now());
   useVisiblePoll(1_000, () => setNow(Date.now()), {
@@ -482,6 +485,7 @@ function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): 
       if (refreshAttempt && !ownsRefresh(refreshAttempt)) {
         retireRefresh();
       }
+      pair.retireUnlessTarget(host.props?.gatewayUrl);
     });
     return () => {
       retireRefresh();

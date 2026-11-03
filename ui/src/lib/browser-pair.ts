@@ -51,18 +51,27 @@ export function canPairBrowserWithGateway(gatewayUrl: string): boolean {
 export function createBrowserPairSession(params: {
   basePath: string;
   onState: (state: BrowserPairState) => void;
-  onApproved: (bootstrapToken: string) => void;
+  /** Receives the Gateway that issued the approval, which is the only valid redeemer. */
+  onApproved: (bootstrapToken: string, gatewayUrl: string) => void;
 }) {
   let attempt = 0;
+  let attemptGatewayUrl: string | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const stop = () => {
     attempt += 1;
+    attemptGatewayUrl = undefined;
     clearTimeout(timer);
+  };
+
+  const cancel = () => {
+    stop();
+    params.onState({ kind: "idle" });
   };
 
   const poll = async (
     current: number,
+    gatewayUrl: string,
     identity: Identity,
     requestId: string,
     expiresAtMs: number,
@@ -100,7 +109,7 @@ export function createBrowserPairSession(params: {
     if (body?.status === "approved" && body.bootstrapToken) {
       // The login gate owns connection progress and errors from here.
       params.onState({ kind: "idle" });
-      params.onApproved(body.bootstrapToken);
+      params.onApproved(body.bootstrapToken, gatewayUrl);
       return;
     }
     if (body?.status === "rejected") {
@@ -112,15 +121,16 @@ export function createBrowserPairSession(params: {
       return;
     }
     timer = setTimeout(
-      () => void poll(current, identity, requestId, expiresAtMs),
+      () => void poll(current, gatewayUrl, identity, requestId, expiresAtMs),
       BROWSER_PAIR_POLL_INTERVAL_MS,
     );
   };
 
   return {
-    start: async (): Promise<void> => {
+    start: async (gatewayUrl: string): Promise<void> => {
       stop();
       const current = attempt;
+      attemptGatewayUrl = gatewayUrl;
       params.onState({ kind: "starting" });
       const identity = await loadOrCreateDeviceIdentity().catch(() => null);
       if (current !== attempt) {
@@ -155,11 +165,14 @@ export function createBrowserPairSession(params: {
         code: formatBrowserPairCode(body.code),
         browserId: formatBrowserPairDeviceId(identity.deviceId),
       });
-      void poll(current, identity, body.requestId, body.expiresAtMs);
+      void poll(current, gatewayUrl, identity, body.requestId, body.expiresAtMs);
     },
-    cancel: () => {
-      stop();
-      params.onState({ kind: "idle" });
+    cancel,
+    /** An approval is only valid for its issuer, so a new target ends the attempt. */
+    retireUnlessTarget: (gatewayUrl: string | undefined) => {
+      if (attemptGatewayUrl !== undefined && attemptGatewayUrl !== gatewayUrl) {
+        cancel();
+      }
     },
     dispose: stop,
   };

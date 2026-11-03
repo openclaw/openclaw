@@ -93,7 +93,7 @@ Use this when a browser has no Gateway token and you can run a command on the Ga
 
   </Step>
   <Step title="Let the page connect">
-    Keep the page open. It connects by itself within a few seconds of approval.
+    Keep the page open. It connects by itself within a few seconds of approval. Editing the Gateway URL or choosing **Connect** ends the wait, because an approval only works on the Gateway that issued it.
   </Step>
 </Steps>
 

@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, Show } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { createBrowserPairSession, type BrowserPairState } from "../lib/browser-pair.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { ConnectCommand } from "./solid/connect-command.tsx";
@@ -6,7 +6,8 @@ import { ConnectCommand } from "./solid/connect-command.tsx";
 /** Owned by the gate so a waiting attempt survives its form and status layouts. */
 export function createLoginGateBrowserPair(params: {
   basePath: () => string;
-  onPaired: (bootstrapToken: string) => void;
+  gatewayUrl: () => string;
+  onPaired: (bootstrapToken: string, gatewayUrl: string) => void;
 }) {
   const [state, setState] = createSignal<BrowserPairState>({ kind: "idle" });
   const session = createBrowserPairSession({
@@ -16,8 +17,13 @@ export function createLoginGateBrowserPair(params: {
     onState: setState,
     onApproved: params.onPaired,
   });
-  onCleanup(session.dispose);
-  return { state, start: session.start, cancel: session.cancel };
+  onSettled(() => session.dispose);
+  return {
+    state,
+    start: () => session.start(params.gatewayUrl()),
+    cancel: session.cancel,
+    retireUnlessTarget: session.retireUnlessTarget,
+  };
 }
 
 export type LoginGateBrowserPairModel = ReturnType<typeof createLoginGateBrowserPair>;

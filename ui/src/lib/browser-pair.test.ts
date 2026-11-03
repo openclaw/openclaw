@@ -46,14 +46,14 @@ describe("browser pair session", () => {
     const fetchMock = vi.fn(async () => replies.shift()!);
     vi.stubGlobal("fetch", fetchMock);
     const pair = session();
-    await pair.start();
+    await pair.start("ws://gateway.example");
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "waiting",
       code: "ABCD-EFGH",
       browserId: "01234567",
     });
     await vi.advanceTimersByTimeAsync(4_100);
-    expect(pair.onApproved).toHaveBeenCalledWith("bootstrap");
+    expect(pair.onApproved).toHaveBeenCalledWith("bootstrap", "ws://gateway.example");
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
@@ -68,7 +68,7 @@ describe("browser pair session", () => {
       vi.fn(async () => replies.shift()!),
     );
     const pair = session();
-    await pair.start();
+    await pair.start("ws://gateway.example");
     await vi.advanceTimersByTimeAsync(10);
     expect(pair.onState).toHaveBeenLastCalledWith({ kind: "failed", reason });
   });
@@ -79,7 +79,7 @@ describe("browser pair session", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const pair = session();
-    await pair.start();
+    await pair.start("ws://gateway.example");
     await vi.advanceTimersByTimeAsync(10);
     pair.cancel();
     const calls = fetchMock.mock.calls.length;
@@ -88,13 +88,25 @@ describe("browser pair session", () => {
     expect(pair.onState).toHaveBeenLastCalledWith({ kind: "idle" });
   });
 
+  it("hands the approval to the Gateway that started the attempt", async () => {
+    const replies = [json(started), json({ status: "approved", bootstrapToken: "bootstrap" })];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => replies.shift()!),
+    );
+    const pair = session();
+    await pair.start("ws://issuing.example");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(pair.onApproved).toHaveBeenCalledWith("bootstrap", "ws://issuing.example");
+  });
+
   it("names a full Gateway separately from a broken one", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => json({ error: "capacity" }, 429)),
     );
     const pair = session();
-    await pair.start();
+    await pair.start("ws://gateway.example");
     expect(pair.onState).toHaveBeenLastCalledWith({ kind: "failed", reason: "busy" });
   });
 
