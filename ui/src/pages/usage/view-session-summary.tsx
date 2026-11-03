@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { For } from "solid-js";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
-import { formatMs } from "../../lib/format.ts";
+import { formatDateTimeRangeMs, formatMs } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ParsedSessionLog } from "./helpers.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
@@ -23,12 +23,7 @@ export function renderSessionSummary(
     if (!first || !last) {
       return first || last ? formatMs((first || last)!) : t("usage.common.emptyValue");
     }
-    const day = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
-    const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
-    const sameDay = day.format(first) === day.format(last);
-    return sameDay
-      ? `${day.format(first)}, ${time.format(first)} – ${time.format(last)}`
-      : `${day.format(first)}, ${time.format(first)} → ${day.format(last)}, ${time.format(last)}`;
+    return formatDateTimeRangeMs(first, last);
   };
   const hasInterval = filteredLogs !== undefined;
   const datedLogs = filteredLogs?.filter(({ log }) => log.timestamp > 0);
