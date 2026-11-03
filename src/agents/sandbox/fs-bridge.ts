@@ -43,6 +43,14 @@ export function createSandboxFsBridge(params: {
   return new SandboxFsBridgeImpl(params.sandbox, params.containerOnlyMounts);
 }
 
+function isSandboxStatMissingPathError(stderr: string): boolean {
+  return (
+    stderr.includes("No such file or directory") ||
+    // dash (/bin/sh on Debian/Ubuntu) fails `cd` with this wording instead.
+    stderr.includes("can't cd to ")
+  );
+}
+
 class SandboxFsBridgeImpl implements SandboxFsBridge {
   private readonly sandbox: MountedSandboxFsBridgeContext;
   private readonly mounts: ReturnType<typeof buildSandboxFsMounts>;
@@ -299,14 +307,22 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       // Keep stat's original parent/basename metadata semantics, while its
       // boundary check validates the container-visible backing rather than a hidden host alias.
       checks: [{ target: resolved.target, options: { action: "stat files" } }],
-      script: 'set -eu\ncd -- "$1"\nLC_ALL=C stat -c "%F|%s|%y" -- "$2"',
+      // Emit a C-locale ENOENT before cd so dash (/bin/sh on Debian/Ubuntu)
+      // does not surface "can't cd to …" for a missing parent directory.
+      script:
+        'set -eu\n' +
+        'if [ ! -d "$1" ]; then printf "%s\\n" "No such file or directory" >&2; exit 1; fi\n' +
+        'cd -- "$1"\n' +
+        'LC_ALL=C stat -c "%F|%s|%y" -- "$2"',
       args: [anchoredTarget.canonicalParentPath, anchoredTarget.basename],
       allowFailure: true,
       signal: params.signal,
     });
     if (result.code !== 0) {
       const stderr = result.stderr.toString("utf8");
-      if (stderr.includes("No such file or directory")) {
+      // dash prints "can't cd to <dir>" when the parent is missing; treat it
+      // like GNU/BusyBox "No such file or directory" so callers get null/ENOENT.
+      if (isSandboxStatMissingPathError(stderr)) {
         return null;
       }
       const message = stderr.trim() || `stat failed with code ${result.code}`;

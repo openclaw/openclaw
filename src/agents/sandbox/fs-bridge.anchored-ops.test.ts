@@ -149,6 +149,16 @@ describe("sandbox fs bridge anchored ops", () => {
     ).resolves.toBeNull();
   });
 
+  it("treats dash missing-parent cd errors as null", async () => {
+    mockStat(() => ({
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.from("openclaw-sandbox-fs: 2: cd: can't cd to /workspace/nonexistent_dir_xyz\n"),
+      code: 2,
+    }));
+
+    await expect(bridge.stat({ filePath: "nonexistent_dir_xyz/file.txt" })).resolves.toBeNull();
+  });
+
   it("keeps non-missing stat failures as errors", async () => {
     mockStat(() => ({
       stdout: Buffer.alloc(0),
