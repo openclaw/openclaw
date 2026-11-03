@@ -774,9 +774,9 @@ describe("update-cli", () => {
         expect(processExitSpy).not.toHaveBeenCalled();
       } finally {
         gate.resolve();
-        await updatePromise.finally(async () => {
-          await waitForCliSignalExit();
-        });
+        // The try body observes command errors; cleanup joins work before signal finalization.
+        await Promise.allSettled([updatePromise]);
+        await waitForCliSignalExit();
       }
     },
   );
