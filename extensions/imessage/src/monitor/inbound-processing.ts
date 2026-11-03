@@ -109,7 +109,7 @@ export function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
   return uniqueStrings([...params.groupAllowFrom, ...legacyChatTargets]);
 }
 
-const imessageIngressIdentity = defineStableChannelIngressIdentity({
+export const imessageIngressIdentity = defineStableChannelIngressIdentity({
   key: "imessage-sender",
   normalizeEntry: normalizeIMessageHandleEntry,
   normalizeSubject: normalizeIMessageHandle,

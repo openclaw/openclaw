@@ -26,7 +26,6 @@ import {
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   ensureConfiguredBindingRouteReady,
-  readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
@@ -110,6 +109,7 @@ import {
 import { createIMessageDurableIngress, type IMessageIngressLifecycle } from "./ingress.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
+import { readIMessageInboundStoreAllowFrom } from "./pairing-store-admission.js";
 import { createPollCommentFolder } from "./poll-comment.js";
 import { renderIMessagePollBody } from "./poll-render.js";
 import { resolveIMessageReactionContext } from "./reaction-context.js";
@@ -591,7 +591,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       groupPolicy,
       dmPolicy,
       readStoreAllowFrom: () =>
-        readChannelAllowFromStore("imessage", process.env, accountInfo.accountId),
+        readIMessageInboundStoreAllowFrom(message, cfg, accountInfo.accountId, dmPolicy, allowFrom),
       historyLimit,
       groupHistories,
       echoCache: sentMessageCache,

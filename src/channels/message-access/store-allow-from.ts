@@ -40,13 +40,11 @@ export async function readChannelIngressStoreAllowFrom(
     return [];
   }
   const entries = params.readStoreAllowFrom
-    ? await params
-        .readStoreAllowFrom({
-          channelId: params.channelId,
-          accountId: params.accountId,
-          dmPolicy: params.policy.dmPolicy,
-        })
-        .catch(() => [])
+    ? await params.readStoreAllowFrom({
+        channelId: params.channelId,
+        accountId: params.accountId,
+        dmPolicy: params.policy.dmPolicy,
+      })
     : params.useDefaultPairingStore
       ? await readChannelIngressStoreAllowFromForDmPolicy({
           provider: params.channelId,
