@@ -350,7 +350,10 @@ export function registerGoalAutomaticContinuationCases(
     await expectDrained();
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(testCase.stopCall);
     const stoppedEntry = loadSessionEntry(scope());
-    expect(stoppedEntry?.goal?.status).toBe("active");
+    expect(stoppedEntry?.goal).toMatchObject({
+      status: "paused",
+      lastStatusNote: "Paused after Stop. Resume to continue.",
+    });
     expect(stoppedEntry?.abortedLastRun).toBe(true);
     const goal = stoppedEntry?.goal;
     const request = {
