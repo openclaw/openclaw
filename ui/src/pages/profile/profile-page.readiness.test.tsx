@@ -61,7 +61,9 @@ it("reveals identity and following settings before preferences finish, then enab
       });
       expect(page.textContent).toContain("ada@example.test");
       expect(page.querySelector("openclaw-model-accounts")).not.toBeNull();
-      expect(page.querySelector(".settings-row--nav")?.textContent).toContain("Usage statistics");
+      expect(page.querySelector("button.settings-row--nav")?.textContent).toContain(
+        "Usage statistics",
+      );
       expect(input()).toMatchObject({ value: "Ada", disabled: true });
       expect(
         [
