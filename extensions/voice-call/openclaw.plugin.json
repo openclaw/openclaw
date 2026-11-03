@@ -161,7 +161,7 @@
     },
     "realtime.idleHangupMs": {
       "label": "Realtime Speech Idle Hangup (ms)",
-      "help": "Ends an active realtime call after neither side speaks for this long. Unset disables speech-idle hangup.",
+      "help": "Ends an active realtime call after neither side speaks for this long. Unset uses 30 seconds for outbound calls; inbound calls have no default speech-idle hangup.",
       "advanced": true
     },
     "realtime.instructions": {

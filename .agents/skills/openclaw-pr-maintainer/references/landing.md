@@ -13,7 +13,7 @@
 ## Open or update the PR
 
 - Current template + real body file; preserve human credit, maintainer-editable branches when safe. Fork edits: heed Actions/secrets warning.
-- Build + focused local tests pass → open ready PR promptly; PR CI runs broad suites. Create draft first, wait for non-null `mergeable`, mark ready, verify CI attached to pushed head. Requested landing of own draft includes marking ready.
+- Follow the [proof policy](../../openclaw-testing/SKILL.md#proof-policy), including its draft/CI route when build capacity is unavailable. Create draft first; after required build and focused proof pass, wait for non-null `mergeable`, mark ready, and verify CI attached to pushed head. Requested landing of own draft includes marking ready once those requirements pass.
 - Merge-ref startup failure cannot rerun; hourly PR CI sweeper re-fires, or authorized close/reopen after verifying missing attachment.
 - No rebase just for advancing main. Refresh for conflict, failing guard, explicit request, material stale-base risk only.
 - Conflict repair: record last passing run/tested head, resolved delta, affected contracts in existing preparation evidence. Reuse unchanged-input proof; run affected checks, not every completed suite. Older run ≠ current-head CI or gate waiver. Admission succeeds → merge before optional polish/cleanup.

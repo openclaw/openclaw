@@ -73,6 +73,7 @@ describe("config env vars", () => {
             ),
             OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS: "0",
             OPENCLAW_DISABLE_CRON_HOST_EXECUTION: "0",
+            OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS: "1",
             OPENCLAW_NIX_MODE: "1",
             VALID: "literal",
           },

@@ -259,7 +259,14 @@ requester cap, refuses the call before it reaches the server. Every request to a
 configured server (tool calls, resource reads, prompt fetches) rechecks the turn's
 grant just before it is sent. Each listed server's `initialize` instructions are
 passed to the CLI whole, in server-name order.
-Requester-scoped servers need a verified sender and are not offered on these turns.
+Requester-scoped servers (per-requester OAuth or a plugin connection resolver) are
+listed on every turn once the session has seen their tools. Before that, a
+per-requester OAuth server is listed as its sign-in tool; a resolver-based server
+appears after the first turn whose verified sender the plugin resolves. Each call
+uses the current turn's verified sender. A turn without one, such as a completion,
+an automation or a subagent run, refuses the call with an explicit error and never
+uses another account. A call also stops before any request to the server if the
+turn's grant ends while it waits, for example during an OAuth token refresh.
 
 Existing sessions that stored the implicit automatic policy also retain continuity.
 OpenClaw records the current policy when the next turn completes.
@@ -638,12 +645,15 @@ JSON examples inside double-quoted banner text are not treated as response or er
 For JSONL, banner scanning starts fresh on each line.
 
 Claude streaming limits discount recognized partial-message envelopes while
-counting their text, thinking, and tool-input payloads. Cumulative snapshots and
-tool results still count toward the output budget. Forwarded subagent assistant
+counting their text, thinking, and tool-input payloads. Pure tool-result records
+hand payloads to consumers without retaining them, so those payloads do not count
+toward the output budget; IDs, metadata, padding, and frames still do. Mixed user
+records and cumulative snapshots still count. Forwarded subagent assistant
 messages and tool-result messages that the parser discards are charged a fixed
-allowance for their parent progress id. Child attribution alone does not earn
-that discount: retained stream-event text still counts toward the same 8 MiB
-output limit. Single-line limits and bounded frame counts remain active.
+allowance for their parent progress id.
+Child attribution alone does not earn that discount: retained stream-event text
+still counts toward the same 8 MiB output limit. Single-line limits and bounded
+frame counts remain active.
 
 Input modes:
 

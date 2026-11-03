@@ -836,6 +836,9 @@ suite.define(() => {
       await advancedTitles.getByText("Plugin system enabled", { exact: true }).waitFor();
       await advancedTitles.getByText("Allowed plugin IDs", { exact: true }).waitFor();
       await advancedTitles.getByText("Blocked plugin IDs", { exact: true }).waitFor();
+      for (const closed of await page.locator("details.cfg-object:not([open]) > summary").all()) {
+        await closed.click();
+      }
       await advancedTitles.getByText("Additional plugin load paths", { exact: true }).waitFor();
       await expect
         .poll(() =>

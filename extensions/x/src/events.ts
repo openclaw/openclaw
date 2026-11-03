@@ -168,14 +168,22 @@ async function receiveStream(
   let receiveError: Error | undefined;
   let wakeReader: (() => void) | undefined;
   let wakeConsumer: (() => void) | undefined;
+  let wakeCapacity: (() => void) | undefined;
   let chargesSettled = Promise.resolve();
-  const batches: { events: unknown[]; charged: Promise<void> }[] = [];
+  // Pause the reader once a slow onPost retains this many batches or this much
+  // event text. The pending-line guard below does not cover batches already queued.
+  const queuedBatchLimit = 32;
+  const queuedCharLimit = 1_048_576;
+  let queuedChars = 0;
+  const batches: { events: unknown[]; charged: Promise<void>; chars: number }[] = [];
+  const backlogFull = () => batches.length >= queuedBatchLimit || queuedChars >= queuedCharLimit;
   const cancelOnAbort = () => {
     void reader?.cancel().catch(() => {});
   };
   const requestDrain = () => {
     drainRequested = true;
     wakeReader?.();
+    wakeCapacity?.();
   };
   const pause = (until: number) => {
     budgetPaused = true;
@@ -213,6 +221,24 @@ async function receiveStream(
     try {
       for (;;) {
         options.signal.throwIfAborted();
+        if (!drainRequested && !controller.signal.aborted && backlogFull()) {
+          // Stay paused until the consumer drains below the bound, or drain/abort.
+          // The idle timer stays disarmed: this wait is local backpressure, not a dead stream.
+          await new Promise<void>((resolve) => {
+            const finish = () => {
+              options.signal.removeEventListener("abort", finish);
+              controller.signal.removeEventListener("abort", finish);
+              if (wakeCapacity === finish) {
+                wakeCapacity = undefined;
+              }
+              resolve();
+            };
+            wakeCapacity = finish;
+            options.signal.addEventListener("abort", finish, { once: true });
+            controller.signal.addEventListener("abort", finish, { once: true });
+          });
+          continue;
+        }
         const read = source.read();
         let ready = false;
         void read.then(
@@ -262,6 +288,7 @@ async function receiveStream(
           throw new Error("X activity stream event exceeded 1 MiB");
         }
         const events: unknown[] = [];
+        let chars = 0;
         let boundary: number;
         while ((boundary = pending.indexOf("\n")) !== -1) {
           const line = pending.slice(0, boundary).trim();
@@ -269,6 +296,7 @@ async function receiveStream(
           if (!line) {
             continue;
           }
+          chars += line.length;
           try {
             events.push(JSON.parse(line));
           } catch {
@@ -285,7 +313,8 @@ async function receiveStream(
           // The spend owner serializes charges; its latest receipt joins every earlier charge.
           chargesSettled = charged.catch(fail);
         }
-        batches.push({ events, charged });
+        queuedChars += chars;
+        batches.push({ events, charged, chars });
         wakeConsumer?.();
       }
     } catch (error) {
@@ -377,6 +406,8 @@ async function receiveStream(
         wakeConsumer = undefined;
         continue;
       }
+      queuedChars -= batch.chars;
+      wakeCapacity?.();
       await batch.charged;
       for (const value of batch.events) {
         options.signal.throwIfAborted();

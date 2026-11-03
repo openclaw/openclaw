@@ -167,7 +167,7 @@ it.each(admissionScenarios)(
     const directDashboard = dashboard && scenario !== "dashboard-internal";
     const dashboardReadAllowed = directDashboard && scenario !== "dashboard-unattested";
     const membershipRequired = scenario === "dashboard-member-revoked";
-    const createsDashboardSession = dashboardReadAllowed && !membershipRequired;
+    const createsSession = (dashboardReadAllowed && !membershipRequired) || scenario === "queued";
     const closure =
       scenario === "narrow-first-send"
         ? "rotated"
@@ -301,7 +301,7 @@ it.each(admissionScenarios)(
           createdActor,
           ...(membershipRequired ? { visibility: "suggest" as const } : {}),
         };
-        if (createsDashboardSession) {
+        if (createsSession) {
           const creationScope = { ...scope, storePath: owned.session.storePath };
           const snapshot = await loadReplySessionInitializationSnapshot(creationScope);
           const bindCreation = options.replyOptions?.bindSessionCreation;

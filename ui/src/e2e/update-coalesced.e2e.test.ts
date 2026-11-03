@@ -161,7 +161,10 @@ suite.define(() => {
       await startUpdate(page);
       await button(page, "Updating…").waitFor();
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
-      await button(page, "Close").click();
+      await page
+        .locator("openclaw-modal-dialog openclaw-modal-actions")
+        .getByRole("button", { name: "Close", exact: true })
+        .click();
       const updateIssue = await openUpdateIssue(page);
       await text(updateIssue, restartingText).first().waitFor();
       await updateIssue.locator(".sidebar-update-card__action").click();

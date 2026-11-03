@@ -134,7 +134,6 @@ const enChatSession = {
       copyBranch: "Copy branch name",
       copied: "Copied",
       branches: "Versions",
-      versionsHelpLabel: "About versions",
       versionsHelp:
         "Saved copies of this conversation from rewinds or repairs. You can return to an earlier version here.",
       versionsEmptyTitle: "No earlier versions",

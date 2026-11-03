@@ -77,6 +77,7 @@ import {
   pluginLifecycleMockInitScript,
 } from "./control-ui-mock-plugins.ts";
 import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
+import { buildSearchMocks } from "./control-ui-mock-search.ts";
 import {
   createSessionDesignPortalFixturePlugin,
   createSessionDesignDesktopFixturePlugin,
@@ -2798,6 +2799,7 @@ async function createChatPickerScenario(
         qrDataUrl: whatsappLoginQrDataUrl,
       },
       "web.login.wait": { message: "Linked.", connected: true },
+      ...buildSearchMocks(configMocks.get.hash),
       "wizard.start": channelWizard.start,
       "wizard.next": channelWizard.next,
       "wizard.cancel": { status: "cancelled" },
@@ -2901,8 +2903,11 @@ async function createChatPickerScenario(
         gatewayUrl: "wss://gateway.example.test",
         qrDataUrl: devicePairQrDataUrl,
         setupCode: devicePairSetupCode,
+        setupId: "mock-pair-setup",
+        expiresAtMs: Date.now() + 86_400_000,
         urlSource: "mock",
       },
+      "device.pair.setupStatus": {},
       "node.list": {
         nodes: [
           createOfflineDeviceNode(),
