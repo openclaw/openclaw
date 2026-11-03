@@ -22,8 +22,8 @@ function runtime(factory: StreamFn) {
 
 it("registers once, preserves producers and lazy results, and survives builtin refresh", async () => {
   const registry = createApiRegistry();
-  const source = createAssistantMessageEventStream();
-  source.result = vi.fn(async () => repaired);
+  const result = vi.fn(async () => repaired);
+  const source = Object.assign(createAssistantMessageEventStream(), { result });
   const factory = () => source;
   expect(ensureCustomApiRegistered(registry, model.api, factory)).toBe(true);
   expect(ensureCustomApiRegistered(registry, model.api, factory)).toBe(false);
@@ -35,7 +35,7 @@ it("registers once, preserves producers and lazy results, and survives builtin r
   expect(getEventStreamCompletion(stream)).toBe(getEventStreamCompletion(source));
   source.push({ type: "done", reason: "stop", message });
   await expect(getEventStreamCompletion(stream)).resolves.toBe(message);
-  expect(source.result).not.toHaveBeenCalled();
+  expect(result).not.toHaveBeenCalled();
   await expect(stream.result()).resolves.toBe(repaired);
   expect(registry.getApiProvider("openai-responses")).toBeDefined();
 });
