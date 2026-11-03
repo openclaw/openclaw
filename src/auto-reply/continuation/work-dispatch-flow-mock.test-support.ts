@@ -10,6 +10,8 @@
 // writes, or put a real concurrent writer (or a refused write) in front of one.
 // The recipient-authority capture and checks read the real agent database the
 // same way, so suites count them with `wrapWorkRecipientAuthorityForWorkDispatch`.
+import path from "node:path";
+import { resolveStateDir } from "../../config/state-dir.js";
 import type * as CustodyStore from "./custody/custody-store.js";
 import type {
   ContinuationRecord,
@@ -29,6 +31,16 @@ export type WorkDispatchCustodyHooks = {
   /** Put a real concurrent revision bump in front of the next N single-record updates. */
   revisionConflictsRemaining: number;
 };
+
+/**
+ * The session store the suites' mocked path owner names. Absolute under the hermetic state dir:
+ * the recipient-authority capture and checks open its real database.
+ */
+export const WORK_DISPATCH_STORE_PATH = path.join(
+  resolveStateDir(),
+  "work-dispatch",
+  "sessions.json",
+);
 
 export const workDispatchCustodyHooks: WorkDispatchCustodyHooks = {
   revisionConflictsRemaining: 0,

@@ -20,7 +20,7 @@ let activeQueueMode: "delivered" | "queued-without-proof" | "rejected" = "delive
 let activeQueueHandleAvailable = true;
 const mockSessionStore: Record<string, unknown> = {};
 const loadSessionEntryMock = vi.fn();
-let mockStorePath = "test-store";
+let mockStorePath = WORK_DISPATCH_STORE_PATH;
 let observeSubordinateAdmission = false;
 const observedSubordinateAdmissionClosed: boolean[] = [];
 // test state: toggle continuation enablement (disabled-gate), capture the
@@ -382,6 +382,7 @@ import {
   describeWorkTransition,
   resetWorkDispatchCustodyHooks,
   settleWorkDispatchCustody,
+  WORK_DISPATCH_STORE_PATH,
   workDispatchCustodyHooks,
 } from "./work-dispatch-flow-mock.test-support.js";
 import {
@@ -566,7 +567,7 @@ describe("durable continuation_work dispatch", () => {
       .mockImplementation(
         ({ sessionKey }: { sessionKey: string }) => mockSessionStore[sessionKey.trim()],
       );
-    mockStorePath = "test-store";
+    mockStorePath = WORK_DISPATCH_STORE_PATH;
     resetWorkDispatchCustodyHooks();
     workDispatchCustodyHooks.onApplied = (update) => {
       const transition = describeWorkTransition(update);

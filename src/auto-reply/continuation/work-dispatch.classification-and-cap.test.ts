@@ -26,7 +26,7 @@ function getCommandLaneIdleError(): Error | string | undefined {
 const activeQueueHandleAvailable = true;
 const mockSessionStore: Record<string, unknown> = {};
 const loadSessionEntryMock = vi.fn();
-const mockStorePath = "test-store";
+const mockStorePath = WORK_DISPATCH_STORE_PATH;
 const observeSubordinateAdmission = false;
 const observedSubordinateAdmissionClosed: boolean[] = [];
 // test state: toggle continuation enablement (disabled-gate), capture the
@@ -391,6 +391,7 @@ import {
   describeWorkTransition,
   resetWorkDispatchCustodyHooks,
   settleWorkDispatchCustody,
+  WORK_DISPATCH_STORE_PATH,
   workDispatchCustodyHooks,
 } from "./work-dispatch-flow-mock.test-support.js";
 import {

@@ -18,7 +18,7 @@ let activeQueueMode: "delivered" | "queued-without-proof" | "rejected" = "delive
 let [activeQueueHandleAvailable, continuationEnabledForTest] = [true, true];
 const mockSessionStore: Record<string, unknown> = {};
 const loadSessionEntryMock = vi.fn();
-let mockStorePath = "test-store",
+let mockStorePath = WORK_DISPATCH_STORE_PATH,
   observeSubordinateAdmission = false;
 const observedSubordinateAdmissionClosed: boolean[] = [];
 // test state: toggle continuation enablement (disabled-gate), capture the
@@ -381,6 +381,7 @@ import {
   describeWorkTransition,
   resetWorkDispatchCustodyHooks,
   settleWorkDispatchCustody,
+  WORK_DISPATCH_STORE_PATH,
   workDispatchCustodyHooks,
 } from "./work-dispatch-flow-mock.test-support.js";
 import {
@@ -522,14 +523,15 @@ async function advanceTimers(ms: number): Promise<void> {
 
 /**
  * Fake timers owned by continuation dispatch. Every custody command re-arms
- * the shared-state worker's one idle-retirement timer, and every recipient-
- * authority read or capture the agent database owner's; neither is dispatch
- * state, so the count is taken right after one of each and excludes both.
+ * the shared-state worker's one idle-retirement timer; every recipient-
+ * authority read or capture re-arms the session-store resolution pool's and
+ * the agent database owner's. None is dispatch state, so the count is taken
+ * right after one of each and excludes all three.
  */
 async function dispatchTimerCount(): Promise<number> {
   await listCustodyRecordsForTest();
   await captureContinuationWorkRecipientAuthority("agent:main:dispatch-timer-count");
-  return vi.getTimerCount() - 2;
+  return vi.getTimerCount() - 3;
 }
 
 describe("durable continuation_work dispatch", () => {
@@ -561,7 +563,7 @@ describe("durable continuation_work dispatch", () => {
       .mockImplementation(
         ({ sessionKey }: { sessionKey: string }) => mockSessionStore[sessionKey.trim()],
       );
-    mockStorePath = "test-store";
+    mockStorePath = WORK_DISPATCH_STORE_PATH;
     resetWorkDispatchCustodyHooks();
     workDispatchCustodyHooks.onApplied = (update) => {
       const transition = describeWorkTransition(update);

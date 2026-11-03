@@ -15,6 +15,7 @@
 // by an advance the store cannot tell apart, refuses it as unverifiable: a lost legacy wake, logged.
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { captureSessionRecipientAuthority } from "../../config/sessions/session-accessor.js";
 import type { SessionAccessScope } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import {
@@ -36,12 +37,18 @@ import {
 import { decodeWorkState, workToRuntime, type PendingContinuationWork } from "./work-flow-state.js";
 import { markPendingWorkFailed } from "./work-store.js";
 
-/** Capture and check resolve the session's authority row as a delegate's binding capture does. */
+/**
+ * Capture and check open the session's own store, where its handovers advance the epoch, as the
+ * wake turn and the return's prompt-drain check resolve it.
+ */
 function workRecipientScope(sessionKey: string): SessionAccessScope {
-  const fallbackAgentId = sessionKey.startsWith("agent:")
-    ? undefined
-    : resolveDefaultAgentId(getRuntimeConfig());
-  return { agentId: resolveAgentIdFromSessionKey(sessionKey, fallbackAgentId), sessionKey };
+  const cfg = getRuntimeConfig();
+  const agentId = resolveAgentIdFromSessionKey(
+    sessionKey,
+    sessionKey.startsWith("agent:") ? undefined : resolveDefaultAgentId(cfg),
+  );
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  return { agentId, sessionKey, storePath };
 }
 
 /**
