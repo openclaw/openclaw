@@ -98,6 +98,8 @@ if (mode === "seed") {
     await import("../../src/state/openclaw-state-db.js");
   const { resolveSqliteTranscriptArchiveDirectory } =
     await import("../../src/config/sessions/session-accessor.sqlite-scope.js");
+  const { normalizeLegacySessionEntryDelivery } =
+    await import("../../src/infra/state-migrations.legacy-session-store.js");
   const line =
     JSON.stringify({
       type: "message",
@@ -128,7 +130,11 @@ if (mode === "seed") {
       node.run(
         sessionKey,
         sessionId,
-        JSON.stringify({ sessionId, updatedAt: now, status: "done" }),
+        JSON.stringify(
+          shape === "team"
+            ? normalizeLegacySessionEntryDelivery({ sessionId, updatedAt: now, status: "done" })
+            : { sessionId, updatedAt: now, status: "done" },
+        ),
         now,
       );
       window.run(sessionId, sessionKey, now, now);
@@ -194,6 +200,7 @@ if (mode === "seed") {
       archiveMiBPerAgent: archiveMiB,
       databaseBytes: paths.map((pathname) => fs.statSync(pathname).size),
       sourceAgentSchema: 39,
+      canonicalSessionDelivery: true,
       workspaceFiles: 62000,
       workspaceBytes: 62000 * content.length,
     };
