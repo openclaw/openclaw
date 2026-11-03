@@ -653,6 +653,11 @@ button.sidebar-image-view__image {
   color: var(--primary-hover-foreground);
 }
 
+.sidebar-file-view__edit-actions .btn:last-child:not(:disabled):active {
+  background: var(--primary-active);
+  color: var(--primary-active-foreground);
+}
+
 .sidebar-file-view__compact-action {
   display: none;
 }

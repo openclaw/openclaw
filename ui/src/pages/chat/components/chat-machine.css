@@ -162,3 +162,8 @@
   background: var(--primary-hover);
   color: var(--primary-hover-foreground);
 }
+
+.chat-machine__action--continue:active:not(:disabled) {
+  background: var(--primary-active);
+  color: var(--primary-active-foreground);
+}

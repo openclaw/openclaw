@@ -896,6 +896,11 @@
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
+.chat-send-btn:active:not(:disabled, .chat-send-btn--voice, .chat-send-btn--stop) {
+  background: var(--primary-active);
+  color: var(--primary-active-foreground);
+}
+
 /* Outline (not box-shadow) so the hover rules' higher-specificity box-shadow
    overrides can never swallow the keyboard focus indicator. */
 .chat-send-btn:focus-visible {
@@ -934,6 +939,12 @@
   background: var(--primary-hover);
   color: var(--primary-hover-foreground);
   box-shadow: none;
+}
+
+.agent-chat__input
+  .chat-send-btn:active:not(:disabled, .chat-send-btn--voice, .chat-send-btn--stop) {
+  background: var(--primary-active);
+  color: var(--primary-active-foreground);
 }
 
 .agent-chat__input .chat-send-btn:disabled {

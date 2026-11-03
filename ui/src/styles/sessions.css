@@ -55,6 +55,11 @@
   border-color: transparent;
 }
 
+.settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs:active {
+  background: var(--primary-active);
+  color: var(--primary-active-foreground);
+}
+
 /* --- Transcript search: server-backed message content, separate from roster filters --- */
 .sessions-transcript-search {
   display: grid;

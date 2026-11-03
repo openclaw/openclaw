@@ -407,6 +407,12 @@ footer.sidebar-issues-panel__mentions-note {
   color: var(--primary-hover-foreground);
 }
 
+.sidebar-issues-panel .sidebar-issues-panel__action--primary:active,
+.sidebar-issues-panel .sidebar-update-card__review--primary:active {
+  background: var(--primary-active);
+  color: var(--primary-active-foreground);
+}
+
 .shell--mobile-nav .sidebar-issues-panel .sidebar-issues-panel__action,
 .shell--mobile-nav .sidebar-issues-panel .sidebar-approval-row__action {
   min-height: 36px;

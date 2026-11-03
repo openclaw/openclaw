@@ -1354,6 +1354,11 @@ openclaw-chat-video-player {
   color: var(--primary-hover-foreground);
 }
 
+.chat-audio-player__toggle:active {
+  background: var(--primary-active);
+  color: var(--primary-active-foreground);
+}
+
 .chat-audio-player__toggle:focus-visible,
 .chat-audio-player__volume:focus-visible {
   outline: 2px solid var(--ring);
