@@ -11,7 +11,7 @@ import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
 import {
   readAutoincrementHighWater,
   restoreAutoincrementHighWater,
-  withSqliteForeignKeysDisabled,
+  withSqliteForeignKeys,
 } from "../sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { writeSqliteUserVersion } from "../sqlite-user-version.js";
@@ -314,7 +314,7 @@ async function insertBatch(
   assertCurrent();
   const columns = table.columns.map((c) => quote(c.name)).join(",");
   if (endpoint.engine === "sqlite") {
-    withSqliteForeignKeysDisabled(endpoint.db, () => {
+    withSqliteForeignKeys(endpoint.db, false, () => {
       runSqliteImmediateTransactionSync(endpoint.db, () => {
         const statement = sqliteStatement(
           endpoint.db,
@@ -646,7 +646,7 @@ export async function materializeDatabasePort(params: {
       await destination.db.query(`SET search_path = ${quote(destination.namespace)}`);
       await destination.db.query(descriptor.preData);
     } else {
-      withSqliteForeignKeysDisabled(destination.db, () => destination.db.exec(descriptor.sqlite));
+      withSqliteForeignKeys(destination.db, false, () => destination.db.exec(descriptor.sqlite));
       for (const trigger of descriptor.triggers ?? []) {
         destination.db.exec(`DROP TRIGGER ${quote(trigger.name)}`);
       }

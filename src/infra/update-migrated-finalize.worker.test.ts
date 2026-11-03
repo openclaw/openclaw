@@ -147,8 +147,8 @@ vi.mock("./postgres-sync/pool.js", () => ({
 vi.mock("./update-finalization-budget.js", () => ({
   resolveUpdateFinalizationTimeoutMs: fixture.budget,
 }));
-// mock-isolation: Native capture and shared-handle ownership are exercised by
-// update-command-predecessor-capture.test.ts; this suite owns executable wiring.
+// Native capture and shared-handle ownership: update-command-predecessor-capture.test.ts.
+// mock-isolation: This executable-wiring suite must not acquire real maintenance ownership.
 vi.mock("./update-doctor-predecessor.js", () => ({
   async withUpdateDoctorPredecessor(
     ...[input, params, operation]: Parameters<

@@ -4,10 +4,7 @@ import { readSqliteSchemaCatalog } from "../../scripts/lib/sqlite-schema-catalog
 import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from "../daemon/runtime-pin-schema.js";
 import { DEPLOYED_FTS_ROWS_SCHEMA } from "../state/openclaw-agent-transcript-fts-schema-source.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import {
-  migrateSqliteSchemaToStrict as migrate,
-  withSqliteForeignKeysDisabled,
-} from "./sqlite-strict.js";
+import { migrateSqliteSchemaToStrict as migrate, withSqliteForeignKeys } from "./sqlite-strict.js";
 
 const unchanged = { migratedTables: [] };
 
@@ -49,28 +46,33 @@ function catalogMigrationOptions(schemaSql: string, useCatalog: boolean) {
 
 type RejectedSchema = Record<"table" | "before" | "after" | "error", string>;
 
-describe("withSqliteForeignKeysDisabled", () => {
-  it.each([0, 1])("restores previous enforcement %i after success and failure", (enabled) => {
-    using database = createDatabase(`PRAGMA foreign_keys = ${enabled};`);
+describe("withSqliteForeignKeys", () => {
+  it.each([
+    [0, false],
+    [0, true],
+    [1, false],
+    [1, true],
+  ] as const)("restores enforcement %i after borrowing %s", (previous, enabled) => {
+    using database = createDatabase(`PRAGMA foreign_keys = ${previous};`);
     const operation = () => {
-      expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: 0 });
+      expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: Number(enabled) });
       return 42;
     };
-    expect(withSqliteForeignKeysDisabled(database, operation)).toBe(42);
-    expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: enabled });
+    expect(withSqliteForeignKeys(database, enabled, operation)).toBe(42);
+    expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: previous });
     expect(() =>
-      withSqliteForeignKeysDisabled(database, () => {
+      withSqliteForeignKeys(database, enabled, () => {
         operation();
         throw new Error("staging failed");
       }),
     ).toThrow("staging failed");
-    expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: enabled });
+    expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: previous });
   });
 
   it("rejects an active transaction before invoking the callback", () => {
     using database = createDatabase("PRAGMA foreign_keys = ON; BEGIN;");
     let called = false;
-    expect(() => withSqliteForeignKeysDisabled(database, () => (called = true))).toThrow(
+    expect(() => withSqliteForeignKeys(database, false, () => (called = true))).toThrow(
       "cannot change inside a transaction",
     );
     expect(called).toBe(false);
@@ -80,7 +82,7 @@ describe("withSqliteForeignKeysDisabled", () => {
 
   it("rejects asynchronous work and restores enforcement", () => {
     using database = createDatabase("PRAGMA foreign_keys = ON;");
-    expect(() => withSqliteForeignKeysDisabled(database, async () => 42)).toThrow(
+    expect(() => withSqliteForeignKeys(database, false, async () => 42)).toThrow(
       "must be synchronous",
     );
     expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: 1 });
