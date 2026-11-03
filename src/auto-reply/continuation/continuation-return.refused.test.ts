@@ -15,10 +15,19 @@ import {
   deliverQueuedSessionDelivery,
   recoverPendingProducedSessionDeliveries,
 } from "../../gateway/server-restart-sentinel.js";
-import { inspectDeliveryQueueReceipt } from "../../infra/delivery-queue-sqlite.js";
+import {
+  inspectDeliveryQueueReceipt,
+  pruneExpiredDeliveryQueueTombstones,
+} from "../../infra/delivery-queue-sqlite.js";
 import { captureDeliveryQueueStateContext } from "../../infra/delivery-queue-state-context.js";
-import { drainPendingSessionDelivery } from "../../infra/session-delivery-queue-recovery.js";
-import { enqueueSessionDelivery } from "../../infra/session-delivery-queue-storage.js";
+import {
+  drainPendingSessionDelivery,
+  recoverPendingSessionDeliveries,
+} from "../../infra/session-delivery-queue-recovery.js";
+import {
+  enqueueSessionDelivery,
+  failSessionDelivery,
+} from "../../infra/session-delivery-queue-storage.js";
 import {
   enqueueSystemEventRaw,
   peekSystemEventEntries,
@@ -26,6 +35,7 @@ import {
 } from "../../infra/system-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   resolveFinalSystemEventAdoption,
@@ -80,6 +90,8 @@ const transitions: Record<string, (scope: Scope) => Promise<unknown>> = {
     accessor.assignSessionOwner(scope, { owner: ownerA, assignedBy: ownerB, assignedAt: 4 });
   },
 };
+const transitionTo = (transition: string, scope: Scope) => () => transitions[transition]!(scope);
+const discardLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 const stages = {
   enqueue: "enqueue",
   "enqueue, after its row is written": "enqueue",
@@ -118,13 +130,17 @@ async function withRecipient(
 }
 
 /**
- * The real producer; `afterWrite` runs once the durable row exists, before the event is queued.
- * `ambient` omits the state dir, as the announce producer does.
+ * The real producer; `beforeWrite` runs after its authority read, `afterWrite` once the durable row
+ * exists, before the event is queued. `ambient` omits the state dir, as the announce producer does.
  */
 async function produce(
   scope: Scope,
   authority: SessionRecipientAuthority,
-  { afterWrite, ambient }: { afterWrite?: () => unknown; ambient?: boolean } = {},
+  {
+    beforeWrite,
+    afterWrite,
+    ambient,
+  }: { beforeWrite?: () => unknown; afterWrite?: () => unknown; ambient?: boolean } = {},
 ) {
   const written: string[] = [];
   const outcome = await enqueueContinuationReturnDeliveries(
@@ -139,6 +155,7 @@ async function produce(
     },
     {
       enqueueSessionDelivery: async (...args) => {
+        await beforeWrite?.();
         written.push(await enqueueSessionDelivery(...args));
         await afterWrite?.();
         return written.at(-1)!;
@@ -155,7 +172,7 @@ async function restartAndReplay(scope: Scope, beforeReplay?: () => unknown) {
   resetSystemEventsForTest();
   vi.mocked(requestContinuationWake).mockClear();
   await beforeReplay?.();
-  const recovery = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const recovery = discardLog();
   await recoverPendingProducedSessionDeliveries({
     deps: {},
     queueContext: captureContinuationQueueContext(scope.env.OPENCLAW_STATE_DIR),
@@ -198,6 +215,8 @@ async function receiptStatus(scope: Scope, id: string) {
 
 const refusalLines = () =>
   logLines.filter((line) => line.startsWith("[continuation:return-refused]"));
+const refusalLine = (stage: string, sessionKey: string, id?: string) =>
+  `[continuation:return-refused] stage=${stage} reason=recipient-authority-changed session=${sessionKey}${id ? ` deliveryId=${id}` : ""}`;
 
 describe("a continuation return whose recipient authority advanced", () => {
   const cases = Object.keys(transitions).flatMap((transition) =>
@@ -237,12 +256,103 @@ describe("a continuation return whose recipient authority advanced", () => {
       expect(await nextTurn(scope, { beforeAdoption })).not.toContain("delegate result");
       expect(requestContinuationWake).not.toHaveBeenCalled();
       expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
-      if (id) {
-        expect([undefined, "failed"]).toContain(await receiptStatus(scope, id));
+      // Only a refusal before the write leaves no row; every written row keeps its failed receipt.
+      if (stage === "enqueue") {
+        expect(id).toBeUndefined();
+      } else {
+        expect(await receiptStatus(scope, id!)).toBe("failed");
       }
-      expect(refusalLines()).toEqual([
-        `[continuation:return-refused] stage=${stages[stage]} reason=recipient-authority-changed session=${scope.sessionKey}${id ? ` deliveryId=${id}` : ""}`,
-      ]);
+      expect(refusalLines()).toEqual([refusalLine(stages[stage], scope.sessionKey, id)]);
+    });
+  });
+
+  it.each(["inside", "after"] as const)(
+    "fences a duplicate announce %s its refused row's receipt window, never adopting it",
+    async (window) => {
+      await withRecipient(async (scope, authority) => {
+        // The duplicate reads authority before the change and writes after the refusal settled.
+        let reachedWrite!: () => void;
+        let releaseWrite!: () => void;
+        const atWrite = new Promise<void>((resolve) => (reachedWrite = resolve));
+        const released = new Promise<void>((resolve) => (releaseWrite = resolve));
+        let id: string | undefined;
+        let statusAtWrite: string | undefined;
+        const duplicate = produce(scope, authority, {
+          beforeWrite: () => {
+            reachedWrite();
+            return released;
+          },
+          afterWrite: async () => {
+            statusAtWrite = await receiptStatus(scope, id!);
+          },
+        });
+        await atWrite;
+        ({ id } = await produce(scope, authority, {
+          afterWrite: transitionTo("owner change", scope),
+        }));
+        if (window === "after") {
+          expect(await receiptStatus(scope, id!)).toBe("failed");
+          // Past the 30-day bound, the maintenance sweep removes the receipt and frees the id.
+          openOpenClawStateDatabase({ env: scope.env })
+            .db.prepare(
+              "UPDATE delivery_queue_entries SET enqueued_at = enqueued_at - ? WHERE queue_name = 'session' AND id = ?",
+            )
+            .run(31 * 86_400_000, id!);
+          await pruneExpiredDeliveryQueueTombstones(scope.env.OPENCLAW_STATE_DIR);
+          expect(await receiptStatus(scope, id!)).toBeUndefined();
+        }
+        releaseWrite();
+        const { outcome } = await duplicate;
+
+        // Inside the window the receipt fences the write; after it, the write lands and is refused.
+        expect(statusAtWrite).toBe(window === "inside" ? "failed" : "pending");
+        expect(outcome).toMatchObject({ deliveryIds: [], refusedSessionKeys: [scope.sessionKey] });
+        expect(await nextTurn(scope)).not.toContain("delegate result");
+        expect(requestContinuationWake).not.toHaveBeenCalled();
+        expect(await receiptStatus(scope, id!)).toBe("failed");
+        expect(refusalLines()).toEqual(Array(2).fill(refusalLine("enqueue", scope.sessionKey, id)));
+      });
+    },
+  );
+
+  it("keeps its receipt when the process dies between the replay's refusal and its terminal write", async () => {
+    await withRecipient(async (scope, authority) => {
+      const { id } = await produce(scope, authority);
+      // A restart drops the queued copy, so replay alone holds the row once the owner changes.
+      resetSystemEventsForTest();
+      await transitionTo("owner change", scope)();
+      // That restart's recovery refuses the row and dies inside settlement, before the row's write.
+      await recoverPendingSessionDeliveries({
+        queueContext: captureContinuationQueueContext(scope.env.OPENCLAW_STATE_DIR),
+        log: discardLog(),
+        deliver: (entry, context) => deliverQueuedSessionDelivery({ deps: {}, entry, ...context }),
+        onSettled: () => {
+          throw new Error("process died");
+        },
+      });
+      expect(await receiptStatus(scope, id!)).toBe("pending");
+
+      await restartAndReplay(scope);
+      expect(await receiptStatus(scope, id!)).toBe("failed");
+      expect(await nextTurn(scope)).not.toContain("delegate result");
+      expect(requestContinuationWake).not.toHaveBeenCalled();
+      expect(refusalLines()).toEqual(Array(2).fill(refusalLine("replay", scope.sessionKey, id)));
+    });
+  });
+
+  it("is deleted as before when its retry budget dead-letters it before any refusal", async () => {
+    await withRecipient(async (scope, authority) => {
+      const { id } = await produce(scope, authority);
+      const queueContext = captureContinuationQueueContext(scope.env.OPENCLAW_STATE_DIR);
+      // The default budget is five; recovery retires an exhausted row without replaying it.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await failSessionDelivery(id!, "replay failed", queueContext);
+      }
+      await restartAndReplay(scope, transitionTo("owner change", scope));
+
+      expect(await receiptStatus(scope, id!)).toBeUndefined();
+      expect(await nextTurn(scope)).not.toContain("delegate result");
+      expect(refusalLines()).toEqual([]);
     });
   });
 
@@ -293,7 +403,7 @@ describe("a continuation return whose recipient authority advanced", () => {
             queueContext,
             bypassBackoff: true,
             logLabel: "sweep",
-            log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+            log: discardLog(),
             deliver: (entry, context) =>
               deliverQueuedSessionDelivery({ deps: {}, entry, ...context }),
           });

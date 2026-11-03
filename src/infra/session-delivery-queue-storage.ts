@@ -678,10 +678,17 @@ export async function loadPendingSessionDeliveries(
   return entries;
 }
 
-/** Move an exhausted session delivery out of the pending queue. */
+/**
+ * Move an exhausted session delivery out of the pending queue. `keepFailedReceipt` leaves a
+ * bounded `failed` receipt that fences the id where the row's own retention would remove it.
+ */
 export async function moveSessionDeliveryToFailed(
   id: string,
   context: OpenClawStateWorkerContext,
+  options?: { keepFailedReceipt?: true },
 ): Promise<void> {
-  return executeSessionDelivery(context, { type: "sessionDelivery.moveToFailed", input: { id } });
+  return executeSessionDelivery(context, {
+    type: "sessionDelivery.moveToFailed",
+    input: { id, ...options },
+  });
 }

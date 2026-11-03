@@ -266,9 +266,9 @@ export const sessionDeliveryOperations = {
         .orderBy("id", "asc"),
     ).rows.map(inflateDeliveryQueueEntryResult);
   },
-  "sessionDelivery.moveToFailed": (input: { id: string }, { open }) => {
+  "sessionDelivery.moveToFailed": (input: { id: string; keepFailedReceipt?: true }, { open }) => {
     const database = open();
-    const { id } = input;
+    const { id, keepFailedReceipt } = input;
     return finalize(database, id, "failed", () => {
       const result = readSessionDeliveryResult(database, id);
       if (result?.status !== "loaded") {
@@ -277,7 +277,12 @@ export const sessionDeliveryOperations = {
       const entry = result.entry;
       const terminalized = terminalizePendingDeliveryQueueEntryInDatabase(
         database,
-        prepareDeliveryQueueTerminalEntry({ queueName: SESSION_DELIVERY_QUEUE_NAME, id, entry }),
+        prepareDeliveryQueueTerminalEntry({
+          queueName: SESSION_DELIVERY_QUEUE_NAME,
+          id,
+          entry,
+          keepFailedReceipt,
+        }),
       );
       if (terminalized.status !== "terminalized") {
         throw deliveryQueueEntryNotFoundError(SESSION_DELIVERY_QUEUE_NAME, id);

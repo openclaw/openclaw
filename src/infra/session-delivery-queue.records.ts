@@ -125,6 +125,19 @@ export class SessionDeliverySafeRetryError extends Error {
 /** Signals that recovery must settle this pending row as failed without replaying delivery. */
 export class SessionDeliveryDeadLetteredError extends Error {
   override name = "SessionDeliveryDeadLetteredError";
+  /**
+   * The row settles as a bounded `failed` receipt for its id instead of being removed. Only for a
+   * decision with no side effect whose cause never reverts: recovery records no settlement first,
+   * so a row whose terminal write is lost stays pending and the next replay decides it again.
+   */
+  readonly keepFailedReceipt?: true;
+
+  constructor(message?: string, options?: { keepFailedReceipt?: true }) {
+    super(message);
+    if (options?.keepFailedReceipt) {
+      this.keepFailedReceipt = true;
+    }
+  }
 }
 
 function buildEntryId(idempotencyKey?: string): string {

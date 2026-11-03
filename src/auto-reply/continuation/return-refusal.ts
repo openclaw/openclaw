@@ -2,11 +2,11 @@
 // recipient authority advanced (delete and recreate, owner change, visibility narrowing, member
 // removal) is refused at whichever boundary sees it first: enqueue, restart replay, wake
 // handoff or prompt drain. A refused return is never delivered, woken or acknowledged as
-// adopted; its durable row settles through the queue's existing `moved-to-failed` outcome, so
-// no stored value changes, and each refusal is reported with a stable reason.
+// adopted; its durable row settles as a bounded `failed` receipt for its deterministic id, which
+// fences a duplicate announce of the same return while it lasts, and each refusal is reported
+// with a stable reason.
 import {
   loadPendingSessionDelivery,
-  markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
 } from "../../infra/session-delivery-queue-storage.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -29,8 +29,9 @@ export function reportRefusedContinuationReturn(params: {
 }
 
 /**
- * Retires a refused return's durable row unadopted. A row already gone was settled by another
- * boundary; a refusal has no effect to repeat, so there is nothing left to do.
+ * Retires a refused return's durable row unadopted, as its bounded `failed` receipt. A row already
+ * gone was settled by another boundary; a refusal has no effect to repeat, so there is nothing
+ * left to do.
  */
 export async function refuseContinuationReturnDelivery(
   deliveryId: string,
@@ -40,6 +41,7 @@ export async function refuseContinuationReturnDelivery(
   if (!entry) {
     return;
   }
-  await markSessionDeliverySettlement(entry, "moved-to-failed", context);
-  await moveSessionDeliveryToFailed(deliveryId, context);
+  // One write from the pending row to its receipt, with no settlement marked first: if it is lost,
+  // the row stays pending and replay refuses it again (authority epochs never come back).
+  await moveSessionDeliveryToFailed(deliveryId, context, { keepFailedReceipt: true });
 }

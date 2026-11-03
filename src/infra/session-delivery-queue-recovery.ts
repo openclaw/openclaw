@@ -57,15 +57,20 @@ async function finalizeSessionDeliverySettlement(params: {
   onSettled?: SettleSessionDeliveryFn;
   outcome: SessionDeliverySettledOutcome;
   queueContext: OpenClawStateWorkerContext;
+  keepFailedReceipt?: true;
 }): Promise<boolean> {
   let phase = "settled callback";
   try {
     params.queueContext.admission.assertCurrent();
     await params.onSettled?.(params.entry, params.outcome, params.queueContext);
     phase = `${params.outcome} finalization`;
-    const finalize =
-      params.outcome === "recovered" ? completeSessionDelivery : moveSessionDeliveryToFailed;
-    await finalize(params.entry.id, params.queueContext);
+    await (params.outcome === "recovered"
+      ? completeSessionDelivery(params.entry.id, params.queueContext)
+      : moveSessionDeliveryToFailed(
+          params.entry.id,
+          params.queueContext,
+          params.keepFailedReceipt ? { keepFailedReceipt: true } : undefined,
+        ));
     return true;
   } catch (error) {
     params.log.error(`session delivery: ${phase} failed for ${params.entry.id}: ${String(error)}`);
@@ -147,6 +152,7 @@ async function processPendingSessionDelivery(opts: {
   }
 
   let result: SessionDeliverySettledOutcome;
+  let keepFailedReceipt: true | undefined;
   try {
     context.queueContext.admission.assertCurrent();
     await context.deliver(entry, { queueContext: context.queueContext });
@@ -160,8 +166,13 @@ async function processPendingSessionDelivery(opts: {
       context.log.warn(
         `${context.logLabel}: dead-letter decision for entry ${entry.id}: ${formatErrorMessage(err)}`,
       );
+      keepFailedReceipt = err.keepFailedReceipt;
+      // A receipt-keeping decision is not marked: a mark cannot carry the receipt, so an unfinished
+      // settlement leaves the row pending and its replay decides the same way again.
       try {
-        await markSessionDeliverySettlement(entry, "moved-to-failed", context.queueContext);
+        if (!keepFailedReceipt) {
+          await markSessionDeliverySettlement(entry, "moved-to-failed", context.queueContext);
+        }
       } catch (markError) {
         if (markError instanceof SessionDeliveryAcknowledgementFinalizeError) {
           return { status: "deferred" };
@@ -200,6 +211,7 @@ async function processPendingSessionDelivery(opts: {
     ...context,
     entry,
     outcome: result,
+    keepFailedReceipt,
   });
   return { status: result, finalized };
 }

@@ -5,6 +5,13 @@ export type DeliveryQueueCompletionRetention =
   | "permanent"
   | Readonly<{ idPrefix: string; maxAgeMs: number; maxEntries: number }>;
 
+/**
+ * `receipt`: an ordinary failed receipt a caller opted into. It keeps no payload or producer
+ * prefix, fences its exact id like an ordinary completed tombstone, and ages out with one.
+ */
+export type DeliveryQueueFailureRetention = DeliveryQueueCompletionRetention | "receipt";
+export const DELIVERY_QUEUE_FAILED_RECEIPT_STATE = "failed_receipt";
+
 /** Parse only the shipped completion-retention shape for one exact producer ID. */
 export function parseDeliveryQueueCompletionRetention(
   value: unknown,
@@ -46,7 +53,11 @@ export function inferDeliveryQueueFailureRetention(
   id: string,
   queueName?: string,
   legacyAmbiguousSendEvidence = false,
-): DeliveryQueueCompletionRetention | undefined {
+): DeliveryQueueFailureRetention | undefined {
+  // A receipt's projection names itself, so recompaction keeps it bounded.
+  if (entry.recoveryState === DELIVERY_QUEUE_FAILED_RECEIPT_STATE) {
+    return "receipt";
+  }
   const explicit =
     parseDeliveryQueueCompletionRetention(entry.completionRetention, id) ??
     parseDeliveryQueueCompletionRetention(entry.failureRetention, id);
@@ -133,16 +144,19 @@ export function projectDeliveryQueueTerminalEntry(
   entry: Pick<DeliveryQueueEntryState, "id" | "retryCount">,
   terminalAt: number,
   terminal: "completed" | "failed",
-  completionRetention?: DeliveryQueueCompletionRetention,
+  retention?: DeliveryQueueFailureRetention,
 ): DeliveryQueueEntryState {
   const retryCount =
     Number.isSafeInteger(entry.retryCount) && entry.retryCount >= 0 ? entry.retryCount : 0;
+  const completionRetention = retention === "receipt" ? undefined : retention;
   const recoveryState =
-    completionRetention === "permanent"
-      ? "completed_permanent"
-      : completionRetention
-        ? "completed_bounded"
-        : undefined;
+    retention === "receipt"
+      ? DELIVERY_QUEUE_FAILED_RECEIPT_STATE
+      : completionRetention === "permanent"
+        ? "completed_permanent"
+        : completionRetention
+          ? "completed_bounded"
+          : undefined;
   return {
     id: entry.id,
     enqueuedAt: terminalAt,

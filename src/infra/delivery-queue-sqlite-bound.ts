@@ -1,4 +1,4 @@
-import type { NotNull, RawBuilder, Selectable } from "kysely";
+import type { ExpressionBuilder, NotNull, RawBuilder, Selectable } from "kysely";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -9,7 +9,10 @@ import {
 } from "./delivery-queue-cache.js";
 import { deriveDeliveryQueueRetentionColumns } from "./delivery-queue-retention-columns.js";
 import type { DeliveryQueueSqliteRow } from "./delivery-queue-sqlite-codec.js";
-import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
+import {
+  DELIVERY_QUEUE_FAILED_RECEIPT_STATE,
+  type DeliveryQueueEntryState,
+} from "./delivery-queue-sqlite.types.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -29,7 +32,26 @@ import { runSqliteSingleStatementSync } from "./sqlite-transaction.js";
 type QueueStatus = "pending" | "failed" | "completed";
 export type DeliveryQueueReadMode = "pending" | "unfinished" | "all";
 type DeliveryQueueTable = OpenClawStateKyselyDatabase["delivery_queue_entries"];
-const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
+// Ordinary receipts carry no producer policy: a completed tombstone, or a failed receipt its caller
+// opted into. Both fence their exact id against a second write for 30 days. One window for both, so
+// an id that settled as failed is fenced exactly as long as one that settled as delivered: a
+// duplicate inside it is a duplicate either way, and neither outcome reopens the id sooner.
+const ORDINARY_RECEIPT_RETENTION_MS = 30 * 24 * 60 * 60_000;
+function isOrdinaryReceipt(eb: ExpressionBuilder<DeliveryQueueDatabase, "delivery_queue_entries">) {
+  return eb.or([
+    eb.and([
+      eb("status", "=", "completed"),
+      eb.or([
+        eb("recovery_state", "is", null),
+        eb("recovery_state", "not in", ["completed_permanent", "completed_bounded"]),
+      ]),
+    ]),
+    eb.and([
+      eb("status", "=", "failed"),
+      eb("recovery_state", "=", DELIVERY_QUEUE_FAILED_RECEIPT_STATE),
+    ]),
+  ]);
+}
 function boundedDeliveryReceipts(db: EngineConnection) {
   return getNodeSqliteKysely<DeliveryQueueDatabase>(db)
     .selectFrom("delivery_queue_entries")
@@ -129,11 +151,13 @@ export function pruneDeliveryQueueTombstones(
         ),
       ),
   );
-  if ((result.numAffectedRows ?? 0n) > 0n) {
+  const ordinaryPruned = prefix ? false : pruneOrdinaryDeliveryReceipts(db, now);
+  const pruned = (result.numAffectedRows ?? 0n) > 0n || ordinaryPruned;
+  if (pruned) {
+    // Ordinary receipts include failed rows too.
     publishSqliteDatabaseAdmission(db, failedDeliveryQueueHealthAdmission, undefined);
   }
-  const ordinaryPruned = prefix ? false : pruneOrdinaryDeliveryReceipts(db, now);
-  return (result.numAffectedRows ?? 0n) > 0n || ordinaryPruned;
+  return pruned;
 }
 
 /** Cheap maintenance cleanup: learn the next age deadline, then skip quiet passes. */
@@ -144,14 +168,8 @@ export function pruneDeliveryQueueTombstoneAges(db: EngineConnection, now: numbe
     const ordinary = queueDb
       .selectFrom("delivery_queue_entries")
       .select("enqueued_at")
-      .select((eb) => eb.val(COMPLETED_TOMBSTONE_RETENTION_MS).as("max_age_ms"))
-      .where("status", "=", "completed")
-      .where((eb) =>
-        eb.or([
-          eb("recovery_state", "is", null),
-          eb("recovery_state", "not in", ["completed_permanent", "completed_bounded"]),
-        ]),
-      );
+      .select((eb) => eb.val(ORDINARY_RECEIPT_RETENTION_MS).as("max_age_ms"))
+      .where(isOrdinaryReceipt);
     const [row] = executeSqliteQuerySync(
       db,
       queueDb
@@ -192,12 +210,8 @@ export function pruneDeliveryQueueTombstoneAges(db: EngineConnection, now: numbe
               eb("enqueued_at", "<", eb(eb.val(now), "-", eb.ref("retention_max_age_ms"))),
             ]),
             eb.and([
-              eb("status", "=", "completed"),
-              eb("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS),
-              eb.or([
-                eb("recovery_state", "is", null),
-                eb("recovery_state", "not in", ["completed_permanent", "completed_bounded"]),
-              ]),
+              eb("enqueued_at", "<", now - ORDINARY_RECEIPT_RETENTION_MS),
+              isOrdinaryReceipt(eb),
             ]),
           ]),
         ),
@@ -260,14 +274,8 @@ function pruneOrdinaryDeliveryReceipts(db: EngineConnection, now: number): boole
     db,
     getNodeSqliteKysely<DeliveryQueueDatabase>(db)
       .deleteFrom("delivery_queue_entries")
-      .where("status", "=", "completed")
-      .where("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS)
-      .where((eb) =>
-        eb.or([
-          eb("recovery_state", "is", null),
-          eb("recovery_state", "not in", ["completed_permanent", "completed_bounded"]),
-        ]),
-      ),
+      .where("enqueued_at", "<", now - ORDINARY_RECEIPT_RETENTION_MS)
+      .where(isOrdinaryReceipt),
   );
   return (result.numAffectedRows ?? 0n) > 0n;
 }

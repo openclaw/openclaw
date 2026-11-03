@@ -25,6 +25,7 @@ import {
   projectDeliveryQueueTerminalEntry,
   resolveDeliveryQueueAttemptCount,
   type DeliveryQueueEntryState,
+  type DeliveryQueueFailureRetention,
 } from "./delivery-queue-sqlite.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME } from "./outbound/delivery-queue-namespaces.js";
@@ -273,7 +274,7 @@ export function completeDeliveryQueueEntryInDatabase(
 function pruneBoundedDeliveryQueueTombstones(
   database: OpenClawStateDatabase,
   queueName: string,
-  retention: ReturnType<typeof parseDeliveryQueueCompletionRetention>,
+  retention: DeliveryQueueFailureRetention | undefined,
 ): void {
   if (typeof retention === "object") {
     runSqliteImmediateTransactionSync(
@@ -445,6 +446,8 @@ export type TerminalizePendingDeliveryQueueEntryParams = {
   id: string;
   entry: DeliveryQueueEntryState;
   expectedStatus?: "pending" | "failed";
+  /** Opt-in: keep an ordinary failed receipt where the entry's own facts would delete the row. */
+  keepFailedReceipt?: true;
 };
 
 /** Validate and serialize terminal custody before a standalone call opens its database. */
@@ -456,7 +459,10 @@ export function prepareDeliveryQueueTerminalEntry(
   }
   const now = Date.now();
   const expectedJson = JSON.stringify(params.entry);
-  const retention = inferDeliveryQueueFailureRetention(params.entry, params.id, params.queueName);
+  // The receipt lives only in the projection: the entry stays the persisted original the CAS matches.
+  const retention =
+    inferDeliveryQueueFailureRetention(params.entry, params.id, params.queueName) ??
+    (params.keepFailedReceipt ? "receipt" : undefined);
   const failedEntry = retention
     ? projectDeliveryQueueTerminalEntry(params.entry, now, "failed", retention)
     : undefined;

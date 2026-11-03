@@ -41,7 +41,8 @@ type RestartSentinelWakeOutcome = "queued" | "refused" | "stale-authority";
 
 /**
  * A replayed return whose recipient authority advanced is refused: never queued or woken, and its
- * row settles as failed rather than as recovered, so replay never reports it delivered. A row with
+ * row settles as a bounded failed receipt rather than as recovered, so replay never reports it
+ * delivered and a duplicate announce cannot write it again while the receipt lasts. A row with
  * a copy in memory, or a turn adopting one, belongs to that copy's owner: the turn adopts it (its
  * decision ran while authority was current) or gives it back, and a copy is refused where it is
  * next seen. Replay refuses only a row it alone holds.
@@ -70,6 +71,7 @@ function refuseStaleAuthorityReplay(params: {
   });
   throw new SessionDeliveryDeadLetteredError(
     "continuation return refused: recipient-authority-changed",
+    { keepFailedReceipt: true },
   );
 }
 
