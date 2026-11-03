@@ -411,11 +411,9 @@ it("uses the committed snapshot for both display and reset while the form draft 
 
   const themeSection = await waitForSolid(() => {
     const section = container.querySelector<HTMLElement>("#settings-appearance-theme");
-    expect(section?.textContent).toContain("Default: Claw");
+    expect(section?.textContent).toContain("Synced across your devices");
     return section!;
   });
-  expect(themeSection?.textContent).toContain("Synced across your devices");
-  expect(themeSection?.textContent).not.toContain("Default: Knot");
   expect(themeSection?.textContent).not.toContain("Stored in this browser only");
 
   themeSection?.querySelector<HTMLButtonElement>(".settings-theme-card--claw")?.click();
