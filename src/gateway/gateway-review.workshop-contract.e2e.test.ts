@@ -180,7 +180,8 @@ async function withReview(
       OPENCLAW_SKIP_CANVAS_HOST: "1",
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
       OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      // The skill-workshop plugin is bundled; plugins.allow keeps every other one off.
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
     },
   });
   const sessionKey = `agent:main:${options.channel ?? "dashboard"}:direct:review-contract-${randomUUID()}`;
@@ -287,6 +288,8 @@ async function withReview(
           gateway: { auth: { mode: "token", token } },
           models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
           plugins: {
+            enabled: true,
+            allow: ["skill-workshop"],
             slots: { memory: "none" },
             entries: {
               "skill-workshop": {

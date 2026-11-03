@@ -30,7 +30,8 @@ it(
         OPENCLAW_SKIP_CANVAS_HOST: "1",
         OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
         OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        // The skill-workshop plugin is bundled; plugins.allow keeps every other one off.
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       },
     });
     let gateway: { client: GatewayClient; server: Pick<GatewayServer, "close"> } | undefined;
@@ -87,6 +88,8 @@ it(
             gateway: { auth: { mode: "token", token } },
             models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
             plugins: {
+              enabled: true,
+              allow: ["skill-workshop"],
               slots: { memory: "none" },
               entries: { "skill-workshop": { config: { autonomous: { mode: "off" } } } },
             },
