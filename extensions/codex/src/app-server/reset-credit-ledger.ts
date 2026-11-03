@@ -124,19 +124,24 @@ export function createCodexResetCreditLedger(deps: LedgerDeps) {
   const owned = new Map<string, string>();
 
   const modify = async <T>(
-    decide: (ledger: Ledger, now: number) => { value: T; next: Ledger },
+    decide: (ledger: Ledger, now: number) => { value: T; next: Ledger; onCommit?: () => void },
   ): Promise<T> => {
     for (let i = 0; i < MAX_COMPARE_ATTEMPTS; i++) {
       const observed = await deps.store.observe(CODEX_RESET_LEDGER_KEY);
       const now = nowFn();
       const ledger = boundedLedger(readLedger(observed.value), now);
       const decision = decide(ledger, now);
+      if (decision.next === ledger) {
+        // Fail-closed no-op decisions require no mutation or ownership claim.
+        return decision.value;
+      }
       const result = await deps.store.compareAndApply(
         CODEX_RESET_LEDGER_KEY,
         observed.comparison,
         { operation: "update", action: "set", value: decision.next },
       );
-      if (result.status === "applied") {
+      if (result.status === "applied" || result.status === "unchanged") {
+        decision.onCommit?.();
         return decision.value;
       }
       // On conflict, compare again against the latest committed state.
@@ -183,7 +188,6 @@ export function createCodexResetCreditLedger(deps: LedgerDeps) {
           leaseUntil: now + leaseMs,
           leaseToken,
         };
-        owned.set(resumed.attemptId, leaseToken);
         return {
           value: {
             status: "owned",
@@ -196,6 +200,7 @@ export function createCodexResetCreditLedger(deps: LedgerDeps) {
               a.attemptId === resumed.attemptId ? resumed : a,
             ),
           },
+          onCommit: () => owned.set(resumed.attemptId, leaseToken),
         };
       }
       const spendCount = ledger.attempts.filter(
@@ -221,10 +226,10 @@ export function createCodexResetCreditLedger(deps: LedgerDeps) {
         leaseToken,
         status: "pending",
       };
-      owned.set(attemptId, leaseToken);
       return {
         value: { status: "owned", attemptId, idempotencyKey } as CodexResetClaim,
         next: { ...ledger, attempts: [...ledger.attempts, attempt] },
+        onCommit: () => owned.set(attemptId, leaseToken),
       };
     });
   }
