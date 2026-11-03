@@ -435,7 +435,9 @@ function renderChannelDetailFixture(
     channelAccounts: { [channelId]: options.accounts ?? [] },
   });
   props.channels.channelsLoading = options.loading ?? false;
-  props.config.lastError = options.configError ?? null;
+  props.saveFeedback = options.configError
+    ? { channelId, kind: "error", message: options.configError }
+    : null;
   if (options.onRefresh) {
     props.onRefresh = options.onRefresh;
   }

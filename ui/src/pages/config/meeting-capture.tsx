@@ -1,4 +1,5 @@
 import type { TranscriptsStatusResult } from "@openclaw/gateway-protocol";
+import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
@@ -7,6 +8,7 @@ import { TRANSCRIPT_SOURCE_LOCATOR_FIELDS } from "../../../../src/plugins/manife
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
@@ -166,7 +168,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
       return;
     }
     const updatedSources = [...sources()];
-    if (index !== "new" && updatedSources[index] !== editedSource) {
+    if (index !== "new" && !jsonSchemaValuesEqual(updatedSources[index], editedSource)) {
       setEditError(t("meetingCapture.sourceChanged"));
       return;
     }
@@ -612,12 +614,15 @@ export function MeetingCaptureSettings(props: SettingsProps) {
         </div>
       </SettingsPage>
       <ShellLayoutBoundary traits={{ settingsPage: true }}>
-        <details class="settings-page" open={props.advancedExpanded}>
-          <summary class="settings-section__heading">
-            {t("meetingCapture.advancedSettings")}
-          </summary>
-          {props.buildEditor?.()}
-        </details>
+        <div class="settings-page">
+          <SettingsDisclosure
+            sections
+            title={t("meetingCapture.advancedSettings")}
+            open={props.advancedExpanded}
+          >
+            {props.buildEditor?.()}
+          </SettingsDisclosure>
+        </div>
       </ShellLayoutBoundary>
     </openclaw-meeting-capture-settings>
   );

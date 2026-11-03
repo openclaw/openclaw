@@ -475,7 +475,7 @@ export function Memory(props: MemoryViewProps) {
           ) : props.activeTab === "memories" ? (
             props.memories
           ) : props.activeTab === "dreams" ? (
-            <div class="settings-page">{props.dreams}</div>
+            props.dreams
           ) : (
             <SettingsTab {...props} />
           )}
