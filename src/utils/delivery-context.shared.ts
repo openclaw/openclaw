@@ -109,7 +109,7 @@ function mergeRouteMetadataWithDeliveryContext(
   });
 }
 
-function isInternalRouteContext(context?: DeliveryContext): boolean {
+export function isInternalRouteContext(context?: DeliveryContext): boolean {
   const channel = context?.channel;
   return Boolean(
     channel && (channel === INTERNAL_MESSAGE_CHANNEL || isInternalNonDeliveryChannel(channel)),

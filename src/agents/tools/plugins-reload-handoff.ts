@@ -14,6 +14,8 @@ import {
 } from "../../infra/exec-request-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { isInternalRouteContext } from "../../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import { jsonResult, ToolInputError } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
@@ -69,6 +71,14 @@ export async function handoffPluginReload(params: {
     if (target.sessionId !== params.sessionId) {
       throw new ToolInputError("The reload requester session changed before handoff.");
     }
+    // Internal turns have no external conversation to resume in. Keep the
+    // captured session route for external callers, but not for Control UI wakes.
+    const resumeRoute =
+      isInternalRouteContext({ channel: caller.turnSourceChannel }) &&
+      (!caller.turnSourceTo || caller.turnSourceTo === caller.sessionKey) &&
+      target.deliveryContext?.channel
+        ? { channel: INTERNAL_MESSAGE_CHANNEL }
+        : undefined;
     continuation.assertCurrent();
     operation.abortSignal.throwIfAborted();
     params.signal?.throwIfAborted();
@@ -134,6 +144,7 @@ export async function handoffPluginReload(params: {
                       source: "plugin",
                       contextKey: "plugin-reload:" + randomUUID(),
                       expectedTarget: target,
+                      ...(resumeRoute ? { deliveryContext: resumeRoute } : {}),
                       assertCurrent: retained.assertCurrent,
                       abortSignal: signal,
                     },
