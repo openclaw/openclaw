@@ -25,6 +25,7 @@ import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
+  isMainPackageTarget,
   isPackageTargetAlreadyCurrent,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
@@ -301,13 +302,11 @@ export async function resolveUpdateCommandTarget(
         }
       }
 
-      const unsupportedMainTag = updateInstallKind === "package" && explicitTag === "main";
-      if ((channel === "extended-stable" && explicitTag) || unsupportedMainTag) {
+      const unsupportedMain = updateInstallKind === "package" && isMainPackageTarget(explicitTag);
+      if ((channel === "extended-stable" && explicitTag) || unsupportedMain) {
         await refuseUpdate(
-          unsupportedMainTag
-            ? "unsupported-package-target"
-            : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
-          unsupportedMainTag
+          unsupportedMain ? "unsupported-package-target" : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+          unsupportedMain
             ? "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow."
             : undefined,
         );
