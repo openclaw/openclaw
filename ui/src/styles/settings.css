@@ -1511,7 +1511,7 @@ openclaw-approvals-page .data-table-pagination__info {
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
   text-align: start;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .approval-log__summary:hover {
