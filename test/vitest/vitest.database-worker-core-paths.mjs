@@ -76,6 +76,7 @@ export const databaseWorkerCoreTestFiles = [
   // Physical admission and descriptor custody belong to the application host, not an unhosted test Worker.
   "src/infra/database-engine/pending-input-source.conformance.test.ts",
   "src/infra/database-engine/backup-runs.conformance.test.ts",
+  "src/infra/database-engine/creation-receipts.conformance.test.ts",
   "src/infra/database-engine/goal-receipts.conformance.test.ts",
   "src/infra/database-engine/owner-fragments.conformance.test.ts",
   "src/infra/database-engine/profile-authority.conformance.test.ts",
@@ -980,6 +981,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-memory-revision-migration.test.ts",
   "src/state/openclaw-agent-cold-archive-chunks-migration.test.ts",
   "src/state/openclaw-agent-cold-navigation-migration.test.ts",
+  "src/state/openclaw-agent-creation-operations-migration.test.ts",
   "src/state/openclaw-agent-vector-decoder-migration.test.ts",
   "src/state/openclaw-agent-write-layout-migration.test.ts",
   "src/state/openclaw-agent-index-retirement-migration.test.ts",
