@@ -1424,7 +1424,6 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 
 .callout.danger,
 .callout.warn {
-  border-color: color-mix(in srgb, var(--callout-tone) 34%, var(--border));
   background: linear-gradient(
     135deg,
     color-mix(in srgb, var(--callout-tone) 14%, var(--bg-elevated)) 0%,
@@ -1435,7 +1434,6 @@ openclaw-tooltip:last-child > .btn.refresh-button {
 
 .callout.info,
 .callout.success {
-  border-color: color-mix(in srgb, var(--callout-tone) 25%, transparent);
   background: linear-gradient(
     135deg,
     color-mix(in srgb, var(--callout-tone) 8%, transparent) 0%,

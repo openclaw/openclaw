@@ -976,7 +976,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   flex: 0 0 auto;
   align-items: flex-start;
   margin: 8px;
-  border-color: color-mix(in srgb, var(--danger) 22%, var(--border));
   box-shadow: var(--shadow-sm);
 }
 
