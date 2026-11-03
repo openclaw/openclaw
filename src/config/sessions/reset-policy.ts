@@ -4,6 +4,7 @@ import {
   asFiniteNumberInRange,
 } from "@openclaw/normalization-core/number-coercion";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
+import { DEFAULT_RESET_TAIL_MESSAGES } from "./transcript-replay.js";
 
 export type SessionResetMode = "none" | "daily" | "idle";
 type SessionStaleReason = Exclude<SessionResetMode, "none">;
@@ -28,7 +29,6 @@ export type SessionFreshness = {
 const DEFAULT_RESET_MODE: SessionResetMode = "none";
 const DEFAULT_RESET_AT_HOUR = 4;
 const DEFAULT_IDLE_MINUTES = 0;
-export const DEFAULT_RESET_TAIL_MESSAGES = 6;
 
 /** Returns the most recent daily reset boundary for the supplied wall-clock time. */
 function resolveDailyResetAtMs(now: number, atHour: number): number {

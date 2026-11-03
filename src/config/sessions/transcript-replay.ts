@@ -1,5 +1,7 @@
 // Selects safe user/assistant tails for in-log lifecycle boundaries.
-import { DEFAULT_RESET_TAIL_MESSAGES } from "./reset-policy.js";
+
+/** Default reset tail; kept here so this module stays dependency-free. */
+export const DEFAULT_RESET_TAIL_MESSAGES = 6;
 
 type SessionRecord = {
   type?: unknown;

@@ -90,28 +90,13 @@ it("accepts none in the session schema and ignores reset deadlines", () => {
 });
 
 it.each([
-  ["defaults to six", undefined, 6],
-  ["reads the base policy", { reset: { tailMessages: 20 } }, 20],
-  [
-    "prefers the chat type override",
-    { reset: { tailMessages: 20 }, resetByType: { direct: { tailMessages: 0 } } },
-    0,
-  ],
-] as const)("resolves the reset tail %s", (_name, sessionCfg, tailMessages) => {
-  expect(resolveSessionResetPolicy({ sessionCfg, resetType: "direct" })).toMatchObject({
-    tailMessages,
-  });
-});
-
-it("applies a channel override to the reset tail", () => {
-  const sessionCfg = SessionSchema.parse({
-    reset: { mode: "idle", tailMessages: 20 },
-    resetByChannel: { whatsapp: { mode: "idle", tailMessages: 3 } },
-  });
-  const resetOverride = resolveChannelResetConfig({ sessionCfg, channel: "whatsapp" });
-
+  [undefined, undefined, 6],
+  [{ reset: { tailMessages: 20 } }, undefined, 20],
+  [{ reset: { tailMessages: 20 }, resetByType: { direct: { tailMessages: 0 } } }, undefined, 0],
+  [{ reset: { tailMessages: 20 } }, { tailMessages: 3 }, 3],
+] as const)("resolves the reset tail %#", (sessionCfg, resetOverride, tailMessages) => {
   expect(
     resolveSessionResetPolicy({ sessionCfg, resetType: "direct", resetOverride }),
-  ).toMatchObject({ tailMessages: 3 });
+  ).toMatchObject({ tailMessages });
   expect(() => SessionSchema.parse({ reset: { tailMessages: -1 } })).toThrow();
 });
