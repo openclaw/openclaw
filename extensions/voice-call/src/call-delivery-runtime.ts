@@ -55,10 +55,6 @@ function persistedLiveCursor(call: CallRecord): number {
     : 0;
 }
 
-function unsentLines(state: LiveCallDelivery): TranscriptEntry[] {
-  return state.call.transcript.filter((entry) => entry.isFinal && !state.sent.has(entry));
-}
-
 function formatCallTranscript(entries: readonly TranscriptEntry[]): string {
   return entries
     .filter((entry) => entry.isFinal)
@@ -295,7 +291,9 @@ export function createCallDeliveryRuntime(params: {
       clearTimeout(state.timer);
       state.timer = undefined;
     }
-    const entries = unsentLines(state);
+    const entries = state.call.transcript.filter(
+      (entry) => entry.isFinal && !state.sent.has(entry),
+    );
     if (entries.length === 0) {
       return state.work;
     }
@@ -403,8 +401,12 @@ export function createCallDeliveryRuntime(params: {
       }
       state.call = snapshot;
       state.cursor = snapshot.transcript.length;
-      if (!state.timer && !TerminalStates.has(snapshot.state) && unsentLines(state).length > 0) {
-        const current = state;
+      const current = state;
+      if (
+        !state.timer &&
+        !TerminalStates.has(snapshot.state) &&
+        snapshot.transcript.some((entry) => entry.isFinal && !current.sent.has(entry))
+      ) {
         state.timer = setTimeout(() => {
           void flush(current, sessionKey);
         }, params.config.live.minIntervalMs);
