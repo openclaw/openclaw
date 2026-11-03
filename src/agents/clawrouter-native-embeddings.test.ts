@@ -280,7 +280,11 @@ describe("actual ClawRouter native memory embeddings", () => {
       models: {
         providers: {
           clawrouter: { baseUrl, models: [] },
-          "amazon-bedrock": { apiKey: "unused-native-bedrock-key", models: [] },
+          "amazon-bedrock": {
+            apiKey: "unused-native-bedrock-key",
+            baseUrl: "https://upstream.example",
+            models: [],
+          },
           google: {
             apiKey: "unused-upstream-key",
             baseUrl: "https://upstream.example",
