@@ -750,8 +750,10 @@ dispatch so authorization failures have one standard structured response:
   apply. Persisting a selected model as the configured agent default is
   admin-only.
 - `sessions.delete` requires `operator.write` for an archived-only request
-  with the supported fields, and `operator.admin` otherwise. Neither session
-  scope authorizes deletion.
+  with the supported fields, and `operator.admin` otherwise. The archived-only
+  path is not creator-limited: any `operator.write` caller that can see the
+  archived session may delete it, while deleting an active session requires
+  `operator.admin`. Neither session scope authorizes deletion.
 - `session.typing` accepts `operator.sessions.write` for draft previews in the
   authenticated creator’s own session, or broader `operator.write` access under
   the existing participation policy. Read-only access cannot publish typing;
