@@ -368,10 +368,9 @@ describe("session activity semantics", () => {
 describe("session activity people filter", () => {
   it.each([false, true])("keeps unnamed identities private and unresolved (phone: %s)", (phone) => {
     const matchMedia = window.matchMedia;
-    vi.stubGlobal("matchMedia", (query: string) => ({
-      ...matchMedia(query),
-      matches: phone && query === ACTIVITY_PHONE_QUERY,
-    }));
+    vi.stubGlobal("matchMedia", (query: string) =>
+      Object.assign(matchMedia(query), { matches: phone && query === ACTIVITY_PHONE_QUERY }),
+    );
     const privateId = "private-login@example.test";
     const opaqueId = "0123456789abcdef";
     const input = props({
