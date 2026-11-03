@@ -708,8 +708,10 @@ dispatch so authorization failures have one standard structured response:
   apply. Persisting a selected model as the configured agent default is
   admin-only.
 - `sessions.delete` requires `operator.write` for an archived-only request
-  with the supported fields, and `operator.admin` otherwise. Neither session
-  scope authorizes deletion.
+  with the supported fields, and `operator.admin` otherwise. The archived-only
+  path is not creator-limited: any `operator.write` caller that can see the
+  archived session may delete it, while deleting an active session requires
+  `operator.admin`. Neither session scope authorizes deletion.
 - `session.reactions.list` accepts `operator.sessions.read` or broader read
   access and requires current session visibility. `session.reactions.set` requires `operator.write`, an identified
   author, and permission to send to or suggest in the session. A view-only
