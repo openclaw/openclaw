@@ -748,6 +748,7 @@ describe("release validation no-push transport", () => {
       "windows-node",
       "live-e2e",
       "package",
+      "qualified-package",
       "qa-parity",
       "qa-live",
       "npm-telegram",
@@ -777,7 +778,9 @@ describe("release validation no-push transport", () => {
       '[[ "$RERUN_GROUP" =~ ^(all|plugin-prerelease)$ ]] && plugin_required=true',
     );
     expect(candidateRequest.run).toContain('[[ "$RERUN_GROUP" =~ ^(all|cross-os|windows-node)$ &&');
-    expect(candidateRequest.run).toContain('elif [[ "$RERUN_GROUP" =~ ^(all|package)$ &&');
+    expect(candidateRequest.run).toContain(
+      'elif [[ "$RERUN_GROUP" =~ ^(all|package|qualified-package)$ &&',
+    );
     expect(candidateRequest.run).toContain('elif [[ "$RERUN_GROUP" == "live-e2e" &&');
     const candidateAcquisition = job(full, "candidate_acquisition");
     expect(candidateAcquisition.if).toContain(
@@ -860,6 +863,12 @@ describe("release validation no-push transport", () => {
     {
       group: "package",
       groups: ["package"],
+      packageRequired: "true",
+      dockerRequired: "false",
+    },
+    {
+      group: "qualified-package",
+      groups: ["qualified-package"],
       packageRequired: "true",
       dockerRequired: "false",
     },
@@ -982,6 +991,7 @@ describe("release validation no-push transport", () => {
 
   it.each([
     ["windows-node", "", ""],
+    ["qualified-package", "", ""],
     ["qa-live", "qa-live-matrix", ""],
     ["live-e2e", " Repo-E2E,\trepo-smoke ", ""],
     ["cross-os", "", " Windows/Packaged-Upgrade "],
