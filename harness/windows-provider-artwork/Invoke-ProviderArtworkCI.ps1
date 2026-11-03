@@ -51,6 +51,12 @@ New-Item -ItemType Directory -Path $Artifacts | Out-Null
 Copy-Item $AstReceipt (Join-Path $Artifacts 'ast-stage-preflight.json')
 $leaf='runtime-admission'
 try {
+    $leaf='launcher-parameter-transport-probe'
+    $sourceLauncher=Join-Path $AfterSource 'scripts/Invoke-PrivateDesktop.ps1'
+    $launcherContract=@($manifest.sourceContracts | Where-Object {$_.path -ceq 'scripts/Invoke-PrivateDesktop.ps1'})
+    if ($launcherContract.Count -ne 1 -or (Hash $sourceLauncher) -cne $launcherContract[0].sha256) { throw 'Source launcher changed before binding-only probe.' }
+    & (Join-Path $PSScriptRoot 'Test-LauncherParameterTransport.ps1') -SourceLauncher $sourceLauncher -Artifacts (Join-Path $Artifacts 'launcher-binding-probe')
+    $leaf='runtime-admission'
     $runtimeOut=Join-Path $Artifacts 'runtime'
     New-Item -ItemType Directory -Path $runtimeOut | Out-Null
     & (Join-Path $PSScriptRoot 'Initialize-NativeRuntime.ps1') -BeforeSource $BeforeSource -AfterSource $AfterSource -Artifacts $runtimeOut -ExecutionAuthorized
@@ -73,13 +79,18 @@ try {
         # The unchanged source launcher declares process-wide CLR types. Each
         # stage therefore needs a new PowerShell process, not another runspace.
         $launcher=Join-Path $source 'scripts/Invoke-PrivateDesktop.ps1'
-        $launcherArguments=@('-NoProfile','-NonInteractive','-File',$launcher,
-            '-Executable',$launchArgs.Executable,'-ArgumentLine',$launchArgs.ArgumentLine,
-            '-DataDirectory',$launchArgs.DataDirectory,'-McpPort',[string]$launchArgs.McpPort,
-            '-ConsoleProcess','-WaitForExit','-ProcessTimeoutSeconds',[string]$launchArgs.ProcessTimeoutSeconds,
-            '-NamePrefix',$launchArgs.NamePrefix,'-ResultPath',$launchArgs.ResultPath)
-        & (Join-Path $PSHOME 'pwsh.exe') @launcherArguments
-        if ($LASTEXITCODE -ne 0) { throw 'Source-owned private launcher process failed. Preserve its actual leaf.' }
+        $argumentsFile=Join-Path $Artifacts ($stage+'-launcher-arguments.json')
+        Json @{launcher=$launcher;sha256=(Hash $launcher);parameters=$launchArgs} $argumentsFile
+        $priorNative=$PSNativeCommandUseErrorActionPreference
+        $priorError=$ErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference=$false
+        $ErrorActionPreference='Continue'
+        try {
+            & (Join-Path $PSHOME 'pwsh.exe') -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Invoke-SourceLauncherProcess.ps1') -ArgumentsPath $argumentsFile 2>&1 | Tee-Object -FilePath ($launch+'.launcher.log') | Out-Host
+            $launcherExit=$LASTEXITCODE
+        } finally { $PSNativeCommandUseErrorActionPreference=$priorNative; $ErrorActionPreference=$priorError }
+        Json @{exitCode=$launcherExit;log=($launch+'.launcher.log');argumentsSha256=(Hash $argumentsFile)} ($launch+'.launcher-exit.json')
+        if ($launcherExit -ne 0) { throw 'Source-owned private launcher process failed. Read its retained inner log.' }
         $desktop=Get-Content $launch -Raw | ConvertFrom-Json
         $exit=Get-Content ($launch+'.exit.json') -Raw | ConvertFrom-Json
         if ($desktop.sharedInputDesktopSwitched -or $desktop.securityMode -cne 'default-dacl-and-label' -or !$desktop.aclAndLabelBytesEqual) { throw 'Source-owned private desktop security admission failed.' }

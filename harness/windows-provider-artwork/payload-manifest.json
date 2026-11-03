@@ -73,13 +73,18 @@
     },
     {
       "path": "Invoke-ProviderArtworkCI.ps1",
-      "bytes": 9028,
-      "sha256": "ed03be972541ee17fac3419bdf16f10b9f21fe026bff267f647af726cf5104f9"
+      "bytes": 10021,
+      "sha256": "ae9ad329c17f1ac9e3314e6281dfa09829c34f21ba658087ddcb220604327431"
     },
     {
       "path": "Invoke-ProviderArtworkProof.ps1",
       "bytes": 22352,
       "sha256": "21df5035ee6481f9de5bf256df0eeb07966a469c60f533668d75f1cfba192015"
+    },
+    {
+      "path": "Invoke-SourceLauncherProcess.ps1",
+      "bytes": 576,
+      "sha256": "f1019f4ae57236bd1fce3876f78d77bcf9f200568f14bf8205ef3b07277235f3"
     },
     {
       "path": "LAUNCHER-PROCESS-REPAIR.json",
@@ -150,6 +155,11 @@
       "path": "TEST-COST.json",
       "bytes": 702,
       "sha256": "51c635b76cd676b6c897a427c714c0ebb991b799f1a55d43aafe690b77f0202a"
+    },
+    {
+      "path": "Test-LauncherParameterTransport.ps1",
+      "bytes": 3832,
+      "sha256": "fac3d7c95d18e6e317fa82c2df13d69c11e6b9bf78b304edc92a8ff6c204cafd"
     },
     {
       "path": "Test-PacketSyntaxAndStage.ps1",
@@ -248,8 +258,8 @@
     },
     {
       "path": "source-pins.json",
-      "bytes": 12107,
-      "sha256": "e202a831542c0addee0cfc7789066f817959c9a344ec6aedd42973f77fea79a4"
+      "bytes": 12326,
+      "sha256": "90fc0cdebbf39fd013a557941b1a6a91bedf0ea148cadb734ad9024104d11eee"
     }
   ],
   "afterCaptureTree": "d7fc11b355417fa268430fd98fa2ab01a1d7c9c6"
