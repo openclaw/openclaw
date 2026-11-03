@@ -328,7 +328,7 @@ suite.define(() => {
           gateway = await startGatewayServer(port, {
             auth: { mode: "trusted-proxy", trustedProxy },
             bind: "loopback",
-            controlUiEnabled: false,
+            controlUiEnabled: true,
             sidecarStartup: "defer",
           });
           await gateway.startupSettled;
@@ -344,7 +344,7 @@ suite.define(() => {
           },
           "/": gatewayProxyRoute(port, viewerEmail),
         });
-        await proxy.listen();
+        await proxy.listen(proxyPort);
         const proxyUrl = proxy.resolvedUrls?.local[0];
         if (!proxyUrl) {
           throw new Error("PR reader fixture proxy did not expose a loopback URL");
