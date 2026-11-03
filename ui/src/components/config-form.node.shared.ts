@@ -5,6 +5,10 @@ import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { isEnvPlaceholder, REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
+import type {
+  ConfigSecretFields,
+  StoredSecretSources,
+} from "../lib/config/config-secret-fields.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
@@ -55,6 +59,10 @@ export type ConfigNodeRenderParams = {
   inlineObject?: "lone-setting" | "only-group";
   /** Section shells own the title while collection rows still own help/default metadata. */
   showHeaderMeta?: boolean;
+  /** Keep every nested group of settings closed until it is opened. */
+  collapseObjects?: boolean;
+  /** State worth reading without opening a nested group, shown on its summary row. */
+  summarizeObject?: (path: Array<string | number>, value: unknown) => JSX.Element;
   searchCriteria?: ConfigSearchCriteria;
   revealSensitive?: boolean;
   maskSensitive?: boolean;
@@ -62,6 +70,10 @@ export type ConfigNodeRenderParams = {
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   /** Switches this page to its Raw tab; absent where the page has none. */
   onOpenRaw?: () => void;
+  /** Secret-marked fields hold their edit here and write through their own Save. */
+  secretFields?: ConfigSecretFields;
+  /** The form's own Save writes these edits, so a stored secret can be typed over. */
+  replaceStoredSecrets?: StoredSecretSources;
   onPatch: (path: Array<string | number>, value: unknown) => boolean | void;
   onRemove?: (path: Array<string | number>) => boolean | void;
 };
@@ -77,10 +89,14 @@ export function configChildRenderOptions(params: ConfigNodeRenderParams) {
     disabled: params.disabled,
     compact: params.compact,
     commitOnBlur: params.commitOnBlur,
+    collapseObjects: params.collapseObjects,
+    summarizeObject: params.summarizeObject,
     revealSensitive: params.revealSensitive,
     isSensitivePathRevealed: params.isSensitivePathRevealed,
     onToggleSensitivePath: params.onToggleSensitivePath,
     onOpenRaw: params.onOpenRaw,
+    secretFields: params.secretFields,
+    replaceStoredSecrets: params.replaceStoredSecrets,
   };
 }
 

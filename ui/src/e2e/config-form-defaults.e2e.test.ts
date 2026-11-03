@@ -1,5 +1,6 @@
 // Control UI tests cover schema defaults and restoring inherited config values.
 
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -245,7 +246,7 @@ suite.define(() => {
       });
       await expect
         .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toBe("");
+        .toBe("Saving…");
 
       await expect.poll(() => modeRow.locator("select").inputValue()).toBe("__unset__");
       await expect.poll(() => retriesRow.getByRole("spinbutton").inputValue()).toBe("");

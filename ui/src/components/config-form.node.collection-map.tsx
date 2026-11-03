@@ -177,6 +177,8 @@ function ConfigMapRow(
               disabled={props.params.disabled}
               isRequired={true}
               onToggleSensitivePath={props.params.onToggleSensitivePath}
+              hints={props.params.hints}
+              secretFields={props.params.secretFields}
               onPatch={props.params.onPatch}
             />
           }

@@ -121,6 +121,31 @@ export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) 
   return resolveHintForPath(path, hints)?.hint;
 }
 
+/** The schema marks some array rows as list[].field rather than list.*.field. */
+function arrayHintKey(path: ReadonlyArray<string | number>): string {
+  return path.reduce<string>(
+    (key, segment) =>
+      typeof segment === "number" ? `${key}[]` : key ? `${key}.${segment}` : segment,
+    "",
+  );
+}
+
+/** The schema's own marking decides; the nearest explicit hint on the path wins. */
+export function isSecretConfigField(
+  path: ReadonlyArray<string | number>,
+  hints: ConfigUiHints,
+): boolean {
+  for (let end = path.length; end > 0; end -= 1) {
+    const prefix = path.slice(0, end);
+    const sensitive =
+      hintForPath(prefix, hints)?.sensitive ?? hints[arrayHintKey(prefix)]?.sensitive;
+    if (sensitive !== undefined) {
+      return sensitive;
+    }
+  }
+  return false;
+}
+
 export function localizedHintForPath(path: Array<string | number>, hints: ConfigUiHints) {
   const resolved = resolveHintForPath(path, hints);
   if (!resolved) {

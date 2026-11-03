@@ -16,6 +16,7 @@ import { ownedWorkerBytes } from "../infra/worker-transfer-bytes.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   openOpenClawStateReadConnection,
@@ -134,7 +135,9 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       const locationArgs = [
         input.databasePath,
         input.location,
-        undefined,
+        command.type === "updateRuns.recoveryAdmission"
+          ? openDoctorStateSchemaReadAdmission
+          : undefined,
         input.expectedIdentity,
         input.snapshotRoot,
         true,

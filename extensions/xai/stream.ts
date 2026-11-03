@@ -1,6 +1,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   composeProviderStreamWrappers,
   mergeTransportHeaders,
@@ -8,7 +9,7 @@ import {
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { asOptionalRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveXaiFastModelId } from "./fast-mode.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { isXaiGrokProxyBaseUrl } from "./provider-catalog.js";
@@ -45,7 +46,7 @@ function createXaiGrokOAuthHeadersWrapper(
   };
 }
 
-const XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content";
+const xaiReasoning = buildProviderStreamFamilyHooks("xai-responses-reasoning");
 
 function isReplayableInputImagePart(part: Record<string, unknown>): boolean {
   if (part.type !== "input_image") {
@@ -180,22 +181,6 @@ function normalizeXaiResponsesToolResultPayload(
 function createXaiToolPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model }) => {
     normalizeXaiResponsesToolResultPayload(payload, model);
-    if (!model.reasoning || asOptionalRecord(model.compat)?.supportsReasoningEffort === false) {
-      // Only current flagship Grok models advertise configurable effort.
-      delete payload.reasoning;
-      delete payload.reasoningEffort;
-      delete payload.reasoning_effort;
-    }
-    // All reasoning xAI models should still request + later replay encrypted_content.
-    if (!isXaiProviderId(model.provider) || model.api !== "openai-responses" || !model.reasoning) {
-      return;
-    }
-    const existing = payload.include;
-    const include = filterStringEntries(existing);
-    if (!include.includes(XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE)) {
-      include.push(XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE);
-    }
-    payload.include = include;
   });
 }
 
@@ -208,6 +193,7 @@ export function wrapXaiProviderStream(
   return composeProviderStreamWrappers(
     ctx.streamFn,
     (streamFn) => createXaiGrokOAuthHeadersWrapper(streamFn, runtime?.clientVersion),
+    (streamFn) => xaiReasoning.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn ?? streamSimple,
     createXaiToolPayloadCompatibilityWrapper,
     Boolean(
       extraParams &&

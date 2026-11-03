@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { JsonSchema } from "./config-form.shared.ts";
 import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
 
 describe("splitConfigSchemaByTier", () => {
@@ -71,7 +72,7 @@ describe("splitConfigSchemaByTier", () => {
           properties: { primary: { type: "string" }, fallbacks: { type: "string" } },
         },
       ],
-    } as const;
+    } satisfies JsonSchema;
     const split = splitConfigSchemaByTier({
       path: ["agents"],
       schema: { type: "object", properties: { mode: { type: "string" }, model } },

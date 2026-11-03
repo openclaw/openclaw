@@ -7,7 +7,7 @@ import {
   requiredPropertyKeys,
 } from "./config-form.array-items.ts";
 import { canApplyObjectCandidate, isObjectPropertyNameValid } from "./config-form.constraints.ts";
-import { configChildRenderOptions } from "./config-form.node.shared.ts";
+import { configChildRenderOptions, isSecretRefObject } from "./config-form.node.shared.ts";
 import type { ConfigNodeRenderParams } from "./config-form.node.shared.ts";
 import {
   hasConfigSearchCriteria as hasSearchCriteria,
@@ -146,6 +146,10 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
       Boolean(entry[1]),
     );
   const requiredKeys = requiredPropertyKeys(schema);
+  // A SecretRef's redacted id is a reference, so its parts never become replaceable secrets.
+  const secretRefOptions = isSecretRefObject(objectValue)
+    ? { secretFields: undefined, replaceStoredSecrets: undefined }
+    : {};
 
   // Only a level with a surface for lifted help may dissolve its one group.
   const hasHelpSurface =
@@ -183,6 +187,10 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     const rightOrder = hintForPath([...path, right[0]], hints)?.order ?? 0;
     if (leftOrder !== rightOrder) {
       return leftOrder - rightOrder;
+    }
+    // A group opened on its own leads with the switch that decides whether the rest applies.
+    if (params.collapseObjects && (left[0] === "enabled" || right[0] === "enabled")) {
+      return left[0] === "enabled" ? -1 : 1;
     }
     return left[0].localeCompare(right[0]);
   });
@@ -238,6 +246,7 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
         sourceIdentity: inherited ? undefined : objectValue[propertyKey],
         controlIdentity: params.controlIdentity ?? objectValue,
         searchCriteria: childSearchCriteria,
+        ...secretRefOptions,
         onPatch: patchObjectChild,
       }) satisfies ConfigNodeRenderParams;
     }),
