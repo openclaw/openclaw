@@ -35,39 +35,68 @@ function isSavingChannelConfig(channelId: string, props: ChannelsProps) {
 
 /** Outside the form's scroll, so what happened to a save never depends on scrolling to it. */
 export function ChannelConfigFeedback(params: { channelId: string; props: ChannelsProps }) {
+  const blockedSetup = () =>
+    params.props.wizardHost.blockedByDirtyConfig() &&
+    (params.props.config.configFormDirty || Object.keys(params.props.configEdits).length > 0);
   return (
-    <Show when={params.props.config.lastError || params.props.saveConflict === params.channelId}>
+    <Show
+      when={
+        params.props.config.lastError ||
+        params.props.saveConflict === params.channelId ||
+        blockedSetup()
+      }
+    >
       <div class="channels-detail__feedback" role="alert">
-        <div class={params.props.config.lastError ? "callout danger" : "callout warn"}>
-          {params.props.config.lastError ?? t("channels.config.conflictKept")}
-        </div>
+        <Show
+          when={params.props.config.lastError || params.props.saveConflict === params.channelId}
+        >
+          <div class={params.props.config.lastError ? "callout danger" : "callout warn"}>
+            {params.props.config.lastError ?? t("channels.config.conflictKept")}
+          </div>
+        </Show>
+        <Show when={blockedSetup()}>
+          <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
+        </Show>
       </div>
     </Show>
   );
 }
 
-/** Lives in the dialog's footer: a long form can't hide that an edit is waiting on Save. */
-export function ChannelConfigSave(params: { channelId: string; props: ChannelsProps }) {
+/** Leads the dialog's footer: a long form can't hide that an edit is waiting on Save. */
+export function ChannelConfigStatus(params: { channelId: string; props: ChannelsProps }) {
   const edits = () => params.props.configEdits[params.channelId];
   const saved = () => params.props.savedChannel === params.channelId;
-  const saving = () => isSavingChannelConfig(params.channelId, params.props);
   return (
     <Show when={edits() || saved()}>
-      <div class="channels-detail__save">
-        <Show when={edits()}>
-          <button
-            class="btn btn--sm primary"
-            type="submit"
-            form={channelConfigFormId(params.channelId)}
-            disabled={!params.props.channels.connected || saving()}
-          >
-            {saving() ? t("common.saving") : t("common.save")}
-          </button>
-        </Show>
-        <span role="status">
-          {t(edits() ? "channels.config.unsaved" : "configView.autoSaveSaved")}
-        </span>
-      </div>
+      <span class="channels-detail__status" role="status">
+        {t(edits() ? "channels.config.unsaved" : "channels.config.saved")}
+      </span>
+    </Show>
+  );
+}
+
+/** Discard and Save close the footer, only while there is something to decide. The form owns
+    Save through `form`: wrapping the dialog would make plugin views' own buttons submit it. */
+export function ChannelConfigActions(params: { channelId: string; props: ChannelsProps }) {
+  const saving = () => isSavingChannelConfig(params.channelId, params.props);
+  return (
+    <Show when={params.props.configEdits[params.channelId]}>
+      <button
+        class="btn btn--sm"
+        type="button"
+        disabled={saving()}
+        onClick={() => params.props.onConfigDiscard(params.channelId)}
+      >
+        {t("channels.config.discard")}
+      </button>
+      <button
+        class="btn btn--sm primary"
+        type="submit"
+        form={channelConfigFormId(params.channelId)}
+        disabled={!params.props.channels.connected || saving()}
+      >
+        {saving() ? t("common.saving") : t("common.save")}
+      </button>
     </Show>
   );
 }
@@ -162,16 +191,6 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
             </>
           )}
         </Show>
-        <div class="settings-row__control">
-          <button
-            class="btn"
-            type="button"
-            disabled={!params.props.channels.connected || disabled()}
-            onClick={() => params.props.onConfigReload(params.channelId)}
-          >
-            {t("common.reload")}
-          </button>
-        </div>
       </form>
     </Show>
   );

@@ -107,7 +107,7 @@ export function createChannelsViewProps(
     onShowAdvancedSettings: () => {},
     onConfigPatch: () => {},
     onConfigSave: () => {},
-    onConfigReload: () => {},
+    onConfigDiscard: () => {},
     ...props,
   };
 }

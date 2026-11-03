@@ -276,7 +276,7 @@ const enSettings = {
       runSetup: "Run setup",
       adminRequired: "Browsing only. Channel setup requires operator.admin access.",
       saveBeforeSetup:
-        "You have unsaved channel config changes. Save or reload them before running guided setup.",
+        "You have unsaved settings changes. Save or discard them before running guided setup.",
     },
     pairing: {
       title: "DM access requests",
@@ -360,10 +360,12 @@ const enSettings = {
       channelSchemaUnavailable: "Channel config schema unavailable.",
       loadingSchema: "Loading config schema…",
       unsaved: "Unsaved changes",
+      unsavedWithDetail: "Unsaved changes · {detail}",
+      saved: "Saved",
       unsavedTitle: "Unsaved changes",
       unsavedMessage: "Your changes to {channel} aren't saved yet.",
-      reloadMessage: "Reloading discards your changes to {channel}.",
       unsavedOnLeave: "{channel} has unsaved changes",
+      unsavedOnLeaveMany: "{channels} have unsaved changes",
       discard: "Discard",
       keepEditing: "Keep editing",
       review: "Review",

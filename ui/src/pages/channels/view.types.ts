@@ -62,5 +62,5 @@ export type ChannelsProps = {
   onShowAdvancedSettings: (enabled: boolean) => void;
   onConfigPatch: (channelId: string, path: Array<string | number>, value: unknown) => void;
   onConfigSave: (channelId: string) => void;
-  onConfigReload: (channelId: string) => void;
+  onConfigDiscard: (channelId: string) => void;
 };

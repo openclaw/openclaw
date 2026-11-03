@@ -332,9 +332,9 @@ export function createChannelSettingsPresentation(
                     current();
                     hooks.getProps().onConfigSave(id);
                   },
-                  onConfigReload(id: string) {
+                  onConfigDiscard(id: string) {
                     current();
-                    hooks.getProps().onConfigReload(id);
+                    hooks.getProps().onConfigDiscard(id);
                   },
                   onShowAdvancedSettings(enabled: boolean) {
                     current();

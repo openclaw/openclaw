@@ -127,13 +127,12 @@ suite.define(() => {
             channels: { nostr: { enabled: false } },
           });
         }, true);
+        // A change made elsewhere reaches the open form without a manual reload.
         await gateway.setMethodResponse("config.get", snapshot(2));
-        const beforeReload = (await gateway.getRequests("config.get")).length;
-        await refreshAfter(async () => {
-          await detail.getByRole("button", { name: "Reload", exact: true }).click();
-          await gateway.waitForRequest("config.get", { after: beforeReload });
-          await expect(enabled).toBeChecked();
-        }, true);
+        const beforeChange = (await gateway.getRequests("config.get")).length;
+        await gateway.emitGatewayEvent("config.changed", {});
+        await gateway.waitForRequest("config.get", { after: beforeChange });
+        await expect(enabled).toBeChecked();
         await refreshAfter(
           () => detail.getByRole("button", { name: "Refresh", exact: true }).click(),
           false,

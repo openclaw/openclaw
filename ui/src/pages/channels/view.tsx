@@ -135,7 +135,9 @@ export function ChannelsView(props: ChannelsProps) {
     <>
       <SettingsPage>
         <ChannelStatusFeedback channels={props.channels} />
+        {/* An open channel shows this above its own footer instead. */}
         {props.wizardHost.blockedByDirtyConfig() &&
+        !props.selectedChannel &&
         (props.config.configFormDirty || Object.keys(props.configEdits).length > 0) ? (
           <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
         ) : undefined}
@@ -269,15 +271,21 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
       (issue) => issue.channel === params.channelId,
     ),
   );
-  const description = createMemo(() =>
-    params.props.configEdits[params.channelId]
-      ? t("channels.config.unsaved")
-      : statusIssue()
-        ? formatUiExternalText(statusIssue()?.message)
-        : (lastActivityLine(params.channelId, params.props) ??
-          resolveChannelDetailLabel(params.props, params.channelId) ??
-          t("channels.hub.openDetails")),
-  );
+  const description = createMemo(() => {
+    const issue = statusIssue() ? formatUiExternalText(statusIssue()?.message) : null;
+    if (params.props.configEdits[params.channelId]) {
+      // Unsaved edits never hide what is wrong with the channel.
+      return issue
+        ? t("channels.config.unsavedWithDetail", { detail: issue })
+        : t("channels.config.unsaved");
+    }
+    return (
+      issue ??
+      lastActivityLine(params.channelId, params.props) ??
+      resolveChannelDetailLabel(params.props, params.channelId) ??
+      t("channels.hub.openDetails")
+    );
+  });
   return (
     <button
       type="button"

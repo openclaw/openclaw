@@ -3,7 +3,7 @@ import type { ChannelsPairingListResult, ChannelsPairingRequest } from "../../ap
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { showConfirmChoiceDialog, showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { showConfirmChoiceDialog } from "../../components/confirm-dialog.ts";
 import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
@@ -17,7 +17,7 @@ import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-pa
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectChannels, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { projectMutableSource, projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
@@ -81,7 +81,7 @@ export function ChannelsPage() {
   const wizardHost = createChannelSetup({
     getContext: () => context,
     channels: channelCapability,
-    clearSelection: () => setSelectedChannel(null),
+    clearSelection: () => clearChannelDetail(),
     presentWizard: (pending) => runMutation("wizard", pending),
     retire: () => {
       retireMutation("wizard");
@@ -312,26 +312,16 @@ export function ChannelsPage() {
     return true;
   }
 
-  async function reloadChannelConfig(channelId: string) {
-    if (
-      hasUnsavedConfig(channelId) &&
-      !(await showConfirmDialog({
-        title: t("channels.config.unsavedTitle"),
-        message: t("channels.config.reloadMessage", {
-          channel: resolveChannelLabel(viewProps(), channelId),
-        }),
-        confirmLabel: t("channels.config.discard"),
-        cancelLabel: t("channels.config.keepEditing"),
-        danger: true,
-      }))
-    ) {
-      return;
-    }
+  async function discardChannelConfig(channelId: string) {
     channelCapability.discardConfigEdits(channelId);
     setSavedChannel(null);
     setSaveConflict(null);
-    await context.runtimeConfig.discardDraft({ reloadOnly: true });
-    await channelCapability.refresh(true);
+    // Config changes elsewhere already refresh the form; a re-read is only left to clear what a
+    // rejected Save reported. Other pages' unsaved edits in the shared draft would not survive it.
+    const config = context.runtimeConfig.state;
+    if (config.lastError && !config.configFormDirty) {
+      await context.runtimeConfig.discardDraft({ reloadOnly: true });
+    }
   }
 
   /** Resolves true once the channel has nothing unsaved; false keeps the user editing. */
@@ -346,17 +336,13 @@ export function ChannelsPage() {
       cancelLabel: t("channels.config.keepEditing"),
     });
     if (choice === "alternative") {
-      channelCapability.discardConfigEdits(channelId);
+      await discardChannelConfig(channelId);
       return true;
     }
     return choice === "confirm" ? saveChannelConfig(channelId) : false;
   }
 
-  async function closeChannelDetail() {
-    const channelId = selectedChannel();
-    if (channelId && hasUnsavedConfig(channelId) && !(await resolveUnsavedConfig(channelId))) {
-      return;
-    }
+  function clearChannelDetail() {
     retireMutation("config");
     retireMutation("whatsapp");
     setSavedChannel(null);
@@ -364,21 +350,55 @@ export function ChannelsPage() {
     setSelectedChannel(null);
   }
 
-  function noteUnsavedConfigOnLeave() {
-    const [channelId] = Object.keys(channelCapability.state.configEdits);
-    if (channelId) {
-      showToast({
-        message: t("channels.config.unsavedOnLeave", {
-          channel: resolveChannelLabel(viewProps(), channelId),
-        }),
-        actionLabel: t("channels.config.review"),
-        onAction: () => {
-          channelCapability.requestConfigReview(channelId);
-          void context.router.navigate("channels", context);
-        },
-        durationMs: 12_000,
-      });
+  async function closeChannelDetail() {
+    const channelId = selectedChannel();
+    if (channelId && hasUnsavedConfig(channelId) && !(await resolveUnsavedConfig(channelId))) {
+      return;
     }
+    clearChannelDetail();
+  }
+
+  /** Setup reloads the config when it finishes, so unsaved edits get the same choice as closing. */
+  async function startChannelSetup(channelId: string | null) {
+    const open = selectedChannel();
+    const edited = Object.keys(channelCapability.state.configEdits).toSorted(
+      (left, right) => Number(right === open) - Number(left === open),
+    );
+    for (const id of edited) {
+      if (hasUnsavedConfig(id) && !(await resolveUnsavedConfig(id))) {
+        return;
+      }
+    }
+    if (active && canAdmin && context.gateway.snapshot.phase === "connected") {
+      wizardHost.startSetup(channelId);
+    }
+  }
+
+  function noteUnsavedConfigOnLeave() {
+    const channelIds = Object.keys(channelCapability.state.configEdits);
+    if (channelIds.length === 0) {
+      return;
+    }
+    const props = viewProps();
+    const labels = channelIds.map((channelId) => resolveChannelLabel(props, channelId));
+    const [only] = channelIds.length === 1 ? channelIds : [];
+    showToast({
+      message:
+        only !== undefined
+          ? t("channels.config.unsavedOnLeave", { channel: resolveChannelLabel(props, only) })
+          : t("channels.config.unsavedOnLeaveMany", {
+              channels: new Intl.ListFormat(getLocale(), { type: "conjunction" }).format(labels),
+            }),
+      actionLabel: t("channels.config.review"),
+      onAction: () => {
+        // One channel reopens with its edits; several return to the list, where each row says so.
+        if (only !== undefined) {
+          channelCapability.requestConfigReview(only);
+        }
+        void context.router.navigate("channels", context);
+      },
+      durationMs: 12_000,
+    });
   }
 
   function reconcilePairingFilter(snapshot: ChannelsPairingListResult | null) {
@@ -528,11 +548,7 @@ export function ChannelsPage() {
         setSelectedChannel(channel);
       },
       onCloseDetail: () => void closeChannelDetail(),
-      onStartSetup: (channelId) => {
-        if (canAdmin && context.gateway.snapshot.phase === "connected") {
-          wizardHost.startSetup(channelId);
-        }
-      },
+      onStartSetup: (channelId) => void startChannelSetup(channelId),
       onRefresh: (probe) => void channelCapability.refresh(probe),
       onPairingRefresh: () => void channelCapability.refreshPairing(),
       onPairingFilterChange: setPairingFilter,
@@ -555,7 +571,7 @@ export function ChannelsPage() {
         channelCapability.editConfig(channelId, { path, value });
       },
       onConfigSave: (channelId) => void runMutation("config", saveChannelConfig(channelId)),
-      onConfigReload: (channelId) => void reloadChannelConfig(channelId),
+      onConfigDiscard: (channelId) => void discardChannelConfig(channelId),
     };
   }
   // The application owns these services for this mounted page's lifetime.

@@ -1,9 +1,11 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { buildChannelWizardMocks } from "../../../scripts/control-ui-mock-channels.ts";
 import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
+  waitForConfirmModal,
 } from "../test-helpers/control-ui-e2e.ts";
 import { configSchema, objectSchema } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -41,8 +43,14 @@ const schema = configSchema(
 );
 
 async function openChannels(page: Page) {
+  const wizard = buildChannelWizardMocks();
   const gateway = await installMockGateway(page, {
-    featureMethods: [...defaultControlUiFeatureMethods, "config.patch"],
+    featureMethods: [
+      ...defaultControlUiFeatureMethods,
+      "config.patch",
+      "wizard.start",
+      "wizard.next",
+    ],
     methodResponses: {
       "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
       "plugins.controlUi.list": { plugins: [], diagnostics: [], revision: "empty" },
@@ -53,7 +61,10 @@ async function openChannels(page: Page) {
         channels: { telegram: { configured: true, running: true, connected: true } },
         channelAccounts: {},
         channelDefaultAccountId: {},
+        channelMeta: [{ id: "telegram", label: "Telegram" }],
       },
+      "wizard.start": wizard.start,
+      "wizard.next": wizard.next,
       "channels.pairing.list": emptyPairingSnapshot(),
       "config.get": snapshot,
       "config.schema": schema,
@@ -67,6 +78,12 @@ async function openChannels(page: Page) {
   const token = detail.locator('input[type="password"]').first();
   await token.waitFor();
   return { gateway, detail, token };
+}
+
+/** Answers the unsaved-changes prompt; the dialog behind it has its own Discard and Save. */
+async function choose(page: Page, name: "Keep editing" | "Discard" | "Save") {
+  const prompt = await waitForConfirmModal(page);
+  await prompt.getByRole("button", { name, exact: true }).click();
 }
 
 suite.define(() => {
@@ -85,7 +102,7 @@ suite.define(() => {
       expect(await writes()).toBe(0);
 
       await detail.getByRole("button", { name: "Close", exact: true }).click();
-      await page.getByRole("button", { name: "Keep editing", exact: true }).click();
+      await choose(page, "Keep editing");
       expect(await token.inputValue()).toBe(PARTIAL);
       expect(await writes()).toBe(0);
 
@@ -112,6 +129,64 @@ suite.define(() => {
     });
   });
 
+  for (const gesture of ["Escape", "backdrop"] as const) {
+    it(`keeps the dialog open after ${gesture} and Keep editing, and closes it on Discard`, async () => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const { gateway, detail, token } = await openChannels(page);
+        const dismiss = async () => {
+          if (gesture === "Escape") {
+            await token.press("Escape");
+          } else {
+            // Outside the 680px dialog, on the backdrop.
+            await page.mouse.click(12, 450);
+          }
+        };
+        await token.fill(PARTIAL);
+
+        await dismiss();
+        await choose(page, "Keep editing");
+        await expect.poll(() => detail.isVisible()).toBe(true);
+        expect(await token.inputValue()).toBe(PARTIAL);
+        await token.fill(`${PARTIAL}2`);
+        expect(await token.inputValue()).toBe(`${PARTIAL}2`);
+
+        await dismiss();
+        await choose(page, "Discard");
+        await expect.poll(() => detail.count()).toBe(0);
+        const row = page.locator(".channels-item").filter({ hasText: "Telegram" }).first();
+        expect(await row.textContent()).not.toContain("Unsaved changes");
+        await row.click();
+        await token.waitFor();
+        expect(await token.inputValue()).not.toContain(PARTIAL);
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      });
+    });
+  }
+
+  it("asks before Run setup, and starts setup once the edits are saved", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { gateway, detail, token } = await openChannels(page);
+      const runSetup = detail.getByRole("button", { name: "Run setup", exact: true });
+      await token.fill(PARTIAL);
+
+      await runSetup.click();
+      await choose(page, "Keep editing");
+      await expect.poll(() => detail.isVisible()).toBe(true);
+      expect(await token.inputValue()).toBe(PARTIAL);
+      expect(await gateway.getRequests("wizard.start")).toHaveLength(0);
+
+      await runSetup.click();
+      await choose(page, "Save");
+      const request = await gateway.waitForRequest("config.patch");
+      expect(JSON.parse((request.params as { raw: string }).raw)).toEqual({
+        channels: { telegram: { botToken: PARTIAL } },
+      });
+      await gateway.waitForRequest("wizard.start");
+      await page.locator(".channels-wizard").waitFor();
+      expect(await detail.count()).toBe(0);
+    });
+  });
+
   it("marks the row after a plain return, without reopening the channel", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { gateway, detail, token } = await openChannels(page);
@@ -128,7 +203,7 @@ suite.define(() => {
       await token.waitFor();
       expect(await token.inputValue()).toBe(PARTIAL);
       await detail.getByRole("button", { name: "Close", exact: true }).click();
-      await page.getByRole("button", { name: "Discard", exact: true }).click();
+      await choose(page, "Discard");
       await expect.poll(() => row.textContent()).not.toContain("Unsaved changes");
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
     });
@@ -150,13 +225,15 @@ suite.define(() => {
       expect(await detail.getByRole("status").textContent()).toBe("Unsaved changes");
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
-      await detail.getByRole("button", { name: "Close", exact: true }).click();
-      await page.getByRole("button", { name: "Discard", exact: true }).click();
-      await expect.poll(() => detail.count()).toBe(0);
-      await page.locator(".channels-item").filter({ hasText: "Telegram" }).first().click();
-      await token.waitFor();
+      // Discard in the footer drops the edit and what its rejected Save reported, in place.
+      await detail.getByRole("button", { name: "Discard", exact: true }).click();
+      await expect.poll(() => detail.getByRole("alert").count()).toBe(0);
+      expect(await detail.isVisible()).toBe(true);
       expect(await token.inputValue()).not.toBe(PARTIAL);
       expect(await detail.getByRole("status").count()).toBe(0);
+      expect(await detail.getByRole("button", { name: "Save", exact: true }).count()).toBe(0);
+      await detail.getByRole("button", { name: "Close", exact: true }).click();
+      await expect.poll(() => detail.count()).toBe(0);
     });
   });
 });

@@ -644,7 +644,7 @@ it("retires a real host configuration slot and rejects mounting through its old 
   const container = document.createElement("div");
   f.mounts[0]!.input.parentElement!.append(container);
   const dispose = f.context.mountConfig(container);
-  await waitForSolid(() => expect(container.textContent).toContain("Reload"));
+  await waitForSolid(() => expect(container.querySelector("form")).not.toBeNull());
   f.gateway.emit({ client: createGateway().snapshot.client });
   expect(f.context.signal.aborted).toBe(true);
   expect(container.childNodes).toHaveLength(0);
