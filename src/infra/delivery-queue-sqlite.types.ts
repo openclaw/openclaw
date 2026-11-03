@@ -8,6 +8,7 @@ export type DeliveryQueueCompletionRetention =
 /**
  * `receipt`: an ordinary failed receipt a caller opted into. It keeps no payload or producer
  * prefix, fences its exact id like an ordinary completed tombstone, and ages out with one.
+ * Dead-letter health never counts it: opt in for an expected refusal, never a failed delivery.
  */
 export type DeliveryQueueFailureRetention = DeliveryQueueCompletionRetention | "receipt";
 export const DELIVERY_QUEUE_FAILED_RECEIPT_STATE = "failed_receipt";
