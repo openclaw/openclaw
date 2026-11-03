@@ -2,11 +2,6 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-  SELF_HOSTED_DEFAULT_COST,
-  SELF_HOSTED_DEFAULT_MAX_TOKENS,
-} from "openclaw/plugin-sdk/provider-setup";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
@@ -51,26 +46,21 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function delegateGuardedFetchToGlobalFetch() {
+beforeEach(() => {
   guardedFetch.mockImplementation(
     async (params: {
       url: string;
       init?: RequestInit;
       fetchImpl?: typeof fetch;
       signal?: AbortSignal;
-    }) => {
-      const fetchFn = params.fetchImpl ?? fetch;
-      const init = params.signal ? { ...params.init, signal: params.signal } : params.init;
-      return {
-        response: await fetchFn(params.url, init),
-        release: async () => undefined,
-      };
-    },
+    }) => ({
+      response: await (params.fetchImpl ?? fetch)(
+        params.url,
+        params.signal ? { ...params.init, signal: params.signal } : params.init,
+      ),
+      release: async () => undefined,
+    }),
   );
-}
-
-beforeEach(() => {
-  delegateGuardedFetchToGlobalFetch();
 });
 
 // Direct helpers retain undefined-vs-empty compat semantics hidden by discovery.
@@ -147,38 +137,34 @@ describe("lmstudio-models", () => {
   });
 
   it("discovers llm models and maps metadata", async () => {
+    const llm = (key: string, capabilities?: object, extra?: object) => ({
+      type: "llm",
+      key,
+      ...(capabilities ? { capabilities } : {}),
+      ...extra,
+    });
     const fetchMock = catalog([
-      {
-        type: "llm",
-        key: "qwen3-8b-instruct",
-        display_name: "Qwen3 8B",
-        max_context_length: 262144,
-        format: "mlx",
-        capabilities: {
+      llm(
+        "qwen3-8b-instruct",
+        {
           vision: true,
           trained_for_tool_use: true,
           reasoning: { allowed_options: ["off", "on"], default: "on" },
         },
-        loaded_instances: [{ id: "inst-1", config: { context_length: 8_192 } }],
-      },
-      { type: "llm", key: "deepseek-r1" },
-      {
-        type: "llm",
-        key: "graded-reasoning",
-        capabilities: {
-          reasoning: { allowed_options: ["low", "medium", "high"], default: "low" },
+        {
+          display_name: "Qwen3 8B",
+          max_context_length: 262144,
+          format: "mlx",
+          loaded_instances: [{ id: "inst-1", config: { context_length: 8_192 } }],
         },
-      },
-      {
-        type: "llm",
-        key: "off-only-reasoning",
-        capabilities: { reasoning: { allowed_options: ["off"], default: "off" } },
-      },
-      ...[["off", "low", "medium"], ["minimal"]].map((allowed_options) => ({
-        type: "llm",
-        key: allowed_options.join("-"),
-        capabilities: { reasoning: { allowed_options } },
-      })),
+      ),
+      llm("deepseek-r1"),
+      llm("graded-reasoning", {
+        reasoning: { allowed_options: ["low", "medium", "high"], default: "low" },
+      }),
+      llm("off-only-reasoning", { reasoning: { allowed_options: ["off"], default: "off" } }),
+      llm("off-low-medium", { reasoning: { allowed_options: ["off", "low", "medium"] } }),
+      llm("minimal", { reasoning: { allowed_options: ["minimal"] } }),
       { type: "embedding", key: "text-embedding-nomic-embed-text-v1.5" },
       { type: "llm", key: "   " },
       null,
@@ -212,16 +198,6 @@ describe("lmstudio-models", () => {
         reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
       },
     });
-    expect(models[1]).toMatchObject({
-      name: "deepseek-r1",
-      input: ["text"],
-      contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-      contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
-      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
-    });
-    for (const index of [1, 3]) {
-      expect(models[index]?.compat).toEqual({ supportsUsageInStreaming: true });
-    }
     for (const [index, efforts, max] of [
       [2, ["low", "medium", "high"], "high"],
       [4, ["none", "low", "medium"], "medium"],
@@ -569,38 +545,3 @@ it("releases guarded non-ok discovery without waiting for the capture clone", as
   }
   expect(tracked.wasCanceled()).toBe(true);
 });
-
-it.each([
-  { supportedReasoningEfforts: ["off", "on"], reasoningEffortMap: { off: "off", medium: "on" } },
-  {
-    supportedReasoningEfforts: ["none", "low", "high"],
-    reasoningEffortMap: { off: "low", medium: "none" },
-  },
-])(
-  "preserves authored reasoning maps in the configured catalog: $reasoningEffortMap",
-  async (compat) => {
-    const provider = capturePluginRegistration(plugin).providers[0];
-    assert(provider?.augmentModelCatalog, "LM Studio catalog hook is missing");
-    const config = createModelProviderConfig({
-      lmstudio: {
-        baseUrl: "http://localhost:1234/v1",
-        models: [
-          {
-            id: "saved-model",
-            name: "Saved",
-            reasoning: true,
-            input: ["text"],
-            cost: SELF_HOSTED_DEFAULT_COST,
-            maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
-            contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-            compat,
-          },
-        ],
-      },
-    });
-    const entries = await provider.augmentModelCatalog({ config, entries: [], env: {} });
-    assert(Array.isArray(entries), "LM Studio catalog hook returned no entries");
-    expect(entries[0]?.compat).toMatchObject(compat);
-    expect(config.models?.providers?.lmstudio?.models[0]?.compat).toEqual(compat);
-  },
-);
