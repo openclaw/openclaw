@@ -26,7 +26,6 @@
   min-width: 0;
 }
 
-.device-entry__heading,
 .personal-instructions__actions,
 .active-filters {
   display: flex;
@@ -3799,8 +3798,7 @@ html.openclaw-native-web-chrome
   color: var(--muted);
 }
 
-.page-meta,
-.dreaming-header-controls {
+.page-meta {
   display: flex;
   align-items: center;
   gap: 8px;

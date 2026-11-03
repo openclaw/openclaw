@@ -81,11 +81,34 @@ and context. Changes to configuration or include files during execution cannot
 rewrite that frozen identity. A missing or invalid terminal receipt leaves the
 incomplete snapshot available if the artifact upload runs.
 
+If expanded dependency paths exceed the export limit, the capture retains
+terminal outcomes and the frozen snapshot with all dependencies set to `null`,
+and emits a warning. Missing graph data still requires conservative selection.
+If that smaller export also exceeds the limit, the incomplete snapshot remains.
+
 This snapshot follows configuration evaluation and native test selection. It
 does not contain a prior graph, source diff, model ranking or selection decision.
 Global setup can still change worker settings after capture. The local recording
 timestamp is not artifact availability: a later consumer must also retain the
 publication/download time before using an earlier run as predictive evidence.
+
+For the canonical `unit-fast` configuration, `preExecution.graphInputs` records
+a version-1 profile with separate configuration and environment hashes. These
+omit resolved include membership and pre/post-shard include-file contents. They
+retain native configuration sources, direct setup sources, declared execution
+and transform settings, runtime identity, and an explicit environment allowlist.
+Repository paths in settings are normalized before hashing; regular expressions
+retain their pattern and flags. Unsupported profiles or nonserializable settings
+produce `null` without discarding the exact-run observations.
+
+These hashes allow comparison of declared graph inputs across different file
+selections. They do not establish interchangeable graphs or outcomes: `unit-fast`
+shares process state between files, and the captured environment and direct setup
+sources are not an exhaustive dependency contract. Consumers must also compare
+the repository, lock, project/pool, runtime, platform and dependency-root identity,
+retain source/diff provenance, and measure overlapping-file graph differences.
+The shadow selector still requires the original exact context. Matching graph
+inputs never grants permission to omit tests.
 
 The first readout compares usable-data coverage, native-Bun gaps, observed
 failures, fallback causes, and paired total job costs. Learned selection and

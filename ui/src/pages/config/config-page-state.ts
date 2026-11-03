@@ -24,6 +24,10 @@ import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { configRawForDisplay } from "../../lib/config/config-draft-model.ts";
 import {
+  configSecretFields,
+  type ConfigSecretFields,
+} from "../../lib/config/config-secret-fields.ts";
+import {
   currentConfigRead,
   currentDisplayConfig,
   currentDisplayRuntimeConfig,
@@ -460,6 +464,7 @@ export function createConfigPage(
         invalidate();
       },
       onViewStateChange: () => invalidate(),
+      secretFields: configSecretFields(context) as ConfigSecretFields | undefined,
       onFormPatch: withConfigMutation((path: Array<string | number>, value: unknown) =>
         runtimeConfig.patchForm(path, value),
       ),

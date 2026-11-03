@@ -153,30 +153,22 @@ suite.define(() => {
         const enabled = detail.getByRole("switch", { name: "Enabled" });
         await enabled.waitFor();
 
-        await gateway.deferNext("config.set");
-        await enabled.click();
-        await gateway.waitForRequest("config.set");
-        await gateway.rejectDeferred("config.set", {
-          code: "INVALID_REQUEST",
-          message: "automatic channel save rejected",
-        });
-        const alert = detail.getByRole("alert");
-        await expect.poll(() => alert.textContent()).toContain("automatic channel save rejected");
-
         const save = button(detail, "Save");
+        await enabled.click();
         await expect.poll(() => save.isEnabled()).toBe(true);
-        const writesBefore = await requestCount(gateway, "config.set");
+        expect(await requestCount(gateway, "config.set")).toBe(0);
         const readsBefore = await requestCount(gateway, "config.get");
-        await gateway.deferNext("config.set");
+        await gateway.deferNext("config.patch");
         await save.click();
-        const request = await gateway.waitForRequest("config.set", { after: writesBefore });
+        const request = await gateway.waitForRequest("config.patch");
         expect(request.params).toMatchObject({ baseHash: "channel-config-1" });
-        await gateway.rejectDeferred("config.set", {
+        await gateway.rejectDeferred("config.patch", {
           code: "INVALID_REQUEST",
           message:
             "channel rejected: OPENAI_API_KEY=sk-1234567890abcdef <img src=x onerror=alert(1)>",
         });
 
+        const alert = detail.getByRole("alert");
         await expect.poll(() => alert.textContent()).toContain("channel rejected");
         const message = await alert.textContent();
         expect(message).toContain("OPENAI_API_KEY=sk-123...cdef");
@@ -448,6 +440,7 @@ suite.define(() => {
         await gateway.deferNext("wizard.next");
         const account = wizard.locator("openclaw-select-picker");
         await selectPickerValue(account, "1");
+        await button(wizard, "Continue").click();
         await expectRequests(gateway, "wizard.next", 1);
         await expect.poll(() => account.locator(".picker-select__trigger").isDisabled()).toBe(true);
         const busyButton = wizard.locator('button[aria-busy="true"]');
