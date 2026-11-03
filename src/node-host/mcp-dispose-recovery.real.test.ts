@@ -5,9 +5,16 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { startNodeHostMcpManager } from "./mcp.js";
+import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 
 const require = createRequire(import.meta.url);
+
+type McpCallResult = Awaited<ReturnType<NodeHostMcpManager["callMcpTool"]>>;
+
+function resultText(result: McpCallResult): string {
+  const block = result.content.find((item) => item.type === "text");
+  return block && "text" in block ? block.text : "";
+}
 
 // Real-behavior coverage for the dispose-retry recovery: a real stdio MCP server
 // process, the real SDK client, and the real supervised transport. The cleanup
@@ -114,8 +121,8 @@ await server.connect(new StdioServerTransport());
             tool: "echo",
             arguments: { value: "before-disconnect" },
           });
-          expect(before.content[0].text).toContain("echo:before-disconnect");
-          console.log(`[real] call before disconnect: ${before.content[0].text}`);
+          expect(resultText(before)).toContain("echo:before-disconnect");
+          console.log(`[real] call before disconnect: ${resultText(before)}`);
 
           faultArmed = true;
           process.kill(Number(initialPid), "SIGKILL");
@@ -139,8 +146,8 @@ await server.connect(new StdioServerTransport());
             tool: "echo",
             arguments: { value: "after-recovery" },
           });
-          console.log(`[real] call after recovery: ${after.content[0].text}`);
-          expect(after.content[0].text).toContain("echo:after-recovery");
+          console.log(`[real] call after recovery: ${resultText(after)}`);
+          expect(resultText(after)).toContain("echo:after-recovery");
         } finally {
           await manager.close();
         }
