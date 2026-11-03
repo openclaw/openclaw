@@ -19,8 +19,6 @@ function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {
   const fixture = createAgentViewTestProps();
   return {
     ...fixture.agentSkills,
-    onConfigReload: fixture.onConfigReload,
-    onConfigSave: fixture.onConfigSave,
     readData() {
       return { ...fixture.readData(), ...this };
     },
@@ -34,7 +32,6 @@ function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {
     configLoading: false,
     configSaving: false,
     configDirty: false,
-    presentationRetired: Promise.withResolvers<void>().promise,
     ...overrides,
   };
 }

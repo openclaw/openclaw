@@ -1,0 +1,2 @@
+# Flush and read the startup timeline in one turn, preserving readiness assertions.
+2

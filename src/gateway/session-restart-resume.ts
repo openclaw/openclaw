@@ -49,6 +49,7 @@ import { withAgentInputRecovery } from "../state/agent-database-preparation-cont
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { recordRestartResumeFailure } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
@@ -607,6 +608,8 @@ async function resumeRestartStore(
         }
         const { entry, marker } = resumed;
         const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
+        const runId = snapshotEntry.lifecycleRunId ?? entry.lastRunId;
+        let admissionStage = "principal";
         const skip = restartResumeSkipReason(sessionKey, entry);
         if (skip) {
           summary.record(agentId, sessionKey, skip);
@@ -624,6 +627,7 @@ async function resumeRestartStore(
             sessionId: entry.sessionId,
             assertCurrent: () => signal.throwIfAborted(),
           });
+          admissionStage = "target";
           const captured = await captureSessionEventTargetForHost(agentId, sessionKey, {
             operatorAuthority: authority?.authority,
             assertCurrent: () => signal.throwIfAborted(),
@@ -631,6 +635,7 @@ async function resumeRestartStore(
           if (captured.sessionId !== entry.sessionId) {
             throw new Error("Session changed before restart resume admission");
           }
+          admissionStage = "session-event";
           const receipt = withPluginRuntimeGatewayContextResolver(
             context.resolveGatewayContext,
             () =>
@@ -663,15 +668,23 @@ async function resumeRestartStore(
             });
           const accepted = await receipt.accepted;
           if (!accepted.ok) {
-            throw new Error(accepted.error);
+            throw accepted.cause ?? new Error(accepted.error);
           }
           summary.record(agentId, sessionKey, "resumed");
         } catch (error) {
           if (signal.aborted) {
             throw error;
           }
-          log.warn(`Skipped restart resume for ${sessionKey}: ${String(error)}`);
           summary.record(agentId, sessionKey, "admission-failed");
+          await recordRestartResumeFailure({
+            target: { ...target, agentId, sessionKey },
+            entry,
+            runId,
+            admissionStage,
+            error,
+            signal,
+            log,
+          });
         }
         // Each accepted sender retains its own admission even when the owner cannot resume.
         await continueSessionQueuedInputs(
