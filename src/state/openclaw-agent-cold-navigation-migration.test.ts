@@ -11,7 +11,10 @@ import {
   quoteSqliteIdentifier,
 } from "../infra/sqlite-schema-sql.js";
 import { AGENT_COLD_NAVIGATION_SCHEMA_VERSION as target } from "./openclaw-agent-db-contract.js";
-import { assertOpenClawAgentCurrentRuntimeSchema } from "./openclaw-agent-db-schema-helpers.js";
+import {
+  assertOpenClawAgentSchemaContains,
+  getOpenClawAgentMigrationSchema,
+} from "./openclaw-agent-db-schema-helpers.js";
 import { agentDatabaseIntegrityBeforeMutationSteps } from "./openclaw-agent-db-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { assertOpenClawMigrationWitnessPreserved } from "./openclaw-migration-witness.js";
@@ -139,7 +142,7 @@ it.each(["commit", "rollback"])(
   },
 );
 
-it("converges with the original rebuild catalog and runtime admission", async () => {
+it("converges with the original rebuild catalog and schema-39 admission", async () => {
   using rebuilt = openNodeSqliteDatabase(":memory:");
   seed(rebuilt);
   const facts = captureSqliteSchemaFacts(rebuilt);
@@ -183,10 +186,11 @@ it("converges with the original rebuild catalog and runtime admission", async ()
     expect(captureSqliteSchemaFacts(database)).toMatchObject(expected);
     for (const db of [rebuilt, database]) {
       expect(() =>
-        assertOpenClawAgentCurrentRuntimeSchema(db, {
-          agentId: "main",
-          pathname: "convergence.sqlite",
-        }),
+        assertOpenClawAgentSchemaContains(
+          db,
+          "convergence.sqlite",
+          getOpenClawAgentMigrationSchema(target),
+        ),
       ).not.toThrow();
     }
     const migration = {

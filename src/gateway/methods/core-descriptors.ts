@@ -755,4 +755,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.files.preview", "sessions-files", "operator.read", "2026.10"],
   ["sessions.files.preview.release", "sessions-files", "operator.read", "2026.10"],
   ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
+  ["sessions.groups.create", "sessions-groups", "operator.write", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

@@ -969,3 +969,20 @@ recognizes the update-phase markers shipped drivers already set and keeps full
 startup backups in those phases. A scoped archive is never supplied to an older
 updater or to the generic session-file restore command. Both archive formats use
 the existing completion and later-successful-update cleanup rules.
+
+## Durable session creation receipts
+
+Agent schema 40 adds `session_creation_operations` through the existing SQLite
+and PostgreSQL migration owners. The session row and its receipt commit in one
+transaction. Receipts contain a namespaced idempotency digest, request fingerprint,
+original session key, session ID and lifecycle revision, original role/scopes as
+restrictions, and expiry. Stored identity and scopes never authorize a replay;
+current requester and session owners do.
+
+Receipts survive reset and deletion for the existing five-minute creation retry
+retention. Later creation writes prune expired receipts. No request content or
+credentials are stored, and no existing session data is backfilled. The migration
+creates only an empty table and expiry index and updates schema metadata; its
+scoped backup covers schema metadata and the new table, not existing transcripts.
+State schema remains 39. Older binaries refuse agent40 stores; rollback requires
+the verified pre-upgrade backup and matching binary, never a lower version marker.
