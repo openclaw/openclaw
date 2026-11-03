@@ -18,8 +18,6 @@ export const currentReplyPolicy = buildHarnessVisibleReplyGuidance({
   messageToolAvailable: true,
   currentConversation: { currentChannelProvider: "telegram", currentChannelId: "123" },
 });
-export const legacyReplyPolicy =
-  "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.";
 
 export function settleParent(
   server: Pick<Awaited<ReturnType<typeof startQaMockOpenAiServer>>, "terminalRequesters">,

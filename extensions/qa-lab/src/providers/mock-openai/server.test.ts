@@ -7,7 +7,6 @@ import type { StreamEvent } from "./mock-openai-contracts.js";
 import { QA_TOOL_SEARCH_SECONDARY_TARGET, readTargetFromPrompt } from "./mock-openai-tooling.js";
 import {
   currentReplyPolicy,
-  legacyReplyPolicy,
   expectIncludes,
   expectExcludes,
   expectSlots,
@@ -1768,12 +1767,12 @@ describe("qa mock openai server", () => {
   });
 
   it.each([
-    { name: "combined completion", combined: true, canDeliver: true, final: false },
-    { name: "separate completions", combined: false, canDeliver: true, final: true },
-    { name: "zero-tool completions", combined: false, canDeliver: false, final: false },
+    { name: "combined completion", combined: true, canDeliver: true },
+    { name: "separate completions", combined: false, canDeliver: true },
+    { name: "zero-tool completions", combined: false, canDeliver: false },
   ])(
     "delivers private fanout through the permitted surface for $name",
-    async ({ combined, canDeliver, final }) => {
+    async ({ combined, canDeliver }) => {
       const server = await startMockServer();
       const tools = combined ? [SESSIONS_SPAWN_TOOL, MESSAGE_TOOL] : [SESSIONS_SPAWN_TOOL];
       await startFanout(
@@ -1785,10 +1784,9 @@ describe("qa mock openai server", () => {
           ...(combined ? { note: "ALPHA-OK" } : {}),
         }),
       );
-      const instructions = final ? currentReplyPolicy : legacyReplyPolicy;
       const withInstructions = (input: unknown[]) => ({
-        ...(final ? { instructions: "Follow the unrelated Codex base instructions." } : {}),
-        input: [makeDeveloperInput(instructions), ...input],
+        instructions: "Follow the unrelated Codex base instructions.",
+        input: [makeDeveloperInput(currentReplyPolicy), ...input],
       });
       for (const markers of combined ? [["ALPHA-OK", "BETA-OK"]] : [["ALPHA-OK"], ["BETA-OK"]]) {
         const input = userInputs(
@@ -1809,7 +1807,7 @@ describe("qa mock openai server", () => {
         expect(callArgs(message)).toEqual({
           action: "send",
           message: "subagent-1: ok\nsubagent-2: ok",
-          ...(final ? { final: true } : {}),
+          final: true,
         });
         if (combined) {
           const settled = await responseJson(server, {
