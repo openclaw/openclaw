@@ -251,9 +251,9 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
             await readSessionTranscriptAccountingAsync(scope, {
               ...accountingOptions,
               includeByteSize: false,
-              usageEventLimit: 0,
+              includeUsage: false,
             }),
-          ).toEqual({ usage: undefined, turnTainted: false });
+          ).toEqual({ turnTainted: false });
           expect(historyReads).not.toHaveBeenCalled();
           const committed = vi.fn();
           const captured = await capturePersistedModelPromptProjection({

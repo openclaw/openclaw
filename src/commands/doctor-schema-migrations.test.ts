@@ -7,6 +7,7 @@ import * as sqlite from "../infra/node-sqlite.js";
 import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { inspectScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
+import * as readOnlyWorker from "../infra/sqlite-readonly-worker.js";
 import { prepareAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
@@ -77,14 +78,15 @@ function migrationParams(
 
 it("attributes version and additive schema preparation before admitting retained readers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    openOpenClawStateDatabase({ env: state.env });
+    const sharedPath = openOpenClawStateDatabase({ env: state.env }).path;
+    await closeOpenClawStateDatabaseAsync();
     const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
     {
       using database = openLegacyDatabase(pathname);
       database.exec("PRAGMA journal_mode = WAL; ALTER TABLE session_nodes DROP COLUMN project_id");
     }
     const warnings: string[] = [];
-    const generations = readUpdateDatabaseGenerations([pathname]);
+    const generations = readUpdateDatabaseGenerations([sharedPath, pathname]);
     const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
       env: state.env,
       signal: new AbortController().signal,
@@ -93,18 +95,28 @@ it("attributes version and additive schema preparation before admitting retained
     await withMaintenance(async () => {
       await capture.admit();
       await capture.run(async () => {
-        const result = await prepareDoctorDatabaseMigrations(
-          migrationParams(state.env, [
-            {
-              kind: "agent",
-              agentId: "main",
-              path: pathname,
-              foundVersion: 26,
-              supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-            },
-          ]),
-        );
-        expect(result.warnings).toEqual([]);
+        const synchronous = vi.spyOn(readOnlyWorker, "runSqliteReadOnlyWorkerSync");
+        try {
+          const result = await prepareDoctorDatabaseMigrations(
+            migrationParams(state.env, [
+              {
+                kind: "agent",
+                agentId: "main",
+                path: pathname,
+                foundVersion: 26,
+                supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+              },
+            ]),
+          );
+          expect(result.warnings).toEqual([]);
+          expect(
+            synchronous.mock.calls.filter(
+              ([source]) => source === pathname || source === sharedPath,
+            ),
+          ).toEqual([]);
+        } finally {
+          synchronous.mockRestore();
+        }
         using reader = new DatabaseSync(pathname, { readOnly: true });
         expect(reader.prepare("SELECT project_id FROM session_nodes").all()).toEqual([]);
         const admitted = openOpenClawAgentDatabase({
@@ -246,11 +258,15 @@ it.each([
         return database;
       });
       const worker = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
+      const syncWorker = vi.spyOn(integrityWorker, "runSqliteIntegrityCheckInWorkerSync");
       const additiveSchema = vi.spyOn(agentSchema, "ensureOpenClawAgentSchema");
       const liveFullChecks = () =>
         localFullChecks +
         worker.mock.calls.filter((call) => call[0] === pathname && call[5]?.check !== "quick")
-          .length;
+          .length +
+        syncWorker.mock.calls.filter(
+          ([call]) => call.databaseLabel === pathname && call.check !== "quick",
+        ).length;
       try {
         await withMaintenance(async () => {
           const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery({

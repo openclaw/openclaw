@@ -2,6 +2,7 @@
 import fsSync, { type BigIntStats, type Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import {
   getPublishFileExclusiveFailureDetails,
@@ -55,6 +56,11 @@ import { configureSqliteSnapshotPragmas } from "./sqlite-wal.js";
 
 export type { SqliteSnapshotValidator } from "./sqlite-snapshot.types.js";
 
+/** Reuse a bounded page cache when mappings are unavailable on an inspection copy. */
+export function configureSqliteSnapshotReadCache(database: DatabaseSync): void {
+  database.exec("PRAGMA cache_size = -16384; PRAGMA mmap_size = 268435456;");
+}
+
 export type SqliteReplacementReceipt = SqliteFileContent & {
   targetPath: string;
   identity: FileIdentityStat;
@@ -103,12 +109,9 @@ async function copyFileExclusive(
   let target: Awaited<ReturnType<typeof fs.open>> | undefined;
   let targetIdentity: BigIntStats | undefined;
   try {
-    const publication = await copySqliteFile(
-      sourcePath,
-      targetPath,
-      sourceFingerprint,
+    const publication = await copySqliteFile(sourcePath, targetPath, sourceFingerprint, {
       beforeByteCopy,
-    );
+    });
     target = await fs.open(targetPath, "r+");
     // Native receipts retain exact Windows file IDs beyond Number precision.
     const openedIdentity = await target.stat({ bigint: true });

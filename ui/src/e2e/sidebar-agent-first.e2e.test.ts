@@ -87,7 +87,7 @@ suite.define(() =>
         const restingHeader = (await headerLocator.boundingBox())!;
         const restingIcon = (await attention.boundingBox())!;
         const copy = (await roster("copy").boundingBox())!;
-        expect(restingHeader.height).toBe(44);
+        expect(restingHeader.height).toBe(46);
         expect(Math.abs(center(restingIcon) - center(restingHeader))).toBeLessThanOrEqual(1);
         expect(restingIcon.x).toBeGreaterThanOrEqual(right(copy));
         expect(right(restingIcon)).toBeLessThanOrEqual(right(restingHeader));

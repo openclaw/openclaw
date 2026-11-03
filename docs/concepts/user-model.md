@@ -290,6 +290,21 @@ Use the exact configured account ID and immutable sender ID. An identical sender
 
 Links follow explicit profile merges and the surviving profile's current role. Linking does not rename or merge people, rewrite transcript attribution, assign session ownership, or change session visibility. Permission resolution separately checks the trusted incoming sender and the linked person's current authority.
 
+An authenticated personal requester can use a linked channel identity to steer
+their exact active session across the Control UI and channels, even when the
+channel has fewer permissions or collaborative steering is disabled. The active
+execution retains its requester, prepared permissions, tool bindings, approval
+destination, and reply routing. A new execution uses the submitting person's
+current applicable policy. Normal channel admission and session access still
+apply. The shared Owner profile cannot establish this cross-surface identity.
+Shared-credential WebUI access instead supports a separate continuation rule
+with channel participants in the exact same active session. When collaborative
+steering is disabled, both sides need current owner authority: administrative
+WebUI access and a configured channel owner or linked administrative person
+with any required access grant. This neither links the accounts nor attributes
+the shared credential to a particular human.
+See [Steering scope](/concepts/queue-steering#scope).
+
 Every linked sender whose current effective operator role includes `operator.admin` receives channel-owner authority automatically while any role-required person-access grant remains active. The role name does not matter, and no extra `gateway.auth.identityScopes` grant is needed. When operator roles are not configured, a matching administrative identity-scope grant supplies this authority instead. A configured nonadmin role prevents that fallback. Removing the link, demoting the person, or removing the role's administrative scope revokes inherited authority. Authority is rechecked before pending privileged actions take effect; already accepted operations finish their required cleanup. Explicit `commands.ownerAllowFrom` entries remain independent. See [Operator scopes](/gateway/operator-scopes).
 
 Managed updates retain the original person-access grant through staging and a
@@ -381,7 +396,7 @@ Account discovery through `sessions.github.options` is unchanged.
 
 New publications create an open PR by default. Ask the agent to publish a draft to use `draft: true` on `github_publish`; omitting `draft` or setting it to `false` creates an open PR. This choice applies only when creating a PR. Publishing more changes to an existing PR preserves its current draft or open state.
 
-The account arrow beside **Publish PR** appears only when both shared and personal accounts are available. Its compact menu shows account names and the selected account; the effective shared account remains the default. With only a shared account, use **Publish PR** directly. With only **My GitHub**, the **Publish as @account** button explicitly selects that account and requests publication in one click; discovery alone never selects personal credentials. If the same account is connected through both routes, the menu labels them separately. Personal publication requires an idle session with a reconciled worktree or accepted repository checkpoint.
+The account arrow beside **Publish PR** appears only when both shared and personal accounts are available. Its compact menu shows account names and the selected account; the effective shared account remains the default. With only a shared account, use **Publish PR** directly. With only **My GitHub**, the **Publish as @account** button explicitly selects that account and requests publication in one click; discovery alone never selects personal credentials. If the same account is connected through both routes, the menu labels them separately. On mobile, account rows show each account's GitHub avatar, or its initials when the image cannot load. Personal publication requires an idle session with a reconciled worktree or accepted repository checkpoint.
 
 An existing `gh` login in the Gateway's runtime environment is supported; connecting **My GitHub** is optional and does not replace that login. A login on your browser's computer does not automatically authenticate a remote Gateway. When no publication account is selectable, the row distinguishes missing credentials, failed or rate-limited account verification, and an unsupported session workspace. Follow the displayed recovery guidance instead of reconnecting for a verification or workspace failure. Session-scoped shared publication requires a session-owned worktree or repository workspace with a supported GitHub origin; ordinary agent `git` and `gh` commands remain separate from this publication eligibility check.
 

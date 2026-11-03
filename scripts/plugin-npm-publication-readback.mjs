@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  classifyReleaseGhTransportError,
+  releaseGhRateLimitRetryAt,
+} from "./full-release-validation-policy.mjs";
+import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZipWithPolicy,
   readBoundedRegularFile,
@@ -15,17 +19,56 @@ import {
   verifyPublishedNpmRegistry,
 } from "./plugin-npm-prepared-release.mjs";
 import { verifyPluginPublicationArtifact } from "./plugin-publication-artifact.mjs";
+import { parseGithubResponse } from "./pr-lib/gh-api-preflight.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
 
 const WORKFLOW = ".github/workflows/plugin-npm-release.yml";
 const JOB_PREFIX = "Publish plugin npm package (";
 const SHA = /^[a-f0-9]{40}$/u;
 const RECEIPT_BYTES = 256 * 1024;
+const READ_ATTEMPTS = 3;
+const READ_DEADLINE_MS = 3 * 60_000;
 
 function requireValue(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+export async function retryPluginNpmRead(read, options = {}) {
+  const attempts = options.attempts ?? READ_ATTEMPTS;
+  requireValue(
+    Number.isSafeInteger(attempts) && attempts > 0 && attempts <= 5,
+    "Plugin npm read retry count is invalid.",
+  );
+  const now = options.now ?? Date.now;
+  const deadlineMs = options.deadlineMs ?? now() + READ_DEADLINE_MS;
+  const delay =
+    options.delay ??
+    ((delayMs) =>
+      new Promise((resolveDelay) => {
+        setTimeout(resolveDelay, delayMs);
+      }));
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      // The callback owns parsing and identity validation, so every successful
+      // retry is checked before any later read can consume it.
+      return await read();
+    } catch (error) {
+      if (classifyReleaseGhTransportError(error) !== "transient" || attempt === attempts) {
+        throw error;
+      }
+      const currentTime = now();
+      const retryAt = releaseGhRateLimitRetryAt(error, currentTime, attempt - 1);
+      const delayMs = Math.max(attempt * 1000, retryAt === undefined ? 0 : retryAt - currentTime);
+      if (delayMs >= deadlineMs - currentTime) {
+        throw error;
+      }
+      await delay(delayMs);
+    }
+  }
+  throw new Error("Plugin npm read retry exhausted unexpectedly.");
 }
 
 export async function createPluginNpmPublicationReadback(options) {
@@ -41,55 +84,83 @@ export async function createPluginNpmPublicationReadback(options) {
     "Plugin npm parent readback requires the exact source, tooling, and child run.",
   );
   const runGh = options.runGh ?? runReleaseToolingGh;
-  const api = (endpoint) => JSON.parse(runGh(["api", `repos/${repository}/${endpoint}`]));
-  const inventory = (endpoint, key) => {
-    const fields =
-      key === "jobs"
-        ? "id,name,run_id,run_attempt,head_sha,status,conclusion,steps"
-        : "id,name,digest,size_in_bytes,expired,expires_at,workflow_run";
+  const readApi = (endpoint, jq) => {
     const raw = runGh([
       "api",
-      `repos/${repository}/${endpoint}${endpoint.includes("?") ? "&" : "?"}per_page=100`,
-      "--paginate",
-      "--jq",
-      `{total_count, ${key}: [.${key}[] | {${fields}}]} | @json`,
+      `repos/${repository}/${endpoint}`,
+      ...(jq ? ["--jq", jq] : []),
+      "--include",
     ]);
-    const pages = raw
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    const count = pages[0]?.total_count;
+    const response = parseGithubResponse(raw);
     requireValue(
-      Number.isSafeInteger(count) &&
-        count >= 0 &&
-        count <= 10_000 &&
-        pages.every((page) => page.total_count === count && Array.isArray(page[key])),
-      `Incomplete plugin npm ${key} inventory.`,
+      /^2\d\d$/u.test(response.status ?? "") &&
+        response.body !== null &&
+        typeof response.body === "object" &&
+        !Array.isArray(response.body),
+      "Plugin npm GitHub read returned an invalid response.",
     );
-    const entries = pages.flatMap((page) => page[key]);
-    requireValue(
-      entries.length === count && new Set(entries.map((entry) => entry.id)).size === count,
-      `Incomplete or duplicate plugin npm ${key} inventory.`,
-    );
-    return entries;
+    return response.body;
   };
-  const run = api(`actions/runs/${runId}`);
-  requireValue(
-    run.id === runId &&
-      Number.isSafeInteger(run.run_attempt) &&
-      run.run_attempt > 0 &&
-      run.path === WORKFLOW &&
-      run.event === "workflow_dispatch" &&
-      run.head_sha === workflowSha &&
-      run.head_branch === workflowRef &&
-      run.repository?.full_name === repository &&
-      run.head_repository?.full_name === repository &&
-      run.status === "completed" &&
-      run.conclusion === "success",
-    "Plugin npm readback child identity or successful attempt does not match publication.",
-  );
-  const jobs = inventory(`actions/runs/${runId}/jobs?filter=all`, "jobs");
-  const artifacts = inventory(`actions/runs/${runId}/artifacts`, "artifacts");
+  const api = (endpoint, validate = (value) => value) =>
+    retryPluginNpmRead(() => {
+      const value = readApi(endpoint);
+      return validate(value);
+    });
+  const inventory = (endpoint, key) =>
+    retryPluginNpmRead(() => {
+      const fields =
+        key === "jobs"
+          ? "id,name,run_id,run_attempt,head_sha,status,conclusion,steps"
+          : "id,name,digest,size_in_bytes,expired,expires_at,workflow_run";
+      const entries = [];
+      let count;
+      for (let page = 1; page <= 100; page += 1) {
+        const value = readApi(
+          `${endpoint}${endpoint.includes("?") ? "&" : "?"}per_page=100&page=${page}`,
+          `{total_count, ${key}: [.${key}[] | {${fields}}]}`,
+        );
+        if (count === undefined) {
+          count = value.total_count;
+        }
+        requireValue(
+          Number.isSafeInteger(count) &&
+            count >= 0 &&
+            count <= 10_000 &&
+            value.total_count === count &&
+            Array.isArray(value[key]),
+          `Incomplete plugin npm ${key} inventory.`,
+        );
+        entries.push(...value[key]);
+        if (entries.length >= count) {
+          break;
+        }
+        requireValue(value[key].length === 100, `Incomplete plugin npm ${key} inventory.`);
+      }
+      requireValue(
+        entries.length === count && new Set(entries.map((entry) => entry.id)).size === count,
+        `Incomplete or duplicate plugin npm ${key} inventory.`,
+      );
+      return entries;
+    });
+  const run = await api(`actions/runs/${runId}`, (value) => {
+    requireValue(
+      value.id === runId &&
+        Number.isSafeInteger(value.run_attempt) &&
+        value.run_attempt > 0 &&
+        value.path === WORKFLOW &&
+        value.event === "workflow_dispatch" &&
+        value.head_sha === workflowSha &&
+        value.head_branch === workflowRef &&
+        value.repository?.full_name === repository &&
+        value.head_repository?.full_name === repository &&
+        value.status === "completed" &&
+        value.conclusion === "success",
+      "Plugin npm readback child identity or successful attempt does not match publication.",
+    );
+    return value;
+  });
+  const jobs = await inventory(`actions/runs/${runId}/jobs?filter=all`, "jobs");
+  const artifacts = await inventory(`actions/runs/${runId}/artifacts`, "artifacts");
   const packages = collectPublishablePluginPackages(sourceRoot, {
     packageNames: options.plugins?.length > 0 ? options.plugins : undefined,
   });
@@ -131,25 +202,26 @@ export async function createPluginNpmPublicationReadback(options) {
   mkdirSync(cacheDir, { recursive: true });
   const attempts = new Map([[`${runId}/${run.run_attempt}`, run]]);
   const jobInventories = new Map();
-  const attempt = (id, number) => {
+  const attempt = async (id, number) => {
     const key = `${id}/${number}`;
     if (!attempts.has(key)) {
       attempts.set(key, api(`actions/runs/${id}/attempts/${number}`));
     }
-    return attempts.get(key);
+    return await attempts.get(key);
   };
   const download = async (binding, metadata, producerRun, maxArchiveBytes) => {
+    const resolvedProducerRun = await producerRun;
     validateActionsArtifactBinding({
       expected: binding,
       artifactMetadata: metadata,
-      workflowRun: producerRun,
+      workflowRun: resolvedProducerRun,
     });
     let workflowJobs;
     if (binding.runStatePolicy === "same-run-producer-success") {
       const key = `${binding.runId}/${binding.runAttempt}`;
       // Prior attempts are terminal; reuse their complete inventory across packages.
       if (!jobInventories.has(key)) {
-        const producerJobs = inventory(
+        const producerJobs = await inventory(
           `actions/runs/${binding.runId}/attempts/${binding.runAttempt}/jobs`,
           "jobs",
         );
@@ -337,8 +409,15 @@ export async function createPluginNpmPublicationReadback(options) {
         consumerRunAttempt: run.run_attempt,
         producerJobName: receipt.producerJobName,
       };
-      const qualifiedRun = attempt(receipt.runId, receipt.runAttempt);
-      const qualifiedMetadata = api(`actions/artifacts/${receipt.artifactId}`);
+      const qualifiedRun = await attempt(receipt.runId, receipt.runAttempt);
+      const qualifiedMetadata = await api(`actions/artifacts/${receipt.artifactId}`, (value) => {
+        validateActionsArtifactBinding({
+          expected: qualifiedBinding,
+          artifactMetadata: value,
+          workflowRun: qualifiedRun,
+        });
+        return value;
+      });
       const qualified = await download(qualifiedBinding, qualifiedMetadata, qualifiedRun);
       const directory = mkdtempSync(join(cacheDir, "qualified-"));
       const metadataPath = join(directory, "artifact.json");

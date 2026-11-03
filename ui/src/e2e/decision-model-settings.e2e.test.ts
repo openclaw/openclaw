@@ -68,7 +68,7 @@ suite.define(() => {
   });
 
   it.each([true, false])(
-    "uses Gateway ownership for Set Default state (selection required: %s)",
+    "uses Gateway ownership for Set default state (selection required: %s)",
     async (selectionRequired) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const defaultId = selectionRequired ? "main" : "research";
@@ -98,17 +98,18 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/agents`);
         await gateway.waitForRequest("agents.list");
         await page.locator(".agent-select__trigger").click();
-        await page.getByRole("menuitemradio", { name: /Research agent/ }).waitFor();
+        await page.getByRole("option", { name: /Research agent/ }).waitFor();
 
         expect(await page.locator(".agent-select__option .agent-select__badge").count()).toBe(0);
         await page
-          .getByRole("menuitemradio", {
+          .getByRole("option", {
             name: selectionRequired ? "Main agent" : "Research agent",
             exact: true,
           })
           .click();
-        const defaultAction = page.getByRole("button", {
-          name: selectionRequired ? "Set Default" : "Default",
+        await page.locator(".agents-page-menu__trigger").click();
+        const defaultAction = page.getByRole("menuitem", {
+          name: selectionRequired ? "Set default" : "Default",
           exact: true,
         });
         await defaultAction.waitFor();

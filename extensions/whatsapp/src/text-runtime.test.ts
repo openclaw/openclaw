@@ -52,12 +52,12 @@ describe("WhatsApp text runtime", () => {
   });
 
   it("closes and reopens formatting at chunk boundaries", () => {
-    const chunks = markdownToWhatsAppChunks(`# ${"word ".repeat(12)}`, 20);
+    const chunks = markdownToWhatsAppChunks(`> > # ${"word ".repeat(12)}`, 20);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
-    expect(chunks.every((chunk) => /^\*.*\*\s*$/su.test(chunk))).toBe(true);
+    expect(chunks.every((chunk) => /^> > \*.*\*\s*$/su.test(chunk))).toBe(true);
     expect(
-      chunks.map((chunk) => chunk.replace(/^\*/u, "").replace(/\*(\s*)$/u, "$1")).join(""),
+      chunks.map((chunk) => chunk.replace(/^> > \*/u, "").replace(/\*(\s*)$/u, "$1")).join(""),
     ).toBe("word ".repeat(12));
   });
 

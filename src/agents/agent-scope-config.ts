@@ -78,6 +78,7 @@ export class AgentSelectionRequiredError extends Error {
 export type ResolvedAgentConfig = {
   name?: string;
   workspace?: string;
+  workspaceFileMode?: AgentEntry["workspaceFileMode"];
   agentDir?: string;
   model?: AgentEntry["model"];
   models?: AgentEntry["models"];
@@ -91,6 +92,7 @@ export type ResolvedAgentConfig = {
   toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
   fastModeDefault?: AgentEntry["fastModeDefault"];
+  newSessionPermissionMode?: AgentEntry["newSessionPermissionMode"];
   contextInjection?: AgentEntry["contextInjection"];
   bootstrapMaxChars?: AgentEntry["bootstrapMaxChars"];
   bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
@@ -451,6 +453,7 @@ export function resolveAgentConfig(
   return {
     name: entry.name,
     workspace: entry.workspace,
+    workspaceFileMode: entry.workspaceFileMode ?? agentDefaults?.workspaceFileMode,
     agentDir: entry.agentDir,
     model: entry.model,
     ...(entry.models ? { models: entry.models } : {}),
@@ -464,6 +467,7 @@ export function resolveAgentConfig(
     toolProgressDetail: entry.toolProgressDetail ?? agentDefaults?.toolProgressDetail,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault ?? agentDefaults?.fastModeDefault,
+    newSessionPermissionMode: entry.newSessionPermissionMode,
     contextInjection: entry.contextInjection,
     bootstrapMaxChars: entry.bootstrapMaxChars,
     bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,

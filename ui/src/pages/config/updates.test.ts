@@ -513,11 +513,11 @@ describe("renderUpdates", () => {
     expect(row("Installed").querySelector("time")?.getAttribute("datetime")).toBe(
       "2026-08-08T12:00:00.000Z",
     );
-    expect(row("Installed").textContent).toContain("2h ago");
+    expect(row("Installed").querySelector("time")?.title).toBe("2h ago");
     expect(row("Last commit").querySelector("time")?.getAttribute("datetime")).toBe(
       "2026-08-08T10:00:00.000Z",
     );
-    expect(row("Last commit").textContent).toContain("4h ago");
+    expect(row("Last commit").querySelector("time")?.title).toBe("4h ago");
 
     renderUpdates({
       configObject: { update: { channel: "dev" } },

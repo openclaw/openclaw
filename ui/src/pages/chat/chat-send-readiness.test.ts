@@ -29,6 +29,11 @@ import {
 import { handleSendChat } from "./chat-send-submit.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 import {
+  beginQueuedMessageEdit,
+  cancelQueuedMessageEdit,
+  updateQueuedMessageEdit,
+} from "./queued-message-edit.ts";
+import {
   adoptStartedChatRun,
   reconcileChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
@@ -44,6 +49,89 @@ function cachedTranscript(sessionId: string, displayedLeafEntryId: string): Chat
 }
 
 useChatSendBrowserFixture();
+
+it.each(["save", "cancel"] as const)(
+  "holds an edit opened during idle readiness until %s resumes the queue",
+  async (action) => {
+    const sessionKey = "agent:main:dashboard:late-queued-edit";
+    const history = createDeferred<ChatHistoryResult>();
+    const requested = createDeferred();
+    let holdReadiness = false;
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: "current-session",
+      chatRunId: "previous-run",
+      chatMessage: "Original queued message",
+      requestHandlers: {
+        "chat.history": () => {
+          if (holdReadiness) {
+            requested.resolve();
+            return history.promise;
+          }
+          return {
+            messages: [],
+            sessionId: "current-session",
+            sessionInfo: {
+              key: sessionKey,
+              sessionId: "current-session",
+              kind: "direct",
+              status: "running",
+              hasActiveRun: true,
+              updatedAt: 1,
+            },
+          };
+        },
+        "chat.send": { status: "ok", messageSeq: 1 },
+      },
+    });
+    await handleSendChat(host, undefined, { followUpMode: "queue" });
+    const item = host.chatQueue[0];
+    if (!item) {
+      throw new Error("Expected the ordinary follow-up to remain queued");
+    }
+    host.chatRunId = null;
+    holdReadiness = true;
+    const draining = resumeStoredChatOutboxes(host);
+    const idle: ChatHistoryResult = {
+      messages: [],
+      sessionId: "current-session",
+      sessionInfo: {
+        key: sessionKey,
+        sessionId: "current-session",
+        kind: "direct",
+        status: "done",
+        hasActiveRun: false,
+        updatedAt: 2,
+      },
+    };
+    try {
+      await requested.promise;
+      expect(beginQueuedMessageEdit(host, item.id)).toBe("started");
+      expect(updateQueuedMessageEdit(host, "Corrected queued message")).toBe(true);
+      history.resolve(idle);
+      await draining;
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toEqual([]);
+      expect(host.chatQueuedEdit?.draftText).toBe("Corrected queued message");
+      if (action === "cancel") {
+        expect(cancelQueuedMessageEdit(host)).toBe(true);
+        await resumeStoredChatOutboxes(host);
+      } else {
+        await handleSendChat(host, "Corrected queued message", {
+          resumeQueuedMessageEditId: item.id,
+        });
+      }
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+      expect(findChatSendPayload(host)).toMatchObject({
+        sessionKey,
+        message: action === "cancel" ? "Original queued message" : "Corrected queued message",
+      });
+      expect(host.chatQueuedEdit).toBeNull();
+    } finally {
+      history.resolve(idle);
+      await draining;
+    }
+  },
+);
 
 it("admits consecutive drafts synchronously and delivers them in order without clearing a newer draft", async () => {
   const sessionKey = "agent:main:main";

@@ -43,10 +43,14 @@ import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-ty
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
 /** Keep one owner proof per database; fence in-place writes and sidecar changes after awaits. */
-export function createRecoveryDestinationVerifier(stateDir: string, assertCurrent: () => void) {
+export function createRecoveryDestinationVerifier(
+  stateDir: string,
+  assertCurrent: () => void,
+  options: { allowOwnedMutation?: boolean } = {},
+) {
   const destinations = new Map<
     string,
-    { agentId?: string; files: (fs.BigIntStats | undefined)[]; generation: SqliteFileGeneration }
+    { agentId?: string; files: (fs.BigIntStats | undefined)[]; generation?: SqliteFileGeneration }
   >();
   return (refs: Iterable<Pick<RecoveryArtifactReference, "target" | "run" | "move">>) => {
     for (const { target, run, move } of refs) {
@@ -71,19 +75,30 @@ export function createRecoveryDestinationVerifier(stateDir: string, assertCurren
         (target.databaseIdentity && String(files[0]?.ino) !== target.databaseIdentity.ino) ||
         files.some((file) => file && (!file.isFile() || file.nlink !== 1n)) ||
         (expected &&
+          (["dev", "ino"] as const).some((key) => files[0]?.[key] !== expected.files[0]?.[key])) ||
+        (expected &&
+          !options.allowOwnedMutation &&
           files.some((file, index) =>
             (index === 0
-              ? (["ino", "ctimeNs", "mtimeNs", "size"] as const)
+              ? (["ctimeNs", "mtimeNs", "size"] as const)
               : (["dev", "ino", "size"] as const)
             ).some((key) => file?.[key] !== expected.files[index]?.[key]),
           ))
       ) {
         throw new Error("Recovery destination database changed; preview cleanup again.");
       }
-      // Ignore SHM reader bookkeeping, but freshly fingerprint WAL/journal contents even
-      // on coarse filesystem clocks. Raw descriptor closes stay outside the serving process.
-      const generation = readSqliteFileGenerationSync(target.sqlitePath);
+      const identity = target.databaseIdentity;
+      const deviceChanged = identity !== undefined && identity.dev !== String(files[0]!.dev);
+      // Owned cleanup tolerates its live Gateway writing between this stat and a fingerprint,
+      // so it needs contents only to re-certify a moved destination. Otherwise ignore SHM
+      // reader bookkeeping, but freshly fingerprint WAL/journal contents even on coarse
+      // filesystem clocks. Raw descriptor closes stay outside the serving process.
+      const generation =
+        options.allowOwnedMutation && !deviceChanged
+          ? undefined
+          : readSqliteFileGenerationSync(target.sqlitePath);
       if (
+        generation &&
         (
           [
             ["database", 0],
@@ -95,13 +110,14 @@ export function createRecoveryDestinationVerifier(stateDir: string, assertCurren
             generation[key]?.dev !== files[index]?.dev ||
             generation[key]?.ino !== files[index]?.ino ||
             generation[key]?.size !== files[index]?.size ||
-            (expected && generation[key]?.sha256 !== expected.generation[key]?.sha256),
+            (expected &&
+              !options.allowOwnedMutation &&
+              generation[key]?.sha256 !== expected.generation?.[key]?.sha256),
         )
       ) {
         throw new Error("Recovery destination database changed; preview cleanup again.");
       }
-      const identity = target.databaseIdentity;
-      if (identity && identity.dev !== String(files[0]!.dev)) {
+      if (identity && deviceChanged && generation) {
         // An inode can collide across volumes. Older manifests can only be re-certified
         // when a full producer-verified original proves the entire closed destination image.
         const original =

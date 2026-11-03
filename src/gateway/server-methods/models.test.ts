@@ -37,6 +37,7 @@ import {
   EXPECTED_IMPLICIT_CODEX_RUNTIME,
   EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
   thinkingLevels,
+  withStatedRuntime,
 } from "./models-runtime.fixtures.test-support.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
@@ -291,7 +292,7 @@ async function listModels(params: Parameters<typeof requestModelsList>[0]) {
 }
 
 function expectModels(respond: ReturnType<typeof vi.fn>, models: unknown) {
-  expect(respond).toHaveBeenCalledWith(true, { models }, undefined);
+  expect(respond).toHaveBeenCalledWith(true, { models: withStatedRuntime(models) }, undefined);
 }
 
 async function expectModelsList(params: Parameters<typeof requestModelsList>[0], models: unknown) {
@@ -1058,25 +1059,23 @@ describe("models.list", () => {
               },
             }).models,
           } as unknown as OpenClawConfig;
-          const expected = {
-            models: [
-              {
-                id: "llama-configured",
-                name: "Llama Configured",
-                provider: "vllm",
-                local: true,
-                available: true,
-                tags: ["default"],
-              },
-              {
-                id: "llama-discovered",
-                name: "Llama Discovered",
-                provider: "vllm",
-                local: true,
-                available: true,
-              },
-            ],
-          };
+          const expected = [
+            {
+              id: "llama-configured",
+              name: "Llama Configured",
+              provider: "vllm",
+              local: true,
+              available: true,
+              tags: ["default"],
+            },
+            {
+              id: "llama-discovered",
+              name: "Llama Discovered",
+              provider: "vllm",
+              local: true,
+              available: true,
+            },
+          ];
 
           for (const view of ["default", "configured"] as const) {
             const { request, respond } = requestModelsList({
@@ -1086,7 +1085,7 @@ describe("models.list", () => {
               loadGatewayModelCatalog: catalogLoader(catalog),
             });
             await request;
-            expect(respond).toHaveBeenCalledWith(true, expected, undefined);
+            expectModels(respond, expected);
           }
         },
       );
@@ -1187,6 +1186,7 @@ describe("models.list", () => {
                     source: "model",
                   },
                   available,
+                  supportsFastMode: false,
                   tags: ["configured"],
                   ...(authenticated ? {} : { unavailableReason: "missing-auth" }),
                 },
@@ -1269,13 +1269,13 @@ describe("models.list", () => {
           loadGatewayModelCatalog: catalogLoader([LLAMA_SECURE]),
         });
 
-        expect.soft(respond).toHaveBeenCalledWith(
-          true,
-          {
-            models: [{ ...LLAMA_SECURE, available: true }],
-          },
-          undefined,
-        );
+        expect
+          .soft(respond)
+          .toHaveBeenCalledWith(
+            true,
+            { models: withStatedRuntime([{ ...LLAMA_SECURE, available: true }]) },
+            undefined,
+          );
       }
     } finally {
       clearRuntimeConfigSnapshot();
