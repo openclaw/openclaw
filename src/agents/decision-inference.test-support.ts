@@ -104,7 +104,12 @@ export async function activateDecisionRegistry(
   return registry;
 }
 
-export function prepareDecisionRuntime(config: OpenClawConfig, provider: string, modelId: string) {
+export function prepareDecisionRuntime(
+  config: OpenClawConfig,
+  provider: string,
+  modelId: string,
+  catalogMode: "static" | "live" = "static",
+) {
   const agentId = resolveDefaultAgentId(config);
   return acquireAgentRunPreparedModelRuntime(
     {
@@ -116,7 +121,7 @@ export function prepareDecisionRuntime(config: OpenClawConfig, provider: string,
       runtimePluginPurpose: "isolated-completion",
       runtimePluginSelections: [{ provider, modelId, agentId }],
     },
-    { catalogMode: "static" },
+    { catalogMode },
   );
 }
 

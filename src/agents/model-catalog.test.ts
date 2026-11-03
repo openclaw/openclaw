@@ -339,6 +339,47 @@ it("uses an explicitly ready live catalog order across entries and route variant
   expect(withoutOptIn.entries.map(({ id }) => id)).toEqual(["first", "second", "new"]);
 });
 
+it.each([
+  { status: "ready", provider: "demo", allowed: true },
+  { status: "auth-rejected", provider: "demo", allowed: false },
+  { status: "unavailable", provider: "demo", allowed: false },
+  { status: "ready", provider: "other", allowed: false },
+] as const)(
+  "admits decision-only augmentation only from the ready provider listing (%j)",
+  async ({ status, provider, allowed }) => {
+    const inference = {
+      chat: false,
+      decision: { protocol: "fixture", input: ["text" as const] },
+    };
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      row("demo", "listed", { inference, baseUrl: "https://selected.example/v1" }),
+      row("demo", "unlisted", { inference, baseUrl: "https://selected.example/v1" }),
+      row("demo", "chat", { api: "openai-responses", baseUrl: "https://selected.example/v1" }),
+      row("demo", "foreign", { inference, baseUrl: "https://foreign.example/v1" }),
+    ]);
+    const snapshot = await build({
+      config: {
+        models: { providers: { demo: { baseUrl: "https://selected.example/v1", models: [] } } },
+      },
+      metadataSnapshot: createManifestSnapshot("demo", {
+        configuredEndpointDiscovery: ["demo"],
+        discovery: { demo: "runtime" },
+        providers: {
+          demo: { baseUrl: "https://default.example/v1", api: "openai-responses", models: [] },
+        },
+      }),
+      providerOutcomes: [
+        { provider: "demo", status: "unavailable" },
+        { provider, status, listedModelIds: ["listed", "chat", "foreign"] },
+      ],
+      readOnly: false,
+    });
+    expect(snapshot.entries.filter((entry) => entry.provider === "demo")).toEqual(
+      allowed ? [expect.objectContaining({ id: "listed", inference })] : [],
+    );
+  },
+);
+
 it("keeps manifest rank for configured runtime models absent from the registry", async () => {
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
     row("openai", "gpt-5.4", { name: "GPT-5.4" }),

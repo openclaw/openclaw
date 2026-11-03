@@ -568,3 +568,17 @@ This capability is host-local and is never a wire environment override.
 streams. It preserves incomplete lines and leaves CR handling to the consumer.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.
+
+## SystemOne Decisions runtime
+
+`openclaw/plugin-sdk/decisions-systemone-runtime` supplies the shared Liquid
+SystemOne codec and bounded executor used by the native Liquid plugin and
+ClawRouter. Import it from the consumer's decision runtime. This profile supports
+`d1` and `d1-ultra`; it does not imply support for other SystemOne vendors.
+
+`supportsLiquidDecisionBatch`, `encodeLiquidDecisionRequest` and
+`executeLiquidDecision` retain the native state/question validation, complete
+request byte ceiling, image geometry checks, zero output-token validation,
+deadline, cancellation and current-authority checks. The caller supplies the
+already selected transport, headers, capabilities and image metadata callback.
+The executor never selects credentials or falls back to a chat API.

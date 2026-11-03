@@ -444,6 +444,15 @@ export async function buildPreparedModelCatalogSnapshot(
       // discovery omits them; compare emitted identities to preserve their routes.
       const keyOf = createModelCatalogIdentityKeyResolver();
       const accountVisibleModelKeys = new Set([...models, ...configuredModels].map(keyOf));
+      const accountListedModelKeys = new Set(
+        params.providerOutcomes?.flatMap((outcome) =>
+          outcome.status === "ready"
+            ? (outcome.listedModelIds ?? []).map((id) =>
+                keyOf({ provider: normalizeProvider(outcome.provider), id }),
+              )
+            : [],
+        ),
+      );
       const normalizedSupplemental: ModelCatalogEntry[] = [];
       for (const entry of supplemental) {
         const provider = normalizeProvider(entry.provider);
@@ -452,7 +461,14 @@ export async function buildPreparedModelCatalogSnapshot(
           owners.modelCatalogProviders.get(provider) ?? owners.providers.get(provider);
         const pluginId = pluginIds?.length === 1 ? pluginIds[0] : undefined;
         const plugin = pluginId ? manifestMetadataSnapshot.byPluginId.get(pluginId) : undefined;
-        if (!isProviderCatalogSourceAllowed({ provider, config: cfg, plugin })) {
+        if (
+          !isProviderCatalogSourceAllowed({
+            provider,
+            config: cfg,
+            plugin,
+            sourceBaseUrl: entry.baseUrl,
+          })
+        ) {
           continue;
         }
         const id = normalizeModelId(provider, entry.id);
@@ -461,7 +477,14 @@ export async function buildPreparedModelCatalogSnapshot(
         // but must never advertise a model the account did not discover.
         if (
           runtimeDiscoveryProviders.has(normalizeProviderId(provider)) &&
-          !accountVisibleModelKeys.has(keyOf({ provider, id }))
+          !accountVisibleModelKeys.has(keyOf({ provider, id })) &&
+          // Decision-only rows have no chat registry API. They still require the
+          // selected account's successful listing, not static protocol support.
+          !(
+            entry.inference?.chat === false &&
+            entry.inference.decision &&
+            accountListedModelKeys.has(keyOf({ provider, id }))
+          )
         ) {
           continue;
         }
