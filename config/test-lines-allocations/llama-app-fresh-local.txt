@@ -1,0 +1,2 @@
+28
+# Fresh local preference and preservation of configured defaults through Gateway automatic setup.

@@ -52,6 +52,11 @@ host or use an endpoint the Gateway can reach.
 
 ### Set up the app connection
 
+For fresh automatic setup, an available Llama model is preferred over other
+local server candidates. Existing configured models, saved sign-ins and supported
+cloud credentials retain their earlier priority. This preference never installs
+Llama or replaces a configured default.
+
 Choose **Llama** in provider setup. On a fresh machine, first get the app from
 [llama.app](https://llama.app/), choose and download a model inside Llama, and
 start its API server. OpenClaw's setup explains this handoff; it does not install
