@@ -6,7 +6,7 @@ run-name: Native Llama ${{ inputs.platform }} - ${{ inputs.dispatch_id }}
       platform:
         description: Native screenshot producer to run
         type: choice
-        options: [mac, windows-w4, service, windows-ollama-fixtures, mac-copy, mac-branded-copy, windows-provider-artwork, stock-shared]
+        options: [mac, windows-w4, service, windows-ollama-fixtures, mac-copy, mac-branded-copy, windows-provider-artwork, mac-reference-diag, stock-shared]
         default: mac
         required: true
       qualification:
@@ -18,6 +18,11 @@ run-name: Native Llama ${{ inputs.platform }} - ${{ inputs.dispatch_id }}
         description: Unique capture correlation, not a release request
         type: string
         required: true
+      retained_capsule_b64:
+        description: One sealed DERIVED ROI data capsule, not source code or original proof
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
 concurrency:
@@ -517,5 +522,49 @@ jobs:
             packet-preflight.json
             packet-preflight-failure.txt
           include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  # PROPOSED ONLY: contents:read ONLY; no artifact API/token/permission grant.
+  mac-reference-causal:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/roboclaw/local-ai-native-followups-20261102' && inputs.platform == 'mac-reference-diag'
+    permissions:
+      contents: read
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+      LLAMA_REFERENCE_ACK: parent-reviewed-reference-only
+    steps:
+      - name: Checkout sealed reference-only diagnostic
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/native-llama/reference-causal
+      - name: Admit program source
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cd .github/native-llama/reference-causal
+          echo 'f6c6f3b24d228f2bc3be12ebec52d35b9ceb4391c66d8f6a6ebe47505a55154c  PAYLOAD-SHA256SUMS' | /usr/bin/shasum -a 256 -c -
+          /usr/bin/shasum -a 256 -c PAYLOAD-SHA256SUMS
+      - name: Strictly decode ONE sealed derived data field
+        env:
+          LLAMA_RETAINED_CAPSULE_B64: ${{ inputs.retained_capsule_b64 }}
+          LLAMA_DISPATCH_INPUTS_JSON: ${{ toJSON(inputs) }}
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I -S .github/native-llama/reference-causal/decode_capsule.py "$RUNNER_TEMP/retained-roi-capsule.zip"
+      - name: Run standalone source probe with derived ROI color observations
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          /bin/bash .github/native-llama/reference-causal/run-reference.sh \
+            "$RUNNER_TEMP/retained-roi-capsule.zip" \
+            "$GITHUB_WORKSPACE/.artifacts/native-llama/reference-causal"
+      - name: Preserve diagnostic only; original qualification stays failed
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: llama-reference-causal-diagnostic
+          path: .artifacts/native-llama/reference-causal/
           if-no-files-found: error
           retention-days: 7

@@ -1,0 +1,130 @@
+{
+  "canvas": {
+    "width": 630,
+    "height": 1000
+  },
+  "scenes": [
+    {
+      "stage": "before",
+      "choices": [
+        {
+          "brand": "llama-app",
+          "label": "Llama app",
+          "hint": "Use models from the separate Llama app (llama.app).",
+          "action": "Connect / Set up",
+          "rowScreenRect": {
+            "height": 48,
+            "width": 538,
+            "x": 40,
+            "y": 376
+          },
+          "wellScreenRect": {
+            "x": 50,
+            "y": 384.0,
+            "width": 32,
+            "height": 32
+          },
+          "wellPixelOrigin": [
+            50,
+            290.0
+          ],
+          "glyphPixelRectDerivedFromFrozen18In32Source": [
+            57,
+            297.0,
+            18,
+            18
+          ]
+        },
+        {
+          "brand": "ollama",
+          "label": "Ollama",
+          "hint": "Use local models in Ollama or connect your Ollama Cloud account.",
+          "action": "Set up",
+          "rowScreenRect": {
+            "height": 48,
+            "width": 538,
+            "x": 40,
+            "y": 320
+          },
+          "wellScreenRect": {
+            "x": 50,
+            "y": 328.0,
+            "width": 32,
+            "height": 32
+          },
+          "wellPixelOrigin": [
+            50,
+            346.0
+          ],
+          "glyphPixelRectDerivedFromFrozen18In32Source": [
+            57,
+            353.0,
+            18,
+            18
+          ]
+        }
+      ]
+    },
+    {
+      "stage": "after",
+      "choices": [
+        {
+          "brand": "llama-app",
+          "label": "Llama app",
+          "hint": "Use models from the separate Llama app (llama.app).",
+          "action": "Set up",
+          "rowScreenRect": {
+            "height": 48,
+            "width": 538,
+            "x": 40,
+            "y": 376
+          },
+          "wellScreenRect": {
+            "x": 50,
+            "y": 384.0,
+            "width": 32,
+            "height": 32
+          },
+          "wellPixelOrigin": [
+            50,
+            290.0
+          ],
+          "glyphPixelRectDerivedFromFrozen18In32Source": [
+            57,
+            297.0,
+            18,
+            18
+          ]
+        },
+        {
+          "brand": "ollama",
+          "label": "Ollama",
+          "hint": "Use local models in Ollama or connect your Ollama Cloud account.",
+          "action": "Set up",
+          "rowScreenRect": {
+            "height": 48,
+            "width": 538,
+            "x": 40,
+            "y": 320
+          },
+          "wellScreenRect": {
+            "x": 50,
+            "y": 328.0,
+            "width": 32,
+            "height": 32
+          },
+          "wellPixelOrigin": [
+            50,
+            346.0
+          ],
+          "glyphPixelRectDerivedFromFrozen18In32Source": [
+            57,
+            353.0,
+            18,
+            18
+          ]
+        }
+      ]
+    }
+  ]
+}

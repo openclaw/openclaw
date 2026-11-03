@@ -1,0 +1,63 @@
+{
+  "kind": "REFERENCE_ONLY_DIAGNOSTIC_NOT_QUALIFICATION",
+  "originalRun": 41572287535,
+  "originalHead": "da97918b58bed5993e35be6235b11a10b1cc3a8a",
+  "originalArtifact": {
+    "id": 13203365015,
+    "name": "native-mac-branded-copy",
+    "bytes": 22906376,
+    "sha256": "cfff72a47ce1cc1b9e173d148a513745c3d3a171a568b96d707440f41c55a689"
+  },
+  "requiredHost": {
+    "macOS": "26.6.2",
+    "xcode": "26.4.1",
+    "swift": "6.3.1",
+    "sdk": "26.4",
+    "target": "arm64-apple-macosx26.2",
+    "scale": 1
+  },
+  "guards": {
+    "minimumDice": 0.85,
+    "minimumWinningMargin": 0.1,
+    "placementTolerancePoints": 1,
+    "darkThreshold": 180,
+    "minimumLightFraction": 0.5
+  },
+  "assets": {
+    "llama-app": {
+      "filename": "ProviderIcon-llama.svg",
+      "sha256": "78bbb16ce08f25baf0bc2c8f0c765e85d933f537ba92625b844528cb02aa249b"
+    },
+    "ollama": {
+      "filename": "ProviderIcon-ollama.svg",
+      "sha256": "167d65056565611212cba72f70e582032f92f3b6a1bd35ffc26c2b5014f90794"
+    }
+  },
+  "retainedMembers": {
+    "before/onboarding.png": "6a0d49bf7fd26244b03d6bcbaf3ee467d933b1c5d6cf197fe67a9c9435347742",
+    "before/onboarding.accessibility.json": "93efbce5edde7e8d763ecc01b170203f0443b4125550bb09fcc2be3e69b311be",
+    "before/brand-proof.json": "3c413c6be31651388e60492df8f38d08a55ea0c99fa0777a3d3a03eab50404cc",
+    "before/receipt.json": "a9b76483a41fcaa448859478a291f006bf7c268bc7260ce68881e8f732464f88",
+    "after/onboarding.png": "957f2dd5c538be52b902a69a791502c905034caa3a43aa6b7c9ac3df69f10ffb",
+    "after/onboarding.accessibility.json": "4ebcda8d869a4a7ce5f4b486aa10bdba4957506d15641c77be7ed97d11e604e3",
+    "after/brand-proof.json": "3c413c6be31651388e60492df8f38d08a55ea0c99fa0777a3d3a03eab50404cc",
+    "after/receipt.json": "f559550214b904878e49d949c16c4a83bcd4f8bd557489bb2761701266e32fcd"
+  },
+  "caseIds": [
+    "old-data-white-small",
+    "data-white-small-source-order",
+    "data-white-canvas",
+    "data-source-paint",
+    "file-source-paint",
+    "file-source-button",
+    "file-source-half-phase"
+  ],
+  "predeclaredMinimalCandidate": "file-source-paint",
+  "sourceContextControl": "file-source-button",
+  "halfPhaseRole": "sensitivity only; never a selectable repair or acceptance fallback",
+  "baselineRule": "Old exact data/white/small nativeDeviceMask must reproduce retained native reference masks for causal attribution",
+  "selectionRule": "Report every predeclared result; never choose a passing mask/phase as repair. Original failure remains failed.",
+  "missingFacts": "Original reference RGBA and production NSImage representations were not retained; this separate same-SDK diagnostic measures fresh loader/draw/cache behavior, not original-process cache objects.",
+  "actualInputMode": "DERIVED_LOSSLESS34x34RGBA_ICC_CAPSULE_NOT_ORIGINAL_FULL_PNG",
+  "wholePNGRepresentationOrCacheStateInference": "not available from ROI; SVG constructor controls remain independent at original full reference-canvas geometry"
+}
