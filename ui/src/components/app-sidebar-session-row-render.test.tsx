@@ -557,13 +557,16 @@ it("keeps a restored pin's badges after roster handoff until its own descriptor 
   const update = mountObservedHost(host, container, context, (observedHost) => (
     <RecentSession host={observedHost} session={current()} />
   ));
-  host.releaseSidebarSnapshot();
-  update();
-  expect(host.sidebarSnapshot).toBeNull();
+  await vi.dynamicImportSettled();
   await waitForSolid(() => {
     expect(dom.all(".session-row-badge--approval")).toHaveLength(1);
     expect(dom.all(".session-row-badge--pull-request")).toHaveLength(1);
   });
+  const badge = dom.query(".session-row-badge--pull-request");
+  host.releaseSidebarSnapshot();
+  update();
+  expect(host.sidebarSnapshot).toBeNull();
+  expect(dom.query(".session-row-badge--pull-request")).toBe(badge);
   setCurrent(projectSidebarSession({ key: saved.key, label: "Current pin", pinned: true }));
   update();
   await waitForSolid(() => expect(dom.all(".session-row-badge")).toHaveLength(0));

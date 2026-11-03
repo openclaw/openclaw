@@ -82,6 +82,13 @@ current access and repository identity at the supplied boundaries. The host
 retains the selected source and pinned commit through dispatch, restart, and
 Gateway recovery.
 
+Worker preparation and checkout can receive an optional `readCredential` capability
+from the admitted dispatch owner. It retains its current-actor assertion and
+admission operation; a plugin must not replace required dispatch admission with
+stored credentials. When `retainCredentialCleanup` is supplied, register each
+issued credential's revocation callback immediately so the host can clean it up
+when the accepted work ends. These callbacks do not become prepared metadata.
+
 The host revalidates the worker lease before and after `prepareGitPack`. The
 provider keeps current caller and captured credential assertions at each transport
 effect; it does not repeat the host's remote lease revalidation.
@@ -99,3 +106,8 @@ Existing plugins need no new registration or manifest fields. The bundled
 migration. The host keeps saved source snapshots, managed checkout storage,
 accepted checkpoints, publication receipts, and recovery; plugin code owns forge
 transport and identity policy. See [GitHub](/plugins/github#repository-integration).
+
+Managed-checkout transports can reuse `configureProjectCheckoutMaintenance` from
+`openclaw/plugin-sdk/process-runtime` when adopting an existing clone. It uses the
+host maintenance settings, bounded Git process runner, cancellation and current
+authority assertion; the transport still owns authentication and remote policy.

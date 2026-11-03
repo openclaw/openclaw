@@ -22,6 +22,7 @@ import {
   requireGitHubPublicationCommit,
   runPublicationCommand,
 } from "./github-publication-git-transport.js";
+import { performRepositoryPublicationGit } from "./repository-publication-git-transfer.js";
 
 let testState: OpenClawTestState;
 let f: Awaited<ReturnType<typeof createFixture>>;
@@ -170,25 +171,38 @@ describe("GitHub publication index update", () => {
     });
     let fetches = 0;
     let allowFetch = false;
-    const run: typeof runPublicationCommand = async (argv, options) => {
-      if (argv.includes("fetch")) {
-        fetches++;
-      }
-      return await runPublicationCommand(
-        argv.map((arg) => (arg === "https://github.com/example/project.git" ? url : arg)),
-        { ...options, env: { ...options?.env, GIT_ALLOW_PROTOCOL: allowFetch ? "file" : "" } },
-      );
-    };
+    const run = exec.runCommandBuffered;
+    const transport = vi
+      .spyOn(exec, "runCommandBuffered")
+      .mockImplementation(async (argv, options) => {
+        if (argv.includes("fetch")) {
+          fetches++;
+        }
+        return run(
+          argv.map((arg) => (arg === "https://github.com/example/project.git" ? url : arg)),
+          { ...options, env: { ...options?.env, GIT_ALLOW_PROTOCOL: allowFetch ? "file" : "" } },
+        );
+      });
+    onTestFinished(() => transport.mockRestore());
     const prepare = (sha: string) =>
-      requireGitHubPublicationCommit(
-        run,
-        "example/project",
+      requireGitHubPublicationCommit({
+        publisher: {
+          provenance: { source: "system-detected", account: { accountId: 1, login: "fixture" } },
+          author: { name: "Publication Test", email: "publication@example.test" },
+          assertCurrent() {},
+          async refresh() {},
+          authorizeGit: (transfer) =>
+            performRepositoryPublicationGit(transfer, {
+              httpAuthorization: "Bearer synthetic",
+              assertCurrent() {},
+            }),
+        },
+        remoteUrl: "https://github.com/example/project.git",
         sha,
-        "github.com",
-        clone,
-        process.env,
-        "Publication commit unavailable",
-      );
+        cwd: clone,
+        assertCurrent() {},
+        failure: "Publication commit unavailable",
+      });
     const missing = await git(clone, ["rev-list", "--objects", "--missing=print", local]);
     expect(missing).toContain("?");
     await prepare(local);

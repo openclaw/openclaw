@@ -235,7 +235,7 @@ function seed(worktree: Awaited<ReturnType<typeof bind>>, key = sessionKey) {
       identity: {
         source: "system-configured",
         profileId: "fixture-profile",
-        account: { accountId: 7, login: "fixture-bot", avatarUrl: null },
+        account: { accountId: 7, login: "fixture-bot" },
       },
     }),
   );

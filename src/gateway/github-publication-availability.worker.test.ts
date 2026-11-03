@@ -4,6 +4,7 @@ import { createGitHubPublicationProvider } from "../../extensions/github-reposit
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import * as registryRead from "../agents/worktrees/registry-read.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import {
   deleteRegistryWorktree,
   insertRegistryWorktree,

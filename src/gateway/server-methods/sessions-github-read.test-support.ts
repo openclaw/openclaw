@@ -15,7 +15,10 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createRepositorySessionReadHost } from "../control-ui-session-pr-runtime.js";
+import {
+  createRepositorySessionReadHost,
+  type RepositorySessionPresentation,
+} from "../control-ui-session-pr-runtime.js";
 import { installGitHubAccountFixture } from "../github-account-service.test-support.js";
 import { handleGatewayRequest, createRequestGatewayMethodRegistry } from "../server-methods.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
@@ -216,7 +219,12 @@ function createFixture(
     await prepareUserGitHubConnection(action.owner);
     return personalGitHubStatus(action);
   });
-  const pullRequests = { subscribe: vi.fn(), unsubscribe: vi.fn(), read: vi.fn(), stop: vi.fn() };
+  const pullRequests = {
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    read: vi.fn<RepositorySessionPresentation["read"]>(),
+    stop: vi.fn(async () => {}),
+  };
   // Only these services belong to the read handler; the authorization helpers stay real.
   const context = {
     getRuntimeConfig,
@@ -242,12 +250,12 @@ function createFixture(
   );
   reads.installPresentation({
     ...pullRequests,
-    checks: vi.fn(),
-    replace: vi.fn(),
-    readPrepared: vi.fn(),
-    knownMergedHeads: vi.fn(),
-    pollNow: vi.fn(),
-  } as never);
+    checks: vi.fn<RepositorySessionPresentation["checks"]>(),
+    replace: vi.fn(async () => {}),
+    readPrepared: () => undefined,
+    knownMergedHeads: async () => [],
+    pollNow: async () => {},
+  });
   installGitHubAccountFixture(
     context,
     {

@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { clearGitHubCredentialVerificationCache } from "../../../extensions/github-repositories/oauth-api.js";
 import { clearNativeGitHubTokenCache } from "../../../extensions/github-repositories/read-identity-api.js";
+import { controlUiGitHubHandlers } from "../../../extensions/github-repositories/runtime-api.js";
 import * as githubIdentity from "../../../extensions/github-repositories/tool-identity-api.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
@@ -161,7 +162,7 @@ it.for(["unchanged", "removed", "rotated"] as const)(
                   new Set(filter(client) ? [client.connId] : []),
               },
             }),
-            extraHandlers: controlUiHandlers,
+            extraHandlers: controlUiGitHubHandlers,
           });
           expect(respond).toHaveBeenCalledOnce();
           const [ok, payload] = expectDefined(respond.mock.calls[0], "preview RPC response");

@@ -332,14 +332,17 @@ describe("shared publication to a prepared original PR", () => {
     async (sameBranch) => {
       const f = await fixture(false, false, true, sameBranch);
       f.pr.user = { id: 42, login: "roboclaw-bot" };
-      const { inspectOwnGitHubPullRequest } = await import("./github-publication-inspect.js");
+      const { prepareOwnGitHubPullRequestReader } =
+        await import("./github-publication-inspect-reader.js");
       await expect(
-        inspectOwnGitHubPullRequest({
-          pullRequestUrl: f.pr.html_url,
-          session: f.publicationSession,
-          requester: f.guest,
-          assertCurrent: () => f.guest.assertCurrent(),
-        }),
+        prepareOwnGitHubPullRequestReader(f.guest, f.publicationSession).then((reader) =>
+          f.coordinator.inspectPullRequest({
+            pullRequestUrl: f.pr.html_url,
+            agentId: f.publicationSession.agentId,
+            reader,
+            assertCurrent: () => f.guest.assertCurrent(),
+          }),
+        ),
       ).rejects.toThrow("Link a verified");
       f.expectPublished(await f.publish("maintainer-assistance"));
       expect(

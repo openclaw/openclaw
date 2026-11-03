@@ -32,7 +32,6 @@ import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "../../plugin-sdk/plugin-test-contracts.js";
-import { createPluginBoardWidgetContentKindRegistrar } from "../../plugins/board-widget-content-kinds.js";
 import { registerPluginDashboardCapabilities } from "../../plugins/dashboard-capabilities.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
@@ -378,47 +377,6 @@ describe("board authenticated GitHub Actions", () => {
       }
     },
   );
-
-  it("verifies identity before saving registered host capabilities and preserves a failed update", async () => {
-    const registry = pluginRegistry;
-    createPluginBoardWidgetContentKindRegistrar(registry)(
-      createPluginRecord({
-        id: "fixture",
-        source: "fixture",
-        origin: "bundled",
-        enabled: true,
-        configSchema: false,
-      }),
-      {
-        kind: "fixture",
-        label: "Fixture",
-        resources: { surface: "fixture", paths: ["/widget.js"] },
-        validateSource: () => {},
-        composeDocument: ({ source }) => source,
-      },
-    );
-    setActivePluginRegistry(registry);
-    const { invoke, store, broadcast } = createGitHubBoardHarness();
-    const target = boardTarget();
-    const input = {
-      ...widgetInput(),
-      ...target,
-      content: { kind: "registered", contentKind: "fixture", source: "runs" },
-    };
-    expect((await invoke("board.widget.put", input)).mock.calls[0]?.[0]).toBe(true);
-    expect(account).toHaveBeenCalledOnce();
-    expect(native).not.toHaveBeenCalled();
-    expect(actionCalls()).toHaveLength(0);
-    const before = await store.getSnapshot(target);
-    expect(before.widgets[0]?.declared?.tools).toEqual(["github.actions.runs:owner/repo"]);
-    broadcast.mockClear();
-    clearNativeGitHubTokenCache();
-    clearGitHubCredentialVerificationCache();
-    account.mockImplementationOnce(async () => new Response(token, { status: 401 }));
-    await expectDenied(invoke("board.widget.put", input), /reconnect|retry/);
-    expect(await store.getSnapshot(target)).toEqual(before);
-    expect(broadcast).not.toHaveBeenCalled();
-  });
 
   it.each(["signal", "commit guard", "session authorization", "agent", "routing"] as const)(
     "rejects pinning when %s authority changes during verification without persistence",

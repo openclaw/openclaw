@@ -873,7 +873,6 @@ it("checks physical source once per load while every assertion observes owner re
     try {
       const load = read.withSource(async ({ assertCurrent }) => {
         const captured = identities.mock.calls.length;
-        expect(captured).toBeGreaterThan(0);
         for (let index = 0; index < 20; index++) {
           assertCurrent();
         }

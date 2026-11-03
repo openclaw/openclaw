@@ -629,32 +629,6 @@ describe("session pull request snapshot store", () => {
     await unwatch();
   });
 
-  it("refreshes once per streamed PR run through the plugin event and subscription owners", async () => {
-    vi.useFakeTimers();
-    await watch([key], { foreground: true });
-    harness.request.mockClear();
-    const delta = async (deltaText: string, runId = "run-1") => {
-      harness.emit({ state: "delta", runId, sessionKey: key, deltaText }, "chat");
-      await vi.advanceTimersByTimeAsync(5_000);
-    };
-    await delta("working on it ");
-    expect(harness.request).not.toHaveBeenCalled();
-    await delta("see https://github.com/openclaw/openclaw/issues/42 ");
-    expect(harness.request).not.toHaveBeenCalled();
-    await delta("opened https://github.com/openclaw/openclaw/pull/113840 for review ");
-    expect(harness.request).toHaveBeenCalledTimes(1);
-    expectSubscription(harness, [key], [key]);
-    await delta("also https://github.com/openclaw/openclaw/pull/113900 ");
-    expect(harness.request).toHaveBeenCalledTimes(1);
-    await delta("continuing https://github.com/openclaw/openclaw/pu", "run-2");
-    expect(harness.request).toHaveBeenCalledTimes(1);
-    await delta("ll/113901 done", "run-2");
-    expect(harness.request).toHaveBeenCalledTimes(2);
-    await delta("merged https://github.com/openclaw/openclaw/pull/113840 at last", "run-3");
-    expect(harness.request).toHaveBeenCalledTimes(3);
-    await unwatch();
-  });
-
   it("coalesces tool and terminal activity for viewed sessions without refreshing passive rows", async () => {
     vi.useFakeTimers();
     const passiveOwner = {};

@@ -58,16 +58,23 @@ A publication provider supplies typed `NativeGitHubPublisherProvenance` facts:
 the recorded source, optional managed profile, and verified account ID/login.
 The host records these facts in the existing native receipt fields and compares
 them directly on replay. Live account and request assertions still authorize
-every effect.
+every effect. The provider's `supportsOrigin(url)` answers current host policy;
+origin qualification caches physical checkout facts and reevaluates this policy
+when used, including after configuration changes.
 The account bridge retains existing shutdown drain and exact refresh settlement
 contracts, including the released synchronous adapters through December 31, 2026.
 The read bridge keeps common session/source observations separate from its
-GitHub-specific own-PR binding and verified-account read capability.
+GitHub-specific own-PR binding and verified-account read capability. A bound read
+service can use `runDetached` for service work that must discard the request's
+ambient context while retaining its captured service broker and lifetime.
 
 A plugin tool's optional `context.gateway` capability calls only that plugin's
 registered methods and its installed publication host operations. The host
 retains request authority and accepted handoff custody; plugins do not receive an
-administrative Gateway client.
+administrative Gateway client. Read-only `clientCaps` records the invoking client's
+capabilities, and `workspace.workspacePreparationAvailable` reports whether that
+invocation can prepare its workspace. These facts support tool presentation;
+existing host guards still authorize dispatch and workspace effects.
 
 ## Where each section moved
 

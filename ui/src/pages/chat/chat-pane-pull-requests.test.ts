@@ -164,6 +164,10 @@ function createPublicationPane(
     publications,
     settled,
     emitGatewayEvent,
+    present(next: boolean) {
+      pane.presented = next;
+      publication.sync();
+    },
   };
 }
 
@@ -195,7 +199,7 @@ it.each(["global", "per-sender"] as const)(
 );
 
 it("retires hidden publication feedback while retaining the admitted write and its result", async () => {
-  const { pane, request, responses, publications, settled } = createPublicationPane();
+  const { pane, request, responses, publications, settled, present } = createPublicationPane();
   const response = Promise.withResolvers<unknown>();
   responses.set("sessions.github.publish", response.promise);
   const ready = await settled();
@@ -210,7 +214,7 @@ it("retires hidden publication feedback while retaining the admitted write and i
   });
   expect(publications()).toHaveLength(1);
 
-  pane.presented = false;
+  present(false);
   // Hiding must retire the receipt before any render of the parked frame or RPC settlement.
   await Promise.resolve();
   expect(retired).toBe(true);
@@ -227,7 +231,7 @@ it("retires hidden publication feedback while retaining the admitted write and i
   };
   response.resolve(result);
   await completion;
-  pane.presented = true;
+  present(true);
   expect((await settled()).result).toEqual(result);
   expect(publications()).toHaveLength(1);
   expect(
@@ -238,7 +242,8 @@ it("retires hidden publication feedback while retaining the admitted write and i
 it.each(["shared", "personal"] as const)(
   "retains an unknown %s publication across a retained-pane navigation",
   async (source) => {
-    const { pane, state, request, options, settled, publications } = createPublicationPane();
+    const { pane, state, request, options, settled, publications, present } =
+      createPublicationPane();
     (await settled()).onSelect?.(source);
     pane.render();
     pane.publicationView()!.onPublish?.();
@@ -259,16 +264,14 @@ it.each(["shared", "personal"] as const)(
       expect(unknown.onPublish).toBeTypeOf("function");
     }
 
-    pane.presented = false;
+    present(false);
     pane.render();
-    // The parked same-session presentation may project its retained receipt;
-    // the following RPC assertions prove it cannot admit hidden mutations.
-    expect(pane.publicationView()?.locked).toBe(true);
+    expect(pane.publicationView()).toBeUndefined();
     const hiddenRequests = request.mock.calls.length;
     void unknown.onPublish?.();
     void unknown.onRefresh();
     expect(request).toHaveBeenCalledTimes(hiddenRequests);
-    pane.presented = true;
+    present(true);
     const returned = await settled();
 
     expect([returned.locked, returned.selection]).toEqual([true, unknown.selection]);

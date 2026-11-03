@@ -21,6 +21,7 @@ import * as stateWriter from "../../state/openclaw-state-worker-owner.js";
 import type { UserGitHubConnection } from "../../state/user-github-connections.js";
 import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import type { ControlUiSessionPullRequestSnapshot } from "../control-ui-contract.js";
 import {
   expectFailure,
   expectReply,
@@ -355,12 +356,6 @@ it("retains a failed publication without a captured tree when PR discovery is un
       },
       confirmation: null,
     };
-    vi.spyOn(prRead, "createControlUiSessionPrRead").mockReturnValue(async () => ({
-      params: { sessionKey, agentId: "main" },
-      identity: "pr-source",
-      readSource: { agentId: "main", path: "/fixture" },
-      source: { owner: "owner", repo: "repo", branch: "feature" },
-    }));
     fixture.pullRequests.read.mockRejectedValue(new Error("PR discovery is unavailable"));
     fixture.latestShared.mockImplementation(async (_session, _key, isSuperseded) =>
       (await isSuperseded(snapshot)) ? null : failed,
@@ -380,11 +375,10 @@ it.each([false, true])(
         source_head_commit: "1".repeat(40),
         workspace_tree: "2".repeat(40),
       };
-      const prs = [
+      const source = { owner: "owner", repo: "repo", branch: "feature" };
+      const prs: ControlUiSessionPullRequestSnapshot["pullRequests"] = [
         {
-          owner: "owner",
-          repo: "repo",
-          branch: "feature",
+          ...source,
           number: 1,
           title: "Published work",
           url: "https://github.com/owner/repo/pull/1",
@@ -414,6 +408,7 @@ it.each([false, true])(
       expect(fixture.pullRequests.read).toHaveBeenCalledWith(
         expect.objectContaining({
           session: expect.objectContaining({ sessionKey, agentId: "main" }),
+          assertCurrent: expect.any(Function),
         }),
         expect.any(Function),
         "publication",

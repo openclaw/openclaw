@@ -1,0 +1,2 @@
+# Keep existing native publication and session-read regressions on the current host preparation, one-use Git transfer, provider and typed request contracts after extracting vendor operations. No duplicate behavioral cases.
+56

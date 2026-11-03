@@ -2,7 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readGitHubConfig } from "../../../extensions/github-repositories/config-api.js";
 import * as checkDetails from "../../../extensions/github-repositories/control-ui-session-pr-check-details-api.js";
-import { gitHubPublicApi } from "../../../extensions/github-repositories/public-api.js";
+import {
+  gitHubPublicApi,
+  githubApiToken,
+} from "../../../extensions/github-repositories/public-api.js";
 import { controlUiGitHubHandlers } from "../../../extensions/github-repositories/runtime-api.js";
 import * as githubIdentity from "../../../extensions/github-repositories/tool-identity-api.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -424,6 +427,7 @@ describe("controlUi.githubPreview", () => {
         ownerId: "plugins.entries.github-repositories.config.service.token",
         state: "unavailable",
         degradationState: "cold",
+        reason: "secret reference was not found",
         paths: ["plugins.entries.github-repositories.config.service.token"],
         refKeys: ["store:default:PREVIEW_TOKEN"],
       },
@@ -600,7 +604,6 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
         return async () => ({
           identity: session.sessionKey,
           params: { sessionKey: session.sessionKey, agentId: "main" },
-          taskReceiptsOnly: session.taskReceiptsOnly,
           readSource,
           source: null,
         });

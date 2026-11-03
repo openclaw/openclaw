@@ -1271,7 +1271,7 @@ async function seedTeamBootPublication(
       identity: {
         source: api ? "system-detected" : "system-configured",
         ...(api ? {} : { profileId: "startup-fixture" }),
-        account: { accountId: 1, login: "startup-fixture", avatarUrl: null },
+        account: { accountId: 1, login: "startup-fixture" },
       },
       ...(api
         ? { snapshot: { sourceHeadCommit, sourceIndexTree: workspaceTree, workspaceTree } }

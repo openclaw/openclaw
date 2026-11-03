@@ -1,3 +1,4 @@
+import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GitHubAuthorizationState } from "../../../../extensions/github-repositories/browser/github-identity-shared.ts";
@@ -5,7 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { routeFixtures } from "../../app/router-outlet-fixtures.test-support.tsx";
 import { mountRouterOutlet, settleRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { getQueriesForElement, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
