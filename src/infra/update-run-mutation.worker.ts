@@ -3,6 +3,7 @@ import {
   openExistingOpenClawStateWriter,
   type ExistingOpenClawStateWriter,
 } from "../state/openclaw-state-db-existing-write.js";
+import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { isPostgresSqlConnection } from "./sql-connection.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
@@ -12,8 +13,10 @@ import {
 } from "./sqlite-worker-admission-retry.js";
 import {
   requestSqliteWorkerOperationAdmission,
+  requestSqliteWorkerSchemaMaintenance,
   takeSqliteWorkerOperationAdmissionAttachment,
 } from "./sqlite-worker-operation-admission.js";
+import type { UpdateSqliteWriteReceipt } from "./update-doctor-migration-attribution.js";
 import { PluginCohortRecoveryWriteBindingSchema } from "./update-plugin-cohort-schema.js";
 import { claimUpdateResultInTransaction } from "./update-result-claim.js";
 import { resolveUpdateRunCodecEnv, type UpdateRunLedgerOptions } from "./update-run-codec.js";
@@ -74,8 +77,23 @@ export function recordUpdateRunMutationInWorker(
     input.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     bookkeeping ? UPDATE_RUN_BOOKKEEPING_TIMEOUT_MS : Infinity,
   );
+  let sqliteWriteReceipt: UpdateSqliteWriteReceipt | undefined;
   const options = {
     ...stateOptions,
+    ...(input.sqliteCaptureGeneration
+      ? {
+          updateCapture: {
+            expected: input.sqliteCaptureGeneration,
+            // Settlement follows COMMIT; do not reopen its terminal transaction grant.
+            assertCurrent: () => {
+              requestSqliteWorkerSchemaMaintenance(resolveDatabasePath(stateOptions));
+            },
+            accept: (receipt: UpdateSqliteWriteReceipt) => {
+              sqliteWriteReceipt = receipt;
+            },
+          },
+        }
+      : {}),
     busyTimeoutMs,
     redactPaths: input.redactPaths,
   };
@@ -92,85 +110,91 @@ export function recordUpdateRunMutationInWorker(
   let entered = false;
   try {
     assertCurrent("transaction");
-    return writer().run(({ db }) => {
-      entered = true;
-      // The longer wait is for BEGIN only; mutation and commit keep the normal lock budget.
-      if (!isPostgresSqlConnection(db) && busyTimeoutMs > OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) {
-        setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
-      }
-      if (input.requireNoRecovery) {
-        const binding = input.pluginCohort;
-        const eligible =
-          binding &&
-          (command.type === "updateRuns.recordPhase" ||
-            command.type === "updateRuns.recordStep" ||
-            command.type === "updateRuns.recordDiagnostics");
-        // Check even when the reservation disappeared: an orphan companion is never admission.
-        const pair = eligible ? readPluginCohortRecoveryInDatabase(db, input.runId) : undefined;
-        const recovery = readRecovery(db, input.runId);
-        if (recovery) {
-          if (
-            !binding ||
-            !pair ||
-            binding.runId !== input.runId ||
-            binding.transactionId !== pair.cohort.transactionId ||
-            binding.installKey !== pair.cohort.installKey ||
-            !pluginCohortRecoveryMatchesSource(pair, options)
-          ) {
-            assertCurrent("commit");
-            return { kind: "recovery-required", recovery };
-          }
-          // The attachment belongs to this request's retained admission callback,
-          // which rechecks the live executor/source before BEGIN and COMMIT.
-          const admitted = PluginCohortRecoveryWriteBindingSchema.parse(
-            takeSqliteWorkerOperationAdmissionAttachment(),
-          );
-          if (
-            admitted.runId !== binding.runId ||
-            admitted.transactionId !== binding.transactionId ||
-            admitted.installKey !== binding.installKey
-          ) {
-            throw new Error("Plugin cohort bookkeeping lost its admitted operation");
+    const result = writer().run<UpdateRunWriteOperations["updateRuns.recordStep"]["output"]>(
+      ({ db }) => {
+        entered = true;
+        // The longer wait is for BEGIN only; mutation and commit keep the normal lock budget.
+        if (!isPostgresSqlConnection(db) && busyTimeoutMs > OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) {
+          setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+        }
+        if (input.requireNoRecovery) {
+          const binding = input.pluginCohort;
+          const eligible =
+            binding &&
+            (command.type === "updateRuns.recordPhase" ||
+              command.type === "updateRuns.recordStep" ||
+              command.type === "updateRuns.recordDiagnostics");
+          // Check even when the reservation disappeared: an orphan companion is never admission.
+          const pair = eligible ? readPluginCohortRecoveryInDatabase(db, input.runId) : undefined;
+          const recovery = readRecovery(db, input.runId);
+          if (recovery) {
+            if (
+              !binding ||
+              !pair ||
+              binding.runId !== input.runId ||
+              binding.transactionId !== pair.cohort.transactionId ||
+              binding.installKey !== pair.cohort.installKey ||
+              !pluginCohortRecoveryMatchesSource(pair, options)
+            ) {
+              assertCurrent("commit");
+              return { kind: "recovery-required", recovery };
+            }
+            // The attachment belongs to this request's retained admission callback,
+            // which rechecks the live executor/source before BEGIN and COMMIT.
+            const admitted = PluginCohortRecoveryWriteBindingSchema.parse(
+              takeSqliteWorkerOperationAdmissionAttachment(),
+            );
+            if (
+              admitted.runId !== binding.runId ||
+              admitted.transactionId !== binding.transactionId ||
+              admitted.installKey !== binding.installKey
+            ) {
+              throw new Error("Plugin cohort bookkeeping lost its admitted operation");
+            }
           }
         }
-      }
-      const record = mutateRunInTransaction(
-        db,
-        input.runId,
-        (current) => {
-          if (command.type === "updateRuns.recordPhase") {
-            applyUpdateRunPhase(current, command.input.phase, command.input.patch);
-          } else if (command.type === "updateRuns.recordStep") {
-            applyUpdateRunStep(current, command.input.step);
-          } else if (command.type === "updateRuns.finish") {
-            applyFinishUpdateRun(current, command.input.result);
-          } else if (command.type === "updateRuns.recordVerification") {
-            recordUpdateRunVerificationRecord(current, command.input.verification, command.input);
-          } else {
-            const diagnostics = command.input.diagnostics;
-            applyUpdateRunDiagnostics(
-              current,
-              command.input.preserveRecovery
-                ? {
-                    ...diagnostics,
-                    recovery: current.verification.recovery ?? diagnostics.recovery,
-                    rollbackOutcome:
-                      current.verification.rollbackOutcome ?? diagnostics.rollbackOutcome,
-                  }
-                : diagnostics,
-            );
-          }
-        },
-        codecOptions,
-      );
-      // The host owner dispatches a claimed outcome only after this commit.
-      const updateResult =
-        command.type === "updateRuns.finish"
-          ? claimUpdateResultInTransaction(db, record)
-          : undefined;
-      assertCurrent("commit");
-      return { kind: "recorded", record, ...(updateResult ? { updateResult } : {}) };
-    }, options);
+        const record = mutateRunInTransaction(
+          db,
+          input.runId,
+          (current) => {
+            if (command.type === "updateRuns.recordPhase") {
+              applyUpdateRunPhase(current, command.input.phase, command.input.patch);
+            } else if (command.type === "updateRuns.recordStep") {
+              applyUpdateRunStep(current, command.input.step);
+            } else if (command.type === "updateRuns.finish") {
+              applyFinishUpdateRun(current, command.input.result);
+            } else if (command.type === "updateRuns.recordVerification") {
+              recordUpdateRunVerificationRecord(current, command.input.verification, command.input);
+            } else {
+              const diagnostics = command.input.diagnostics;
+              applyUpdateRunDiagnostics(
+                current,
+                command.input.preserveRecovery
+                  ? {
+                      ...diagnostics,
+                      recovery: current.verification.recovery ?? diagnostics.recovery,
+                      rollbackOutcome:
+                        current.verification.rollbackOutcome ?? diagnostics.rollbackOutcome,
+                    }
+                  : diagnostics,
+              );
+            }
+          },
+          codecOptions,
+        );
+        // The host owner dispatches a claimed outcome only after this commit.
+        const updateResult =
+          command.type === "updateRuns.finish"
+            ? claimUpdateResultInTransaction(db, record)
+            : undefined;
+        assertCurrent("commit");
+        return { kind: "recorded", record, ...(updateResult ? { updateResult } : {}) };
+      },
+      options,
+    );
+    return result.kind === "recorded" && sqliteWriteReceipt
+      ? { ...result, sqliteWriteReceipt }
+      : result;
   } catch (cause) {
     if (entered || !isSqliteLockError(cause)) {
       throw cause;

@@ -118,6 +118,7 @@ type DatabaseGenerationObservation = {
   generation: string | null;
   physical: string | null;
   emptyReaderAlternate?: string;
+  closedGeneration?: string;
   preparedSource?: PreparedSqliteSnapshotSource;
 };
 
@@ -292,6 +293,7 @@ export function readUpdateDatabaseGeneration(
       }
       return {
         generation: fingerprint(change, checksum),
+        closedGeneration: fingerprint(null, null),
         physical: serializePhysicalGeneration(current, after),
         // The first read-only native open can create this zero-write WAL index;
         // closing the last writer can remove it. Neither changes committed content.
@@ -317,6 +319,12 @@ export function readUpdateDatabaseGenerations(
   inspectImage?: (imagePath: string, sourcePath: string) => void,
 ): UpdateDatabaseGenerations {
   return readUpdateDatabaseGenerationPair(paths, inspectImage).committed;
+}
+
+/** Predict only the native last-writer close of these exact committed bytes. */
+export function readUpdateSqliteWriterGeneration(pathname: string) {
+  const observation = readUpdateDatabaseGeneration(pathname);
+  return { generation: observation.generation, closedGeneration: observation.closedGeneration };
 }
 
 /** Both wire formats come from the same verified family observation. */

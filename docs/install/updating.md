@@ -1676,6 +1676,15 @@ capture, so writer shutdown during rollback is not mistaken for intervening writ
 The installed updater owns snapshot capture; staging a newer candidate cannot
 change that behavior in an already-running older updater.
 
+When an older updater leaves a managed Gateway in a restart loop, the candidate
+checks the native service even if no live Gateway lease exists between restarts.
+It retains the original database capture while stopping the service, then records
+the stop under maintenance ownership. The receipt's actual SQLite writer reports
+its committed before/after generations into the same capture used by Doctor.
+Subsequent schema migration remains eligible for verified rollback; independent
+writes before migration still invalidate automatic restoration rather than becoming
+a new baseline.
+
 Switch channels or target a specific version:
 
 ```bash

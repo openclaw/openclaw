@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { realpathSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
@@ -31,6 +32,79 @@ export type UpdateDoctorMigrationCapture = {
   refuse(message: string): void;
 };
 
+export type UpdateSqliteWriteReceipt = {
+  before: string;
+  after: string | null;
+  afterClose?: string;
+};
+
+/** Capture only the selected writer; ordinary writes never advance Doctor's baseline. */
+export function captureUpdateDoctorSqliteWrite(pathname: string) {
+  const capture = captures.getStore()?.capture;
+  if (!capture) {
+    return undefined;
+  }
+  const key = resolveUpdateSqlitePath(pathname);
+  const expected = capture.expected(key);
+  if (typeof expected !== "string") {
+    capture.refuse("The update receipt writer is outside the captured SQLite sources.");
+    return undefined;
+  }
+  const assertCurrent = migrationAuthority(capture, pathname);
+  assertCurrent();
+  return {
+    expected,
+    assertCurrent,
+    accept(receipt: UpdateSqliteWriteReceipt) {
+      assertCurrent();
+      capture.accept(key, receipt.before, receipt.after);
+    },
+    refuse() {
+      capture.refuse("The update receipt writer did not return a settled SQLite generation.");
+    },
+  };
+}
+
+/** The existing writer supplies live worker admission and its actual native connection. */
+export function runUpdateSqliteWriterCapture<T>(
+  db: DatabaseSync,
+  pathname: string,
+  expected: string,
+  assertCurrent: () => void,
+  operation: () => T,
+): { value: T; receipt: UpdateSqliteWriteReceipt } {
+  const key = resolveUpdateSqlitePath(pathname);
+  let generation: string | null = expected;
+  let afterClose: string | undefined;
+  const value = captures.run(
+    {
+      writer: {
+        path: key,
+        assertCurrent,
+        acceptClose: (closed) => {
+          afterClose = closed;
+        },
+      },
+      capture: {
+        expected: (candidate) => (candidate === key ? generation : undefined),
+        assertCurrent,
+        accept(_candidate, before, after) {
+          if (before !== generation) {
+            throw new Error("Update receipt source changed before writer admission.");
+          }
+          generation = after;
+        },
+        refuse() {
+          // The native owner propagates its original error. Preserve rollback-only
+          // admission timeouts for retry; the host refuses an exhausted settlement.
+        },
+      },
+    },
+    () => runUpdateSqliteMigration(db, pathname, operation, { verifyExclusivePreimage: true }),
+  );
+  return { value, receipt: { before: expected, after: generation, afterClose } };
+}
+
 type MigrationSource = {
   path: string;
   generation: string;
@@ -43,6 +117,7 @@ type DoctorMigrationBackup = (
 type DoctorMigrationFullBackup = { path: string; generation?: string };
 const captures = new AsyncLocalStorage<{
   capture?: UpdateDoctorMigrationCapture;
+  writer?: { path: string; assertCurrent: () => void; acceptClose: (generation: string) => void };
   source?: MigrationSource;
   companions?: readonly MigrationSource[];
   assertMigrationCurrent?: () => void;
@@ -124,14 +199,28 @@ function migrationAuthority(
   };
 }
 
-function readSqliteGeneration(pathname: string): string | null {
+function readSqliteWriterGeneration(pathname: string) {
   const value: unknown = JSON.parse(
     runSqliteReadOnlyWorkerSync(pathname, undefined, "update-generation"),
   );
-  if (value !== null && (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value))) {
+  if (
+    !isRecord(value) ||
+    (value.generation !== null &&
+      (typeof value.generation !== "string" || !/^[a-f0-9]{64}$/u.test(value.generation))) ||
+    (value.closedGeneration !== undefined &&
+      (typeof value.closedGeneration !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(value.closedGeneration)))
+  ) {
     throw new Error("Database generation child returned an invalid generation.");
   }
-  return value;
+  return {
+    generation: value.generation,
+    closedGeneration: value.closedGeneration,
+  };
+}
+
+function readSqliteGeneration(pathname: string): string | null {
+  return readSqliteWriterGeneration(pathname).generation;
 }
 
 function readSqliteFiles(pathname: string) {
@@ -161,6 +250,8 @@ export function hasUpdateDoctorMigrationCapture(): boolean {
 }
 
 type SqliteMigrationOptions = {
+  /** A receipt attributes only its own writer, not all work under maintenance custody. */
+  verifyExclusivePreimage?: boolean;
   retainExclusive?: boolean;
   created?: boolean;
   /** Already-open companion custody stays held through this synchronous native phase. */
@@ -241,7 +332,10 @@ function* updateSqliteMigrationSteps<T>(
   if (typeof expected !== "string" && !(expected === null && options?.created)) {
     return operation();
   }
-  const assertCurrent = migrationAuthority(capture, pathname);
+  const assertCurrent =
+    context.writer?.path === key
+      ? context.writer.assertCurrent
+      : migrationAuthority(capture, pathname);
   assertCurrent();
   if (db.isTransaction) {
     throw new Error("Update migration exclusion must precede the source transaction.");
@@ -250,6 +344,11 @@ function* updateSqliteMigrationSteps<T>(
   let outcome: { value: T } | { error: unknown };
   try {
     try {
+      // A strict receipt attaches WAL before observing the preimage. Ordinary
+      // migrations retain their established maintenance-interval semantics.
+      if (options?.verifyExclusivePreimage && mode !== "exclusive") {
+        db.prepare("PRAGMA schema_version").get(); // sqlite-allow-raw -- Attach native WAL coordination before the receipt preimage.
+      }
       // Maintenance owns the source; concurrent outside writers are unsupported.
       if (expected === null) {
         let files: ReturnType<typeof readSqliteFiles> | undefined;
@@ -309,6 +408,9 @@ function* updateSqliteMigrationSteps<T>(
       }
       db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;"); // sqlite-allow-raw -- Bound the migration's native exclusion.
       assertCurrent();
+      if (options?.verifyExclusivePreimage && readSqliteGeneration(pathname) !== before) {
+        throw new Error("Update receipt source changed before native writer exclusion.");
+      }
       const source: MigrationSource | undefined =
         before === null ? undefined : { path: key, generation: before, assertCurrent };
       const migrationContext = {
@@ -353,7 +455,11 @@ function* updateSqliteMigrationSteps<T>(
       let after: string | null | undefined;
       yield {
         read() {
-          after = readSqliteGeneration(pathname);
+          const observed = readSqliteWriterGeneration(pathname);
+          after = observed.generation;
+          if (context.writer?.path === key && observed.closedGeneration) {
+            context.writer.acceptClose(observed.closedGeneration);
+          }
         },
         async readAsync(signal) {
           const { readUpdateSqliteDatabaseGenerationPairIsolated } =

@@ -36,10 +36,16 @@ export type UpdateRunWriteInput = {
   pluginCohort?: PluginCohortRecoveryWriteBinding;
   busyTimeoutMs?: number;
   redactPaths?: readonly string[];
+  sqliteCaptureGeneration?: string;
 };
 
 type UpdateRunWriteResult =
-  | { kind: "recorded"; record: UpdateRunRecord; updateResult?: UpdateResultPayload }
+  | {
+      kind: "recorded";
+      record: UpdateRunRecord;
+      updateResult?: UpdateResultPayload;
+      sqliteWriteReceipt?: import("./update-doctor-migration-attribution.js").UpdateSqliteWriteReceipt;
+    }
   | { kind: "bookkeeping-skipped" }
   | { kind: "recovery-required"; recovery: UpdateRecoveryRecord };
 

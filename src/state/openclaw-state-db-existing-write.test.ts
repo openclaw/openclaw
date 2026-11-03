@@ -7,7 +7,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import { retrySqliteWorkerAdmission } from "../infra/sqlite-worker-admission-retry.js";
+import { SqliteWorkerAdmissionTimeoutError } from "../infra/sqlite-worker-contract.js";
 import * as maintenance from "../infra/state-database-maintenance.js";
+import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import type { UpdateSqliteWriteReceipt } from "../infra/update-doctor-migration-attribution.js";
 import { closeOpenClawStateDatabaseByPathAsync as closePath } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION as SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -378,4 +382,53 @@ it("rechecks current environment for each retained write", () => {
     writer.run(record(2, "readmitted"), externalOptions);
   });
   expect(readValues(options.path)).toEqual(["authorized", "readmitted"]);
+});
+
+it("attributes only its native transaction and refuses a changed preimage", () => {
+  const options = fixture();
+  const expected = readUpdateDatabaseGenerations([options.path])[options.path]!;
+  const writer = openWriter(options);
+  const receipts: UpdateSqliteWriteReceipt[] = [];
+  const attributed = {
+    ...options,
+    updateCapture: {
+      expected,
+      assertCurrent() {},
+      accept: (receipt: UpdateSqliteWriteReceipt) => receipts.push(receipt),
+    },
+  };
+  writer.run(({ db }) => {
+    using outsider = new DatabaseSync(options.path);
+    outsider.exec("PRAGMA busy_timeout = 0");
+    expect(() => insert(outsider, 2, "outside")).toThrow(/locked/);
+    insert(db, 1, "receipt");
+  }, attributed);
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0]?.before).toBe(expected);
+  expect(receipts[0]?.after).not.toBe(expected);
+  expect(readValues(options.path)).toEqual(["receipt"]);
+  attributed.updateCapture.expected = receipts[0]!.after!;
+  let attempts = 0;
+  retrySqliteWorkerAdmission(
+    () =>
+      writer.run(({ db }) => {
+        insert(db, 2, "retried");
+        if (++attempts === 1) {
+          throw new SqliteWorkerAdmissionTimeoutError();
+        }
+      }, attributed),
+    { maxAttempts: 2 },
+  );
+  expect(attempts).toBe(2);
+  expect(receipts).toHaveLength(2);
+  expect(readValues(options.path)).toEqual(["receipt", "retried"]);
+  // A later unrelated commit must not be folded into the attributed writer.
+  attributed.updateCapture.expected = receipts[1]!.after!;
+  {
+    using outsider = new DatabaseSync(options.path);
+    insert(outsider, 3, "independent");
+  }
+  expect(() => writer.run(record(4, "must not write"), attributed)).toThrow(/source changed/);
+  expect(receipts).toHaveLength(2);
+  expect(readValues(options.path)).toEqual(["receipt", "retried", "independent"]);
 });
