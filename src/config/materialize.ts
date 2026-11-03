@@ -9,6 +9,10 @@ import {
   applyModelDefaults,
   applySessionDefaults,
 } from "./defaults.js";
+import {
+  computeModelPolicyAllowlist,
+  hasModelPolicyAllowlistMigrationMarker,
+} from "./model-policy-allowlist-migration.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { captureConfigResolutionFactsThroughRewrite } from "./resolution-facts.js";
 import { projectSkillWorkshopPluginPolicy } from "./skill-workshop-plugin-migration.js";
@@ -41,6 +45,19 @@ export function materializeRuntimeConfig(
   } = {},
 ): RuntimeConfig {
   const carryResolutionFacts = captureConfigResolutionFactsThroughRewrite(config);
+  // Resolve authored restrictions before provider defaults add model metadata.
+  if (!hasModelPolicyAllowlistMigrationMarker(config) && !config.agents?.defaults?.modelPolicy) {
+    const allow = computeModelPolicyAllowlist({ root: config, defaults: config.agents?.defaults });
+    if (allow === null) {
+      config = {
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: { ...config.agents?.defaults, modelPolicy: {} },
+        },
+      };
+    }
+  }
   let next = applyMessageDefaults(config);
   next = applySessionDefaults(next);
   next = applyAgentDefaults(next);
