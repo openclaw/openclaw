@@ -192,10 +192,13 @@ prove module evaluation. Untouched native main and the clean candidate each pass
 the existing case. An actual metadata-owner eager import passes the original and
 fails only the repaired pre-callback module-evaluation check. Owner and test bytes
 restore exactly. Both related suites pass all19 cases; focused typecheck, lint,
-format, MDX and test-line checks pass. Fresh review and current-head CI remain
-pending.
+format, MDX and test-line checks pass. Initial CI caught a changed mock-factory
+fingerprint. Add the supported isolation annotation and retire only that factory's
+obsolete baseline entry; the guard now passes. Repeat eager-import controls still
+pass the original and fail the repair, with exact byte restoration and a clean
+candidate pass. Fresh review and repaired-head CI remain pending.
 
-Production, shared scalar, imports, helpers and exports are unchanged. Four
+Production, shared scalar, imports, helpers and exports are unchanged. Five
 additional test lines receive exact separate allocation credit. No declaration,
 case or original assertion is removed. This proves local metadata loading only;
 no Gateway, native Codex execution or authorization behavior is claimed.

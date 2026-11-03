@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   registerCodexSessionCli: vi.fn(),
 }));
 
+// mock-isolation: Observe deferred loading without importing the real session CLI runtime.
 vi.mock("./src/session-cli.js", () => {
   mocks.moduleLoaded = true;
   return { registerCodexSessionCli: mocks.registerCodexSessionCli };
