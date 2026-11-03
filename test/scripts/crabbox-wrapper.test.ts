@@ -73,7 +73,7 @@ const GIT_MERGE_BASE_MAIN_HEAD_KEY = "merge-base\u0000origin/main\u0000HEAD";
 const GIT_MERGE_BASE_RELEASE_HEAD_KEY = "merge-base\u0000origin/release/2026.7.2\u0000HEAD";
 const GIT_CHECK_RELEASE_REF_KEY = "check-ref-format\u0000refs/remotes/origin/release/2026.7.2";
 const defaultProviderHelp =
-  "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
+  "provider: hetzner, aws, ascii-box, local-container, blacksmith-testbox, or cloudflare\n";
 const brokerProviderHelp = "provider: aws, azure, blacksmith-testbox, or daytona\n";
 const azureProviderHelp =
   "provider: hetzner, aws, azure, local-container, blacksmith-testbox, or cloudflare\n";
@@ -154,7 +154,7 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     "for (const claimPath of claimPaths) { const claim = fs.existsSync(claimPath) ? JSON.parse(fs.readFileSync(claimPath, 'utf8')) : { leaseID: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID }; claim.repoRoot = process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT || process.cwd(); fs.mkdirSync(path.dirname(claimPath), { recursive: true }); fs.writeFileSync(claimPath, JSON.stringify(claim) + '\\n', 'utf8'); }",
     "const timingRequested = args.slice(0, args.indexOf('--') < 0 ? args.length : args.indexOf('--')).some((arg) => /^--?timing-json(?:=true)?$/.test(arg));",
     "const timingLeaseId = process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID || (timingRequested && optionValue('provider') === 'blacksmith-testbox' && claimPaths.length === 0 ? optionValue('id') || 'tbx_fixture' : '');",
-    "if (timingLeaseId) process.stderr.write(JSON.stringify({ provider: optionValue('provider'), leaseId: timingLeaseId, exitCode: Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || '0', 10) }) + '\\n');",
+    "if (timingLeaseId) process.stderr.write(JSON.stringify({ provider: optionValue('provider') === 'boat' ? 'ascii-box' : optionValue('provider'), leaseId: timingLeaseId, exitCode: Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || '0', 10) }) + '\\n');",
   ].join("");
   // Keep the descendant in the fake's process group, and publish readiness only
   // after its signal handlers exist so the wrapper's group cleanup is deterministic.
@@ -2476,17 +2476,19 @@ describe("scripts/crabbox-wrapper", () => {
     },
   );
 
-  it.each([
-    {
-      flags: ["--fresh-pr=openclaw/openclaw#1", "--apply-local-patch"],
-      command: ["node", "scripts/check-changed.mjs"],
-    },
-    { flags: ["--no-sync"], command: ["node", "scripts/source-fixture.mjs"] },
-    { flags: ["--sync-only"], command: [] },
-    { flags: ["--target", "windows"], command: ["node", "scripts/source-fixture.mjs"] },
-  ])("preserves native AWS source selection for $flags", ({ flags, command }) => {
+  it.each(
+    [
+      {
+        flags: ["--fresh-pr=openclaw/openclaw#1", "--apply-local-patch"],
+        command: ["node", "scripts/check-changed.mjs"],
+      },
+      { flags: ["--no-sync"], command: ["node", "scripts/source-fixture.mjs"] },
+      { flags: ["--sync-only"], command: [] },
+      { flags: ["--target", "windows"], command: ["node", "scripts/source-fixture.mjs"] },
+    ].flatMap((entry) => ["aws", "boat"].map((provider) => ({ ...entry, provider }))),
+  )("preserves native $provider source selection for $flags", ({ provider, flags, command }) => {
     const { output, remoteCommand } = runSuccessfulDefaultWrapper(
-      runArgs("aws", ...flags, "--", ...command),
+      runArgs(provider, ...flags, "--", ...command),
       {
         gitResponses: {
           [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
@@ -2503,56 +2505,63 @@ describe("scripts/crabbox-wrapper", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32").each(["command", "script"])(
-    "runs native AWS no-hydrate %s payloads without Node or pnpm",
-    (mode) => {
-      const cwd = invocationLogTempDirs.make("openclaw-raw-aws-");
-      const emptyPath = path.join(cwd, "empty-path");
-      mkdirSync(emptyPath);
-      const script =
-        "set -eu\n! command -v node\n! command -v pnpm\nprintf '%s\\n' raw-bootstrap-ran\n";
-      const file = path.join(cwd, "bootstrap.sh");
-      writeFileSync(file, script);
-      const payload = mode === "script" ? ["--script", file] : ["--shell", "--", script];
+  it.skipIf(process.platform === "win32").each([
+    ["aws", "command"],
+    ["aws", "script"],
+    ["boat", "command"],
+    ["boat", "script"],
+  ] as const)("runs native %s no-hydrate %s payloads without Node or pnpm", (provider, mode) => {
+    const cwd = invocationLogTempDirs.make("openclaw-raw-aws-");
+    const emptyPath = path.join(cwd, "empty-path");
+    mkdirSync(emptyPath);
+    const script =
+      "set -eu\n! command -v node\n! command -v pnpm\nprintf '%s\\n' raw-bootstrap-ran\n";
+    const file = path.join(cwd, "bootstrap.sh");
+    writeFileSync(file, script);
+    const payload = mode === "script" ? ["--script", file] : ["--shell", "--", script];
+    const { output, remoteCommand } = runSuccessfulDefaultWrapper(
+      runArgs(provider, "--no-hydrate", ...payload),
+    );
+    expect(output.args).toContain("--no-hydrate");
+    const result = spawnSync(
+      "/bin/sh",
+      ["-c", mode === "script" ? output.scriptContent! : remoteCommand],
+      {
+        cwd,
+        encoding: "utf8",
+        env: { PATH: emptyPath },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("raw-bootstrap-ran\n");
+    expect(output.args.slice(-payload.length)).toEqual(payload);
+    expect(mode === "script" ? output.scriptContent : remoteCommand).toBe(script);
+  });
+
+  it.each(
+    [
+      { flags: ["--no-hydrate=1"], capsule: false },
+      { flags: ["--no-hydrate", "--no-hydrate=false"], capsule: true },
+      { flags: ["--no-hydrate=false", "--no-hydrate"], capsule: false },
+      { flags: ["--label", "--no-hydrate"], capsule: true },
+    ].flatMap((entry) => ["aws", "boat"].map((provider) => ({ ...entry, provider }))),
+  )(
+    "preserves native $provider hydration option semantics: $flags",
+    ({ provider, flags, capsule }) => {
       const { output, remoteCommand } = runSuccessfulDefaultWrapper(
-        runArgs("aws", "--no-hydrate", ...payload),
+        runArgs(provider, ...flags, "--", "echo", "--no-hydrate"),
       );
-      expect(output.args).toContain("--no-hydrate");
-      const result = spawnSync(
-        "/bin/sh",
-        ["-c", mode === "script" ? output.scriptContent! : remoteCommand],
-        {
-          cwd,
-          encoding: "utf8",
-          env: { PATH: emptyPath },
-        },
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toBe("raw-bootstrap-ran\n");
-      expect(output.args.slice(-payload.length)).toEqual(payload);
-      expect(mode === "script" ? output.scriptContent : remoteCommand).toBe(script);
+      expect(remoteCommand.includes(".openclaw-crabbox-changed-gate.bundle")).toBe(capsule);
+      expect(remoteCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+      const index = output.args.indexOf(flags[0]!);
+      expect(output.args.slice(index, index + flags.length)).toEqual(flags);
+      if (capsule) {
+        expect(remoteCommand).toContain("echo --no-hydrate");
+      } else {
+        expect(output.args.slice(-2)).toEqual(["echo", "--no-hydrate"]);
+      }
     },
   );
-
-  it.each([
-    { flags: ["--no-hydrate=1"], capsule: false },
-    { flags: ["--no-hydrate", "--no-hydrate=false"], capsule: true },
-    { flags: ["--no-hydrate=false", "--no-hydrate"], capsule: false },
-    { flags: ["--label", "--no-hydrate"], capsule: true },
-  ])("preserves native hydration option semantics: $flags", ({ flags, capsule }) => {
-    const { output, remoteCommand } = runSuccessfulDefaultWrapper(
-      runArgs("aws", ...flags, "--", "echo", "--no-hydrate"),
-    );
-    expect(remoteCommand.includes(".openclaw-crabbox-changed-gate.bundle")).toBe(capsule);
-    expect(remoteCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
-    const index = output.args.indexOf(flags[0]!);
-    expect(output.args.slice(index, index + flags.length)).toEqual(flags);
-    if (capsule) {
-      expect(remoteCommand).toContain("echo --no-hydrate");
-    } else {
-      expect(output.args.slice(-2)).toEqual(["echo", "--no-hydrate"]);
-    }
-  });
 
   it.each<{ source: string; args: string[]; options: WrapperOptions; capsule: boolean }>([
     { source: "Linux alias", args: ["--target", "ubuntu"], options: {}, capsule: true },
@@ -2769,9 +2778,30 @@ describe("scripts/crabbox-wrapper", () => {
     { provider: "aws", id: "cbx_111111111111", status: 0 },
     { provider: "aws", id: "cbx_111111111111", status: 7 },
     { provider: "aws", id: "cbx_111111111111", requestId: "retained-runner", status: 0 },
+    { provider: "boat", id: "cbx_111111111111", status: 0 },
+    { provider: "boat", id: "cbx_111111111111", status: 7 },
+    { provider: "boat", id: "cbx_111111111111", requestId: "retained-runner", status: 0 },
+    {
+      provider: "boat",
+      id: "cbx_111111111111",
+      status: 0,
+      labels: { ascii_box_deletion_completed: "completed-witness" },
+    },
+    {
+      provider: "boat",
+      id: "cbx_111111111111",
+      status: 7,
+      labels: { ascii_box_deletion_operation: "" },
+    },
+    {
+      provider: "boat",
+      id: "cbx_111111111111",
+      status: 7,
+      labels: { ascii_box_deletion_operation_binding: "operation-witness" },
+    },
   ])(
-    "restores delegated $provider claims after exit $status ($requestId)",
-    ({ provider, id, requestId, status }) => {
+    "preserves delegated $provider claim ownership after exit $status ($requestId)",
+    ({ provider, id, requestId, status, labels }) => {
       const fixture = makeClaimFixture();
       fixture.key(id);
       const originalClaim = {
@@ -2779,6 +2809,8 @@ describe("scripts/crabbox-wrapper", () => {
         repoRoot,
         owner: "preserved-owner",
         metadata: { keep: true },
+        ...(provider === "boat" ? { provider: "ascii-box" } : {}),
+        ...(labels ? { labels } : {}),
       };
       const claimPath = fixture.claim(originalClaim);
 
@@ -2791,7 +2823,17 @@ describe("scripts/crabbox-wrapper", () => {
         },
       );
 
-      expect(result.status).toBe(status);
+      expect(result.status).toBe(status || (labels ? 1 : 0));
+      if (labels) {
+        const { cwd } = parseFakeCrabboxOutput(result);
+        expect(readFileSync(claimPath, "utf8")).toBe(
+          `${JSON.stringify({ ...originalClaim, repoRoot: cwd })}\n`,
+        );
+        expect(result.stderr).toContain("lease ownership restoration failed");
+        expect(result.stderr).toContain("temporary checkout retained");
+        expect(existsSync(cwd)).toBe(true);
+        return;
+      }
       expect(readJson(claimPath)).toEqual(originalClaim);
     },
   );
@@ -2906,12 +2948,12 @@ console.error = function (...args) {
     }
   });
 
-  it.each(["blacksmith-testbox", "aws"])(
+  it.each(["blacksmith-testbox", "aws", "boat"])(
     "restores a created delegated %s claim by captured timing lease id",
     (provider) => {
       const fixture = makeClaimFixture();
-      const id = provider === "aws" ? "cbx_222222222222" : "tbx_created_timing";
-      const decoyId = provider === "aws" ? "cbx_888888888888" : "tbx_created_decoy";
+      const id = provider !== "blacksmith-testbox" ? "cbx_222222222222" : "tbx_created_timing";
+      const decoyId = provider !== "blacksmith-testbox" ? "cbx_888888888888" : "tbx_created_decoy";
       const originalClaim = { leaseID: id, repoRoot, metadata: { keep: true } };
       const decoyClaim = { leaseID: decoyId, repoRoot };
       const claimPath = fixture.claim(originalClaim);
@@ -2936,22 +2978,22 @@ console.error = function (...args) {
     },
   );
 
-  it.each(["blacksmith-testbox", "aws"])(
+  it.each(["blacksmith-testbox", "aws", "boat"])(
     "restores created delegated %s claims from the temporary checkout fallback",
     (provider) => {
       const fixture = makeClaimFixture();
       const createdClaim = {
-        leaseID: provider === "aws" ? "cbx_333333333333" : "tbx_created_fallback",
+        leaseID: provider !== "blacksmith-testbox" ? "cbx_333333333333" : "tbx_created_fallback",
         repoRoot,
         owner: "created",
       };
       const siblingClaim = {
-        leaseID: provider === "aws" ? "cbx_444444444444" : "tbx_created_sibling",
+        leaseID: provider !== "blacksmith-testbox" ? "cbx_444444444444" : "tbx_created_sibling",
         repoRoot,
         owner: "sibling",
       };
       const foreignClaim = {
-        leaseID: provider === "aws" ? "cbx_555555555555" : "tbx_foreign_fallback",
+        leaseID: provider !== "blacksmith-testbox" ? "cbx_555555555555" : "tbx_foreign_fallback",
         repoRoot: "/tmp/genuinely-foreign-repo",
       };
       const claimPath = fixture.claim(createdClaim);
@@ -2959,7 +3001,12 @@ console.error = function (...args) {
       const foreignPath = fixture.claim(foreignClaim);
 
       const result = runDelegatedClaim(
-        runArgs(provider, ...(provider === "aws" ? [] : ["--keep"]), "--", "echo ok"),
+        runArgs(
+          provider,
+          ...(provider !== "blacksmith-testbox" ? [] : ["--keep"]),
+          "--",
+          "echo ok",
+        ),
         {
           ...fixture.env,
           OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
@@ -2974,12 +3021,12 @@ console.error = function (...args) {
     },
   );
 
-  it.each(["blacksmith-testbox", "aws"])(
+  it.each(["blacksmith-testbox", "aws", "boat"])(
     "restores a failed delegated %s claim kept on failure",
     (provider) => {
       const fixture = makeClaimFixture();
       const originalClaim = {
-        leaseID: provider === "aws" ? "cbx_666666666666" : "tbx_created_failure",
+        leaseID: provider !== "blacksmith-testbox" ? "cbx_666666666666" : "tbx_created_failure",
         repoRoot,
         metadata: { keepOnFailure: true },
       };
@@ -2996,16 +3043,19 @@ console.error = function (...args) {
     },
   );
 
-  it.each(["blacksmith-testbox", "aws"])(
+  it.each(["blacksmith-testbox", "aws", "boat"])(
     "leaves genuinely foreign delegated %s claims untouched",
     (provider) => {
       const fixture = makeClaimFixture();
-      const id = provider === "aws" ? "cbx_777777777777" : "tbx_foreign_claim";
+      const id = provider !== "blacksmith-testbox" ? "cbx_777777777777" : "tbx_foreign_claim";
       fixture.key(id);
       const foreignClaim = {
         leaseID: id,
         repoRoot: "/tmp/genuinely-foreign-repo",
         owner: "foreign-owner",
+        ...(provider === "boat"
+          ? { provider: "ascii-box", labels: { ascii_box_deletion_completed: "" } }
+          : {}),
       };
       const claimPath = fixture.claim({ ...foreignClaim, repoRoot });
 
@@ -4540,6 +4590,7 @@ process.on("exit", () => {
     ["aws", true, "transport"],
     ["aws", false, "transport"],
     ["aws", false, "arbitrary"],
+    ["boat", false, "arbitrary"],
     ["aws", false, "unchanged"],
     ["blacksmith-testbox", true, "transport"],
     ["blacksmith-testbox", false, "transport"],
