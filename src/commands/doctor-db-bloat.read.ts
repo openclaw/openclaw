@@ -18,6 +18,70 @@ export type SqliteBloatStats = {
   incrementalAutoVacuum: boolean;
 };
 
+const SQLITE_HEADER_BYTES = 100;
+// "SQLite format 3\0" as header bytes; compared manually to avoid Buffer-prototype helpers.
+const SQLITE_HEADER_MAGIC = [
+  0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00,
+];
+
+function isSqliteStoredPageSize(pageSize: number): boolean {
+  // The stored value 1 means 65536; every other valid size is a power of two in
+  // [512, 32768] and cannot encode 65536 directly.
+  if (pageSize === 1) {
+    return true;
+  }
+  return pageSize >= 512 && pageSize <= 32768 && (pageSize & (pageSize - 1)) === 0;
+}
+
+/**
+ * Reads bloat stats from the 100-byte SQLite header without opening the database.
+ * The three values this check reports (page size, freelist count, auto-vacuum mode)
+ * all live in the header, so a raw read avoids the size-scaled snapshot copy and the
+ * sidecar creation risk that motivates it. Returns null on any doubt — including
+ * non-SQLite files, truncated headers, and torn reads mid page-1 write — so callers
+ * fall back to the snapshot path. In WAL databases the freelist count is the
+ * last-checkpointed value, which is acceptable staleness for a bloat heuristic.
+ */
+async function readSqliteBloatStatsFromHeader(
+  pathname: string,
+  fileBytes: number,
+): Promise<SqliteBloatStats | null> {
+  let bytes: Uint8Array;
+  let handle: fs.promises.FileHandle | undefined;
+  try {
+    handle = await fs.promises.open(pathname, "r");
+    bytes = new Uint8Array(SQLITE_HEADER_BYTES);
+    const { bytesRead } = await handle.read(bytes, 0, SQLITE_HEADER_BYTES, 0);
+    if (bytesRead < SQLITE_HEADER_BYTES) {
+      return null;
+    }
+  } catch {
+    return null;
+  } finally {
+    await handle?.close();
+  }
+  for (let index = 0; index < SQLITE_HEADER_MAGIC.length; index += 1) {
+    if (bytes[index] !== SQLITE_HEADER_MAGIC[index]) {
+      return null;
+    }
+  }
+  const header = new DataView(bytes.buffer);
+  const storedPageSize = header.getUint16(16, false);
+  if (!isSqliteStoredPageSize(storedPageSize)) {
+    return null;
+  }
+  const pageSize = storedPageSize === 1 ? 65536 : storedPageSize;
+  const freelistCount = header.getUint32(36, false);
+  const largestRootBTreePage = header.getUint32(52, false);
+  const incrementalVacuumFlag = header.getUint32(64, false);
+  const autoVacuum = largestRootBTreePage === 0 ? 0 : incrementalVacuumFlag !== 0 ? 2 : 1;
+  return {
+    fileBytes,
+    freeBytes: freelistCount * pageSize,
+    incrementalAutoVacuum: autoVacuum === 2,
+  };
+}
+
 async function readSqliteBloatStats(
   pathname: string,
   signal?: AbortSignal,
@@ -33,6 +97,12 @@ async function readSqliteBloatStats(
   // Smaller files cannot produce a finding, so avoid preparing their private copy.
   if (fileBytes < BLOAT_MIN_FILE_BYTES) {
     return null;
+  }
+  // Reporting-size files are exactly where the snapshot copy is most expensive;
+  // a validated header read answers this check without one.
+  const headerStats = await readSqliteBloatStatsFromHeader(pathname, fileBytes);
+  if (headerStats) {
+    return headerStats;
   }
   let stats: SqliteBloatStats | null = null;
   let failure: { error: unknown } | undefined;

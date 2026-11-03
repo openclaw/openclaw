@@ -100,3 +100,97 @@ it("cancels database-size preparation instead of swallowing the aborted inspecti
     readSqliteDatabaseBloat({ path: pathname, env: {}, signal: controller.signal }),
   ).rejects.toThrow(reason);
 });
+
+function createPaddedDatabase(params: {
+  label: string;
+  pageSize: number;
+  autoVacuum?: number;
+  wal?: boolean;
+}): string {
+  const pathname = path.join(tempDirs.make(params.label), "database.sqlite");
+  const database = openNodeSqliteDatabase(pathname);
+  try {
+    database.exec(
+      `PRAGMA page_size=${params.pageSize}; PRAGMA auto_vacuum=${params.autoVacuum ?? 0}`,
+    );
+    if (params.wal) {
+      database.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0");
+    }
+    database.exec("CREATE TABLE payload(value)");
+    const insert = database.prepare("INSERT INTO payload VALUES (?)");
+    for (let index = 0; index < 300; index += 1) {
+      insert.run("x".repeat(2000));
+    }
+    database.exec("DELETE FROM payload WHERE rowid < 290");
+  } finally {
+    database.close();
+  }
+  // Reporting-size files reach the header reader, so pad past the boundary without
+  // touching the header page the reader validates.
+  fs.truncateSync(pathname, BLOAT_MIN_FILE_BYTES);
+  return pathname;
+}
+
+it("answers reporting-size files from the header without preparing a snapshot", async () => {
+  const pathname = createPaddedDatabase({ label: "doctor-bloat-header-", pageSize: 4096 });
+  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(() => {
+    throw new Error("unexpected snapshot preparation");
+  });
+  const results = await readSqliteDatabaseBloat({ path: pathname, env: {} });
+  expect(results).toHaveLength(1);
+  expect(results[0].stats.fileBytes).toBe(BLOAT_MIN_FILE_BYTES);
+  expect(results[0].stats.freeBytes).toBeGreaterThan(0);
+  expect(results[0].stats.incrementalAutoVacuum).toBe(false);
+  expect(prepare).not.toHaveBeenCalled();
+});
+
+it("decodes a stored page-size value of 1 as 65536 from the header", async () => {
+  const pathname = createPaddedDatabase({ label: "doctor-bloat-header-big-", pageSize: 65536 });
+  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(() => {
+    throw new Error("unexpected snapshot preparation");
+  });
+  const results = await readSqliteDatabaseBloat({ path: pathname, env: {} });
+  expect(results).toHaveLength(1);
+  expect(prepare).not.toHaveBeenCalled();
+});
+
+it.each([
+  { autoVacuum: 0, incremental: false },
+  { autoVacuum: 1, incremental: false },
+  { autoVacuum: 2, incremental: true },
+])("decodes auto_vacuum=$autoVacuum mode from the header", async ({ autoVacuum, incremental }) => {
+  const pathname = createPaddedDatabase({
+    label: "doctor-bloat-header-av-",
+    pageSize: 4096,
+    autoVacuum,
+  });
+  const results = await readSqliteDatabaseBloat({ path: pathname, env: {} });
+  expect(results).toHaveLength(1);
+  expect(results[0].stats.incrementalAutoVacuum).toBe(incremental);
+});
+
+it("answers a WAL-mode reporting-size file from the header without changing source artifacts", async () => {
+  const pathname = createPaddedDatabase({
+    label: "doctor-bloat-header-wal-",
+    pageSize: 4096,
+    wal: true,
+  });
+  const family = [pathname, `${pathname}-wal`, `${pathname}-shm`].filter((member) =>
+    fs.existsSync(member),
+  );
+  const before = await Promise.all(family.map((member) => sha256File(member)));
+  const results = await readSqliteDatabaseBloat({ path: pathname, env: {} });
+  expect(results).toHaveLength(1);
+  expect(results[0].stats.freeBytes).toBeGreaterThan(0);
+  expect(await Promise.all(family.map((member) => sha256File(member)))).toEqual(before);
+});
+
+it("falls back to snapshot preparation when the header magic does not validate", async () => {
+  const pathname = path.join(tempDirs.make("doctor-bloat-header-garbage-"), "database.sqlite");
+  fs.writeFileSync(pathname, Buffer.alloc(BLOAT_MIN_FILE_BYTES, 0x41));
+  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(() => {
+    throw new Error("controlled preparation failure");
+  });
+  expect(await readSqliteDatabaseBloat({ path: pathname, env: {} })).toEqual([]);
+  expect(prepare).toHaveBeenCalledOnce();
+});
