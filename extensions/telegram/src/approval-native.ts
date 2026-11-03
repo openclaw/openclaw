@@ -59,18 +59,10 @@ function reconcileTelegramOmittedThread(
   if (turnSourceTarget.to !== sessionTarget.to) {
     return null;
   }
-  const turnThread = turnSourceTarget.threadId;
-  const sessionThread = sessionTarget.threadId;
-  if (turnThread != null && sessionThread != null) {
+  if (turnSourceTarget.threadId != null && sessionTarget.threadId != null) {
     return null;
   }
-  if (turnThread == null && sessionThread != null) {
-    return sessionTarget;
-  }
-  if (sessionThread == null && turnThread != null) {
-    return turnSourceTarget;
-  }
-  return null;
+  return turnSourceTarget.threadId != null ? turnSourceTarget : sessionTarget;
 }
 
 const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolverAsync({

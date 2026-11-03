@@ -96,15 +96,7 @@ function originTargetOptions<TTarget>(
         normalizedLeft && normalizedRight && params.targetsMatch(normalizedLeft, normalizedRight),
       );
     },
-    reconcileDivergentTargets: params.reconcileDivergentTargets
-      ? (turnSourceTarget: TTarget, sessionTarget: TTarget) => {
-          const turn = normalizeTarget(turnSourceTarget);
-          const session = normalizeTarget(sessionTarget);
-          return turn && session
-            ? (params.reconcileDivergentTargets?.(turn, session) ?? null)
-            : null;
-        }
-      : undefined,
+    reconcileDivergentTargets: params.reconcileDivergentTargets,
     resolveFallbackTarget: params.resolveFallbackTarget
       ? (request: ApprovalRequest) =>
           normalizeTarget(params.resolveFallbackTarget?.(request) ?? null)

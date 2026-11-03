@@ -61,24 +61,7 @@ describe("telegram native approval adapter", () => {
   );
 
   it("parses numeric string thread ids from the session store for plugin approvals", async () => {
-    const storePath = path.join(sessionDirs.make(), "sessions.json");
-    const sessionKey = `agent:main:telegram:group:${chatId}:topic:928`;
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "sess",
-        updatedAt: Date.now(),
-        delivery: normalizeSessionDeliveryState({
-          context: {
-            channel: "telegram",
-            to: chatId,
-            accountId: "default",
-            threadId: "928",
-          },
-        }),
-      },
-    });
+    const { storePath, sessionKey } = await seedForumTopicSession();
 
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
       cfg: { ...cfg, session: { store: storePath } },
@@ -94,7 +77,7 @@ describe("telegram native approval adapter", () => {
     expect(target).toEqual({ to: chatId, threadId: 928 });
   });
 
-  it("keeps the stored forum topic when the live turn omits the thread", async () => {
+  async function seedForumTopicSession(): Promise<{ storePath: string; sessionKey: string }> {
     const storePath = path.join(sessionDirs.make(), "sessions.json");
     const sessionKey = `agent:main:telegram:group:${chatId}:topic:928`;
     await upsertSessionEntry({
@@ -113,6 +96,11 @@ describe("telegram native approval adapter", () => {
         }),
       },
     });
+    return { storePath, sessionKey };
+  }
+
+  it("keeps the stored forum topic when the live turn omits the thread", async () => {
+    const { storePath, sessionKey } = await seedForumTopicSession();
 
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
       cfg: { ...cfg, session: { store: storePath } },
@@ -136,24 +124,7 @@ describe("telegram native approval adapter", () => {
   });
 
   it("does not route a forum topic when the live turn names a different thread", async () => {
-    const storePath = path.join(sessionDirs.make(), "sessions.json");
-    const sessionKey = `agent:main:telegram:group:${chatId}:topic:928`;
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "sess",
-        updatedAt: Date.now(),
-        delivery: normalizeSessionDeliveryState({
-          context: {
-            channel: "telegram",
-            to: chatId,
-            accountId: "default",
-            threadId: "928",
-          },
-        }),
-      },
-    });
+    const { storePath, sessionKey } = await seedForumTopicSession();
 
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
       cfg: { ...cfg, session: { store: storePath } },

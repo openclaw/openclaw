@@ -219,7 +219,11 @@ Other approval helpers:
   the channel needs to normalize provider ids before the default route
   matcher or a custom `targetsMatch` callback runs, while preserving the
   original target for delivery. Use `normalizeTarget` only when the resolved
-  delivery target itself should be normalized.
+  delivery target itself should be normalized. Pass
+  `reconcileDivergentTargets` when an exact mismatch can still name one
+  conversation, such as a Telegram group id versus that group plus a forum
+  topic. It receives the already resolved turn and session targets and
+  returns the target to deliver, or null to keep the no-origin result.
 - If the channel needs runtime-owned objects such as a client, token, Bolt
   app, or webhook receiver, register them through
   `openclaw/plugin-sdk/channel-runtime-context`. The generic runtime-context

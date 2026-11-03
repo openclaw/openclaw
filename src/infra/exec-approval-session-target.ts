@@ -42,8 +42,8 @@ type ApprovalRequestOriginTargetResolver<TTarget> = {
   resolveTurnSourceTarget: (request: ApprovalRequestLike) => TTarget | null;
   resolveSessionTarget: (sessionTarget: ExecApprovalSessionTarget) => TTarget | null;
   targetsMatch: (a: TTarget, b: TTarget) => boolean;
-  // Exact mismatch can still name one conversation when only one side has a thread.
-  // The callback returns that target, or null when the destinations really disagree.
+  // Channel hook may recover one target after the exact matcher rejects the pair.
+  // Null keeps the no-origin result.
   reconcileDivergentTargets?: (turnSourceTarget: TTarget, sessionTarget: TTarget) => TTarget | null;
   resolveFallbackTarget?: (request: ApprovalRequestLike) => TTarget | null;
 };
@@ -154,7 +154,7 @@ function resolveApprovalRequestOriginTargetFromDelivery<TTarget>(
       : null;
 
   if (turnSourceTarget && sessionTarget && !params.targetsMatch(turnSourceTarget, sessionTarget)) {
-    // A missing thread is not a second conversation. Conflicting threads still return null.
+    // The channel owns whether a rejected pair still names one destination.
     return params.reconcileDivergentTargets?.(turnSourceTarget, sessionTarget) ?? null;
   }
 
