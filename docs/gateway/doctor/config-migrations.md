@@ -18,6 +18,15 @@ Doctor keeps plugin repair and diagnostic contracts available through later heal
 checks and service finalization. It releases its private plugin resources when
 the flow ends, including failed runs.
 
+## Group allowlist fallback
+
+For channels that support legacy DM sender fallback, Doctor copies `allowFrom`
+into an absent `groupAllowFrom`. It preserves explicit lists, including `[]`, at
+channel and account scope, and accounts keep inherited explicit channel lists.
+The migration also leaves lists absent when the effective account, channel, or
+global-default `groupPolicy` disables groups. Explicit policy overrides still
+apply. Update-time Doctor repair follows the same rules.
+
 ## Cloud setup secret migration
 
 The Crabbox plugin retires `cloudWorkers.profiles.<id>.settings.setupEnv`.
