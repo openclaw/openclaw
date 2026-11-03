@@ -130,7 +130,9 @@ it.each(["owner", "placement", "duplicate", "channel"])(
 
 it("localizes packaged settings timeouts without changing cleanup", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const f = fixture([memoryView()]);
   const translate = vi.spyOn(i18n, "t").mockReturnValue("localized settings timeout");
   onTestFinished(() => translate.mockRestore());

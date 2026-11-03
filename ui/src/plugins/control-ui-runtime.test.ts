@@ -653,7 +653,7 @@ it.each(["header", "session"] as const)("localizes unavailable %s actions", asyn
       id: "review/blocked",
       placement,
       sessionKey: "agent:main:test",
-      session: { key: "agent:main:test", updatedAt: 1 },
+      session: { key: "agent:main:test", kind: "direct", updatedAt: 1 },
       signal: new AbortController().signal,
     }),
   ).rejects.toThrow("localized unavailable action");
@@ -668,7 +668,9 @@ it.each([true, false])(
   "localizes activation timeouts (catalog available=%s)",
   async (catalogAvailable) => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const message = catalogAvailable ? "localized activation timeout" : "localized recovery";
     const translate = vi
       .spyOn(i18n, "t")
