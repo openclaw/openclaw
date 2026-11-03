@@ -198,6 +198,10 @@ suite.define(() => {
         await expect.poll(() => indicator.textContent()).toContain("Settings changed elsewhere");
         expect(await cliJson(["config", "get", "logging.level", "--json"])).toBe("error");
         await indicator.getByRole("button", { name: "Reload", exact: true }).click();
+        await page
+          .getByRole("dialog")
+          .getByRole("button", { name: "Discard changes", exact: true })
+          .click();
         await expect.poll(selected).toBe("error");
         expect(await cliJson(["config", "get", "logging.consoleLevel", "--json"])).toBe("warn");
       } finally {
