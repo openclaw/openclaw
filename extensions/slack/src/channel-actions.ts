@@ -158,7 +158,11 @@ export function createSlackActions(
     isToolDeliveryAction: ({ args }) =>
       typeof args.action === "string" && SLACK_TOOL_DELIVERY_ACTIONS.has(args.action),
     prepareSendPayload: ({ ctx, to, payload }) =>
-      ctx.action === "send" && !shouldUseWorkspaceAwareSlackActionSend(to, ctx.toolContext)
+      // replyBroadcast is plugin-owned (chat.postMessage reply_broadcast). The
+      // core outbound path drops it, so force the Slack handleAction path.
+      ctx.action === "send" &&
+      !shouldUseWorkspaceAwareSlackActionSend(to, ctx.toolContext) &&
+      !readBooleanParam(ctx.params, "replyBroadcast")
         ? payload
         : null,
     handleAction: async (ctx) => {

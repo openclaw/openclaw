@@ -133,6 +133,25 @@ describe("slackPlugin actions", () => {
     expect(prepared).toBe(workspaceAware ? null : payload);
   });
 
+  it("forces the plugin action path when replyBroadcast is set", () => {
+    const payload = { text: "hello" };
+    const prepared = slackPlugin.actions!.prepareSendPayload!({
+      ctx: {
+        action: "send",
+        channel: "slack",
+        cfg: {},
+        params: { replyBroadcast: true, threadId: "111.222" },
+        toolContext: {
+          currentChannelId: "team:T123:channel:C999",
+          currentChannelProvider: undefined,
+        },
+      },
+      to: "channel:C999",
+      payload,
+    } as never);
+    expect(prepared).toBeNull();
+  });
+
   it.each([
     { accountId: "work", id: "U12345678", token: "xoxb-work", qualified: false },
     { accountId: "org", id: "team:T12345678:user:U12345678", token: "xoxb-org", qualified: true },
