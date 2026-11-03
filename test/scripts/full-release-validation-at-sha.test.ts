@@ -1590,8 +1590,10 @@ describe("full-release-validation-at-sha", () => {
       ],
     });
     const result = fixture.run();
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("blocked_diagnostics_running");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("blocked_diagnostics_running");
+    expect(result.stdout).toContain("Continue with: pnpm frv watch --run 123");
+    expect(result.stderr).not.toContain("[full-release-validation] FAILED");
     expect(fixture.readWaits()).toEqual([120_000]);
     const calls = fixture.calls();
     expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(1);

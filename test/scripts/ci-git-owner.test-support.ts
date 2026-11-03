@@ -318,6 +318,17 @@ export async function runCiGitStep(options: {
           mkdirSync(path.join(directory, ".git"), { recursive: true });
           writeFileSync(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
         }
+        if (
+          typeof options.workflow === "object" &&
+          options.workflow.file === ".github/workflows/plugin-npm-release.yml"
+        ) {
+          const toolingScripts = path.join(workspace, ".release-tooling/scripts");
+          mkdirSync(toolingScripts, { recursive: true });
+          writeFileSync(
+            path.join(toolingScripts, "plugin-npm-release-admission.py"),
+            readFileSync("scripts/plugin-npm-release-admission.py"),
+          );
+        }
         if (pluginRelease) {
           writeFileSync(path.join(workspace, "package.json"), '{"version":"2026.8.33"}\n');
         }

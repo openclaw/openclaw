@@ -5,6 +5,7 @@ import { reviewDependencyChanges } from "./dependency-guard.mjs";
 import {
   ObsoleteReviewError,
   assertGuardUnchanged,
+  failGuard,
   findMaintainerApproval,
   readGuardReview,
   securityReviewContracts,
@@ -14,6 +15,7 @@ import {
   GitHubNoticePublicationError,
   GitHubRateLimitError,
   GitHubReadTimeoutError,
+  GitHubStatusFailurePublishedError,
   GitHubStatusPublicationError,
   publishGuardStatus,
   withSecurityReviewRecovery,
@@ -170,6 +172,7 @@ async function main() {
       const errors = [];
       let allowed = true;
       for (const guard of [reviewDependencyChanges, reviewSecuritySensitiveChanges]) {
+        const guardIndex = review.guards.length;
         try {
           if (!(await guard(review, mode === "prepare" ? "prepare" : "enforce"))) {
             allowed = false;
@@ -178,6 +181,11 @@ async function main() {
             return;
           }
         } catch (error) {
+          const failedGuard = review.guards[guardIndex];
+          if (failedGuard) {
+            review.failedGuard = failedGuard;
+            await failGuard(failedGuard, error);
+          }
           if (
             error instanceof GitHubRateLimitError ||
             ((error instanceof GitHubStatusPublicationError ||
@@ -189,11 +197,18 @@ async function main() {
           ) {
             throw error;
           }
-          errors.push(error instanceof Error ? error.message : String(error));
+          if (error instanceof GitHubReadTimeoutError && errors.length > 0 && failedGuard) {
+            await failGuard(failedGuard, error, { terminal: true });
+          }
+          errors.push(error);
         }
       }
       if (errors.length > 0) {
-        throw new Error(errors.join("\n"));
+        throw new Error(
+          errors
+            .map((error) => (error instanceof Error ? error.message : String(error)))
+            .join("\n"),
+        );
       }
       if (!allowed) {
         await publishGuardStatus(
@@ -233,7 +248,7 @@ async function main() {
       if (guard.requiresApproval && !(await findMaintainerApproval(guard))) {
         await publishGuardStatus(
           guard,
-          "failure",
+          "pending",
           "A maintainer must approve the current PR revision",
         );
         await publishGuardStatus(
@@ -250,6 +265,9 @@ async function main() {
   } catch (error) {
     if (error instanceof GitHubDiffDataError || error instanceof GitHubNoticePublicationError) {
       recoveryReview = review;
+    }
+    if (error instanceof GitHubStatusFailurePublishedError) {
+      throw error;
     }
     if (
       error instanceof GitHubRateLimitError ||
@@ -304,10 +322,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       },
     },
   ).catch(
-    /** @param {unknown} error */ (error) => {
+    /** @param {unknown} error */ async (error) => {
       if (error instanceof ObsoleteReviewError) {
         console.log(error.message);
         return;
+      }
+      if (
+        (error instanceof GitHubReadTimeoutError ||
+          error?.cause instanceof GitHubReadTimeoutError) &&
+        currentReview
+      ) {
+        await failGuard(currentReview, error, { terminal: true });
+        if (currentReview.failedGuard) {
+          await failGuard(currentReview.failedGuard, error, { terminal: true });
+        }
       }
       console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;

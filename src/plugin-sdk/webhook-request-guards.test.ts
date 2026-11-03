@@ -4,7 +4,19 @@
 import { EventEmitter } from "node:events";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
-import { describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { enqueueCommandInLane } from "../process/command-queue.js";
+import {
+  captureGatewayRootWorkReleaseObserver,
+  GatewayDrainingError,
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import { createFixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import {
@@ -273,6 +285,7 @@ describe("beginWebhookRequestPipelineOrReject", () => {
 });
 
 describe("runDetachedWebhookWork", () => {
+  afterEach(resetGatewayWorkAdmission);
   it("defers the callback until the request handler can acknowledge", async () => {
     const { runWithGatewayHttpWorkAdmission } =
       await import("../gateway/server/http-work-admission.js");
@@ -297,53 +310,70 @@ describe("runDetachedWebhookWork", () => {
     expect(order).toEqual(["ack", "work"]);
   });
 
-  it("keeps post-ack processing admitted after the request admission is released", async () => {
+  it.each([
+    ["detached", "accepting", true],
+    ["inherited", "accepting", false],
+    ["detached", "suspended", true],
+    ["detached", "restarting", false],
+  ] as const)("owns %s post-ack cleanup while %s", async (kind, phase, allowed) => {
     const { runWithGatewayHttpWorkAdmission } =
       await import("../gateway/server/http-work-admission.js");
-    const { enqueueCommandInLane } = await import("../process/command-queue.js");
-
-    let detached: Promise<number> | null = null;
-    await runWithGatewayHttpWorkAdmission(
-      new ServerResponse(new IncomingMessage(new Socket())),
-      async () => {
-        // Ack-first shape: dispatch continues after the handler (and its
-        // admission) completes; the queue enqueue happens well past release.
-        detached = runDetachedWebhookWork(async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 25);
+    const cleanupStarted = createDeferredCore();
+    const execute = createDeferredCore();
+    const released = createDeferredCore();
+    const deliver = vi.fn(async () => 42);
+    let continued: Promise<number> | undefined;
+    try {
+      await runWithGatewayHttpWorkAdmission(
+        new ServerResponse(new IncomingMessage(new Socket())),
+        async () => {
+          const run =
+            kind === "detached" ? runDetachedWebhookWork : (work: () => Promise<number>) => work();
+          continued = run(async () => {
+            const observeRelease = expectDefined(
+              captureGatewayRootWorkReleaseObserver(),
+              "work root observer",
+            );
+            observeRelease(() => released.resolve());
+            cleanupStarted.resolve();
+            await execute.promise;
+            return await enqueueCommandInLane(`${kind}-webhook-work-test`, deliver);
           });
-          return await enqueueCommandInLane("detached-webhook-work-test", async () => 42);
-        });
-        return true;
-      },
-    );
-
-    await expect(detached).resolves.toBe(42);
+          void continued.catch(() => {});
+          return true;
+        },
+      );
+      await cleanupStarted.promise;
+      expect(getActiveGatewayRootWorkCount()).toBe(kind === "detached" ? 1 : 0);
+      expect(deliver).not.toHaveBeenCalled();
+      if (phase === "suspended") {
+        expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
+        expect(tryBeginGatewayRootWorkAdmission("new-input")).toBeNull();
+      } else if (phase === "restarting") {
+        markGatewayRestartDraining();
+      }
+      execute.resolve();
+      if (allowed) {
+        await expect(continued).resolves.toBe(42);
+        expect(deliver).toHaveBeenCalledOnce();
+      } else {
+        await expect(continued).rejects.toBeInstanceOf(GatewayDrainingError);
+        expect(deliver).not.toHaveBeenCalled();
+      }
+      await released.promise;
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      execute.resolve();
+      await Promise.allSettled([continued]);
+    }
   });
 
-  it("refuses the same post-ack processing when it merely inherits the request admission", async () => {
-    const { runWithGatewayHttpWorkAdmission } =
-      await import("../gateway/server/http-work-admission.js");
-    const { enqueueCommandInLane } = await import("../process/command-queue.js");
-
-    let inherited: Promise<number> | null = null;
-    await runWithGatewayHttpWorkAdmission(
-      new ServerResponse(new IncomingMessage(new Socket())),
-      async () => {
-        inherited = (async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 25);
-          });
-          return await enqueueCommandInLane("inherited-webhook-work-test", async () => 42);
-        })();
-        inherited.catch(() => {});
-        return true;
-      },
-    );
-
-    await expect(inherited).rejects.toThrow(
-      "Gateway is temporarily unavailable. Please try again shortly.",
-    );
+  it("refuses a new detached callback when restart has closed admission", async () => {
+    const work = vi.fn(async () => 42);
+    markGatewayRestartDraining();
+    await expect(runDetachedWebhookWork(work)).rejects.toBeInstanceOf(GatewayDrainingError);
+    expect(work).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("keeps tracked work accepted after the caller's async work scope closes", async () => {

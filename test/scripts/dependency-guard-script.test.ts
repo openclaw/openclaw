@@ -177,8 +177,7 @@ describe("dependency guard script", () => {
       "GET /repos/openclaw/openclaw/pulls/8": { ...pullRequest, number: 8 },
     });
     expect(result.status).toBe(1);
-    expect(result.statuses.map((call) => call.body?.state)).not.toContain("success");
-    expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+    expect(result.statuses.map((call) => call.body?.state)).toEqual(["pending", "failure"]);
   });
 
   it("requires current maintainer authority for dependency approval", () => {
@@ -240,8 +239,8 @@ describe("dependency guard script", () => {
       });
       expect(result.status, `${name}: ${result.stderr}`).toBe(0);
       expect(result.statuses.map((call) => call.body?.state)).toEqual([
-        "failure",
-        allowed ? "success" : "failure",
+        "pending",
+        allowed ? "success" : "pending",
       ]);
       if (author) {
         expect(result.stdout).toContain("informational");
@@ -262,7 +261,7 @@ describe("dependency guard script", () => {
       },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+    expect(result.statuses.at(-1)?.body?.state).toBe("pending");
     expect(result.stdout).toContain("Maintainer dependency review required");
   });
 
@@ -313,7 +312,7 @@ describe("dependency guard script", () => {
       }
       const result = runDependencyGuard(fixture);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+      expect(result.statuses.at(-1)?.body?.state).toBe("pending");
       if (notice) {
         expect(result.stdout).toContain(notice);
       }
@@ -324,7 +323,7 @@ describe("dependency guard script", () => {
     const cases = [
       { role: "write", headVersion: "1", expected: "success", notice: false },
       { role: "admin", headVersion: "1", expected: "success", notice: false },
-      { role: "write", headVersion: "2", expected: "failure", notice: true },
+      { role: "write", headVersion: "2", expected: "pending", notice: true },
     ];
     for (const { role, headVersion, expected, notice } of cases) {
       const content = (version: string, test: string) =>
@@ -363,7 +362,7 @@ describe("dependency guard script", () => {
         [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
       });
       expect(result.status, result.stderr).toBe(0);
-      expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+      expect(result.statuses.at(-1)?.body?.state).toBe("pending");
       expect(result.stdout).toContain("/allow-dependencies-change");
     }
   });
@@ -380,7 +379,7 @@ describe("dependency guard script", () => {
       });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("merge base");
-      expect(result.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
+      expect(result.statuses.map((call) => call.body?.state)).toEqual(["pending", "failure"]);
       expect(result.calls.some((call) => call.path === "/graphql")).toBe(false);
     }
   });
@@ -444,7 +443,9 @@ describe("dependency guard script", () => {
           },
         });
       }
-      expect(result.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
+      expect(result.statuses.map((call) => call.body?.state)).toEqual(
+        writeError ? ["pending", "failure"] : ["pending"],
+      );
     }
   });
 
@@ -518,7 +519,7 @@ describe("dependency guard script", () => {
     const autoscrub = runDependencyGuard(routes, "autoscrub", null);
     expect(autoscrub.status, autoscrub.stderr).toBe(0);
     expect(autoscrub.calls.some((call) => call.path === "/graphql")).toBe(false);
-    expect(autoscrub.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
+    expect(autoscrub.statuses.map((call) => call.body?.state)).toEqual(["pending"]);
     const notice = autoscrub.calls.find(
       (call) => call.path === `${issuePath}/comments` && call.method === "POST",
     );
@@ -528,7 +529,7 @@ describe("dependency guard script", () => {
 
     const enforcement = runDependencyGuard(routes, "enforce", null);
     expect(enforcement.status, enforcement.stderr).toBe(0);
-    expect(enforcement.statuses.at(-1)?.body?.state).toBe("failure");
+    expect(enforcement.statuses.at(-1)?.body?.state).toBe("pending");
     expect(enforcement.stdout).toContain("/allow-dependencies-change");
     expect(enforcement.stdout).toContain("Automatic lockfile cleanup is best effort.");
   });

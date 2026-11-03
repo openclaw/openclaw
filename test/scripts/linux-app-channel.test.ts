@@ -14,7 +14,9 @@ const nextTag = "v2026.9.4";
 const channel = "linux-stable";
 const publicKey = Buffer.from("fixture public key\n").toString("base64");
 const signature = Buffer.from("fixture signature\n").toString("base64");
-const toolingSha = "b".repeat(40);
+const requestSha = "a".repeat(40);
+const builderSha = "b".repeat(40);
+const toolingSha = requestSha;
 const toolingRef = `release-publish/${toolingSha.slice(0, 12)}-42`;
 
 type Asset = {
@@ -92,6 +94,8 @@ type State = {
   releaseResponseTag?: { tag: string; value: string };
   authority: {
     toolingSha: string;
+    requestSha: string;
+    writerSha: string;
     toolingPresent: boolean;
     toolingRef: string;
     toolingFullRef: string;
@@ -277,13 +281,13 @@ try {
       }
       answer();
     } else if (route.startsWith("compare/") && route.endsWith("...main")) {
-      assert.equal(route, "compare/" + "b".repeat(40) + "...main");
+      assert.equal(route, "compare/" + state.authority.toolingSha + "...main");
       answer({ status: "identical" });
     } else if (route === "actions/runs/42") {
       answer({
         id: 42, run_attempt: state.authority.parentAttempt,
         repository: { full_name: "openclaw/openclaw" }, event: "workflow_dispatch",
-        head_branch: state.authority.toolingRef, head_sha: "b".repeat(40),
+        head_branch: state.authority.toolingRef, head_sha: state.authority.toolingSha,
         path: ".github/workflows/openclaw-release-publish.yml@" + state.authority.toolingFullRef,
         status: state.authority.parentStatus, conclusion: state.authority.parentConclusion,
       });
@@ -294,7 +298,7 @@ try {
       answer({
         id: 43, run_attempt: state.authority.requestAttempt,
         repository: { full_name: "openclaw/openclaw" }, event: "workflow_dispatch",
-        head_branch: "main", head_sha: "b".repeat(40),
+        head_branch: "main", head_sha: state.authority.requestSha,
         path: ".github/workflows/linux-app-release-request.yml",
         display_title: "Linux App Release Request [" + state.authority.requestTag + "] desktop=" + state.authority.desktop,
         status: "completed", conclusion: "success",
@@ -304,7 +308,7 @@ try {
         id: 44, run_attempt: state.authority.writerAttempt,
         repository: { full_name: "openclaw/openclaw" },
         event: state.authority.writerEvent,
-        head_branch: state.authority.writerRef, head_sha: "b".repeat(40),
+        head_branch: state.authority.writerRef, head_sha: state.authority.writerSha,
         path: state.authority.writerPath + "@" + state.authority.writerFullRef,
         status: state.authority.writerStatus, conclusion: state.authority.writerConclusion,
       });
@@ -550,6 +554,8 @@ function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
       verifierExit: 0,
       authority: {
         toolingSha,
+        requestSha,
+        writerSha: toolingSha,
         toolingPresent: true,
         toolingRef: workflowRef,
         toolingFullRef: workflowFullRef,
@@ -689,6 +695,8 @@ function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
     const args = [mode, "--tag", releaseTag, "--source-sha", sourceSha(releaseTag)];
     args.push("--tooling-sha", toolingSha);
     update((value) => {
+      value.authority.toolingSha = toolingSha;
+      value.authority.writerSha = mode === "publish" ? builderSha : toolingSha;
       value.authority.writerRef = mode === "publish" ? "main" : workflowRef;
       value.authority.writerFullRef = mode === "publish" ? "refs/heads/main" : workflowFullRef;
       value.authority.writerPath =
@@ -704,6 +712,8 @@ function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
         value.authority.requestTag = releaseTag;
       });
       args.push(
+        "--builder-sha",
+        builderSha,
         "--workflow-ref",
         "main",
         "--workflow-full-ref",
@@ -804,6 +814,18 @@ function failed(result: ReturnType<ReturnType<typeof fixture>["run"]>, message: 
   expect(result.stderr).toContain(message);
   expect(result.stdout.trim()).toBe("");
 }
+
+it("publishes with request SHA tooling under an independently authorized later builder SHA", () => {
+  const f = fixture();
+  expect(succeeded(f.run("publish"))).toMatchObject({ state: "published" });
+  expect(f.state().authority).toMatchObject({
+    toolingSha: requestSha,
+    requestSha,
+    writerSha: builderSha,
+  });
+  expect(requestSha).not.toBe(builderSha);
+  expect(f.mutations().length).toBeGreaterThan(0);
+});
 
 it("reuses complete public Linux assets without local build inputs", () => {
   const f = fixture();

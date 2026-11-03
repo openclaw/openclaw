@@ -12,6 +12,8 @@ import { createNestedGitEnv, writeJsonFile } from "../helpers/temp-repo.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const version = "2026.9.5";
+const pkg = (packageName: string) => ({ packageName, version });
+const npmOptions = { version, npmDistTag: "latest", plugins: [] };
 const sourceSha = "a".repeat(40);
 const githubOptions = {
   repository: "openclaw/openclaw",
@@ -37,6 +39,39 @@ const pluginOptions = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("release publication state", () => {
+  it("revalidates a version omitted from stale abbreviated registry metadata", async () => {
+    const requested: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        requested.push(input);
+        return input.endsWith(`/${version}`)
+          ? Response.json({ name: "openclaw", version, dist: { integrity: "sha512-fixture" } })
+          : Response.json({
+              name: "openclaw",
+              versions: { "2026.9.4": { name: "openclaw", version: "2026.9.4" } },
+              "dist-tags": { latest: version, beta: version },
+            });
+      }),
+    );
+
+    const result = await observeReleaseNpmState(npmOptions);
+
+    expect(requested).toEqual([
+      "https://registry.npmjs.org/openclaw",
+      `https://registry.npmjs.org/openclaw/${version}`,
+    ]);
+    expect(result.corePublished).toBe(true);
+    expect(result.publishedPackages).toEqual([pkg("openclaw")]);
+    expect(result.gates).toContainEqual(
+      expect.objectContaining({
+        id: "npm.package.openclaw",
+        status: "WARN",
+        message: expect.stringContaining("already published (npm-readback)"),
+      }),
+    );
+  });
+
   it.each([
     {
       tags: { latest: "2026.9.4", beta: version },
@@ -73,17 +108,19 @@ describe("release publication state", () => {
     async ({ tags, versions, expected, published }) => {
       vi.stubGlobal(
         "fetch",
-        vi.fn(async () =>
-          Response.json({
-            name: "@openclaw/example",
-            versions: Object.fromEntries(
-              versions.map((packageVersion) => [
-                packageVersion,
-                { name: "@openclaw/example", version: packageVersion },
-              ]),
-            ),
-            "dist-tags": tags,
-          }),
+        vi.fn(async (input: string) =>
+          input.endsWith(`/${version}`)
+            ? new Response("{}", { status: 404 })
+            : Response.json({
+                name: "@openclaw/example",
+                versions: Object.fromEntries(
+                  versions.map((packageVersion) => [
+                    packageVersion,
+                    { name: "@openclaw/example", version: packageVersion },
+                  ]),
+                ),
+                "dist-tags": tags,
+              }),
         ),
       );
       const result = await observeReleaseNpmState(pluginOptions);

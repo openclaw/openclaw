@@ -57,20 +57,15 @@ export async function verifyGatewayStartReadiness(params: {
     `Gateway HTTP readiness: /healthz=${readiness.healthz ?? "unreachable"}; ` +
       `/readyz=${readiness.readyz ?? "unreachable"}.`,
   );
-  if (health.waitOutcome === "still-starting") {
-    params.fail(
-      formatGatewayRestartFailure({
-        health,
-        port,
-        defaultTimeoutSeconds: Math.round(deadlineMs / 1000),
-      }).failMessage,
-      [formatCliCommand("openclaw gateway status --deep")],
-      "still-starting",
-    );
-    return;
-  }
+  const failure = formatGatewayRestartFailure({
+    health,
+    port,
+    defaultTimeoutSeconds: Math.round(deadlineMs / 1000),
+    action: "start",
+  });
   params.fail(
-    `Gateway start timed out after ${Math.round(deadlineMs / 1000)}s waiting for /healthz and /readyz.`,
+    failure.failMessage,
     [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
+    health.waitOutcome === "still-starting" ? "still-starting" : undefined,
   );
 }
