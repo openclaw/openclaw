@@ -217,7 +217,7 @@ describe("fetchBrowserScreenshotDataUrl", () => {
         authToken: null,
         path: "/tmp/missing.png",
       }),
-    ).rejects.toThrow("Screenshot fetch failed (404).");
+    ).rejects.toThrow("Couldn’t load the screenshot (404). Try again.");
     expect(cancel).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
