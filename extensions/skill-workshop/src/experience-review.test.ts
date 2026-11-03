@@ -144,3 +144,51 @@ it.each(["off", "replaced", "refused"] as const)("runs nothing visible when %s",
   expect(forks).toHaveLength(cause === "refused" ? 1 : 0);
   expect(mocks.postWorkshopChangeNotice).not.toHaveBeenCalled();
 });
+
+it("stops the running review model when learning is turned off", async () => {
+  vi.useFakeTimers();
+  try {
+    const started = Promise.withResolvers<void>();
+    let stopped: unknown;
+    setWorkshopRuntime({
+      config: { current: () => config },
+      agent: { resolveAgentTimeoutMs: () => 600_000 },
+      system: { captureSessionGeneration: vi.fn(async () => generation) },
+      subagent: {
+        runForkedTurn: async (params: ForkParams) => {
+          forks.push(params);
+          started.resolve();
+          // The model run ends only when its signal aborts.
+          const error = await new Promise<unknown>((resolve) => {
+            params.signal?.addEventListener("abort", () => resolve(params.signal?.reason), {
+              once: true,
+            });
+          });
+          stopped = error;
+          const runId = params.runId ?? "";
+          return {
+            status: "settled",
+            runId,
+            value: await params.onSettled({ runId, ok: false, cancelled: true, error }),
+          };
+        },
+      },
+    } as unknown as PluginRuntime); // SAFETY: the review reads only these runtime members.
+    const review = runSkillExperienceReview(candidate);
+    const settled = expect(review).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Skill Workshop was turned off during review.",
+    });
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(stopped).toBeUndefined();
+    config = {
+      plugins: { entries: { "skill-workshop": { config: { autonomous: { mode: "off" } } } } },
+    };
+    await vi.advanceTimersByTimeAsync(1_000);
+    await settled;
+    expect(stopped).toMatchObject({ name: "AbortError" });
+  } finally {
+    vi.useRealTimers();
+  }
+});

@@ -15,10 +15,9 @@ import { getWorkshopRuntime, readWorkshopRuntimeConfig, workshopLog } from "./ru
 
 const MAINTENANCE_INTERVAL_MS = 24 * 60 * 60_000;
 const lastMaintenanceByAgent = new Map<string, number>();
-// Aborted when the plugin's service stops (Gateway shutdown, restart, or plugin unload).
-let lifetime = new AbortController();
 // The running service's Gateway-owned scheduler. Its callbacks run in this plugin's call scope,
-// which review runs need; a detached timer would lose it.
+// which review runs need; a detached timer would lose it. Stopping the service (Gateway
+// shutdown, restart, or plugin unload) aborts its signal and waits for running callbacks.
 let serviceScheduler: PluginServiceSchedulerV1 | undefined;
 
 const defaultScheduler = createSkillExperienceReviewScheduler({
@@ -92,10 +91,16 @@ export function stopSkillExperienceReview(params: {
  * Daily Workshop maintenance in auto mode, at most once a day per agent: archive long-unused
  * learned skills, then diet one oversized skill. An agent whose tool policy denies
  * skill_workshop opted out and gets no maintenance. Runs detached from the finished turn and
- * never affects its result; the plugin service's lifetime stops it.
+ * never affects its result. It runs as a job of the plugin service's scheduler, so a graceful
+ * restart waits for a running archive while the stop signal ends the diet's model call.
  */
 export function scheduleDailyWorkshopMaintenance(config: OpenClawConfig, agentId: string): void {
   if (resolveSkillWorkshopConfig(config).autonomous.mode !== "auto") {
+    return;
+  }
+  const scheduler = serviceScheduler;
+  if (!scheduler) {
+    workshopLog().debug("workshop maintenance skipped: reason=service-stopped");
     return;
   }
   const nowMs = Date.now();
@@ -104,8 +109,20 @@ export function scheduleDailyWorkshopMaintenance(config: OpenClawConfig, agentId
     return;
   }
   lastMaintenanceByAgent.set(agentId, nowMs);
-  const abortSignal = lifetime.signal;
-  void (async () => {
+  scheduler.schedule({
+    id: `maintenance:${agentId}`,
+    delayMs: 0,
+    run: () => runDailyWorkshopMaintenance(config, agentId, nowMs, scheduler.signal),
+  });
+}
+
+async function runDailyWorkshopMaintenance(
+  config: OpenClawConfig,
+  agentId: string,
+  nowMs: number,
+  abortSignal: AbortSignal,
+): Promise<void> {
+  try {
     // Maintenance loads the library and runtime policy; most turns never need them.
     const runtime = getWorkshopRuntime();
     const { isSkillWorkshopDeniedForAgent } = await import("./tool-policy-diagnostic.js");
@@ -130,7 +147,10 @@ export function scheduleDailyWorkshopMaintenance(config: OpenClawConfig, agentId
         `archived ${archived.length} unused learned skill(s) for ${agentId}: ${archived.map((change) => change.skillName).join(", ")}`,
       );
     }
-    abortSignal.throwIfAborted();
+    // A stopping service waited for the archive; it skips the diet's model call.
+    if (abortSignal.aborted) {
+      return;
+    }
     const { runWorkshopSkillDiet } = await import("./skill-diet.js");
     const dieted = await runWorkshopSkillDiet({ config, agentId, nowMs, abortSignal });
     if (dieted) {
@@ -138,9 +158,9 @@ export function scheduleDailyWorkshopMaintenance(config: OpenClawConfig, agentId
         `dieted learned skill ${dieted.skillName} for ${agentId}: ${dieted.summary}`,
       );
     }
-  })().catch((error: unknown) => {
+  } catch (error) {
     workshopLog().warn(`workshop maintenance failed: ${formatErrorMessage(error)}`);
-  });
+  }
 }
 
 /**
@@ -152,14 +172,12 @@ export function registerSkillWorkshopReview(api: OpenClawPluginApi): void {
     apiVersion: 2,
     id: "skill-workshop-maintenance",
     start: (ctx) => {
-      lifetime = new AbortController();
       serviceScheduler = ctx.scheduler;
     },
     stop: (ctx) => {
       if (serviceScheduler === ctx.scheduler) {
         serviceScheduler = undefined;
       }
-      lifetime.abort(new Error("Skill Workshop stopped."));
     },
   });
   api.on("agent_end", (event, ctx) => {
