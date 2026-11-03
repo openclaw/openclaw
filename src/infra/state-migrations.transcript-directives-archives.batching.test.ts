@@ -5,7 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as archiveCompression from "../config/sessions/archive-compression.js";
+import * as archiveCompression from "../config/sessions/archive-decode.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { runWithAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
 import { requireNodeSqlite } from "./node-sqlite.js";

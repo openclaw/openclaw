@@ -10,6 +10,7 @@ import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
+import { decodeSessionArchiveBytes } from "./archive-decode.js";
 import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 export { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 
@@ -49,22 +50,6 @@ export function readSessionArchiveContentSync(
     }
     throw error;
   }
-}
-
-export function decodeSessionArchiveBytes(
-  bytes: Uint8Array,
-  compressed: boolean,
-  expectedUtf8Bytes?: number,
-): string {
-  if (!compressed) {
-    return Buffer.from(bytes).toString("utf8");
-  }
-  if (!zstdCodec) {
-    throw new Error("Cannot decode compressed transcript archive: this runtime lacks zstd support");
-  }
-  return zstdCodec
-    .decompress(Buffer.from(bytes), expectedUtf8Bytes ?? bytes.byteLength + 1024 * 1024)
-    .toString("utf8");
 }
 
 /**

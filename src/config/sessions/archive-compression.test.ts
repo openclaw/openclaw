@@ -5,12 +5,12 @@ import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
-  decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
   materializeSessionArchiveForRead,
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "./archive-compression.js";
+import { decodeSessionArchiveBytes } from "./archive-decode.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

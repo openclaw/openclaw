@@ -6,10 +6,10 @@ import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
-  decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
+import { decodeSessionArchiveBytes } from "../config/sessions/archive-decode.js";
 import {
   publishEncodedSessionTranscriptArchive,
   resolveRegisteredSqliteTranscriptArchiveName,

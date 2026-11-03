@@ -31,6 +31,32 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(next.agents?.defaults?.model).toEqual(base.agents.defaults.model);
   });
 
+  it("merges workspace auth headers without replacing provider configuration", () => {
+    const provider = {
+      baseUrl: "https://api.anthropic.com",
+      models: [],
+      headers: { "X-Route": "preserve" },
+      request: { headers: { "X-Request": "preserve" } },
+    } satisfies ModelProviderConfig;
+    const config: OpenClawConfig = { models: { providers: { anthropic: provider } } };
+    const patch = {
+      models: {
+        providers: {
+          anthropic: { headers: { "anthropic-workspace-id": "wrkspc_synthetic_test" } },
+        },
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch(config, patch, { providerConfigNormalizer });
+
+    expect(next.models?.providers?.anthropic).toEqual({
+      ...provider,
+      headers: { "X-Route": "preserve", "anthropic-workspace-id": "wrkspc_synthetic_test" },
+    });
+    expect(config.models?.providers?.anthropic).toEqual(provider);
+    expect(provider.headers).toEqual({ "X-Route": "preserve" });
+  });
+
   it("ignores undefined deletions under blocked __proto__ keys without mutating input", () => {
     const blockedKey = "__proto__";
     const config = { [blockedKey]: { retained: "before" } };

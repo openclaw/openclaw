@@ -2,11 +2,7 @@ import {
   createRuntimeEnv,
   createTestWizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  applyProviderAuthConfigPatch,
-  type OpenClawConfig,
-  type ProviderAuthContext,
-} from "openclaw/plugin-sdk/provider-auth";
+import type { OpenClawConfig, ProviderAuthContext } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it, vi } from "vitest";
 import { buildAnthropicProvider } from "./register.runtime.js";
@@ -40,20 +36,20 @@ async function authenticate(
       createVpsAwareHandlers: vi.fn<ProviderAuthContext["oauth"]["createVpsAwareHandlers"]>(),
     },
   });
-  return { result, next: applyProviderAuthConfigPatch(cfg, result.configPatch ?? {}) };
+  return result;
 }
 
 describe("Anthropic API-key workspace setup", () => {
   it("saves a workspace without replacing configured headers or scoped-key settings", async () => {
-    const { result, next } = await authenticate();
-    expect(next.models?.providers?.anthropic?.headers).toEqual({
+    const result = await authenticate();
+    expect(result.configPatch?.models?.providers?.anthropic?.headers).toEqual({
       "X-Route": "preserve",
       "anthropic-workspace-id": workspaceId,
     });
     expect(config.models?.providers?.anthropic?.headers).toEqual({ "X-Route": "preserve" });
     expect(result.profiles[0]?.credential).toMatchObject({ type: "api_key", key: apiKey });
     const scoped = await authenticate(config, async () => "  ");
-    expect(scoped.next.models?.providers?.anthropic).toEqual(config.models?.providers?.anthropic);
+    expect(scoped.configPatch).toBeUndefined();
 
     const overrides: Array<Pick<ModelProviderConfig, "headers" | "request">> = [
       { headers: { "Anthropic-Workspace-Id": workspaceId } },
@@ -78,15 +74,17 @@ describe("Anthropic API-key workspace setup", () => {
         throw new Error("Existing workspace must not be replaced");
       };
       const preserved = await authenticate(configured, text);
-      expect(preserved.next.models?.providers?.anthropic).toEqual(
-        configured.models?.providers?.anthropic,
-      );
+      expect(preserved.configPatch).toBeUndefined();
+      expect(configured.models?.providers?.anthropic).toEqual({
+        ...config.models?.providers?.anthropic,
+        ...override,
+      });
     }
   });
 
   it("creates the stable provider config when no explicit provider row exists", async () => {
-    const { next } = await authenticate({});
-    expect(next.models?.providers?.anthropic).toMatchObject({
+    const result = await authenticate({});
+    expect(result.configPatch?.models?.providers?.anthropic).toMatchObject({
       baseUrl: "https://api.anthropic.com",
       models: [],
       headers: { "anthropic-workspace-id": workspaceId },

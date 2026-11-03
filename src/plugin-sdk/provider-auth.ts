@@ -111,5 +111,3 @@ export {
   listUsableProviderAuthProfileIdsAsync,
   resolveProviderAuthProfileApiKey,
 } from "../plugins/provider-auth-availability.js";
-
-export { applyProviderAuthConfigPatch } from "../plugins/provider-auth-choice-helpers.js";
