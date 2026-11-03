@@ -2,27 +2,37 @@
  * Registers caller-supplied custom API stream functions with the LLM registry.
  */
 import type { ApiRegistry } from "@openclaw/ai";
-import type { StreamFn, StreamFunction } from "@openclaw/llm-core";
+import type { AssistantMessageEventStreamLike, StreamFn, StreamFunction } from "@openclaw/llm-core";
 import type { Api, AssistantMessageEventStreamContract, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import { buildStreamErrorAssistantMessage } from "./stream-message-shared.js";
 
+/** The public StreamFn contract also admits read-only streams; only these can be returned as-is. */
+function isProducerStream(
+  stream: AssistantMessageEventStreamLike,
+): stream is AssistantMessageEventStreamContract {
+  const producer = stream as Partial<AssistantMessageEventStreamContract>;
+  return typeof producer.push === "function" && typeof producer.end === "function";
+}
+
 function adaptCustomStream(
   model: Model,
   stream: ReturnType<StreamFn>,
 ): AssistantMessageEventStreamContract {
-  if (!(stream instanceof Promise)) {
-    return stream as AssistantMessageEventStreamContract;
+  if (!(stream instanceof Promise) && isProducerStream(stream)) {
+    return stream;
   }
 
   const adapted = createAssistantMessageEventStream();
+  const resolvedStream = stream instanceof Promise ? stream : Promise.resolve(stream);
   void (async () => {
     try {
       // Registry providers must return a stream immediately, while plugin
-      // hooks may resolve one lazily. Bridge that lifecycle at the boundary.
+      // hooks may resolve one lazily and callers may hand back a read-only
+      // stream. Bridge both lifecycles at the boundary.
       await runPluginStreamConsumer(stream, async () => {
-        const resolved = await stream;
+        const resolved = await resolvedStream;
         for await (const event of resolved) {
           adapted.push(event);
         }

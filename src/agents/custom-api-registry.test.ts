@@ -52,6 +52,25 @@ describe("ensureCustomApiRegistered", () => {
     await expect(stream.result()).resolves.toBe(message);
   });
 
+  it("adapts synchronous read-only streams to the producer contract", async () => {
+    const message = buildAssistantMessage({
+      model,
+      content: [{ type: "text", text: "done" }],
+      stopReason: "stop",
+      usage: buildUsageWithNoCost({}),
+    });
+    const streamFn = () => ({
+      result: async () => message,
+      async *[Symbol.asyncIterator]() {
+        yield { type: "done", reason: "stop", message } as const;
+      },
+    });
+    const stream = register(streamFn).stream(model as never, { messages: [] }, {});
+
+    expect(typeof stream.push).toBe("function");
+    await expect(stream.result()).resolves.toBe(message);
+  });
+
   it("converts async stream factory failures into terminal stream errors", async () => {
     const streamFn = async () => {
       throw new Error("factory failed");
