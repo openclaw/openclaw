@@ -3,6 +3,7 @@
 // elections it has not driven yet; delete ends the session and terminalizes all of its custody;
 // the owner's explicit cancel ends exactly the records it names.
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { resolveContinuationRuntimeConfig } from "./config.js";
 import { abortContinuationDispatchClaim } from "./continuation-dispatch-claims.js";
 import { listContinuationRecords, updateContinuationRecords } from "./custody/custody-store.js";
 import type { ContinuationRecord, ContinuationRecordPatch } from "./custody/custody-store.types.js";
@@ -135,6 +136,10 @@ export async function rearmKeptContinuations(params: {
   sessionKey: string;
   storePath: string;
 }): Promise<void> {
+  // Disabled continuation leaves the kept rows durable for a re-enable, as recovery does.
+  if (!resolveContinuationRuntimeConfig().enabled) {
+    return;
+  }
   const kept = await listContinuationRecords({
     ownerSessionKey: params.sessionKey,
     kinds: ["work", "delegate"],
@@ -155,7 +160,9 @@ export async function rearmKeptContinuations(params: {
   }
   const [{ rearmContinuationWorkDispatch }, { rearmPendingContinuationDelegates }] =
     await Promise.all([import("./work-dispatch.js"), import("./delegate-dispatch-recovery.js")]);
-  await rearmContinuationWorkDispatch(params.sessionKey);
+  if (kept.some((record) => record.kind === "work" && record.status === "queued")) {
+    rearmContinuationWorkDispatch(params.sessionKey);
+  }
   await rearmPendingContinuationDelegates({ ...params, entry });
 }
 

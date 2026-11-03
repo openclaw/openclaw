@@ -370,7 +370,7 @@ import {
   enqueuePendingDelegate,
   pendingDelegateCount,
 } from "./delegate-store.js";
-import { cancelSessionContinuations } from "./session-reset.js";
+import { cancelSessionContinuations, rearmKeptContinuations } from "./session-reset.js";
 import type { ContinuationRuntimeConfig } from "./types.js";
 import {
   describeWorkTransition,
@@ -385,7 +385,6 @@ import {
   computeBusySkipBackoffMs,
   dispatchPendingContinuationWork,
   partitionSupersededWork,
-  rearmContinuationWorkDispatch,
   recoverPendingContinuationWork,
   resetContinuationWorkDispatchForTests,
   scheduleContinuationWork,
@@ -722,8 +721,13 @@ describe("durable continuation_work dispatch", () => {
   // queue must not start a recheck loop for the session.
   it("a reset re-arm arms nothing when continuation is disabled or no wake is queued", async () => {
     const sessionKey = "agent:main:rearm-after-reset";
+    mockSessionStore[sessionKey] = { sessionId: "rearm-after-reset-session" };
+    const rearm = async () => {
+      await rearmKeptContinuations({ sessionKey, storePath: mockStorePath });
+      await flushAsyncWork();
+    };
     const before = await dispatchTimerCount();
-    await rearmContinuationWorkDispatch(sessionKey);
+    await rearm();
     expect(await dispatchTimerCount()).toBe(before);
 
     await enqueuePendingWork({
@@ -735,11 +739,11 @@ describe("durable continuation_work dispatch", () => {
       maxChainLength: 8,
     });
     continuationEnabledForTest = false;
-    await rearmContinuationWorkDispatch(sessionKey);
+    await rearm();
     expect(await dispatchTimerCount()).toBe(before);
 
     continuationEnabledForTest = true;
-    await rearmContinuationWorkDispatch(sessionKey);
+    await rearm();
     expect(await dispatchTimerCount()).toBe(before + 1);
   });
 
