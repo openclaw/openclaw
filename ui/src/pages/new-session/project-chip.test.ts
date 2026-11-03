@@ -6,6 +6,7 @@ const projects = [
   {
     id: "openclaw",
     displayName: "OpenClaw",
+    repositoryIdentity: "acme-labs/console",
     repoRoot: "/workspace/openclaw",
     source: "registered" as const,
   },
@@ -70,7 +71,7 @@ describe("What chip state", () => {
     const state = resolveProjectChip({
       folder: "",
       workspace: "/workspace",
-      projectId: "",
+      projectId: "openclaw",
       selectedRemoteProject: null,
       projects,
       recents: [
@@ -82,6 +83,7 @@ describe("What chip state", () => {
     });
 
     expect(state.recents).toEqual([folderRecent, repositoryRecent]);
+    expect(state.label).toBe("acme-labs/console");
   });
 
   it.each([

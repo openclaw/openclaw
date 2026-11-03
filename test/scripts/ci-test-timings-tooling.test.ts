@@ -79,6 +79,21 @@ it("requires independent runs, preserves runner profiles and prefers complete na
   });
 });
 
+it("excludes Boat and unsupported self-hosted tooling from existing runner profiles", () => {
+  const labels = [["boat"], ["boat-large/from=snapshot"], ["ubuntu-24.04", "self-hosted"]];
+  const runs = labels.flatMap((runnerLabels, index) =>
+    [1, 2].map((id) =>
+      Object.assign(run(index * 2 + id), {
+        logs: [{ kind: "tooling" as const, text: toolingLog(200), labels: runnerLabels }],
+      }),
+    ),
+  );
+  expect(refitTestTimings(runs).timings.toolingFileSeconds).toEqual({
+    blacksmith: {},
+    github: {},
+  });
+});
+
 type TimingCase = [
   label: string,
   expected: number | undefined,

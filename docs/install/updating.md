@@ -53,6 +53,35 @@ backup.
 
 ## Update implementation contract
 
+The candidate macOS app's narrow credential Doctor also completes pending local
+service-runtime intent migration before native startup selects a Gateway. This
+prevents an absent migration receipt from preserving the old seed after credential
+cutover advances shared state. The daemon migration owner keeps explicit pins and
+conflict refusals; preparation does not seed a runtime or start a service. Retry
+also reconciles intent when credential cutover already completed. The candidate
+must contain this fix; older installed updaters are unchanged.
+
+After draining database readers and writers, candidate Doctor inspects SQLite
+reclamation mode without copying databases whose WAL is empty or absent and whose
+rollback journal is absent. Immutable reads preserve source artifacts; databases
+with recovery content retain the private snapshot path. Conversion still uses the
+existing maintenance, space, and integrity checks. This requires the candidate
+Doctor; the installed updater needs no new protocol.
+
+Synchronous integrity workers preserve the migration owner's selected schema-only
+check, matching the asynchronous worker path. Explicit full verification keeps
+its full coverage; the candidate must contain this transport fix.
+
+Candidate Doctor prepares its read-only SQLite inspection snapshots asynchronously,
+including lease and auth inspection and captured session repair planning. Cancellation
+joins the snapshot child and its cleanup. Snapshot allocation checks the destination's
+free space against the database, WAL, and rollback journal before copying; unknown
+capacity retains best-effort behavior. These fixes must be present in the candidate
+Doctor and snapshot worker; they do not change an older installed updater's inspection.
+New macOS and Windows agent leases record platform boot identity so a dead owner from
+the same boot can use existing quick recovery admission. Legacy or unknown provenance
+still requires the full integrity gate; existing leases are not backfilled.
+
 Pre-update config copies publish through a temporary file and same-directory
 rename. An interrupted write preserves the previous `.pre-update` copy, and a
 later snapshot attempt can retry. Post-update recovery refuses malformed copies
@@ -191,6 +220,27 @@ database backup provider. The installed updater must contain this repair.
 Update-history writes participate in PostgreSQL's generation handoff to Doctor;
 all other generation checks remain in force. Update status reads history and
 recovery outcomes through the configured database engine.
+
+The managed update helper owns recovery when its updater exits by signal or
+without a readable result after either the helper or the updater stopped the
+Gateway. Both recovery paths use the same update-history evidence of an
+unfinished stop: the helper's stop step, or a managed handoff followed by the
+updater's activation phase while the Gateway is currently stopped. The handoff
+record remains usable after target selection records a package-manager method.
+Its staged runtime keeps
+bookkeeping available while the installed package is missing. An untouched
+publication preparation is retired and the verified original Gateway restored;
+an interrupted publication completes the recorded candidate, runs post-core
+repair as the same update's continuation, then restarts and verifies the managed
+Gateway. A plugin cohort that the killed updater reserved for this update is
+settled by that continuation before Doctor runs; after a restored original,
+the original runtime settles it before the Gateway restarts. If that settlement
+fails, the original Gateway still restarts and update history names
+`openclaw update repair` before the next update. The helper never settles a cohort
+that belongs to another update. Update history records rollback, success with
+recovery, or an actionable failure. Lost ownership, named data risk, and
+unverifiable runtime identity still keep the Gateway stopped. The helper that starts the update must contain this
+change; staging a newer candidate cannot repair an older helper.
 
 During overlapping Gateway restarts, config recovery reads health facts through
 the same isolated read-only transaction used for startup plugin metadata while
@@ -479,6 +529,17 @@ records a failed outcome after its child work settles, while it still owns
 bookkeeping. Expiration during activation, unresolved child work, or lost
 ownership retains recovery custody instead. A timeout does not authorize a new
 process to take over an unresolved update.
+
+When both the managed-update helper and updater are proven dead, explicit
+`openclaw update repair` can reclaim their handoff immediately; unknown custody
+keeps the 45-minute (or longer recorded) grace. The descendant census still
+refuses live or unverified work. After finalization succeeds, repair starts and
+verifies the managed Gateway only when update history records that the helper
+or updater stopped it without a subsequent start, running observation, completed
+managed restart, or settled run. Both recovery owners use this same decision. A Gateway
+stopped by its operator stays stopped. A recorded named data risk prevents
+automatic startup. The repairing CLI must contain this fix; older managed-service
+activation records can establish the stop without a new stop-time receipt.
 
 A successful foreground update hands completion to the replacement Gateway.
 Automatic history reconciliation preserves that handoff while startup verifies

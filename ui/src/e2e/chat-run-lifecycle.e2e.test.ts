@@ -91,7 +91,7 @@ async function newPage(
   return activePage;
 }
 function stopButton(page: Page) {
-  return page.getByRole("button", { name: "Stop generating" });
+  return page.getByRole("button", { name: "Stop", exact: true });
 }
 function sendButton(page: Page, exact?: boolean) {
   return page.getByRole("button", {

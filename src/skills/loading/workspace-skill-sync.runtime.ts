@@ -298,16 +298,14 @@ export async function syncWorkspaceSkills(params: {
     const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));
     assertCurrent?.();
     phases.mark("attempt.setup.sandbox.layout.skills_sync.reuse");
-    const sourceVersion = getSkillsResourceVersion(sourceWorkspace);
-    const skillsVersion = getSkillsSnapshotVersion(sourceWorkspace);
     const expectedManifestKey =
-      skillsSnapshot?.version === skillsVersion
+      skillsSnapshot?.version === getSkillsSnapshotVersion(sourceWorkspace)
         ? resolveSyncedSkillsManifestKey({
             entryKeys: skillsSnapshot.skills
               .map((skill) => resolveSyncedSkillIdentity(skill.skillKey ?? skill.name, skill.name))
               .toSorted(),
             skillRootsFingerprint,
-            skillsVersion,
+            skillsVersion: skillsSnapshot.version,
           })
         : undefined;
     const cachedUsage = syncedSkillsUsageCache.get(targetSkillsDir);
@@ -316,7 +314,7 @@ export async function syncWorkspaceSkills(params: {
       expectedManifestKey &&
       manifestKey === expectedManifestKey &&
       cachedUsage?.manifestKey === manifestKey &&
-      cachedUsage.sourceVersion === sourceVersion
+      cachedUsage.sourceVersion === getSkillsResourceVersion(sourceWorkspace)
     ) {
       return cachedUsage.skillUsagePaths.map((entry) => ({ ...entry }));
     }
@@ -339,6 +337,8 @@ export async function syncWorkspaceSkills(params: {
       executionWorkspaceFileHost,
     });
     assertCurrent?.();
+    const sourceVersion = getSkillsResourceVersion(sourceWorkspace);
+    const skillsVersion = getSkillsSnapshotVersion(sourceWorkspace);
     if (skillsSnapshot?.librarySelections?.length) {
       const selectedNames = new Set(skillsSnapshot.skills.map((skill) => skill.name));
       phases.mark("attempt.setup.sandbox.layout.skills_sync.library_selection");

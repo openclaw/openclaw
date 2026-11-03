@@ -368,12 +368,13 @@ describe("memory-core plugin runtime registration", () => {
       markMemoryIndexingLive("main");
       markMemoryIndexingLive("research");
       const config = indexConfig(owner);
-      const { services, backgroundTasks, context } = captureCapability({ config });
+      const { tools, services, backgroundTasks, context } = captureCapability({ config });
       for (const service of services) {
         await service.start(context);
       }
       await Promise.all(backgroundTasks);
       expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+      expect(tools.flatMap(([, options]) => options?.names ?? [])).toEqual(["intent"]);
     },
   );
 

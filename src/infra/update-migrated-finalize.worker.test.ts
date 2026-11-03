@@ -83,6 +83,11 @@ vi.mock("./database-engine/admission-scope.js", async (importOriginal) => {
   return { ...actual, installDatabaseProcessRole: vi.fn(actual.installDatabaseProcessRole) };
 });
 
+// mock-isolation: Wire/cleanup fixtures leave real storage selection to the PostgreSQL process test.
+vi.mock("../cli/update-cli/update-command-database-engine.js", () => ({
+  withUpdateDatabaseEngine: async (_env: NodeJS.ProcessEnv, run: () => Promise<unknown>) => run(),
+}));
+
 // Exercise the executable's output boundary without update, service, or database effects.
 vi.mock("node:fs/promises", () => ({ default: { writeFile: fixture.writeFile } }));
 vi.mock("../cli/daemon-cli.js", () => ({ finishUpdateRun: vi.fn() }));

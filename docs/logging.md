@@ -535,9 +535,32 @@ parents as inclusive totals; do not add a parent to its children. Prompt-media
 warnings beginning `Native image:` concern image-file access, not container-image
 validation, and occur outside attempt setup.
 
+Within `detail.attempt.system-prompt.project-memory`, `detail.project-memory.*`
+separates runtime selection, dynamic imports, provider preparation, candidate
+retrieval, authority checks, rendering, provider close, and final publication.
+Legacy memory runtimes instead report `legacy.manager`, `legacy.candidates`, and
+`legacy.render`. The native provider owners further report
+`detail.memory.provider-open.*` (authority preparation, runtime lookup, opening,
+revalidation, failed-open cleanup, and binding) and `detail.memory.provider-call.*` (authority
+preparation, execution, and revalidation). Authority phases include waits for
+pending audience publications; candidate execution includes the provider's own
+storage and filtering work. These fixed labels contain no project keys or memory
+content, and include failed or denied operations. Parent totals overlap their
+children; the same provider phases can also occur during other memory operations.
+
+Fresh managed sandbox projections also record fixed stages beneath
+`sandbox.workspace_selection.prepare.reconcile`: template selection and cloning,
+checkout packing, indexing and materialization, manifest scanning, publication,
+and cleanup. `dependency.install` separates package installation from
+`dependency.retire`, which includes removing the disposable builder before its
+files can be published. A slow reconcile total can therefore reflect container
+removal even after the installer has exited.
+
 `detail.worktree.managed.*` and `detail.worktree.sandbox.*` carry the worktree
 owner's recorded phase durations, including `templatePrepare`, `templateApply`,
-`checkout`, `runtimeQuiesce`, `runtimeResume`, and `unattributed`. Runtime quiescence
+`templateValidate`, `templateRetire`, `checkout`, `runtimeQuiesce`, `runtimeResume`,
+and `unattributed`. Template retirement includes removing an obsolete generation;
+it is separate from retiring a dependency builder. Runtime quiescence
 and resume include pausing and unpausing sandbox writers around synchronization.
 The top-level `worktree` interval can describe an
 earlier managed checkout; it is not the sandbox work inside `attempt.setup`.
@@ -1296,6 +1319,17 @@ stack tails and their outer callers, then lower-ranked self frames. JSON stays
 complete, and sampled leaves take priority. `truncated` separately describes
 limited native profile coverage. Code locations and symbols retain the same
 redaction policy as other diagnostic profiles.
+
+On supported Node runtimes, a worker also reports a continuously blocked main
+thread after 30 seconds, then at most once per minute while the same stall
+continues. `main-thread stall in progress` is written directly to standard error
+(and the service journal), so it does not wait for the main event loop or the
+configured file logger. It uses the existing bounded native recording: an
+inspector interrupt takes the snapshot, and the worker parses, sanitizes, and
+formats it within the same 2 KiB profile budget. `captureMs` measures the native
+snapshot interrupt; no debugger listener or additional sampler is started.
+Native waits that cannot service an inspector interrupt can still prevent a JS
+profile; this mechanism diagnoses JavaScript spins, not every native deadlock.
 
 ### Model call size and timing
 
