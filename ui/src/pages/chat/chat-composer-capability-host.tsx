@@ -554,7 +554,8 @@ export class ChatComposerCapabilityHost {
           if (current() && canWriteLibrary) {
             void this.library.activate(action, skillId, revision).then((message) => {
               if (message && current()) {
-                showToast({ severity: "error", message });
+                // activate() returns only the queued-selection notice; failures stay inline.
+                showToast({ message });
               }
             });
           }
