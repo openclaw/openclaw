@@ -141,7 +141,7 @@ describe("agent identity actions", () => {
   });
 
   it.each([
-    ["unusable", "That image can't be used. Pick an image file up to 2 MB."],
+    ["unusable", "That image can’t be used. Pick an image file up to 2 MB."],
     ["too-detailed", "That image is too detailed to store as an avatar"],
   ] as const)("explains a %s avatar rejection", async (reason, message) => {
     fileToAvatarDataUrlMock.mockResolvedValueOnce({ ok: false, reason });

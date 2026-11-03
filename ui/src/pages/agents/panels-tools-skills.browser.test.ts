@@ -228,8 +228,8 @@ describe("agents tools panel (browser)", () => {
 
     const included = container.querySelector("#agent-tool-read");
     const absent = container.querySelector("#agent-tool-exec");
-    expect(toolFact(included, "Tool preview")).toBe("Listed in preview via Built-In.");
-    expect(included?.textContent).toContain("Listed in preview via Built-In.");
+    expect(toolFact(included, "Tool preview")).toBe("Listed in preview via Built-in.");
+    expect(included?.textContent).toContain("Listed in preview via Built-in.");
     expect(toolFact(absent, "Tool preview")).toBe("Not listed");
     expect(absent?.querySelector<HTMLInputElement>("input.settings-toggle__input")?.checked).toBe(
       true,
@@ -305,7 +305,7 @@ describe("agents tools panel (browser)", () => {
     expect(texts(container, ".agent-tools-group__title > .settings-row__value")).toEqual([
       "Plugin: voice-call",
     ]);
-    expect(toolFact(container.querySelector("#agent-tool-tts"), "Source")).toBe("Built-In");
+    expect(toolFact(container.querySelector("#agent-tool-tts"), "Source")).toBe("Built-in");
     expect(toolFact(container.querySelector("#agent-tool-voice_call"), "Source")).toBe(
       "Plugin: voice-call · Optional",
     );
