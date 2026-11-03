@@ -82,7 +82,9 @@ export function renderPluginDetailShell(props: {
           <section class="plugin-catalog-detail__panel">{props.panel}</section>
           {props.readme ? (
             <section class="plugin-catalog-detail__readme-section">
-              <h2>{t("pluginsPage.detailTabs.readme")}</h2>
+              <h2 class="settings-section__heading oc-settings-section-title">
+                {t("pluginsPage.detailTabs.readme")}
+              </h2>
               {props.readme}
             </section>
           ) : undefined}
