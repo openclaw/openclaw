@@ -168,9 +168,12 @@ every other assertion; production and the shared test-line scalar stay unchanged
 
 The complete client, diagnostics, frame decoder, transport harness, determining
 callers, causal privacy history and static runtime route are source-qualified.
-Actual content-leak keeper controls, untouched/candidate proof, focused checks,
-all removal scans, fresh review and published proof remain pending. No live Codex,
-native process, Gateway or model execution verdict is claimed.
+Untouched and candidate runs pass all25 cases. Actual decoder-frame and stderr-error
+leaks each fail only the retained exact-call keeper on original and candidate
+tests, with24 other cases passing; both owners are restored byte-for-byte.
+Focused types, lint, MDX, the test-line ratchet and all seven removal-scan
+components pass. Fresh committed-range review and published proof remain pending.
+No live Codex, native process, Gateway or model execution verdict is claimed.
 
 ## Completed source review
 
