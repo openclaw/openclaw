@@ -1,7 +1,11 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isSecretRefShape } from "../../../../src/config/redact-snapshot.secret-ref.js";
 import { registerListener } from "../../../../src/shared/listeners.js";
+import type { ConfigSnapshot } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
+import { REDACTED_SENTINEL } from "../config-form-utils.ts";
 import { listen } from "../reactive/listener.ts";
 import { showToast } from "../toast.ts";
 import type { ConfigPatchAck } from "./config-draft-model.ts";
@@ -11,6 +15,47 @@ import { resolveEditableSnapshotConfig } from "./config-state-model.ts";
 type ConfigPath = Array<string | number>;
 
 const fieldKey = (path: ConfigPath) => JSON.stringify(path);
+
+const MISSING = Symbol("missing");
+
+/** The saved value at a path, or MISSING when the snapshot can't say. */
+function savedValue(snapshot: ConfigSnapshot | null | undefined, path: ConfigPath): unknown {
+  let node: unknown = resolveEditableSnapshotConfig(snapshot);
+  if (node === null) {
+    return MISSING;
+  }
+  for (const segment of path) {
+    // A SecretRef's parts are a reference too; none of them is a value to type over.
+    if (isRecord(node) && isSecretRefShape(node)) {
+      return REDACTED_SENTINEL;
+    }
+    node =
+      isRecord(node) || Array.isArray(node)
+        ? (node as Record<string, unknown>)[segment]
+        : undefined;
+  }
+  return isRecord(node) && isSecretRefShape(node) ? REDACTED_SENTINEL : node;
+}
+
+/**
+ * Whether a held edit may still go out. A stored secret, or a ${VAR} the field wasn't showing when
+ * typing began, can arrive from elsewhere while the edit is held; Save never writes over either.
+ * Undefined means the snapshot can't tell yet, and the edit waits.
+ */
+function canWriteOver(
+  snapshot: ConfigSnapshot | null | undefined,
+  path: ConfigPath,
+  baseline: unknown,
+): boolean | undefined {
+  const saved = savedValue(snapshot, path);
+  if (saved === MISSING) {
+    return undefined;
+  }
+  if (saved === REDACTED_SENTINEL) {
+    return false;
+  }
+  return !(typeof saved === "string" && saved.includes("${") && saved !== baseline);
+}
 
 export type ConfigSecretFields = {
   read: (path: ConfigPath) => string | undefined;
@@ -33,7 +78,16 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
   const runtime = context.runtimeConfig;
   const entries = new Map<
     string,
-    { label: string; text: string; routeId: string; pathname: string; search: string }
+    {
+      path: ConfigPath;
+      /** The saved value the field showed when typing began. */
+      baseline: unknown;
+      label: string;
+      text: string;
+      routeId: string;
+      pathname: string;
+      search: string;
+    }
   >();
   const listeners = new Set<() => void>();
   let scope: number | undefined;
@@ -48,6 +102,21 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
   const syncScope = () => {
     if (entries.size > 0 && scope !== currentScope()) {
       entries.clear();
+      notify();
+    }
+  };
+  const writable = (path: ConfigPath) =>
+    canWriteOver(runtime.state.configSnapshot, path, entries.get(fieldKey(path))?.baseline);
+  // An edit over something that turned into a reference is dropped, so the field shows that instead.
+  const dropUnwritable = () => {
+    let dropped = false;
+    for (const [key, entry] of entries) {
+      if (writable(entry.path) === false) {
+        entries.delete(key);
+        dropped = true;
+      }
+    }
+    if (dropped) {
       notify();
     }
   };
@@ -78,7 +147,10 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
         event.returnValue = "";
       }
     });
-    runtime.subscribe(syncScope);
+    runtime.subscribe(() => {
+      syncScope();
+      dropUnwritable();
+    });
     let pathname = context.router.getState().location.pathname;
     context.router.subscribe((state) => {
       if (state.location.pathname !== pathname) {
@@ -110,10 +182,20 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
         });
       },
       {
-        canDispatch: () => scope === undefined || scope === currentScope(),
+        // Checked against the snapshot the patch is built from, right before it goes out.
+        canDispatch: () =>
+          (scope === undefined || scope === currentScope()) && writable(path) !== false,
         configWriteAck: (ack) => ack,
       },
     );
+  const refuse = (path: ConfigPath) => {
+    dropUnwritable();
+    if (entries.delete(fieldKey(path))) {
+      notify();
+    }
+    // The field now shows what's saved there, which says why nothing was written.
+    return { ok: false as const, error: "" };
+  };
   return {
     read(path) {
       syncScope();
@@ -123,11 +205,15 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
       wire();
       syncScope();
       scope = currentScope();
+      const key = fieldKey(path);
+      const held = entries.get(key);
       const { location, matches } = context.router.getState();
-      entries.set(fieldKey(path), {
+      entries.set(key, {
+        path: [...path],
+        baseline: held ? held.baseline : savedValue(runtime.state.configSnapshot, path),
         label,
         text,
-        routeId: String(matches[0]?.routeId ?? ""),
+        routeId: matches[0]?.routeId ?? "",
         pathname: location.pathname,
         search: location.search,
       });
@@ -140,11 +226,17 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
     },
     async save(path, value) {
       syncScope();
+      if (writable(path) === false) {
+        return refuse(path);
+      }
       let result = await write(path, value);
       if (!result.ok && result.reason === "conflict") {
         // Only this field goes out, so the latest saved config can safely take it.
         await runtime.refresh({ background: true });
-        result = await write(path, value);
+        result = writable(path) === false ? result : await write(path, value);
+      }
+      if (!result.ok && writable(path) === false) {
+        return refuse(path);
       }
       return result.ok ? { ok: true } : { ok: false, error: result.error };
     },

@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { For, createMemo } from "solid-js";
 import { i18n } from "../i18n/index.ts";
+import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { createNativeDraft } from "../lib/reactive/native-draft.ts";
 import {
@@ -139,7 +140,10 @@ function ScalarInput(props: {
     path: props.params.path,
     hints: props.params.hints,
     secretFields: props.stepped ? undefined : props.params.secretFields,
-    label: () => String(resolveConfigFieldPresentation(props.params).label),
+    // A stored secret or a SecretRef stays read-only, even if an edit was held before it arrived.
+    writable: () =>
+      props.params.value !== REDACTED_SENTINEL && !isSecretRefObject(props.params.value),
+    label: () => resolveConfigFieldPresentation(props.params).label,
   }));
   let input: HTMLInputElement | HTMLTextAreaElement | undefined;
   const state = createMemo(() => {
@@ -216,7 +220,12 @@ function ScalarInput(props: {
     const inputType = props.inputType;
     const invalidString = t("configForm.invalidString");
     const invalidNumber = t("configForm.invalidNumber");
+    const holdsEdit = hold.active();
     const textInputState = (raw: string, editHint: ScalarEditHint) => {
+      // The sentinel only stands in for a stored secret; it is never a value to save.
+      if (holdsEdit && raw.includes(REDACTED_SENTINEL)) {
+        return { candidate: undefined, message: invalidString };
+      }
       const candidate = coerceTextInputValue(raw, schema, editHint);
       const valid = isSupportedConfigValueValid(schema, candidate);
       const clearOptional = raw === "" && !isRequired && !valid;
@@ -225,10 +234,15 @@ function ScalarInput(props: {
         message: valid || clearOptional ? "" : invalidString,
       };
     };
+    // Secrets stay out of autofill, saved form state, spellcheck services and password managers.
+    const secretInput =
+      !props.stepped &&
+      (hold.active() || Boolean(sensitiveState?.isSensitiveField || sensitiveState?.isSensitive));
     return {
       field,
       errorId,
       sensitiveState,
+      secretInput,
       isStructuredSecretRef,
       masked,
       effectiveRedacted,
@@ -406,6 +420,27 @@ function ScalarInput(props: {
     get readonly() {
       return state().effectiveRedacted;
     },
+    get autocomplete() {
+      return state().secretInput ? "off" : undefined;
+    },
+    get spellcheck() {
+      return state().secretInput ? false : undefined;
+    },
+    get autocapitalize() {
+      return state().secretInput ? "off" : undefined;
+    },
+    get "data-1p-ignore"() {
+      return state().secretInput ? "" : undefined;
+    },
+    get "data-lpignore"() {
+      return state().secretInput ? "true" : undefined;
+    },
+    get "data-bwignore"() {
+      return state().secretInput ? "" : undefined;
+    },
+    get "data-form-type"() {
+      return state().secretInput ? "other" : undefined;
+    },
     onClick: () => {
       if (!state().masked && state().sensitiveState?.isRedacted && !state().isStructuredSecretRef) {
         props.params.onToggleSensitivePath?.(props.params.path);
@@ -497,31 +532,37 @@ function ScalarInput(props: {
       )}
     </>
   );
+  const secretField = () => (
+    <span class="settings-secret">
+      {control}
+      {hold.text() === undefined && (
+        <SensitiveToggleButton
+          path={props.params.path}
+          state={state().sensitiveState!}
+          disabled={props.params.disabled}
+          onToggleSensitivePath={props.params.onToggleSensitivePath}
+        />
+      )}
+    </span>
+  );
   const wrappedInput = (
     <>
-      {!props.stepped &&
-      !state().isStructuredSecretRef &&
-      (hold.active() ||
-        ((state().sensitiveState?.isSensitiveField || state().sensitiveState?.isSensitive) &&
-          props.params.onToggleSensitivePath)) ? (
-        <span class="settings-secret">
-          {control}
-          {hold.text() === undefined && (
-            <SensitiveToggleButton
-              path={props.params.path}
-              state={state().sensitiveState!}
-              disabled={props.params.disabled}
-              onToggleSensitivePath={props.params.onToggleSensitivePath}
-            />
-          )}
+      {!props.stepped && !state().isStructuredSecretRef && hold.active() ? (
+        <span class="cfg-secret">
+          {secretField()}
           <SecretFieldActions
             hold={hold}
-            label={String(state().field.label)}
+            label={state().field.label}
             disabled={props.params.disabled}
             onSave={() => void saveHeld()}
             onCancel={cancelHeld}
           />
         </span>
+      ) : !props.stepped &&
+        !state().isStructuredSecretRef &&
+        (state().sensitiveState?.isSensitiveField || state().sensitiveState?.isSensitive) &&
+        props.params.onToggleSensitivePath ? (
+        secretField()
       ) : (
         control
       )}

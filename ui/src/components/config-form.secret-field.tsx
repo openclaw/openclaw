@@ -32,6 +32,8 @@ type SecretFieldSource = {
   path: Array<string | number>;
   hints: ConfigUiHints;
   secretFields: ConfigSecretFields | undefined;
+  /** False while the saved value is one a form never writes over, such as a stored secret. */
+  writable: () => boolean;
   label: () => string;
 };
 
@@ -47,7 +49,7 @@ export function createSecretFieldHold(read: () => SecretFieldSource) {
   const text = createMemo(() => {
     revision();
     const source = read();
-    return active() ? source.secretFields?.read(source.path) : undefined;
+    return active() && source.writable() ? source.secretFields?.read(source.path) : undefined;
   });
   let error = "";
   let savedTimer: ReturnType<typeof setTimeout> | undefined;
@@ -111,7 +113,10 @@ export function createSecretFieldHold(read: () => SecretFieldSource) {
 
 export type SecretFieldHold = ReturnType<typeof createSecretFieldHold>;
 
-/** Sits inside the field so holding an edit never moves the row or the caret. */
+/**
+ * Save and Cancel sit beside the field, within the field's own width, so the row keeps its
+ * height. They keep their place through Saving and Saved, so the field doesn't move twice.
+ */
 export function SecretFieldActions(props: {
   hold: SecretFieldHold;
   label: string;
@@ -119,36 +124,48 @@ export function SecretFieldActions(props: {
   onSave: () => void;
   onCancel: () => void;
 }) {
+  const held = () => props.hold.text() !== undefined;
   return (
-    <Show
-      when={props.hold.text() !== undefined}
-      fallback={
-        <Show when={props.hold.saved()}>
-          <span class="cfg-secret-actions cfg-secret-actions--saved" role="status">
+    <Show when={held() || props.hold.saved()}>
+      <span class="cfg-secret-actions" data-saved={held() ? undefined : ""}>
+        <span class="cfg-secret-actions__buttons">
+          <button
+            type="button"
+            class="btn btn--sm primary"
+            aria-label={`${t("common.save")}: ${props.label}`}
+            aria-busy={props.hold.saving() ? "true" : undefined}
+            disabled={!held() || props.disabled || props.hold.saving()}
+            onClick={() => props.onSave()}
+          >
+            <span
+              class="cfg-secret-actions__label"
+              data-shown={props.hold.saving() ? undefined : ""}
+            >
+              {t("common.save")}
+            </span>
+            <span
+              class="cfg-secret-actions__label"
+              data-shown={props.hold.saving() ? "" : undefined}
+              aria-hidden="true"
+            >
+              {t("common.saving")}
+            </span>
+          </button>
+          <button
+            type="button"
+            class="btn btn--sm"
+            aria-label={`${t("common.cancel")}: ${props.label}`}
+            disabled={!held() || props.hold.saving()}
+            onClick={() => props.onCancel()}
+          >
+            {t("common.cancel")}
+          </button>
+        </span>
+        <Show when={!held()}>
+          <span class="cfg-secret-actions__saved" role="status">
             {t("configForm.secretSaved")}
           </span>
         </Show>
-      }
-    >
-      <span class="cfg-secret-actions">
-        <button
-          type="button"
-          class="btn btn--sm primary"
-          aria-label={`${t("common.save")}: ${props.label}`}
-          disabled={props.disabled || props.hold.saving()}
-          onClick={() => props.onSave()}
-        >
-          {props.hold.saving() ? t("common.saving") : t("common.save")}
-        </button>
-        <button
-          type="button"
-          class="btn btn--sm"
-          aria-label={`${t("common.cancel")}: ${props.label}`}
-          disabled={props.hold.saving()}
-          onClick={() => props.onCancel()}
-        >
-          {t("common.cancel")}
-        </button>
       </span>
     </Show>
   );

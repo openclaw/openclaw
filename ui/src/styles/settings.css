@@ -855,55 +855,91 @@ openclaw-appearance-background .settings-background-preview .session-background_
   flex: 1 1 auto;
 }
 
-/* A held secret's actions sit inside the field, so editing never moves the row. */
-.cfg-secret-actions {
-  position: absolute;
-  inset-block: 0;
-  inset-inline-end: 3px;
-  display: flex;
+/* A secret that holds its edit: the field, then Save and Cancel beside it. Together they keep the
+   lone-input width, so a held edit narrows the field instead of moving the row or its neighbours. */
+.cfg-secret {
+  display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
-.settings-secret > .cfg-secret-actions > .btn {
-  min-height: 0;
-  height: calc(100% - 6px);
-  padding-block: 0;
-  padding-inline: 8px;
+.cfg-secret > .settings-secret {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
-.cfg-secret-actions--saved {
-  padding-inline-end: var(--space-2);
+.settings-row:not(.settings-row--stacked) .settings-row__control > .cfg-secret {
+  width: 340px;
+}
+
+.settings-row--stacked .settings-row__control > .cfg-secret {
+  flex: 1 1 auto;
+}
+
+.cfg-secret--multiline {
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+}
+
+.cfg-secret--multiline > .settings-secret {
+  flex: none;
+  width: 100%;
+}
+
+.cfg-secret--multiline > .cfg-secret-actions {
+  align-self: flex-end;
+}
+
+/* Saving and Saved keep the buttons' footprint, so the field changes width only when the edit
+   starts and when it ends. */
+.cfg-secret-actions {
+  display: grid;
+  flex: none;
+}
+
+.cfg-secret-actions > * {
+  grid-area: 1 / 1;
+}
+
+.cfg-secret-actions__buttons {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.cfg-secret-actions[data-saved] > .cfg-secret-actions__buttons {
+  visibility: hidden;
+}
+
+.cfg-secret-actions .btn {
+  display: inline-grid;
+  place-items: center;
+}
+
+.cfg-secret-actions__label {
+  grid-area: 1 / 1;
+}
+
+.cfg-secret-actions__label:not([data-shown]) {
+  visibility: hidden;
+}
+
+.cfg-secret-actions__saved {
+  align-self: center;
+  padding-inline: var(--space-2);
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--control-ui-text-sm);
 }
 
-/* The refusal wraps under the field instead of squeezing it. */
-.settings-row:not(.settings-row--stacked)
-  > .settings-row__control:has(> .settings-secret > .cfg-secret-actions) {
+/* A refusal wraps under the field and its actions instead of squeezing them. */
+.settings-row:not(.settings-row--stacked) > .settings-row__control:has(> .cfg-secret) {
   flex-wrap: wrap;
   width: 340px;
 }
 
-.settings-row__control:has(> .settings-secret > .cfg-secret-actions) > .cfg-field__error {
+.settings-row__control:has(> .cfg-secret) > .cfg-field__error {
   flex-basis: 100%;
-}
-
-.settings-secret:has(> openclaw-tooltip) > .cfg-secret-actions--saved {
-  inset-inline-end: 34px;
-}
-
-.settings-secret:has(> .cfg-secret-actions:not(.cfg-secret-actions--saved)) > input {
-  padding-inline-end: 8.5rem;
-}
-
-.settings-secret:has(> textarea) > .cfg-secret-actions {
-  inset-block: auto 6px;
-  height: 28px;
-}
-
-.settings-secret:has(> .cfg-secret-actions) > textarea {
-  padding-block-end: 38px;
 }
 
 /* Multiline secrets (JSON textareas) anchor the eye to the first line. */

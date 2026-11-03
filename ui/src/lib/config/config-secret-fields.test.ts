@@ -113,4 +113,83 @@ describe("configSecretFields", () => {
     });
     expect(fields.read(path)).toBe("abc");
   });
+
+  describe("a value that turns into a reference while the edit is held", () => {
+    const savedAs = (token: unknown) => ({
+      hash: "h2",
+      config: { gateway: { port: 1, auth: { token } } },
+    });
+
+    it.each([
+      ["a stored secret", "__OPENCLAW_REDACTED__"],
+      ["a SecretRef", { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" }],
+      ["a ${VAR} the field wasn't showing", "${GATEWAY_TOKEN}"],
+      ["a template the field wasn't showing", "Bearer ${GATEWAY_TOKEN}"],
+    ])("drops the edit and never writes over %s", async (_name, saved) => {
+      const { context, fields, request, configListeners } = fixture();
+      fields.hold(path, "abc", "Token");
+      const changed = vi.fn();
+      fields.subscribe(changed);
+      // SAFETY: The fixture's snapshot only needs the members the owner reads.
+      context.runtimeConfig.state.configSnapshot = savedAs(saved) as never;
+      for (const listener of configListeners) {
+        listener();
+      }
+      expect(fields.read(path)).toBeUndefined();
+      expect(changed).toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["a stored secret", "__OPENCLAW_REDACTED__"],
+      ["a SecretRef", { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" }],
+      ["a ${VAR} the field wasn't showing", "${GATEWAY_TOKEN}"],
+    ])("checks again on Save, before the patch goes out, for %s", async (_name, saved) => {
+      const { context, fields, request } = fixture();
+      fields.hold(path, "abc", "Token");
+      // The change lands without a notification yet, so only Save's own check can see it.
+      context.runtimeConfig.state.configSnapshot = savedAs(saved) as never;
+      await expect(fields.save(path, "abc")).resolves.toEqual({ ok: false, error: "" });
+      expect(request).not.toHaveBeenCalled();
+      expect(fields.read(path)).toBeUndefined();
+    });
+
+    it("refuses when the reference lands between a conflict and the retry", async () => {
+      const { context, fields, request, runExternalMutation } = fixture();
+      fields.hold(path, "abc", "Token");
+      runExternalMutation.mockResolvedValueOnce({
+        ok: false,
+        reason: "conflict",
+        error: "Config changed",
+      } as never);
+      context.runtimeConfig.refresh.mockImplementationOnce(async () => {
+        context.runtimeConfig.state.configSnapshot = savedAs("${GATEWAY_TOKEN}") as never;
+      });
+      await expect(fields.save(path, "abc")).resolves.toEqual({ ok: false, error: "" });
+      expect(runExternalMutation).toHaveBeenCalledTimes(1);
+      expect(request).not.toHaveBeenCalled();
+      expect(fields.read(path)).toBeUndefined();
+    });
+
+    it("still writes over the ${VAR} the field showed when typing began", async () => {
+      const { context, fields, request } = fixture();
+      context.runtimeConfig.state.configSnapshot = savedAs("${GATEWAY_TOKEN}") as never;
+      fields.hold(path, "abc", "Token");
+      await expect(fields.save(path, "abc")).resolves.toEqual({ ok: true });
+      expect(request).toHaveBeenCalledWith(
+        "config.patch",
+        expect.objectContaining({ raw: JSON.stringify({ gateway: { auth: { token: "abc" } } }) }),
+      );
+    });
+
+    it("keeps the edit while the snapshot is being re-read", () => {
+      const { context, fields, configListeners } = fixture();
+      fields.hold(path, "abc", "Token");
+      context.runtimeConfig.state.configSnapshot = null as never;
+      for (const listener of configListeners) {
+        listener();
+      }
+      expect(fields.read(path)).toBe("abc");
+    });
+  });
 });
