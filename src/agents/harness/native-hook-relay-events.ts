@@ -23,6 +23,7 @@ import {
   readCodexToolInput,
   readCodexToolResponse,
   readNativeHookRelayApprovalMode,
+  resolveCodexUpdatedToolInput,
 } from "./native-hook-relay-codec.js";
 import {
   runNativeHookRelayPermissionRequest,
@@ -202,14 +203,28 @@ async function runNativeHookRelayPreToolUse(
         : undefined,
     );
   }
+  let updatedInput: ReturnType<typeof resolveCodexUpdatedToolInput>;
   if (
     !outcome.deferredApproval &&
     nativeHookRelayParamsWereRewritten(originalToolInputFingerprint, outcome.params)
   ) {
     // Native execution must not retain custody of rewritten inputs it will not use.
-    return codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(
-      "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
-    );
+    if (approvalMode === "report") {
+      // Codex already fixed this command; an approval reply cannot replace it.
+      return codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(
+        "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+      );
+    }
+    updatedInput = resolveCodexUpdatedToolInput({
+      rawPayload: params.invocation.rawPayload,
+      originalToolInputFingerprint,
+      candidate: outcome.params,
+    });
+    if (!updatedInput) {
+      return codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(
+        "OpenClaw tool policy rewrote Codex native tool input that Codex cannot apply; refusing original request. Only `command` can change for Bash and apply_patch. MCP arguments must be a JSON object within plugin hook limits, and the rewrite must not contain a number that JavaScript parsing altered.",
+      );
+    }
   }
   try {
     if (params.executionAdmission?.toolNames.includes(toolName)) {
@@ -257,7 +272,9 @@ async function runNativeHookRelayPreToolUse(
       );
     }
   }
-  return codexNativeHookRelayResponseCodec.renderNoopResponse();
+  return updatedInput
+    ? codexNativeHookRelayResponseCodec.renderPreToolUseUpdatedInputResponse(updatedInput)
+    : codexNativeHookRelayResponseCodec.renderNoopResponse();
 }
 
 async function runNativeHookRelayPostToolUse(
