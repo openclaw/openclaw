@@ -194,6 +194,37 @@ it("owns queued bytes without replaying successfully flushed frames", async () =
   expect(sentFrames).toEqual(["first", "second"]);
 });
 
+it("discards queued audio when the provider terminates before readiness", async () => {
+  const liveReceived = createDeferred();
+  const { session, frames } = await setup(
+    {
+      readyOnOpen: false,
+      onMessage: (event, transport) => {
+        if (event.type === "terminal") {
+          transport.closeNow();
+        } else {
+          handleProviderEvent(event, transport);
+        }
+      },
+    },
+    (socket, number) => {
+      socket.send(JSON.stringify({ type: number === 1 ? "terminal" : "session.created" }));
+      socket.on("message", (data) => {
+        if (Buffer.isBuffer(data) && data.toString() === "live") {
+          liveReceived.resolve();
+        }
+      });
+    },
+  );
+  session.sendAudio(Buffer.from("previous session"));
+  await session.connect();
+  session.close();
+  await session.connect();
+  session.sendAudio(Buffer.from("live"));
+  await liveReceived.promise;
+  expect(frames).toEqual([Buffer.from("live")]);
+});
+
 it("keeps replacement sockets owned when retired socket callbacks arrive late", async () => {
   const { session, connections, transports, onError, onTranscript } = await setup({
     closeTimeoutMs: 30,

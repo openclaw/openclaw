@@ -272,7 +272,18 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   using db = new DatabaseSync(":memory:");
   db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"));
   const id = randomUUID();
-  const baseline = tree("a");
+  const baseline = createLocalWorkspaceManifestTree(
+    Array.from({ length: 300 }, (_, index) => [
+      { path: `dir-${index}`, type: "directory" as const },
+      {
+        path: `dir-${index}/entry.txt`,
+        type: "file" as const,
+        mode: 0o644,
+        size: 1,
+        sha256: "a".repeat(64),
+      },
+    ]).flat(),
+  );
   const previous = tree("b");
   const pending = tree("c");
   const abandoned = tree("d");
