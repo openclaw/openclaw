@@ -1,5 +1,5 @@
 import { createMemo, For } from "solid-js";
-import { TEXT_SCALE_STOPS, type TextScaleStop } from "../../app/settings.ts";
+import { normalizeTextScale, TEXT_SCALE_STOPS, type TextScaleStop } from "../../app/settings.ts";
 import { normalizeTerminalFontFamily } from "../../app/terminal-font.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import {
@@ -8,7 +8,7 @@ import {
   resolveTypefaces,
   TYPEFACES,
 } from "../../app/typography.ts";
-import { SettingsRow } from "../../components/solid/settings-ui.tsx";
+import { SettingsRow, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import "../../components/select-picker.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
@@ -54,27 +54,18 @@ export function TextSection(
           <SettingsRow
             title={t("configView.appearance.textSize")}
             description={t("quickSettings.personal.browserOnly")}
-            stacked={true}
+            stackedOnNarrow={true}
             control={
-              <div class="settings-text-scale">
-                <div class="settings-text-scale__options">
-                  <For each={TEXT_SCALE_STOPS}>
-                    {(stop) => (
-                      <button
-                        type="button"
-                        class={["settings-text-scale__btn", { active: stop === props.textScale }]}
-                        aria-pressed={stop === props.textScale ? "true" : "false"}
-                        onClick={() => props.setTextScale(stop)}
-                      >
-                        <span class="settings-text-scale__sample">
-                          {t(TEXT_SCALE_LABELS[stop])}
-                        </span>
-                        <span class="settings-text-scale__label">{stop}%</span>
-                      </button>
-                    )}
-                  </For>
-                </div>
-              </div>
+              <SettingsSegmented
+                value={String(props.textScale)}
+                ariaLabel={t("configView.appearance.textSize")}
+                options={TEXT_SCALE_STOPS.map((stop) => ({
+                  value: String(stop),
+                  label: `${stop}%`,
+                  title: t(TEXT_SCALE_LABELS[stop]),
+                }))}
+                onChange={(value) => props.setTextScale(normalizeTextScale(Number(value)))}
+              />
             }
           />
         </div>
@@ -131,7 +122,7 @@ export function TextSection(
               {t("quickSettings.personal.browserOnly")}
             </>
           }
-          stacked={true}
+          stackedOnNarrow={true}
           control={
             <>
               <input
