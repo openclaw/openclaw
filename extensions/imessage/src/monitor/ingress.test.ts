@@ -74,6 +74,48 @@ afterEach(async () => {
 });
 
 describe("iMessage durable ingress", () => {
+  it("aborts a signal-waiting dispatch instead of waiting for it to finish first", async () => {
+    const started = deferred<void>();
+    let aborted = false;
+    const dispatch = vi.fn(
+      async (_message: { id?: number | null }, lifecycle: { abortSignal: AbortSignal }) => {
+        started.resolve();
+        await new Promise<void>((resolve) => {
+          if (lifecycle.abortSignal.aborted) {
+            aborted = true;
+            resolve();
+            return;
+          }
+          lifecycle.abortSignal.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        return { kind: "completed" } as const;
+      },
+    );
+    const ingress = createIngress({ dispatch });
+    ingress.start();
+    try {
+      await ingress.receive(rawRow());
+      await started.promise;
+      const finished = await Promise.race([
+        ingress.stop().then(() => "stopped" as const),
+        new Promise<"pending">((resolve) => {
+          setTimeout(() => resolve("pending"), 300);
+        }),
+      ]);
+      expect(finished).toBe("stopped");
+      expect(aborted).toBe(true);
+    } finally {
+      await ingress.stop();
+    }
+  });
+
   it("does not advance the read cursor or dispatch when durable append fails", async () => {
     const appendError = new Error("sqlite unavailable");
     const failingQueue = {
