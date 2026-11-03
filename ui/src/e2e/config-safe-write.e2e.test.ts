@@ -68,6 +68,7 @@ function laboratoryConfig(endpoint: string, retryBudget = 2) {
 }
 
 async function installConfig(page: Page, config: Record<string, unknown>, hash: string) {
+  await page.clock.install();
   return installMockGateway(page, {
     methodResponses: {
       "config.get": configResponse(config, hash),
@@ -93,7 +94,13 @@ function mutationParams(request: MockGatewayRequest): MutationParams {
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 const expectSaveStatus = (page: Page, status: string) =>
   expect
-    .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+    .poll(async () => {
+      // Let each real config.get settle before advancing the next polling window.
+      if (status === "Apply changes") {
+        await page.clock.runFor(1_000);
+      }
+      return page.locator("openclaw-settings-save-indicator").textContent();
+    })
     .toContain(status);
 const requestCount = async (gateway: Awaited<ReturnType<typeof installConfig>>, method: string) =>
   (await gateway.getRequests(method)).length;

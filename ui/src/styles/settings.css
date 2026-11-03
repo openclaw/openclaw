@@ -584,12 +584,12 @@ openclaw-appearance-background .settings-background-preview .session-background_
 .settings-section__help-button > span,
 .settings-section__help-button svg {
   display: block;
-  width: 100%;
-  height: 100%;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
 }
 
 .settings-section__help-button svg {
-  stroke-width: 1.75;
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .settings-section__help-button:hover,
@@ -706,25 +706,13 @@ openclaw-appearance-background .settings-background-preview .session-background_
   --btn-bg-hover: var(--surface-selected);
   background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
-  border-radius: var(--radius-lg);
+  border-radius: var(--composer-radius);
   overflow: hidden;
   min-width: 0;
 }
 
 .settings-group:empty {
   display: none;
-}
-
-.settings-disclosure__summary {
-  list-style: none;
-}
-
-.settings-disclosure__summary::-webkit-details-marker {
-  display: none;
-}
-
-.settings-disclosure[open] > .settings-disclosure__summary .settings-disclosure__chevron {
-  transform: rotate(90deg);
 }
 
 .settings-disclosure__sections {
@@ -1012,6 +1000,28 @@ openclaw-appearance-background .settings-background-preview .session-background_
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ring) 80%, transparent);
 }
 
+/* The group clips row fills, but a focus ring is a line: flush rows round it to
+   the group's inner corner so it doesn't break at the curve. */
+.settings-group > .settings-row--nav:first-child:focus-visible,
+.settings-group
+  > .provider-list
+  > .provider-row:first-child
+  > .provider-row__summary:focus-visible {
+  border-start-start-radius: calc(var(--composer-radius) - 1px);
+  border-start-end-radius: calc(var(--composer-radius) - 1px);
+  corner-shape: superellipse(1.5);
+}
+
+.settings-group > .settings-row--nav:last-child:focus-visible,
+.settings-group
+  > .provider-list
+  > .provider-row:last-child:not(.provider-row--open)
+  > .provider-row__summary:focus-visible {
+  border-end-start-radius: calc(var(--composer-radius) - 1px);
+  border-end-end-radius: calc(var(--composer-radius) - 1px);
+  corner-shape: superellipse(1.5);
+}
+
 .settings-row__chevron {
   display: flex;
   align-items: center;
@@ -1028,7 +1038,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
      and disappears in dark mode. */
   stroke: currentColor;
   fill: none;
-  stroke-width: 2px;
+  stroke-width: var(--list-row-icon-stroke);
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -1096,10 +1106,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
   width: 220px;
 }
 
-.settings-row__control input.settings-input:not(.picker-select__search) {
-  text-align: right;
-}
-
 /* Lone value inputs share one width so stacked rows in a group read as a
    grid instead of ragged right-aligned fields. A percentage guard cannot work
    here (the shrink-to-fit control resolves 100% circularly); the fixed width
@@ -1111,6 +1117,38 @@ openclaw-appearance-background .settings-background-preview .session-background_
   width: 340px;
 }
 
+/* Generated settings line up down a group: every field control fills one column at
+   the row's end, so text, selects and segmented options share both edges. */
+@media not all and (max-width: 640px) {
+  .settings-row--field:not(.settings-row--stacked) {
+    --settings-field-width: 280px;
+
+    > .settings-row__control {
+      flex: 0 0 var(--settings-field-width);
+      max-width: none;
+
+      > :is(.settings-input, .settings-select, .settings-secret, .settings-phone-presentation) {
+        width: 100%;
+        min-width: 0;
+      }
+
+      > .settings-segmented {
+        display: flex;
+        flex: 1 1 auto;
+        flex-wrap: nowrap;
+        min-width: 0;
+      }
+
+      > .settings-segmented > .settings-segmented__btn {
+        flex: 1 1 0;
+        min-width: 0;
+        padding-inline: var(--space-2);
+      }
+    }
+  }
+}
+
+/* A stepper is short at any width, so it stays beside its label on phones too. */
 /* Short values line up with the selects in the same column. */
 .settings-row:not(.settings-row--stacked)
   .settings-row__control
@@ -1557,6 +1595,11 @@ textarea.settings-input {
   user-select: all;
 }
 
+/* Who a connection acts as is what the row is read for; the rest of the line explains it. */
+.github-connection__login {
+  color: var(--text-strong);
+}
+
 .shell--embed-settings {
   --settings-control-height: 44px;
 
@@ -1583,8 +1626,8 @@ textarea.settings-input {
   }
 
   .settings-section__help-button > span {
-    width: 16px;
-    height: 16px;
+    width: var(--chrome-icon-size);
+    height: var(--chrome-icon-size);
   }
 }
 
@@ -1619,8 +1662,8 @@ textarea.settings-input {
     }
 
     .settings-section__help-button > span {
-      width: 16px;
-      height: 16px;
+      width: var(--chrome-icon-size);
+      height: var(--chrome-icon-size);
     }
   }
 }
@@ -2189,16 +2232,16 @@ openclaw-approvals-page .data-table-pagination__info {
   inset-inline-start: 10px;
   z-index: 1;
   display: inline-flex;
-  width: 15px;
-  height: 15px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
   pointer-events: none;
 }
 
 .settings-sidebar__search-icon svg,
 .settings-sidebar__search-clear svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.7px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .settings-sidebar__search-input {
@@ -2272,20 +2315,19 @@ openclaw-approvals-page .data-table-pagination__info {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
   flex-shrink: 0;
-  opacity: 0.72;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.settings-sidebar__item:hover .settings-sidebar__item-icon,
-.settings-sidebar__item--active .settings-sidebar__item-icon {
-  opacity: 1;
 }
 
 .settings-sidebar__item--active .settings-sidebar__item-icon {
   color: var(--navigation-selected-icon, var(--accent));
+}
+
+/* The mascot keeps its quiet resting state; line icons take their weight from the stroke. */
+.settings-sidebar__item:not(:hover, .settings-sidebar__item--active)
+  .settings-sidebar__item-icon:has(openclaw-theme-brand-icon) {
+  opacity: 0.72;
 }
 
 .settings-sidebar__item-label {

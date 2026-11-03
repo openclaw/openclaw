@@ -1781,8 +1781,13 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
-      - name: Check main push ratchets and protocol additions
+      - name: Setup ripgrep for differential guards
+        id: guard_ripgrep
         if: ${{ !cancelled() && steps.guard_setup.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true' }}
+        uses: ./.ci-harness/.github/actions/setup-ripgrep
+
+      - name: Check main push ratchets and protocol additions
+        if: ${{ !cancelled() && steps.guard_setup.outcome == 'success' && steps.guard_ripgrep.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true' }}
         env:
           BASE_SHA: *diff_base
           PROTOCOL_SINCE_BASE_SHA: *diff_base

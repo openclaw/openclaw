@@ -6,7 +6,7 @@ import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
   SettingsPage,
-  SettingsPageHeader,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
@@ -43,7 +43,7 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
       fallback={
         <div class="settings-group oc-settings-group">
           {!props.connected ? (
-            <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />
+            <SettingsUnavailable message={t("pluginsPage.connectToManage")} />
           ) : props.loading ? (
             <SettingsLoadingSkeleton rows={4} carapace />
           ) : props.error ? (
@@ -129,7 +129,7 @@ function InstalledRows(
                 <span class="settings-row__chevron" aria-hidden="true">
                   <i
                     class="session-css-icon"
-                    style={{ "mask-image": sessionIconMask("chevronRight") }}
+                    style={{ "mask-image": sessionIconMask("chevronRight", 1.6) }}
                   />
                 </span>
               </div>
@@ -178,11 +178,6 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
   );
   return (
     <SettingsPage carapace={true}>
-      <SettingsPageHeader
-        registerHeading={props.registerRemovalHeading}
-        title={t("tabs.plugins")}
-        subtitle={t("pluginsPage.settingsDescription")}
-      />
       <div class="plugins-settings-content">
         <HubTabs
           id="plugin-settings"

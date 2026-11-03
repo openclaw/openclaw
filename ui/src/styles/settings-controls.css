@@ -260,9 +260,9 @@ select.settings-select {
 }
 
 .settings-secret__toggle svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 2px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 /* Quiet count badge used by settings pages and the Skill Workshop. */

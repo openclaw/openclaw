@@ -217,7 +217,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
           </div>
         </Show>
       </div>
-      <Show when={!curated() && meta().description && !headingRepeats()}>
+      <Show when={!curated() && meta().description && !headingRepeats() && !docsUrl()}>
         <p class="settings-section__desc">{meta().description}</p>
       </Show>
       <ConfigTierGroups

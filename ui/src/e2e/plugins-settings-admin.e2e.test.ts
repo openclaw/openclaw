@@ -41,6 +41,7 @@ beforeEach(() => {
 
 const pluginMethods = [
   "config.get",
+  "config.patch",
   "config.schema",
   "config.set",
   "plugins.inspect",
@@ -64,7 +65,7 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
   await search.waitFor();
   const inventoryGeometry = await page.evaluate(() => {
     const surface = document.querySelector<HTMLElement>(".settings-page.oc-app-surface");
-    const title = surface?.querySelector<HTMLElement>(".content-header--settings h1.page-title");
+    const title = document.querySelector<HTMLElement>(".content-header--settings h1.page-title");
     const tabs = surface?.querySelector<HTMLElement>(".plugins-settings-tabs.oc-segmented");
     const searchField = surface?.querySelector<HTMLElement>(".plugins-settings-search");
     const section = surface?.querySelector<HTMLElement>("#plugin-settings-panel .settings-group");
@@ -281,8 +282,8 @@ suite.define(() => {
       pluginId: "brave",
       name: "Brave",
       section: "webSearch",
-      label: "Brave Search API Key",
-      referenceLabel: "Brave Search Base URL",
+      label: "Brave search API key",
+      referenceLabel: "Brave search base URL",
       readOnly,
       pluginConfig: {
         webSearch: {
@@ -295,8 +296,8 @@ suite.define(() => {
       pluginId: "firecrawl",
       name: "Firecrawl",
       section: "webFetch",
-      label: "Firecrawl Fetch API Key",
-      referenceLabel: "Firecrawl Search API Key",
+      label: "Firecrawl fetch API key",
+      referenceLabel: "Firecrawl search API key",
       readOnly: false,
       pluginConfig: {
         webSearch: { apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" } },
@@ -339,7 +340,7 @@ suite.define(() => {
         const gateway = await installMockGateway(
           page,
           {
-            featureMethods: [...pluginMethods, "config.patch"],
+            featureMethods: pluginMethods,
             operatorScopes: readOnly ? ["operator.read"] : ["operator.read", "operator.admin"],
             methodResponses: {
               ...pluginResponses(),
