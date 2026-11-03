@@ -141,35 +141,37 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [191506](https://github.com/openclaw/openclaw/pull/191506): Repair exact prior browser-history state and full-URL restoration proof. Preserve both declarations/cases, every prior assertion/input and production; seed one nondefault suite baseline and restore its entering environment, with independent expected state and an exact18-line allocation. Separate actual lost-state/lost-URL faults each pass original two and fail only the corresponding new candidate keeper, one other pass each. Owner/test bytes restored exactly. Untouched baseline, clean and published two, focused checks, hooks and fresh review with zero findings pass. Exact-head CI has32 successes/28 intentional skips and successful security.
 
+- [191534](https://github.com/openclaw/openclaw/pull/191534): Remove one unread private TTS result member; retain all five declarations/ten cases, every row/input/assertion, public type and production. Original/candidate throwing-read controls pass ten, and injected actual read fails only the intended case. Actual wrong-agent option fails the same retained keeper in both versions, nine other passes each; owner/test bytes restored. Baseline/clean/published ten, unchanged adapter sibling seven, focused checks, hooks and fresh review pass. All seven removal phases completed; four failed export surfaces reproduce the same two compaction exports on exact original sources; unused-file/script phases pass, no suppression. One fewer test line; shared scalar unchanged. Exact-head CI has29 successes/29 skips and successful security.
+
+- [191558](https://github.com/openclaw/openclaw/pull/191558): Remove one literal backslash-x1b absence predicate implied by the exact same-string output keeper. Retain all fourteen declarations/eighteen cases, all rows/inputs and other assertions; production and shared scalar unchanged, one fewer test line. An actual shared stdout/stderr parser fault fails the same exact-output keeper with the same corrupted aggregate on original/candidate, seventeen other passes each; owner/test bytes restored exactly. Untouched baseline, clean candidate and published eighteen pass without skips. All seven removal phases completed; only two production export surfaces fail and reproduce the same Doctor memory-provenance export on exact original sources. Five passing phases not repeated; no suppression. Focused checks, hooks and fresh review with zero findings pass. Exact-head CI has29 successes/29 intentional skips and successful security.
+
+- [191572](https://github.com/openclaw/openclaw/pull/191572): Remove one guarded-fetch count implied by the exact four-entry audit-context projection of the same mock calls. Retain all ten declarations/twelve cases, inputs, rows and every other assertion, including the independent fetch count; production/shared scalar unchanged, one fewer test line. An actual upload-negotiation audit-context fault fails the same retained projection in original/candidate, eleven other passes each; owner/test bytes restored exactly. Baseline/clean/published twelve pass without skips. All seven removal phases completed; two failed production export surfaces reproduce the identical Doctor memory-provenance export on exact original sources, five passing phases not repeated and no suppression. Focused extension checks, hooks and fresh review with zero findings pass. Exact-head CI has30 successes/29 intentional skips and successful security.
+
 ## Current qualification
 
-Pinned main 6dc2250b7e8e: remove only the unread voiceCompatible member from
-the private TTS-config mock response. All five physical declarations/ten registered
-cases, every table row, assertion and input remain. Production, public TtsResult
-type and shared test-line scalar are unchanged; one fewer test line.
+Pinned main 913f025cd15b: replace three partial approval-display truncation
+predicates with one independent exact prefix-plus-ellipsis keeper. Its
+196 literal x characters followed by three dots prove the length/suffix
+properties while rejecting a split UTF-16 surrogate at the existing input's
+cut boundary. Retain both physical declarations/cases, all original input
+bytes, the inline escaping check and the complete second case. Production and
+shared test-line scalar stay unchanged; two fewer test lines.
 
-The actual adapter stopped reading this field in74fe7d64709 and rebuilds its tool
-result without exposing the raw synthesis response. The full fixture, adapter,
-relevant assembly edges, provenance callee, consumed type and unchanged seven-case
-adapter sibling are source-qualified.
+The complete selected suite and canonical pure formatter, determining caller
+functions and causal history are source-qualified. Untouched official
+extension-discord baseline and clean candidate pass both cases without skips.
+An actual owner fault slices the escaped UTF-16 string instead of preserving
+the whole-character prefix: the original suite passes both cases; the candidate
+fails only its exact-output keeper, with the other case passing. Temporary
+owner/test bytes are restored exactly before the clean run.
 
-The untouched official agents-core baseline, clean candidate and both original/
-candidate throwing property-read probes pass all ten cases without skips.
-An injected actual result read fails exactly the intended first case, validating
-the read probe. An actual wrong-agent option fails that same retained argument
-keeper on both original and candidate fixtures, with nine other passes each.
-Temporary owner/test bytes are restored exactly. Vitest JSON omits argument
-diffs; fault qualification uses the exact source mutation, case and keeper stack,
-reusing the recorded original failure rather than repeating its execution.
+All seven removal phases pass with zero findings: production and full-tree
+exports, both unused-file phases and all three export-wrapper phases. No
+baseline replay or suppression is needed. Focused extension checks pass; normal
+hooks, fresh review, published proof and CI are separately recorded.
 
-All seven removal phases completed. Dependency/production and full-tree export
-scans, including both failed wrapper phases, reproduce the same two unused
-compaction exports on exact original sources. Both unused-file phases and script
-exports pass; no passing phase was repeated and no finding was suppressed.
-The unchanged adapter sibling passes seven without skips. Focused checks pass;
-normal hooks, fresh review, published proof and CI remain separately recorded.
-This is local tool assembly with synthesis mocked; no provider, live Gateway or
-native Codex execution is claimed.
+This targets the canonical formatter's output. No live Discord, native payload,
+approval authority, Gateway or complete escape-token-boundary verdict is claimed.
 
 ## Completed source review
 
@@ -186,10 +188,10 @@ permission to delete without root qualification.
 - Core content/runtime: Templates31/230; logging64/465; meeting bot30/183 direct+inherited; hooks41; TTS23; media-understanding43/241; context/chat/Canvas19/139; generation19/103; web/fetch8/69; status/storage25/207; realtime1/13.
 - Core setup/tools: Bootstrap/provider/interactive/plugin state21/179; daemon127/920; Talk39/250 plus inherited table; wizard30/239; security46/181; model commands35/215; catalog/memory SDK7/71; Doctor118/673.
 - Core entrypoints: Root src25; root docs/scripts21/63; direct channels103; CLI Gateway31/246; admin/share/Bonjour8/41. Deeper nested channel owners remain open.
-- Agent internals: 2,242 unique suites/15,247 physical sites: R15112/F129/C2/D4. All83 registry and 58 sandbox suites are source-closed; tool display/schema and process custody retain their contracts. Separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
+- Agent internals: 2,287 unique suites/15,539 physical sites: R15363/F170/C2/D4. All83 registry and 58 sandbox suites are source-closed; tool display/schema and process custody retain their contracts. Separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
 - Auto-reply: All429 suites plus43 separate upstream suites and invoked local registrars/support classified. Latest54/498: R495/F2/C1; qualified two duplicates landed above. Keep channel persistence, group/native routing, progress suppression and abort cases.
 - CLI: Config/setup24/209; plugin lifecycle25/176; validation22/106; channel/root/message/device/skills/session98/542; execution/reply presentation overlaps the reply aggregate. Only qualified fixture reduction landed above.
-- Control UI: 2,183 unique suites/12,579 physical sites: R9466/F3105/C1/D7. Agents Memory, Memory Import, Workshop, Systems, About and Worktrees retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. Proof/custody repairs remain pending; other UI remains open.
+- Control UI: 2,219 unique suites/12,719 physical sites: R9583/F3128/C1/D7. Agents Memory, Memory Import, Workshop, Systems, About and Worktrees retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. Proof/custody repairs remain pending; other UI remains open.
 - Shared native: OpenClawKit209 files/2,528 sites: R2523/F3/C2. NativeState/MLX protocol5/46: R45/F1. Swabble6/12 R; MLX helper1/5 with one pending PCM consolidation.
 - macOS: 304 Swift files/2,653 sites: R2635/F8/C9/D1. Native runtime qualification pending.
 - iOS: 135 files/1,416 sites: R1370/F39/C6/D1; obsolete typography metadata scanner and a migration helper remain candidates. Native qualification pending.
@@ -199,7 +201,7 @@ permission to delete without root qualification.
 - Other audited plugins: Voice-call64/523 R522/F1; Nostr14/112 R; Prometheus7/55 R; IMAP/A2A13/103 R; MXC13/64 R61/F3; DeepInfra17/78 qualified above; MiniMax13/75 R74/F1.
 - Plugin service owners: File Transfer21/162 R161/D1; active-memory11/122 R; Synology10/91 R; OpenShell11/88 R; Diagnostics OTel12/86 R83/F1/C2; AgentsAPI10/96 R; Cua12/83 R. All local support/assets live.
 - Later plugin closures: LanceDB22/109 R; Logbook13/55 R; IRC15/99 R97/F2; Diffs14/58 R56/F1/C1; policy15/301 physical R298/F3; SMS16/158 R; team-reports21/138 R; Twitch15/86 R; TypeSafe10/50 R; X24/149 R148/C1; Zalo25/89 local R87/F2 plus9 inherited R and one duplicate row. Assertion-only candidates below do not remove their declarations.
-- Plugin lane progress: Leaf3,663 suites/143 closed owners; combined3,737 suites/176 directory owners plus the closed root boundary. Memory Core201/201 is source-closed:1,282 normalized physical sites R1159/F123 and1,900 expanded cases R1738/F160/C2, including inherited registrations once; all9 PostgreSQL suites are source-only, with no runtime claim. Matrix156/156 is source-closed:1,063 physical sites R945/F117/C1 and1,578 expanded cases R1427/F150/C1; all30 local support surfaces remain live. PostgreSQL proof remains source-only. 15 support-custody findings and support-removal nominations are separate. QA Lab329/329 is source-closed:1938 physical sites R1813/F125/C0/D0 and2989 expanded cases R2812/F177, including one inherited registration counted once; all52 local support files remain live; 40 support proof/custody findings are separate; no runtime claim. Telegram167/167 is source-closed:1,265 normalized physical sites R1117/F148 and2,112 expanded cases R1903/F209, including15 inherited sites/20 registrations counted once; all48 auxiliaries (45 local supports and three root facades/drivers) remain live and31 support proof/custody findings are separate. Discord135/257 is source-closed:832 physical sites R750/F82 and1163 expanded cases R1047/F116; its47 auxiliaries remain live and 9 support findings are separate. Remaining570 suites/2 owners (Codex448 and Discord122); runtime qualification remains separate. Browser280/280 is source-closed:2,006 physical sites R1764/F242 and3,243 expanded cases R2909/F334; actual runtime qualification remains separate. Slack155/155 is source-closed:1,268 direct sites R1258/F10 and1,828 static invocations R1813/F15; all21 auxiliaries and seven live traces remain. MS Teams107/107 is source-closed. WhatsApp103/103 and Feishu104/104 are source-closed; their authority, timing and custody proof repairs remain follow-ups. OpenAI99/99 is closed:744 direct/support sites R737/F5/C2,1,238 static invocations R1228/F8/C2. Its18 supports and packaged icons remain live. Knowledge59, iMessage60, Workboard65, LINE61, Mattermost56, Signal44, memory-wiki50 and Crabbox53 are closed. Keep identity, transport, cache, compiler, storage, interaction and mutation contracts. Source-only; no runtime verdict.
+- Plugin lane progress: Leaf3,725 suites/143 closed owners; combined3,799 suites/176 directory owners plus the closed root boundary. Memory Core201/201 is source-closed:1,282 normalized physical sites R1159/F123 and1,900 expanded cases R1738/F160/C2, including inherited registrations once; all9 PostgreSQL suites are source-only, with no runtime claim. Matrix156/156 is source-closed:1,063 physical sites R945/F117/C1 and1,578 expanded cases R1427/F150/C1; all30 local support surfaces remain live. PostgreSQL proof remains source-only. 15 support-custody findings and support-removal nominations are separate. QA Lab329/329 is source-closed:1938 physical sites R1813/F125/C0/D0 and2989 expanded cases R2812/F177, including one inherited registration counted once; all52 local support files remain live; 40 support proof/custody findings are separate; no runtime claim. Telegram167/167 is source-closed:1,265 normalized physical sites R1117/F148 and2,112 expanded cases R1903/F209, including15 inherited sites/20 registrations counted once; all48 auxiliaries (45 local supports and three root facades/drivers) remain live and31 support proof/custody findings are separate. Discord193/257 is source-closed:1297 physical sites R1147/F150 and1904 expanded cases R1681/F223; its59 auxiliaries remain live and 13 support findings are separate. Codex4/448 is source-closed:9 physical sites R8/F1 and10 expanded cases R9/F1; native/worker execution remains unqualified. Remaining508 suites/2 owners (Codex444 and Discord64); runtime qualification remains separate. Browser280/280 is source-closed:2,006 physical sites R1764/F242 and3,243 expanded cases R2909/F334; actual runtime qualification remains separate. Slack155/155 is source-closed:1,268 direct sites R1258/F10 and1,828 static invocations R1813/F15; all21 auxiliaries and seven live traces remain. MS Teams107/107 is source-closed. WhatsApp103/103 and Feishu104/104 are source-closed; their authority, timing and custody proof repairs remain follow-ups. OpenAI99/99 is closed:744 direct/support sites R737/F5/C2,1,238 static invocations R1228/F8/C2. Its18 supports and packaged icons remain live. Knowledge59, iMessage60, Workboard65, LINE61, Mattermost56, Signal44, memory-wiki50 and Crabbox53 are closed. Keep identity, transport, cache, compiler, storage, interaction and mutation contracts. Source-only; no runtime verdict.
 
 ## Pending qualification and proof repairs
 
