@@ -184,10 +184,11 @@ The Gateway is the single source of truth for sessions, routing, and channel con
   </Step>
   <Step title="Install the Gateway service">
     Quick start leaves the Gateway in the foreground. Press **Ctrl+C**, then
-    install the background service:
+    install the background service and wait for it to be ready:
 
     ```bash
     openclaw gateway install
+    openclaw gateway start
     ```
 
   </Step>

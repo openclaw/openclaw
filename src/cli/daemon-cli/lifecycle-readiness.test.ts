@@ -55,7 +55,6 @@ vi.mock("./restart-health.js", () => ({
 }));
 
 const { runDaemonStart, runDaemonRestart } = await import("./lifecycle.js");
-const { checkGatewayServiceReadiness } = await import("./service-readiness.js");
 
 describe("Gateway service readiness", () => {
   beforeEach(() => {
@@ -115,18 +114,6 @@ describe("Gateway service readiness", () => {
     );
   });
 
-  it("lets a caller shorten the Windows wait without touching the start deadline", async () => {
-    mockProcessPlatform("win32");
-
-    await checkGatewayServiceReadiness({ service: service as never, deadlineCapMs: 45_000 });
-
-    const attempts = Math.ceil(45_000 / DEFAULT_RESTART_HEALTH_DELAY_MS);
-    expect(waitForGatewayHealthyRestart).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ timeoutMs: 45_000, attempts }),
-    );
-    expect(waitForGatewayHttpReadiness).toHaveBeenCalledWith(expect.objectContaining({ attempts }));
-  });
-
   it.each([
     {
       outcome: "plugin-errors",
@@ -145,12 +132,17 @@ describe("Gateway service readiness", () => {
       elapsedMs: 9_000,
     });
 
-    await expect(
-      checkGatewayServiceReadiness({ service: service as never, deadlineCapMs: 45_000 }),
-    ).resolves.toMatchObject({
-      ready: false,
-      failure: [expect.stringContaining(message), expect.any(Array)],
+    const fail = vi.fn();
+    runServiceStart.mockImplementation(async ({ postStartCheck }) => {
+      await postStartCheck({ warnings: [], fail });
     });
+
+    await runDaemonStart({ json: true });
+
+    expect(fail).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(message),
+      expect.any(Array),
+    );
   });
 
   it.each([

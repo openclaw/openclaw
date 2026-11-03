@@ -38,7 +38,7 @@ job. Open the page that matches your task.
 | [Manage the Gateway service](/cli/gateway/service)              | You are installing, starting, stopping, or repairing the native service.           |
 | [Discover gateways (Bonjour)](/cli/gateway/discovery)           | You are looking for gateways over mDNS or wide-area DNS-SD.                        |
 
-`openclaw gateway install` installs and starts the service, then waits up to 45 seconds for the Gateway to report ready and says so. A Gateway that is still starting at that point leaves the install in place and prints what to check; `--json` reports registration only. `--force` reinstalls an existing install and may restart a running Gateway. Finish offline configuration and runtime repairs before installation.
+`openclaw gateway install` installs and starts the service and returns without waiting for the Gateway to become ready; run `openclaw gateway start` next when the following step needs a ready Gateway. `--force` reinstalls an existing install and may restart a running Gateway. Finish offline configuration and runtime repairs before installation.
 
 ## Where each section moved
 
