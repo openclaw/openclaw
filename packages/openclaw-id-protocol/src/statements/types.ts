@@ -136,8 +136,10 @@ export const REVOCATION_KINDS = ["owner_device", "peer_key"] as const;
 export type RevocationKind = (typeof REVOCATION_KINDS)[number];
 
 /**
- * Removes a key by fingerprint from the claws that receive it. Nothing remembers it afterwards:
- * the removed key is simply no longer listed.
+ * Removes a key by fingerprint from the claws that receive it. The key itself is not stored
+ * as revoked: a later revocation of an unlisted key changes nothing. The authority remembers
+ * the signature that removed a listed key, for the life of that authority state, so those
+ * same bytes cannot remove a later approval.
  */
 export type RevocationBody = {
   target_fp: KeyFingerprint;

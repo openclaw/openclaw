@@ -22,16 +22,23 @@ must perform (`disconnect`, `invalidate_tokens`, `cancel_runs`, `notify_owners`,
 
 ### Write rules
 
-| Write                                         | Function                                   | Allowed channels       | Notes                                                                |
-| --------------------------------------------- | ------------------------------------------ | ---------------------- | -------------------------------------------------------------------- |
-| Link claw (pin R for good)                    | `linkClaw`                                 | local_operator         | spec 4                                                               |
-| MembershipChange by an owner device           | `submitStatement`                          | tunnel, local_operator | `seq` must be current + 1                                            |
-| MembershipChange signed by R (kit enrollment) | `submitStatement`                          | any, incl. mailbox     | `add_owner_device` via mailbox emits `notify_owners: kit_used`       |
-| Revocation                                    | `submitStatement`                          | any                    | deletes the key and every owner device it approved (no history kept) |
-| InviteCap + proof key                         | `registerInvite`                           | tunnel, local_operator | `secret_hash` must equal SHA-256(proof key)                          |
-| InviteRedemption                              | `submitRedemption`                         | any (normally mailbox) | becomes **pending**, reserves the invite, admits nothing             |
-| Approve redemption                            | `submitStatement` (`add` with `invite_id`) | tunnel, local_operator | must match the pending account and peer key; role <= invite role     |
-| Deny redemption                               | `submitStatement` (`deny_invite`)          | tunnel, local_operator | consumes the invite                                                  |
+| Write                                         | Function                                   | Allowed channels       | Notes                                                                                          |
+| --------------------------------------------- | ------------------------------------------ | ---------------------- | ---------------------------------------------------------------------------------------------- |
+| Link claw (pin R for good)                    | `linkClaw`                                 | local_operator         | spec 4                                                                                         |
+| MembershipChange by an owner device           | `submitStatement`                          | tunnel, local_operator | `seq` must be current + 1                                                                      |
+| MembershipChange signed by R (kit enrollment) | `submitStatement`                          | any, incl. mailbox     | `add_owner_device` via mailbox emits `notify_owners: kit_used`                                 |
+| Revocation                                    | `submitStatement`                          | any                    | deletes the key and every owner device it approved; the signature stays on the authority state |
+| InviteCap + proof key                         | `registerInvite`                           | tunnel, local_operator | `secret_hash` must equal SHA-256(proof key)                                                    |
+| InviteRedemption                              | `submitRedemption`                         | any (normally mailbox) | becomes **pending**, reserves the invite, admits nothing                                       |
+| Approve redemption                            | `submitStatement` (`add` with `invite_id`) | tunnel, local_operator | must match the pending account and peer key; role <= invite role                               |
+| Deny redemption                               | `submitStatement` (`deny_invite`)          | tunnel, local_operator | consumes the invite                                                                            |
+
+A revocation that removes a listed key stores that statement's signature on
+`AuthorityState.applied_revocations`. The key itself is not kept: revoking a key the claw
+no longer lists changes nothing and is not stored. Submitting the same signature again does
+not remove a later approval. A new signature still revokes. The signatures stay for the life
+of the authority state. This draft does not expire them. The MembershipSnapshot still lists
+only the current allowlist.
 
 Root supremacy: an R-signed statement is accepted wherever a device-signed one is, plus over
 the mailbox. A refusal leaves the state unchanged and has no events.

@@ -151,8 +151,10 @@ nothing else. There are no certificate chains and no list of revoked keys.
   invalidates their device tokens. Nothing is remembered about the key itself: a later
   Revocation of a key the claw no longer lists changes nothing. The signature that did
   remove a key is remembered, so those same bytes cannot remove a later approval. A new
-  signature still revokes, even when the signer's clock is behind the certificate. A
-  revocable owner still takes every device it currently approved with it.
+  signature still revokes, even when the signer's clock is behind the certificate. Those
+  signatures stay on the authority state for its life. This draft does not expire them, and
+  the published snapshot does not include them. A revocable owner still takes every device
+  it currently approved with it.
 - **Inactivity.** The Gateway records `last_seen` per owner device and per member browser
   whenever the tunnel admits it (at most once an hour). Owner devices unused for 90 days and
   member browsers unused for 30 days are dropped (Gateway config
