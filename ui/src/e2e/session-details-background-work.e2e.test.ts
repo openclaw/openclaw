@@ -140,6 +140,12 @@ const processes: SessionProcessSummary[] = [
   },
 ];
 
+const processList = (rows: SessionProcessSummary[]) => ({
+  sessionId: "details-background",
+  processes: rows,
+  truncated: false,
+});
+
 function installBackgroundWorkGateway(page: Page, deferred = true, initialProcesses = processes) {
   const parent: SessionFixture = {
     key: parentKey,
@@ -184,12 +190,15 @@ function installBackgroundWorkGateway(page: Page, deferred = true, initialProces
         hasMore: false,
         nextOffset: null,
       }),
-      "sessions.processes.list": {
-        sessionId: "details-background",
-        processes: initialProcesses,
-        truncated: false,
-      },
+      "sessions.processes.list": processList(initialProcesses),
     },
+  });
+}
+
+function processesChanged(gateway: Awaited<ReturnType<typeof installBackgroundWorkGateway>>) {
+  return gateway.emitGatewayEvent("sessions.processes.changed", {
+    sessionKey: parentKey,
+    agentId: "main",
   });
 }
 
@@ -215,11 +224,20 @@ suite.define(() => {
             .toContain("Process service unavailable");
           const retry = processGroup.getByRole("button", { name: "Retry", exact: true });
           await expect.poll(() => retry.count()).toBe(1);
-          await gateway.setMethodResponse("sessions.processes.list", {
-            sessionId: "details-background",
-            processes: [],
-            truncated: false,
+          await gateway.setMethodResponse(
+            "sessions.processes.list",
+            processList(processes.filter((row) => row.status !== "running")),
+          );
+          await retry.click();
+          await expect.poll(() => retry.count()).toBe(0);
+          await gateway.deferNext("sessions.processes.list");
+          await processesChanged(gateway);
+          await gateway.rejectDeferred("sessions.processes.list", {
+            code: "UNAVAILABLE",
+            message: "Process history refresh unavailable",
           });
+          await expect.poll(() => retry.count()).toBe(1);
+          await gateway.setMethodResponse("sessions.processes.list", processList([]));
           await retry.click();
           await expect.poll(() => retry.count()).toBe(0);
         },
@@ -285,11 +303,7 @@ suite.define(() => {
                 await capture(`processes-loading-${colorScheme}`, details, [details]);
               });
             }
-            await gateway.resolveDeferred("sessions.processes.list", {
-              sessionId: "details-background",
-              processes,
-              truncated: false,
-            });
+            await gateway.resolveDeferred("sessions.processes.list", processList(processes));
           }
           if (width === 390) {
             await details
@@ -465,15 +479,8 @@ suite.define(() => {
               const unavailable = processes.map((row) =>
                 row.processId === "watch-tests" ? { ...row, canStop: false } : row,
               );
-              await gateway.setMethodResponse("sessions.processes.list", {
-                sessionId: "details-background",
-                processes: unavailable,
-                truncated: false,
-              });
-              await gateway.emitGatewayEvent("sessions.processes.changed", {
-                sessionKey: parentKey,
-                agentId: "main",
-              });
+              await gateway.setMethodResponse("sessions.processes.list", processList(unavailable));
+              await processesChanged(gateway);
               await expect
                 .poll(() =>
                   processGroup
@@ -496,11 +503,7 @@ suite.define(() => {
               await expect
                 .poll(async () => (await gateway.getRequests("sessions.processes.stop")).length)
                 .toBe(2);
-              await gateway.setMethodResponse("sessions.processes.list", {
-                sessionId: "details-background",
-                processes: stopped,
-                truncated: false,
-              });
+              await gateway.setMethodResponse("sessions.processes.list", processList(stopped));
               await gateway.resolveDeferred("sessions.processes.stop", { requested: true });
               await first.waitFor({ state: "detached" });
               const viewAll = processGroup.getByRole("button", {
@@ -535,31 +538,18 @@ suite.define(() => {
                 ),
                 truncated: false,
               });
-              await gateway.emitGatewayEvent("sessions.processes.changed", {
-                sessionKey: parentKey,
-                agentId: "main",
-              });
+              await processesChanged(gateway);
               await processGroup.waitFor({ state: "detached" });
               if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
                 await checkThemes(async () => {
                   await capture(`processes-terminal-${colorScheme}`, details, [subagents]);
                 });
               }
-              await gateway.setMethodResponse("sessions.processes.list", {
-                sessionId: "details-background",
-                processes,
-                truncated: false,
-              });
-              await gateway.emitGatewayEvent("sessions.processes.changed", {
-                sessionKey: parentKey,
-                agentId: "main",
-              });
+              await gateway.setMethodResponse("sessions.processes.list", processList(processes));
+              await processesChanged(gateway);
               await expect.poll(() => processGroup.locator("[data-process-id]").count()).toBe(3);
               await gateway.deferNext("sessions.processes.list");
-              await gateway.emitGatewayEvent("sessions.processes.changed", {
-                sessionKey: parentKey,
-                agentId: "main",
-              });
+              await processesChanged(gateway);
               await gateway.rejectDeferred("sessions.processes.list", {
                 code: "UNAVAILABLE",
                 message: "Connection temporarily unavailable",
@@ -574,15 +564,8 @@ suite.define(() => {
               expect(
                 await processGroup.getByRole("button", { name: "Retry", exact: true }).count(),
               ).toBe(0);
-              await gateway.setMethodResponse("sessions.processes.list", {
-                sessionId: "details-background",
-                processes: [],
-                truncated: false,
-              });
-              await gateway.emitGatewayEvent("sessions.processes.changed", {
-                sessionKey: parentKey,
-                agentId: "main",
-              });
+              await gateway.setMethodResponse("sessions.processes.list", processList([]));
+              await processesChanged(gateway);
               await processGroup.waitFor({ state: "detached" });
               if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
                 await checkThemes(async () => {
@@ -590,10 +573,7 @@ suite.define(() => {
                 });
               }
               await gateway.deferNext("sessions.processes.list");
-              await gateway.emitGatewayEvent("sessions.processes.changed", {
-                sessionKey: parentKey,
-                agentId: "main",
-              });
+              await processesChanged(gateway);
               await gateway.rejectDeferred("sessions.processes.list", {
                 code: "UNAVAILABLE",
                 message: "Process list temporarily unavailable",
@@ -611,15 +591,8 @@ suite.define(() => {
                   await capture(`processes-list-error-${colorScheme}`, details, [subagents]);
                 });
               }
-              await gateway.setMethodResponse("sessions.processes.list", {
-                sessionId: "details-background",
-                processes,
-                truncated: false,
-              });
-              await gateway.emitGatewayEvent("sessions.processes.changed", {
-                sessionKey: parentKey,
-                agentId: "main",
-              });
+              await gateway.setMethodResponse("sessions.processes.list", processList(processes));
+              await processesChanged(gateway);
               await expect.poll(() => processGroup.locator("[data-process-id]").count()).toBe(3);
             }
             await first
@@ -789,15 +762,8 @@ suite.define(() => {
           };
           const created = () => control.evaluate(({ animations }) => animations.length);
           const publish = async (next: SessionProcessSummary[], expected: string[]) => {
-            await gateway.setMethodResponse("sessions.processes.list", {
-              sessionId: "details-background",
-              processes: next,
-              truncated: false,
-            });
-            await gateway.emitGatewayEvent("sessions.processes.changed", {
-              sessionKey: parentKey,
-              agentId: "main",
-            });
+            await gateway.setMethodResponse("sessions.processes.list", processList(next));
+            await processesChanged(gateway);
             await expect
               .poll(() =>
                 rows.evaluateAll((elements) =>
@@ -915,10 +881,7 @@ suite.define(() => {
           await publish(finishThrough(2), ["watch-docs"]);
           expect((await envelope.boundingBox())!.height).toBeCloseTo(beforeShrink, 0);
           await gateway.deferNext("sessions.processes.list");
-          await gateway.emitGatewayEvent("sessions.processes.changed", {
-            sessionKey: parentKey,
-            agentId: "main",
-          });
+          await processesChanged(gateway);
           await gateway.rejectDeferred("sessions.processes.list", {
             code: "FORBIDDEN",
             message: "Process access removed",
@@ -928,11 +891,7 @@ suite.define(() => {
             "Process access removed",
           );
           expect(await rows.count()).toBe(0);
-          await gateway.setMethodResponse("sessions.processes.list", {
-            sessionId: "details-background",
-            processes: currentProcesses,
-            truncated: false,
-          });
+          await gateway.setMethodResponse("sessions.processes.list", processList(currentProcesses));
           await details.getByRole("button", { name: "Retry", exact: true }).click();
           await expect.poll(() => rows.count()).toBe(width === 1728 ? 3 : 2);
           await advance(150);
@@ -966,15 +925,8 @@ suite.define(() => {
         await expect.poll(() => heading.getAttribute("aria-expanded")).toBe("false");
 
         const publish = async (rows: SessionProcessSummary[]) => {
-          await gateway.setMethodResponse("sessions.processes.list", {
-            sessionId: "details-background",
-            processes: rows,
-            truncated: false,
-          });
-          await gateway.emitGatewayEvent("sessions.processes.changed", {
-            sessionKey: parentKey,
-            agentId: "main",
-          });
+          await gateway.setMethodResponse("sessions.processes.list", processList(rows));
+          await processesChanged(gateway);
         };
         await publish([]);
         await heading.waitFor({ state: "detached" });

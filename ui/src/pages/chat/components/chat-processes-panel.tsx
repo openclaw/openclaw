@@ -77,9 +77,9 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
     const presentation = createProcessesPresentation(panel);
     const data = () => panel().snapshot;
     // Full Processes keeps its failed-read empty/loading states; compact Details retains rows.
-    const rows = () => (presentation.readState() === "error-with-retry" ? [] : data().rows);
+    const rows = () => (data().readError ? [] : data().rows);
     const visibleError = (loading: boolean) =>
-      presentation.readState() === "error-with-retry" && loading ? null : presentation.error();
+      data().readError ? (loading ? null : data().readError) : data().error;
     // Only local return targets/offsets reset on denied access; output remains with the data owner.
     const emptyNavigation = (): {
       listTop: number;

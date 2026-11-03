@@ -17,7 +17,10 @@ registerEnglishCatalog(registerSessionOrganizationEnglish);
 
 export type ChatDetailsMobileProcessesProps = {
   /** The session host retains the native ProcessesPanelData projection and its demand. */
-  data: Pick<ProcessesPanelData["snapshot"], "rows" | "errorKind" | "loading" | "hasResult"> &
+  data: Pick<
+    ProcessesPanelData["snapshot"],
+    "rows" | "error" | "errorKind" | "loading" | "hasResult"
+  > &
     Pick<ProcessesPanelData, "refresh"> & {
       presentation: ReturnType<typeof createProcessesPresentation>;
     };
@@ -29,7 +32,7 @@ export type ChatDetailsMobileProcessesProps = {
 export function ChatDetailsMobileProcesses(props: ChatDetailsMobileProcessesProps) {
   const visibleRows = createMemo(() => props.data.rows.slice(0, 2));
   const hidden = () => props.data.rows.length - visibleRows().length;
-  const error = () => props.data.presentation.error();
+  const error = () => props.data.error;
   const hasContent = () => props.data.rows.length > 0 || Boolean(error());
   const motion = createKeyedListMotion({
     ids: () => visibleRows().map((row) => row.instanceId),

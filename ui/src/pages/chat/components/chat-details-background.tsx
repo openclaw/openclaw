@@ -331,13 +331,12 @@ function DetailsProcesses(
     processes: () => ProcessesPanelData | undefined;
   },
 ) {
-  const presentation = createProcessesPresentation(() => props.processes(), true);
-  const processRows = createDetailsProcessesPresentation(
-    () => props.processes()?.snapshot.rows ?? [],
+  const { rows: processRows, error: processError } = createDetailsProcessesPresentation(
+    () => props.processes()?.snapshot,
   );
+  const presentation = createProcessesPresentation(() => props.processes());
   const visibleRows = createMemo(() => processRows().slice(0, 2));
   const hidden = () => processRows().length - visibleRows().length;
-  const processError = presentation.error;
   const openProcesses = (instanceId?: string) => {
     if (props.presented) {
       props.details.onOpenProcesses?.(instanceId);

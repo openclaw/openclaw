@@ -98,7 +98,7 @@ function ProcessRow(props: {
 export function ChatDetailsProcesses(props: Props) {
   const presentation = createProcessesPresentation(() => props.processes(), true);
   const snapshot = () => props.processes()?.snapshot;
-  const rows = createDetailsProcessesPresentation(() => snapshot()?.rows ?? []);
+  const { rows, error: processError } = createDetailsProcessesPresentation(snapshot);
   const visibleRows = createMemo(() => rows().slice(0, 3));
   const hidden = () => rows().length - visibleRows().length;
   const [revealing, setRevealing] = createSignal(false);
@@ -116,7 +116,7 @@ export function ChatDetailsProcesses(props: Props) {
   };
   const hasRunning = () => rows().length > 0;
   const ProcessError = (errorProps: { loading: boolean; retry: () => void }) => (
-    <Show when={presentation.error()}>
+    <Show when={processError()}>
       {(error) => (
         <div class="chat-details-processes__error" role="alert">
           <span>{error()}</span>
@@ -190,33 +190,23 @@ export function ChatDetailsProcesses(props: Props) {
       </Loading>
     </Errored>
   );
-  const ProcessSection = () => (
-    <ChatDetailsDesktopSection
-      section="processes"
-      title={t("chat.sessionDetails.processes")}
-      expanded={props.expanded}
-      presented={props.presented}
-      onExpandedChange={(expanded) => props.onExpandedChange(expanded)}
-      onRevealMotionChange={setRevealing}
-    >
-      <ReadContent />
-    </ChatDetailsDesktopSection>
-  );
   // The disclosure's layout owner must survive pending and errored body reads.
   return (
     <Show when={props.onOpen}>
-      <Show
-        when={motion.present()}
-        fallback={
-          <Show when={presentation.error()} fallback={<ReadContent />}>
-            <ProcessSection />
-          </Show>
-        }
-      >
+      <Show when={motion.present() || processError()} fallback={<ReadContent />}>
         <div ref={motion.shell} class="chat-details-processes__envelope">
           <div ref={motion.content} class="chat-details-processes__motion-content">
-            <Show when={hasRunning()}>
-              <ProcessSection />
+            <Show when={hasRunning() || processError()}>
+              <ChatDetailsDesktopSection
+                section="processes"
+                title={t("chat.sessionDetails.processes")}
+                expanded={props.expanded}
+                presented={props.presented}
+                onExpandedChange={(expanded) => props.onExpandedChange(expanded)}
+                onRevealMotionChange={setRevealing}
+              >
+                <ReadContent />
+              </ChatDetailsDesktopSection>
             </Show>
           </div>
         </div>

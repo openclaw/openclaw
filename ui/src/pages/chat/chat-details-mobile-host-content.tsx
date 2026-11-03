@@ -122,20 +122,20 @@ function MobileHostContent(
         },
       )
     : () => undefined;
-  const processPresentation = createProcessesPresentation(processes, true);
-  const detailsProcesses = createDetailsProcessesPresentation(
-    () => processes()?.snapshot.rows ?? [],
+  const { rows: detailsProcesses, error: processError } = createDetailsProcessesPresentation(
+    () => processes()?.snapshot,
   );
+  const processPresentation = createProcessesPresentation(processes);
   const processData = createMemo(() => {
     const data = processes();
     if (!data) {
       return undefined;
     }
-    const { error, errorKind, loading, hasResult } = data.snapshot;
+    const { errorKind, loading, hasResult } = data.snapshot;
     return {
       rows: detailsProcesses(),
       presentation: processPresentation,
-      error,
+      error: processError(),
       errorKind,
       loading,
       hasResult,

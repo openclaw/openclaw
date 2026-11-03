@@ -22,35 +22,11 @@ export function isProcessesPresentationReady(
   return Boolean(snapshot?.hasResult || snapshot?.errorKind);
 }
 
-type ProcessesReadState =
-  | "loading"
-  | "loaded-empty"
-  | "loaded"
-  | "stale-with-rows"
-  | "error-with-retry";
-
 /** Presents shared, already-admitted process work without starting another read. */
 export function createProcessesPresentation(
   source: () => ProcessesPanelData | undefined,
   retainRows = false,
 ) {
-  const readState = createMemo<ProcessesReadState>(() => {
-    const snapshot = source()?.snapshot;
-    if (snapshot?.readError) {
-      return retainRows && snapshot.rows.length > 0 ? "stale-with-rows" : "error-with-retry";
-    }
-    if (!snapshot?.hasResult) {
-      return "loading";
-    }
-    return snapshot.rows.length > 0 ? "loaded" : "loaded-empty";
-  });
-  const visibleError = createMemo(() => {
-    const snapshot = source()?.snapshot;
-    if (readState() === "error-with-retry") {
-      return snapshot?.readError;
-    }
-    return snapshot?.errorKind === "read" ? null : snapshot?.error;
-  });
   const pending = createMemo(() => ({ completion: source()?.pendingRead ?? null }), {
     equals: (a, b) => a.completion === b.completion,
   });
@@ -85,7 +61,7 @@ export function createProcessesPresentation(
     return Promise.race([admitted ?? Promise.resolve(), view.retired, view.connectionRetired]).then(
       () => {
         const snapshot = view.owner.snapshot;
-        if (isCurrent(view) && snapshot.readError && readState() === "error-with-retry") {
+        if (isCurrent(view) && snapshot.readError && (!retainRows || !snapshot.rows.length)) {
           throw new Error(snapshot.readError);
         }
       },
@@ -140,5 +116,5 @@ export function createProcessesPresentation(
       },
     };
   }
-  return { read, readState, error: visibleError, scope, createStop };
+  return { read, scope, createStop };
 }
