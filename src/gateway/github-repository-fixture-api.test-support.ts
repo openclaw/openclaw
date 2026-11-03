@@ -29,13 +29,13 @@ export function loadGitHubRepositoryRuntimeFixture() {
     controlUiGitHubHandlers: GatewayRequestHandlers;
     repositoryHandlers: GatewayRequestHandlers;
     currentGitHubPublicationConfig: () => OpenClawConfig;
-    clearGitHubCredentialVerificationCache(): void;
+    clearGitHubCredentialVerificationCache: () => void;
     requestCurrentGitHubOAuthRefresh(agentId: string): Promise<void>;
     requestCurrentPersonalGitHubRefresh(owner: string): Promise<void>;
-    createGitHubRepositorySource(
+    createGitHubRepositorySource: (
       getConfig: () => OpenClawConfig,
       refresh: (agentId: string) => Promise<void>,
-    ): RepositorySourceV1;
+    ) => RepositorySourceV1;
     createGitHubPublicationProvider: (owner: {
       signal: AbortSignal;
       assertCurrent: () => void;
@@ -81,17 +81,17 @@ export function loadActualGitHubIdentityFixture() {
 
 export function loadGitHubProfileFixture() {
   return loadBundledPluginFacade<{
-    resolveManagedGitHubProfileDir(input: {
+    resolveManagedGitHubProfileDir: (input: {
       agentId: string;
       scope: "agent" | "system";
       profileId?: string;
       env?: NodeJS.ProcessEnv;
-    }): string;
-    writeManagedGitHubProfileFiles(
+    }) => string;
+    writeManagedGitHubProfileFiles: (
       profileDir: string,
       identity: { login: string; token: string },
       options?: { assertCurrent: () => void },
-    ): Promise<void>;
+    ) => Promise<void>;
   }>({ pluginId: "github-repositories", artifactBasename: "tool-identity-api.js" });
 }
 export function loadGitHubNativeCredentialFixture() {

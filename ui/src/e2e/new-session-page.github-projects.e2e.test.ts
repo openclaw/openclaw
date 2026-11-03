@@ -1,6 +1,9 @@
-import repositoryManifest from "../../../extensions/github-repositories/openclaw.plugin.json" with { type: "json" };
+import { loadPluginManifest } from "../../../src/plugins/manifest.js";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { GITHUB_REPOSITORY_PLUGIN } from "../test-helpers/repository-plugin.ts";
+const repositoryManifestResult = loadPluginManifest(GITHUB_REPOSITORY_PLUGIN.rootDir);
+if (!repositoryManifestResult.ok) throw new Error(repositoryManifestResult.error);
+const repositoryManifest = repositoryManifestResult.manifest;
 const nativeRepositoryPlugins = [GITHUB_REPOSITORY_PLUGIN];
 import { Buffer } from "node:buffer";
 import { writeFile } from "node:fs/promises";
@@ -140,7 +143,7 @@ suite.define(() => {
           ...initialCatalog,
           revision: "plugin-source",
           repositorySources: [
-            ...repositoryManifest.repositorySources.map((entry) =>
+            ...(repositoryManifest.repositorySources ?? []).map((entry) =>
               Object.assign({ pluginId: "github-repositories" }, entry),
             ),
             source,
@@ -340,7 +343,7 @@ suite.define(() => {
             "plugins.controlUi.list": {
               revision: "headless",
               plugins: [],
-              repositorySources: repositoryManifest.repositorySources.map((source) =>
+              repositorySources: (repositoryManifest.repositorySources ?? []).map((source) =>
                 Object.assign({ pluginId: repositoryManifest.id }, source),
               ),
               diagnostics: [],

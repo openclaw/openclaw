@@ -1,7 +1,6 @@
 import { existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { prepareCurrentGitHubPublicationOptionsIdentity } from "../../extensions/github-repositories/publication-availability-api.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.native.js";
@@ -29,6 +28,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { installPublicationRpcFixture } from "./github-account-service.test-support.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -58,12 +58,19 @@ import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
 import { withStateDirEnv } from "./session-utils.test-support.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
+const { prepareCurrentGitHubPublicationOptionsIdentity } = await loadBundledPluginFacade<{
+  prepareCurrentGitHubPublicationOptionsIdentity: (
+    agentId: string,
+    assertCurrent?: () => void,
+  ) => Promise<unknown>;
+}>({ pluginId: "github-repositories", artifactBasename: "publication-availability-api.js" });
+
 afterEach(() => memorySessionActorOwners.reset());
 
 vi.mock("../../extensions/github-repositories/publication-availability-api.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../extensions/github-repositories/publication-availability-api.js")
-  >("../../extensions/github-repositories/publication-availability-api.js");
+  const actual = await vi.importActual<Record<string, unknown>>(
+    "../../extensions/github-repositories/publication-availability-api.js",
+  );
   return {
     ...actual,
     prepareCurrentGitHubPublicationOptionsIdentity: vi.fn(async (agentId: string) => ({
@@ -286,48 +293,52 @@ describe("global session lookup ownership", () => {
       const context = {
         getRuntimeConfig: () => cfg,
       } as unknown as GatewayRequestContext;
-      await installPublicationRpcFixture(context, { latestShared });
-      for (const agentId of ["research", "main", "research"]) {
-        const respond = vi.fn<RespondFn>();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: `options-${agentId}`,
-            method: "sessions.github.options",
-            params: { sessionKey: `agent:${agentId}:main` },
-          },
-          client: null,
-          isWebchatConnect: () => false,
-          context,
-          respond,
-        });
-        expect(respond).toHaveBeenCalledOnce();
-        expect(respond.mock.calls[0]?.[2]).toBeUndefined();
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
-        expect(respond.mock.calls[0]?.[1]).toEqual({
-          personal: null,
-          pendingPersonal: null,
-          latestShared: null,
-          shared: {
-            source: "system",
-            accountId: `account-${agentId}`,
-            login: `synthetic-${agentId}`,
-          },
-        });
-        expect(prepareCurrentGitHubPublicationOptionsIdentity).toHaveBeenLastCalledWith(
-          agentId,
-          expect.any(Function),
-        );
-        expect(latestShared).toHaveBeenLastCalledWith(
-          expect.objectContaining({
+      const publication = await installPublicationRpcFixture(context, { latestShared });
+      try {
+        for (const agentId of ["research", "main", "research"]) {
+          const respond = vi.fn<RespondFn>();
+          await handleGatewayRequest({
+            req: {
+              type: "req",
+              id: `options-${agentId}`,
+              method: "sessions.github.options",
+              params: { sessionKey: `agent:${agentId}:main` },
+            },
+            client: null,
+            isWebchatConnect: () => false,
+            context,
+            respond,
+          });
+          expect(respond).toHaveBeenCalledOnce();
+          expect(respond.mock.calls[0]?.[2]).toBeUndefined();
+          expect(respond.mock.calls[0]?.[0]).toBe(true);
+          expect(respond.mock.calls[0]?.[1]).toEqual({
+            personal: null,
+            pendingPersonal: null,
+            latestShared: null,
+            shared: {
+              source: "system",
+              accountId: `account-${agentId}`,
+              login: `synthetic-${agentId}`,
+            },
+          });
+          expect(prepareCurrentGitHubPublicationOptionsIdentity).toHaveBeenLastCalledWith(
             agentId,
-            sessionKey: "global",
-            sessionId: agentId + "-global",
-          }),
-          undefined,
-          expect.any(Function),
-          expect.any(Function),
-        );
+            expect.any(Function),
+          );
+          expect(latestShared).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+              agentId,
+              sessionKey: "global",
+              sessionId: agentId + "-global",
+            }),
+            undefined,
+            expect.any(Function),
+            expect.any(Function),
+          );
+        }
+      } finally {
+        await publication.stop();
       }
     });
   });

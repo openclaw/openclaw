@@ -1,12 +1,9 @@
 import { expect, it } from "vitest";
-import { repositoryGatewayMethods } from "../../extensions/github-repositories/gateway-methods-api.js";
-import { GATEWAY_EVENTS } from "./events.js";
 import {
   createCoreGatewayMethodDescriptors,
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
 } from "./methods/core-method-policy.js";
 import { listGatewayMethods } from "./server-methods-list.js";
-import { LEGACY_ADVERTISED_GATEWAY_METHODS } from "./server-methods-list.test-fixtures.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
 const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
@@ -65,14 +62,6 @@ it("keeps read-only methods outside the control-plane write budget", () => {
   }
 });
 
-it("preserves the legacy advertised prefix and appends the MCP catalog", () => {
-  const methods = listGatewayMethods();
-  const pluginMethods = new Set<string>(repositoryGatewayMethods.map(([name]) => name));
-  const retained = LEGACY_ADVERTISED_GATEWAY_METHODS.filter((name) => !pluginMethods.has(name));
-  expect(methods.slice(0, retained.length)).toEqual(retained);
-  expect(methods.indexOf("mcp.events.list")).toBeGreaterThanOrEqual(retained.length);
-});
-
 it.each([
   "users.background.get",
   "users.background.upload",
@@ -86,13 +75,4 @@ it.each([
 ])("advertises and wires %s", (name) => {
   expect(listGatewayMethods()).toContain(name);
   expect(coreGatewayHandlers[name]).toBeTypeOf("function");
-});
-
-it("leaves repository discovery to its installed plugin and retains the shared event", () => {
-  const methods = listGatewayMethods();
-  for (const [name] of repositoryGatewayMethods) {
-    expect(methods).not.toContain(name);
-    expect(coreGatewayHandlers).not.toHaveProperty(name);
-  }
-  expect(GATEWAY_EVENTS).toContain("controlUi.sessionPullRequests.changed");
 });

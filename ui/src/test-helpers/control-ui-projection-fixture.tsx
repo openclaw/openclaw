@@ -266,35 +266,39 @@ function createFixture(family: CoreProjectionFamily, instrumented: boolean) {
 }
 
 /** This handle exists only in the explicit benchmark entry, never in the shipping graph. */
-window.openclawProjectionFixture = {
-  async setup(family, instrumented) {
-    active?.dispose();
-    active =
-      family === "sdk-avatars" || family === "sdk-avatar-identities"
-        ? createSdkAvatarFixture(family, instrumented)
-        : family === "tooltips" ||
-            family === "link-providers" ||
-            family === "link-metadata" ||
-            family === "ci-pairs" ||
-            family === "clawhub-cards"
-          ? createInstanceResourceFixture(family, instrumented)
-          : createFixture(family, instrumented);
-    return active.setup();
-  },
-  run: () => {
-    if (!active) {
-      throw new Error("Projection fixture is not mounted");
-    }
-    return active.run();
-  },
-  finish: () => {
-    if (!active) {
-      throw new Error("Projection fixture is not mounted");
-    }
-    return active.finish();
-  },
-  dispose: () => {
-    active?.dispose();
-    active = undefined;
-  },
-};
+export function installProjectionFixture(
+  createCiConsumers: Parameters<typeof createInstanceResourceFixture>[2],
+) {
+  window.openclawProjectionFixture = {
+    async setup(family, instrumented) {
+      active?.dispose();
+      active =
+        family === "sdk-avatars" || family === "sdk-avatar-identities"
+          ? createSdkAvatarFixture(family, instrumented)
+          : family === "tooltips" ||
+              family === "link-providers" ||
+              family === "link-metadata" ||
+              family === "ci-pairs" ||
+              family === "clawhub-cards"
+            ? createInstanceResourceFixture(family, instrumented, createCiConsumers)
+            : createFixture(family, instrumented);
+      return active.setup();
+    },
+    run: () => {
+      if (!active) {
+        throw new Error("Projection fixture is not mounted");
+      }
+      return active.run();
+    },
+    finish: () => {
+      if (!active) {
+        throw new Error("Projection fixture is not mounted");
+      }
+      return active.finish();
+    },
+    dispose: () => {
+      active?.dispose();
+      active = undefined;
+    },
+  };
+}

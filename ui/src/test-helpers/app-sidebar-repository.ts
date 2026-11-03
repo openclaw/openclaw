@@ -1,21 +1,9 @@
-import { onTestFinished } from "vitest";
-import { createRepositoryBrowserRuntime } from "../../../extensions/github-repositories/browser/repository-runtime.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../extensions/github-repositories/browser/session-pull-requests.ts";
-import { createSidebarBadgeAccessory } from "../../../extensions/github-repositories/browser/sidebar-accessory.tsx";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../packages/gateway-protocol/src/control-ui-session-pull-requests.ts";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/index.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
-import type {
-  ControlUiContributions,
-  ControlUiRegistration,
-} from "../plugins/control-ui-capability.ts";
-import { createControlUiPluginHost } from "../plugins/control-ui-host.ts";
-import {
-  type ControlUiPluginOwner,
-  ControlUiPluginRuntime,
-} from "../plugins/control-ui-runtime.ts";
-
+import { installRepositoryPresentation } from "./repository-presentation.test-support.ts";
 type SidebarGatewayEventPublisher = (event: string, payload: unknown) => void;
 const sidebarGatewayPublishers = new WeakMap<ApplicationGateway, SidebarGatewayEventPublisher>();
 
@@ -70,48 +58,13 @@ export function createSidebarPullRequestPublisher(currentGateway: () => Applicat
 
 /** Sidebar fixtures render the plugin's real badge and read store, not a second host summary. */
 export function installSidebarRepository(context: ApplicationContext) {
-  const abort = new AbortController();
-  const owner = {
-    client: context.gateway.snapshot.client,
-    abort,
-    descriptor: { pluginId: "github-repositories" },
-    disposers: new Set<() => void>(),
-  } as Omit<ControlUiPluginOwner, "host">;
-  const runtime = new ControlUiPluginRuntime(() => context);
-  // This fixture admits one fixed contribution without loading a browser asset catalog.
-  runtime.isCurrent = (candidate) => candidate === owner && !abort.signal.aborted;
-  runtime.reportError = (_pluginId, error) => {
-    throw error;
-  };
-  const host = createControlUiPluginHost(() => context, runtime, owner);
-  const repository = createRepositoryBrowserRuntime(host);
-  const registrations: {
-    [K in keyof ControlUiContributions]: ControlUiRegistration<ControlUiContributions[K]>[];
-  } = {
-    pages: [],
-    navigation: [],
-    panels: [],
-    actions: [],
-    accessories: [
-      {
-        key: "github-repositories/pull-request",
-        pluginId: "github-repositories",
-        value: createSidebarBadgeAccessory(host, repository),
-        host,
-        signal: abort.signal,
-      },
-    ],
-    inlineViews: [],
-    textReferences: [],
-    widgets: [],
-    replacements: [],
-  };
-  context.plugins.registrations = (kind) => registrations[kind];
-  context.plugins.reportError = (pluginId, error) => runtime.reportError(pluginId, error);
-  onTestFinished(() => {
-    abort.abort();
-    owner.disposers.forEach((dispose) => dispose());
-    owner.disposers.clear();
-    runtime.dispose();
-  });
+  if (!context.gateway.snapshot.client) {
+    return;
+  }
+  const presentation = installRepositoryPresentation(context);
+  const plugins = presentation.context.plugins;
+  context.plugins.registrations = (kind) => plugins.registrations(kind);
+  context.plugins.reportError = (pluginId, error) => plugins.reportError(pluginId, error);
+  context.plugins.subscribe = (listener) => plugins.subscribe(listener);
+  context.plugins.selectedReplacement = (surface) => plugins.selectedReplacement(surface);
 }

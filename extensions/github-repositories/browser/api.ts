@@ -15,14 +15,7 @@ export type { ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 export { GitHubPublicationAction } from "./chat-github-publication.tsx";
 export { createPublicationPresentation } from "./publication-presentation.ts";
 
-export { createHovercardAccessoryMount } from "./hovercard-accessory.tsx";
-export { createSidebarBadgeAccessory } from "./sidebar-accessory.tsx";
-export type { RepositoryBrowserRuntime } from "./repository-runtime.ts";
-
-export { createSessionAccessoryMount } from "./session-accessory.tsx";
-
 export { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "./session-pull-requests.ts";
-export { createMobileSessionAccessoryMount } from "./session-accessory.tsx";
 export { ChatCiDetails } from "./chat-ci-details.tsx";
 export type { ChatCiDetailsProps } from "./chat-ci-details.tsx";
 export { ChatCiAutomation } from "./chat-ci-automation-control.tsx";

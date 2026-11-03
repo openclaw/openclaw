@@ -7,6 +7,7 @@ import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.t
 import { createContext, createSessions } from "../test-helpers/app-sidebar.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { installRepositoryPresentation } from "../test-helpers/repository-presentation.test-support.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
@@ -53,6 +54,7 @@ it("preserves live hovercard content, focus, and translated actions across updat
   connection.publish({
     ...connection.gateway.snapshot,
     phase: "connected",
+    hello: gatewayHelloForMethods(["controlUi.sessionPullRequests.subscribe"], ["operator.read"]),
     client: createTestGatewayClient(async () => ({})),
   });
   const source = createContext(connection.gateway, createSessions("main", [key]));

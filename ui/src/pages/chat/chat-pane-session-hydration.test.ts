@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../../extensions/github-repositories/session-pull-requests-api.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../../src/gateway/control-ui-contract.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";

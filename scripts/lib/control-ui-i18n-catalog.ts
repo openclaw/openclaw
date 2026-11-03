@@ -1,13 +1,7 @@
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  settingsEnglish,
-  pullRequestEnglish,
-  repositoryEnglish,
-  ciEnglish,
-  publicationEnglish,
-} from "../../extensions/github-repositories/english-api.ts";
 import { buildBaseHints } from "../../src/config/schema.hints.js";
 import { PUBLIC_SESSION_COPY } from "../../src/shared/public-session-copy.ts";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
@@ -109,6 +103,24 @@ const localesDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../ui/src/i18n/locales",
 );
+const repositoryEnglishSource = createRequire(
+  path.resolve(localesDir, "../../../../extensions/github-repositories/package.json"),
+).resolve("@openclaw/github-repositories/english-api.js");
+// Vite's isolated module runner also owns this import, so reloads retain no stale namespace.
+const {
+  settingsEnglish,
+  pullRequestEnglish,
+  repositoryEnglish,
+  ciEnglish,
+  publicationEnglish,
+}: {
+  settingsEnglish: { githubConnections: TranslationMap; agentTools: TranslationMap };
+  pullRequestEnglish: { sessionHovercard: TranslationMap };
+  repositoryEnglish: { chat: { pullRequests: TranslationMap & { automationNoChecks: string } } };
+  ciEnglish: { chat: { pullRequests: TranslationMap & { automationRetry: string } } };
+  publicationEnglish: { githubPublication: TranslationMap };
+} = await import(repositoryEnglishSource);
+
 const sourceFiles = [
   "en-chat-permissions.ts",
   "en-chat-composer-menu.ts",

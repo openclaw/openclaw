@@ -38,13 +38,6 @@ import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
-const oauth = vi.hoisted(() => ({ create: vi.fn() }));
-
-vi.mock("../../extensions/github-repositories/oauth-lifecycle-api.js", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  createGitHubOAuthLifecycle: oauth.create,
-}));
-
 // mock-isolation: Prevent unrelated backfill; real lifetime/worker proof covers publication.
 vi.mock("./session-cost-usage-lifetime.js", () => ({
   startSessionCostUsageProjectionLifetime: () => ({ stop: async () => {} }),
@@ -109,9 +102,7 @@ afterEach(async () => {
 });
 
 describe("gateway lifetime sidecars", () => {
-  beforeEach(() => {
-    oauth.create.mockReset();
-  });
+  beforeEach(() => {});
 
   test("parks empty expiry, resumes on writes, and joins responsive worker sweeps on shutdown", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: createStateDir() }, async () => {
@@ -368,7 +359,6 @@ describe("gateway lifetime sidecars", () => {
       logWarning: warn,
     });
 
-    expect(oauth.create).not.toHaveBeenCalled();
     expect(context).not.toHaveProperty("githubOAuthService");
     expect(context.modelAccountConnectService).toBeDefined();
     const modelAccounts = context.modelAccountConnectService;

@@ -1,8 +1,39 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
-  createGatewayHarness,
-  createHello,
-} from "../plugins/github-repositories-integration/session-pull-requests.test-support.ts";
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../test-helpers/application-context-fixtures.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+
+const createHello = (scopes = ["operator.read"]) =>
+  gatewayHelloForMethods(["controlUi.sessionPullRequests.subscribe"], scopes);
+function createGatewayHarness() {
+  const publication = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client: createTestGatewayClient(async () => ({ subscribed: true })),
+      hello: createHello(),
+    }),
+  );
+  const subscribe = publication.gateway.subscribe;
+  const unsubscribeSnapshots = vi.fn();
+  const subscribeSnapshots = vi
+    .spyOn(publication.gateway, "subscribe")
+    .mockImplementation((listener) => {
+      const stop = subscribe(listener);
+      return () => {
+        unsubscribeSnapshots();
+        stop();
+      };
+    });
+  return {
+    ...publication,
+    setSnapshot: publication.publish,
+    subscribeSnapshots,
+    unsubscribeSnapshots,
+  };
+}
 import { subscribeGatewaySnapshot } from "./gateway-snapshot-observation.ts";
 
 it("filters CI snapshots by the exact details and automation retirement facts", () => {

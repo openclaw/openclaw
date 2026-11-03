@@ -38,6 +38,7 @@
   "exports": {
     ".": "./index.ts",
     "./config-api.js": "./config-api.ts",
+    "./english-api.js": "./english-api.ts",
     "./public-api.js": "./public-api.ts",
     "./remote-api.js": "./remote-api.ts",
     "./reader-identity-api.js": "./reader-identity-api.ts",

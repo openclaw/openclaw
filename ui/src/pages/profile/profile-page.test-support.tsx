@@ -1,5 +1,6 @@
 import { vi } from "vitest";
-import { settingsViews } from "../../../../extensions/github-repositories/browser/index.tsx";
+import { repositoryUi } from "../../test-helpers/repository-module.ts";
+const settingsViews = repositoryUi.settingsViews ?? [];
 import type {
   UserProfile,
   UsersSelfResult,

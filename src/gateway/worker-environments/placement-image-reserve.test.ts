@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import {
-  clearGitHubCredentialVerificationCache,
-  createGitHubRepositorySource,
-} from "../../../extensions/github-repositories/runtime-api.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
@@ -13,6 +9,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { prepareUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
+import { loadGitHubRepositoryRuntimeFixture } from "../github-repository-fixture-api.test-support.js";
 import {
   repositoryDispatchCredentialReader,
   withRepositoryChatDispatch,
@@ -42,6 +39,9 @@ import { createWorkerPlacementRedispatch } from "./worker-placement-redispatch.j
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
+
+const { clearGitHubCredentialVerificationCache, createGitHubRepositorySource } =
+  await loadGitHubRepositoryRuntimeFixture();
 
 describe("runtime image reserve repository dispatch", () => {
   support.setupWorkerEnvironmentServiceSuite((config) => {

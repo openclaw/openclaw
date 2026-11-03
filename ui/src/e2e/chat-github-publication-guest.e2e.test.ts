@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { GitHubPublicationOptions } from "../../../extensions/github-repositories/browser/api.ts";
+import type { SessionGitHubOptionsResult as GitHubPublicationOptions } from "../../../packages/gateway-protocol/src/schema/session-github-publication.ts";
 import type {
   SessionGitHubPublicationResult,
   SessionGitHubStatusResult,

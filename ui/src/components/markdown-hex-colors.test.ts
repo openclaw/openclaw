@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { githubReferenceOptions } from "../test-helpers/github-text-references.ts";
 import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
@@ -41,24 +40,6 @@ describe("Markdown hex colors", () => {
     expect(swatches(fragment)).toHaveLength(0);
     expect(fragment.querySelector("code")?.textContent).toBe("#abc");
     expect(fragment.querySelector("a")?.getAttribute("href")).toBe("https://example.com/#abc");
-  });
-
-  it("keeps repository references as links and reader documents literal", () => {
-    const fragment = htmlFragment(
-      toSanitizedMarkdownHtml(
-        "PR openclaw/openclaw#178969, color #aabbcc.",
-        githubReferenceOptions(),
-      ),
-    );
-    expect(fragment.querySelector("a")?.getAttribute("href")).toBe(
-      "https://github.com/openclaw/openclaw/pull/178969",
-    );
-    expect(swatches(fragment).map((image) => image.parentElement?.textContent)).toEqual([
-      "#aabbcc",
-    ]);
-    expect(
-      swatches(htmlFragment(toSanitizedMarkdownHtml("#abc", { mode: "document" }))),
-    ).toHaveLength(0);
   });
 
   it("keeps unresolved item references plain while preserving numeric colors", () => {

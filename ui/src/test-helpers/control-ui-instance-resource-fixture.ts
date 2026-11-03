@@ -119,31 +119,33 @@ function createInstanceContext(family: InstanceResourceFamily, instrumented: boo
 }
 export type InstanceContext = ReturnType<typeof createInstanceContext>;
 
+export type InstanceConsumers = {
+  setup(): Promise<InstanceResourceFacts>;
+  run(): Promise<InstanceResourceFacts>;
+  finish(): Promise<InstanceResourceFacts>;
+};
+
 export function createInstanceResourceFixture(
   family: InstanceResourceFamily,
   instrumented: boolean,
+  createCiConsumers?: (context: InstanceContext) => Promise<InstanceConsumers>,
 ) {
   const context = createInstanceContext(family, instrumented);
-  let delegate:
-    | {
-        setup(): Promise<InstanceResourceFacts>;
-        run(): Promise<InstanceResourceFacts>;
-        finish(): Promise<InstanceResourceFacts>;
-      }
-    | undefined;
+  let delegate: InstanceConsumers | undefined;
   return {
     async setup() {
       context.capture("before-modules");
       if (family === "link-providers" || family === "link-metadata") {
         const module = await import("./control-ui-provider-resource-fixture.ts");
         delegate = await module.createInstanceConsumers(context, family);
+      } else if (family === "ci-pairs") {
+        instanceAssert(createCiConsumers, "CI benchmark requires its plugin-owned consumer entry");
+        delegate = await createCiConsumers(context);
       } else {
         const module =
           family === "tooltips"
             ? await import("./control-ui-tooltip-resource-fixture.ts")
-            : family === "ci-pairs"
-              ? await import("./control-ui-ci-resource-fixture.ts")
-              : await import("./control-ui-clawhub-resource-fixture.tsx");
+            : await import("./control-ui-clawhub-resource-fixture.tsx");
         delegate = await module.createInstanceConsumers(context);
       }
       return delegate.setup();

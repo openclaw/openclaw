@@ -51,21 +51,18 @@ beforeAll(async () => {
     },
   });
 
-  const [cli, gh, plugins, workers, rows, sidecars, discovery, skills, subagents] =
-    await Promise.all([
-      import("../infra/openclaw-cli-shim.js"),
-      import("../../extensions/github-repositories/tool-profile-cleanup-api.js"),
-      import("./server-startup-plugins.js"),
-      import("./server-worker-environment-startup.js"),
-      import("./session-row-projection.js"),
-      import("./server-lifetime-sidecars.js"),
-      import("./server-discovery-runtime.js"),
-      import("../skills/runtime/remote.js"),
-      import("../agents/subagents/registry/subagent-registry.js"),
-    ]);
+  const [cli, plugins, workers, rows, sidecars, discovery, skills, subagents] = await Promise.all([
+    import("../infra/openclaw-cli-shim.js"),
+    import("./server-startup-plugins.js"),
+    import("./server-worker-environment-startup.js"),
+    import("./session-row-projection.js"),
+    import("./server-lifetime-sidecars.js"),
+    import("./server-discovery-runtime.js"),
+    import("../skills/runtime/remote.js"),
+    import("../agents/subagents/registry/subagent-registry.js"),
+  ]);
   for (const [spy, name] of [
     [vi.spyOn(cli, "prepareGatewayAgentCliShim"), "agent CLI shim"],
-    [vi.spyOn(gh, "cleanupRetiredManagedGitHubProfiles"), "managed GitHub profile cleanup"],
     [vi.spyOn(plugins, "runGatewayPostReadyStartupMaintenance"), "channel and session maintenance"],
     [vi.spyOn(workers, "loadGatewayWorkerEnvironmentStartupState"), "worker environment recovery"],
     [vi.spyOn(rows, "createSessionRowProjection"), "session catalog hydration"],

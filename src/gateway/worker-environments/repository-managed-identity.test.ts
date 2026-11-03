@@ -2,10 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  clearGitHubCredentialVerificationCache,
-  createGitHubRepositorySource,
-} from "../../../extensions/github-repositories/runtime-api.js";
 import { readRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
@@ -19,6 +15,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { loadGitHubRepositoryRuntimeFixture } from "../github-repository-fixture-api.test-support.js";
 import {
   repositoryDispatchCredentialReader,
   withRepositoryChatDispatch,
@@ -40,6 +37,9 @@ import {
 import * as support from "./service.test-support.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
+
+const { clearGitHubCredentialVerificationCache, createGitHubRepositorySource } =
+  await loadGitHubRepositoryRuntimeFixture();
 
 support.setupWorkerEnvironmentServiceSuite((_config, root) => {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);

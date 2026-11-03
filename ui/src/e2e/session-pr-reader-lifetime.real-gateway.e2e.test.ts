@@ -315,14 +315,13 @@ suite.define(() => {
           throw new Error(`Unexpected synthetic GitHub request: ${url.pathname}`);
         });
         restoreFetch = () => transport.mockRestore();
-        const subscriptions =
-          await import("../../../extensions/github-repositories/control-ui-session-pr-subscriptions-api.js");
-        const createSubscriptions = subscriptions.createControlUiSessionPullRequestSubscriptions;
-        // Only PR refresh pacing uses controlled time; Gateway I/O and browser clocks stay real.
+        const serviceScheduling = await import("../../../src/plugins/service-scheduler.ts");
+        const createScheduling = serviceScheduling.createPluginServiceScheduler;
+        // Plugin maintenance uses controlled time; Gateway I/O and browser clocks stay real.
         const subscriptionFactory = vi
-          .spyOn(subscriptions, "createControlUiSessionPullRequestSubscriptions")
-          .mockImplementation((deps) =>
-            createSubscriptions({ ...deps, scheduler: refreshScheduler }),
+          .spyOn(serviceScheduling, "createPluginServiceScheduler")
+          .mockImplementation((_gatewayScheduler, runOwned) =>
+            createScheduling(refreshScheduler, runOwned),
           );
         try {
           const { startGatewayServer } = await import("../../../src/gateway/server.js");
@@ -332,6 +331,7 @@ suite.define(() => {
             controlUiEnabled: false,
             sidecarStartup: "defer",
           });
+          await gateway.startupSettled;
           expect(subscriptionFactory).toHaveBeenCalledOnce();
         } finally {
           subscriptionFactory.mockRestore();

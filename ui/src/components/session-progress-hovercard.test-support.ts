@@ -1,6 +1,6 @@
 import type { ProgressCard, ControlUiSessionPullRequestSnapshot } from "@openclaw/gateway-protocol";
 import { afterEach, vi } from "vitest";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../extensions/github-repositories/session-pull-requests-api.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import {
   applicationContext,

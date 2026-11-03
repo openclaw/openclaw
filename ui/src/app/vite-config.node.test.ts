@@ -709,6 +709,17 @@ it("bootstraps only an absent locale memory from the English catalog", async () 
     await loadAll();
     expect(flattenTranslations(catalog)).toEqual(flattenTranslations(loadControlUiSourceCatalog()));
     expect(watchedPaths(addWatchFile)).toContain(path.join(repoRoot, "src/config/schema.hints.ts"));
+    for (const source of [
+      "english-api.ts",
+      "browser/settings-english.ts",
+      "browser/metadata-english.ts",
+      "browser/pull-request-english.ts",
+      "browser/publication-english.ts",
+    ]) {
+      expect(watchedPaths(addWatchFile)).toContain(
+        path.join(repoRoot, "extensions/github-repositories", source),
+      );
+    }
   });
 });
 
@@ -760,49 +771,54 @@ it.each([
   });
 });
 
-it("reloads configured source aliases instead of installed package outputs", async () => {
-  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "control-ui-locale-")));
-  const entry = path.join(root, "catalog.ts");
-  const dependency = path.join(root, "labels.ts");
-  const installedPackage = path.join(root, "node_modules/@fixture/labels");
-  const { runnerImport } = await vi.importActual<typeof import("vite")>("vite");
-  try {
-    await writeFile(
-      entry,
-      'import { label } from "@fixture/labels";\n' +
-        "export const loadControlUiSourceCatalog = () => " +
-        "({ common: { health: label }, configHints: { fixture: { label } } });\n" +
-        "export const loadControlUiStartupCatalog = () => ({ common: { health: label } });\n",
-    );
-    await mkdir(installedPackage, { recursive: true });
-    await writeFile(
-      path.join(installedPackage, "package.json"),
-      JSON.stringify({ name: "@fixture/labels", type: "module", exports: "./index.js" }),
-    );
-    await writeFile(path.join(installedPackage, "index.js"), 'export const label = "stale";\n');
-    await writeFile(dependency, 'export const label = "first";\n');
-    await withSourceImport(
-      (_entry, config) => runnerImport(entry, config),
-      async () => {
-        const { load, watchChange } = await localeHooks([
-          { find: "@fixture/labels", replacement: dependency },
-        ]);
-        const addWatchFile = vi.fn();
-        const readCatalog = async () => {
-          const base = await loadLocaleSource(load, baseLocaleId, addWatchFile);
-          return (await executeLocale(load, base)).catalog;
-        };
-        expect(await readCatalog()).toEqual(labeledCatalog("first"));
-        expect(watchedPaths(addWatchFile)).toContain(dependency);
-        await writeFile(dependency, 'export const label = "second";\n');
-        await watchChange.call({} as never, dependency, {} as never);
-        expect(await readCatalog()).toEqual(labeledCatalog("second"));
-      },
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+it.each(["static alias", "computed absolute path"])(
+  "reloads %s source dependencies instead of installed package outputs",
+  async (mode) => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "control-ui-locale-")));
+    const entry = path.join(root, "catalog.ts");
+    const dependency = path.join(root, "labels.ts");
+    const installedPackage = path.join(root, "node_modules/@fixture/labels");
+    const { runnerImport } = await vi.importActual<typeof import("vite")>("vite");
+    try {
+      await writeFile(
+        entry,
+        (mode === "static alias"
+          ? 'import { label } from "@fixture/labels";\n'
+          : `const source = ${JSON.stringify(dependency)};\nconst { label } = await import(source);\n`) +
+          "export const loadControlUiSourceCatalog = () => " +
+          "({ common: { health: label }, configHints: { fixture: { label } } });\n" +
+          "export const loadControlUiStartupCatalog = () => ({ common: { health: label } });\n",
+      );
+      await mkdir(installedPackage, { recursive: true });
+      await writeFile(
+        path.join(installedPackage, "package.json"),
+        JSON.stringify({ name: "@fixture/labels", type: "module", exports: "./index.js" }),
+      );
+      await writeFile(path.join(installedPackage, "index.js"), 'export const label = "stale";\n');
+      await writeFile(dependency, 'export const label = "first";\n');
+      await withSourceImport(
+        (_entry, config) => runnerImport(entry, config),
+        async () => {
+          const { load, watchChange } = await localeHooks([
+            { find: "@fixture/labels", replacement: dependency },
+          ]);
+          const addWatchFile = vi.fn();
+          const readCatalog = async () => {
+            const base = await loadLocaleSource(load, baseLocaleId, addWatchFile);
+            return (await executeLocale(load, base)).catalog;
+          };
+          expect(await readCatalog()).toEqual(labeledCatalog("first"));
+          expect(watchedPaths(addWatchFile)).toContain(dependency);
+          await writeFile(dependency, 'export const label = "second";\n');
+          await watchChange.call({} as never, dependency, {} as never);
+          expect(await readCatalog()).toEqual(labeledCatalog("second"));
+        },
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 it("invalidates a resolved locale generation at build start", async () => {
   const catalogs = ["first", "second"].map((label) => ({

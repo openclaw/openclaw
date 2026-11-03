@@ -1,6 +1,6 @@
+import { dirname } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import repositoryManifest from "../../extensions/github-repositories/openclaw.plugin.json" with { type: "json" };
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -10,11 +10,15 @@ import {
   registerTestPlugin,
   registerVirtualTestPlugin,
 } from "../plugin-sdk/plugin-test-contracts.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginDefinition } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import {
+  loadBundledPluginFacade,
+  resolveBundledPluginPublicModulePath,
+} from "../test-utils/bundled-plugin-public-surface.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -32,6 +36,20 @@ const { default: github } = await loadBundledPluginFacade<{
 const { default: repositories } = await loadBundledPluginFacade<{
   default: OpenClawPluginDefinition;
 }>({ pluginId: "github-repositories", artifactBasename: "index.ts" });
+
+const loadedManifest = loadPluginManifest(
+  dirname(
+    resolveBundledPluginPublicModulePath({
+      pluginId: "github-repositories",
+      artifactBasename: "index.ts",
+    }),
+  ),
+  false,
+);
+if (!loadedManifest.ok) {
+  throw new Error(loadedManifest.error);
+}
+const repositoryManifest = loadedManifest.manifest;
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
 beforeEach(async () => {

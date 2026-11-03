@@ -18,7 +18,10 @@ await mkdir(outDir, { recursive: true });
 if ((await readdir(outDir)).length !== 0) {
   throw new Error("Use an empty, task-owned directory for the projection benchmark");
 }
-const fixture = path.join(root, "ui/src/test-helpers/control-ui-projection-fixture.tsx");
+const fixture = path.join(
+  root,
+  "extensions/github-repositories/browser/integration/resource-benchmark.ts",
+);
 const manifest: Plugin = {
   name: "control-ui-projection-benchmark-manifest",
   generateBundle(_options, bundle) {

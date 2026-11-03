@@ -6,6 +6,7 @@ import { hydrate, render, type JSX } from "@solidjs/web";
 import { createComponent } from "solid-js";
 import { trackSolidRoot } from "./solid-cleanup.ts";
 
+export { getQueriesForElement };
 export { cleanupSolid } from "./solid-cleanup.ts";
 
 // Testing Library advertises location but does not implement router integration.

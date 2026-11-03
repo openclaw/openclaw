@@ -1798,7 +1798,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   {
-    testFile: "src/gateway/worker-environments/repository-workspace-startup.test.ts",
+    testFile: "extensions/github-repositories/test/host/repository-workspace-startup.test.ts",
     watchGlobs: ["src/node-host/node-worker-journal.worker.ts"],
   },
   {

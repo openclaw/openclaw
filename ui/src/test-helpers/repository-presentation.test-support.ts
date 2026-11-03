@@ -1,20 +1,16 @@
 import type { ControlUiSessionPullRequestSnapshot } from "@openclaw/gateway-protocol";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { onTestFinished } from "vitest";
-import {
-  createSessionAccessoryMount,
-  createMobileSessionAccessoryMount,
-  createHovercardAccessoryMount,
-  createSidebarBadgeAccessory,
-  type RepositoryBrowserRuntime,
-} from "../../../extensions/github-repositories/browser/api.ts";
-import githubPlugin from "../../../extensions/github-repositories/browser/index.tsx";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { ApplicationContext } from "../app/context.ts";
-import "../plugins/control-ui-contributions.solid.tsx";
 import { createControlUiPluginHost } from "../plugins/control-ui-host.ts";
 import {
   ControlUiPluginRuntime,
   type ControlUiPluginOwner,
 } from "../plugins/control-ui-runtime.ts";
+import "../plugins/control-ui-contributions.solid.tsx";
+import { createTestGatewayClient } from "./gateway-client.ts";
+import { repositoryUi } from "./repository-module.ts";
 
 /** Real accessory mounts and host scoping; optional facts isolate component presentation from transport. */
 export function installRepositoryPresentation(
@@ -43,7 +39,6 @@ export function installRepositoryPresentation(
       revision: "synthetic-presentation",
       entryUrl: "/synthetic-repository-presentation.js",
       styles: [],
-      uiCapabilities: ["accessory", "action"],
     },
     client,
     abort: new AbortController(),
@@ -69,32 +64,66 @@ export function installRepositoryPresentation(
     context.gateway.snapshot.phase === "connected" &&
     context.gateway.snapshot.client === client;
   const base = createControlUiPluginHost(() => context, runtime, owner);
-  const listeners = new Set<() => void>();
+  const listeners = new Set<Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0]>();
   const host = base;
-  const repository: RepositoryBrowserRuntime | undefined = readSnapshot
-    ? {
-        read: readSnapshot,
-        observe(_target, listener) {
-          listeners.add(listener);
-          return () => listeners.delete(listener);
+  const interested = new Set<string>();
+  const publish = () => {
+    const snapshot = readSnapshot?.();
+    for (const listener of listeners) {
+      listener({
+        type: "event",
+        event: "controlUi.sessionPullRequests.changed",
+        payload: {
+          sessions: Object.fromEntries(
+            [...interested].map((key) => [
+              key,
+              snapshot ?? { status: "ready", pullRequests: [], rateLimited: false },
+            ]),
+          ),
         },
-        store: {
-          get: readSnapshot,
-          branchKnown: () => readSnapshot()?.branchRead !== false,
-          load: async () => readSnapshot(),
-          watch() {},
-          unwatch() {},
-          refresh: () => false,
-          dispose() {
-            listeners.clear();
-          },
-          subscribe(listener) {
-            listeners.add(listener);
-            return () => listeners.delete(listener);
-          },
-        },
+      });
+    }
+  };
+  const request = client.request;
+  const subscribeEvents = source.gateway.subscribeEvents;
+  const hello = source.gateway.snapshot.hello;
+  const originalFeatures = hello?.features;
+  if (readSnapshot) {
+    if (hello) {
+      hello.features = {
+        ...hello.features,
+        methods: [
+          ...new Set([...(hello.features?.methods ?? []), SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]),
+        ],
+      };
+    }
+    client.request = createTestGatewayClient(async (method, params, options) => {
+      if (method !== SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) {
+        return request.call(client, method, params, options);
       }
-    : undefined;
+      interested.clear();
+      const selection = asRecord(params);
+      for (const keys of [selection?.sessionKeys, selection?.passiveSessionKeys]) {
+        if (Array.isArray(keys)) {
+          for (const key of keys) {
+            if (typeof key === "string") {
+              interested.add(key);
+            }
+          }
+        }
+      }
+      queueMicrotask(publish);
+      return { subscribed: true };
+    }).request;
+    source.gateway.subscribeEvents = (listener) => {
+      listeners.add(listener);
+      const stop = subscribeEvents.call(source.gateway, listener);
+      return () => {
+        listeners.delete(listener);
+        stop();
+      };
+    };
+  }
   const plugins: ApplicationContext["plugins"] = {
     ...previous,
     get errors() {
@@ -117,43 +146,18 @@ export function installRepositoryPresentation(
   const activationHost = host.scopeView(owner.abort.signal);
   let activationCleanup: (() => void) | undefined;
   let live = true;
-  const ready = repository
-    ? Promise.resolve()
-    : Promise.resolve(githubPlugin.activate?.(activationHost)).then((cleanup) => {
-        if (typeof cleanup !== "function") {
-          return;
-        }
-        if (live) {
-          activationCleanup = cleanup;
-        } else {
-          cleanup();
-        }
-      });
-  if (repository) {
-    runtime.register(owner, "accessories", {
-      id: "repository-hovercard",
-      placement: "session-hovercard",
-      mount: createHovercardAccessoryMount(repository),
-    });
-    runtime.register(owner, "accessories", createSidebarBadgeAccessory(activationHost, repository));
-    runtime.register(owner, "accessories", {
-      id: "repository",
-      placement: "session-context",
-      mount: createSessionAccessoryMount(activationHost, repository),
-    });
-    runtime.register(owner, "accessories", {
-      id: "repository-environment",
-      placement: "session-environment",
-      mount: createSessionAccessoryMount(activationHost, repository, true),
-    });
-    for (const placement of ["root", "page", "activity"] as const) {
-      runtime.register(owner, "accessories", {
-        id: `repository-mobile-${placement}`,
-        placement: `session-mobile-${placement}`,
-        mount: createMobileSessionAccessoryMount(activationHost, repository, placement),
-      });
-    }
-  }
+  const ready = Promise.resolve(repositoryUi.default?.activate?.(activationHost)).then(
+    (cleanup) => {
+      if (typeof cleanup !== "function") {
+        return;
+      }
+      if (live) {
+        activationCleanup = cleanup;
+      } else {
+        cleanup();
+      }
+    },
+  );
   const dispose = () => {
     if (!live) {
       return;
@@ -167,6 +171,13 @@ export function installRepositoryPresentation(
     }
     owner.disposers.clear();
     listeners.clear();
+    if (readSnapshot) {
+      client.request = request;
+      source.gateway.subscribeEvents = subscribeEvents;
+      if (hello) {
+        hello.features = originalFeatures;
+      }
+    }
     runtime.dispose();
   };
   retirement.current = dispose;
@@ -175,11 +186,7 @@ export function installRepositoryPresentation(
     context,
     host,
     ready,
-    notify() {
-      for (const listener of listeners) {
-        listener();
-      }
-    },
+    notify: publish,
     dispose,
   };
 }

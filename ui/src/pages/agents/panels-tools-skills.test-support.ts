@@ -1,8 +1,6 @@
-import { createComponent, flush } from "solid-js";
+import { flush } from "solid-js";
 import { vi } from "vitest";
 import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../api/types.ts";
-import { githubIdentityViewFixture } from "../../plugins/github-repositories-integration/github-identity.test-support.ts";
-import { GitHubIdentity } from "../../plugins/github-repositories-integration/github-settings.test-support.tsx";
 import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
 import type { AgentTools } from "./panels-tools-skills.tsx";
 
@@ -10,13 +8,6 @@ type Params = Parameters<typeof AgentTools>[0] & {
   catalog: ToolsCatalogResult | null;
   effective: ToolsEffectiveResult | null;
 };
-
-/** Render the actual plugin through the generic Settings slot, never a native identity prop. */
-export function renderIdentitySettings(
-  identity: Parameters<typeof GitHubIdentity>[0]["identity"] = githubIdentityViewFixture(),
-) {
-  return () => createComponent(GitHubIdentity, { identity, onOpenConnections: vi.fn() });
-}
 
 /** Reveal the groups whose tool controls a test exercises. */
 export function openToolGroups(container: HTMLElement) {
@@ -58,7 +49,7 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     effectiveRequest: null,
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: true,
-    renderSettings: renderIdentitySettings(),
+    renderSettings: () => document.createElement("fixture-agent-settings"),
     onProfileChange: () => undefined,
     onOverridesChange: () => undefined,
     ...overrides,

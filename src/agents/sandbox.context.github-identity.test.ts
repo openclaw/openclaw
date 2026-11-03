@@ -2,12 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import {
-  resolveManagedGitHubProfileDir,
-  writeManagedGitHubProfileFiles,
-} from "../../extensions/github-repositories/tool-identity-api.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadGitHubProfileFixture } from "../gateway/github-repository-fixture-api.test-support.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
@@ -21,6 +18,9 @@ import type { CreateSandboxBackendParams } from "./sandbox/backend.types.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolvePreparedSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveSandboxMountSelection } from "./sandbox/workspace-mounts.js";
+
+const { resolveManagedGitHubProfileDir, writeManagedGitHubProfileFiles } =
+  await loadGitHubProfileFixture();
 
 const backend = vi.hoisted(() =>
   vi.fn(async (_params: CreateSandboxBackendParams) => ({

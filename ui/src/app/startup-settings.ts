@@ -107,8 +107,8 @@ export function resolveApplicationStartupSettings(
   // Older Android WebViews cannot inject at document start. This public marker
   // selects native-only auth immediately; authority arrives over a main-frame port.
   // Keep the marker in the URL so a reload cannot start a browser pairing flow.
-  const nativePortGateway =
-    !remoteIngress && new URLSearchParams(location.hash.replace(/^#/, "")).get("nativeControlAuth");
+  const hashParams = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const nativePortGateway = !remoteIngress && hashParams.get("nativeControlAuth");
   const nativeAuth =
     injectedNativeAuth ??
     (nativePortGateway ? { gatewayUrl: nativePortGateway, nativeConnectAuth: true } : undefined);
@@ -184,12 +184,7 @@ export function resolveApplicationStartupSettings(
     };
   }
 
-  const url = new URL(
-    `${location.pathname}${location.search}${location.hash}`,
-    "http://openclaw.local",
-  );
-  const params = new URLSearchParams(url.search);
-  const hashParams = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+  const params = new URLSearchParams(location.search);
   const gatewayUrlRaw = remoteIngress
     ? null
     : (params.get("gatewayUrl") ?? hashParams.get("gatewayUrl"));
@@ -197,7 +192,6 @@ export function resolveApplicationStartupSettings(
   const gatewayUrlChanged = Boolean(nextGatewayUrl && nextGatewayUrl !== settings.gatewayUrl);
   const queryToken = params.get("token");
   const hashToken = hashParams.get("token");
-  const hasTokenParam = hashToken != null || queryToken != null;
   const token = remoteIngress ? undefined : normalizeOptionalString(hashToken ?? queryToken);
   const hasBootstrapTokenParam = !remoteIngress && hashParams.has("bootstrapToken");
   const bootstrapToken = normalizeOptionalString(hashParams.get("bootstrapToken"));
@@ -208,18 +202,15 @@ export function resolveApplicationStartupSettings(
     location.pathname,
     inferBasePathFromPathname(location.pathname),
   );
-  const shouldResetSessionForToken = Boolean(token && !sessionPath && !gatewayUrlChanged);
-  if (hasTokenParam) {
-    if (queryToken != null) {
-      console.warn(
-        "[openclaw] Auth token passed as query parameter (?token=). Use URL fragment instead: #token=<token>. Query parameters may appear in server logs.",
-      );
-    }
-    if (token && gatewayUrlChanged) {
-      pendingGatewayToken = token;
-    } else if (token) {
-      updateSettings({ token });
-    }
+  if (queryToken != null) {
+    console.warn(
+      "[openclaw] Auth token passed as query parameter (?token=). Use URL fragment instead: #token=<token>. Query parameters may appear in server logs.",
+    );
+  }
+  if (token && gatewayUrlChanged) {
+    pendingGatewayToken = token;
+  } else if (token) {
+    updateSettings({ token });
   }
 
   if (hasBootstrapTokenParam) {
@@ -230,16 +221,16 @@ export function resolveApplicationStartupSettings(
         : null;
   }
 
-  if (shouldResetSessionForToken) {
+  if (token && !sessionPath && !gatewayUrlChanged) {
     updateSettings({
       sessionKey: "main",
       lastActiveSessionKey: "main",
     });
   }
 
-  if (gatewayUrlRaw != null) {
-    pendingGatewayUrl = gatewayUrlChanged ? nextGatewayUrl : null;
-    if (!gatewayUrlChanged || pendingBootstrapToken) {
+  if (gatewayUrlChanged) {
+    pendingGatewayUrl = nextGatewayUrl;
+    if (pendingBootstrapToken) {
       pendingGatewayToken = null;
     }
   }
@@ -258,10 +249,15 @@ export function resolveApplicationStartupSettings(
     }
   }
 
+  let nextLocation = location;
   if (shouldCleanUrl) {
-    url.search = params.toString();
-    const nextHash = hashParams.toString();
-    url.hash = nextHash ? `#${nextHash}` : "";
+    const search = params.toString();
+    const hash = hashParams.toString();
+    nextLocation = {
+      pathname: location.pathname,
+      search: search ? `?${search}` : "",
+      hash: hash ? `#${hash}` : "",
+    };
   }
 
   return {
@@ -272,13 +268,7 @@ export function resolveApplicationStartupSettings(
     pendingBootstrapToken,
     pendingBootstrapProfile,
     nativeClient,
-    location: shouldCleanUrl
-      ? {
-          pathname: url.pathname,
-          search: url.search,
-          hash: url.hash,
-        }
-      : location,
+    location: nextLocation,
     changed,
   };
 }
