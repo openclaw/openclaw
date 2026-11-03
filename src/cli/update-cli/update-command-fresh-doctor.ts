@@ -87,6 +87,10 @@ import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-out
 
 export { withPrePluginUpdateDoctorEnv } from "./update-command-fresh-doctor-env.js";
 
+// Isolated workers serve an older updater whose executor fence is not admitted here.
+const servesOlderUpdater = () =>
+  Reflect.get(globalThis, Symbol.for("openclaw.updateCompat.olderUpdater")) === true;
+
 export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   phase: "pre-plugin" | "post-plugin";
   root: string;
@@ -199,7 +203,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       env: { ...commandOptions.env, ...sectionTiming.env },
     };
     const doctorArgv =
-      doctorConfigWrites && executorFence && runId
+      doctorConfigWrites && executorFence && runId && !servesOlderUpdater()
         ? [...workerCommand, "--doctor"]
         : [params.nodeRunner ?? resolveNodeRunner(), ...args];
     doctorStartedAt = Date.now();
@@ -211,7 +215,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       exitCode: null,
     };
     let child: Awaited<ReturnType<typeof runUpdateDoctorProcess>>;
-    if (doctorConfigWrites && executorFence && runId) {
+    if (doctorConfigWrites && executorFence && runId && !servesOlderUpdater()) {
       const snapshot = await readUpdateConfigSnapshot(resolveConfigPath());
       assertCurrent();
       child = await withUpdateDoctorChild(

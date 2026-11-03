@@ -46,7 +46,7 @@ it.each([
   });
   const legacy = await import(pathToFileURL(path.join(root, "dist", chunk.path)).href);
   for (const { exported, origin } of chunk.exports) {
-    expect(legacy[exported]()).toBe(origin.symbol);
+    expect(await legacy[exported]()).toBe(origin.symbol);
   }
 });
 
