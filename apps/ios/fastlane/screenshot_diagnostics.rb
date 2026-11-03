@@ -3,6 +3,14 @@ class ScreenshotDiagnostics
   attr_reader :events
 
   PROCESSES = %w[OpenClaw OpenClawUITests-Runner testmanagerd DTServiceHub Simulator com.apple.CoreSimulator.CoreSimulatorService].freeze
+  STARTUP_MARKERS = {
+    "commandHeader" => "Command line invocation:",
+    "packageGraphStarted" => "Resolve Package Graph",
+    "packageGraphResolved" => "Resolved source packages:",
+    "resultBundleAnnounced" => "Writing result bundle at path:",
+    "runnerStarted" => "[Default] Running tests...",
+    "suiteStarted" => "Test Suite 'Selected tests' started at"
+  }.freeze
 
   def initialize(&persist)
     @events = []
@@ -15,6 +23,15 @@ class ScreenshotDiagnostics
     event = { "phase" => phase, "deviceName" => device, "startedAt" => started_at.utc.iso8601 }
     @events << event
     persist
+    if log_path
+      event["startupProgressSeconds"] = {}
+      observer = Thread.new do
+        loop do
+          observe_startup_progress(log_path, started, event.fetch("startupProgressSeconds"))
+          sleep(1)
+        end
+      end
+    end
     result = yield
     event["outcome"] = "succeeded"
     result
@@ -23,7 +40,9 @@ class ScreenshotDiagnostics
     event["crashes"] = crashes_since(started_at, udid)
     raise
   ensure
+    observer&.kill&.join
     if event
+      observe_startup_progress(log_path, started, event.fetch("startupProgressSeconds")) if log_path
       event["durationSeconds"] = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).round(2)
       event["startup"] = startup_facts(log_path) if log_path
       persist
@@ -31,6 +50,20 @@ class ScreenshotDiagnostics
   end
 
   private
+
+  # Temporary diagnostic: observe the existing file without piping native output.
+  # These are arrival times (up to one poll late); native buffering can delay them.
+  def observe_startup_progress(path, started, progress)
+    File.foreach(path) do |line|
+      line = line.scrub
+      STARTUP_MARKERS.each do |name, marker|
+        next if progress.key?(name) || !line.include?(marker)
+        progress[name] = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).round(2)
+      end
+    end
+  rescue SystemCallError
+    nil
+  end
 
   def persist
     @persist.call
