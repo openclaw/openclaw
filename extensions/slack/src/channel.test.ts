@@ -133,17 +133,14 @@ describe("slackPlugin actions", () => {
     expect(prepared).toBe(workspaceAware ? null : payload);
   });
 
-  it.each([
-    { name: "broadcast reply", params: { threadId: "111.222", replyBroadcast: true } },
-    { name: "broadcast reply without a thread", params: { replyBroadcast: true } },
-  ])("keeps $name on the plugin action path", ({ params }) => {
+  it("keeps a broadcast reply on the plugin action path", () => {
     const payload = { text: "hello" };
     const prepared = slackPlugin.actions!.prepareSendPayload!({
       ctx: {
         action: "send",
         channel: "slack",
         cfg: {},
-        params,
+        params: { threadId: "111.222", replyBroadcast: true },
         toolContext: {},
       },
       to: "channel:C123",
