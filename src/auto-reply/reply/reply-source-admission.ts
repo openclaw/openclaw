@@ -81,6 +81,34 @@ export async function prepareReplySourceAdmission(params: {
   }
 }
 
+/** Required preflight can invoke models and tools before the reply runner exists. */
+export async function admitReplyMaintenance(
+  turn: {
+    readonly runId: string;
+    queued: FollowupRun;
+    operation: ReplyOperation;
+  },
+  sessionKey: string | undefined,
+  assertCurrent: () => void,
+): Promise<void> {
+  const execution = turn.queued.run.internalEventExecution;
+  await execution?.beforeScheduledStart?.(turn.runId);
+  assertCurrent();
+  // Maintenance owns the occurrence before effects, preventing pre-execution policy replay.
+  execution?.onStarted(turn.runId);
+  const automation = turn.queued.run.scheduledAutomation;
+  if (automation && sessionKey) {
+    automation.onExecutionStarted?.({
+      runId: turn.runId,
+      sessionId: turn.operation.sessionId,
+      sessionKey,
+      provider: turn.queued.run.provider,
+      model: turn.queued.run.model,
+    });
+    automation.onExecutionPhase?.({ jobId: automation.job.id, phase: "context_engine" });
+  }
+}
+
 /** Acquire caller-owned custody before publishing a queued execution. */
 export async function enqueueReplySourceAdmission(params: {
   options?: Pick<InternalGetReplyOptions, "turnAdoptionLifecycle" | "userTurnTranscriptRecorder">;
