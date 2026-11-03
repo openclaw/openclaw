@@ -26,9 +26,13 @@ class ScreenshotDiagnostics
     if log_path
       event["startupProgressSeconds"] = {}
       observer = Thread.new do
+        saved = nil
         loop do
           observe_startup_progress(log_path, started, event.fetch("startupProgressSeconds"))
           observe_launch_progress(log_path, started, event)
+          observed = [event.fetch("startupProgressSeconds").length, event.fetch("launchProgress", {}).length]
+          persist if saved != observed
+          saved = observed
           sleep(1)
         end
       end
@@ -69,6 +73,7 @@ class ScreenshotDiagnostics
     return if Process.clock_gettime(Process::CLOCK_MONOTONIC) - started - launch.fetch("child-launched").fetch("observedSeconds") < 15
     @startup_sample_taken = true
     event["startupSample"] = { "outcome" => "interrupted", "requestedSeconds" => (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).round(2) }
+    persist
     sample_startup_child(path, parent, child, event.fetch("startupSample"))
   rescue SystemCallError
     nil
@@ -78,6 +83,7 @@ class ScreenshotDiagnostics
     began = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     identity_path = "#{path}.identity"
     sample_path = "#{path}.sample"
+    progress_path = "#{path}.sample-progress"
     identity = bounded_startup_probe(["/bin/ps", "-p", child.to_s, "-o", "ppid=,comm="], identity_path, 2)
     result["identityProbe"] = identity
     return result["outcome"] = "identity-unavailable" unless identity == "ok"
@@ -91,24 +97,52 @@ class ScreenshotDiagnostics
     else
       "unclassified-xcodebuild"
     end
-    result["outcome"] = bounded_startup_probe(["/usr/bin/sample", child.to_s, "1", "10", "-file", sample_path], File::NULL, 5)
+    progress = result["progressSeconds"] = {}
+    result["outcome"] = bounded_startup_probe(
+      ["/usr/bin/sample", child.to_s, "1", "10", "-file", sample_path], File::NULL, 5, error_output: progress_path
+    ) do |elapsed|
+      observe_sample_progress(progress_path, progress, elapsed)
+      # Collection stays one second. Only observed completion grants report time.
+      progress.key?("collectionCompleted") ? [progress.fetch("collectionCompleted") + 10, 15].min : 5
+    end
+    if result["outcome"] == "timeout"
+      result["timeoutPhase"] = progress.key?("collectionCompleted") ? "report-processing" : "attachment-or-collection"
+    end
     result["frames"] = sanitized_startup_frames(sample_path) if result["outcome"] == "ok"
   rescue SystemCallError
     result["outcome"] = "unavailable"
   ensure
     result["observerPausedSeconds"] = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - began).round(2)
-    FileUtils.rm_f([identity_path, sample_path])
+    FileUtils.rm_f([identity_path, sample_path, progress_path])
+    persist
+  end
+
+  def observe_sample_progress(path, progress, elapsed)
+    File.read(path, 16_384).to_s.each_line do |line|
+      name = if line.match?(/\ASampling process \d+ for 1 second with 10 milliseconds of run time between samples\s*\z/)
+        "collectionAnnounced"
+      elsif line.strip == "Sampling completed, processing symbols..."
+        "collectionCompleted"
+      elsif line.match?(/\ASample analysis of process \d+ written to file /)
+        "reportWritten"
+      end
+      progress[name] ||= elapsed.round(2) if name
+    end
+  rescue SystemCallError
+    nil
   end
 
   # The probe owns only its own process group. Its deadline never kills Xcode.
-  def bounded_startup_probe(arguments, output, seconds)
+  def bounded_startup_probe(arguments, output, seconds, error_output: File::NULL)
     reaped = nil
-    child = Process.spawn(*arguments, out: output, err: File::NULL, pgroup: true)
-    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + seconds
+    child = Process.spawn(*arguments, out: output, err: error_output, pgroup: true)
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     loop do
       reaped, status = Process.waitpid2(child, Process::WNOHANG)
+      elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+      limit = block_given? ? yield(elapsed) : seconds
       return status.success? ? "ok" : "failed" if reaped
-      return "timeout" if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+      return "timeout" if elapsed >= limit
       sleep(0.05)
     end
   ensure
