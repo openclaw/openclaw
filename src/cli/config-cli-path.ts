@@ -520,6 +520,45 @@ export function assertNonDestructiveReplacement(params: {
 
 type UnsetAtPathResult = { removed: true; leafContainer: "array" | "object" } | { removed: false };
 
+/**
+ * Prunes plain-object parents that a just-completed unset emptied, matching the
+ * write path's `unsetPathForWriteAt` semantics: empty objects are removed
+ * recursively, empty object elements are spliced out of arrays, but empty
+ * arrays themselves are preserved (an empty allowlist is a meaningful value).
+ */
+function pruneEmptyObjectParents(root: Record<string, unknown>, path: PathSegment[]): void {
+  for (let depth = path.length - 2; depth >= 0; depth -= 1) {
+    const container = getAtPath(root, path.slice(0, depth)).value;
+    const key = path.at(depth);
+    if (container === undefined || key === undefined) {
+      return;
+    }
+    if (Array.isArray(container)) {
+      const index = parseConfigPathArrayIndex(key);
+      if (index === undefined || index >= container.length) {
+        return;
+      }
+      const child = container[index];
+      if (!isPlainRecord(child) || Object.keys(child).length !== 0) {
+        return;
+      }
+      container.splice(index, 1);
+      continue;
+    }
+    if (!isPlainRecord(container)) {
+      return;
+    }
+    if (!Object.hasOwn(container, key)) {
+      return;
+    }
+    const child = container[key];
+    if (!isPlainRecord(child) || Object.keys(child).length !== 0) {
+      return;
+    }
+    delete container[key];
+  }
+}
+
 export function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetAtPathResult {
   const last = path.at(-1);
   if (last === undefined) {
@@ -543,5 +582,6 @@ export function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]):
     return { removed: false };
   }
   delete record[last];
+  pruneEmptyObjectParents(root, path);
   return { removed: true, leafContainer: "object" };
 }
