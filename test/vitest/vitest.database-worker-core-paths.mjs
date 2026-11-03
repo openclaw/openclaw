@@ -2,6 +2,7 @@
 export const databaseWorkerCoreTestFiles = [
   "src/infra/backup-local-companion.test.ts",
   "src/commands/backup-verify-completeness.test.ts",
+  "src/infra/approval-session-audience.sqlite.test.ts",
   "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
   "src/gateway/server-methods.workshop-contract.test.ts",
   "src/cli/skills-cli.workshop-contract.test.ts",
@@ -451,6 +452,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/channels/dead-letters.test.ts",
   "src/commands/doctor-channel-ingress.test.ts",
   "src/plugins/registry.runtime-config.test.ts",
+  "src/plugins/registry-runtime.skill-usage.test.ts",
   "src/plugins/contracts/host-hook-state.identity.test.ts",
   "src/plugins/contracts/host-hooks.contract.test.ts",
   "src/acp/control-plane/manager.owner.test.ts",

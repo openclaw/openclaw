@@ -14,6 +14,9 @@ who contributed, with links to the source changes.
 ### October 2026
 
 <CardGroup cols={2}>
+  <Card title="v2026.10.10" href="/releases/2026.10.10">
+    Chat Details, experimental Advisor, split speech mode for browser Talk, and other improvements and fixes.
+  </Card>
   <Card title="v2026.10.9 (latest)" href="/releases/2026.10.9">
     Security remediations and fixes for updates, database recovery, workspace restrictions, and sessions.
   </Card>

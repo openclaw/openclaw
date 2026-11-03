@@ -770,7 +770,6 @@ async function renderSourceRootHelpText(
   }
   const moduleUrl = pathToFileURL(path.join(rootDir, "src/cli/program/root-help.ts")).href;
   const renderOptions = {
-    pluginSdkResolution: "src",
     config: renderContext.config,
     env: renderContext.env,
   } satisfies RootHelpRenderOptions;

@@ -88,6 +88,7 @@ const repositoryScriptEntries = [
   "scripts/ci-shard-timings-refresh.mts!",
   "scripts/ci-test-observations.mjs!",
   "scripts/ci-adaptive-select.mjs!",
+  "scripts/ci-adaptive-costs.mjs!",
   // The scheduled-run execution context design invokes this development replay by path.
   "scripts/dev/cron-context-replay.mts!",
   // #183131 invokes this fresh-process cron flake workload by path.
@@ -137,6 +138,8 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-cold-load.ts!",
   // The history-depth benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-history-depth.ts!",
+  // The hosted Doctor benchmark guide invokes this opt-in CLI by path.
+  "scripts/perf/hosted-doctor-measure.mts!",
   // scripts/control-ui-retention/README.md invokes this opt-in production census.
   "scripts/control-ui-retention/retention-suite.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
