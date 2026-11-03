@@ -115,7 +115,6 @@ export default class VitestResourceReporter implements Reporter {
         pool: ctx.config.pool,
         isolate: ctx.config.isolate,
         maxWorkers: ctx.config.maxWorkers,
-        fileParallelism: ctx.config.fileParallelism,
         testTimeout: ctx.config.testTimeout,
         hookTimeout: ctx.config.hookTimeout,
         retry: ctx.config.retry,
