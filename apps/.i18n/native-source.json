@@ -1185,6 +1185,7 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.2fd185478c0c645b","source":"Session Settings"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.44dd56e8b9027fab","source":"Session Status"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.a81c865ace06052c","source":"Sessions"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.3585b12344219e76","source":"Skill Library"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.69b21abc2f4ed0de","source":"Skill Read"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.e9dccc167c5cf85b","source":"Skill Search"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json","kind":"tool-display","surface":"android","id":"native.android.5ff7428eec141e51","source":"Skill Workshop"},
