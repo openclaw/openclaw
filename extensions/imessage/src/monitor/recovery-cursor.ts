@@ -7,6 +7,7 @@
 // lower-rowid database silently suppresses every row in it forever (#99638).
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveIMessageHomeDir } from "../cli-path.js";
 import { getIMessageRuntime } from "../runtime.js";
 
@@ -33,7 +34,7 @@ function openRecoveryCursorStore() {
 // Canonicalize a local chat.db path (expand a leading ~, then resolve) so the
 // implicit default and any explicit spelling of the same file share one identity.
 function normalizeLocalDbPath(dbPath: string): string {
-  let resolved = dbPath.trim();
+  let resolved = dbPath;
   if (resolved.startsWith("~")) {
     const home = resolveIMessageHomeDir();
     if (home) {
@@ -58,9 +59,9 @@ export function resolveIMessageRecoveryCursorDbIdentity(params: {
   const remoteHost = params.remoteHost?.trim();
   if (remoteHost) {
     // Remote paths cannot be resolved locally; key by host + raw remote path.
-    return `remote:${remoteHost}:${params.dbPath?.trim() || "default"}`;
+    return `remote:${remoteHost}:${readNonBlankString(params.dbPath) ?? "default"}`;
   }
-  const dbPath = params.dbPath?.trim();
+  const dbPath = readNonBlankString(params.dbPath);
   if (dbPath) {
     return `local:${normalizeLocalDbPath(dbPath)}`;
   }
@@ -68,7 +69,7 @@ export function resolveIMessageRecoveryCursorDbIdentity(params: {
   // resolve it to the same concrete path an explicit config would spell. A
   // custom cliPath (e.g. an SSH wrapper whose host is not auto-detected) can
   // front a distinct database, so keep those distinct instead.
-  const cliPath = params.cliPath?.trim();
+  const cliPath = readNonBlankString(params.cliPath);
   const isDefaultCli = !cliPath || cliPath === "imsg" || path.basename(cliPath) === "imsg";
   if (isDefaultCli) {
     const home = resolveIMessageHomeDir();

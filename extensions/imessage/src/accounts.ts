@@ -8,7 +8,10 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageAccountConfig } from "./account-types.js";
 import {
   expandIMessageUserPath,
@@ -90,8 +93,8 @@ export function resolveIMessageAccount(params: {
   const accountEnabled = merged.enabled !== false;
   const configured = Boolean(
     merged.enabled === true ||
-    merged.cliPath?.trim() ||
-    merged.dbPath?.trim() ||
+    readNonBlankString(merged.cliPath) ||
+    readNonBlankString(merged.dbPath) ||
     merged.service ||
     merged.sendTransport ||
     merged.region?.trim() ||
@@ -116,11 +119,11 @@ export function resolveIMessageAccount(params: {
 }
 
 function normalizeIMessageCliPath(value: string | undefined | null): string {
-  return value?.trim() || "imsg";
+  return readNonBlankString(value) ?? "imsg";
 }
 
 function normalizeIMessageDbPath(value: string | undefined | null): string {
-  return value?.trim() ?? "";
+  return readNonBlankString(value) ?? "";
 }
 
 // Stable signature for the local Messages backend an iMessage account targets.
@@ -240,8 +243,8 @@ export function hasExclusiveIMessageLocalDatabase(params: {
       continue;
     }
     const candidateDbPath = resolveLocalIMessageChatDbPath({
-      cliPath: candidate.config.cliPath?.trim() || "imsg",
-      dbPath: candidate.config.dbPath?.trim() || undefined,
+      cliPath: readNonBlankString(candidate.config.cliPath) ?? "imsg",
+      dbPath: readNonBlankString(candidate.config.dbPath),
     });
     if (!candidateDbPath) {
       return false;
