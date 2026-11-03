@@ -17,6 +17,10 @@ import {
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeClawRouterRootUrl } from "./base-url.js";
+import {
+  readClawRouterCapabilityOffers,
+  type ClawRouterCapabilityOffer,
+} from "./capability-offers.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { CLAWROUTER_ROUTE_METADATA_KEY as ROUTE_METADATA_KEY } from "./provider-policy-api.js";
 
@@ -65,6 +69,7 @@ type CatalogProvider = {
   routes: CatalogRoute[];
   models: unknown[];
   hostedWebSearchModels: Set<string>;
+  nativeHttpOffers: ClawRouterCapabilityOffer[];
 };
 
 type RouteMetadata = {
@@ -88,12 +93,23 @@ export function normalizeClawRouterReasoningEfforts(
   return efforts.length > 0 ? efforts : undefined;
 }
 
-function readCatalogRows(body: unknown): readonly unknown[] {
-  const providers = asOptionalRecord(body)?.providers;
+function readCatalogRows(body: unknown, baseUrl: string): readonly unknown[] {
+  const catalog = asOptionalRecord(body);
+  const providers = catalog?.providers;
   if (!Array.isArray(providers)) {
     throw new Error("ClawRouter catalog response must contain providers[]");
   }
-  return providers;
+  const offers =
+    catalog?.version === "clawrouter.client-catalog.v1"
+      ? readClawRouterCapabilityOffers(body, baseUrl)
+      : [];
+  return providers.map((provider) => ({
+    provider,
+    nativeHttpOffers: offers.filter(
+      (offer) =>
+        offer.providerId === asOptionalRecord(provider)?.id && offer.routeKind === "native",
+    ),
+  }));
 }
 
 function parseCatalogRoute(value: unknown): CatalogRoute | undefined {
@@ -131,7 +147,8 @@ function parseCatalogInput(value: unknown): Array<"text" | "image"> | undefined 
 }
 
 function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
-  const row = asOptionalRecord(value);
+  const envelope = value as { provider: unknown; nativeHttpOffers: ClawRouterCapabilityOffer[] };
+  const row = asOptionalRecord(envelope.provider);
   const id = normalizeOptionalString(row?.id);
   const nativeBaseUrl = normalizeOptionalString(row?.nativeBaseUrl);
   const isFusion = id === "clawrouter" && nativeBaseUrl === "/v1" && row?.openaiCompatible === true;
@@ -161,6 +178,7 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
     displayName: normalizeOptionalString(row?.displayName) ?? id,
     openaiCompatible: row?.openaiCompatible === true,
     nativeBaseUrl,
+    nativeHttpOffers: envelope.nativeHttpOffers,
     routes: Array.isArray(row?.routes)
       ? row.routes.map(parseCatalogRoute).filter((route): route is CatalogRoute => Boolean(route))
       : [],
@@ -211,7 +229,7 @@ type ResolveNativeModelFacts = Awaited<ReturnType<typeof loadBundledModelIdentit
 
 // Upstream catalogs whose first-party model facts are qualified for routed rows. A row
 // inherits only when its upstream id and wire API match the bundled native row exactly.
-const NATIVE_MODEL_FACT_PROVIDERS = new Set(["openai", "anthropic"]);
+const NATIVE_MODEL_FACT_PROVIDERS = new Set(["openai", "anthropic", "cohere"]);
 // Catalog providers whose id differs from the bundled provider serving the same native API.
 const BUNDLED_CATALOG_PROVIDER_IDS = new Map([["google-gemini", "google"]]);
 
@@ -248,7 +266,25 @@ function buildRoutedModel(
   let upstreamModel: string | undefined;
   let endpoint: string | undefined;
 
-  if (provider.openaiCompatible && capabilities.includes("llm.responses")) {
+  const cohereChat =
+    provider.id === "cohere" && capabilities.includes("llm.chat")
+      ? provider.nativeHttpOffers.find(
+          (offer) =>
+            offer.model?.id === id &&
+            offer.requestFormat === "openai.chat_completions" &&
+            offer.responseFormat === "openai.chat_completions" &&
+            offer.methods.includes("POST") &&
+            offer.url.endsWith("/chat/completions"),
+        )
+      : undefined;
+  if (cohereChat) {
+    api = "openai-completions";
+    baseUrl = cohereChat.url.slice(0, -"/chat/completions".length);
+    upstreamModel = upstream;
+  } else if (provider.id === "cohere") {
+    // Native v2 is a different wire contract; it must not acquire a compatibility alias.
+    return undefined;
+  } else if (provider.openaiCompatible && capabilities.includes("llm.responses")) {
     api = "openai-responses";
     endpoint = "responses";
     baseUrl = `${rootUrl}/v1`;
@@ -341,6 +377,7 @@ function buildRoutedModel(
     },
     reasoning:
       supportedReasoningEfforts !== undefined ||
+      (provider.id === "cohere" && nativeFacts?.compat?.supportsReasoningEffort === true) ||
       /(?:claude-|gemini-|gpt-5|gpt-oss|deepseek-v|reasoner|glm-5|grok-4|minimax-m)/u.test(
         qualifiedId,
       ),
@@ -417,7 +454,7 @@ export async function buildClawRouterProviderConfig(params: {
     endpoint: `${rootUrl}/v1/catalog`,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
-    readRows: readCatalogRows,
+    readRows: (body) => readCatalogRows(body, `${rootUrl}/v1`),
     ttlMs: CATALOG_CACHE_TTL_MS,
     auditContext: "clawrouter-model-discovery",
   });

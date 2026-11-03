@@ -25,11 +25,13 @@ import type { ProviderPlugin } from "../plugins/types.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 import {
   createGoogleThinkingPayloadWrapper,
+  createPayloadPatchStreamWrapper,
   createMoonshotThinkingWrapper,
   createToolStreamWrapper,
   resolveMoonshotThinkingType,
   streamWithPayloadPatch,
 } from "./provider-stream-shared.js";
+import { asOptionalObjectRecord } from "./string-coerce-runtime.js";
 export {
   applyAnthropicEphemeralCacheControlMarkers,
   composeProviderStreamWrappers,
@@ -43,6 +45,8 @@ export {
 
 /** Named stream-wrapper bundles that provider plugins can opt into without duplicating policy. */
 export type ProviderStreamFamily =
+  /** Applies the native Cohere Compatibility API instruction and tool-choice policy. */
+  | "cohere-compatibility"
   /** Applies Google thinking-level payload normalization. */
   | "google-thinking"
   /** Applies Kilocode proxy reasoning payload normalization. */
@@ -121,6 +125,20 @@ export function buildProviderStreamFamilyHooks(
   family: ProviderStreamFamily,
 ): ProviderStreamFamilyHooks {
   switch (family) {
+    case "cohere-compatibility":
+      return {
+        wrapStreamFn: (ctx) =>
+          createPayloadPatchStreamWrapper(ctx.streamFn, ({ payload }) => {
+            if (Array.isArray(payload.messages)) {
+              payload.messages = payload.messages.map((message) => {
+                const record = asOptionalObjectRecord(message);
+                return record?.role === "system" ? { ...record, role: "developer" } : message;
+              });
+            }
+            // Cohere chooses tools when omitted; its Compatibility API does not accept tool_choice.
+            delete payload.tool_choice;
+          }),
+      };
     case "google-thinking":
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
