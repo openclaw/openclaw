@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, onTestFailed } from "vitest";
 import { loadPersistedSharedAuthProfileStore } from "../../../../src/agents/auth-profiles/persisted.js";
+import { isProfileInCooldown } from "../../../../src/agents/auth-profiles/usage-state.js";
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { loadBundledPluginFacade } from "../../../../src/test-utils/bundled-plugin-public-surface.js";
@@ -128,12 +129,14 @@ it(
       const refusalDiagnosis = `${JSON.stringify(refused.terminal)}\n${serializedHistory}\n${currentInstance.logs()}`;
 
       // The stored credential is the fact the issue is about: a refusal that never reached
-      // the provider must not leave a cooldown window behind for every sibling agent.
+      // the provider must not open a cooldown window for every sibling agent. Read it through
+      // the owner's predicate, which resolves the persisted usageStats windows.
       const store = loadPersistedSharedAuthProfileStore(currentInstance.env);
       expect(store?.profiles[OAUTH_PROFILE_ID], refusalDiagnosis).toBeDefined();
-      expect(store?.profiles[OAUTH_PROFILE_ID], refusalDiagnosis).not.toHaveProperty(
-        "cooldownUntil",
-      );
+      const cooledAfterRefusal = store
+        ? isProfileInCooldown(store, OAUTH_PROFILE_ID, undefined, REPAIRED_MODEL_ID)
+        : true;
+      expect(cooledAfterRefusal, refusalDiagnosis).toBe(false);
 
       expect(refused.terminal.status, refusalDiagnosis).toBe("error");
       const failureNotices = (history.messages ?? [])
@@ -154,22 +157,29 @@ it(
 
       const entries = await readRequests(requestLog);
       const turnStarts = entries.filter((entry) => entry.method === "turn/start");
+      const laterStore = loadPersistedSharedAuthProfileStore(currentInstance.env);
+      const cooledAfterSibling = laterStore
+        ? isProfileInCooldown(laterStore, OAUTH_PROFILE_ID, undefined, REPAIRED_MODEL_ID)
+        : true;
       const proof = {
         turnStartCount: turnStarts.length,
         selectedModels: [...new Set(turnStarts.map((entry) => entry.params?.model))],
         laterStatus: sibling.terminal.status,
         laterReplySeen: laterSerialized.includes(LATER_TURN_TEXT),
-        profileCooledAt: store?.profiles[OAUTH_PROFILE_ID]?.cooldowns ?? null,
+        cooledAfterRefusal,
+        cooledAfterSibling,
       };
       console.log(`[gateway local refusal health proof] ${JSON.stringify(proof)}`);
       expect(proof).toEqual({
         // One refused run plus one ordinary later turn, on the same model and credential:
-        // neither the profile chain nor the model fallback chain was consumed.
+        // neither the profile chain nor the model fallback chain was consumed, and the
+        // shared profile never entered a cooldown window at any point.
         turnStartCount: 2,
         selectedModels: [REPAIRED_MODEL_ID],
         laterStatus: "ok",
         laterReplySeen: true,
-        profileCooledAt: null,
+        cooledAfterRefusal: false,
+        cooledAfterSibling: false,
       });
     } finally {
       client.stop();
