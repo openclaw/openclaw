@@ -80,6 +80,30 @@ describe("PostgreSQL conformance shards", () => {
     expect(JSON.parse(result.stdout)).toEqual(targets(["--shard", "2/3"]));
   });
 
+  it("flushes piped list output before exiting", () => {
+    const delayedOutput = `
+      const write = process.stdout.write.bind(process.stdout);
+      process.stdout.write = (...args) => {
+        setTimeout(() => write(...args), 10);
+        return false;
+      };
+    `;
+    const result = spawnSync(
+      resolveTestNodeExecPath(),
+      [
+        "--import",
+        `data:text/javascript,${encodeURIComponent(delayedOutput)}`,
+        runner,
+        "--engine",
+        "postgres",
+        "--list",
+      ],
+      { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" } },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(targets([]));
+  });
+
   it.each([
     ["--shard", "unknown"],
     ["--shard", "4/3"],

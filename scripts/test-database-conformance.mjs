@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
 import {
   assignPostgresConformanceShards,
@@ -118,7 +118,10 @@ if (shardCount) {
   targets = targets.filter((target) => selected.has(target));
 }
 if (values.list) {
-  console.log(JSON.stringify(explicitTargets ? forwarded : [...targets, ...forwarded], null, 2));
+  // Explicit exit must wait for piped output, or large inventories can be truncated.
+  await promisify(process.stdout.write.bind(process.stdout))(
+    `${JSON.stringify(explicitTargets ? forwarded : [...targets, ...forwarded], null, 2)}\n`,
+  );
   process.exit(0);
 }
 
