@@ -53,6 +53,14 @@ backup.
 
 ## Update implementation contract
 
+The candidate macOS app's narrow credential Doctor also completes pending local
+service-runtime intent migration before native startup selects a Gateway. This
+prevents an absent migration receipt from preserving the old seed after credential
+cutover advances shared state. The daemon migration owner keeps explicit pins and
+conflict refusals; preparation does not seed a runtime or start a service. Retry
+also reconciles intent when credential cutover already completed. The candidate
+must contain this fix; older installed updaters are unchanged.
+
 After draining database readers and writers, candidate Doctor inspects SQLite
 reclamation mode without copying databases whose WAL is empty or absent and whose
 rollback journal is absent. Immutable reads preserve source artifacts; databases
