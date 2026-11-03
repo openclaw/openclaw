@@ -78,7 +78,9 @@ describe("DevicesPage policy saves", () => {
       expect(save.disabled).toBe(outcome === "accepted");
       if (outcome === "rejected") {
         expect(page.container.textContent).toContain("Policy changed; reload before saving.");
-        const mode = page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]');
+        const mode = page.container.querySelector<HTMLSelectElement>(
+          'select[aria-label="Security"]',
+        );
         expect(mode?.value).toBe("allowlist");
       }
     },

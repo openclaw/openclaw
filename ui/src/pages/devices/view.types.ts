@@ -62,7 +62,6 @@ export type DevicesProps = Omit<
   onBindDefault: (nodeId: string | null) => void;
   onBindAgent: (agentId: string, nodeId: string | null) => void;
   onExecApprovalsTargetChange: (kind: "gateway" | "node", nodeId: string | null) => void;
-  onExecApprovalsSelectAgent: (agentId: string) => void;
   onExecApprovalsPatch: (path: Array<string | number>, value: unknown) => void;
   onExecApprovalsRemove: (path: Array<string | number>) => void;
   onSaveExecApprovals: () => void;

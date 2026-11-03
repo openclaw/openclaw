@@ -63,7 +63,7 @@ async function bindingControls(
   const researchSelect = section
     .locator(".settings-row")
     .filter({
-      has: page.locator(".settings-row__title").getByText("Research (research)", { exact: true }),
+      has: page.locator(".settings-row__title").getByText("Research", { exact: true }),
     })
     .getByRole("combobox");
   return { gateway, section, defaultSelect, researchSelect };
@@ -218,16 +218,16 @@ suite.define(() => {
         await expect(researchSelect).toBeEnabled();
 
         await gateway.deferNext("config.set");
-        await researchSelect.selectOption({ label: "Use default" });
+        await researchSelect.selectOption({ label: "Use default (Any node)" });
         const clearedAgent = requireRecord(
           (await gateway.waitForRequest("config.set", { after: 1 })).params,
         );
         expect(JSON.parse(String(clearedAgent.raw))).toEqual(makeConfig("", ""));
         await gateway.resolveDeferred("config.set");
         await expect(indicator).toContainText("Apply changes");
-        await expect(researchSelect).toHaveValue("__default__");
-        await expect(researchSelect).toBeDisabled();
-        await expect(defaultSelect).toBeDisabled();
+        await expect(
+          section.getByText("No nodes with system.run available.", { exact: true }),
+        ).toBeVisible();
         if (artifacts) {
           await page.screenshot({ path: path.join(artifacts, "unavailable-cleared.png") });
         }

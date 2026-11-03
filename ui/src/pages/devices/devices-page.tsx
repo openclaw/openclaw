@@ -397,7 +397,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       dataState.execApprovalsSnapshot = null;
       dataState.execApprovalsForm = null;
       dataState.execApprovalsDirty = false;
-      dataState.execApprovalsSelectedAgent = null;
+      dataState.execApprovalsError = null;
+      dataState.execApprovalsSavedNotice = false;
     }
   }
 
@@ -580,8 +581,11 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     devices.execApprovalsSnapshot = null;
     devices.execApprovalsForm = null;
     devices.execApprovalsDirty = false;
-    devices.execApprovalsSelectedAgent = null;
+    devices.execApprovalsError = null;
     publishData();
+    if (kind === "gateway" || nodeId) {
+      refreshExecApprovals();
+    }
   }
 
   function resolveExecApprovalsTarget(): ExecApprovalsTarget {
@@ -651,7 +655,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       execApprovalsDirty: devices.execApprovalsDirty,
       execApprovalsSnapshot: approvalsSnapshot(),
       execApprovalsForm: devices.execApprovalsForm,
-      execApprovalsSelectedAgent: devices.execApprovalsSelectedAgent,
+      execApprovalsError: devices.execApprovalsError,
+      execApprovalsSavedNotice: devices.execApprovalsSavedNotice,
       execApprovalsTarget,
       execApprovalsTargetNodeId,
       onDevicePairSetupOpen: () => {
@@ -686,10 +691,6 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       onBindDefault: (nodeId) => policyActions.bindNode(nodeId),
       onBindAgent: (agentId, nodeId) => policyActions.bindNode(nodeId, agentId),
       onExecApprovalsTargetChange: (kind, nodeId) => void changeExecApprovalsTarget(kind, nodeId),
-      onExecApprovalsSelectAgent: (agentId) => {
-        devices.execApprovalsSelectedAgent = agentId;
-        publishData();
-      },
       onExecApprovalsPatch: (path, value) =>
         runAdminTask((pageState) => updateExecApprovalsFormValue(pageState, path, value)),
       onExecApprovalsRemove: (path) =>

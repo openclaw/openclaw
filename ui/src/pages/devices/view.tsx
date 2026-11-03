@@ -15,18 +15,26 @@ import {
 import { resolveNodeIdFromCandidates } from "../../../../src/shared/node-match.js";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
+  SettingsEmpty,
   SettingsRow,
   SettingsSection,
   SettingsPage,
   SettingsLoadingSkeleton,
 } from "../../components/solid/settings-ui.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/devices.css";
 import type { DevicePolicyRead } from "./devices-policy-reads.ts";
 import { ExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.tsx";
 import { DeviceInventory } from "./view-inventory-readiness.tsx";
-import { MetaLine, resolveConfigAgents, resolveNodeTargets } from "./view-shared.tsx";
+import {
+  agentDisplayName,
+  PolicyActionRow,
+  PolicyFailure,
+  resolveConfigAgents,
+  resolveNodeTargets,
+} from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
@@ -62,7 +70,12 @@ export function DevicesView(props: DevicesProps) {
           </div>
         ) : undefined}
         <DeviceInventory {...props} />
-        <PolicyRead read={props.execApprovalsRead} onRetry={() => props.onLoadExecApprovals()}>
+        <PolicyRead
+          read={props.execApprovalsRead}
+          title={t("devices.execApprovals.title")}
+          failure={t("devices.execApprovals.loadFailed")}
+          onRetry={() => props.onLoadExecApprovals()}
+        >
           {(pending) => (
             <ExecApprovals
               {...approvalsState()}
@@ -71,7 +84,12 @@ export function DevicesView(props: DevicesProps) {
             />
           )}
         </PolicyRead>
-        <PolicyRead read={props.configRead} onRetry={() => props.onLoadConfig()}>
+        <PolicyRead
+          read={props.configRead}
+          title={t("devices.binding.execNodeBinding")}
+          failure={t("devices.binding.loadFailed")}
+          onRetry={() => props.onLoadConfig()}
+        >
           {(pending) => (
             <Bindings
               {...bindingState()}
@@ -87,18 +105,21 @@ export function DevicesView(props: DevicesProps) {
 
 function PolicyRead(props: {
   read: DevicePolicyRead;
+  title: string;
+  failure: string;
   onRetry: () => void;
   children: (pending: Accessor<boolean>) => JSX.Element;
 }) {
   return (
     <Errored
       fallback={(error) => (
-        <div class="callout danger" role="alert">
-          {String(error())}
-          <button class="btn" onClick={() => props.onRetry()}>
-            {t("common.retry")}
-          </button>
-        </div>
+        <SettingsSection title={props.title}>
+          <PolicyFailure
+            title={props.failure}
+            message={formatUiError(error())}
+            onRetry={props.onRetry}
+          />
+        </SettingsSection>
       )}
     >
       <Loading on={props.read.scope()} fallback={props.children(() => true)}>
@@ -127,29 +148,31 @@ function resolveBindingsState(input: DevicesProps) {
   };
 }
 
+/** Bindings autosave like the rest of config; the settings save indicator reports them. */
 function Bindings(props: BindingState) {
   const supportsBinding = () => props.nodes.length > 0;
-  const rows = (
-    <>
-      {props.connected && !props.canAdmin ? (
-        <SettingsRow title={t("devices.readOnly.adminRequired")} />
-      ) : undefined}
+  const hasBinding = () =>
+    props.defaultBinding !== null || props.agents.some((agent) => agent.binding !== null);
+  return (
+    <SettingsSection
+      title={t("devices.binding.execNodeBinding")}
+      description={t("devices.binding.execNodeBindingSubtitle")}
+    >
       {props.configFormMode === "raw" ? (
-        <SettingsRow title={t("devices.binding.formModeHint")} />
+        <PolicyActionRow description={t("devices.binding.formModeHint")} />
       ) : undefined}
       {!props.ready ? (
-        <SettingsRow
-          title={t("devices.binding.loadConfigHint")}
-          control={
-            <button
-              class="btn"
-              disabled={!props.connected || props.configLoading}
-              onClick={() => props.onLoadConfig()}
-            >
-              {props.configLoading ? t("common.loading") : t("common.loadConfig")}
+        props.configLoading ? (
+          <PolicyActionRow description={t("common.loading")} />
+        ) : (
+          <PolicyActionRow description={t("devices.binding.loadConfigHint")}>
+            <button class="btn" disabled={!props.connected} onClick={() => props.onLoadConfig()}>
+              {t("common.loadConfig")}
             </button>
-          }
-        />
+          </PolicyActionRow>
+        )
+      ) : !supportsBinding() && !hasBinding() ? (
+        <SettingsEmpty message={t("devices.binding.noNodes")} />
       ) : (
         <>
           <SettingsRow
@@ -170,37 +193,15 @@ function Bindings(props: BindingState) {
           </For>
         </>
       )}
-    </>
-  );
-  return (
-    <SettingsSection
-      title={t("devices.binding.execNodeBinding")}
-      description={t("devices.binding.execNodeBindingSubtitle")}
-    >
-      {rows}
     </SettingsSection>
   );
 }
 
 function AgentBinding(props: BindingState & { agent: BindingAgent }) {
-  const bindingValue = () => props.agent.binding ?? "__default__";
-  const label = () =>
-    props.agent.name?.trim() ? `${props.agent.name} (${props.agent.id})` : props.agent.id;
   return (
     <SettingsRow
-      title={label()}
-      description={
-        <MetaLine
-          parts={[
-            props.agent.isDefault ? t("devices.binding.defaultAgent") : t("devices.binding.agent"),
-            bindingValue() === "__default__"
-              ? t("devices.binding.usesDefault", {
-                  node: props.defaultBinding ?? t("devices.binding.any"),
-                })
-              : t("devices.binding.override", { node: props.agent.binding ?? "" }),
-          ]}
-        />
-      }
+      title={agentDisplayName(props.agent)}
+      description={props.agent.isDefault ? t("devices.binding.defaultAgent") : undefined}
       control={<BindingSelect {...props} agent={props.agent} />}
     />
   );
@@ -253,7 +254,11 @@ function BindingSelect(props: BindingState & { agent: BindingAgent | null }) {
       options={[
         {
           value: sentinel(),
-          label: t(isDefault() ? "devices.binding.anyNode" : "devices.binding.useDefault"),
+          label: isDefault()
+            ? t("devices.binding.anyNode")
+            : t("devices.binding.useDefaultValue", {
+                node: props.defaultBinding ?? t("devices.binding.anyNode"),
+              }),
         },
         ...options().map((node) => ({
           value: node.id,
