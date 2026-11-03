@@ -484,25 +484,19 @@ export function createAgentsPageState(
     });
   }
 
-  async function refreshAgents(mode: "ensure" | "refresh" | "save" = "refresh") {
+  async function refreshAgents(mode: "ensure" | "refresh" = "refresh") {
     const client = state.client;
-    if (!client || (mode === "save" && !canCall("config.set", "operator.admin"))) {
+    if (!client) {
       return;
     }
     const generation = state.requestGeneration;
     const agents = context.agents;
-    if (mode === "save" && !(await context.runtimeConfig.save())) {
-      return;
-    }
     await (mode === "ensure" ? agents.ensureList() : agents.refreshList());
     if (!isCurrentRequest(client, generation, undefined, { agents })) {
       return;
     }
-    if (mode === "save") {
-      effectiveTools.reset();
-    }
     syncAgentState(agents);
-    if (mode !== "refresh") {
+    if (mode === "ensure") {
       ensureSelectedIdentity();
     }
     loadActivePanelData();
@@ -611,7 +605,11 @@ export function createAgentsPageState(
       },
       pinnedAgentIds: navigation.read().pinnedAgentIds,
       onTogglePinnedAgent: (agentId: string) => togglePinnedAgent(context.navigation, agentId),
-      onRefresh: () => void refreshAgents(),
+      // Refresh is this page's one way to pick up edits made outside it, config included.
+      onRefresh: () => {
+        void refreshAgents();
+        void context.runtimeConfig.refresh({ background: true });
+      },
       onCreateAgent: () => {
         if (canCall("openclaw.chat", "operator.admin")) {
           context.navigate("custodian", { search: "?intent=new-agent" });
@@ -619,8 +617,7 @@ export function createAgentsPageState(
       },
       onSelectPanel: (panel: AgentsPanel) =>
         navigateToAgentPanel(context, selectedAgentId, state.agentsPanel, panel),
-      onConfigReload: () => context.runtimeConfig.discardDraft({ reloadOnly: true }),
-      onConfigSave: () => refreshAgents("save"),
+      onConfigRetry: () => void context.runtimeConfig.refresh(),
       onOpenMemoryImport: () => context.navigate("memory-import"),
       onOpenMemorySettings: () => context.navigate("memory"),
       onOpenAgentDefaults: () => context.navigate("ai-agents"),
