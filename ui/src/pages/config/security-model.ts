@@ -1,4 +1,5 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 type ExecSecurity = "deny" | "allowlist" | "full";
 type ExecAsk = "off" | "on-miss" | "always";
@@ -31,17 +32,13 @@ const EXEC_MODE_POLICIES: Record<string, { security: ExecSecurity; ask: ExecAsk 
   full: { security: "full", ask: "off" },
 };
 
-function readString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
 function resolveGatewayAuth(root: Record<string, unknown>, live: SecurityLiveFacts): string {
   if (live.authMode) {
     return live.authMode;
   }
   // Without a live answer only an explicit mode is known: env can still supply a credential.
   const auth = asConfigRecord(asConfigRecord(root.gateway)?.auth);
-  const mode = readString(auth?.mode);
+  const mode = normalizeOptionalString(auth?.mode);
   if (mode) {
     return mode;
   }
@@ -72,13 +69,13 @@ function resolveNetworkAccess(
     return { kind: "unknown" };
   }
   const gateway = asConfigRecord(root.gateway);
-  const tailscale = readString(asConfigRecord(gateway?.tailscale)?.mode);
+  const tailscale = normalizeOptionalString(asConfigRecord(gateway?.tailscale)?.mode);
   if (tailscale === "funnel" || tailscale === "serve") {
     return { kind: tailscale };
   }
-  const bind = readString(gateway?.bind);
+  const bind = normalizeOptionalString(gateway?.bind);
   if (bind === "custom") {
-    const host = readString(gateway?.customBindHost);
+    const host = normalizeOptionalString(gateway?.customBindHost);
     return host ? { kind: "custom", host } : { kind: "auto" };
   }
   if (bind === "lan" || bind === "tailnet" || bind === "auto") {
@@ -108,14 +105,15 @@ function resolveExecPolicy(root: Record<string, unknown>, live: SecurityLiveFact
     return "unknown";
   }
   const exec = asConfigRecord(asConfigRecord(root.tools)?.exec) ?? {};
-  const mode = readString(exec.mode);
+  const mode = normalizeOptionalString(exec.mode) ?? "";
   const modePolicy = EXEC_MODE_POLICIES[mode];
   if (mode && !modePolicy) {
     return mode;
   }
   const security = (modePolicy?.security ??
-    (readString(exec.security) || REQUESTED_EXEC_DEFAULTS.security)) as ExecSecurity;
-  const ask = (modePolicy?.ask ?? (readString(exec.ask) || REQUESTED_EXEC_DEFAULTS.ask)) as ExecAsk;
+    (normalizeOptionalString(exec.security) || REQUESTED_EXEC_DEFAULTS.security)) as ExecSecurity;
+  const ask = (modePolicy?.ask ??
+    (normalizeOptionalString(exec.ask) || REQUESTED_EXEC_DEFAULTS.ask)) as ExecAsk;
   const effectiveSecurity = stricterOf(
     EXEC_SECURITY_ORDER,
     security,
