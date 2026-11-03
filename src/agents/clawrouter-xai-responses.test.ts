@@ -1,14 +1,20 @@
-import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import plugin from "./index.js";
-import {
-  buildClawRouterProviderConfig,
-  normalizeClawRouterResolvedModel,
-} from "./provider-catalog.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { streamSimple } from "../llm/stream.js";
+import type { Context, Model } from "../llm/types.js";
+import { registerSingleProviderPlugin } from "../plugin-sdk/plugin-test-runtime.js";
+import { clearLiveCatalogCacheForTests } from "../plugin-sdk/provider-catalog-live-runtime.js";
+import * as ssrfRuntime from "../plugin-sdk/ssrf-runtime.js";
+import { resolveToolCallArgumentsEncoding } from "../plugins/provider-model-compat.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import { createHtmlEntityToolCallArgumentDecodingWrapper } from "./embedded-agent-runner/tool-call-argument-decoding.js";
+
+async function routerProvider() {
+  const entry = await loadBundledPluginFacade<{
+    default: Parameters<typeof registerSingleProviderPlugin>[0];
+  }>({ pluginId: "clawrouter", artifactBasename: "index.js" });
+  return registerSingleProviderPlugin(entry.default);
+}
 
 const MODEL = "xai/grok-4.7";
 const opaque = "synthetic-encrypted-reasoning";
@@ -132,21 +138,38 @@ describe("ClawRouter native xAI Responses replay", () => {
       finalUrl: "https://router.example/v1/catalog",
       release: async () => undefined,
     });
-    const discovered = await buildClawRouterProviderConfig({
-      baseUrl: "https://router.example/v1",
-      apiKey: "synthetic-router-key",
+    const provider = await routerProvider();
+    const key = "synthetic-router-key";
+    const discovered = await provider.catalog?.run({
+      config: {
+        models: {
+          providers: { clawrouter: { baseUrl: "https://router.example/v1", apiKey: key } },
+        },
+      } as unknown as OpenClawConfig,
+      env: {},
+      resolveProviderAuth: () => ({
+        apiKey: key,
+        discoveryApiKey: key,
+        mode: "api_key",
+        source: "profile",
+      }),
+      resolveProviderApiKey: () => ({ apiKey: key, discoveryApiKey: key }),
     });
-    const row = discovered.models.find((entry) => entry.id === MODEL);
+    if (!discovered || !("provider" in discovered) || !discovered.provider) {
+      throw new Error("Expected a ClawRouter catalog");
+    }
+    const row = discovered.provider.models.find((entry) => entry.id === MODEL);
     if (!row) {
       return undefined;
     }
-    return {
+    const model = {
       ...row,
-      ...normalizeClawRouterResolvedModel({
-        ...row,
-        provider: "clawrouter",
-      } as ProviderRuntimeModel),
       provider: "clawrouter",
+      baseUrl: row.baseUrl ?? discovered.provider.baseUrl,
+    } as Model<"openai-responses">;
+    return {
+      ...model,
+      ...provider.normalizeResolvedModel?.({ provider: "clawrouter", modelId: MODEL, model }),
     } as Model<"openai-responses">;
   }
 
@@ -189,7 +212,7 @@ describe("ClawRouter native xAI Responses replay", () => {
         });
         return response(wires.length === 1);
       });
-      const provider = await registerSingleProviderPlugin(plugin);
+      const provider = await routerProvider();
       const wrapped = provider[hook]?.({
         provider: "clawrouter",
         modelId: MODEL,
@@ -197,6 +220,12 @@ describe("ClawRouter native xAI Responses replay", () => {
         streamFn: streamSimple,
       });
       expect(wrapped).toBeDefined();
+      if (!wrapped) {
+        throw new Error("Expected a ClawRouter stream hook");
+      }
+      // The host installs this decoder after provider hooks, before tool execution.
+      expect(resolveToolCallArgumentsEncoding(model)).toBe("html-entities");
+      const hostStream = createHtmlEntityToolCallArgumentDecodingWrapper(wrapped);
       const context: Context = {
         messages: [{ role: "user", content: "Run the synthetic lookup", timestamp: 1 }],
         tools: [
@@ -218,7 +247,7 @@ describe("ClawRouter native xAI Responses replay", () => {
         reasoning: "high" as const,
         cacheRetention: "none" as const,
       };
-      const first = await (await wrapped!(model, context, options)).result();
+      const first = await (await hostStream(model, context, options)).result();
       expect(first.stopReason).toBe("toolUse");
       expect(first.usage).toMatchObject({ input: 5, output: 3, totalTokens: 8 });
       const tool = first.content.find((part) => part.type === "toolCall");
@@ -237,7 +266,7 @@ describe("ClawRouter native xAI Responses replay", () => {
         timestamp: 2,
       });
       const stored = structuredClone(context);
-      const second = await (await wrapped!(model, context, options)).result();
+      const second = await (await hostStream(model, context, options)).result();
       expect(second.content).toContainEqual({ type: "text", text: "Synthetic answer" });
       expect(second.stopReason).toBe("stop");
       const replay = wires[1]?.body.input;
@@ -253,7 +282,7 @@ describe("ClawRouter native xAI Responses replay", () => {
         ]),
       );
       for (const change of [{ sessionId: "other-session" }, { authProfileId: "other-profile" }]) {
-        await (await wrapped!(model, context, { ...options, ...change })).result();
+        await (await hostStream(model, context, { ...options, ...change })).result();
         expect(JSON.stringify(wires.at(-1)?.body)).not.toContain(opaque);
       }
       expect(context).toEqual(stored);
