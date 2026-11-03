@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { registerSqliteCacheExitClose } from "./sqlite-wal.js";
+import { registerProcessExitLeaseCleanup } from "../state/openclaw-state-lease-process-exit.js";
+import { registerProcessExitCleanup } from "./process-exit-cleanup.js";
 
 let exits: EventEmitter;
 const unregister: Array<() => void> = [];
@@ -32,10 +33,26 @@ afterEach(() => {
 });
 
 function register(close: () => void): () => void {
-  const dispose = registerSqliteCacheExitClose(close);
+  const dispose = registerProcessExitCleanup(close);
   unregister.push(dispose);
   return dispose;
 }
+
+it("keeps interleaved stores and leases within the startup listener budget", () => {
+  for (let index = 0; index < 8; index++) {
+    exits.once("exit", () => {});
+  }
+  const close = vi.fn();
+  const release = vi.fn();
+  for (let index = 0; index < 32; index++) {
+    register(close);
+    unregister.push(registerProcessExitLeaseCleanup(() => release()));
+    expect(exits.listenerCount("exit")).toBeLessThanOrEqual(exits.getMaxListeners());
+  }
+  exits.emit("exit", 0);
+  expect(close).toHaveBeenCalledTimes(32);
+  expect(release).toHaveBeenCalledTimes(32);
+});
 
 it.each([false, true])("preserves order and listener budget (interleaved: %s)", (interleaved) => {
   const startupOwners = interleaved ? 0 : 8;
