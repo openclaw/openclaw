@@ -1,8 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { onSettled, Show } from "solid-js";
 import { Picker } from "../../components/select-picker.ts";
-import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
-import { SettingsRow, SettingsStatus, SettingsValue } from "../../components/solid/settings-ui.tsx";
+import { SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -47,20 +46,27 @@ export function DiscordIdentity() {
       <SettingsRow
         title={t("profilePage.discord.title")}
         description={
-          // Three flow controls need their own line; every other state keeps its button at the end.
+          // One anatomy with the other accounts: status, then the identity; the action at the end.
+          // While linking, the two flow actions take their own line on phones, so no meta line.
           view.read().flow ? (
-            t("profilePage.discord.descriptionShort")
-          ) : (
+            <SettingsStatus kind="muted" label={t("profilePage.discord.waiting")} />
+          ) : linked() ? (
             <span class="settings-row__meta">
-              {linked() ? (
-                <SettingsStatus kind="ok" label={t("profilePage.discord.verified")} />
-              ) : (
-                t(
-                  unavailable()
-                    ? "profilePage.discord.unavailable"
-                    : "profilePage.discord.descriptionShort",
-                )
-              )}
+              <SettingsStatus kind="ok" label={t("profilePage.discord.verified")} />
+              <span class="identity-account">{view.read().selected?.senderIds.join(", ")}</span>
+            </span>
+          ) : unavailable() ? (
+            t("profilePage.discord.unavailable")
+          ) : (
+            // Holds the line while the status is pending or failed; the failure has its own row.
+            <span
+              class="settings-row__meta"
+              style={{
+                visibility: view.read().loading || view.read().error ? "hidden" : "visible",
+              }}
+              aria-hidden={view.read().loading || view.read().error ? "true" : undefined}
+            >
+              <SettingsStatus kind="muted" label={t("profilePage.discord.notConnected")} />
             </span>
           )
         }
@@ -101,7 +107,6 @@ export function DiscordIdentity() {
                   >
                     {(flow) => (
                       <>
-                        <SettingsStatus kind="muted" label={t("profilePage.discord.waiting")} />
                         <a
                           class="btn btn--sm"
                           href={flow().url}
@@ -158,16 +163,6 @@ export function DiscordIdentity() {
             }
           />
         </div>
-      </Show>
-      <Show when={linked()}>
-        <SettingsDisclosure quiet title={t("profilePage.discord.details")}>
-          <SettingsRow
-            title={t("profilePage.discord.id")}
-            control={
-              <SettingsValue mono value={view.read().selected?.senderIds.join(", ") ?? ""} />
-            }
-          />
-        </SettingsDisclosure>
       </Show>
       <Show when={view.read().error}>
         {(error) => (

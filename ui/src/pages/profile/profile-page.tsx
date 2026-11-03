@@ -19,6 +19,7 @@ import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ScopeUpgradeOwner } from "../../app/device-scope-upgrade-owner.runtime.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { ScopeUpgradeActions, scopeUpgradeText } from "../../components/scope-upgrade-actions.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsSectionHelp } from "../../components/solid/settings-section-help.tsx";
 import {
@@ -288,7 +289,13 @@ export function ProfilePage() {
                     </Show>
                     <p>
                       <strong>{t("profilePage.identity.githubAccount")}</strong>{" "}
-                      {t("profilePage.identity.githubAccountDescription")}
+                      {isOwnerProfile()
+                        ? t("profilePage.identity.ownerGithubDescription")
+                        : t("profilePage.identity.githubAccountDescription")}
+                      <Show when={!profile().githubIdentity}>
+                        {" "}
+                        {t("profilePage.identity.githubUnavailableDescription")}
+                      </Show>
                     </p>
                   </SettingsSectionHelp>
                 }
@@ -392,11 +399,11 @@ export function ProfilePage() {
                 <Show when={!isOwnerProfile()}>
                   <SettingsRow
                     title={t("profilePage.identity.linkedEmails")}
-                    control={
+                    description={
                       profile().emails.length ? (
                         <span class="identity-emails">
                           <For each={profile().emails}>
-                            {(email) => <SettingsValue value={email} />}
+                            {(email) => <span class="identity-account">{email}</span>}
                           </For>
                         </span>
                       ) : undefined
@@ -421,7 +428,7 @@ export function ProfilePage() {
                       <Show when={profile().githubIdentity}>
                         {(identity) => (
                           <a
-                            class="identity-github-login"
+                            class="identity-account identity-github-login"
                             href={identity().profileUrl}
                             target={EXTERNAL_LINK_TARGET}
                             rel={buildExternalLinkRel()}
@@ -431,13 +438,6 @@ export function ProfilePage() {
                           </a>
                         )}
                       </Show>
-                      <span>
-                        {isOwnerProfile()
-                          ? t("profilePage.identity.ownerGithubDescription")
-                          : profile().githubIdentity
-                            ? t("profilePage.identity.githubAccountShort")
-                            : t("profilePage.identity.githubUnavailableDescription")}
-                      </span>
                     </span>
                   }
                 />
@@ -536,17 +536,13 @@ export function ProfilePage() {
             </div>
           </div>
           <Show when={view().connected}>
-            <button
-              class="btn profile-refresh"
-              data-refresh-label={t("common.refresh")}
-              data-refreshing-label={t("common.refreshing")}
-              disabled={!view().identityReady || view().identityLoading || identityBusy() !== null}
+            <RefreshButton
+              class="profile-refresh"
+              label={view().identityLoading ? t("common.refreshing") : t("common.refresh")}
+              busy={view().identityLoading}
+              disabled={!view().identityReady || identityBusy() !== null}
               onClick={() => state.refreshManually()}
-            >
-              <Show when={view().identityLoading} fallback={<span>{t("common.refresh")}</span>}>
-                <span>{t("common.refreshing")}</span>
-              </Show>
-            </button>
+            />
           </Show>
         </section>
       </ShellLayoutBoundary>
@@ -566,8 +562,12 @@ export function ProfilePage() {
               </SettingsGroup>
             }
           >
-            <Show when={!view().selfUser && !initialIdentityPending()}>
-              <ProfileHero row={agent()} identity={identities.read().get(agent().id)} />
+            <Show when={view().selfUser || !initialIdentityPending()}>
+              <ProfileHero
+                row={agent()}
+                user={view().selfUser}
+                identity={identities.read().get(agent().id)}
+              />
             </Show>
             <Show when={!initialIdentityPending()} fallback={<IdentityContent pending={true} />}>
               <Errored

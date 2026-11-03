@@ -11,14 +11,12 @@ const enProfile = {
         "Connect your Discord identity to this profile. Your existing permissions and channel access rules still apply.",
       unavailable:
         "Discord account linking is not configured. Ask your Gateway administrator to enable it.",
-      descriptionShort: "Connect your Discord identity to this profile.",
       gatewayAccount: "Discord gateway account",
       connect: "Connect Discord",
       connectShort: "Connect",
-      details: "Discord details",
-      id: "Discord ID",
       disconnect: "Disconnect",
       verified: "Verified",
+      notConnected: "Not connected",
       waiting: "Waiting for Discord…",
       continue: "Continue in Discord",
     },
@@ -67,7 +65,6 @@ const enProfile = {
       linkedEmailsDescription: "Email addresses connected to this profile.",
       attribution: identity.attribution,
       githubAccount: "GitHub sign-in",
-      githubAccountShort: "Sign-in identity, not permission to publish.",
       githubAccountDescription:
         "Verified sign-in identity, not permission to publish. Manage publishing access under GitHub connections below.",
       githubVerified: "Verified",

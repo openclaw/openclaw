@@ -162,8 +162,13 @@ it.each([
     });
     if (owner) {
       const identity = page.querySelector("#settings-profile-identity")!;
-      expect(identity.textContent).toContain(
-        "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
+      // Where the owner's identity comes from is under the section's "?", not in the row.
+      expect(identity.textContent).not.toContain("GitHub-backed sign-in through Cloudflare Access");
+      identity.querySelector<HTMLButtonElement>(".settings-section__help-button")!.click();
+      await waitForFast(() =>
+        expect(document.querySelector(".settings-section__help-panel")?.textContent).toContain(
+          "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
+        ),
       );
       const attribution = page.querySelector("#settings-profile-attribution")!;
       expect(attribution.textContent).toContain(

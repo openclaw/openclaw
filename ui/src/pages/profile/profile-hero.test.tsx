@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 /* @vitest-environment jsdom */
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid as waitForFast } from "../../test-helpers/solid-settle.ts";
@@ -17,8 +18,23 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-it("shows the default agent when the connection has no person", async () => {
-  mountHero({ row: { id: "clipper", name: "Clipper" }, identity: null }, container);
+it("keeps the connected person's hero independent of the default agent and live name updates", async () => {
+  const props = {
+    row: { id: "clipper", name: "Clipper" },
+    identity: null,
+    user: { id: "person-1", name: "Ada", email: "ada@example.test" },
+  };
+  mountHero(props, container);
+  expect(container.querySelector(".profile-hero__name")?.textContent).toBe("Ada");
+  expect(container.querySelector(".profile-hero__handle")?.textContent).toContain(
+    "ada@example.test",
+  );
+  expect(container.textContent).not.toContain("Clipper");
+
+  mountHero({ ...props, user: { ...props.user, name: "Ada Lovelace" } }, container);
+  expect(container.querySelector(".profile-hero__name")?.textContent).toBe("Ada Lovelace");
+
+  mountHero({ ...props, user: null }, container);
   expect(container.querySelector(".profile-hero__name")?.textContent).toBe("Clipper");
   expect(container.querySelector(".profile-hero__handle")?.textContent).toContain("@clipper");
   await waitForFast(() =>
@@ -26,9 +42,12 @@ it("shows the default agent when the connection has no person", async () => {
       container.querySelector(".profile-hero__avatar .identity-avatar__agent-face"),
     ).not.toBeNull(),
   );
+
+  mountHero({ ...props, user: { id: "gateway-owner" } }, container);
+  expect(container.querySelector(".profile-hero__name")?.textContent).toBe(t("nav.owner"));
 });
 
-it("leaves a person's name and avatar to the identity rows", async () => {
+it("honors a live name clear while the profile editor still holds the fetched name", async () => {
   const profile = {
     id: "person-1",
     displayName: "Ada",
@@ -59,6 +78,8 @@ it("leaves a person's name and avatar to the identity rows", async () => {
     expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe("Ada"),
   );
 
-  expect(page.querySelector(".profile-hero")).toBeNull();
-  expect(page.querySelector("#settings-profile-identity openclaw-viewer-avatar")).not.toBeNull();
+  harness.context.gateway.updateSelfUser?.({ name: undefined });
+  await waitForFast(() =>
+    expect(page.querySelector(".profile-hero__name")?.textContent).toBe("ada@example.test"),
+  );
 });

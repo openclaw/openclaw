@@ -97,7 +97,7 @@ suite.define(() => {
     return gateway;
   }
 
-  it("wraps an unnamed user's long email in its identity row on narrow screens", async () => {
+  it("wraps an unnamed user's long email in both hero fields on narrow screens", async () => {
     const longEmail = "primaryuserprimaryuserprimaryuserprimaryuserprimaryuser@example.test";
     await suite.withPage({ viewport: { width: 360, height: 800 } }, async ({ page }) => {
       await openProfilePage(
@@ -106,13 +106,16 @@ suite.define(() => {
         testPresenceUsers.map((user) => ({ ...user, name: undefined, email: longEmail })),
       );
 
-      const emails = page.locator("#settings-profile-identity .settings-row__value", {
-        hasText: longEmail,
-      });
-      await expect(emails).toBeVisible();
-      expect(await emails.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
-        true,
-      );
+      const title = page.locator(".profile-hero__name");
+      const handle = page.locator(".profile-hero__handle");
+      await expect(title).toHaveText(longEmail);
+      await expect(handle).toContainText(longEmail);
+      for (const field of [title, handle]) {
+        await expect(field).toBeInViewport({ ratio: 1 });
+        expect(await field.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+          true,
+        );
+      }
       expect(
         await page.locator("body").evaluate((element) => element.scrollWidth),
       ).toBeLessThanOrEqual(360);
@@ -332,9 +335,10 @@ suite.define(() => {
         requestId: "test-request",
         authorizationUrl: "https://discord.example/consent",
       });
+      // Status, then the Discord ID as its identity, in the row itself.
       await expect(discord).toContainText("Verified");
-      const details = page.locator("#settings-profile-identity .settings-disclosure");
-      await expect(details).toContainText("123456789012345678");
+      await expect(discord).toContainText("123456789012345678");
+      await expect(page.locator("#settings-profile-identity .settings-disclosure")).toHaveCount(0);
       await screenshot(page, "21-discord-linked.png");
       await gateway.setMethodResponse("users.channelIdentity", {
         status: "ready",

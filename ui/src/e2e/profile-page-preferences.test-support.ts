@@ -77,7 +77,16 @@ export function defineProfilePreferenceTests({
             has: page.locator(".settings-row__title", { hasText: "Git co-author credit" }),
           });
           await expect(githubRow).toContainText("Unavailable");
-          await expect(githubRow).toContainText("No single verified GitHub sign-in account");
+          await expect(githubRow).not.toContainText("No single verified GitHub sign-in account");
+          const identityHelp = page.locator(
+            "#settings-profile-identity .settings-section__help-button",
+          );
+          await identityHelp.click();
+          await expect(page.locator(".settings-section__help-panel")).toContainText(
+            "No single verified GitHub sign-in account",
+          );
+          await identityHelp.click();
+          await expect(page.locator(".settings-section__help-panel")).toHaveCount(0);
           await expect(githubRow.getByRole("link")).toHaveCount(0);
           await expect(
             coauthorRow.getByRole("switch", { name: "Git co-author credit" }),

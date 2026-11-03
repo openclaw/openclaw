@@ -156,7 +156,9 @@ it("renders identity before Usage statistics and opens the usage page", async ()
     ),
   );
   const identity = page.querySelector("#settings-profile-identity");
-  expect(identity?.textContent).toContain("No single verified GitHub sign-in account");
+  // The GitHub row shows its status only; the explanation is under the section's "?".
+  expect(identity?.textContent).toContain("Unavailable");
+  expect(identity?.textContent).not.toContain("No single verified GitHub sign-in account");
   expect(
     [...(identity?.querySelectorAll(".settings-row__title") ?? [])].filter(
       (node) => node.textContent?.trim() === "Linked emails",
@@ -352,7 +354,8 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
   flush();
   const refresh = refreshButton(page)!;
   expect(refresh.disabled).toBe(true);
-  expect(refresh.textContent?.trim()).toBe(t("common.refreshing"));
+  expect(refresh.getAttribute("aria-busy")).toBe("true");
+  expect(refresh.getAttribute("aria-label")).toBe(t("common.refreshing"));
 
   refresh.click();
   refresh.click();
@@ -361,7 +364,8 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
 
   firstIdentity.reject(new Error("identity unavailable: OPENAI_API_KEY=sk-1234567890abcdef"));
   await waitForFast(() => expect(refresh.disabled).toBe(false));
-  expect(refresh.textContent?.trim()).toBe(t("common.refresh"));
+  expect(refresh.getAttribute("aria-busy")).toBeNull();
+  expect(refresh.getAttribute("aria-label")).toBe(t("common.refresh"));
   expect(page.textContent).toContain("identity unavailable: OPENAI_API_KEY=sk-123...cdef");
   expect(page.textContent).not.toContain("sk-1234567890abcdef");
 
