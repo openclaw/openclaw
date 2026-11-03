@@ -590,6 +590,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
   transform: rotate(90deg);
 }
 
+.settings-disclosure__sections {
+  margin-top: var(--space-8);
+}
+
 .settings-row {
   display: flex;
   align-items: center;
@@ -810,6 +814,12 @@ openclaw-appearance-background .settings-background-preview .session-background_
   color: inherit;
   cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
+}
+
+/* A disclosure that opens whole sections is its own one-row group. */
+.settings-row--nav.settings-group {
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  background: var(--card);
 }
 
 .settings-row--nav:hover {
