@@ -14,10 +14,7 @@ import type { WebSocket } from "ws";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { consumeCodexAppServerLiveThread, hasCodexAppServerLiveThread } from "./client-runtime.js";
-import {
-  createCodexTestHostCapabilities,
-  setCodexTestToolFactory,
-} from "./host-capability.test-support.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { buildCodexNativeHookRelayId } from "./native-hook-relay.js";
 import {
   flattenCodexDynamicToolFunctions,
@@ -25,9 +22,12 @@ import {
   type CodexTurnStartParams,
 } from "./protocol.js";
 import {
+  createSandboxPolicyRun,
+  createSourceBoundHostCapabilities,
+} from "./run-attempt-native-process-authority.test-support.js";
+import {
   createCodexRuntimePlanFixture,
   createParams,
-  createRuntimeDynamicTool,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
   setCodexAppServerClientFactoryForTest,
@@ -71,26 +71,6 @@ type Terminal = {
   closed: Promise<unknown>;
   settled: Promise<unknown>;
 };
-
-function createSourceBoundHostCapabilities(
-  signal: AbortSignal,
-  requestCustody = Object.freeze({}),
-) {
-  const bindModelExecution = () => ({
-    signal,
-    assertCurrent: () => signal.throwIfAborted(),
-    release: () => {},
-  });
-  return createCodexTestHostCapabilities({
-    captureRequestCustody: () => requestCustody,
-    bindModelExecution,
-    retainSourceAuthority: () => ({
-      ...bindModelExecution(),
-      modelPolicyRequired: false,
-      bindModelExecution,
-    }),
-  });
-}
 
 async function fixture(options: { failSettlement?: boolean } = {}) {
   setRuntimeConfigSnapshot({ tools: { web: { search: { enabled: false } } } });
@@ -573,34 +553,6 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       }
     },
   };
-}
-
-function createSandboxPolicyRun() {
-  const params = createParams(
-    path.join(tempDir, "managed-policy.jsonl"),
-    path.join(tempDir, "workspace"),
-  );
-  setRuntimeConfigSnapshot(params.config ?? {});
-  const controller = new AbortController();
-  const preparation: string[] = [];
-  const exec = createRuntimeDynamicTool("exec");
-  params.hostCapabilities = createSourceBoundHostCapabilities(controller.signal);
-  params.sandbox = {
-    ...createSandboxContext({}),
-    sessionKey: params.sessionKey!,
-    workspaceDir: params.workspaceDir,
-    agentWorkspaceDir: params.workspaceDir,
-    runtimeId: `managed-policy-${path.basename(tempDir)}`,
-  };
-  params.abortSignal = controller.signal;
-  params.runtimePlan = createCodexRuntimePlanFixture();
-  setCodexTestModelSupportsTools(params, true);
-  const selectTools = vi.fn(() => {
-    preparation.push("tools");
-    return [exec];
-  });
-  setCodexTestToolFactory(params, selectTools);
-  return { params, controller, exec, preparation, selectTools };
 }
 
 describe("native background process source authority", () => {

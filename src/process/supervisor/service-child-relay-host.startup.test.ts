@@ -98,9 +98,7 @@ it("rejects undefined secret delivery failures at the relay readiness boundary",
     throw Object.assign(new Error("process group is gone"), { code: "ESRCH" });
   });
   vi.spyOn(secretInput, "prepareSecretInputStdio").mockReturnValue({
-    deliverTo: async () => {
-      throw undefined;
-    },
+    deliverTo: vi.fn().mockRejectedValue(undefined),
     [Symbol.dispose]() {},
   });
   const { adapter, ready } = await createServiceChildRelayAdapter({

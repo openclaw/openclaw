@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -184,10 +185,11 @@ it.each(["human", "internal", "steering"] as const)(
           maxBytes: 1_000_000,
         });
         expect(manager.getBranch().some((entry) => entry.id === requestFromEntryId)).toBe(false);
-        await manager.appendMessageAsync({
-          ...makeUserMessage("Worker update", 4),
-          provenance: { kind: "inter_session" },
-        });
+        await manager.appendMessageAsync(
+          Object.assign(makeUserMessage("Worker update", 4), {
+            provenance: { kind: "inter_session" },
+          }),
+        );
         if (kind === "steering") {
           await manager.appendMessageAsync(makeUserMessage(steering, 5));
         }
@@ -237,7 +239,9 @@ it.each(["human", "internal", "steering"] as const)(
             : generation > 0 && kind === "steering"
               ? steering
               : request;
-        expect(outcome.result.details?.latestUnresolvedUserRequest).toBe(expectedRequest);
+        expect(parseCompactionDetails(outcome.result.details)?.latestUnresolvedUserRequest).toBe(
+          expectedRequest,
+        );
         expect(outcome.result.summary.includes("## Latest unresolved user request")).toBe(
           kind !== "internal",
         );

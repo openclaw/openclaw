@@ -912,5 +912,3 @@ describe("Codex app-server binding store", () => {
     ).toThrow("requires an agent id");
   });
 });
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

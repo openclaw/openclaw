@@ -28,7 +28,7 @@ suite.define(() => {
       const option = picker.locator('[data-chat-model-option="example/sol"]');
       await expect.poll(() => option.count()).toBe(1);
       await picker.locator("[data-chat-model-select]").click();
-      await revealChatModelOption(picker, "example/sol");
+      await revealChatModelOption(option);
       await option.waitFor({ state: "visible" });
       if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
         const directory = createControlUiE2eArtifactDir("configured-model-budget");

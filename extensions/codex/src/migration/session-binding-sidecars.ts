@@ -732,4 +732,3 @@ export async function migrateLegacySessionBindingSidecars(params: MigrationParam
     ...(notices.length > 0 ? { notices } : {}),
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

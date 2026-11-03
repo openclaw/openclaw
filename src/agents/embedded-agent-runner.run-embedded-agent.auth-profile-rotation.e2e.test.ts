@@ -8,11 +8,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
-import {
-  resolveInlineProviderApiKeyUsageId,
-  type AuthProfileFailureReason,
-  type ProfileUsageStats,
-} from "./auth-profiles.js";
+import { resolveInlineProviderApiKeyUsageId, type ProfileUsageStats } from "./auth-profiles.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
