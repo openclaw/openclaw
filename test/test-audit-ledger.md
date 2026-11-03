@@ -169,17 +169,22 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Batch82, pinned mainf75eda954c20: require the published session roster when a
-sessions.changed event clears a thinking override. The current optional row
-check accepts an absent row while the roster can retain the old override.
-Retain all10 declarations/17 cases, their inputs and thinking/runtime/profile
-contracts. No production, shared scalar, allocation or visual behavior change.
+[192103](https://github.com/openclaw/openclaw/pull/192103), pinned mainf75eda954c20:
+replace the thinking-field predicates with an exact published-roster expectation.
+All10 declarations/17 cases, their inputs and original thinking/runtime/profile
+contracts remain. The input row independently supplies the expected identity and
+metadata; timestamp2 and the cleared override must reach the roster. Two fewer
+test lines; no production, shared scalar, allocation or visual behavior change.
 
-Qualify through the real UI unit entry: untouched baseline; an actual parser
-rejection control on the original and candidate; clean candidate and related
-thinking siblings; scoped checks, removal gates if applicable, fresh review,
-published proof, exact-head CI and verified native landing/closeout. Runtime
-qualification has not started. Source review alone supplies no passing verdict.
+Untouched baseline and clean candidate pass all17 cases; the thinking-profile
+and chat-thinking siblings pass14. An actual parser rejection of null thinking
+levels passes the original selected row, but the repaired published-roster
+keeper rejects the stale timestamp1/ultra row. Each control skips16 unselected
+cases; the parser restores byte-for-byte after both. The clean candidate costs
+2.89s measured command wall time. Focused types, typed lint, formatting, ledger
+MDX, whitespace and the test-line ratchet pass. Fresh review, published proof
+and exact-head CI remain pending. No test, fixture input, import, helper or
+export is removed, so there is no removal scan qualification claim.
 
 ## Completed source review
 
