@@ -138,7 +138,7 @@ it("locks every global dreaming control when config mutation is unavailable", ()
   ).toBe(true);
 });
 
-it("preserves uncommitted numeric and text drafts across unrelated config refreshes", () => {
+it("preserves drafts and numeric admission across config refreshes", () => {
   const onPatch = vi.fn();
   const draft = (frequency: string, lookbackDays: number, extra = {}) =>
     dreamingConfig({ frequency, phases: { light: { lookbackDays } }, ...extra });
@@ -169,44 +169,26 @@ it("preserves uncommitted numeric and text drafts across unrelated config refres
   flush();
   expect(frequency.value).toBe("0 5 * * *");
   expect(lookback.value).toBe("21");
-});
-it("rejects invalid numbers, accepts valid edits, and clears emptied values", () => {
-  const onPatch = vi.fn();
-  const container = renderInto({ enabled: true, phases: { light: { lookbackDays: 7 } } }, onPatch);
 
-  editNumber(numberInput(container, "Lookback days"), "-1");
-  expect(numberInput(container, "Lookback days").value).toBe("7");
-  editNumber(numberInput(container, "Limit"), "2.5");
-  editNumber(numberInput(container, "Dedupe similarity"), "1.4");
-  editNumber(numberInput(container, "Maximum age (days)"), "0");
+  onPatch.mockClear();
+  const badInput = vi.spyOn(lookback.validity, "badInput", "get").mockReturnValueOnce(true);
+  for (const value of ["", "-1"]) {
+    editNumber(lookback, value);
+    expect(lookback.value).toBe("21");
+  }
+  badInput.mockRestore();
+  editNumber(numberInput(view.container, "Limit"), "2.5");
+  editNumber(numberInput(view.container, "Dedupe similarity"), "1.4");
+  editNumber(numberInput(view.container, "Maximum age (days)"), "0");
   expect(onPatch).not.toHaveBeenCalled();
 
-  editNumber(numberInput(container, "Lookback days"), "7");
-  editNumber(numberInput(container, "Dedupe similarity"), "0.82");
+  editNumber(lookback, "7");
+  editNumber(numberInput(view.container, "Dedupe similarity"), "0.82");
   expect(onPatch).toHaveBeenNthCalledWith(1, ["phases", "light", "lookbackDays"], 7);
   expect(onPatch).toHaveBeenNthCalledWith(2, ["phases", "light", "dedupeSimilarity"], 0.82);
-  editNumber(numberInput(container, "Lookback days"), "");
+  editNumber(lookback, "");
   expect(onPatch).toHaveBeenNthCalledWith(3, ["phases", "light", "lookbackDays"], undefined);
 });
-
-it("restores the admitted value when bad-input text is blurred", () => {
-  const onPatch = vi.fn();
-  const container = renderInto({ enabled: true, phases: { light: { lookbackDays: 7 } } }, onPatch);
-  const input = numberInput(container, "Lookback days");
-
-  // Simulate HTML number-input sanitization: invalid text yields an empty value
-  // with badInput set, which must not be mistaken for a deliberate clear.
-  Object.defineProperty(input, "validity", {
-    value: { badInput: true },
-    configurable: true,
-  });
-  input.value = "";
-  input.dispatchEvent(new Event("change", { bubbles: true }));
-
-  expect(onPatch).not.toHaveBeenCalled();
-  expect(input.value).toBe("7");
-});
-
 it("submits edited values and removals through the shared config owner without materializing display defaults", async () => {
   vi.useFakeTimers();
   let config: Record<string, unknown> = persistedConfig({

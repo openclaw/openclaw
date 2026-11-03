@@ -196,7 +196,7 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
               onChange={(event) => {
                 const input = event.currentTarget;
                 if (input.validity.badInput) {
-                  // Type-invalid text in a number field; restore the admitted value.
+                  // Browsers sanitize unfinished numbers to empty, not a deliberate clear.
                   input.value = text();
                   return;
                 }
