@@ -123,53 +123,72 @@ class NodeEventHarness {
   active = () => this.nodeRegistry.getActiveNode();
 }
 
-describe.each([
-  { route: "Gateway", questionsEnabled: true },
-  { route: "worker", questionsEnabled: true },
-  { route: "worker", questionsEnabled: false },
-] as const)("$route MCP questions ($questionsEnabled)", ({ route, questionsEnabled }) => {
+const mcpQuestionCases = [
+  ["Gateway", "granted"],
+  ["Gateway", "grant retired"],
+  ["Gateway", "pairing replaced"],
+  ["Gateway", "legacy Gateway"],
+  ["Gateway", "node opt-out"],
+  ["worker", "granted"],
+  ["worker", "grant retired"],
+  ["worker", "turn ended"],
+  ["worker", "pairing replaced"],
+  ["worker", "execution only"],
+] as const;
+
+describe.each(mcpQuestionCases)("%s MCP questions (%s)", (route, scenario) => {
   installQuestionTestHooks();
 
-  it("returns the originating user’s answer when granted and declines locally otherwise", async () => {
+  it("delivers an answer to the MCP server only while its requester is authorized", async () => {
     vi.useRealTimers();
     const h = new NodeEventHarness();
     const node = h.register("owner");
     const recipient = expectDefined(h.node(), "missing paired node");
     recipient.commands.push(NODE_MCP_TOOLS_CALL_COMMAND);
+    const questionsEnabled = scenario !== "legacy Gateway" && scenario !== "execution only";
     h.context.getRuntimeConfig = () => ({ mcp: { apps: { enabled: questionsEnabled } } });
     const registered = createDeferred();
     const grant = new AbortController();
     const id = randomUUID();
-    if (questionsEnabled) {
-      h.nodeRegistry.mcpElicitation.register({
-        id,
-        node: recipient,
-        signal: grant.signal,
-        handle: createMcpClientElicitationHandler({
-          sessionKey: requestParams.sessionKey,
-          agentId: requestParams.agentId,
-          assertCurrent: () => grant.signal.throwIfAborted(),
-          gatewayCall: async (method, _options, params) => {
-            if (!isRecord(params)) {
-              throw new Error("Missing question params");
-            }
-            if (method === "question.request") {
-              expect(params.sessionKey).toBe(requestParams.sessionKey);
-            }
-            const [ok, result, error] = await callQuestionRpc(method, params, {
-              client: adminRequestClient,
-            });
-            if (!ok) {
-              throw new Error(error?.message);
-            }
-            if (method === "question.request") {
-              registered.resolve();
-            }
-            return result;
+    const answerReady = createDeferred<unknown>();
+    const deliverAnswer = createDeferred();
+    const handleQuestion = createMcpClientElicitationHandler({
+      sessionKey: requestParams.sessionKey,
+      agentId: requestParams.agentId,
+      assertCurrent: () => grant.signal.throwIfAborted(),
+      gatewayCall: async (method, _options, params) => {
+        if (!isRecord(params)) {
+          throw new Error("Missing question params");
+        }
+        if (method === "question.request") {
+          expect(params.sessionKey).toBe(requestParams.sessionKey);
+        }
+        const [ok, result, error] = await callQuestionRpc(method, params, {
+          client: adminRequestClient,
+        });
+        if (!ok) {
+          throw new Error(error?.message);
+        }
+        if (method === "question.request") {
+          registered.resolve();
+        }
+        return result;
+      },
+    });
+    const retire = questionsEnabled
+      ? h.nodeRegistry.mcpElicitation.register({
+          id,
+          node: recipient,
+          signal: grant.signal,
+          handle: async (request) => {
+            const answer = await handleQuestion(request);
+            answerReady.resolve(answer);
+            // Exercise retirement after the user answers, while the node still awaits delivery.
+            await deliverAnswer.promise;
+            return answer;
           },
-        }),
-      });
-    }
+        })
+      : undefined;
     const event = {
       id,
       requestId: randomUUID(),
@@ -187,8 +206,13 @@ describe.each([
     expect(questions.list()).toHaveLength(0);
     const mcp = new McpServer({ name: "fixture", version: "1" });
 
+    const receivedByServer = createDeferred<unknown>();
     mcp.registerTool("choose", {}, async ({ mcpReq }) => {
-      const answer = await mcpReq.elicitInput(event.params);
+      const answer = await mcpReq.elicitInput(event.params).catch((error: unknown) => {
+        receivedByServer.resolve(error);
+        throw error;
+      });
+      receivedByServer.resolve(answer);
       return { content: [], structuredContent: answer };
     });
     const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
@@ -196,7 +220,9 @@ describe.each([
     const http = await startMcpHttpFixture((req, res) => transport.handleRequest(req, res));
     const gatewayMethods: string[] = [];
     const client: NodeHostClient = {
-      serverCapabilities: new Set([GATEWAY_SERVER_CAPS.NODE_MCP_ELICITATION]),
+      serverCapabilities: new Set(
+        scenario === "legacy Gateway" ? [] : [GATEWAY_SERVER_CAPS.NODE_MCP_ELICITATION],
+      ),
       request: async (method, params) => {
         gatewayMethods.push(method);
         if (!isRecord(params) || (method !== "node.event" && method !== "node.invoke.result")) {
@@ -224,7 +250,7 @@ describe.each([
     };
     const nodeMcp = await startNodeHostMcpManager(
       { fixture: { url: http.url, transport: "streamable-http" } },
-      { elicitationClient: client },
+      scenario === "node opt-out" ? {} : { elicitationClient: client },
     );
     onTestFinished(async () => {
       await nodeMcp.close();
@@ -233,6 +259,9 @@ describe.each([
     });
     async function callTool() {
       if (route === "worker") {
+        // The Gateway may retire the turn before the worker receives its cancellation.
+        const workerLifetime = new AbortController();
+        onTestFinished(() => workerLifetime.abort());
         const descriptor = createWorkerLaunchDescriptorForTest({
           assignment: {
             toolAuthority: {
@@ -252,7 +281,7 @@ describe.each([
           createNodeWorkerMcpTurn(descriptor, {
             descriptors: nodeMcp.descriptors,
             callMcpTool: nodeMcp.callMcpTool,
-            signal: grant.signal,
+            signal: workerLifetime.signal,
           }),
           "missing same-node MCP grant",
         );
@@ -264,7 +293,7 @@ describe.each([
             worker.receive(result);
           });
         });
-        return worker.call(id, {}, grant.signal);
+        return worker.call(id, {}, workerLifetime.signal);
       }
       const dispatched = createDeferred<string>();
       vi.spyOn(node.socket, "send").mockImplementation((frame) =>
@@ -273,7 +302,12 @@ describe.each([
       const reply = h.nodeRegistry.invoke({
         nodeId: recipient.nodeId,
         command: NODE_MCP_TOOLS_CALL_COMMAND,
-        params: { server: "fixture", tool: "choose", arguments: {}, elicitationId: id },
+        params: {
+          server: "fixture",
+          tool: "choose",
+          arguments: {},
+          ...(questionsEnabled && { elicitationId: id }),
+        },
         sessionKey: requestParams.sessionKey,
       });
       const frame = JSON.parse(
@@ -291,13 +325,31 @@ describe.each([
         nodeMcp,
       );
       const result = await reply;
-      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error(result.error?.message ?? "Gateway MCP invocation failed");
+      }
       return result.payload;
     }
-    const result = callTool();
+    const result = callTool().then(
+      (payload) => ({ ok: true, payload }),
+      (error: unknown) => ({ ok: false, error }),
+    );
+    if (scenario === "node opt-out") {
+      await expect(result).resolves.toMatchObject({ ok: true, payload: { isError: true } });
+      await expect(receivedByServer.promise).resolves.toMatchObject({
+        message: expect.stringMatching(/does not support .*elicitation/i),
+      });
+      expect(gatewayMethods).toEqual(["node.invoke.result"]);
+      return;
+    }
     if (!questionsEnabled) {
-      await expect(result).resolves.toMatchObject({ structuredContent: { action: "decline" } });
-      expect(gatewayMethods).toEqual([]);
+      const decline = { action: "decline" };
+      await expect(result).resolves.toMatchObject({
+        ok: true,
+        payload: { structuredContent: decline },
+      });
+      await expect(receivedByServer.promise).resolves.toEqual(decline);
+      expect(gatewayMethods).toEqual(route === "worker" ? [] : ["node.invoke.result"]);
       expect(questions.list()).toHaveLength(0);
       return;
     }
@@ -314,9 +366,33 @@ describe.each([
       { client: adminRequestClient },
     );
     expect(answered).toBe(true);
-    await expect(result).resolves.toMatchObject({
-      structuredContent: { action: "accept", content: { workspace: "engineering" } },
-    });
+    const accepted = { action: "accept", content: { workspace: "engineering" } };
+    await expect(
+      awaitGateBeforeSettlement(answerReady.promise, result, "The user did not answer"),
+    ).resolves.toEqual(accepted);
+    if (scenario === "grant retired") {
+      expectDefined(retire, "missing active question grant")();
+    } else if (scenario === "turn ended") {
+      grant.abort();
+    } else if (scenario === "pairing replaced") {
+      h.binding = { identity: "replacement", generation: "next-generation" };
+      h.register("new-connection");
+    }
+    deliverAnswer.resolve();
+    await result;
+    if (scenario === "granted") {
+      await expect(receivedByServer.promise).resolves.toEqual(accepted);
+      await expect(result).resolves.toMatchObject({
+        ok: true,
+        payload: { structuredContent: accepted },
+      });
+    } else {
+      const reason =
+        scenario === "pairing replaced" ? "MCP elicitation authority changed" : "AbortError";
+      await expect(receivedByServer.promise).resolves.toMatchObject({
+        message: expect.stringContaining(reason),
+      });
+    }
     expect(gatewayMethods).toEqual(
       route === "worker" ? ["node.event"] : ["node.event", "node.invoke.result"],
     );
