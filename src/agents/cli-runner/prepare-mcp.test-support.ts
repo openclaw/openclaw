@@ -195,14 +195,14 @@ export function registerCliMcpPreparationTests({
     // Keep real mint, transfer, capture and cleanup. Only external preparation
     // seams are replaced, so the same regression also runs against token cleanup.
     resetCliRunnerPrepareTestDeps();
-    const runtimeOwnerToken = `minted-turn-runtime-${randomUUID()}`;
+    const turnOwnerToken = `minted-turn-runtime-${randomUUID()}`;
     setCliRunnerPrepareTestDeps({
       isWorkspaceBootstrapPending: async () => false,
       makeBootstrapWarn: () => () => undefined,
       resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
       getActiveMcpLoopbackRuntime: () => ({
         port: 31783,
-        ownerToken: runtimeOwnerToken,
+        ownerToken: turnOwnerToken,
         nonOwnerToken: "fixture-reader",
       }),
       ensureMcpLoopbackServer: createTestMcpLoopbackServer,
@@ -218,9 +218,11 @@ export function registerCliMcpPreparationTests({
       pluginId: "native-plugin",
       bundleMcp: true,
       bundleMcpMode: "claude-config-file",
-      liveSession: "claude-stdio",
       prepareExecution: () => ({ execute: vi.fn<CliBackendExecute>() }),
-      config: createJsonlStdinBackendConfig("native-cli"),
+      config: {
+        ...createJsonlStdinBackendConfig("native-cli"),
+        liveSession: "claude-stdio",
+      },
     });
     const prepared: PreparedCliRunContext[] = [];
     const originalCaptureKey = "original-process-capture";
@@ -253,78 +255,85 @@ export function registerCliMcpPreparationTests({
         ...(requiredGeneration ? { requiredGeneration } : {}),
       });
     };
-    const first = await prepareTurn("minted-turn-first");
-    const firstCapture = expectDefined(
-      first.preparedBackend.mcpClientGrantCapture,
-      "first capture",
-    );
-    const processToken = firstCapture.transportToken;
-    const original = capabilityFor(first, originalCaptureKey);
-    const close = vi.fn();
-    const handle: CliBackendLiveSessionHandle = {
-      generation: "minted-turn-generation",
-      fingerprint: original.fingerprint,
-      isIdle: () => true,
-      close,
-      waitForExit: async () => {},
-    };
-    const processGrant = { token: processToken, runtimeOwnerToken, captureKey: originalCaptureKey };
-    const finish = async (context: PreparedCliRunContext) => {
-      context.preparedBackend.mcpClientGrantCapture?.deactivate(originalCaptureKey);
-      await context.preparedBackend.cleanup?.();
-    };
-    original.register(handle);
     try {
-      original.activate(handle);
-      expect(grants.resolveMcpLoopbackClientGrant(processGrant)?.context.runId).toBe(
-        "minted-turn-first",
+      const first = await prepareTurn("minted-turn-first");
+      const firstCapture = expectDefined(
+        first.preparedBackend.mcpClientGrantCapture,
+        "first capture",
       );
-      await finish(first);
-      expect(grants.activateMcpLoopbackClientGrantCapture(processGrant)).toBe(false);
-
-      const second = await prepareTurn("minted-turn-second");
-      const secondCapability = capabilityFor(second, "unused-second-capture", handle.generation);
-      expect(secondCapability.current()).toBe(handle);
-      expect(secondCapability.fingerprint).toBe(handle.fingerprint);
-      secondCapability.activate(handle);
-      const secondGrant = grants.resolveMcpLoopbackClientGrant(processGrant);
-      expect(secondGrant?.context.runId).toBe("minted-turn-second");
-      expect(secondGrant?.admittedRunContext).toBe(second.params.admittedRunContext);
-      expect(secondGrant?.isCurrent()).toBe(true);
-
-      // This cleanup must remove the transferred row before process removal.
-      // Resolving an inactive capture alone would conceal the retained-row bug.
-      await finish(second);
-      expect(grants.activateMcpLoopbackClientGrantCapture(processGrant)).toBe(false);
-      expect(secondGrant?.isCurrent()).toBe(false);
-      expect(close).not.toHaveBeenCalled();
-
-      const third = await prepareTurn("minted-turn-third");
-      const thirdCapability = capabilityFor(third, "unused-third-capture", handle.generation);
-      expect(thirdCapability.current()).toBe(handle);
-      expect(thirdCapability.fingerprint).toBe(handle.fingerprint);
-      thirdCapability.activate(handle);
-      const thirdGrant = grants.resolveMcpLoopbackClientGrant(processGrant);
-      expect(thirdGrant).toMatchObject({
+      const bearerToken = firstCapture.transportToken;
+      const original = capabilityFor(first, originalCaptureKey);
+      const close = vi.fn();
+      const handle: CliBackendLiveSessionHandle = {
+        generation: "minted-turn-generation",
+        fingerprint: original.fingerprint,
+        isIdle: () => true,
+        close,
+        waitForExit: async () => {},
+      };
+      const processGrant = {
+        token: bearerToken,
+        runtimeOwnerToken: turnOwnerToken,
         captureKey: originalCaptureKey,
-        context: { runId: "minted-turn-third" },
-        admittedRunContext: third.params.admittedRunContext,
-      });
-      expect(thirdGrant?.isCurrent()).toBe(true);
-      await first.preparedBackend.cleanup?.();
-      await second.preparedBackend.cleanup?.();
-      expect(thirdGrant?.isCurrent()).toBe(true);
-      expect(thirdCapability.current()).toBe(handle);
-      expect(close).not.toHaveBeenCalled();
-      await finish(third);
-      expect(grants.activateMcpLoopbackClientGrantCapture(processGrant)).toBe(false);
+      };
+      const finish = async (context: PreparedCliRunContext) => {
+        context.preparedBackend.mcpClientGrantCapture?.deactivate(originalCaptureKey);
+        await context.preparedBackend.cleanup?.();
+      };
+      try {
+        original.register(handle);
+        original.activate(handle);
+        expect(grants.resolveMcpLoopbackClientGrant(processGrant)?.context.runId).toBe(
+          "minted-turn-first",
+        );
+        await finish(first);
+        expect(grants.activateMcpLoopbackClientGrantCapture(processGrant)).toBe(false);
+
+        const second = await prepareTurn("minted-turn-second");
+        const secondCapability = capabilityFor(second, "unused-second-capture", handle.generation);
+        expect(secondCapability.current()).toBe(handle);
+        expect(secondCapability.fingerprint).toBe(handle.fingerprint);
+        secondCapability.activate(handle);
+        const secondGrant = grants.resolveMcpLoopbackClientGrant(processGrant);
+        expect(secondGrant?.context.runId).toBe("minted-turn-second");
+        expect(secondGrant?.admittedRunContext).toBe(second.params.admittedRunContext);
+        expect(secondGrant?.isCurrent()).toBe(true);
+
+        // This cleanup must remove the transferred row before process removal.
+        // Resolving an inactive capture alone would conceal the retained-row bug.
+        await finish(second);
+        expect(grants.activateMcpLoopbackClientGrantCapture(processGrant)).toBe(false);
+        expect(secondGrant?.isCurrent()).toBe(false);
+        expect(close).not.toHaveBeenCalled();
+
+        const third = await prepareTurn("minted-turn-third");
+        const thirdCapability = capabilityFor(third, "unused-third-capture", handle.generation);
+        expect(thirdCapability.current()).toBe(handle);
+        expect(thirdCapability.fingerprint).toBe(handle.fingerprint);
+        thirdCapability.activate(handle);
+        const thirdGrant = grants.resolveMcpLoopbackClientGrant(processGrant);
+        expect(thirdGrant).toMatchObject({
+          captureKey: originalCaptureKey,
+          context: { runId: "minted-turn-third" },
+          admittedRunContext: third.params.admittedRunContext,
+        });
+        expect(thirdGrant?.isCurrent()).toBe(true);
+        await first.preparedBackend.cleanup?.();
+        await second.preparedBackend.cleanup?.();
+        expect(thirdGrant?.isCurrent()).toBe(true);
+        expect(thirdCapability.current()).toBe(handle);
+        expect(close).not.toHaveBeenCalled();
+        await finish(third);
+        expect(grants.activateMcpLoopbackClientGrantCapture(processGrant)).toBe(false);
+      } finally {
+        // Only fixture teardown removes the process; all three turn assertions precede it.
+        original.remove(handle);
+      }
     } finally {
-      // Only fixture teardown removes the process; all three turn assertions precede it.
-      original.remove(handle);
       for (const context of prepared) {
         await context.preparedBackend.cleanup?.();
       }
-      grants.revokeMcpLoopbackClientGrantsForRuntime(runtimeOwnerToken);
+      grants.revokeMcpLoopbackClientGrantsForRuntime(turnOwnerToken);
     }
   });
 
