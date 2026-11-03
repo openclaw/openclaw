@@ -203,6 +203,25 @@ it.each([
   },
 );
 
+it("proves membership only from the channel tab's header, never the huddle window's", async () => {
+  const mute = muteControl(false);
+  const opened = huddleWindow(
+    channelHeader(true),
+    mute,
+    qaNode("huddle_toolbar__leave_button", "Leave"),
+  );
+  const browser = fixture({
+    document: page(channelHeader(false)),
+    currentUrl: CLIENT_URL,
+    window: slackWindow(opened, { ...MARKER, joinRequested: true }),
+  });
+  await browser.status({ readOnly: true });
+  (browser.window.open as (url: string) => unknown)("about:blank");
+  const result = await browser.status();
+  expect(result.inCall).toBe(false);
+  expect(mute.clicks).toBe(0);
+});
+
 it("unmutes talk-back once the huddle window shows the preferred virtual microphone", async () => {
   const mute = muteControl(false);
   mute.onClick = () => mute.setAttribute("aria-label", "Mute microphone");

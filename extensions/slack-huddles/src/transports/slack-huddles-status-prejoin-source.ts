@@ -86,7 +86,7 @@ export const slackHuddleStatusPrelude: Parameters<
   // workspace. Binding happens here, before any await; read-only or team-less views cannot bind and
   // fail closed. The page identity then rejects other workspaces.
   const channelOnlySession = Boolean(expectedIdentity && !/^slack-huddle:[TE][A-Z0-9]+:/.test(expectedIdentity));
-  const headerMember = identityVerified && Boolean(firstRaw(selectors.channelHeaderInHuddle));
+  const headerMember = identityVerified && Boolean(firstWithin(document, selectors.channelHeaderInHuddle));
   let workspaceBound = !channelOnlySession || Boolean(window.__openclawSlackHuddleWorkspaces?.[expectedIdentity]);
   // Only a session that owns this page lifetime's marker may bind; after a reload an established
   // session has no marker and fails closed rather than adopting whatever workspace is showing.
@@ -114,7 +114,7 @@ export const slackHuddleStatusPrelude: Parameters<
   };
   const authorityHolds = () => meetingIdentity(location.href) === expectedIdentity && markerOwned() &&
     !firstRaw(selectors.confirmation) && !firstRaw(selectors.multiDevice) && (inCall
-    ? Boolean(firstRaw(selectors.channelHeaderInHuddle))
+    ? Boolean(firstWithin(document, selectors.channelHeaderInHuddle))
     : Boolean(preview && firstRaw(selectors.preview) === preview && !firstRaw(selectors.inCall)));
   let authorityLost = false;
   const act = (node) => {
@@ -303,7 +303,7 @@ export const slackHuddleStatusPrelude: Parameters<
   // enforces the bound workspace) shows this device out of the huddle.
   if (canMutateSession && channelOnlySession && !inCallControl && !joinSettling &&
       meetingIdentity(location.href) === expectedIdentity &&
-      firstRaw(selectors.channelHeader) && !firstRaw(selectors.channelHeaderInHuddle)) {
+      firstWithin(document, selectors.channelHeader) && !firstWithin(document, selectors.channelHeaderInHuddle)) {
     delete window.__openclawSlackHuddleWorkspaces?.[expectedIdentity];
   }
   if (authorityLost) {
