@@ -347,22 +347,49 @@ describe("native hook relay CLI", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("rejects oversized hook input without touching the gateway", async () => {
-    const callGateway = vi.fn();
-    const { stderr, run } = relayFixture();
+  it.each<{ event: string; input: string; decision: string; preToolUseUnavailable?: string }>([
+    {
+      event: "pre_tool_use",
+      input: JSON.stringify({ tool_input: "\u0001".repeat(200_000) }),
+      decision: "pre",
+    },
+    { event: "pre_tool_use", input: "{", decision: "pre" },
+    { event: "permission_request", input: "{", decision: "permission" },
+    { event: "pre_tool_use", input: "{", decision: "noop", preToolUseUnavailable: "noop" },
+    { event: "post_tool_use", input: "{", decision: "noop" },
+  ])(
+    "handles unreadable $event input with $decision response",
+    async ({ event, input, decision, preToolUseUnavailable }) => {
+      const callGateway = vi.fn();
+      const { stdout, stderr, run } = relayFixture();
 
-    const exitCode = await run(
-      { event: "post_tool_use" },
-      {
-        stdin: Readable.from(["x".repeat(1024 * 1024 + 1)]),
-        callGateway: callGateway as never,
-      },
-    );
+      const exitCode = await run(
+        { event, preToolUseUnavailable },
+        {
+          stdin: Readable.from([input]),
+          callGateway: callGateway as never,
+        },
+      );
 
-    expect(exitCode).toBe(1);
-    expect(stderr.text()).toContain("native hook input exceeds");
-    expect(callGateway).not.toHaveBeenCalled();
-  });
+      expect(exitCode).toBe(0);
+      expect(stderr.text()).toContain("failed to read native hook input");
+      if (decision === "pre") {
+        expect(JSON.parse(stdout.text()).hookSpecificOutput).toMatchObject({
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: expect.stringContaining("shorten or split"),
+        });
+      } else if (decision === "permission") {
+        expect(JSON.parse(stdout.text()).hookSpecificOutput).toMatchObject({
+          hookEventName: "PermissionRequest",
+          decision: { behavior: "deny", message: expect.stringContaining("shorten or split") },
+        });
+      } else {
+        expect(stdout.text()).toBe("");
+      }
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("fails closed for PermissionRequest when the gateway relay is unavailable", async () => {
     const callGateway = vi.fn(async () => {

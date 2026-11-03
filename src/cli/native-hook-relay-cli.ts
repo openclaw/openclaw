@@ -113,7 +113,9 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
         return timedOut(error);
       }
       writeText(stderr, formatRelayCliError("failed to read native hook input", error));
-      return 1;
+      return unavailable(
+        "Native hook input could not be read; if it is too large, shorten or split it and retry",
+      );
     }
 
     try {

@@ -71,6 +71,11 @@ plugin behavior. For the native tool and permission bridge, OpenClaw injects
 per-thread Codex config for `PreToolUse`, `PostToolUse`, `PermissionRequest`,
 and `Stop`.
 
+The relay accepts up to 1 MiB of serialized hook input. If it cannot read or
+parse input, it denies policy-bearing tool and permission requests. Shorten or
+split an oversized tool request and retry. Observational hooks and tool hooks
+without local policy remain no-ops in this case.
+
 Before starting or resuming a thread, OpenClaw prepares the native relay's
 stored MCP approval snapshot and direct publication attempt, then rechecks the
 current run's authority. For local app-servers, if the listener or SQLite locator is unavailable, hook
