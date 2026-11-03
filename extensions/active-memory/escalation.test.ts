@@ -84,6 +84,10 @@ describe("active-memory escalation", () => {
     "Weißt du noch, was gestern Morgen passiert ist?",
     "Weißt du noch, was vorgestern Morgen passiert ist?",
     "Was hattest du mir gestern gesagt?",
+    "che motto usavo?",
+    "cosa avevamo deciso sul motto, nei mesi scorsi?",
+    "Ti ricordi cosa abbiamo deciso per il server?",
+    "Ieri abbiamo parlato del deploy, giusto?",
   ])("recognizes recall intent in %j", (message) => {
     expect(decide("escalate", message)).toBe("recall");
   });
@@ -151,6 +155,10 @@ describe("active-memory escalation", () => {
     "Weißt du noch, was nächste Woche ansteht?",
     "Was wollten wir morgen kaufen?",
     "Schreib als letztes Wort ENDE",
+    "Ricordami di comprare il latte domani",
+    "Ti ricordi di mandare il rapporto?",
+    "Ieri ho detto a mia madre che parto",
+    "Che cosa devo comprare?",
     "Erinnerst du dich morgen daran, was mit dem Kunden besprochen werden soll?",
   ])("does not mistake ordinary or future-facing %j for recall intent", (message) => {
     expect(hasRecallIntent(message)).toBe(false);
