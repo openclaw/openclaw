@@ -1,8 +1,8 @@
 // Control UI tests cover customizable sidebar navigation and persistence.
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import {
+  controlUiBundledGatewayUrl,
   controlUiSessionPath,
   installMockGateway,
   waitForControlUiRoute,
@@ -720,6 +720,35 @@ suite.define(() => {
             { hasActiveRun: true, key: "main", kind: "direct", status: "running", updatedAt: 100 },
           ],
         });
+        // Seed the outbox owner; shell commits replace direct sidebar property assignments.
+        await page.addInitScript((gatewayOwner) => {
+          const recoveryScope = "e2e-recovery-scope";
+          const sessionKey = "agent:main:main";
+          sessionStorage.setItem(
+            `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayOwner)}:account:${encodeURIComponent(recoveryScope)}`,
+            JSON.stringify({
+              version: 4,
+              gatewayOwner,
+              recovery: {},
+              sessions: {
+                [`${sessionKey}\u0000agent:main`]: {
+                  updatedAt: Date.now(),
+                  queue: [
+                    {
+                      id: "sidebar-home-held-input",
+                      text: "Synthetic held sidebar input",
+                      createdAt: Date.now(),
+                      sessionKey,
+                      agentId: "main",
+                      storageScope: JSON.stringify([gatewayOwner, recoveryScope]),
+                      sendState: "held",
+                    },
+                  ],
+                },
+              },
+            }),
+          );
+        }, controlUiBundledGatewayUrl(suite.server.baseUrl));
 
         await page.goto(`${suite.server.baseUrl}chat`);
         const sidebar = page.locator("openclaw-app-sidebar");
@@ -732,14 +761,6 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
         const home = sidebar.locator(".sidebar-footer-bar__home");
         await expect.poll(() => home.isVisible()).toBe(true);
-        await sidebar.evaluate((element) => {
-          // This layout fixture supplies the sidebar's declared presentation input.
-          (element as AppSidebarElement).storedOutboxes = {
-            total: 1,
-            attentionCountForSession: () => 1,
-            hasSessionDraft: () => false,
-          };
-        });
 
         const activity = home.locator(".session-glyph");
         const shortcut = sidebar

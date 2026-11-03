@@ -2411,8 +2411,8 @@ describe("disposeSession timeout", () => {
         "notify tools/list_changed during tools/call",
       );
       await waitForInvalidation(runtime, signal);
-      const now = Date.now;
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + 5_001);
+      const realNow = performance.now.bind(performance);
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => realNow() + 5_001);
       let retriedCatalog;
       try {
         await runtime.getCatalog();

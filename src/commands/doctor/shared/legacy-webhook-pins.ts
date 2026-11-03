@@ -4,7 +4,7 @@ import type { ChannelDoctorConfigMutation } from "../../../channels/plugins/type
 import { getConfigValueAtPath, setConfigValueAtPath } from "../../../config/config-paths.js";
 import { resolveConfigPath, resolveIsConfigReadOnly } from "../../../config/paths.js";
 import { cloneConfigWithResolutionFacts } from "../../../config/resolution-facts.js";
-import type { ConfigFileSnapshot } from "../../../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
 import {
   executeSqliteQueryTakeFirstSync,
@@ -30,10 +30,32 @@ function webhookCompletionKey(env: NodeJS.ProcessEnv): string {
   return `webhookListeners:${resolveConfigPath(env)}`;
 }
 
-export function readUnwrittenWebhookCompletion(env: NodeJS.ProcessEnv) {
-  return readConfigMachineStateAsync<true | Record<string, string[][]>>(webhookCompletionKey(env), {
-    env,
-  });
+type WebhookCompletion = true | Record<string, string[][]>;
+
+/**
+ * Doctor records decisions in config; startup records them in machine state, including a
+ * channel Doctor left pending. Config decisions win per channel.
+ */
+function mergeWebhookCompletion(
+  configured: WebhookCompletion | undefined,
+  recorded: WebhookCompletion | undefined,
+) {
+  return configured && configured !== true && recorded && recorded !== true
+    ? { ...recorded, ...configured }
+    : (configured ?? recorded);
+}
+
+export async function readWebhookCompletion(
+  config: Pick<OpenClawConfig, "meta">,
+  env: NodeJS.ProcessEnv,
+) {
+  const configured = config.meta?.migrations?.webhookListeners;
+  return configured === true
+    ? configured
+    : mergeWebhookCompletion(
+        configured,
+        await readConfigMachineStateAsync<WebhookCompletion>(webhookCompletionKey(env), { env }),
+      );
 }
 
 /** No config bytes changed, so this completion does not depend on config rollback. */
@@ -108,13 +130,16 @@ function applyHistoricalWebhookPins(
   } = {},
 ): ChannelDoctorConfigMutation {
   const { env } = state;
+  const configured = mutation.config.meta?.migrations?.webhookListeners;
   const marker =
-    mutation.config.meta?.migrations?.webhookListeners ??
-    (state.completion ??= {
-      marker: readConfigMachineState<true | Record<string, string[][]>>(webhookCompletionKey(env), {
-        env,
-      }),
-    }).marker;
+    configured === true
+      ? configured
+      : mergeWebhookCompletion(
+          configured,
+          (state.completion ??= {
+            marker: readConfigMachineState<WebhookCompletion>(webhookCompletionKey(env), { env }),
+          }).marker,
+        );
   if (marker === true || mutation.warnings?.length) {
     return mutation;
   }

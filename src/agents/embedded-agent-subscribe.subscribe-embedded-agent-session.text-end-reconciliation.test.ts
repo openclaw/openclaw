@@ -231,6 +231,22 @@ it("ignores an already-contained snapshot", async () => {
   await h.flush(["Hello world"], true, 1);
 });
 
+it.each([false, true])(
+  "reconciles divergent text_end with terminal partial=%s",
+  async (partial) => {
+    const h = setup({}, false);
+    emitAssistantTextDelta({ emit: h.emit, delta: "Hello word" });
+    if (partial) {
+      h.end(["Hello world"], 0);
+    } else {
+      emitAssistantTextEnd({ emit: h.emit, content: "Hello world" });
+    }
+    const expected = partial ? "Hello world" : "Hello word";
+    await h.flush([expected], true, 1);
+    h.expectEvent(expected);
+  },
+);
+
 it("sends only the new suffix when replies grow across tool calls", async () => {
   const h = setup({}, false);
   const expected = [
@@ -286,9 +302,9 @@ it("preserves split reply directives after a delivered chunk through text_end", 
   const text = "Visible text.\n[[reply_to:target]]Bye";
   const message = assistant([text]);
   h.update(message, { type: "text_end", content: text, partial: message });
-  await h.flush(["Visible text.", "Bye"]);
+  await h.flush(["Visible text.", "\nBye"]);
   expect(h.onBlockReply.mock.calls.at(-1)?.[0]).toMatchObject({
-    text: "Bye",
+    text: "\nBye",
     replyToId: "target",
     replyToTag: true,
   });

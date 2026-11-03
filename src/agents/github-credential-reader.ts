@@ -8,7 +8,12 @@ export type GitHubRepositoryAdmissionRequest = {
   host: string;
   selection: GitHubAppSelection;
 };
-export type GitHubCredentialReader = (
+export type GitHubCredentialReader = ((
   env: NodeJS.ProcessEnv,
   admission?: GitHubRepositoryAdmissionRequest,
-) => Promise<string | undefined>;
+) => Promise<string | undefined>) & {
+  /** Admit repository policy without requesting a native bearer for a managed profile. */
+  admit?: () => Promise<void>;
+  /** Live owner guard retained by native issuers after asynchronous policy admission. */
+  assertCurrent?: () => void;
+};

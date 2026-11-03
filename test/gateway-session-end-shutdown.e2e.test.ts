@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -20,6 +21,7 @@ it("finishes a real reset-started session_end hook after an operating-system SIG
   const fixtureDir = fixtureDirs.make("openclaw-session-end-shutdown-");
   const pluginDir = path.join(fixtureDir, "plugin");
   const tracePath = path.join(fixtureDir, "session-end.trace");
+  const releasePath = path.join(fixtureDir, "release-hook");
   await writeRestartPlugin(
     pluginDir,
     {
@@ -28,14 +30,20 @@ it("finishes a real reset-started session_end hook after an operating-system SIG
       activation: { onStartup: true },
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     },
-    `import { appendFileSync } from "node:fs";
+    `import { appendFileSync, watch } from "node:fs";
 export default {
   id: ${JSON.stringify(PLUGIN_ID)},
   register(api) {
     api.on("session_end", async (event) => {
       if (event.sessionKey !== ${JSON.stringify(SESSION_KEY)} || event.reason !== "reset") return;
-      appendFileSync(${JSON.stringify(tracePath)}, "started\\n");
-      await new Promise((resolve) => setTimeout(resolve, 10000));
+      await new Promise((resolve) => {
+        const watcher = watch(${JSON.stringify(fixtureDir)}, (_event, filename) => {
+          if (filename !== "release-hook") return;
+          watcher.close();
+          resolve();
+        });
+        appendFileSync(${JSON.stringify(tracePath)}, "started\\n");
+      });
       appendFileSync(${JSON.stringify(tracePath)}, "completed\\n");
     });
   },
@@ -74,6 +82,10 @@ export default {
       assert(child, "Gateway process exited before its session-end hook was signaled");
       const exited = once(child, "exit");
       expect(child.kill("SIGTERM")).toBe(true);
+      await vi.waitFor(() => {
+        expect(instance.logs()).toContain("received SIGTERM; shutting down");
+      }, WAIT_OPTIONS);
+      await fs.writeFile(releasePath, "release");
 
       await expect(exited).resolves.toEqual([0, null]);
       await expect(readTrace(tracePath)).resolves.toEqual(["started", "completed"]);

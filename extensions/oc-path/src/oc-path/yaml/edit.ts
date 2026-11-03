@@ -14,6 +14,7 @@ import { OcPathEditError } from "../edit-error.js";
 import type { OcPath } from "../oc-path.js";
 import { formatOcPath } from "../oc-path.js";
 import { guardSentinel } from "../sentinel.js";
+import { sourceLineEnding } from "../source.js";
 import type { YamlAst } from "./ast.js";
 import { resolveYamlOcPath } from "./resolve.js";
 
@@ -46,7 +47,7 @@ export function setYamlOcPath(ast: YamlAst, path: OcPath, newValue: unknown): Ya
     numericSources.delete(previous);
   }
   cloned.setIn(segments, newValue);
-  return { kind: "yaml", raw: cloned.toString(), doc: cloned, lineCounter };
+  return { kind: "yaml", raw: stringifyDoc(cloned, ast.raw), doc: cloned, lineCounter };
 }
 
 export function insertYamlOcPath(
@@ -89,7 +90,7 @@ export function insertYamlOcPath(
       throw new OcPathEditError("unresolved");
     }
     cloned.setIn([...segments, marker.key], newValue);
-    return { kind: "yaml", raw: cloned.toString(), doc: cloned, lineCounter };
+    return { kind: "yaml", raw: stringifyDoc(cloned, ast.raw), doc: cloned, lineCounter };
   }
 
   if (isSeq(parent)) {
@@ -102,10 +103,14 @@ export function insertYamlOcPath(
       const idx = Math.min(marker.index, parent.items.length);
       parent.items.splice(idx, 0, cloned.createNode(newValue) as Node);
     }
-    return { kind: "yaml", raw: cloned.toString(), doc: cloned, lineCounter };
+    return { kind: "yaml", raw: stringifyDoc(cloned, ast.raw), doc: cloned, lineCounter };
   }
 
   throw new OcPathEditError("unresolved");
+}
+
+function stringifyDoc(doc: Document.Parsed, raw: string): string {
+  return doc.toString().replace(/\n/g, sourceLineEnding(raw));
 }
 
 function formatInsertionMarker(

@@ -12,6 +12,8 @@ settings:
     ENABLE_APP_INTENTS_METADATA_GENERATION: NO
 
 packages:
+  ESPProvision:
+    path: ThirdParty/ESPProvision
   OpenClawKit:
     path: ../shared/OpenClawKit
   Swabble:
@@ -75,6 +77,7 @@ targets:
       - path: Resources/Localizable.xcstrings
         buildPhase: resources
     dependencies:
+      - package: ESPProvision
       - target: OpenClawShareExtension
         embed: true
       - target: OpenClawActivityWidget
@@ -426,6 +429,8 @@ targets:
       - path: Tests
         excludes:
           - Logic
+      - path: ThirdParty/ESPProvision/Tests/ESPProvisionTests
+        group: ESPProvisionTests
       - path: ../macos/Tests/OpenClawIPCTests/AsyncTestGate.swift
         group: Tests
       - path: ../macos/Tests/OpenClawIPCTests/DashboardHTTPFixture.swift
@@ -450,6 +455,7 @@ targets:
         group: WatchApp/Sources
     dependencies:
       - target: OpenClaw
+      - package: ESPProvision
       - package: Swabble
         product: SwabbleKit
       - sdk: AppIntents.framework

@@ -374,6 +374,10 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
       ];
   const canonical = new Map(rows.map((row) => [row.key, row]));
   const pins = [...new Set(keys)].flatMap((key) => {
+    // Query replacement may retain a descriptor; a known deletion may not.
+    if (host.sessionDataContext?.sessions.deletionState(key)) {
+      return [];
+    }
     const projected = canonical.get(key);
     const row =
       projected ??
@@ -530,5 +534,5 @@ export function sidebarVisibleRowsInOrder(
         host.sessionDataContext?.sessions.archiveVisibility(key),
       );
   // Keep appearances until the clicked range is resolved; batch targets deduplicate later.
-  return [...personalGroupRows, ...pins, ...visibleRows];
+  return [...pins, ...personalGroupRows, ...visibleRows];
 }

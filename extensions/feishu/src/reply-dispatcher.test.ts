@@ -1564,7 +1564,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
     const fallbackText = String(firstMockArg(sendMessageFeishuMock, "message send params").text);
     expect(fallbackText).toBe("spoken reply\n\nMedia upload failed. Please try again.");
-    expect(fallbackText).not.toContain(mediaPath);
   });
 
   it.each([

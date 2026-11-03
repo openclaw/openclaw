@@ -41,11 +41,11 @@ export function renderPluginDetailShell(props: {
   backLabel: string;
   onBack: () => void;
   titleAction?: JSX.Element;
-  notice?: JSX.Element;
   identity: JSX.Element | undefined;
   icon?: JSX.Element;
   readme?: JSX.Element;
   sidebar?: JSX.Element;
+  recommendations?: JSX.Element;
   panel: JSX.Element;
 }): JSX.Element {
   let heading!: HTMLHeadingElement;
@@ -73,12 +73,12 @@ export function renderPluginDetailShell(props: {
           {props.summary ? (
             <p class="plugin-catalog-detail__summary">{props.summary}</p>
           ) : undefined}
-          {props.notice}
           <div class="plugin-catalog-detail__actions">{props.titleAction ?? undefined}</div>
         </div>
       </div>
       <div class="plugin-catalog-detail__content">
         <div class="plugin-catalog-detail__main">
+          {props.recommendations}
           <section class="plugin-catalog-detail__panel">{props.panel}</section>
           {props.readme ? (
             <section class="plugin-catalog-detail__readme-section">

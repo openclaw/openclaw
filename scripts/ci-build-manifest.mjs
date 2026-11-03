@@ -201,6 +201,9 @@ if (
   );
 }
 const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
+// Stable tags also ship the macOS app, and its post-tag validation is too late
+// to block the tag, so only beta defers macOS Swift proof.
+const deferMacosSwift = releaseScope === "npm-beta";
 const fullNativeValidation =
   eventName === "workflow_dispatch" && !mainValidation && !releaseGate && releaseScope === "full";
 if (releaseScope !== "full" && !npmQualification) {
@@ -381,7 +384,7 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/format-swift.sh");
 const runMacosSwift =
   runMacos &&
-  !npmQualification &&
+  !deferMacosSwift &&
   (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi);
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
@@ -880,12 +883,31 @@ const extensionLintMode =
       : "affected"
     : undefined;
 const runCheckPlan = Boolean(runCheck && (narrowCheckScope || extensionLintMode));
+let preserveFullChecks = !narrowCheckScope;
 let typeGraphBoundaryOwner = "";
 if (runCheckPlan && proposedCheckScope?.types) {
   const { resolveChangedCiTsgoInputs } = await import(
     fromTarget("./scripts/lib/tsgo-core-test-shards.mts")
   );
   const compilerPaths = resolveChangedCiTsgoInputs(changedPaths, existsSync);
+  if (preserveFullChecks && extensionLintMode && !releaseFastLane && compilerPaths) {
+    const { getChangedPathFacts, isTestLineAllocationPath } = await import(
+      fromTarget("./scripts/lib/changed-path-facts.mjs")
+    );
+    // Shared tests and numeric allocations retain every guard family, including
+    // allocation validation. Compiler/lint owners still discover all consumers.
+    preserveFullChecks = !changedPaths.every((file) => {
+      const facts = getChangedPathFacts(file);
+      return (
+        path.posix.normalize(file) === file &&
+        !file.includes("\\") &&
+        (isTestLineAllocationPath(file) ||
+          (["source", "package", "ui", "extension"].includes(facts.surface) &&
+            facts.isTestOnly &&
+            facts.isChangedLaneTest))
+      );
+    });
+  }
   typeGraphBoundaryOwner =
     runNodeFull &&
     !releaseFastLane &&
@@ -1317,7 +1339,11 @@ const nodeTestShards = targetNodeTestShards
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
       requires_bun:
         !shard.requiresDist &&
-        Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
+        (Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)) ||
+          // Node-hosted packaging proof also launches a pinned Bun child.
+          shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
+            plan.configs?.includes(goToolingConfig),
+          )),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
@@ -1364,6 +1390,11 @@ const nodeTestShards = targetNodeTestShards
             plan.shard_name ?? plan.shardName,
           ),
       ),
+      requires_native_secret_service: shardRequiresTests(
+        shard,
+        ["test/e2e/qa-lab/runtime/codex-native-command-auth.e2e.test.ts"],
+        (plan) => plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false,
+      ),
       requires_sandbox_image: shardRequiresTests(
         shard,
         [
@@ -1381,6 +1412,7 @@ const nodeTestShards = targetNodeTestShards
         "requires_dist",
         "requires_go",
         "requires_ripgrep",
+        "requires_native_secret_service",
         "requires_sandbox_image",
       ]) {
         if (row[key] === false) {
@@ -1681,7 +1713,7 @@ const manifest = {
         ...(extensionLintMode
           ? {
               extensionLintMode,
-              preserveFullChecks: !narrowCheckScope,
+              preserveFullChecks,
               ...(process.env.OPENCLAW_CI_CHANGED_BASE
                 ? { changedBaseRef: process.env.OPENCLAW_CI_CHANGED_BASE }
                 : {}),
@@ -1780,7 +1812,7 @@ const manifest = {
       : [],
   ),
   run_macos_swift: runMacosSwift,
-  run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
+  run_openclawkit_tests: runMacos && !deferMacosSwift && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
   run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
   run_ios_lifecycle_tests: iosSimulatorSelection.lifecycle.selected,
@@ -2127,9 +2159,11 @@ if (process.env.GITHUB_STEP_SUMMARY) {
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,
     `### CI release qualification\n\n- Scope: \`${releaseScope}\`\n- Target: \`${checkoutRevision}\`\n` +
-      (npmQualification
+      (deferMacosSwift
         ? "- Native app qualification: deferred; Linux, macOS, and Windows Node coverage retained.\n"
-        : ""),
+        : npmQualification
+          ? "- Native app qualification: deferred except macOS Swift; Linux, macOS, and Windows Node coverage retained.\n"
+          : ""),
   );
 }
 

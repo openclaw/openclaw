@@ -1,4 +1,4 @@
-import { formatErrorMessage } from "@openclaw/normalization-core";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { redactToolDetail } from "./browser-redact.ts";
 
 /** The message is complete UI text; the cause remains available to diagnostics. */
