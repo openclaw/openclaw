@@ -29,6 +29,7 @@ import {
   testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -98,8 +99,10 @@ describe("gateway presence audience", () => {
     setDisplayName(watcherProfile.id, "Presence Watcher");
     setUserProfileRole(ensureProfileForEmail("writer@example.com").id, "writer");
     setUserProfileRole(ensureProfileForEmail("pairing@example.com").id, "pairing");
-    setUserProfileRole(ensureProfileForEmail("guest@example.com").id, "guest");
+    const guestProfile = ensureProfileForEmail("guest@example.com");
+    setUserProfileRole(guestProfile.id, "writer");
     const sharedKey = "agent:main:presence-shared";
+    const guestKey = "agent:main:presence-guest";
     const sharedSessionId = randomUUID();
     const draftKey = "agent:main:presence-draft";
     const draftSessionId = randomUUID();
@@ -113,6 +116,7 @@ describe("gateway presence audience", () => {
     await withGatewayServer(async ({ port }) => {
       for (const [sessionKey, profileId, visibility, incognito] of [
         [sharedKey, creator.id, "shared", false],
+        [guestKey, guestProfile.id, "shared", false],
         [draftKey, creator.id, "draft", false],
         [incognitoKey, creator.id, "shared", true],
         [restrictedKey, restricted.id, "draft", false],
@@ -201,6 +205,26 @@ describe("gateway presence audience", () => {
       };
       try {
         const guest = await openRecipient("guest", ["operator.sessions.write"]);
+        const activity = {
+          source: "activity",
+          includePeople: true,
+          includeOwnerSessionCounts: true,
+        };
+        const personActivity = { ...activity, involvingProfileId: creator.id };
+        expect(await rpcReq(guest.ws, "sessions.list", personActivity)).toMatchObject({
+          ok: true,
+          payload: { sessions: [{ key: sharedKey }] },
+        });
+        expect(await rpcReq(guest.ws, "sessions.list", activity)).toMatchObject({
+          ok: true,
+          payload: {
+            people: expect.arrayContaining([
+              expect.objectContaining({ identity: { type: "profile", id: creator.id } }),
+            ]),
+          },
+        });
+        // Reuse this connection and its warmed selection after revoking the role's authority.
+        setUserProfileRole(guestProfile.id, "guest");
         for (const method of ["users.list", "presence.query", "system-presence"]) {
           expect(await rpcReq(guest.ws, method, {})).toMatchObject({
             ok: false,
@@ -212,13 +236,24 @@ describe("gateway presence audience", () => {
           ok: true,
           payload: { session: { sessionId: sharedSessionId } },
         });
-        expect(
-          await rpcReq(guest.ws, "sessions.list", {
-            source: "activity",
-            involvingProfileId: creator.id,
-            includePeople: true,
-          }),
-        ).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+        expect(await rpcReq(guest.ws, "sessions.list", personActivity)).toMatchObject({
+          ok: false,
+          error: { code: "FORBIDDEN" },
+        });
+        const afterDemotion = await rpcReq<SessionsListResult>(guest.ws, "sessions.list", activity);
+        expect(afterDemotion).toMatchObject({
+          ok: true,
+          payload: {
+            totalCount: 2,
+            people: [{ identity: { id: guestProfile.id } }],
+            owners: [{ id: guestProfile.id }],
+            ownerSessionCounts: [{ profileId: guestProfile.id, open: 1 }],
+            peopleSessionCount: 1,
+          },
+        });
+        expect(afterDemotion.payload?.sessions.map((session) => session.key)).toEqual(
+          expect.arrayContaining([guestKey, sharedKey]),
+        );
         const watcher = await openRecipient("watcher", ["operator.admin"]);
         // Join publication itself: an RPC response can precede the coalescing window.
         const firstConnect = onceMessage<{
