@@ -340,6 +340,7 @@ async function capture(f: Fixture, fresh = false) {
     managedServiceRootRedirect: null,
     recoveryState: { triageTarget: { env: f.env } },
     prepareMutableUpdate: unexpected,
+    onLocalTuiGateAcquired: unexpected,
   };
   const result = await captureUpdateDatabases({
     transaction: {

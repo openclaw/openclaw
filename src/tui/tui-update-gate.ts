@@ -15,7 +15,7 @@ import {
 
 async function respawnTuiFromCurrentInstallation(): Promise<never> {
   const [entryArg, ...entryArgs] = process.argv.slice(1);
-  runCliRespawnPlan({
+  await runCliRespawnPlan({
     command: process.execPath,
     argv: [
       ...process.execArgv,

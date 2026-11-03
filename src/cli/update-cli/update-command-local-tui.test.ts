@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const quiesce = vi.hoisted(() => vi.fn());
 const announce = vi.hoisted(() => vi.fn());
 
-vi.mock("../../infra/local-tui-processes.js", () => ({
+vi.mock("../../infra/local-tui-processes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/local-tui-processes.js")>()),
   announceLocalTuiUpdate: announce,
   quiesceLocalTuiProcessesBeforeUpdate: quiesce,
 }));
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: { error: vi.fn(), log: vi.fn() },
 }));
 

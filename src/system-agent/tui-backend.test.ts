@@ -25,7 +25,10 @@ const verifiedInferenceMocks = vi.hoisted(() => ({
 }));
 const runNestedTuiAfterUpdateGate = vi.hoisted(() => vi.fn());
 
-vi.mock("../tui/tui-update-gate.js", () => ({ runNestedTuiAfterUpdateGate }));
+vi.mock("../tui/tui-update-gate.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tui/tui-update-gate.js")>()),
+  runNestedTuiAfterUpdateGate,
+}));
 
 vi.mock("../commands/channels/add.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/channels/add.js")>()),

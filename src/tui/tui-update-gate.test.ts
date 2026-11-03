@@ -11,7 +11,8 @@ const mocks = vi.hoisted(() => ({
   wait: vi.fn(),
 }));
 
-vi.mock("../infra/local-tui-processes.js", () => ({
+vi.mock("../infra/local-tui-processes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/local-tui-processes.js")>()),
   announceLocalTuiClient: mocks.announce,
   waitForLocalTuiUpdate: mocks.wait,
 }));
@@ -23,9 +24,11 @@ vi.mock("../infra/openclaw-installation-id.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-installation-id.js")>()),
   resolveOpenClawInstallationRevision: mocks.resolveRevision,
 }));
-vi.mock("../entry.respawn.js", () => ({
+vi.mock("../entry.respawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../entry.respawn.js")>()),
   runCliRespawnPlan: mocks.respawn,
 }));
+// mock-isolation: Observe lazy TUI loading without initializing its terminal and runtime graph.
 vi.mock("./tui.js", () => {
   mocks.load();
   return { runTui: mocks.runTui };
@@ -111,6 +114,15 @@ describe("TUI update startup gate", () => {
 
     expect(mocks.load).not.toHaveBeenCalled();
     expect(lifecycle).not.toHaveBeenCalled();
+  });
+
+  it("propagates a failed respawn after installation replacement", async () => {
+    const error = new Error("respawn failed");
+    mocks.resolveRevision.mockReturnValueOnce("revision-1").mockReturnValueOnce("revision-2");
+    mocks.respawn.mockRejectedValueOnce(error);
+
+    await expect(runTuiAfterUpdateGate({} as never)).rejects.toBe(error);
+    expect(mocks.runTui).not.toHaveBeenCalled();
   });
 
   it("respawns from the replaced installation instead of importing stale chunks", async () => {

@@ -1,0 +1,5 @@
+# PR 123906: net new local-TUI update regression coverage against 1f01f4944d45.
+# Protect installation-scoped process discovery and signal authority, startup
+# admission during replacement, nested lifecycle cleanup, and updater consumers.
+# Includes real subprocess signal proof; the shared scalar remains unchanged.
+1540

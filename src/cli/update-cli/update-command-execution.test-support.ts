@@ -101,7 +101,8 @@ vi.mock(import("../../infra/update-runner-git-recovery.js"), async (original) =>
   readCurrentGitUpdateRecovery: mocks.readGitRecovery,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: { error: mocks.runtimeError, log: vi.fn() },
 }));
 
