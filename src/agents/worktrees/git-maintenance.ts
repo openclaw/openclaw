@@ -16,6 +16,10 @@ import {
   type GitProcessOperation,
 } from "../../process/spawn-diagnostics.js";
 import {
+  ProjectCheckoutBusyError,
+  withProjectCheckoutLifecycle,
+} from "../../projects/project-checkout.js";
+import {
   readConfigMachineStateAsync,
   writeConfigMachineStateAsync,
 } from "../../state/config-machine-state-async.js";
@@ -27,11 +31,11 @@ import type { ManagedWorktreeGcResult } from "./types.js";
 const log = createSubsystemLogger("agents/worktrees");
 const operation: GitProcessOperation = "worktree.maintenance";
 const WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS = 30 * 60 * 1000;
-const PACK_BATCH_BYTES = 512 * 1024 * 1024;
+const PACK_BATCH_BYTES = 16 * 1024 * 1024 * 1024;
 // Index size bounds object metadata even when many tiny blobs compress well.
-const PACK_BATCH_INDEX_BYTES = 32 * 1024 * 1024;
+const PACK_BATCH_INDEX_BYTES = 128 * 1024 * 1024;
 const PACK_BATCH_COUNT = 1024;
-const PACK_BATCH_TIMEOUT_MS = 5 * 60 * 1000;
+const PACK_BATCH_TIMEOUT_MS = WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS;
 const TEMP_PACK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const OBJECT_REPAIR_TIMEOUT_MS = 5 * 60 * 1000;
 const OBJECT_REPAIR_BATCH_SIZE = 256;
@@ -64,6 +68,7 @@ async function repairWorktreeObjects(
     }
     return {
       operation,
+      executionIntent: "agent-tool" as const,
       signal: params.signal,
       beforeRun: () => {
         params.signal?.throwIfAborted();
@@ -182,6 +187,7 @@ async function maintainWorktreePacks(
   };
   const options = {
     operation,
+    executionIntent: "agent-tool" as const,
     signal: params.signal,
     beforeRun: assertCurrent,
     timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
@@ -254,6 +260,7 @@ async function cleanTemporaryPacks(
       {
         input: JSON.stringify({ files, olderThan: Date.now() - TEMP_PACK_MAX_AGE_MS }),
         beforeInput: assertCurrent,
+        executionIntent: "agent-tool",
         signal,
         timeoutMs: 30_000,
         killProcessTree: true,
@@ -356,7 +363,7 @@ async function consolidatePacks(
     for (let offset = 0; offset < selected.length; offset += 128) {
       const timeoutMs = Math.ceil(verifyDeadline - performance.now());
       if (timeoutMs <= 0) {
-        throw new Error("Git pack verification exceeded its five-minute budget");
+        throw new Error("Git pack verification exceeded its thirty-minute budget");
       }
       // Relative names and bounded argv also fit Windows' command-line limit.
       await requireGit(
@@ -466,84 +473,109 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
         await report("throttled");
         continue;
       }
-      // Archive notifications also run cleanup; repository housekeeping stays hourly.
-      nextRunAt.set(repoRoot, Date.now() + 60 * 60_000);
-      let stage: "objects" | "packs" | "maintenance" = "packs";
+      const state: { stage: "objects" | "packs" | "maintenance" } = { stage: "packs" };
       try {
-        await report(stage);
-        // Snapshot failures describe graph availability, not pack integrity.
-        // Verify bounded pack inputs before expiry; never gate them on full fsck.
-        await maintainWorktreePacks(repoRoot, params, async (before, after) => {
-          if (after !== undefined) {
-            progress.result.packsRemoved =
-              (progress.result.packsRemoved ?? 0) + Math.max(0, before - after);
-          }
-          await report(stage, { packsBefore: before, packsAfter: after });
-        });
-        const options = {
-          operation,
-          signal: params.signal,
-          beforeRun: assertCurrent,
-          timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
-          killProcessTree: true,
-          lowerPriority: true,
-          env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
-        };
-        let remote: string | undefined;
-        if (params.retryDeferred) {
-          stage = "objects";
-          await report(stage);
-          const config = await runGit(
-            repoRoot,
-            ["config", "--bool", "--get-regexp", "^remote\\..*\\.promisor$"],
-            options,
-          );
-          if (!(config.termination === "exit" && config.code === 1)) {
-            remote = /^remote\.(.+)\.promisor true$/m.exec(
-              requireGitCommandOutput("git config promisor", config),
-            )?.[1];
-          }
-        }
-        // Only an explicit repair pass may fetch. Pack progress is already published.
-        if (params.retryDeferred && remote) {
-          await withContentGitSlot(
-            () => repairWorktreeObjects(repoRoot, remote, env, params),
-            params.signal,
-          );
-        }
-        stage = "maintenance";
-        if (failed.has(repoRoot)) {
+        await withProjectCheckoutLifecycle(
+          repoRoot,
+          { env, signal: params.signal, waitMs: 0 },
+          async (lease) => {
+            const ownedParams = {
+              ...params,
+              signal: lease.signal,
+              commitGuard: () => {
+                assertCurrent();
+                lease.assertCurrent();
+              },
+            };
+            // A busy checkout leaves its hourly slot available for the next sweep.
+            nextRunAt.set(repoRoot, Date.now() + 60 * 60_000);
+            await report(state.stage);
+            // Snapshot failures describe graph availability, not pack integrity.
+            // Verify bounded pack inputs before expiry; never gate them on full fsck.
+            await maintainWorktreePacks(repoRoot, ownedParams, async (before, after) => {
+              if (after !== undefined) {
+                progress.result.packsRemoved =
+                  (progress.result.packsRemoved ?? 0) + Math.max(0, before - after);
+              }
+              await report(state.stage, { packsBefore: before, packsAfter: after });
+            });
+            const options = {
+              operation,
+              executionIntent: "agent-tool" as const,
+              signal: lease.signal,
+              beforeRun: ownedParams.commitGuard,
+              timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
+              killProcessTree: true,
+              lowerPriority: true,
+              env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+            };
+            let remote: string | undefined;
+            if (params.retryDeferred) {
+              state.stage = "objects";
+              await report(state.stage);
+              const config = await runGit(
+                repoRoot,
+                ["config", "--bool", "--get-regexp", "^remote\\..*\\.promisor$"],
+                options,
+              );
+              if (!(config.termination === "exit" && config.code === 1)) {
+                remote = /^remote\.(.+)\.promisor true$/m.exec(
+                  requireGitCommandOutput("git config promisor", config),
+                )?.[1];
+              }
+            }
+            // Only an explicit repair pass may fetch. Pack progress is already published.
+            if (params.retryDeferred && remote) {
+              await withContentGitSlot(
+                () => repairWorktreeObjects(repoRoot, remote, env, ownedParams),
+                params.signal,
+              );
+            }
+            state.stage = "maintenance";
+            if (failed.has(repoRoot)) {
+              progress.record(
+                "git-maintenance",
+                "deferred",
+                "Object or graph maintenance suspended; run worktrees gc --retry-deferred after repair",
+                repoRoot,
+              );
+              await report("suspended");
+              return;
+            }
+            await report(state.stage);
+            await withContentGitSlot(
+              () =>
+                requireGit(
+                  repoRoot,
+                  ["maintenance", "run", "--auto", "--task=commit-graph", "--task=loose-objects"],
+                  options,
+                ),
+              params.signal,
+            );
+            await report("completed");
+          },
+        );
+      } catch (error) {
+        assertCurrent();
+        if (error instanceof ProjectCheckoutBusyError) {
           progress.record(
             "git-maintenance",
             "deferred",
-            "Object or graph maintenance suspended; run worktrees gc --retry-deferred after repair",
+            "Project checkout is busy; retry on the next cleanup pass",
             repoRoot,
           );
-          await report("suspended");
+          await report("throttled");
           continue;
         }
-        await report(stage);
-        await withContentGitSlot(
-          () =>
-            requireGit(
-              repoRoot,
-              ["maintenance", "run", "--auto", "--task=commit-graph", "--task=loose-objects"],
-              options,
-            ),
-          params.signal,
-        );
-        await report("completed");
-      } catch (error) {
-        assertCurrent();
-        failed.set(repoRoot, stage);
+        failed.set(repoRoot, state.stage);
         progress.error("git-maintenance", error, repoRoot);
         await report("suspended");
         const recovery =
-          stage === "objects"
+          state.stage === "objects"
             ? "Check the promisor remote, then run openclaw worktrees gc --retry-deferred to resume object repair."
             : "Repair the repository, then run openclaw worktrees gc --retry-deferred or restart the Gateway to retry.";
         log.warn(
-          `worktree Git maintenance suspended (${stage}) for ${repoRoot}: ${String(error)}\n${recovery}`,
+          `worktree Git maintenance suspended (${state.stage}) for ${repoRoot}: ${String(error)}\n${recovery}`,
         );
       }
     }

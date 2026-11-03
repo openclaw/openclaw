@@ -1,5 +1,15 @@
 // Prepare native process probes before their liveness, readiness, and retention deadlines.
 export const agentProcessTestEntrypoints = {
+  durableProcesses: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "bash-process-durable.test-support",
+    distWorkerPath: "agents/bash-process-durable.test-support.js",
+  },
+  durableProcessStore: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "bash-durable-process-store.test-support",
+    distWorkerPath: "agents/bash-durable-process-store.test-support.js",
+  },
   blockChunker: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "embedded-agent-block-chunker",
@@ -29,6 +39,11 @@ export const agentProcessTestEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "lifecycle-creation.retention.test-support",
     distWorkerPath: "agents/lifecycle-creation.retention.test-support.js",
+  },
+  toolAuthorityRetention: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "harness/tool-authority.runtime.retention.test-support",
+    distWorkerPath: "agents/harness/tool-authority.runtime.retention.test-support.js",
   },
   modelGenerationRetention: {
     currentModuleUrl: import.meta.url,

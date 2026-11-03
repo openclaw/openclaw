@@ -251,6 +251,45 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
   expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
 });
 
+it("defers code overflow measurement out of resize delivery and retires it on hide", async () => {
+  vi.useFakeTimers();
+  const observations = new Map<Element, () => void>();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(private readonly callback: (entries: { target: Element }[]) => void) {}
+      observe(target: Element) {
+        observations.set(target, () => this.callback([{ target }]));
+      }
+      unobserve(target: Element) {
+        observations.delete(target);
+      }
+      disconnect() {}
+    },
+  );
+  const { container, blocks } = mountBlocks();
+  blocks.update(true);
+  await Promise.resolve();
+  const wrapper = container.querySelector<HTMLElement>(".code-block-wrapper")!;
+  const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport")!;
+  const code = viewport.querySelector("code")!;
+  Object.defineProperty(viewport, "clientWidth", { configurable: true, value: 100 });
+  const width = vi.fn(() => 300);
+  Object.defineProperty(code, "scrollWidth", { configurable: true, get: width });
+  observations.get(code)!();
+  expect(width).not.toHaveBeenCalled();
+  expect(wrapper.classList.contains("has-horizontal-overflow")).toBe(false);
+  vi.advanceTimersToNextFrame();
+  expect(wrapper.classList.contains("has-horizontal-overflow")).toBe(true);
+
+  width.mockReturnValue(50).mockClear();
+  observations.get(code)!();
+  blocks.update(false);
+  vi.advanceTimersToNextFrame();
+  expect(width).not.toHaveBeenCalled();
+  expect(wrapper.classList.contains("has-horizontal-overflow")).toBe(true);
+});
+
 it("splits highlighted code into bounded, balanced fragments with exact source offsets", () => {
   const source = "comment 🦞 & < > \" ' text\n".repeat(400);
   const escaped = source

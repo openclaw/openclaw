@@ -144,6 +144,8 @@ sandbox proxy described below.
 - **Update in place:** re-emitting a widget with the same `name` and content
   owner replaces its content, bumps `revision`, and broadcasts `board.changed`.
   Live views update that cell. Document widgets reload that iframe only.
+  Naming the widget's current tab does not change its position. A different
+  tab or an explicit `after` anchor requests a layout move.
   Changing the content owner requires removing the widget before creating its replacement.
 - **Byte freezing:** HTML grants bind to the SHA-256
   digest of the approved content. Preserving a grant requires the same content
@@ -206,8 +208,8 @@ Shared hosting infrastructure:
   (sandboxed, `default-src 'none'`, prompt sends individually confirmed).
   Declared capabilities and interactive MCP Apps follow an explicit
   [session permission mode](/gateway/permission-modes). **Full access** grants.
-  **Workspace** uses an AI reviewer and rejects anything it does not allow.
-  **Guarded** shows **Allow**/**Reject**. **Read only** rejects. Without an
+  **Auto-review** uses an AI reviewer and rejects anything it does not allow.
+  **Ask me** shows **Allow**/**Reject**. **Read only** rejects. Without an
   explicit session mode, the equivalent configured exec approval policy applies.
   Grants are per widget name and content scope. HTML updates preserve a grant
   only while the approved digest matches and the
@@ -500,8 +502,11 @@ invalidate the host's exact session projection before the mutation returns;
 cleanup failures do not turn a completed write into a retryable failure.
 Existing-session write preflight, source-handle acquisition,
 schema/bootstrap/migration, and board-presence projection retain their existing
-owners. Reads capture
-their physical store before waiting and join the same per-agent FIFO as writes.
+owners. Reads capture their physical store before waiting. For an admitted database,
+`board.get` serves a committed metadata snapshot without joining the per-agent write queue. A concurrent
+write may supersede that snapshot; document delivery and capability use still
+check the current widget revision and grants through ordered reads.
+Authority-consumer reads join the same per-agent FIFO as writes.
 The read worker retains its admitted read-only connection and reads one coherent
 snapshot without creating missing board tables or opening a writer publication.
 The host checks the captured physical identity, native mutation witness, and
@@ -546,6 +551,26 @@ RPCs (core method table, typebox schemas in `gateway-protocol`):
 - `board.action { ticket, action, ... }` — exact-grant automation dispatch
   through the existing cron run-now path or an active plugin's validated action
   verb — `operator.write`
+
+Both Canvas document replies include optional `embedSandbox` metadata with the
+effective `gateway.controlUi.embedSandbox` ceiling (`strict`, `scripts`, or
+`trusted`, default `scripts`), resolved from the active runtime config when the
+reply is produced. This is not a capability grant: clients apply the stricter
+of this ceiling, their own content policy, and the preview's policy without
+relaxing sandbox origin or CSP isolation. Missing or unrecognized values require
+a strict fallback, not an inferred default or a broader credential.
+The web Control UI continues to read this ceiling from its authenticated
+bootstrap; independent clients can use the Canvas reply without a separate HTTP
+credential path.
+
+The field's presence identifies support; the RPC advertisement or protocol
+version alone does not. Older Gateways can still return document bytes without
+it. Each fresh view or preview reads the current active policy. Clients should
+invalidate retained policy on reconnect and available `config.changed` notices,
+but that notice describes a persisted write, not confirmation of runtime
+application. It is limited to `operator.read` (including admin), can be dropped
+for slow clients, and is not a policy-revocation signal for session-only readers.
+Already-rendered frames are not automatically revoked by this metadata.
 
 Events (in `EVENT_SCOPE_GUARDS`, read scope):
 

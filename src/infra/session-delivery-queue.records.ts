@@ -144,18 +144,6 @@ function buildEntryId(idempotencyKey?: string): string {
   return sha256Hex(idempotencyKey);
 }
 
-export function prepareSessionDelivery(
-  params: QueuedSessionDeliveryPayload,
-): QueuedSessionDelivery {
-  return {
-    ...params,
-    ...(params.completionRetention === "permanent" ? { retainOnFailure: true as const } : {}),
-    id: buildEntryId(params.idempotencyKey),
-    enqueuedAt: Date.now(),
-    retryCount: 0,
-  };
-}
-
 /** Signals that a delivered result still needs durable settlement finalization. */
 export class SessionDeliveryAcknowledgementFinalizeError extends Error {
   constructor(id: string, options?: ErrorOptions) {

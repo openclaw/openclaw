@@ -22,6 +22,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
+import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
@@ -35,7 +36,7 @@ import { createChatSendDashboardAuthority } from "./chat-send-dashboard-authorit
 import { readChatSendDiagnostics, startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
-import { acknowledgeWorkerGoal } from "./chat-send-goal-ack.js";
+import { acknowledgeCodexGoal } from "./chat-send-goal-ack.js";
 import {
   createChatSendGoalCommitGuard,
   requiresRuntimeApprovedChatInput,
@@ -52,6 +53,7 @@ import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.j
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mediaDocumentContextLoader = createLazyImportLoader(
@@ -116,10 +118,10 @@ export async function handleChatSendWithStorage(
     lifecycleGeneration,
     messageInjectionTarget,
   } = admission;
+  diagnostics.setRunIdentity(admittedSessionId, clientRunId);
   const phase = diagnostics.scope("attachments");
   const preparedAttachments = await prepareChatSendAttachments({
     ...setup,
-    client,
     respond,
     context,
   });
@@ -216,9 +218,9 @@ export async function handleChatSendWithStorage(
           sessionMutationCommitGuard,
         })
       : undefined;
-    const workerGoalCommitted = admission.workerGoalAdmission ? createDeferredCore() : undefined;
+    const codexGoalCommitted = admission.codexGoalAdmission ? createDeferredCore() : undefined;
     const userTurn = createGatewayChatUserTurnController({
-      onMessagePersisted: workerGoalCommitted?.resolve,
+      onMessagePersisted: codexGoalCommitted?.resolve,
       ...setup,
       client,
       commitInitialInput,
@@ -329,7 +331,7 @@ export async function handleChatSendWithStorage(
     phase?.mark("persist");
     let approvedInput: PersistedUserTurnMessage | undefined;
     const stageInput =
-      admission.workerGoalAdmission ||
+      admission.codexGoalAdmission ||
       Boolean(
         entry?.sessionId &&
         userTurn.baseInput.display !== false &&
@@ -570,7 +572,10 @@ export async function handleChatSendWithStorage(
     admission.setDiscardAbandonedPreparedMedia(undefined);
     phase?.mark("response");
     admission.markInputAccepted();
-    if (!admission.workerGoalAdmission) {
+    if (readGatewayRequestMutationAuthority(handlerOptions).family === "worker") {
+      acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
+    }
+    if (!admission.codexGoalAdmission) {
       respond(true, ackPayload, undefined, { runId: clientRunId });
     }
     phase?.finish();
@@ -635,10 +640,10 @@ export async function handleChatSendWithStorage(
       runOutsideOperatorToolGatewayAuthority(() => startChatDispatch(dispatch)),
     );
     admittedCleanup.dispatched = true;
-    if (workerGoalCommitted) {
-      await acknowledgeWorkerGoal({
+    if (codexGoalCommitted) {
+      await acknowledgeCodexGoal({
         dispatch,
-        committed: workerGoalCommitted.promise,
+        committed: codexGoalCommitted.promise,
         dispatched,
         ackPayload,
         respond,

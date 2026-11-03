@@ -1,5 +1,7 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import { isAcpSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -28,15 +30,18 @@ export function sameBindingIncarnation(a: MatrixThreadBindingRecord, b: MatrixTh
 function buildMatrixBindingIntroText(params: {
   metadata?: Record<string, unknown>;
   targetSessionKey: string;
+  introText?: unknown;
 }): string {
-  const introText = normalizeOptionalString(params.metadata?.introText);
+  const introText = normalizeOptionalString(params.introText);
   if (introText) {
     return introText;
   }
   const label = normalizeOptionalString(params.metadata?.label);
   const agentId =
     normalizeOptionalString(params.metadata?.agentId) ||
-    resolveAgentIdFromSessionKey(params.targetSessionKey);
+    (isPluginOwnedSessionBindingRecord(params)
+      ? undefined
+      : resolveAgentIdFromSessionKey(params.targetSessionKey));
   const base = label || agentId || "session";
   return `⚙️ ${base} session active. Messages here go directly to this session.`;
 }
@@ -157,11 +162,60 @@ export function createMatrixSessionBindingAdapter(
         return null;
       }
 
+      const existing =
+        input.placement !== "child"
+          ? manager.getByConversation({ conversationId, parentConversationId })
+          : undefined;
+      const previous =
+        existing?.targetSessionKey === targetSessionKey &&
+        (existing.targetKind === "subagent") === (input.targetKind === "subagent")
+          ? existing
+          : undefined;
+      const metadata = {
+        ...(previous
+          ? {
+              agentId: previous.agentId,
+              label: previous.label,
+              boundBy: previous.boundBy,
+              ...previous.metadata,
+            }
+          : undefined),
+        ...input.metadata,
+      };
+      let targetKind: MatrixThreadBindingRecord["targetKind"] = input.targetKind;
+      if (targetKind === "session") {
+        if (isAcpSessionKey(targetSessionKey)) {
+          targetKind = "acp";
+        } else if (!isPluginOwnedSessionBindingRecord({ metadata })) {
+          const { readAcpSessionEntryAsync } = await import("openclaw/plugin-sdk/acp-runtime");
+          const session = await readAcpSessionEntryAsync({
+            cfg: params.cfg,
+            sessionKey: targetSessionKey,
+            agentId: normalizeOptionalString(metadata.agentId),
+            assertCurrent: () => {
+              assertManagerCurrent();
+              input.assertCurrent?.();
+            },
+          });
+          if (session?.storeReadFailed) {
+            throw new Error(
+              "Matrix binding target could not be classified; retry when session storage is available.",
+            );
+          }
+          if (session?.acp) {
+            targetKind = "acp";
+          }
+        }
+      }
+
+      assertAcceptingMutation();
+      input.assertCurrent?.();
       let boundConversationId = conversationId;
       let boundParentConversationId = parentConversationId;
       const introText = buildMatrixBindingIntroText({
-        metadata: input.metadata,
+        metadata,
         targetSessionKey,
+        introText: input.metadata?.introText,
       });
 
       if (input.placement === "child") {
@@ -186,17 +240,20 @@ export function createMatrixSessionBindingAdapter(
         accountId: params.accountId,
         conversationId: boundConversationId,
         ...(boundParentConversationId ? { parentConversationId: boundParentConversationId } : {}),
-        targetKind: input.targetKind === "subagent" ? "subagent" : "acp",
+        targetKind,
         targetSessionKey,
         agentId:
-          normalizeOptionalString(input.metadata?.agentId) ??
-          resolveSessionAgentIdStrict({ config: params.cfg, sessionKey: targetSessionKey }),
-        label: normalizeOptionalString(input.metadata?.label) || undefined,
-        boundBy: normalizeOptionalString(input.metadata?.boundBy) || "system",
+          normalizeOptionalString(metadata.agentId) ??
+          (isPluginOwnedSessionBindingRecord({ metadata })
+            ? undefined
+            : resolveSessionAgentIdStrict({ config: params.cfg, sessionKey: targetSessionKey })),
+        label: normalizeOptionalString(metadata.label) || undefined,
+        boundBy: normalizeOptionalString(metadata.boundBy) || "system",
         boundAt: now,
         lastActivityAt: now,
         idleTimeoutMs: defaults.idleTimeoutMs,
         maxAgeMs: defaults.maxAgeMs,
+        metadata,
       };
       await mutateBindings(
         (current) => [

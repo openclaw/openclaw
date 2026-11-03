@@ -4,6 +4,7 @@ import type {
   OpenClawConfig,
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginCommandDispatch } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import type {
@@ -50,6 +51,14 @@ type ProcessTelegramMessageOptions = Pick<
 type ProcessTelegramMessage = (
   options: ProcessTelegramMessageOptions,
 ) => Promise<TelegramMessageProcessingResult>;
+
+/** Runs a native plugin command that continued as a native command turn in the message pipeline. */
+export type TelegramPluginCommandContinuation = (params: {
+  ctx: TelegramContext;
+  threadSpec: TelegramThreadSpec;
+  storeAllowFrom: string[];
+  pluginCommandDispatch: PluginCommandDispatch;
+}) => Promise<void>;
 
 export type TelegramNativeCommandCallbackDispatcher = (params: {
   botUser: Context["me"];

@@ -14,6 +14,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as runtimePins from "../../daemon/runtime-pin-state.js";
 import type { GatewayServiceState } from "../../daemon/service.js";
+import { createNpmTarget } from "../../infra/package-update-steps.test-support.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
@@ -180,6 +181,7 @@ function executePackageUpdate(
     opts,
     shouldRestart,
     packageInstallSpec: "openclaw@2026.9.5",
+    packageInstallTarget: { ...createNpmTarget(path.dirname(rootB)), packageRoot: rootB },
     packageTargetVersion: "2026.9.5",
     managedServiceRootRedirect: null,
     managedServiceRoot: rootA,
@@ -693,10 +695,13 @@ it.each([
     await writeFixtureJson(path.join(rootA, "package.json"), metadata);
   }
   if (scenario === "unverified-health") {
-    mocks.inspect.mockResolvedValue({ healthy: false, runtime: { status: "running" } });
+    mocks.health.mockResolvedValue({
+      ...healthObservation(undefined, undefined, false),
+      waitOutcome: "timeout",
+    });
   }
   mocks.package.mockImplementation(async (params) => {
-    expect(params.honorPackageRoot).toBe(true);
+    expect(params.installTarget.packageRoot).toBe(rootB);
     await params.beforeActivate();
     activated = true;
     return updateResult({

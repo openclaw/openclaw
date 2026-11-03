@@ -38,6 +38,7 @@ export type SessionLifecyclePatchEffects = {
     error: unknown;
     errorKind?: "state_contention";
     suppressErrorNotice?: boolean;
+    notice?: string;
   };
 };
 
@@ -58,6 +59,8 @@ export type LifecycleEventLike = { ts: number; sessionId?: string } & {
     error?: unknown;
     errorKind?: unknown;
     suppressErrorNotice?: unknown;
+    /** Host-authored failure copy the requester already saw; recorded verbatim. */
+    errorNotice?: unknown;
     executionStarted?: unknown;
     livenessState?: unknown;
     timeoutPhase?: unknown;
@@ -433,6 +436,9 @@ export function projectSessionLifecyclePatch(
       error:
         resolveTerminalOutcome(params.event).error ??
         (patch.status === "timeout" ? "Run timed out" : undefined),
+      ...(typeof params.event.data?.errorNotice === "string"
+        ? { notice: params.event.data.errorNotice }
+        : {}),
     };
   }
   return {

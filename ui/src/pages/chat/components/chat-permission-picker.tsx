@@ -45,6 +45,14 @@ function modeLabel(
       : t("chat.permissionControls.default");
 }
 
+function agentDefaultLabel(defaultMode?: SessionPermissionMode): string {
+  return defaultMode
+    ? t("chat.permissionControls.agentDefaultWithMode", {
+        mode: t(`chat.permissionControls.modes.${defaultMode}.label`),
+      })
+    : t("chat.permissionControls.agentDefault");
+}
+
 function permissionSelection(value: string): PermissionSelection | undefined {
   return value === DEFAULT_PERMISSION_VALUE
     ? null
@@ -100,7 +108,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
         const value = mode ?? DEFAULT_PERMISSION_VALUE;
         const selected = selectedMode() === mode;
         const locked = mode === "full" && !canSelectFull();
-        const label = modeLabel(mode, defaultMode());
+        const label = mode ? modeLabel(mode) : agentDefaultLabel(defaultMode());
         const fullAccess = mode === "full" || (mode === null && defaultMode() === "full");
         return {
           id: value,
@@ -131,7 +139,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
           content: (
             <span class="chat-controls__permission-option-copy">
               <span class="chat-controls__permission-option-title">
-                <span>{modeLabel(mode)}</span>
+                <span>{mode ? modeLabel(mode) : t("chat.permissionControls.agentDefault")}</span>
                 {mode && mode === defaultMode() && (
                   <span class="chat-controls__permission-default-badge">
                     {t("chat.permissionControls.default")}
@@ -226,9 +234,15 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
         }
       }}
       trigger={
-        <span class="chat-controls__permission-icon" aria-hidden="true">
-          <Icon name={permissionIcon(props.mode)} />
-        </span>
+        <>
+          <span class="chat-controls__permission-icon" aria-hidden="true">
+            <Icon name={permissionIcon(props.mode ?? props.defaultMode)} />
+          </span>
+          {/* "Default (...)" belongs to the menu row; the trigger names the effective mode. */}
+          <span class="chat-controls__inline-select-label chat-controls__permission-label">
+            {modeLabel(props.mode ?? props.defaultMode)}
+          </span>
+        </>
       }
     >
       <div class="chat-controls__popover-title chat-controls__permission-heading">

@@ -339,7 +339,11 @@ describe("chat pane header state", () => {
       spawnedWorkspaceDir: "/src/spawned-repo",
     } satisfies GatewaySessionRow;
     await pane.loadHeaderMenuData(session, "/plain/agent-workspace", false);
-    expect(request).toHaveBeenCalledWith("worktrees.branches", { repoRoot: "/src/spawned-repo" });
+    expect(request).toHaveBeenCalledWith(
+      "worktrees.branches",
+      { repoRoot: "/src/spawned-repo" },
+      { signal: expect.any(AbortSignal) },
+    );
 
     // The agent-workspace root keeps honoring the agent's workspaceGit flag.
     request.mockClear();
@@ -373,9 +377,11 @@ describe("chat pane header state", () => {
       key: "agent:main:reused",
     } satisfies GatewaySessionRow;
     await pane.loadHeaderMenuData(resetRow, "/src/agent-workspace", true);
-    expect(request).toHaveBeenLastCalledWith("worktrees.branches", {
-      repoRoot: "/src/agent-workspace",
-    });
+    expect(request).toHaveBeenLastCalledWith(
+      "worktrees.branches",
+      { repoRoot: "/src/agent-workspace" },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("skips branch lookups while the session runs remotely", async () => {

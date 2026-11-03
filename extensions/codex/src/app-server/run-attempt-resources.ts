@@ -46,7 +46,6 @@ import {
 import { clearCodexBindingForClient } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
-  createIsolatedCodexAppServerClient,
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type {
@@ -184,14 +183,14 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     }
   };
   const releaseSandboxExecEnvironment = async () => {
-    if (state.sandboxExecEnvironment) {
-      const environment = state.sandboxExecEnvironment;
-      state.sandboxExecEnvironment = undefined;
+    const environment = state.sandboxExecEnvironment;
+    state.sandboxExecEnvironment = undefined;
+    if (environment) {
       await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
     }
   };
   const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
-    if (connection.attemptClientFactory === createIsolatedCodexAppServerClient) {
+    if (connection.callerOwnedAttemptClient) {
       // Close the authorized node lease first; losing its socket first is a real disconnect.
       await releaseSandboxExecEnvironment();
       const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
@@ -211,9 +210,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     await retireSharedCodexClientForOneShotCleanup();
   };
   const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>
-    runCodexCleanupStep(params, step, async () => {
-      await operation();
-    });
+    runCodexCleanupStep(params, step, async () => await operation());
   let nativeSubagentMonitorSettlement: Promise<void> | undefined;
   const unregisterNativeSubagentMonitor = async () => {
     const registration = state.nativeSubagentMonitor;

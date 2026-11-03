@@ -49,6 +49,8 @@
   --font-body: "Lora", Georgia, "Times New Roman", serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
+  --link: var(--accent);
+  --link-on-tint: #2d4f96;
 }
 
 :root[data-theme="manuscript"] {
@@ -101,4 +103,6 @@
   --font-body: "Lora", Georgia, "Times New Roman", serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
+  --link: var(--accent);
+  --link-on-tint: #a3bcf6;
 }

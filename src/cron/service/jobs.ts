@@ -307,6 +307,9 @@ export function applyJobPatch(
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
   const explicitlyClearsToolsAllow = patch.payload?.toolsAllow === null;
   const previousScheduleKind = job.schedule.kind;
+  if (patch.ownerProfileId !== undefined) {
+    job.ownerProfileId = patch.ownerProfileId;
+  }
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
   }

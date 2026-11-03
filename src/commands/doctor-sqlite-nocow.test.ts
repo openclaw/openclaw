@@ -538,10 +538,10 @@ describe("Doctor NOCOW recovery identities", () => {
     return readTarget().plannedMoves[0]!.archivePath;
   }
 
-  function retire() {
+  async function retire() {
     return retireSessionSqliteRecovery({
       env,
-      preview: inspectSessionSqliteRecovery({ cfg: {}, env }),
+      preview: await inspectSessionSqliteRecovery({ cfg: {}, env }),
       readConfig: async () => ({}),
       confirm: async () => true,
     });
@@ -558,6 +558,8 @@ describe("Doctor NOCOW recovery identities", () => {
     vi.spyOn(updateCaptureCleanup, "readCompletedUpdateHistory").mockReturnValue({
       runs: [],
       latestCompletedStartedAt: Date.now() + 86_400_000,
+      latestVerifiedStartedAt: 0,
+      hasPendingRecovery: false,
     });
   });
 

@@ -213,7 +213,7 @@ fs.writeFileSync(path.join(work, 'peekaboo-commit'), mode === 'wrong-source' ? '
         const script = readFileSync(scriptPath, "utf8");
         const cleanup = script.slice(
           script.indexOf("cleanup_package_build() {"),
-          script.indexOf("PNPM_CMD=()"),
+          script.indexOf("merge_framework_machos() {"),
         );
         const build = script.slice(
           script.indexOf('echo "🔨 Building $PRODUCT'),
@@ -411,7 +411,7 @@ printf '%s' "$APP_STAGE_DIR"
 APP_STAGE_DIR="$1"
 SWIFT_BUILD_RESULTS="$APP_STAGE_DIR/swift-builds"
 SWIFT_BUILD_PID=""
-${scriptBlock("cleanup_package_build() {", "PNPM_CMD=()")}
+${scriptBlock("cleanup_package_build() {", "merge_framework_machos() {")}
 `,
           [stage],
           { HOME: root, PATH: "/usr/bin:/bin" },
@@ -450,6 +450,7 @@ ${scriptBlock("cleanup_package_build() {", "PNPM_CMD=()")}
         "scripts/apple-release-source-check.sh",
       ),
       "scripts/lib/plistbuddy.sh": readFileSync("scripts/lib/plistbuddy.sh"),
+      "scripts/lib/mac-pnpm.sh": readFileSync("scripts/lib/mac-pnpm.sh"),
       "scripts/lib/build-metadata.sh": readFileSync("scripts/lib/build-metadata.sh"),
       "scripts/lib/mac-app-bundle.sh": readFileSync("scripts/lib/mac-app-bundle.sh"),
       "scripts/lib/mac-swift-build.sh": "",
@@ -622,6 +623,7 @@ function runPackageEntrypointHarness(
   for (const file of [
     scriptPath,
     "scripts/lib/plistbuddy.sh",
+    "scripts/lib/mac-pnpm.sh",
     "scripts/lib/swift-toolchain.sh",
     "scripts/lib/build-metadata.sh",
     "scripts/lib/mac-app-bundle.sh",
@@ -1478,7 +1480,7 @@ describe("package-mac-app plist stamping", () => {
   });
 
   it("prefers repo Corepack pnpm over a global pnpm shim", () => {
-    const helperBlock = scriptBlock("PNPM_CMD=()", "merge_framework_machos()");
+    const helperBlock = readFileSync("scripts/lib/mac-pnpm.sh", "utf8");
     const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
     const outerRoot = tempDirs.make("openclaw-package-pnpm-outer-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
@@ -1519,7 +1521,10 @@ fi
       PATH=${JSON.stringify(toolsDir)}
       cd ${JSON.stringify(outerRoot)}
       ${helperBlock}
+      [[ ! -e "$OPENCLAW_TEST_LOG" ]]
       run_pnpm --version
+      run_pnpm install "argument with spaces" "" "*[literal]"
+      [[ "$PWD" == ${JSON.stringify(outerRoot)} ]]
     `);
 
     expect(result.status).toBe(0);
@@ -1527,6 +1532,7 @@ fi
     expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
       `corepack|${tempRoot}|pnpm --version`,
       `corepack|${tempRoot}|pnpm --version`,
+      `corepack|${tempRoot}|pnpm install argument with spaces  *[literal]`,
     ]);
   });
 

@@ -68,6 +68,7 @@ export type DefaultModelsViewProps = {
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
 const UTILITY_MODEL_PICKER_ID = "model-providers-utility-model";
 const UTILITY_MODEL_HELP_ID = "model-providers-utility-help";
+const DECISION_MODEL_HELP_ID = "model-providers-decision-help";
 const THINKING_HELP_ID = "model-providers-thinking-help";
 const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
 const TRANSLATED_THINKING_LEVELS = new Set(["off", "low", "medium", "high"]);
@@ -509,8 +510,14 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           onChange={props.onUtilityFallbackChange}
         />
         <SettingsRow
-          title={t("chat.modelControls.decisionLabel")}
-          description={t("chat.modelControls.decisionHelp")}
+          title={
+            <HelpTitle
+              title={t("chat.modelControls.decisionLabel")}
+              label={t("modelProviders.defaults.decisionHelpLabel")}
+              triggerId={DECISION_MODEL_HELP_ID}
+              paragraphs={[t("chat.modelControls.decisionHelp")]}
+            />
+          }
           control={
             <DecisionModelPicker
               id={"model-providers-decision-model"}

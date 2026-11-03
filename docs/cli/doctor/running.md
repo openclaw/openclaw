@@ -39,7 +39,16 @@ maintenance custody.
 
 SIGINT and SIGTERM cancel Doctor's preparation before it stops a Gateway or
 starts repairs. If repair already owns state, Doctor settles its admitted work
-and restores any service it stopped before exiting.
+and restores any service it stopped before exiting. Startup cancellation also
+aborts package-file reads and stops and joins prerequisite subprocesses. Doctor
+closes its owned resources, records the signal exit status, and lets Node exit
+naturally so V8 can finish worker cleanup safely.
+
+Before maintenance begins, package-root discovery, source-config loading, and
+Tailscale prerequisite inspection each have a 60-second asynchronous wait limit.
+A timeout names the phase and recommends `OPENCLAW_DEBUG=1 openclaw doctor --lint`
+and a Node diagnostic report. These limits cannot interrupt synchronous native I/O;
+capture a report on the affected host when the event loop itself is blocked.
 
 If a native SQLite snapshot request fails, Doctor exits with an error even when
 an optional check defers its work. Resolve the reported snapshot or filesystem
@@ -162,8 +171,11 @@ including profiles that were offline during the update. Preparation keeps existi
 identities and pairing tokens and captures a backup before retiring their old storage.
 Native clients can invoke the same operation with
 `openclaw doctor --client-credentials --repair --non-interactive`. This command only
-prepares the selected root's client credentials and required source schema. It does not
-run health checks or control services. Add `--json` for a completion report.
+prepares the selected root's client credentials, required source schema, and pending
+local service-runtime intent migration. Runtime pins retain their exact stored values;
+conflicting migration inputs stop preparation before the native app can select an old
+Gateway runtime against newer state. It does not run health checks or control
+services. Add `--json` for a completion report.
 
 If a replacement host retains PostgreSQL state but loses `client/credentials.sqlite`,
 restore the matching credential backup when available. Without a backup, run:
@@ -334,7 +346,7 @@ openclaw channels status --probe
 | `--replace-model <json>`        | With `--fix` or `--repair`, explicitly replace a retiring Daybreak alias with a specific OpenAI model and Access program. Repeat for both aliases; see below.                                                                                         |
 | `--force`                       | Allow aggressive repair choices. Alone, remains guided; with `--fix`, `--repair`, or `--yes`, uses the same policy-refresh and installation-drift rules.                                                                                              |
 | `--non-interactive`             | Run without prompts; safe automatic migrations still apply. Combine with `--fix`, `--repair`, or `--yes` to enter repair maintenance.                                                                                                                 |
-| `--client-credentials`          | Prepare only client credentials and their required source schema. Requires `--repair` or `--fix` with `--non-interactive`; optionally accepts `--json`.                                                                                               |
+| `--client-credentials`          | Prepare client credentials, their required source schema, and pending local service-runtime intent migration. Requires `--repair` or `--fix` with `--non-interactive`; optionally accepts `--json`.                                                   |
 | `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                                                               |
 | `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                                                                         |
 | `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                                                                   |

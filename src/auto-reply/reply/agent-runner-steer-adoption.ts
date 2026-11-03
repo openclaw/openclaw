@@ -18,10 +18,7 @@ import {
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
 import { canInjectReplyMessageTarget } from "../../sessions/session-controller.message-injection.js";
-import {
-  hasReplySteeringRequesterMismatch,
-  prepareReplyMessageJoin,
-} from "../../sessions/session-controller.message-join.js";
+import { prepareReplyMessageJoin } from "../../sessions/session-controller.message-join.js";
 import {
   getSessionControllerEntryForOperation,
   isCurrentSessionControllerOperation,
@@ -235,23 +232,6 @@ export async function runActiveReplySteer(
       return await fallback("injection_unavailable");
     }
     assertReadCurrent();
-    if (
-      isInboundUserMessage &&
-      followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== true &&
-      hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation)
-    ) {
-      if (!canInjectReplyMessageTarget(injectionTarget)) {
-        return await fallback("injection_unavailable", injectionTarget.runId);
-      }
-      if (followupRun.run.config.messages?.queue?.collaborativeSteeringFallback !== "reject") {
-        return await fallback("collaborative_steering_disabled", injectionTarget.runId);
-      }
-      await refuseCollaborativeSteering(followupRun, replyOperationRunState, () => {
-        custodyFinished = true;
-        parked.consume("consumed");
-      });
-      return "handled";
-    }
     delivery = prepareSteeringDelivery({
       agentId: followupRun.run.agentId,
       sessionKey,
@@ -312,6 +292,23 @@ export async function runActiveReplySteer(
           : undefined,
     });
     if (steeringAuthority.kind === "deferred") {
+      if (
+        steeringAuthority.reason === "requester-mismatch" &&
+        isInboundUserMessage &&
+        followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== true
+      ) {
+        if (!canInjectReplyMessageTarget(injectionTarget)) {
+          return await fallback("injection_unavailable", injectionTarget.runId);
+        }
+        if (followupRun.run.config.messages?.queue?.collaborativeSteeringFallback !== "reject") {
+          return await fallback("collaborative_steering_disabled", injectionTarget.runId);
+        }
+        await refuseCollaborativeSteering(followupRun, replyOperationRunState, () => {
+          custodyFinished = true;
+          parked.consume("consumed");
+        });
+        return "handled";
+      }
       return await fallback(
         steeringAuthority.reason,
         injectionTarget.runId,
@@ -371,6 +368,7 @@ export async function runActiveReplySteer(
       ),
       steeringMode: "all",
       isInboundUserMessage,
+      allowPendingUserInputAnswer: steeringAuthority.allowPendingUserInputAnswer,
       terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
       toolAuthorityFingerprint: steeringAuthority.toolAuthorityFingerprint,
       ...(steeringAuthority.collaborativeCaller
@@ -400,7 +398,10 @@ export async function runActiveReplySteer(
       ...(followupRun.run.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
         : {}),
-      taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
+      // Omission inherits the captured execution; followup custody keeps the incoming setting.
+      ...(steeringAuthority.continuationKind
+        ? {}
+        : { taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode }),
       ...(followupRun.userTurnTranscriptRecorder
         ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
         : {}),
@@ -423,16 +424,7 @@ export async function runActiveReplySteer(
       shouldAbortOnAdoptionError: isIngressAdoptionLostError,
     });
     if (finalization.status === "rejected") {
-      if (followupRun.controllerInput?.injection?.accepted !== true) {
-        return await fallback(finalization.outcome.reason, injectionAttempt.targetRunId);
-      }
-      // A negative final receipt cannot undo earlier native acceptance.
-      parked.consume("consumed");
-      custodyFinished = true;
-      if (replyOperationRunState) {
-        replyOperationRunState.admission = { status: "accepted", mode: "steer" };
-      }
-      return "handled";
+      return await fallback(finalization.outcome.reason, injectionAttempt.targetRunId);
     }
     // Accepted or indeterminate input cannot be abandoned for replay, even
     // when the source's later adoption callback rejects.
@@ -477,13 +469,17 @@ export async function runActiveReplySteer(
             replayForbidden = true;
           }
         }
-        if (replayForbidden || followupRun.controllerInput?.injection?.accepted === true) {
+        if (replayForbidden) {
           parked.consume("consumed");
         } else {
           try {
             assertReadCurrent();
             parked.fallback();
           } catch {
+            diagnosticLogger.warn("steering followup unavailable: source authority lost", {
+              sessionId: steerSessionId,
+              runId: params.opts?.runId,
+            });
             parked.consume();
           }
         }

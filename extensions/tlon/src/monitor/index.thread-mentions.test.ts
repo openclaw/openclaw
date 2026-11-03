@@ -194,7 +194,12 @@ describe("monitorTlonProvider bot-owned thread mention policy", () => {
       expect(inboundRuntimeMock.dispatch).toHaveBeenCalledTimes(row.admitted ? 1 : 0);
       if (row.rawReplyId) {
         expect(inboundRuntimeMock.buildContext).toHaveBeenCalledWith(
-          expect.objectContaining({ messageId: row.rawReplyId }),
+          expect.objectContaining({
+            messageId: row.rawReplyId,
+            extra: expect.objectContaining({
+              ReplyThreading: { implicitCurrentMessage: "deny" },
+            }),
+          }),
         );
       }
       if (row.summary) {
@@ -258,6 +263,31 @@ it("applies explicit and automatic citation scopes", async () => {
       await getSubscription("groups", "/groups/ui").event({ channels: { "chat/~zod/race": {} } });
       const revoked = auto ? "diary/~private/notes" : settingsNest;
       await checkCitationCase(nest, ["chat", "~bus", revoked, true, false]);
+    });
+  }
+});
+it("keeps non-owner citations to their source channel when cross-channel citations are off", async () => {
+  const nest = "chat/~zod/citations";
+  const listed = "chat/~zod/announcements";
+  for (const auto of [false, true]) {
+    configureTlon({
+      autoDiscoverChannels: auto,
+      crossChannelCitations: false,
+      ownerShip: "~nec",
+      dmAllowlist: ["~bus"],
+      defaultAuthorizedShips: ["~bus"],
+      groupChannels: [nest, listed],
+    });
+    await runMonitor(async () => {
+      for (const row of [
+        ["channels", "~bus", nest, true, true],
+        ["channels", "~bus", listed, true, false],
+        ["channels", "~bus", "diary/~private/notes", true, false],
+        ["chat", "~bus", nest, true, false],
+        ["chat", "~nec", "diary/~private/notes", true, true],
+      ] as const) {
+        await checkCitationCase(nest, row);
+      }
     });
   }
 });

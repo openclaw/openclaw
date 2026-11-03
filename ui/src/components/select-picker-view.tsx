@@ -1,9 +1,12 @@
+import type { JSX } from "@solidjs/web";
 import {
   For,
+  type Accessor,
   Show,
   createMemo,
   createSignal,
   createStore,
+  latest,
   lazy,
   onSettled,
   untrack,
@@ -17,8 +20,11 @@ import { nativeListener } from "../lib/solid-native-listener.ts";
 import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { createOverlay } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
+import { PickerOptionContent, PickerTriggerContent } from "./select-picker-presentation.tsx";
+import { pickerSearchInputProps } from "./select-picker-search.ts";
 import type { PickerOption, PickerParams, PickerGroup } from "./select-picker-types.ts";
 import type { PickerWindowRow } from "./select-picker-window.tsx";
+import { HeaderSearch } from "./solid/header-search.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
 import { MenuNavigationError } from "./solid/menu-navigation-error.tsx";
@@ -42,6 +48,15 @@ const normalizeSearch = (value: string) => value.toLocaleLowerCase().normalize("
 export function PickerContent<Option extends PickerOption>(props: {
   params: PickerParams<Option>;
   host: HTMLElement;
+  renderers?: {
+    trigger?: (attributes: Accessor<JSX.ButtonHTMLAttributes<HTMLButtonElement>>) => JSX.Element;
+    option?: (
+      attributes: Accessor<JSX.HTMLAttributes<HTMLDivElement>>,
+      option: Accessor<Option>,
+    ) => JSX.Element;
+    menuClass?: JSX.ClassValue;
+    header?: JSX.Element;
+  };
 }) {
   const id = `openclaw-picker-${++nextId}`;
   const contentId = `${id}-content`;
@@ -82,6 +97,7 @@ export function PickerContent<Option extends PickerOption>(props: {
   const markPointerHighlight = () => (pointerHighlight = true);
   const pointerHighlightRef = nativeListener("pointermove", markPointerHighlight, true);
   const [searching, setSearching] = createSignal(false);
+  const [searchAvailable, setSearchAvailable] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [keyboard, setKeyboard] = createSignal(false);
   const [collapsed, setCollapsed] = createStore<string[]>([]);
@@ -180,15 +196,10 @@ export function PickerContent<Option extends PickerOption>(props: {
       }
       target?.focus({ preventScroll: true });
     },
-    onEscape() {
-      if (query() && props.params.searchable === "always") {
-        setQuery("");
-        return true;
-      }
-      return false;
-    },
   });
-  const opened = projectOwner(overlay, (owner) => owner.open, Object.is).read;
+  const acceptedOpen = projectOwner(overlay, (owner) => owner.open, Object.is).read;
+  // Native admission must paint even while an unrelated settings action is pending.
+  const opened = () => latest(acceptedOpen);
   const renderWindowSizer = createMemo(() => props.params.windowed);
   const canWindow = createMemo(
     () =>
@@ -232,7 +243,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     },
     value: () => props.params.value,
   });
-  const active = () => menu.highlightedValue();
+  const active = createMemo(() => menu.highlightedValue());
   const controls = () =>
     opened() && props.params.groupBy
       ? sections()
@@ -255,10 +266,11 @@ export function PickerContent<Option extends PickerOption>(props: {
     if (props.params.disabled || overlay.open) {
       return;
     }
-    setSearching(
+    const available =
       props.params.searchable === "always" ||
-        Boolean(props.params.searchable && (props.params.groupBy || options().length > 8)),
-    );
+      Boolean(props.params.searchable && (props.params.groupBy || options().length > 8));
+    setSearchAvailable(available);
+    setSearching(available && Boolean(initialKey));
     queueMicrotask(() => {
       if (!props.host.isConnected) {
         return;
@@ -339,7 +351,10 @@ export function PickerContent<Option extends PickerOption>(props: {
     }
     if (
       event.target instanceof Element &&
-      event.target.closest(".picker-select__back, .picker-select__group-toggle")
+      event.target.closest(
+        ".picker-select__back, .picker-select__group-toggle, .header-search__toggle",
+      ) &&
+      !event.key.startsWith("Arrow")
     ) {
       return;
     }
@@ -367,22 +382,25 @@ export function PickerContent<Option extends PickerOption>(props: {
           overlay.request(false, overlay.containsFocus() ? "return" : "none");
         }
       },
-      enter ? 120 : 150,
+      enter ? 200 : 100,
     );
   }
   createScrollPosition(
-    () => ({
-      reveal:
-        opened() && !windowed()
-          ? {
-              identity: [opened(), active(), query(), rows()],
-              target: () =>
-                overlay.open && !pointerHighlight
-                  ? optionElements.get(menu.highlightedValueNow() ?? "")
-                  : undefined,
-            }
-          : undefined,
-    }),
+    () => {
+      const staticHighlighted = active();
+      return {
+        reveal:
+          opened() && !windowed()
+            ? {
+                identity: [opened(), staticHighlighted, query(), rows()],
+                target: () =>
+                  overlay.open && !pointerHighlight
+                    ? optionElements.get(staticHighlighted ?? "")
+                    : undefined,
+              }
+            : undefined,
+      };
+    },
     { region: () => list, revealTiming: "animation-frame" },
   );
   function onOpenChange(next: boolean) {
@@ -397,6 +415,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     } else {
       setQuery("");
       setSearching(false);
+      setSearchAvailable(false);
       setCollapsed(() => []);
       hoverOpened = false;
       if (sheetScroll) {
@@ -414,14 +433,17 @@ export function PickerContent<Option extends PickerOption>(props: {
       disconnectAnchor();
     };
   });
-  const Leading = (row: { option?: Option }) => {
-    const content = createMemo(() => row.option && props.params.renderLeading?.(row.option));
-    return (
-      <Show when={content() !== undefined && content() !== null}>
-        <span class="picker-select__leading">{content()}</span>
-      </Show>
-    );
-  };
+  const SheetBack = () => (
+    <button
+      type="button"
+      ref={(element) => (back = element)}
+      class="picker-select__back"
+      aria-label={t("common.back")}
+      onClick={() => overlay.request(false, "return")}
+    >
+      <Icon name="chevronLeft" />
+    </button>
+  );
   const OptionRow = (row: {
     option: () => Option;
     grouped: boolean;
@@ -442,111 +464,83 @@ export function PickerContent<Option extends PickerOption>(props: {
         }
       };
     });
+    const attributes = (): JSX.HTMLAttributes<HTMLDivElement> => ({
+      ref: [itemRef, (node) => (element = node)],
+      ...menu.item(row.option().value, row.option().disabled, undefined, false, row.option().label),
+      class: ["picker-select__option", { "picker-select__option--windowed": Boolean(row.virtual) }],
+      "data-index": row.virtual?.index,
+      style: row.virtual ? { transform: `translateY(${row.virtual.start}px)` } : undefined,
+      "aria-posinset": row.virtual ? row.virtual.index + 1 : undefined,
+      "aria-setsize": row.virtual?.count,
+      role: "option",
+      id: optionId(row.option().value),
+      "data-value": row.option().value,
+      title: props.params.showOptionTooltips === false ? undefined : row.option().value,
+      "aria-selected": row.option().value === props.params.value ? "true" : "false",
+      "aria-disabled": row.option().disabled ? "true" : "false",
+      "data-active": row.option().value === active() ? "" : undefined,
+      onMouseDown: (event) => event.preventDefault(),
+      onMouseMove: () => {
+        setKeyboard(false);
+        markPointerHighlight();
+        if (!row.option().disabled) {
+          menu.setHighlightedValue(row.option().value);
+        }
+      },
+      onClick: () => commit(row.option().value),
+    });
     return (
-      <div
-        ref={[itemRef, (node) => (element = node)]}
-        {...menu.item(
-          row.option().value,
-          row.option().disabled,
-          undefined,
-          false,
-          row.option().label,
-        )}
-        class={[
-          "picker-select__option",
-          { "picker-select__option--windowed": Boolean(row.virtual) },
-        ]}
-        data-index={row.virtual?.index}
-        style={row.virtual ? { transform: `translateY(${row.virtual.start}px)` } : undefined}
-        aria-posinset={row.virtual ? row.virtual.index + 1 : undefined}
-        aria-setsize={row.virtual?.count}
-        role="option"
-        id={optionId(row.option().value)}
-        data-value={row.option().value}
-        title={props.params.showOptionTooltips === false ? undefined : row.option().value}
-        aria-selected={row.option().value === props.params.value ? "true" : "false"}
-        aria-disabled={row.option().disabled ? "true" : "false"}
-        data-active={row.option().value === active() ? "" : undefined}
-        onMouseDown={(event) => event.preventDefault()}
-        onMouseMove={() => {
-          setKeyboard(false);
-          markPointerHighlight();
-          if (!row.option().disabled) {
-            menu.setHighlightedValue(row.option().value);
-          }
-        }}
-        onClick={() => commit(row.option().value)}
+      <Show
+        when={props.renderers?.option}
+        fallback={<PickerOptionContent attributes={attributes} row={row} params={props.params} />}
       >
-        {!row.grouped && <Leading option={row.option()} />}
-        <span class="picker-select__copy">
-          <span class="picker-select__label" style={row.option().labelStyle}>
-            {row.option().label}
-          </span>
-          <Show when={row.option().description}>
-            <span class="picker-select__description">{row.option().description}</span>
-          </Show>
-        </span>
-        <span class="picker-select__check" aria-hidden="true">
-          <Show when={row.option().value === props.params.value}>
-            <Icon name="check" />
-          </Show>
-        </span>
-      </div>
+        {(render) => <>{render()(attributes, row.option)}</>}
+      </Show>
     );
   };
+  const triggerAttributes = (): JSX.ButtonHTMLAttributes<HTMLButtonElement> => ({
+    ref: (element) => (trigger = element),
+    onKeyDown: handleKeydown,
+    "data-menu-trigger": id,
+    id: triggerId(),
+    class: "picker-select__trigger",
+    type: "button",
+    "aria-label": selected()
+      ? `${props.params.label}: ${[selected()?.label, props.params.showSelectedDescription && selected()?.description].filter(Boolean).join(" · ")}`
+      : props.params.label,
+    "aria-haspopup": "listbox",
+    "aria-expanded": opened() ? "true" : "false",
+    "aria-controls": controls(),
+    "aria-invalid": props.params.invalid ? "true" : undefined,
+    "aria-describedby": props.params.describedBy,
+    title: props.params.title,
+    disabled: props.params.disabled,
+    onClick: () => {
+      clearTimeout(hoverTimer);
+      setKeyboard(false);
+      if (!overlay.open) {
+        open();
+      } else if (hoverOpened) {
+        hoverOpened = false;
+      } else {
+        overlay.request(false);
+      }
+    },
+  });
   return (
     <div onPointerEnter={hover} onPointerLeave={hover} data-keyboard={keyboard() ? "" : undefined}>
-      <button
-        ref={(element) => (trigger = element)}
-        onKeyDown={handleKeydown}
-        data-menu-trigger={id}
-        id={triggerId()}
-        class="picker-select__trigger"
-        type="button"
-        aria-label={
-          selected()
-            ? `${props.params.label}: ${[selected()?.label, props.params.showSelectedDescription && selected()?.description].filter(Boolean).join(" · ")}`
-            : props.params.label
-        }
-        aria-haspopup="listbox"
-        aria-expanded={opened() ? "true" : "false"}
-        aria-controls={controls()}
-        aria-invalid={props.params.invalid ? "true" : undefined}
-        aria-describedby={props.params.describedBy}
-        title={props.params.title}
-        disabled={props.params.disabled}
-        onClick={() => {
-          clearTimeout(hoverTimer);
-          setKeyboard(false);
-          if (!overlay.open) {
-            open();
-          } else if (hoverOpened) {
-            hoverOpened = false;
-          } else {
-            overlay.request(false);
-          }
-        }}
-      >
-        <Show when={props.params.variant === "submenu"}>
-          <span class="picker-select__name">{props.params.label}</span>
-        </Show>
-        <Leading option={selected()} />
-        <span class="picker-select__copy">
-          <span class="picker-select__label">{selected()?.label ?? props.params.label}</span>
-          <Show when={props.params.showSelectedDescription && selected()?.description}>
-            <span class="picker-select__description">{selected()?.description}</span>
-          </Show>
-        </span>
-        <span class="picker-select__chevron" aria-hidden="true">
-          <Icon
-            name={
-              props.params.variant === "submenu" || props.params.sheet
-                ? "chevronRight"
-                : "chevronDown"
-            }
+      <Show
+        when={props.renderers?.trigger}
+        fallback={
+          <PickerTriggerContent
+            attributes={triggerAttributes}
+            selected={selected}
+            params={props.params}
           />
-        </span>
-      </button>
+        }
+      >
+        {(render) => <>{render()(triggerAttributes)}</>}
+      </Show>
       <div
         {...menu.content()}
         onKeyDown={handleKeydown}
@@ -557,6 +551,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         id={contentId}
         class={[
           "picker-select__menu",
+          props.renderers?.menuClass,
           {
             "oc-overlay": !props.params.sheet,
             "picker-select__menu--grouped": Boolean(props.params.groupBy),
@@ -566,47 +561,39 @@ export function PickerContent<Option extends PickerOption>(props: {
         hidden={props.params.sheet ? true : undefined}
       >
         <MenuNavigationError binding={menu} />
-        <Show when={props.params.sheet}>
+        <Show when={!searchAvailable()}>{props.renderers?.header}</Show>
+        <Show when={props.params.sheet && !searchAvailable()}>
           <div class="picker-select__page-header">
-            <button
-              type="button"
-              ref={(element) => (back = element)}
-              class="picker-select__back"
-              aria-label={t("common.back")}
-              onClick={() => overlay.request(false, "return")}
-            >
-              <Icon name="chevronLeft" />
-            </button>
+            <SheetBack />
             <span>{props.params.label}</span>
           </div>
         </Show>
-        <Show when={searching()}>
-          <input
-            ref={(element) => (input = element)}
-            class="picker-select__search settings-input"
-            type="search"
-            role="combobox"
-            data-picker-focus
-            data-search
-            tabindex="0"
-            autocomplete="off"
-            spellcheck="false"
-            aria-label={t("common.search")}
+        <Show when={searchAvailable()}>
+          <HeaderSearch
+            leading={props.params.sheet ? <SheetBack /> : undefined}
+            title={props.params.label}
+            label={t("common.search")}
             placeholder={props.params.searchPlaceholder ?? t("common.search")}
-            aria-autocomplete="list"
-            aria-expanded="true"
-            aria-controls={controls()}
-            aria-invalid={props.params.invalid ? "true" : undefined}
-            aria-describedby={props.params.describedBy}
-            aria-activedescendant={active() !== null ? optionId(active()!) : undefined}
-            value={query()}
-            onInput={(event) => setQuery(event.currentTarget.value)}
+            inputClass="picker-select__search"
+            inputProps={pickerSearchInputProps({
+              controls: controls(),
+              invalid: props.params.invalid,
+              describedBy: props.params.describedBy,
+              active: active() !== null ? optionId(active()!) : undefined,
+            })}
+            query={query()}
+            open={searching()}
+            inputRef={(element) => (input = element)}
+            onOpenChange={setSearching}
+            onQueryChange={setQuery}
           />
         </Show>
         {windowSizer()}
         <div
           ref={[(element) => (list = element), scrollRef, pointerHighlightRef]}
           class="picker-select__options"
+          // A late initial highlight must not undo scrolling while navigation loads.
+          onScroll={markPointerHighlight}
           role={props.params.groupBy ? undefined : "listbox"}
           id={props.params.groupBy ? undefined : id}
           aria-label={props.params.groupBy ? undefined : props.params.label}

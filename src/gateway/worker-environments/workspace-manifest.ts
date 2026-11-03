@@ -57,6 +57,12 @@ export const MAX_RECONCILIATION_PACK_BYTES = 256 * 1024 * 1024;
 const MANIFEST_REF_PATTERN = /^sha256:([a-f0-9]{64})$/u;
 const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 
+export class UnsafeWorkspaceManifestPathError extends Error {
+  constructor() {
+    super("Worker workspace manifest contains an unsafe path");
+  }
+}
+
 export function manifestPath(value: unknown): string {
   if (
     typeof value !== "string" ||
@@ -68,7 +74,7 @@ export function manifestPath(value: unknown): string {
     value === ".." ||
     value.startsWith("../")
   ) {
-    throw new Error("Worker workspace manifest contains an unsafe path");
+    throw new UnsafeWorkspaceManifestPathError();
   }
   return value;
 }

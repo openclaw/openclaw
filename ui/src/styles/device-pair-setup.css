@@ -9,7 +9,7 @@
   height: 44px;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--accent-subtle);
   color: var(--accent);
 }
@@ -109,8 +109,9 @@
 .device-pair-setup__spinner {
   width: 18px;
   height: 18px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
+  color: var(--accent);
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: 50%;
   animation: btn-spinner-spin 0.8s linear infinite;
 }
@@ -145,7 +146,6 @@
   width: min(320px, 100%);
   aspect-ratio: 1;
   place-items: center;
-  box-sizing: border-box;
   padding: 18px;
   border: 1px solid var(--border);
   border-radius: 22px;
@@ -262,7 +262,7 @@
   height: 48px;
   place-items: center;
   border: 1px solid var(--border-strong);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   color: var(--muted);
 }
