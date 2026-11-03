@@ -7,7 +7,9 @@ import type {
   PluginInstallRequest,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
-import type { PluginToolPreview } from "./tool-preview.ts";
+import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
+import type { PluginRowMessage } from "./plugin-row-message.tsx";
+import type { PluginToolPreview } from "./tool-preview.tsx";
 
 registerPluginManagementEnglish();
 
@@ -19,14 +21,38 @@ export type PluginsPageDetail = {
   tools?: PluginToolPreview[];
   pluginId: string;
   inspection: PluginsInspectResult | null;
-  error: string | null;
 };
 
 export type PluginsPageCatalogDetail = {
   id: string;
   result: PluginDiscoveryDetailResult | null;
-  error: string | null;
 };
+
+export function createPluginsPageState(): {
+  result: PluginListResult | null;
+  error: string | null;
+  busy: Record<string, PluginMutationAction>;
+  messages: Record<string, PluginRowMessage>;
+  detail: PluginsPageDetail | null;
+  iconUrls: Record<string, string>;
+  catalogIconUrls: Record<string, string>;
+  pageNotice: PluginRowMessage | null;
+  catalogDetail: PluginsPageCatalogDetail | null;
+  installedDetailTab: InstalledPluginDetailTab;
+} {
+  return {
+    result: null,
+    error: null,
+    busy: {},
+    messages: {},
+    detail: null,
+    iconUrls: {},
+    catalogIconUrls: {},
+    pageNotice: null,
+    catalogDetail: null,
+    installedDetailTab: "readme",
+  };
+}
 
 export function mergePluginCatalogItem(
   current: PluginListResult | null,

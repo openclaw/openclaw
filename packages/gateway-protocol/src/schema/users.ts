@@ -17,6 +17,8 @@ import { NonEmptyString, UserProfileIdSchema } from "./primitives.js";
 import { USER_PREFS_ENTRY_LIMIT } from "./user-profile-constants.js";
 import { WizardAnswerSchema, WizardStepSchema } from "./wizard.js";
 
+export * from "./users-background.js";
+
 export {
   ChatAccountSelectionSchema,
   type ChatAccountSelection,
@@ -25,6 +27,8 @@ export {
 export {
   GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,
+  PR_ATTRIBUTION_PREFERENCE_KEY,
+  PR_ATTRIBUTION_FOOTER,
   isGitCoauthorCreditEnabled,
   USER_PREFS_ENTRY_LIMIT,
   USER_PREFS_PROFILE_KEY_LIMIT,
@@ -50,6 +54,7 @@ export const UserProfileAvatarMimeSchema = Type.Union([
   Type.Literal("image/webp"),
 ]);
 export const UserProfileGitHubIdentitySchema = closedObject({
+  host: Type.Optional(NonEmptyString),
   login: Type.String({ minLength: 1, maxLength: 39 }),
   profileUrl: NonEmptyString,
   avatarUrl: NonEmptyString,
@@ -63,13 +68,36 @@ export const UserProfileSchema = closedObject({
   createdAt: Type.Integer({ minimum: 0 }),
   updatedAt: Type.Integer({ minimum: 0 }),
   emails: Type.Array(NonEmptyString),
+  // Display primary only; null does not disable profile-wide consent or host-selected credit.
   githubIdentity: Type.Union([UserProfileGitHubIdentitySchema, Type.Null()]),
   hasAvatar: Type.Boolean(),
   role: Type.Optional(UserProfileRoleSchema),
+  effectiveRole: Type.Optional(UserProfileRoleSchema),
+  roleSource: Type.Optional(
+    Type.Union([Type.Literal("assigned"), Type.Literal("githubLogin"), Type.Literal("default")]),
+  ),
 });
 
-export const UsersListParamsSchema = closedObject({});
-export const UsersListResultSchema = closedObject({ profiles: Type.Array(UserProfileSchema) });
+export const UsersListParamsSchema = closedObject({
+  githubAccountIds: Type.Optional(
+    Type.Array(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }), {
+      maxItems: 500,
+      uniqueItems: true,
+    }),
+  ),
+});
+export const UsersListResultSchema = closedObject({
+  profiles: Type.Array(UserProfileSchema),
+  githubProfiles: Type.Optional(
+    Type.Array(
+      closedObject({
+        accountId: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+        profileId: UserProfileIdSchema,
+      }),
+      { maxItems: 500 },
+    ),
+  ),
+});
 
 // The profile and relative path are derived from the authenticated connection.
 export const UsersPersonalFileGetParamsSchema = closedObject({ agentId: NonEmptyString });
@@ -393,6 +421,7 @@ export const UsersGitHubAuthorizeCancelResultSchema = closedObject({ cancelled: 
 export const UsersGitHubDisconnectParamsSchema = closedObject({});
 export const UsersGitHubDisconnectResultSchema = closedObject({ disconnected: Type.Literal(true) });
 export const PersonalGitHubStatusSchema = closedObject({
+  stale: Type.Optional(Type.Boolean()),
   state: Type.Union([
     Type.Literal("connected"),
     Type.Literal("disconnected"),
@@ -429,3 +458,53 @@ export type PersonalGitHubStatus = Static<typeof PersonalGitHubStatusSchema>;
 export type UsersGitHubStatusResult = Static<typeof UsersGitHubStatusResultSchema>;
 export type UsersGitHubAuthorizeStartResult = Static<typeof UsersGitHubAuthorizeStartResultSchema>;
 export type UsersGitHubAuthorizePollResult = Static<typeof UsersGitHubAuthorizePollResultSchema>;
+
+// Self-service proof never accepts a target profile or a claimed provider user ID.
+const ChannelIdentityTarget = {
+  channelId: Type.String({ minLength: 1, maxLength: 64 }),
+  accountId: Type.String({ minLength: 1, maxLength: 128 }),
+};
+export const UsersChannelIdentityParamsSchema = Type.Union([
+  closedObject({ action: Type.Literal("status"), channelId: ChannelIdentityTarget.channelId }),
+  closedObject({
+    action: Type.Literal("start"),
+    ...ChannelIdentityTarget,
+    browserNonce: Type.String({
+      pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$",
+    }),
+  }),
+  closedObject({
+    action: Type.Literal("poll"),
+    ...ChannelIdentityTarget,
+    requestId: NonEmptyString,
+  }),
+  closedObject({
+    action: Type.Literal("cancel"),
+    ...ChannelIdentityTarget,
+    requestId: NonEmptyString,
+  }),
+  closedObject({ action: Type.Literal("disconnect"), ...ChannelIdentityTarget }),
+]);
+export const UsersChannelIdentityResultSchema = closedObject({
+  status: Type.Union([
+    Type.Literal("ready"),
+    Type.Literal("pending"),
+    Type.Literal("linked"),
+    Type.Literal("failed"),
+    Type.Literal("cancelled"),
+  ]),
+  accounts: Type.Optional(
+    Type.Array(
+      closedObject({
+        accountId: NonEmptyString,
+        available: Type.Boolean(),
+        senderIds: Type.Array(NonEmptyString),
+      }),
+    ),
+  ),
+  requestId: Type.Optional(NonEmptyString),
+  authorizationUrl: Type.Optional(NonEmptyString),
+  message: Type.Optional(NonEmptyString),
+});
+export type UsersChannelIdentityParams = Static<typeof UsersChannelIdentityParamsSchema>;
+export type UsersChannelIdentityResult = Static<typeof UsersChannelIdentityResultSchema>;

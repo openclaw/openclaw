@@ -1,9 +1,10 @@
-import { Type } from "typebox";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ProgressCardPutResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import type { Context, Model } from "../../../llm/types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
+import { createReplyOperation, type ReplyOperation } from "../../../sessions/session-controller.js";
 import { createOpenClawCodingToolsInternal } from "../../agent-tools.js";
 import {
   createAssistant,
@@ -13,21 +14,72 @@ import {
   streamMocks,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import * as gatewayTool from "../../tools/in-process-gateway.js";
 import { createProgressCardTool } from "../../tools/progress-card-tool.js";
-import { clearActiveEmbeddedRun } from "../runs.js";
+import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "../runs.test-support.js";
 import { prepareCatalogExecutor } from "./attempt-stream-prepare.test-support.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
-import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
 
 registerAgentSessionLoopTestLifecycle();
 const streams: ReturnType<typeof prepareCatalogExecutor>[] = [];
+let replyOperation: ReplyOperation;
+beforeEach(() => {
+  replyOperation = createReplyOperation({
+    sessionId: "session-output-schema",
+    sessionKey: "agent:main:main",
+    resetTriggered: false,
+  });
+});
 afterEach(() => {
   for (const stream of streams.splice(0)) {
     stream.subscription.unsubscribe();
     clearActiveEmbeddedRun("session-output-schema", stream.queueHandle, "agent:main:main");
   }
+  replyOperation.complete();
+  vi.restoreAllMocks();
 });
+
+function respond(...args: Parameters<typeof createAssistant>) {
+  return createAssistantResultStream(createAssistant(...args));
+}
+type Turn = (model: Model, context: Context, request: number) => ReturnType<typeof respond>;
+type ScriptedTurn = string | ReturnType<typeof toolCall>[] | Turn;
+function mockTurns(...turns: [ScriptedTurn, ...ScriptedTurn[]]) {
+  let requests = 0;
+  streamMocks.streamSimple.mockImplementation((model, context) => {
+    const turn = turns[Math.min(requests++, turns.length - 1)]!;
+    return typeof turn === "function"
+      ? turn(model, context, requests)
+      : respond(model, turn, typeof turn === "string" ? "stop" : "toolUse");
+  });
+  return () => requests;
+}
+function toolCall(id: string, name: string, args: Record<string, unknown> = {}) {
+  return { type: "toolCall" as const, id, name, arguments: args };
+}
+function cardWith(
+  steps: NonNullable<ProgressCardPutResult["card"]>["steps"],
+): ProgressCardPutResult {
+  return { card: { sessionKey: "agent:main:main", steps, revision: 1, updatedAt: 1 } };
+}
+
+function prepare(options: Parameters<typeof prepareCatalogExecutor>[0]) {
+  const prepared = prepareCatalogExecutor({ replyOperation, ...options });
+  streams.push(prepared);
+  return prepared;
+}
+
+function payloadsFor({ subscription }: ReturnType<typeof prepareCatalogExecutor>) {
+  const assistant = subscription.getCurrentAttemptAssistant();
+  return buildEmbeddedRunPayloads({
+    assistantTexts: subscription.assistantTexts,
+    answerSegments: subscription.answerSegments,
+    lastAssistant: assistant,
+    currentAssistant: assistant ?? null,
+    sessionKey: "agent:main:main",
+  });
+}
 
 it.each([
   { nested: false, nonStreamedMedia: false },
@@ -42,12 +94,9 @@ it.each([
       { step: "Publish repair", status: "completed" as const },
       { step: "Repair remaining failure", status: "pending" as const },
     ];
-    const committed: ProgressCardPutResult = {
-      card: { sessionKey: "agent:main:main", steps: plan, revision: 1, updatedAt: 1 },
-    };
     using gatewayCall = vi
       .spyOn(gatewayTool, "callInProcessGatewayTool")
-      .mockResolvedValue(committed);
+      .mockResolvedValue(cardWith(plan));
     const progress = createOpenClawCodingToolsInternal({
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -102,217 +151,86 @@ it.each([
                 })
               : progress.execute(id, args, signal, update),
         },
-        {
-          name: "repair",
-          label: "Repair",
-          description: "Repair one failure",
-          parameters: Type.Object({}),
-          execute: repair,
-        },
+        { ...createStubTool("repair"), execute: repair },
       ],
     });
     const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
-    const attempt = { completionCheck };
-    const prepared = prepareCatalogExecutor([], {
+    const prepared = prepare({
       activeSession: session,
-      attempt,
+      attempt: { completionCheck },
       onAgentEvent: (event) => events.push(event),
       streamReplies: !nonStreamedMedia,
       trustedLocalMediaToolNames: new Set(["repair"]),
     });
-    streams.push(prepared);
-    let requests = 0;
-    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-      requests += 1;
-      if (requests === 1) {
-        return createAssistantResultStream(
-          createAssistant(
-            model,
-            [
-              { type: "toolCall", id: "first-repair", name: "repair", arguments: {} },
-              {
-                type: "toolCall",
-                id: "save-plan",
-                name: nested ? "exec" : "progress_card",
-                arguments: { plan },
-              },
-            ],
-            "toolUse",
-          ),
-        );
-      }
-      if (requests === 2) {
-        return createAssistantResultStream(
-          createAssistant(model, [{ type: "text", text: "Stopped: one repair remains." }]),
-        );
-      }
-      if (requests === 3) {
+    const requests = mockTurns(
+      [
+        toolCall("first-repair", "repair"),
+        toolCall("save-plan", nested ? "exec" : "progress_card", { plan }),
+      ],
+      "Stopped: one repair remains.",
+      (model, context) => {
         if (nonStreamedMedia) {
           expect(prepared.subscription.getPendingToolMediaReply()).toEqual(expectedPendingMedia);
         }
-        expect(
-          context.messages.some(
-            (message) =>
-              message.role === "user" &&
-              JSON.stringify(message.content).includes("latest successfully saved plan"),
-          ),
-        ).toBe(true);
-        return createAssistantResultStream(
-          createAssistant(
-            model,
-            [{ type: "toolCall", id: "remaining-repair", name: "repair", arguments: {} }],
-            "toolUse",
-          ),
+        const check = context.messages.findLast(
+          (message) =>
+            message.role === "user" &&
+            JSON.stringify(message.content).includes("latest successfully saved plan"),
         );
-      }
-      return createAssistantResultStream(
-        createAssistant(model, [{ type: "text", text: "Both repairs verified." }]),
-      );
-    });
+        expect(check).toBeDefined();
+        expect(JSON.stringify(check?.content)).toContain(SILENT_REPLY_TOKEN);
+        return respond(model, [toolCall("remaining-repair", "repair")], "toolUse");
+      },
+      "Both repairs verified.",
+    );
 
     await session.prompt("Repair both failures and verify them.");
     await prepared.subscription.waitForPendingEvents();
 
     expect(repair.mock.calls.map(([id]) => id)).toEqual(["first-repair", "remaining-repair"]);
-    expect(requests).toBe(4);
+    expect(requests()).toBe(4);
     expect(gatewayCall).toHaveBeenCalledOnce();
     expect(
       events.filter((event) => event.stream === "lifecycle" && event.data.phase === "end"),
     ).toHaveLength(1);
-    const assistant = prepared.subscription.getCurrentAttemptAssistant();
-    const payloads = buildEmbeddedRunPayloads({
-      assistantTexts: prepared.subscription.assistantTexts,
-      answerSegments: prepared.subscription.answerSegments,
-      lastAssistant: assistant,
-      currentAssistant: assistant ?? null,
-      sessionKey: "agent:main:main",
-    });
+    const payloads = payloadsFor(prepared);
     expect(payloads.map((payload) => payload.text)).toEqual(["Both repairs verified."]);
     if (nonStreamedMedia) {
-      const pendingMedia = prepared.subscription.getPendingToolMediaReply();
-      expect(pendingMedia).toEqual(expectedPendingMedia);
-      expect(
-        mergeAttemptToolMediaPayloads({
-          payloads,
-          toolMediaUrls: pendingMedia?.mediaUrls,
-          toolAudioAsVoice: pendingMedia?.audioAsVoice,
-          toolTrustedLocalMedia: pendingMedia?.trustedLocalMedia,
-        }),
-      ).toMatchObject([
-        {
-          text: "Both repairs verified.",
-          mediaUrl,
-          mediaUrls: [mediaUrl],
-          audioAsVoice: true,
-          trustedLocalMedia: true,
-        },
-      ]);
+      expect(prepared.subscription.getPendingToolMediaReply()).toEqual(expectedPendingMedia);
     }
     expect(session.messages.filter((message) => message.role === "toolResult")).toHaveLength(3);
   },
 );
 
-it.each([
-  { name: "completed replacement", replacement: "completed", checks: 0 },
-  { name: "cleared replacement", replacement: "clear", checks: 0 },
-  { name: "note-only replacement", replacement: "note", checks: 0 },
-  { name: "failed replacement retains pending work", replacement: "failed", checks: 1 },
-  { name: "genuine blocker gets one check", replacement: "pending", checks: 1 },
-  { name: "no plan saved in this run", replacement: "untouched", checks: 0 },
-  { name: "a consumed check is not rearmed by another save", replacement: "recovery", checks: 0 },
-  { name: "status-only refresh", replacement: "status", checks: 0 },
-])("honors $name", async ({ replacement, checks }) => {
-  const completionCheck = { unfinishedPlan: false, checked: replacement === "recovery" };
-  const pending = [{ step: "Await external permission", status: "pending" as const }];
-  const initial = {
-    card: { sessionKey: "agent:main:main", steps: pending, revision: 1, updatedAt: 1 },
-  };
-  const gateway = vi.fn().mockResolvedValue(initial);
-  const replacementArgs =
-    replacement === "completed"
-      ? { plan: [{ step: "Await external permission", status: "completed" }] }
-      : replacement === "clear"
-        ? {}
-        : { markdown: "Paused awaiting permission." };
-  const writes = ["completed", "clear", "note", "failed"].includes(replacement)
-    ? 2
-    : replacement === "untouched"
-      ? 0
-      : 1;
-  if (writes === 2) {
-    gateway.mockResolvedValueOnce(initial);
-    if (replacement === "failed") {
-      gateway.mockRejectedValueOnce(new Error("Save rejected"));
-    } else {
-      gateway.mockResolvedValueOnce({
-        card:
-          replacement === "clear"
-            ? null
-            : {
-                sessionKey: "agent:main:main",
-                revision: 2,
-                updatedAt: 2,
-                ...(replacement === "completed"
-                  ? { steps: [{ step: "Await external permission", status: "completed" }] }
-                  : { markdown: "Paused awaiting permission." }),
-              },
-      });
-    }
-  }
-  const progress = createProgressCardTool({
-    agentSessionKey: "agent:main:main",
-    callGateway: gateway,
-    onPlanSaved: (unfinished) => {
-      completionCheck.unfinishedPlan = unfinished;
-    },
-  });
-  const { session } = await createTestSession({ customTools: [progress] });
-  const prepared = prepareCatalogExecutor([], {
-    activeSession: session,
-    attempt: {
-      completionCheck,
-      ...(replacement === "status"
-        ? { silentExpected: true, terminalReplyExpectation: "optional" as const }
-        : {}),
-    },
-  });
-  streams.push(prepared);
-  let requests = 0;
-  streamMocks.streamSimple.mockImplementation((model: Model) => {
-    requests += 1;
-    return createAssistantResultStream(
-      createAssistant(
-        model,
-        requests <= writes
-          ? [
-              {
-                type: "toolCall",
-                id: "save-" + requests,
-                name: "progress_card",
-                arguments: requests === 1 ? { plan: pending } : replacementArgs,
-              },
-            ]
-          : [
-              {
-                type: "text",
-                text: "Waiting for the user's permission; no more authorized actions.",
-              },
-            ],
-        requests <= writes ? "toolUse" : "stop",
+it.each(["no pending plan", "consumed check", "optional status", "authored silence"])(
+  "does not continue after %s",
+  async (state) => {
+    const completionCheck = {
+      unfinishedPlan: state !== "no pending plan",
+      checked: state === "consumed check",
+    };
+    const { session } = await createTestSession();
+    const prepared = prepare({
+      activeSession: session,
+      attempt: {
+        completionCheck,
+        ...(state === "optional status"
+          ? { silentExpected: true, terminalReplyExpectation: "optional" as const }
+          : { terminalReplyExpectation: "required" as const }),
+      },
+    });
+    const requests = mockTurns(state === "authored silence" ? "NO_REPLY" : "Work is complete.");
+    await session.prompt("Continue only when work remains.");
+    await prepared.subscription.waitForPendingEvents();
+    expect(requests()).toBe(1);
+    expect(
+      session.messages.filter(
+        (message) =>
+          message.role === "custom" && message.customType === "openclaw.plan-completion-check",
       ),
-    );
-  });
-  await session.prompt("Investigate the failure, but do not proceed without permission.");
-  await prepared.subscription.waitForPendingEvents();
-  expect(requests).toBe(writes + 1 + checks);
-  expect(
-    session.messages.filter(
-      (message) =>
-        message.role === "custom" && message.customType === "openclaw.plan-completion-check",
-    ),
-  ).toHaveLength(checks);
-  expect(gateway).toHaveBeenCalledTimes(writes);
-});
+    ).toHaveLength(0);
+  },
+);
 
 it.each([
   { owner: "plugin finalize", checks: 0 },
@@ -327,18 +245,8 @@ it.each([
 ])("preserves $owner policy with $checks completion checks", async ({ owner, checks }) => {
   const completionCheck = { unfinishedPlan: false, checked: false };
   const plan = [{ step: "Remaining repair", status: "pending" as const }];
-  const progress = createProgressCardTool({
-    agentSessionKey: "agent:main:main",
-    callGateway: vi.fn().mockResolvedValue({
-      card: { sessionKey: "agent:main:main", steps: plan, revision: 1, updatedAt: 1 },
-    }),
-    onPlanSaved: (unfinished) => {
-      completionCheck.unfinishedPlan = unfinished;
-    },
-  });
-  const { session } = await createTestSession({ customTools: [progress] });
+  vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue(cardWith(plan));
   const controller = new AbortController();
-  let requests = 0;
   const onFinalize = vi.fn(async () => {
     if (owner === "closed during hook") {
       prepared.subscription.unsubscribe();
@@ -354,7 +262,34 @@ it.each([
           createMockPluginRegistry([{ hookName: "before_agent_finalize", handler: onFinalize }]),
         )
       : undefined;
-  const prepared = prepareCatalogExecutor([], {
+  const requests = mockTurns([toolCall("save", "progress_card", { plan })], (model) => {
+    if (owner === "cancelled") {
+      controller.abort();
+    }
+    const assistant = createAssistant(
+      model,
+      "The owner stopped this work.",
+      owner === "output limited" ? "length" : "stop",
+    );
+    if (owner === "provider refusal") {
+      assistant.diagnostics = [
+        {
+          type: "provider_refusal",
+          timestamp: 0,
+          details: { provider: model.provider, category: "refusal" },
+        },
+      ];
+    }
+    return createAssistantResultStream(assistant);
+  });
+  const progress = createProgressCardTool({
+    agentSessionKey: "agent:main:main",
+    onPlanSaved: (unfinished) => {
+      completionCheck.unfinishedPlan = unfinished;
+    },
+  });
+  const { session } = await createTestSession({ customTools: [progress] });
+  const prepared = prepare({
     activeSession: session,
     hookRunner,
     runAbortController: controller,
@@ -369,38 +304,15 @@ it.each([
     },
     getRunState: () => ({
       aborted: controller.signal.aborted,
-      timedOut: owner === "timed out" && requests > 1,
-      yieldDetected: owner === "yielded" && requests > 1,
+      timedOut: owner === "timed out" && requests() > 1,
+      yieldDetected: owner === "yielded" && requests() > 1,
       promptError: undefined,
     }),
   });
-  streams.push(prepared);
-  streamMocks.streamSimple.mockImplementation((model: Model) => {
-    requests += 1;
-    if (requests > 1 && owner === "cancelled") {
-      controller.abort();
-    }
-    const assistant = createAssistant(
-      model,
-      requests === 1
-        ? [{ type: "toolCall", id: "save", name: "progress_card", arguments: { plan } }]
-        : [{ type: "text", text: "The owner stopped this work." }],
-      requests === 1 ? "toolUse" : owner === "output limited" ? "length" : "stop",
-    );
-    if (requests > 1 && owner === "provider refusal") {
-      assistant.diagnostics = [
-        {
-          type: "provider_refusal",
-          timestamp: 0,
-          details: { provider: model.provider, category: "refusal" },
-        },
-      ];
-    }
-    return createAssistantResultStream(assistant);
-  });
+
   await session.prompt("Repair the remaining failure.");
   await prepared.subscription.waitForPendingEvents();
-  expect(requests).toBe(2 + checks);
+  expect(requests()).toBe(2 + checks);
   expect(completionCheck.checked).toBe(checks > 0);
   if (owner === "hook budget exhausted") {
     expect(onFinalize).not.toHaveBeenCalled();

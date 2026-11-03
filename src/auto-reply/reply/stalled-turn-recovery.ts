@@ -1,10 +1,19 @@
-import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import type { FollowupRun } from "./queue/types.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import { buildTranscriptFollowupRun } from "./transcript-followup-run.js";
+
+const STALLED_TURN_NOTICE_TEXT =
+  "⚠️ This turn was interrupted because it stopped making progress. Please try again.";
+const RATE_LIMITED_TURN_NOTICE_TEXT =
+  "⚠️ This turn was stopped while the model provider was rate-limiting requests. Please try again in a few minutes.";
 
 /** Last-resort feedback once no continuation can answer a stalled turn. */
-export const STALLED_TURN_NOTICE_TEXT =
-  "⚠️ This turn was interrupted because it stopped making progress. Please try again.";
+export function resolveStalledTurnNoticeText(operation: ReplyOperation | undefined): string {
+  return operation?.staleExpiryReason === "rate_limited"
+    ? RATE_LIMITED_TURN_NOTICE_TEXT
+    : STALLED_TURN_NOTICE_TEXT;
+}
+
 export const STALLED_TURN_GUIDANCE =
   "Your previous turn stopped making progress and was stopped before you replied, so the " +
   "user's request from that turn is still unanswered. Answer it now, together with any newer " +
@@ -12,41 +21,32 @@ export const STALLED_TURN_GUIDANCE =
   "Keep further tool use to a minimum, do not repeat actions that already ran, and briefly " +
   "say what you could not verify.";
 
-/** A stale watchdog expired this operation before it produced output: the user saw nothing. */
+/** A stale watchdog expired this operation before it delivered output: the user saw nothing. */
 export function isReplyOperationStalledBeforeOutput(
   operation: ReplyOperation | undefined,
 ): boolean {
   return (
     operation?.result?.kind === "failed" &&
+    !operation.sourceReplyDelivered &&
     operation.result.code === "run_stalled" &&
     (operation.staleExpiryReason === "no_activity" ||
+      operation.staleExpiryReason === "rate_limited" ||
       operation.staleExpiryReason === "stuck_recovery")
   );
 }
 
 /** Builds the one recovery run that answers a stalled turn over its persisted transcript. */
-export function buildStalledTurnRecoveryRun(base: FollowupRun): FollowupRun {
+export function buildStalledTurnRecoveryRun(base: FollowupRun, guidance?: string): FollowupRun {
   return {
-    ...base,
-    prompt: formatSystemTurnPrompt(STALLED_TURN_GUIDANCE),
+    ...buildTranscriptFollowupRun(base, {
+      prompt: guidance ?? STALLED_TURN_GUIDANCE,
+      sourceTool: "stalled-turn-recovery",
+      expiredSkillAuthoringMessage:
+        "Skill authoring is unavailable while recovering an interrupted turn. Send a fresh message requesting the change.",
+    }),
     summaryLine: "stalled-turn-recovery",
     stalledTurnRecovery: true,
-    disableCollectBatching: true,
-    enqueuedAt: Date.now(),
-    // The inbound request, its media, and its runtime context are already in the
-    // transcript; this internal system turn persists no user message of its own.
-    transcriptPrompt: undefined,
-    userTurnTranscriptRecorder: undefined,
-    currentInboundContext: undefined,
-    images: undefined,
-    imageOrder: undefined,
-    media: undefined,
-    // The stalled turn's signal, adoption lifecycle, and receipts belong to the
-    // aborted dispatch; sharing them would cancel or settle this run with it.
+    // The aborted dispatch's signal must not cancel its recovery turn.
     abortSignal: undefined,
-    turnAdoptionLifecycle: undefined,
-    replyOperationRunStates: undefined,
-    onQueueDisposition: undefined,
-    run: { ...base.run, suppressNextUserMessagePersistence: true },
   };
 }

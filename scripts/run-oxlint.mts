@@ -9,21 +9,21 @@ import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { DummyRuleMap, OxlintConfig } from "oxlint";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { limitsAreAdvisory, reportLimitViolations } from "./lib/check-limits.mts";
 import { parseStaticDiagnostics } from "./lib/ci-static-check-evidence.mjs";
+import { resolveDevTool } from "./lib/dev-tool.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   distArtifactEntryArgs,
   resolveDistArtifactLockPath,
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
-import {
-  applyLocalOxlintPolicy,
-  resolveLocalCheckEnv,
-  resolveRepoToolBinPath,
-} from "./lib/local-check-runtime.mts";
+import { checkLintParity } from "./lib/lint-parity.mts";
+import { applyLocalOxlintPolicy, resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveUntouchedOxlintExclusions } from "./lib/oxlint-changed-scope.mts";
+import { isCiEnvironment } from "./lib/pinned-bun.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
@@ -59,6 +59,7 @@ const OXLINT_BOUNDARY_FREE_TS_CONFIGS = new Set([
   "config/tsconfig/oxlint.core.json",
   "config/tsconfig/oxlint.scripts.json",
   "test/tsconfig/tsconfig.test.root.json",
+  "tsconfig.ui.json",
 ]);
 const OPENCLAW_FOCUSED_CONFIG_FLAG = "--openclaw-focused-config";
 const LIMIT_RULES = new Set([
@@ -159,18 +160,26 @@ async function runWithAdvisoryLimits(
     env,
     requireProcessTreeExit: process.platform !== "win32",
   };
+  const writesOutput = args.some((arg) =>
+    /^(?:--output-file|--fix(?:-suggestions|-dangerously)?)(?:=|$)/u.test(arg),
+  );
   const evidenceId = env.OPENCLAW_CI_STATIC_EVIDENCE_ID;
   const evidenceEnabled =
     env.OPENCLAW_CI_STATIC_EVIDENCE === "1" &&
     typeof evidenceId === "string" &&
     /^[\w:-]{1,160}$/u.test(evidenceId) &&
-    !args.some((arg) => /^(?:--output-file|--fix(?:-suggestions|-dangerously)?)(?:=|$)/u.test(arg));
+    !writesOutput;
   const githubAdvisory = limitsAreAdvisory(env);
+  // Windows has no automatic fork staging; an explicit executable still enables parity.
+  const parity =
+    isCiEnvironment(env) &&
+    !writesOutput &&
+    (process.platform !== "win32" || Boolean(env.OPENCLAW_BUN_PATH?.trim()));
   let untouchedExclusions = githubAdvisory
     ? undefined
     : resolveUntouchedOxlintExclusions(configPath, env);
   if (
-    (!githubAdvisory && !untouchedExclusions && !evidenceEnabled) ||
+    (!githubAdvisory && !untouchedExclusions && !evidenceEnabled && !parity) ||
     args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg.replace(/[=][\s\S]*$/u, ""))) ||
     !fs.existsSync(configPath)
   ) {
@@ -213,7 +222,7 @@ async function runWithAdvisoryLimits(
     });
   }
   enabled &&= githubAdvisory || Boolean(untouchedExclusions);
-  if (!enabled && !evidenceEnabled) {
+  if (!enabled && !evidenceEnabled && !parity) {
     return { status: await runManagedCommand(command) };
   }
 
@@ -269,7 +278,7 @@ async function runWithAdvisoryLimits(
   };
   try {
     const configuredArgs = advisoryConfig ? configOption.replace(advisoryConfig) : args;
-    if (!githubAdvisory && !evidenceEnabled) {
+    if (!githubAdvisory && !evidenceEnabled && !parity) {
       return { status: await runManagedCommand({ ...command, args: configuredArgs }) };
     }
     const format = oxlintOption(configuredArgs, "--format", "-f");
@@ -336,6 +345,10 @@ async function runWithAdvisoryLimits(
           env,
         );
       }
+      if (parity) {
+        console.error("[lint] parity failed: oxlint report exceeded capture limit.");
+        return { status: 1 };
+      }
       return { status };
     }
     if (status !== 0 && status !== 1) {
@@ -356,6 +369,17 @@ async function runWithAdvisoryLimits(
     const limits = report.diagnostics.filter((diagnostic) =>
       LIMIT_RULES.has(/^eslint\(([^)]+)\)$/u.exec(diagnostic.code ?? "")?.[1] ?? ""),
     );
+    if (
+      parity &&
+      !(await checkLintParity(
+        format.replace("json"),
+        env,
+        { status, stdout: output },
+        MAX_REPORT_BYTES,
+      ))
+    ) {
+      return { status: 1 };
+    }
     reportLimitViolations(
       limits.map((diagnostic) => ({
         file: diagnostic.filename.startsWith("file://")
@@ -421,11 +445,17 @@ async function runWithAdvisoryLimits(
   }
 }
 
-/**
- * Returns whether oxlint args need package-boundary declaration artifacts first.
- */
+/** Ordinary lint is type-aware; focused guards and metadata commands need no types. */
+export function shouldPrepareOxlintArtifacts(args: readonly string[]) {
+  return (
+    !args.includes(OPENCLAW_FOCUSED_CONFIG_FLAG) &&
+    !args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg))
+  );
+}
+
+/** Returns whether oxlint args also need plugin package-boundary declarations. */
 export function shouldPrepareExtensionPackageBoundaryArtifacts(args: string[]) {
-  if (args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg))) {
+  if (!shouldPrepareOxlintArtifacts(args)) {
     return false;
   }
 
@@ -436,7 +466,7 @@ export function shouldPrepareExtensionPackageBoundaryArtifacts(args: string[]) {
     }
     return arg.startsWith("--tsconfig=") ? [arg.slice("--tsconfig=".length)] : [];
   });
-  // Core, script, and root-test lint resolve sources through the root tsconfig;
+  // Core, script, root-test, and UI lint resolve sources through the root tsconfig;
   // generated plugin package declarations are only an extension-lint input.
   return (
     tsconfigs.length === 0 ||
@@ -608,7 +638,7 @@ async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) 
   });
 
   if (status !== 0) {
-    throw new Error(`prepare-extension-package-boundary-artifacts failed with exit code ${status}`);
+    throw new Error(`Boundary preparation failed (${status}). If deps changed, run pnpm install.`);
   }
 }
 
@@ -636,8 +666,12 @@ export async function runOxlint(
         platform: process.platform,
       });
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
-  const finalArgs = sparseTargets.args;
-  const oxlintPath = resolveRepoToolBinPath("oxlint");
+  const tool = resolveDevTool(
+    "lint",
+    isCiEnvironment(env) ? { ...env, OPENCLAW_LINT_TOOL: "oxlint" } : env,
+  );
+  const finalArgs = [...tool.args, ...sparseTargets.args];
+  const oxlintPath = tool.command;
   const needsArtifactPreparation =
     !focusedConfig &&
     env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
@@ -660,6 +694,10 @@ export async function runOxlint(
   }
 
   const run = async (ownedDirectory?: string) => {
+    if (shouldPrepareOxlintArtifacts(argv) && env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1") {
+      // Source-backed core lint skips plugin declarations, not generated schema types.
+      await ensureKyselyTypes(process.cwd(), false, { allowPartialCheckout: true });
+    }
     if (needsArtifactPreparation) {
       // Declaration compilation owns its Go policy; lint limits belong to the oxlint child.
       await prepareExtensionPackageBoundaryArtifacts(localEnv);
@@ -667,14 +705,14 @@ export async function runOxlint(
     return await runWithAdvisoryLimits(
       oxlintPath,
       finalArgs,
-      resolveOxlintToolchainEnv(oxlintPath, env),
+      resolveOxlintToolchainEnv(oxlintPath, tool.env),
       ownedDirectory,
     );
   };
   // Skip-prepare callers still consume shared declarations. Hold one owner across
-  // preparation and lint; source-only lint acquires it only for transient config.
+  // generation and lint; syntax-only guards need it only for transient config.
   const root = process.cwd();
-  return !focusedConfig && shouldPrepareExtensionPackageBoundaryArtifacts(argv)
+  return shouldPrepareOxlintArtifacts(argv)
     ? await withDistArtifactOwnership(root, () => run(resolveDistArtifactLockPath(root)))
     : await run();
 }

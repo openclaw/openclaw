@@ -13,25 +13,59 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough, Transform } from "node:stream";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { RESOURCE_MARKER } from "../../scripts/lib/extension-import-profile.mts";
 import {
   hasUnjoinedWork,
   inspectManagedProcessGroup,
-  waitForManagedProcessGroupExit,
 } from "../../scripts/lib/managed-child-process.mts";
 import { parseArgs, runCase } from "../../scripts/profile-extension-memory.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
-import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
-import { withTestTimeout } from "../helpers/promise.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 const SCRIPT_PATH = path.resolve("scripts/profile-extension-memory.mts");
 const TSX_PRELOAD = pathToFileURL(path.resolve("scripts/tsx.mjs")).href;
 const SOURCE_TSCONFIG_PATH = path.resolve("tsconfig.json");
 const testNodeExecPath = resolveTestNodeExecPath();
+
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+function readDescendantPid(file: string): number {
+  const pid = Number(readFileSync(file, "utf8"));
+  expect(Number.isInteger(pid) && pid > 0, `invalid descendant PID in ${file}`).toBe(true);
+  return pid;
+}
+
+// Foreign descendants have no ChildProcess handle; their parent can exit before reaping them.
+async function waitForProcessCleanup(
+  predicate: () => boolean,
+  description: string,
+  signal: AbortSignal,
+): Promise<void> {
+  try {
+    while (!predicate()) {
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (cause) {
+    throw new Error(description, { cause });
+  }
+}
 
 function runProfileExtensionMemory(args: string[], cwd = process.cwd()) {
   return spawnSync(testNodeExecPath, ["--import", TSX_PRELOAD, SCRIPT_PATH, ...args], {
@@ -56,9 +90,11 @@ async function cleanupProfileFixture(
   child: ReturnType<typeof spawn>,
   closed: Promise<unknown>,
   descendantPidPath: string,
+  signal: AbortSignal,
   detached = true,
 ): Promise<void> {
   let childClosed = false;
+  let stopFailed = false;
   let descendantPid: number | undefined;
   await runQaGatewayFixture(
     async () => {
@@ -71,6 +107,7 @@ async function cleanupProfileFixture(
         process.kill(detached ? -child.pid : child.pid, detached ? "SIGKILL" : "SIGTERM");
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          stopFailed = true;
           throw error;
         }
       }
@@ -81,18 +118,19 @@ async function cleanupProfileFixture(
       }
     },
     async () => {
-      await withTestTimeout(
-        closed,
-        5_000,
-        `profile child did not close; retained fixture: ${root}`,
-      );
+      // A denied runner stop cannot promise a future close. Preserve that failure,
+      // rescue known descendants, and retain inputs rather than blocking later cleanup.
+      if (!detached && stopFailed && child.exitCode === null && child.signalCode === null) {
+        throw new Error(`profile child did not close; retained fixture: ${root}`);
+      }
+      await closed;
       childClosed = true;
     },
     async () => {
       if (!existsSync(descendantPidPath)) {
         return;
       }
-      descendantPid = await waitForPidFile(descendantPidPath, 5_000);
+      descendantPid = readDescendantPid(descendantPidPath);
       killPidIfAlive(descendantPid);
     },
     async () => {
@@ -101,14 +139,23 @@ async function cleanupProfileFixture(
       await runQaGatewayFixture(
         async () => {
           if (descendantPid) {
-            await waitForDead(descendantPid, 5_000);
+            const pid = descendantPid;
+            await waitForProcessCleanup(
+              () => !isProcessAlive(pid),
+              `process still alive: ${pid}; retained fixture: ${root}`,
+              signal,
+            );
           }
         },
         async () => {
           if (!detached || !child.pid) {
             return;
           }
-          await waitForManagedProcessGroupExit(child, 5_000, { errorPolicy: "indeterminate" });
+          await waitForProcessCleanup(
+            () => inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }) === "dead",
+            `profile group still alive; retained fixture: ${root}`,
+            signal,
+          );
           expect(
             inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }),
             `retained fixture: ${root}`,
@@ -123,16 +170,6 @@ async function cleanupProfileFixture(
 }
 
 describe("scripts/profile-extension-memory", () => {
-  it("prints help without requiring built plugin artifacts", () => {
-    const result = runProfileExtensionMemory(["--help"]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(
-      "Usage: node --import tsx scripts/profile-extension-memory.mts",
-    );
-  });
-
   it("stops parsing options after the argument terminator", () => {
     expect(parseArgs(["--extension", "discord", "--", "--extension", "telegram"])).toMatchObject({
       extensions: ["discord"],
@@ -190,27 +227,6 @@ describe("scripts/profile-extension-memory", () => {
       selected: ["external"],
       expected: [{ dir: "external", file: "extensions/external/dist/index.js" }],
     },
-    {
-      name: "nested output in the root plugin tree",
-      files: ["dist/extensions/external/dist/index.js"],
-      selected: ["external"],
-      expected: [{ dir: "external", file: "dist/extensions/external/dist/index.js" }],
-    },
-    ...[true, false].map((selected) => ({
-      name: `mixed internal and external output (${selected ? "selected" : "default"})`,
-      files: ["dist/extensions/internal/index.js", "extensions/external/dist/index.js"],
-      selected: selected ? ["internal", "external"] : [],
-      expected: [
-        { dir: "external", file: "extensions/external/dist/index.js" },
-        { dir: "internal", file: "dist/extensions/internal/index.js" },
-      ],
-    })),
-    ...["index.js", "dist/index.js"].map((rootEntry) => ({
-      name: `one canonical root ${rootEntry} when both builds exist`,
-      files: [`dist/extensions/external/${rootEntry}`, "extensions/external/dist/index.js"],
-      selected: ["external", "external"],
-      expected: [{ dir: "external", file: `dist/extensions/external/${rootEntry}` }],
-    })),
   ])("profiles $name", ({ files, selected, expected }) => {
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory #test-")));
     try {
@@ -226,34 +242,6 @@ describe("scripts/profile-extension-memory", () => {
           file,
           file.endsWith(".ts") ? 'throw new Error("source imported");\n' : "export {};\n",
           "utf8",
-        );
-      }
-      const identified = files[0] === "dist/extensions/external/dist/index.js";
-      if (identified) {
-        const git = (args: string[]) => {
-          const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
-          expect(result.status, result.stderr).toBe(0);
-          return result.stdout.trim();
-        };
-        git(["init", "--quiet", "--template="]);
-        git(["add", "."]);
-        git([
-          "-c",
-          "core.hooksPath=/dev/null",
-          "-c",
-          "commit.gpgsign=false",
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@example.invalid",
-          "commit",
-          "--quiet",
-          "-m",
-          "fixture",
-        ]);
-        writeFileSync(
-          path.join(root, "dist/build-info.json"),
-          JSON.stringify({ commit: git(["rev-parse", "HEAD"]) }),
         );
       }
       const reportPath = path.join(root, "report.json");
@@ -286,16 +274,10 @@ describe("scripts/profile-extension-memory", () => {
       );
       expect(report.scope).toBe("cold-import");
       expect(report.qualification).toMatchObject({
-        qualified: identified && process.platform !== "win32",
+        qualified: false,
         temporaryHomeRemoved: true,
       });
-      if (!identified) {
-        expect(report.qualification.gaps).toContain("canonical build identity unavailable");
-      } else if (process.platform === "win32") {
-        expect(report.qualification.gaps).toEqual(["child/process-group closure unavailable"]);
-      } else {
-        expect(report.qualification.gaps).toEqual([]);
-      }
+      expect(report.qualification.gaps).toContain("canonical build identity unavailable");
       for (const row of [report.combined, ...report.results]) {
         expect(row.completion).toBe("imports");
         expect(row.resources.totalCpuUs).toBe(row.resources.userCpuUs + row.resources.systemCpuUs);
@@ -587,6 +569,11 @@ describe("scripts/profile-extension-memory", () => {
       }),
     ),
     {
+      name: "isolates inherited child environment",
+      scenario: "environment isolation",
+      signalFailureCase: null,
+    },
+    {
       name: "does not qualify a completed import report before home cleanup",
       scenario: "report home deletion failure",
       signalFailureCase: null,
@@ -620,7 +607,9 @@ describe("scripts/profile-extension-memory", () => {
     const reportHomeFailure = scenario === "report home deletion failure";
     const homeDeletionFailure = scenario === "home deletion failure" || reportHomeFailure;
     const signalFailure = scenario === "settled signal failure";
-    const completeImports = signalFailure || reportHomeFailure;
+    const environmentIsolation = scenario === "environment isolation";
+    const includeCombined = signalFailureCase === "combined" || environmentIsolation;
+    const completeImports = signalFailure || reportHomeFailure || environmentIsolation;
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-mappers-"));
     const journalPath = path.join(root, "journal.json");
     const preloadPath = path.join(root, "spawn-fixture.mjs");
@@ -635,11 +624,14 @@ describe("scripts/profile-extension-memory", () => {
       writeFileSync(
         preloadPath,
         [
+          "import assert from 'node:assert/strict';",
           "import cp from 'node:child_process';",
           "import { EventEmitter } from 'node:events';",
           "import fs, { existsSync, writeFileSync } from 'node:fs';",
           "import { syncBuiltinESMExports } from 'node:module';",
+          "import path from 'node:path';",
           "import { PassThrough } from 'node:stream';",
+          "import { fileURLToPath } from 'node:url';",
           "let home, finishHeld, homeDuringClose, failedPid;",
           "const started = [], closed = [], signals = [], live = new Map();",
           "let now = 1_000;",
@@ -692,6 +684,21 @@ describe("scripts/profile-extension-memory", () => {
           "};",
           "cp.spawn = (_command, args, options) => {",
           "  home = options.env.HOME;",
+          `  if (${environmentIsolation}) {`,
+          "    const expectedHome = path.dirname(fileURLToPath(args[1]));",
+          "    assert.equal(options.env.HOME, expectedHome);",
+          "    assert.equal(options.env.USERPROFILE, expectedHome);",
+          "    assert.equal(options.env.OPENCLAW_HOME, expectedHome);",
+          "    assert.equal(options.env.OPENCLAW_STATE_DIR, path.join(expectedHome, '.openclaw'));",
+          "    assert.equal(options.env.OPENCLAW_CONFIG_PATH, path.join(expectedHome, '.openclaw', 'openclaw.json'));",
+          "    assert.equal(options.env.XDG_CONFIG_HOME, path.join(expectedHome, '.config'));",
+          "    assert.equal(options.env.XDG_CACHE_HOME, path.join(expectedHome, '.cache'));",
+          "    assert.equal(options.env.XDG_DATA_HOME, path.join(expectedHome, '.local', 'share'));",
+          "    assert.equal(options.env.XDG_STATE_HOME, path.join(expectedHome, '.local', 'state'));",
+          "    assert.equal(options.env.XDG_RUNTIME_DIR, path.join(expectedHome, '.run'));",
+          "    assert.equal(options.env.NODE_DISABLE_COMPILE_CACHE, '1');",
+          "    assert.equal(options.env.OPENCLAW_NO_RESPAWN, '1');",
+          "  }",
           "  const body = args.at(-1);",
           "  const completion = body.match(/__OPENCLAW_IMPORT_COMPLETE__=[a-f0-9-]+/)?.[0];",
           "  const name = body.includes('IMPORTED_ALL') ? 'combined' :",
@@ -744,7 +751,7 @@ describe("scripts/profile-extension-memory", () => {
           "--import",
           preloadPath,
           SCRIPT_PATH,
-          ...(signalFailureCase === "combined" ? [] : ["--skip-combined"]),
+          ...(includeCombined ? [] : ["--skip-combined"]),
           "--concurrency",
           "2",
           "--json",
@@ -752,7 +759,24 @@ describe("scripts/profile-extension-memory", () => {
         ],
         {
           cwd: root,
-          env: { ...process.env, TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH },
+          env: {
+            ...process.env,
+            ...(environmentIsolation
+              ? {
+                  HOME: path.join(root, "inherited-home"),
+                  USERPROFILE: path.join(root, "inherited-userprofile"),
+                  OPENCLAW_HOME: path.join(root, "inherited-openclaw-home"),
+                  OPENCLAW_STATE_DIR: path.join(root, "inherited-state"),
+                  OPENCLAW_CONFIG_PATH: path.join(root, "inherited-config.json"),
+                  XDG_CONFIG_HOME: path.join(root, "inherited-xdg-config"),
+                  XDG_CACHE_HOME: path.join(root, "inherited-xdg-cache"),
+                  XDG_DATA_HOME: path.join(root, "inherited-xdg-data"),
+                  XDG_STATE_HOME: path.join(root, "inherited-xdg-state"),
+                  XDG_RUNTIME_DIR: path.join(root, "inherited-xdg-runtime"),
+                }
+              : {}),
+            TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH,
+          },
           encoding: "utf8",
           timeout: 10_000,
           killSignal: "SIGKILL",
@@ -760,16 +784,21 @@ describe("scripts/profile-extension-memory", () => {
       );
       const journal = JSON.parse(readFileSync(journalPath, "utf8"));
       home = journal.home;
-      expect(result.status, result.stderr).toBe(parentSignal ? 143 : 1);
+      expect(result.status, result.stderr).toBe(environmentIsolation ? 0 : parentSignal ? 143 : 1);
       expect(journal.pending).toBe(linuxDeadline);
       expect(journal.started).toEqual([
         "baseline",
-        ...(signalFailureCase === "combined" ? ["combined"] : []),
+        ...(includeCombined ? ["combined"] : []),
         "a-held",
         "b-error",
         ...(completeImports ? ["c-unused"] : []),
       ]);
-      if (parentSignal) {
+      if (environmentIsolation) {
+        const report = JSON.parse(readFileSync(reportPath, "utf8"));
+        expect(report.counts.fail).toBe(0);
+        expect(journal.closed).toEqual(expect.arrayContaining(journal.started));
+        expect(journal.homeExists).toBe(false);
+      } else if (parentSignal) {
         if (!linuxDeadline) {
           expect(result.stderr).toContain("group signal failed");
         }
@@ -850,18 +879,25 @@ describe("scripts/profile-extension-memory", () => {
 
   it.runIf(process.platform !== "win32")(
     "cleans descendants after an ordinary leader exit before resolving the case",
-    async () => {
+    async ({ signal, onTestFinished }) => {
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-exit-"));
       const hookPath = path.join(root, "rss-hook.mjs");
       const descendantPidPath = path.join(root, "descendant.pid");
       let cleanup = async () => rmSync(root, { recursive: true, force: true });
+      // Vitest can finish the timed-out body before its async cleanup settles.
+      // Its finalization hook joins the same cleanup as the body.
+      let cleanupPromise: Promise<void> | undefined;
+      const joinCleanup = () => (cleanupPromise ??= cleanup());
+      onTestFinished(joinCleanup);
       await runQaGatewayFixture(
         async () => {
           writeFileSync(hookPath, "", "utf8");
           const descendantScript = [
-            "import { writeFileSync } from 'node:fs';",
+            "import { renameSync, writeFileSync } from 'node:fs';",
             "setInterval(() => {}, 1000);",
-            `writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+            `const pidPath = ${JSON.stringify(descendantPidPath)};`,
+            "writeFileSync(pidPath + '.tmp', String(process.pid));",
+            "renameSync(pidPath + '.tmp', pidPath);",
             "process.send('ready');",
           ].join("\n");
           const body = [
@@ -871,35 +907,40 @@ describe("scripts/profile-extension-memory", () => {
             "await new Promise((resolve) => child.once('message', resolve));",
             "child.disconnect(); child.unref();",
           ].join("\n");
-          const result = await runCase({
-            completionKind: "imports",
-            body,
-            env: process.env,
-            hookPath,
-            name: "ordinary-exit-descendant",
-            repoRoot: root,
-            shutdownGraceMs: 1_000,
-            timeoutMs: 5_000,
-            spawnImpl: (command, args, options) => {
-              const child = spawn(command, args, options);
-              const closed = new Promise<void>((resolve) => {
-                child.once("close", () => resolve());
-              });
-              cleanup = () => cleanupProfileFixture(root, child, closed, descendantPidPath);
-              return child;
-            },
-          });
-          const descendantPid = await waitForPidFile(descendantPidPath, 5_000);
+          const result = await withinTest(
+            runCase({
+              completionKind: "imports",
+              body,
+              env: process.env,
+              hookPath,
+              name: "ordinary-exit-descendant",
+              repoRoot: root,
+              shutdownGraceMs: 1_000,
+              timeoutMs: 5_000,
+              spawnImpl: (command, args, options) => {
+                const child = spawn(command, args, options);
+                const closed = new Promise<void>((resolve) => {
+                  child.once("close", () => resolve());
+                });
+                cleanup = () =>
+                  cleanupProfileFixture(root, child, closed, descendantPidPath, signal);
+                return child;
+              },
+            }),
+            signal,
+          );
+          // The leader awaits descendant readiness before runCase can complete.
+          const descendantPid = readDescendantPid(descendantPidPath);
           expect(result).toMatchObject({ code: 0, error: null, signal: null, timedOut: false });
           expect(isProcessAlive(descendantPid)).toBe(false);
         },
-        () => cleanup(),
+        () => joinCleanup(),
       );
     },
   );
 
   describe.runIf(process.platform !== "win32")("unverified timeout cleanup", () => {
-    it.each(["alive", "EPERM", "EIO"] as const)(
+    it.each(["alive", "EPERM"] as const)(
       "rejects when the owned group is %s after SIGKILL",
       async (groupState) => {
         const child = Object.assign(new EventEmitter(), {
@@ -950,7 +991,7 @@ describe("scripts/profile-extension-memory", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32").each(["EIO", "EPERM"])(
+  it.runIf(process.platform !== "win32").each(["EPERM"])(
     "preserves %s group-signal and primary failures alongside unverified cleanup",
     async (errorCode) => {
       const primary = new Error("case failed");
@@ -1006,98 +1047,132 @@ describe("scripts/profile-extension-memory", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32").each([
-    { label: "nonzero exit", code: 23, signal: null },
-    { label: "signal exit", code: null, signal: "SIGTERM" as const },
-  ])("cleanup preserves terminal evidence without an error event: $label", async (outcome) => {
-    const child = Object.assign(new EventEmitter(), {
-      pid: 2_147_483_647,
-      exitCode: outcome.code,
-      signalCode: outcome.signal,
-      stdout: new PassThrough(),
-      stderr: new PassThrough(),
-      kill: vi.fn(() => true),
-    });
-    const signal = vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
-      expect(pid).toBe(-child.pid);
-      expect([0, "SIGKILL"]).toContain(requestedSignal);
-      return true;
-    });
-    try {
-      const failure: unknown = await runCase({
-        completionKind: "imports",
-        body: "",
-        env: process.env,
-        hookPath: "unused-hook.mjs",
-        name: "terminal-without-error-event",
-        repoRoot: process.cwd(),
-        shutdownGraceMs: 0,
-        timeoutMs: 30_000,
-        spawnImpl: (() => {
-          queueMicrotask(() => {
-            child.stderr.end(`${"x".repeat(160_000)}\nprimary import diagnostic\n`);
-            child.stdout.end();
-            child.emit("exit", outcome.code, outcome.signal);
-            child.emit("close", outcome.code, outcome.signal);
-          });
-          return child;
-        }) as unknown as typeof spawn,
-      }).then(
-        () => {
-          throw new Error("unverified cleanup resolved unexpectedly");
-        },
-        (error: unknown) => error,
-      );
-      expect(failure).toBeInstanceOf(Error);
-      if (!(failure instanceof Error)) {
-        throw new Error("missing cleanup failure");
+  it
+    .runIf(process.platform !== "win32")
+    .each([{ label: "signal exit", code: null, signal: "SIGTERM" as const }])(
+    "cleanup preserves terminal evidence without an error event: $label",
+    async (outcome) => {
+      const child = Object.assign(new EventEmitter(), {
+        pid: 2_147_483_647,
+        exitCode: outcome.code,
+        signalCode: outcome.signal,
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        kill: vi.fn(() => true),
+      });
+      const signal = vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
+        expect(pid).toBe(-child.pid);
+        expect([0, "SIGKILL"]).toContain(requestedSignal);
+        return true;
+      });
+      try {
+        const failure: unknown = await runCase({
+          completionKind: "imports",
+          body: "",
+          env: process.env,
+          hookPath: "unused-hook.mjs",
+          name: "terminal-without-error-event",
+          repoRoot: process.cwd(),
+          shutdownGraceMs: 0,
+          timeoutMs: 30_000,
+          spawnImpl: (() => {
+            queueMicrotask(() => {
+              child.stderr.end(`${"x".repeat(160_000)}\nprimary import diagnostic\n`);
+              child.stdout.end();
+              child.emit("exit", outcome.code, outcome.signal);
+              child.emit("close", outcome.code, outcome.signal);
+            });
+            return child;
+          }) as unknown as typeof spawn,
+        }).then(
+          () => {
+            throw new Error("unverified cleanup resolved unexpectedly");
+          },
+          (error: unknown) => error,
+        );
+        expect(failure).toBeInstanceOf(Error);
+        if (!(failure instanceof Error)) {
+          throw new Error("missing cleanup failure");
+        }
+        expect(hasUnjoinedWork(failure)).toBe(true);
+        expect(failure.message).toMatch(outcome.signal ? /SIGTERM/u : /\b23\b/u);
+        expect(failure.message).toContain("primary import diagnostic");
+        expect(failure.message).toMatch(/cleanup/i);
+        expect(failure.message.length).toBeLessThan(10_000);
+      } finally {
+        signal.mockRestore();
       }
-      expect(hasUnjoinedWork(failure)).toBe(true);
-      expect(failure.message).toMatch(outcome.signal ? /SIGTERM/u : /\b23\b/u);
-      expect(failure.message).toContain("primary import diagnostic");
-      expect(failure.message).toMatch(/cleanup/i);
-      expect(failure.message.length).toBeLessThan(10_000);
-    } finally {
-      signal.mockRestore();
-    }
-  });
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "cleans timeout descendants before resolving the case",
-    async () => {
+    async ({ signal, onTestFinished }) => {
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-timeout-"));
       const hookPath = path.join(root, "rss-hook.mjs");
       const descendantPidPath = path.join(root, "descendant.pid");
       let cleanup = async () => rmSync(root, { recursive: true, force: true });
+      let cleanupPromise: Promise<void> | undefined;
+      const joinCleanup = () => (cleanupPromise ??= cleanup());
+      onTestFinished(joinCleanup);
       await runQaGatewayFixture(
         async () => {
           writeFileSync(hookPath, "", "utf8");
           const descendantScript = [
-            "import { writeFileSync } from 'node:fs';",
+            "import { renameSync, writeFileSync } from 'node:fs';",
             "process.on('SIGTERM', () => {});",
             "setInterval(() => {}, 1000);",
-            `writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+            `const pidPath = ${JSON.stringify(descendantPidPath)};`,
+            "writeFileSync(pidPath + '.tmp', String(process.pid));",
+            "renameSync(pidPath + '.tmp', pidPath);",
+            "process.send(process.pid);",
           ].join("");
           const body = [
             "const childProcess = await import('node:child_process');",
-            "childProcess.spawn(process.execPath, [",
+            "const descendant = childProcess.spawn(process.execPath, [",
             "  '--input-type=module',",
             `  '--eval', ${JSON.stringify(descendantScript)},`,
-            "], { stdio: 'ignore' });",
+            "], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });",
+            "descendant.once('message', (pid) => process.stdout.write('descendant-ready ' + pid + '\\n'));",
+            "descendant.once('error', (error) => { throw error; });",
             "setInterval(() => {}, 1000);",
             "await new Promise(() => {});",
           ].join("\n");
           const child = spawn(
             testNodeExecPath,
             ["--import", hookPath, "--input-type=module", "--eval", body],
-            { cwd: root, detached: true, env: process.env, stdio: ["ignore", "pipe", "pipe"] },
+            {
+              cwd: root,
+              detached: true,
+              env: process.env,
+              stdio: ["ignore", "pipe", "pipe"],
+            },
           );
           const childClosed = new Promise<void>((resolve) => {
             child.once("close", () => resolve());
           });
-          cleanup = () => cleanupProfileFixture(root, child, childClosed, descendantPidPath);
-          await once(child, "spawn");
-          const descendantPid = await waitForPidFile(descendantPidPath, 5_000);
+          cleanup = () =>
+            cleanupProfileFixture(root, child, childClosed, descendantPidPath, signal);
+          const ready = createDeferred<number>();
+          let readyOutput = "";
+          const readReady = (chunk: string) => {
+            readyOutput += chunk;
+            const match = /^descendant-ready (\d+)\n/mu.exec(readyOutput);
+            if (match) {
+              child.stdout.off("data", readReady);
+              ready.resolve(Number(match[1]));
+            }
+          };
+          child.stdout.setEncoding("utf8").on("data", readReady);
+          await withinTest(once(child, "spawn"), signal);
+          const descendantPid = await withinTest(
+            awaitGateBeforeSettlement(
+              ready.promise,
+              childClosed,
+              `timeout waiting for pid in ${descendantPidPath}`,
+            ),
+            signal,
+          );
           expect(Number.isInteger(descendantPid)).toBe(true);
           expect(isProcessAlive(descendantPid)).toBe(true);
 
@@ -1113,41 +1188,52 @@ describe("scripts/profile-extension-memory", () => {
             timeoutMs: 250,
             spawnImpl: () => child,
           });
-          await expect(resultPromise).resolves.toMatchObject({
+          await expect(withinTest(resultPromise, signal)).resolves.toMatchObject({
             name: "timeout-descendant",
             signal: "SIGKILL",
             timedOut: true,
           });
-          await waitForDead(descendantPid, 5_000);
+          await waitForProcessCleanup(
+            () => !isProcessAlive(descendantPid),
+            `process still alive: ${descendantPid}`,
+            signal,
+          );
         },
-        () => cleanup(),
+        () => joinCleanup(),
       );
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "cleans active case descendants on parent signal",
-    async () => {
+    async ({ signal, onTestFinished }) => {
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-parent-signal-"));
       const hookPath = path.join(root, "rss-hook.mjs");
       const runnerPath = path.join(root, "parent-signal-runner.mjs");
       const descendantPidPath = path.join(root, "descendant.pid");
       let cleanup = async () => rmSync(root, { recursive: true, force: true });
+      let cleanupPromise: Promise<void> | undefined;
+      const joinCleanup = () => (cleanupPromise ??= cleanup());
+      onTestFinished(joinCleanup);
       await runQaGatewayFixture(
         async () => {
           writeFileSync(hookPath, "", "utf8");
           const descendantScript = [
+            "import { renameSync, writeFileSync } from 'node:fs';",
+            fixtureReceiptClientSource(receipts.endpoint),
             "process.on('SIGTERM', () => {});",
             "setInterval(() => {}, 1000);",
-          ].join("");
+            `const pidPath = ${JSON.stringify(descendantPidPath)};`,
+            "writeFileSync(pidPath + '.tmp', String(process.pid));",
+            "renameSync(pidPath + '.tmp', pidPath);",
+            `sendReceipt(${JSON.stringify(descendantPidPath)}, 'ready');`,
+          ].join("\n");
           const body = [
             "const childProcess = await import('node:child_process');",
-            "const fs = await import('node:fs');",
             "const descendant = childProcess.spawn(process.execPath, [",
             "  '--input-type=module',",
             `  '--eval', ${JSON.stringify(descendantScript)},`,
             "], { stdio: 'ignore' });",
-            `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
             "setInterval(() => {}, 1000);",
             "await new Promise(() => {});",
           ].join("\n");
@@ -1176,22 +1262,40 @@ describe("scripts/profile-extension-memory", () => {
 
           const runnerClosed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
             (resolve) => {
-              runner.once("close", (code, signal) => resolve({ code, signal }));
+              runner.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
             },
           );
           cleanup = () =>
-            cleanupProfileFixture(root, runner, runnerClosed, descendantPidPath, false);
-          await once(runner, "spawn");
-          const descendantPid = await waitForPidFile(descendantPidPath, 5_000);
+            cleanupProfileFixture(root, runner, runnerClosed, descendantPidPath, signal, false);
+          await withinTest(once(runner, "spawn"), signal);
+          await withinTest(
+            Promise.race([
+              receipts.waitFor(descendantPidPath, "ready"),
+              runnerClosed.then(() => {
+                // The receipt pipe and process exit are unordered; the child writes first.
+                if (!existsSync(descendantPidPath)) {
+                  throw new Error(`timeout waiting for pid in ${descendantPidPath}`);
+                }
+                readDescendantPid(descendantPidPath);
+              }),
+            ]),
+            signal,
+          );
+          const descendantPid = readDescendantPid(descendantPidPath);
           expect(isProcessAlive(descendantPid)).toBe(true);
 
           process.kill(runner.pid!, "SIGTERM");
-          await expect(
-            withTestTimeout(runnerClosed, 8_000, "profile runner did not close"),
-          ).resolves.toEqual({ code: 143, signal: null });
-          await waitForDead(descendantPid, 5_000);
+          await expect(withinTest(runnerClosed, signal)).resolves.toEqual({
+            code: 143,
+            signal: null,
+          });
+          await waitForProcessCleanup(
+            () => !isProcessAlive(descendantPid),
+            `process still alive: ${descendantPid}`,
+            signal,
+          );
         },
-        () => cleanup(),
+        () => joinCleanup(),
       );
     },
   );

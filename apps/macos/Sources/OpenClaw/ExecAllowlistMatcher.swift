@@ -26,30 +26,27 @@ enum ExecAllowlistMatcher {
             if controlPattern.hasPrefix("=command:") || controlPattern.hasPrefix("=node-command:") {
                 continue
             }
-            switch ExecApprovalHelpers.validateAllowlistPattern(entry.pattern) {
-            case let .valid(pattern):
-                guard self.matchesExecutable(pattern: pattern, resolution: resolution) else { continue }
-                guard let argPattern = entry.argPattern, !argPattern.isEmpty else {
-                    // Old generated allow-always entries were path-only and could authorize
-                    // changed argv after upgrade. Manual path-only entries have no source.
-                    if entry.source == "allow-always" {
-                        continue
-                    }
-                    if pathOnlyMatch == nil {
-                        pathOnlyMatch = entry
-                    }
+            guard !controlPattern.isEmpty,
+                  self.matchesExecutable(pattern: controlPattern, resolution: resolution)
+            else { continue }
+            guard let argPattern = entry.argPattern, !argPattern.isEmpty else {
+                // Old generated allow-always entries were path-only and could authorize
+                // changed argv after upgrade. Manual path-only entries have no source.
+                if entry.source == "allow-always" {
                     continue
                 }
-                if entry.source == "allow-always", !argPattern.hasPrefix(self.cwdBoundArgPatternPrefix) {
-                    continue
+                if pathOnlyMatch == nil {
+                    pathOnlyMatch = entry
                 }
-                if let argv = resolution.argv,
-                   self.matchesArgPattern(argPattern, argv: argv, cwd: resolution.cwd)
-                {
-                    return entry
-                }
-            case .invalid:
                 continue
+            }
+            if entry.source == "allow-always", !argPattern.hasPrefix(self.cwdBoundArgPatternPrefix) {
+                continue
+            }
+            if let argv = resolution.argv,
+               self.matchesArgPattern(argPattern, argv: argv, cwd: resolution.cwd)
+            {
+                return entry
             }
         }
         return pathOnlyMatch

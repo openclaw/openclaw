@@ -134,6 +134,43 @@ struct MacGatewayChatTransportMappingTests {
         }
     }
 
+    @MainActor
+    @Test func `card requests reach only the Gateway the window is pinned to`() async throws {
+        try await self.withSessionTransport(capabilities: ["progress-card-agent-scope-v1"]) { base, recorder in
+            let transport = MacGatewayChatTransport(connection: base.connection, outboxGatewayID: "fixture")
+            try await transport.clearProgressCard(sessionKey: "global", agentID: "agent-a", expectedRevision: 3)
+            _ = try await transport.refreshProgressCard(
+                sessionKey: "agent:agent-a:main", agentID: "agent-a", idempotencyKey: "refresh-1")
+            let frames = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+            }
+            #expect(frames.map { $0["method"] as? String } == ["progressCard.put", "progressCard.refresh"])
+            let clearParams = try #require(frames.first?["params"] as? [String: Any])
+            #expect(NSDictionary(dictionary: clearParams).isEqual(to: [
+                "sessionKey": "global", "agentId": "agent-a", "expectedRevision": 3,
+            ]))
+            #expect(frames.last?["params"] as? [String: String] == [
+                "sessionKey": "agent:agent-a:main", "idempotencyKey": "refresh-1",
+            ])
+        }
+        // The app-wide connection follows the configured Gateway. A window pinned to another Gateway
+        // fails before that connection is asked for a socket.
+        try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": TestIsolation.tempConfigPath()]) {
+            let retired = MacGatewayChatTransport(connection: .shared, outboxGatewayID: "retired-gateway")
+            await #expect(throws: OpenClawChatTransportSendError.notDispatched) {
+                try await retired.clearProgressCard(
+                    sessionKey: "agent:main:main", agentID: "main", expectedRevision: 3)
+            }
+            await #expect(throws: OpenClawChatTransportSendError.notDispatched) {
+                _ = try await retired.refreshProgressCard(
+                    sessionKey: "agent:main:main", agentID: "main", idempotencyKey: "refresh-2")
+            }
+            await #expect(throws: OpenClawChatTransportSendError.notDispatched) {
+                _ = try await retired.fetchProgressCard(sessionKey: "agent:main:main", agentID: "main")
+            }
+        }
+    }
+
     private func withSessionTransport(
         connectInitially: Bool = true,
         mainSessionKey: String? = nil,
@@ -174,8 +211,12 @@ struct MacGatewayChatTransportMappingTests {
                 case "sessions.rewind": #"{"editorText":"rewound draft"}"#
                 case "sessions.fork": #"{"sessionKey":"forked","editorText":"continued draft"}"#
                 case "sessions.list":
-                    #"{"defaults":{"modelProvider":"example","model":"model-a","contextTokens":128000,"thinkingOptions":["low","high"],"thinkingDefault":"low","modelSelectionTarget":"session","agentRuntime":{"id":"pi","source":"agent"}},"sessions":[]}"#
+                    #"{"defaults":{"modelProvider":"example","model":"model-a","contextTokens":128000,"# +
+                        #""thinkingOptions":["low","high"],"thinkingDefault":"low","modelSelectionTarget":"session","# +
+                        #""agentRuntime":{"id":"pi","source":"agent"}},"sessions":[]}"#
+                case "sessions.search": #"{"results":[],"sessions":[]}"#
                 case "chat.send": #"{"runId":"native-send","status":"ok"}"#
+                case "progressCard.refresh": #"{"runId":"fixture-refresh","status":"accepted","revision":3}"#
                 default: #"{"ok":true}"#
                 }
                 socket.emitReceiveSuccess(.data(Data(
@@ -187,7 +228,7 @@ struct MacGatewayChatTransportMappingTests {
                     mainSessionKey: mainSessionKey,
                     methods: [
                         "agents.list", "agent.identity.get", "sessions.patch", "sessions.delete", "sessions.rewind",
-                        "sessions.fork", "sessions.list",
+                        "sessions.fork", "sessions.list", "sessions.search",
                     ],
                     capabilities: capabilities))
             })
@@ -205,6 +246,69 @@ struct MacGatewayChatTransportMappingTests {
         } catch {
             await gateway.shutdown()
             throw error
+        }
+    }
+
+    @Test func `sidebar query lease preserves explicit scope and fences shutdown and replacement`() async throws {
+        try await self.withSessionTransport(connectInitially: false) { transport, recorder in
+            let request = try await transport.acquireSidebarRequest()
+            let list = OpenClawChatGatewayRequests.sidebarSessions(
+                query: .init(agentID: nil, status: .all), limit: 200, offset: 200)
+            _ = try await request(list)
+            let search = OpenClawChatGatewayRequests.sidebarTranscriptSearch(
+                query: .init(agentID: "research", status: .archived, search: "needle"))
+            let results = try await JSONDecoder().decode(SessionsSearchResult.self, from: request(search))
+            #expect(results.results.isEmpty)
+            let frames = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+            }
+            #expect(frames.map { $0["method"] as? String } == ["sessions.list", "sessions.search"])
+            let listParams = try #require(frames.first?["params"] as? [String: Any])
+            #expect(listParams["agentId"] == nil)
+            #expect(listParams["offset"] as? Int == 200)
+            #expect(listParams["archived"] as? String == "all")
+            #expect(listParams["includeLastMessage"] as? Bool == true)
+            let searchParams = try #require(frames.last?["params"] as? [String: Any])
+            let scope = try #require(searchParams["scope"] as? [String: Any])
+            #expect(scope["agentId"] as? String == "research")
+            #expect(scope["archived"] as? Bool == true)
+            #expect(scope["offset"] == nil)
+            #expect(scope["search"] == nil)
+            #expect(searchParams["query"] as? String == "needle")
+
+            await transport.connection.shutdown()
+            await #expect(throws: Error.self) { try await request(list) }
+            _ = try await transport.connection.acquireServerLease()
+            await #expect(throws: Error.self) { try await request(list) }
+            #expect(await recorder.snapshot().count == 2)
+            let replacement = try await transport.acquireSidebarRequest()
+            _ = try await replacement(list)
+            #expect(await recorder.snapshot().count == 3)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `snapshot classification distinguishes socket replacement from unknown retired scope`(
+        hasDurableScope: Bool) async throws
+    {
+        try await self.withSessionTransport { base, _ in
+            let transport = MacGatewayChatTransport(
+                connection: base.connection, outboxGatewayID: hasDurableScope ? "fixture-scope" : nil)
+            let previous = try #require(await base.connection.captureServerLease())
+            guard case .reconnected = await transport.snapshotTransportEvent(previousLease: previous) else {
+                Issue.record("A current physical route must preserve its loaded roster")
+                return
+            }
+            await base.connection.shutdown()
+            for reconnect in [false, true] {
+                if reconnect { _ = try await base.connection.acquireServerLease() }
+                let event = await transport.snapshotTransportEvent(previousLease: previous)
+                switch event {
+                case .reconnected: #expect(hasDurableScope)
+                case .routeChanged: #expect(!hasDurableScope)
+                default: Issue.record("Unexpected snapshot transport event")
+                }
+            }
         }
     }
 
@@ -468,10 +572,7 @@ struct MacGatewayChatTransportMappingTests {
             let result: OpenClawChatModelPatchResult?
             if leased {
                 let lease = try #require(await transport.acquireSessionSettingsRouteLease())
-                result = try await lease.patchSessionSettings(
-                    sessionKey: "global",
-                    agentID: "reviewer",
-                    patch: patch)
+                result = try await lease.patchSessionSettings("global", "reviewer", patch)
             } else {
                 result = try await transport.patchSessionSettings(
                     sessionKey: "global",
@@ -511,7 +612,7 @@ struct MacGatewayChatTransportMappingTests {
             do {
                 if leased {
                     let lease = try #require(await transport.acquireSessionSettingsRouteLease())
-                    _ = try await lease.patchSessionSettings(sessionKey: "global", agentID: nil, patch: patch)
+                    _ = try await lease.patchSessionSettings("global", nil, patch)
                 } else {
                     _ = try await transport.patchSessionSettings(sessionKey: "global", agentID: nil, patch: patch)
                 }
@@ -539,7 +640,7 @@ struct MacGatewayChatTransportMappingTests {
             await #expect(throws: OpenClawChatTransportSendError.notDispatched) {
                 if leased {
                     let lease = try #require(await transport.acquireSessionSettingsRouteLease())
-                    _ = try await lease.patchSessionSettings(sessionKey: "global", agentID: nil, patch: patch)
+                    _ = try await lease.patchSessionSettings("global", nil, patch)
                 } else {
                     _ = try await transport.patchSessionSettings(sessionKey: "global", agentID: nil, patch: patch)
                 }
@@ -556,7 +657,7 @@ struct MacGatewayChatTransportMappingTests {
                 fastMode: .some(.on), verboseLevel: .some("full"))
             if leased {
                 let lease = try #require(await transport.acquireSessionSettingsRouteLease())
-                _ = try await lease.patchSessionSettings(sessionKey: "global", agentID: "reviewer", patch: patch)
+                _ = try await lease.patchSessionSettings("global", "reviewer", patch)
             } else {
                 _ = try await transport.patchSessionSettings(sessionKey: "global", agentID: "reviewer", patch: patch)
             }

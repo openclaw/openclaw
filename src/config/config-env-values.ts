@@ -1,4 +1,5 @@
 import { resolveEnvNormalizationKeys } from "../infra/env.js";
+import { clearFsSafeEnvFallback, fsSafeEnvInput } from "../infra/fs-safe-env.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -8,21 +9,22 @@ import { containsEnvVarReference } from "./env-substitution.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "./future-version-guard.js";
 import type { OpenClawConfig } from "./types.js";
 
-function isBlockedConfigEnvVar(key: string): boolean {
-  return (
-    key.toUpperCase() === ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV ||
-    key.toUpperCase() === "OPENCLAW_INCLUDE_ROOTS" ||
-    // Config cannot opt into or out of the host-selected read-only mode.
-    key.toUpperCase() === "OPENCLAW_CONFIG_READONLY" ||
-    isDangerousHostEnvVarName(key) ||
-    isDangerousHostEnvOverrideVarName(key)
-  );
-}
-
 /** Returns whether a config-controlled environment entry is safe to apply at runtime. */
 export function isConfigRuntimeEnvVarAllowed(key: string, value: string): boolean {
-  // Unresolved templates must not become literal process credentials before env substitution.
-  return Boolean(value.trim()) && !isBlockedConfigEnvVar(key) && !containsEnvVarReference(value);
+  const upperKey = key.toUpperCase();
+  // Config cannot override deployment-owned host execution, write, or startup policy or publish unresolved credentials.
+  return (
+    Boolean(value.trim()) &&
+    upperKey !== ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV &&
+    upperKey !== "OPENCLAW_INCLUDE_ROOTS" &&
+    upperKey !== "OPENCLAW_CONFIG_READONLY" &&
+    upperKey !== "OPENCLAW_CONFIG_READONLY_NOTICE" &&
+    upperKey !== "OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS" &&
+    upperKey !== "OPENCLAW_DISABLE_CRON_HOST_EXECUTION" &&
+    !isDangerousHostEnvVarName(key) &&
+    !isDangerousHostEnvOverrideVarName(key) &&
+    !containsEnvVarReference(value)
+  );
 }
 
 /** Collects config env vars safe to inject into runtime process environments. */
@@ -39,17 +41,13 @@ export function collectConfigRuntimeEnvVars(cfg?: OpenClawConfig): Record<string
     ...Object.entries(envConfig).filter(([key]) => key !== "shellEnv" && key !== "vars"),
   ];
   for (const [rawKey, value] of candidates) {
-    if (typeof value !== "string" || !value.trim()) {
+    if (typeof value !== "string") {
       continue;
     }
     const key = normalizeEnvVarKey(rawKey, { portable: true });
-    if (!key) {
-      continue;
+    if (key && isConfigRuntimeEnvVarAllowed(key, value)) {
+      entries[key] = value;
     }
-    if (!isConfigRuntimeEnvVarAllowed(key, value)) {
-      continue;
-    }
-    entries[key] = value;
   }
 
   return entries;
@@ -78,7 +76,7 @@ export function snapshotEnvByPlatformKey(
   // Windows has one logical slot per case-insensitive key. Retain its exact spelling so
   // publication and rollback can compare-and-swap the slot without losing the original key.
   const snapshot = new Map<string, EnvSnapshotEntry>();
-  for (const [key, value] of Object.entries(env)) {
+  for (const [key, value] of Object.entries(fsSafeEnvInput(env))) {
     const platformKey = envSnapshotKey(key);
     if (!snapshot.has(platformKey)) {
       snapshot.set(platformKey, { key, value });
@@ -99,6 +97,7 @@ export function replaceEnvSnapshotEntry(
   current: EnvSnapshotEntry | undefined,
   next: EnvSnapshotEntry | undefined,
 ): void {
+  clearFsSafeEnvFallback(env);
   if (current) {
     delete env[current.key];
   }
@@ -124,25 +123,5 @@ export function indexConfigRuntimeEnvValues(
 export function snapshotEnvProperties(
   env: Readonly<NodeJS.ProcessEnv>,
 ): Map<string, EnvSnapshotEntry> {
-  return new Map(Object.entries(env).map(([key, value]) => [key, { key, value }]));
-}
-
-export type PublishedConfigRuntimeEnvChange = {
-  before: EnvSnapshotEntry | undefined;
-  after: EnvSnapshotEntry | undefined;
-  preparedBefore: EnvSnapshotEntry | undefined;
-};
-
-export function rollbackConfigRuntimeEnvChanges(
-  env: NodeJS.ProcessEnv,
-  changes: ReadonlyMap<string, PublishedConfigRuntimeEnvChange>,
-): void {
-  let current: ReadonlyMap<string, EnvSnapshotEntry> | undefined;
-  for (const [key, change] of changes) {
-    const currentEntry = (current ??= snapshotEnvByPlatformKey(env)).get(key);
-    if (!envSnapshotEntriesEqual(currentEntry, change.after)) {
-      continue;
-    }
-    replaceEnvSnapshotEntry(env, currentEntry, change.before);
-  }
+  return new Map(Object.entries(fsSafeEnvInput(env)).map(([key, value]) => [key, { key, value }]));
 }

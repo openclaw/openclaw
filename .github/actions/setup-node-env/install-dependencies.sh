@@ -4,15 +4,19 @@ set -euo pipefail
 export PATH="$NODE_BIN:$PATH"
 which node
 node -v
-pnpm -v
 case "$FROZEN_LOCKFILE" in
-  true) LOCKFILE_FLAG="--frozen-lockfile" ;;
+  true)
+    # Version probes and lifecycle commands also sync pnpm's package-manager lock.
+    export PNPM_CONFIG_FROZEN_LOCKFILE=true
+    LOCKFILE_FLAG="--frozen-lockfile"
+    ;;
   false) LOCKFILE_FLAG="" ;;
   *)
     echo "::error::Invalid frozen-lockfile input: '$FROZEN_LOCKFILE' (expected true or false)"
     exit 2
     ;;
 esac
+pnpm -v
 
 install_args=(
   install

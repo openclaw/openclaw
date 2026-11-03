@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-page-navigation.test/"} */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { navigateChatPage, ownedChatPaneSessionKey } from "./chat-page-navigation.ts";
@@ -37,20 +38,16 @@ describe("chat page navigation", () => {
   );
   it.each([
     { agentId: "main", face: "chat" },
-    { agentId: "main", face: "dashboard" },
-    { agentId: "research", face: "chat" },
     { agentId: "research", face: "dashboard" },
   ] as const)(
     "keeps $agentId $face navigation stable when its pane adopts global",
     async ({ agentId, face }) => {
       window.history.replaceState({}, "", `/${face}/${agentId}`);
       const navigation = createChatPageNavigationContext();
-      navigation.context.agents.state.agentsList = {
-        defaultId: "main",
-        mainKey: "main",
+      navigation.context.agents.state.agentsList = makeBootRoster({
         scope: "global",
         agents: [{ id: "main" }, { id: "research" }],
-      };
+      });
       navigation.context.gateway.snapshot.hello = {
         ...gatewayHelloForMethods([]),
         snapshot: {

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
@@ -5,16 +6,85 @@ import {
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
-import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
+import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
+import { readLatestAssistantReply, type AgentWaitResult } from "../run-wait.js";
+import { jsonResult } from "./tool-results.js";
 
-export type AnnounceTarget = {
+export const SESSIONS_SEND_TRUNCATION_NOTE =
+  "The reply may be truncated. Ask the target for the missing section or a file containing the full reply; do not repeat the original task.";
+
+export type SessionDeliveryTarget = {
   channel: string;
   to: string;
   accountId?: string;
   threadId?: string; // Forum topic/thread ID
 };
 
-export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
+export function sendFailure(
+  status: "error" | "forbidden",
+  error: string,
+  sessionKey?: string,
+  runId: string = crypto.randomUUID(),
+) {
+  return jsonResult({
+    runId,
+    status,
+    error,
+    ...(sessionKey !== undefined ? { sessionKey } : {}),
+  });
+}
+
+export function sendReplyResult(
+  receipt: { runId: string; sessionKey: string; watched?: boolean },
+  result: { replyText?: string; replyTruncated?: true; sourceReplyDelivered?: boolean },
+) {
+  const { replyText: reply, replyTruncated, sourceReplyDelivered } = result;
+  if (!reply) {
+    return jsonResult({
+      ...receipt,
+      status: "no_reply" as const,
+      message: sourceReplyDelivered
+        ? "The target delivered its final reply directly to its source conversation. Do not resend."
+        : "No visible reply or pending delivery. Continue or retry if needed.",
+    });
+  }
+  return jsonResult({
+    ...receipt,
+    status: "ok" as const,
+    delivery: { status: "skipped" as const },
+    ...(replyTruncated
+      ? {
+          replyTruncated,
+          note: SESSIONS_SEND_TRUNCATION_NOTE,
+        }
+      : {}),
+    reply,
+  });
+}
+
+/** Recover the accepted run's answer under the caller's current history access. */
+export async function resolveSessionsSendReply(
+  result: AgentWaitResult & { replyText?: string },
+  params: Parameters<typeof readLatestAssistantReply>[0],
+): Promise<{ replyText?: string; replyTruncated?: true }> {
+  const { replyText } = result;
+  // A producer-owned full reply can itself end with an ellipsis.
+  if (
+    !replyText?.endsWith("…") ||
+    (result.terminalReply?.disposition === "visible" && result.terminalReply.text !== replyText)
+  ) {
+    return { replyText };
+  }
+  const stored = await readLatestAssistantReply(params).catch(() => undefined);
+  const snapshot = stored === undefined ? undefined : sanitizeAgentRunTerminalReply(stored);
+  return snapshot?.disposition === "visible" && snapshot.text === replyText
+    ? { replyText: stored }
+    : { replyText, replyTruncated: true };
+}
+
+export function resolveSessionDeliveryTargetFromKey(
+  sessionKey: string,
+): SessionDeliveryTarget | null {
   const parsed = resolveSessionConversationRef(sessionKey);
   if (!parsed) {
     const directRoute = parseSessionDeliveryRoute(sessionKey);
@@ -60,70 +130,4 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     to: normalized ?? (normalizedChannel ? genericTarget : parsed.id),
     threadId: parsed.threadId,
   };
-}
-
-function buildAgentSessionLines(params: {
-  requesterSessionKey?: string;
-  requesterChannel?: string;
-  targetChannel?: string;
-}): string[] {
-  return [
-    // Session keys are high-cardinality (thread/run ids), so concrete values churn the
-    // system prompt and break provider prompt-cache reuse across A2A turns. Channels are
-    // low-cardinality and inform reply formatting, so they stay concrete.
-    params.requesterSessionKey ? "Agent 1 (requester) session: <REQUESTER_SESSION>." : undefined,
-    params.requesterChannel
-      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
-      : undefined,
-    "Agent 2 (target) session: <TARGET_SESSION>.",
-    params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
-  ].filter((line): line is string => Boolean(line));
-}
-
-export function buildAgentToAgentMessageContext(params: {
-  requesterSessionKey?: string;
-  requesterChannel?: string;
-}) {
-  return ["Agent-to-agent message context:", ...buildAgentSessionLines(params)].join("\n");
-}
-
-export function buildAgentToAgentReplyContext(params: {
-  requesterSessionKey?: string;
-  requesterChannel?: string;
-  targetChannel?: string;
-  currentRole: "requester" | "target";
-  turn: number;
-  maxTurns: number;
-}) {
-  const currentLabel =
-    params.currentRole === "requester" ? "Agent 1 (requester)" : "Agent 2 (target)";
-  return [
-    "Agent-to-agent reply step:",
-    `Current agent: ${currentLabel}.`,
-    `Turn ${params.turn} of ${params.maxTurns}.`,
-    ...buildAgentSessionLines(params),
-    `If you want to stop the ping-pong, reply exactly "${REPLY_SKIP_TOKEN}".`,
-  ].join("\n");
-}
-
-export function buildAgentToAgentAnnounceContext(params: {
-  requesterSessionKey?: string;
-  requesterChannel?: string;
-  targetChannel?: string;
-  originalMessage: string;
-  roundOneReply?: string;
-  latestReply?: string;
-}) {
-  return [
-    "Agent-to-agent announce step:",
-    ...buildAgentSessionLines(params),
-    `Original request: ${params.originalMessage}`,
-    params.roundOneReply
-      ? `Round 1 reply: ${params.roundOneReply}`
-      : "Round 1 reply: (not available).",
-    params.latestReply ? `Latest reply: ${params.latestReply}` : "Latest reply: (not available).",
-    `If you want to remain silent, reply exactly "${ANNOUNCE_SKIP_TOKEN}".`,
-    "Any other reply is recorded in the target session. External delivery is attempted only if the target has a delivery route.",
-    "After this reply, the agent-to-agent conversation is over.",
-  ].join("\n");
 }

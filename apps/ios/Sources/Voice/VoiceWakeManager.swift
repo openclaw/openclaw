@@ -4,48 +4,15 @@ import Observation
 import Speech
 import SwabbleKit
 
-private func makeAudioTapEnqueueCallback(queue: VoiceWakeAudioBufferQueue)
--> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
-    { buffer, _ in
-        // This callback is invoked on a realtime audio thread/queue. Keep it tiny and nonisolated.
-        queue.enqueueCopy(of: buffer)
-    }
-}
-
-final class VoiceWakeAudioBufferQueue: @unchecked Sendable {
-    private let lock = NSLock()
-    private var buffers: [AVAudioPCMBuffer] = []
-
-    func enqueueCopy(of buffer: AVAudioPCMBuffer) {
-        guard let copy = buffer.copy() as? AVAudioPCMBuffer else { return }
-        self.lock.withLock { self.buffers.append(copy) }
-    }
-
-    func drain() -> [AVAudioPCMBuffer] {
-        self.lock.withLock {
-            let drained = self.buffers
-            self.buffers.removeAll(keepingCapacity: true)
-            return drained
-        }
-    }
-
-    func clear() {
-        self.lock.withLock { self.buffers.removeAll(keepingCapacity: false) }
-    }
-}
-
 private enum VoiceWakeAudioError: LocalizedError {
     case invalidInputFormat
 
     var errorDescription: String? {
-        switch self {
-        case .invalidInputFormat:
-            String(localized: "Microphone input format unavailable")
-        }
+        String(localized: "Microphone input format unavailable")
     }
 }
 
-private enum VoiceWakeSuppressionReason: Hashable {
+enum VoiceWakeSuppressionReason: Hashable {
     case auxiliaryAudio
     case background
     case talk
@@ -55,7 +22,7 @@ private enum VoiceWakeSuppressionReason: Hashable {
 
 @MainActor
 @Observable
-final class VoiceWakeManager: NSObject {
+final class VoiceWakeManager {
     var isEnabled: Bool = false
     var isListening: Bool = false
     var statusText: String = "Off"
@@ -67,11 +34,8 @@ final class VoiceWakeManager: NSObject {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognitionGeneration: UInt64 = 0
-    private var tapQueue: VoiceWakeAudioBufferQueue?
-    private var tapDrainTask: Task<Void, Never>?
     private var scheduledStartTask: Task<Void, Never>?
     private var commandTask: Task<Void, Never>?
-    private var commandGeneration: UInt64 = 0
     private var isStarting: Bool = false
     private var audioSessionIsActive = false
 
@@ -83,7 +47,7 @@ final class VoiceWakeManager: NSObject {
     private let recognitionErrorRestartDelayNs: UInt64
     private let audioSessionDeactivationAction: (@MainActor () throws -> Void)?
 
-    override convenience init() {
+    convenience init() {
         self.init(recognitionErrorRestartDelayNs: 700_000_000, audioSessionDeactivationAction: nil)
     }
 
@@ -93,7 +57,6 @@ final class VoiceWakeManager: NSObject {
     {
         self.recognitionErrorRestartDelayNs = recognitionErrorRestartDelayNs
         self.audioSessionDeactivationAction = audioSessionDeactivationAction
-        super.init()
         self.userDefaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: UserDefaults.standard,
@@ -135,27 +98,7 @@ final class VoiceWakeManager: NSObject {
         }
     }
 
-    func setSuppressedByTalk(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .talk)
-    }
-
-    func setSuppressedForBackground(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .background)
-    }
-
-    func setSuppressedForAuxiliaryAudio(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .auxiliaryAudio)
-    }
-
-    func setSuppressedByPushToTalk(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .pushToTalk)
-    }
-
-    func setSuppressedByVoiceNote(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .voiceNote)
-    }
-
-    private func setSuppressed(_ suppressed: Bool, reason: VoiceWakeSuppressionReason) {
+    func setSuppressed(_ suppressed: Bool, reason: VoiceWakeSuppressionReason) {
         if suppressed {
             self.suppressionReasons.insert(reason)
         } else {
@@ -169,7 +112,6 @@ final class VoiceWakeManager: NSObject {
             let hasRecognitionPipeline = self.isListening ||
                 self.recognitionRequest != nil ||
                 self.recognitionTask != nil ||
-                self.tapDrainTask != nil ||
                 self.commandTask != nil ||
                 self.audioSessionIsActive ||
                 self.audioEngine.isRunning
@@ -230,7 +172,7 @@ final class VoiceWakeManager: NSObject {
 
         self.statusText = String(localized: "Requesting permissions…")
 
-        let micOk = await VoicePermissionSupport.requestMicrophonePermission(timeoutErrorDomain: "VoiceWake")
+        let micOk = await VoicePermissionSupport.requestMicrophonePermission()
         guard micOk else {
             self.statusText = Self.microphonePermissionMessage(
                 kind: String(localized: "Microphone"))
@@ -238,7 +180,7 @@ final class VoiceWakeManager: NSObject {
             return
         }
 
-        let speechOk = await VoicePermissionSupport.requestSpeechPermission(timeoutErrorDomain: "VoiceWake")
+        let speechOk = await VoicePermissionSupport.requestSpeechPermission()
         guard speechOk else {
             self.statusText = VoicePermissionSupport.speechPermissionMessage(
                 kind: String(localized: "Speech recognition"),
@@ -292,10 +234,6 @@ final class VoiceWakeManager: NSObject {
         let recognitionGeneration = self.recognitionGeneration
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
-        self.tapDrainTask?.cancel()
-        self.tapDrainTask = nil
-        self.tapQueue?.clear()
-        self.tapQueue = nil
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -309,32 +247,17 @@ final class VoiceWakeManager: NSObject {
             throw VoiceWakeAudioError.invalidInputFormat
         }
 
-        let queue = VoiceWakeAudioBufferQueue()
-        self.tapQueue = queue
-        let tapBlock: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = makeAudioTapEnqueueCallback(queue: queue)
         inputNode.installTap(
             onBus: 0,
             bufferSize: 1024,
             format: recordingFormat,
-            block: tapBlock)
+            block: SpeechRecognitionAudioTap.make(request: request))
 
         self.audioEngine.prepare()
         try self.audioEngine.start()
 
         let handler = self.makeRecognitionResultHandler(recognitionGeneration: recognitionGeneration)
         self.recognitionTask = self.speechRecognizer?.recognitionTask(with: request, resultHandler: handler)
-
-        self.tapDrainTask = Task { [weak self] in
-            guard let self, let queue = self.tapQueue else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 40_000_000)
-                let drained = queue.drain()
-                if drained.isEmpty { continue }
-                for buf in drained {
-                    request.append(buf)
-                }
-            }
-        }
     }
 
     private func tearDownRecognitionPipeline() {
@@ -343,11 +266,6 @@ final class VoiceWakeManager: NSObject {
         self.recognitionGeneration &+= 1
         self.invalidatePendingCommand()
         let hadRecognitionPipeline = self.recognitionRequest != nil
-
-        self.tapDrainTask?.cancel()
-        self.tapDrainTask = nil
-        self.tapQueue?.clear()
-        self.tapQueue = nil
 
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
@@ -370,8 +288,10 @@ final class VoiceWakeManager: NSObject {
     {
         { [weak self] result, error in
             let transcript = result?.bestTranscription.formattedString
-            let segments = result.flatMap { result in
-                transcript.map { WakeWordSpeechSegments.from(transcription: result.bestTranscription, transcript: $0) }
+            let segments = result.map { result in
+                WakeWordSpeechSegments.from(
+                    transcription: result.bestTranscription,
+                    transcript: result.bestTranscription.formattedString)
             } ?? []
             let errorText = error?.localizedDescription
 
@@ -413,17 +333,13 @@ final class VoiceWakeManager: NSObject {
         self.lastTriggeredCommand = cmd
         self.statusText = String(localized: "Triggered")
 
-        self.commandGeneration &+= 1
-        let commandGeneration = self.commandGeneration
         self.commandTask?.cancel()
         self.commandTask = Task { @MainActor [weak self] in
             guard let self,
-                  self.isCurrentCommand(
-                      recognitionGeneration: recognitionGeneration,
-                      commandGeneration: commandGeneration)
+                  self.isCurrentCommand(recognitionGeneration: recognitionGeneration)
             else { return }
             defer {
-                if self.commandGeneration == commandGeneration {
+                if !Task.isCancelled {
                     self.commandTask = nil
                 }
             }
@@ -431,33 +347,25 @@ final class VoiceWakeManager: NSObject {
                 try await self.onCommand?(cmd)
             } catch {
                 guard !(error is CancellationError), self.isCurrentCommand(
-                    recognitionGeneration: recognitionGeneration,
-                    commandGeneration: commandGeneration)
+                    recognitionGeneration: recognitionGeneration)
                 else { return }
                 self.statusText = error.localizedDescription
                 return
             }
-            guard self.isCurrentCommand(
-                recognitionGeneration: recognitionGeneration,
-                commandGeneration: commandGeneration)
+            guard self.isCurrentCommand(recognitionGeneration: recognitionGeneration)
             else { return }
             self.scheduleStart()
         }
     }
 
-    private func isCurrentCommand(
-        recognitionGeneration: UInt64,
-        commandGeneration: UInt64) -> Bool
-    {
+    private func isCurrentCommand(recognitionGeneration: UInt64) -> Bool {
         !Task.isCancelled &&
             self.recognitionGeneration == recognitionGeneration &&
-            self.commandGeneration == commandGeneration &&
             self.isEnabled &&
             self.suppressionReasons.isEmpty
     }
 
     func invalidatePendingCommand() {
-        self.commandGeneration &+= 1
         self.commandTask?.cancel()
         self.commandTask = nil
     }

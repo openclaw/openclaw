@@ -9,6 +9,7 @@ let nextFrame = 0;
 const root = document.documentElement;
 const height = () => root.style.getPropertyValue("--shell-viewport-height");
 const inset = () => root.style.getPropertyValue("--shell-safe-area-bottom");
+const keyboard = () => root.hasAttribute("data-shell-keyboard");
 function flush() {
   const pending = [...frames.values()];
   frames.clear();
@@ -55,32 +56,42 @@ afterEach(() => {
 });
 
 describe("shell visual viewport", () => {
-  it("publishes a native-scale bound without replacing the CSS resize owner", () => {
-    disconnect = connectShellViewport();
-    for (const next of [900, 1440, 844]) {
-      vi.stubGlobal("innerHeight", next);
-      Object.assign(viewport, { height: next });
-      window.dispatchEvent(new Event("resize"));
-      flush();
-      expect(height()).toBe(`${next}px`);
-    }
-  });
-
-  it.each([false, true])(
-    "bounds sub-keyboard occlusion without removing the inset (focus: %s)",
-    (focused) => {
+  it.each([
+    { focus: "none", heights: [900, 1440, 844], layoutResize: true },
+    { focus: "none", heights: [782], layoutResize: false },
+    { focus: "editor", heights: [782], layoutResize: false },
+    { focus: "button", heights: [480], layoutResize: false },
+  ])(
+    "bounds $focus occlusion without inventing a keyboard ($heights)",
+    ({ focus, heights, layoutResize }) => {
+      if (focus === "button") {
+        const button = document.createElement("input");
+        button.type = "button";
+        document.body.append(button);
+        button.focus();
+      }
       disconnect = connectShellViewport();
-      if (focused) {
+      if (focus === "editor") {
         editor();
         flush();
       }
-      resize({ height: 782 });
-      expect(height()).toBe("782px");
-      expect(inset()).toBe("");
-      // The cap is the visible bottom in layout coordinates, not just its height.
-      resize({ height: 770, offsetTop: 12 }, "scroll");
-      expect(height()).toBe("782px");
-      expect(inset()).toBe("");
+      for (const next of heights) {
+        if (layoutResize) {
+          vi.stubGlobal("innerHeight", next);
+          Object.assign(viewport, { height: next });
+          window.dispatchEvent(new Event("resize"));
+          flush();
+        } else {
+          resize({ height: next });
+        }
+        expect(height()).toBe(`${next}px`);
+        expect(inset()).toBe("");
+        if (next === 782) {
+          resize({ height: 770, offsetTop: 12 }, "scroll");
+          expect(height()).toBe("782px");
+          expect(inset()).toBe("");
+        }
+      }
     },
   );
 
@@ -92,14 +103,62 @@ describe("shell visual viewport", () => {
       resize({ height: 480 });
       expect(height()).toBe("480px");
       expect(inset()).toBe("0px");
+      expect(keyboard()).toBe(true);
       resize({ height: 440, offsetTop: 70 }, "scroll");
       expect(height()).toBe("510px");
+      expect(keyboard()).toBe(true);
       resize({ height: 844, offsetTop: 0 });
       expect(height()).toBe("844px");
       expect(inset()).toBe("");
+      expect(keyboard()).toBe(false);
       expect(input.matches(":focus")).toBe(true);
     },
   );
+
+  it("cancels keyboard-open drags that would pan Safari's visual viewport", () => {
+    const drag = (target: Element, deltaY: number, holdMs = 0) => {
+      const touch = (y: number, type: string, timeStamp: number) => {
+        const event = new Event(type, { bubbles: true, cancelable: true, composed: true });
+        Object.defineProperties(event, {
+          touches: { value: [{ clientX: 100, clientY: y }] },
+          timeStamp: { value: timeStamp },
+        });
+        target.dispatchEvent(event);
+        return event;
+      };
+      touch(400, "touchstart", 1000);
+      return touch(400 + deltaY, "touchmove", 1000 + holdMs + 16).defaultPrevented;
+    };
+    const thread = document.createElement("div");
+    thread.style.overflowY = "auto";
+    const message = document.createElement("p");
+    thread.append(message);
+    document.body.append(thread);
+    Object.defineProperties(thread, {
+      scrollHeight: { value: 2000 },
+      clientHeight: { value: 400 },
+    });
+    disconnect = connectShellViewport();
+    const input = editor();
+    // Without a keyboard there is no uncovered layout area to pan into.
+    expect(drag(input, -40)).toBe(false);
+    resize({ height: 480 });
+
+    expect(drag(input, -40)).toBe(true);
+    thread.scrollTop = 1600;
+    expect(drag(message, -40)).toBe(true);
+    expect(drag(message, 40)).toBe(false);
+    thread.scrollTop = 0;
+    expect(drag(message, 40)).toBe(true);
+    expect(drag(input, -40, 500)).toBe(false);
+    // Safari panned the header away; dragging down must still bring it back.
+    resize({ height: 440, offsetTop: 70 }, "scroll");
+    expect(drag(input, 40)).toBe(false);
+    expect(drag(input, -40)).toBe(true);
+
+    resize({ height: 844 });
+    expect(drag(input, -40)).toBe(false);
+  });
 
   it("captures focus before a content-resizing keyboard and restores its inset", () => {
     disconnect = connectShellViewport();
@@ -142,17 +201,6 @@ describe("shell visual viewport", () => {
     expect(height()).toBe("480px");
   });
 
-  it("bounds visual occlusion without inventing a keyboard for a non-editor", () => {
-    const button = document.createElement("input");
-    button.type = "button";
-    document.body.append(button);
-    button.focus();
-    disconnect = connectShellViewport();
-    resize({ height: 480 });
-    expect(height()).toBe("480px");
-    expect(inset()).toBe("");
-  });
-
   it("coalesces events, removes root overrides, and releases every listener on disconnect", () => {
     disconnect = connectShellViewport();
     editor();
@@ -167,6 +215,7 @@ describe("shell visual viewport", () => {
     expect(frames.size).toBe(0);
     expect(height()).toBe("");
     expect(inset()).toBe("");
+    expect(keyboard()).toBe(false);
     resize({ height: 300 });
     window.dispatchEvent(new Event("orientationchange"));
     document.dispatchEvent(new Event("focusin"));

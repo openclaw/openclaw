@@ -13,6 +13,8 @@ export type {
   SessionsCatalogArchiveResult,
   SessionsCatalogContinueParams,
   SessionsCatalogContinueResult,
+  SessionsCatalogImportParams,
+  SessionsCatalogImportResult,
   SessionsCatalogListParams,
   SessionsCatalogListResult,
   SessionsCatalogHostEvent,

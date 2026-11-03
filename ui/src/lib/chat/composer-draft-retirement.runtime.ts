@@ -6,15 +6,13 @@ import { retireDurableComposerDrafts } from "./composer-draft-store.runtime.ts";
 import { retireStoredComposerDrafts } from "./outbox-store-retirement.ts";
 import { storedChatOutboxScopeKey } from "./outbox-store.ts";
 
-type DeletedComposerDraftScope = Parameters<typeof deleteStoredChatSessionSnapshots>[0] & {
-  client: ApplicationContext["gateway"]["snapshot"]["client"];
-  gatewayUrl: string | undefined;
-  isCurrent: () => boolean;
-};
-
 export async function retireDeletedComposerDrafts(
   context: ApplicationContext,
-  scope: DeletedComposerDraftScope,
+  scope: Parameters<typeof deleteStoredChatSessionSnapshots>[0] & {
+    client: ApplicationContext["gateway"]["snapshot"]["client"];
+    gatewayUrl: string | undefined;
+    isCurrent: () => boolean;
+  },
   targets: Parameters<typeof retireStoredComposerDrafts>[1],
 ): Promise<void> {
   try {
@@ -28,6 +26,7 @@ export async function retireDeletedComposerDrafts(
             resolve();
           }
         };
+        // Await recovery authority or connection retirement before deleting persisted drafts.
         unsubscribe = context.gateway.subscribe(onReady);
         onReady();
       }).finally(() => {
@@ -40,7 +39,7 @@ export async function retireDeletedComposerDrafts(
     }
     const { recoveryScope, recoveryScopeReady } = scope.client;
     const stored = retireStoredComposerDrafts(
-      { settings: { gatewayUrl: scope.gatewayUrl } },
+      { settings: { gatewayUrl: scope.gatewayUrl }, client: scope.client },
       targets,
     );
     const retirements = stored.retirements.map((retirement) => ({
@@ -49,7 +48,10 @@ export async function retireDeletedComposerDrafts(
       retireBeforeRevision: retirement.retireBeforeRevision,
     }));
     const [, durable] = await Promise.all([
-      deleteStoredChatSessionSnapshots(scope, targets),
+      deleteStoredChatSessionSnapshots(
+        { ...scope, settings: { gatewayUrl: scope.gatewayUrl } },
+        targets,
+      ),
       recoveryScopeReady && recoveryScope
         ? retireDurableComposerDrafts(
             { gatewayOwner: stored.gatewayOwner, recoveryScope },

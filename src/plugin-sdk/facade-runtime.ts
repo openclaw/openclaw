@@ -1,4 +1,3 @@
-// Facade runtime helpers load plugin API facades from installed plugin packages.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
@@ -138,6 +137,11 @@ function buildFacadeActivationCheckParams(
     location,
     sourceExtensionsRoot: OPENCLAW_SOURCE_EXTENSIONS_ROOT,
   };
+}
+
+/** Checks the selected owner's surface without loading it or borrowing another owner's artifact. */
+export function hasBundledPluginPublicSurface(params: BundledPluginPublicSurfaceParams): boolean {
+  return resolveFacadeModuleLocation(params) !== null;
 }
 
 /** Load a bundled or registry-backed plugin public surface, tracking activation ownership. */

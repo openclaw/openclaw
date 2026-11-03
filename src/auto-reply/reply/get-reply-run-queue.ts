@@ -1,47 +1,36 @@
-/** Active-run queue admission for prepared reply turns. */
 import type { ReplyPayload } from "../types.js";
-import type { ActiveRunQueueAction } from "./queue-policy.js";
-import type { QueueSettings } from "./queue.js";
-
-/** Snapshot of the active reply run state used by queue admission. */
-type ReplyRunQueueBusyState = {
-  activeSessionId: string | undefined;
-  isActive: boolean;
-};
+import type { QueueSettings } from "./queue/types.js";
 
 export const REPLY_RUN_STILL_SHUTTING_DOWN_TEXT =
   "⚠️ Previous run is still shutting down. Please try again in a moment.";
+const REPLY_RUN_WRITER_FENCE_BLOCKED_TEXT =
+  "⚠️ Previous run could not be safely retired because its writer is still active. Start a separate session or restart the Gateway before retrying this session.";
 
-/** Resolves whether a new reply may continue after active-run queue handling. */
-export async function resolvePreparedReplyQueueState(params: {
-  activeRunQueueAction: ActiveRunQueueAction;
-  activeSessionId: string | undefined;
+/** Waits for admitted active work and returns guidance if it still has not settled. */
+export async function waitForPreparedReplyQueue(params: {
+  activeSessionId: string;
   queueMode: QueueSettings["mode"];
   interruptActiveRun: () => Promise<boolean>;
   waitForActiveRunEnd: (sessionId: string) => Promise<unknown>;
   refreshPreparedState: () => Promise<void>;
-  resolveBusyState: () => ReplyRunQueueBusyState;
-}): Promise<
-  { kind: "continue"; busyState: ReplyRunQueueBusyState } | { kind: "reply"; reply: ReplyPayload }
-> {
-  if (params.activeRunQueueAction !== "run-now" || !params.activeSessionId) {
-    return { kind: "continue", busyState: params.resolveBusyState() };
-  }
-
+  resolveBusyState: () => { isActive: boolean; terminalProducerBlocked?: boolean };
+}): Promise<ReplyPayload | undefined> {
   if (params.queueMode === "interrupt") {
-    await params.interruptActiveRun();
+    // An idle run slot is not evidence that its former writer settled. In
+    // particular a watchdog can release the slot while delivery still owns I/O.
+    if (!(await params.interruptActiveRun())) {
+      return { text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT };
+    }
   } else {
     await params.waitForActiveRunEnd(params.activeSessionId);
   }
   await params.refreshPreparedState();
-  const refreshedBusyState = params.resolveBusyState();
-  if (refreshedBusyState.isActive) {
-    return {
-      kind: "reply",
-      reply: {
-        text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
-      },
-    };
-  }
-  return { kind: "continue", busyState: refreshedBusyState };
+  const busy = params.resolveBusyState();
+  return busy.isActive
+    ? {
+        text: busy.terminalProducerBlocked
+          ? REPLY_RUN_WRITER_FENCE_BLOCKED_TEXT
+          : REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
+      }
+    : undefined;
 }

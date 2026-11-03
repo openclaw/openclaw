@@ -54,7 +54,7 @@ export async function canonicalTargetForSymlinkError(
 export function symlinkRedirectError(code: string, canonicalPath?: string): FileWriteError {
   return fileWriteError(
     code,
-    "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowWritePaths to the canonical path)",
+    "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowWritePaths to the resolved path)",
     canonicalPath,
   );
 }

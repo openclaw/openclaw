@@ -10,7 +10,7 @@ import {
 } from "../../daemon/restart-storm.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
-export type LaunchdJobDiagnostics = {
+type LaunchdJobDiagnostics = {
   staleUpdateLaunchdJobs?: StaleOpenClawUpdateLaunchdJob[];
   foreignLaunchdJobs?: ForeignLaunchdJob[];
   foreignLaunchdInspectionError?: string;

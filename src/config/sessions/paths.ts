@@ -3,15 +3,21 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { safeRealpathSync } from "../../infra/boundary-path.js";
-import { expandHomePrefix, resolveRequiredHomeDir, resolveUserPath } from "../../infra/home-dir.js";
+import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  resolveExplicitIncognitoAgentSqliteTarget,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../state-dir.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
+import { MULTI_STORE_PATH_SENTINEL } from "./session-sqlite-target-paths.js";
+
+export { resolveConcreteSessionStorePath } from "./session-sqlite-target-paths.js";
 
 export type SessionStorePathScope = {
   agentId?: string;
@@ -24,6 +30,15 @@ export type SessionStorePathScope = {
 export function resolveExplicitSessionStorePathForScope(
   scope: SessionStorePathScope,
 ): string | undefined {
+  const explicit = resolveExplicitIncognitoAgentSqliteTarget(scope.storePath, {
+    agentId: isIncognitoSessionKey(scope.sessionKey)
+      ? resolveAgentIdFromSessionKey(scope.sessionKey)
+      : scope.agentId,
+    env: scope.env,
+  });
+  if (explicit) {
+    return explicit.path;
+  }
   if (isIncognitoSessionKey(scope.sessionKey)) {
     return resolveIncognitoOpenClawAgentSqlitePath({
       agentId: resolveAgentIdFromSessionKey(scope.sessionKey),
@@ -31,14 +46,6 @@ export function resolveExplicitSessionStorePathForScope(
     });
   }
   return scope.storePath || undefined;
-}
-
-export function resolveConcreteSessionStorePath(storePath: string | undefined): string | undefined {
-  const trimmed = storePath?.trim();
-  if (!trimmed || trimmed === MULTI_STORE_PATH_SENTINEL || trimmed.includes("{agentId}")) {
-    return undefined;
-  }
-  return trimmed;
 }
 
 export function resolveSessionTranscriptsDirForAgent(
@@ -71,7 +78,6 @@ type SessionFilePathOptions = {
   sessionsDir?: string;
 };
 
-const MULTI_STORE_PATH_SENTINEL = "(multiple)";
 const SQLITE_TRANSCRIPT_TARGET_PREFIX = "sqlite:";
 
 export function resolveSessionFilePathOptions(params: {
@@ -119,9 +125,8 @@ function resolvePathFromAgentSessionsDir(
 ): string | undefined {
   const agentBase =
     safeRealpathSync(path.resolve(agentSessionsDir)) ?? path.resolve(agentSessionsDir);
-  const realCandidate = safeRealpathSync(candidateAbsPath) ?? candidateAbsPath;
-  const relative = path.relative(agentBase, realCandidate);
-  // Realpath both sides when possible so symlinked session dirs still enforce containment.
+  const relative = path.relative(agentBase, candidateAbsPath);
+  // The caller already resolved the candidate; resolve this fallback root for containment.
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     return resolveRerootedSessionPath(agentBase, candidateAbsPath);
   }
@@ -352,15 +357,6 @@ export function resolveSessionStorePathCore(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {
-  return resolveSessionStorePathWithContext(store, opts, { cwd: resolveUserPath(".") });
-}
-
-/** Internal async readers capture their relative-path base before yielding. */
-export function resolveSessionStorePathWithContext(
-  store: string | undefined,
-  opts: { agentId?: string; env?: NodeJS.ProcessEnv } | undefined,
-  context: { cwd: string },
-) {
   const env = opts?.env ?? process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   if (!store) {
@@ -379,16 +375,16 @@ export function resolveSessionStorePathWithContext(
     expandedStore = expandedStore.replaceAll("{agentId}", agentId);
   }
   if (expandedStore.startsWith("~")) {
-    return path.resolve(
-      context.cwd,
-      expandHomePrefix(expandedStore, {
-        home: resolveRequiredHomeDir(env, homedir),
-        env,
-        homedir,
-      }),
-    );
+    expandedStore = expandHomePrefix(expandedStore, {
+      home: resolveRequiredHomeDir(env, homedir),
+      env,
+      homedir,
+    });
   }
-  return path.resolve(context.cwd, expandedStore);
+  // Service working directories vary; configuration must select the same store after a restart.
+  return path.isAbsolute(expandedStore)
+    ? path.resolve(expandedStore)
+    : path.resolve(resolveStateDir(env, homedir), expandedStore);
 }
 
 export function resolveAgentsDirFromSessionStorePath(storePath: string): string | undefined {

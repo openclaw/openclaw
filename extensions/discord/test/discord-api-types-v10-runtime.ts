@@ -7,8 +7,10 @@ const discordApiTypes = requireDiscordApiTypes("discord-api-types/v10") as typeo
 
 export default discordApiTypes;
 export const {
+  AllowedMentionsTypes,
   ApplicationCommandOptionType,
   ApplicationCommandType,
+  ApplicationFlags,
   ButtonStyle,
   ChannelType,
   ComponentType,

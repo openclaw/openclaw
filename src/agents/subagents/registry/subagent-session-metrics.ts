@@ -10,10 +10,7 @@ type SubagentSessionRuntimeRecord = Pick<SubagentRunRecord, "accumulatedRuntimeM
 };
 type SubagentSessionStatusRecord = Pick<SubagentRunRecord, "endedReason" | "pauseReason"> & {
   delivery?: Pick<NonNullable<SubagentRunRecord["delivery"]>, "status" | "disposition">;
-  execution: Pick<
-    SubagentRunRecord["execution"],
-    "status" | "endedAt" | "outcome" | "interruptionReason"
-  >;
+  execution: Pick<SubagentRunRecord["execution"], "status" | "endedAt" | "outcome">;
 };
 
 /** Returns a recorded execution start, never the earlier admission time. */
@@ -23,7 +20,6 @@ export function getSubagentSessionStartedAt(
   return asFiniteNumber(entry?.sessionStartedAt) ?? asFiniteNumber(entry?.execution.startedAt);
 }
 
-/** Computes accumulated runtime including the current live run when still active. */
 export function getSubagentSessionRuntimeMs(
   entry: SubagentSessionRuntimeRecord | null | undefined,
   now = Date.now(),
@@ -44,7 +40,6 @@ export function getSubagentSessionRuntimeMs(
   return Math.max(0, accumulatedRuntimeMs + Math.max(0, currentRunEndedAt - startedAt));
 }
 
-/** Maps persisted run outcome fields to the compact session status shown in tools/UI. */
 export function resolveSubagentSessionStatus(
   entry: SubagentSessionStatusRecord | null | undefined,
 ): "queued" | "running" | "interrupted" | "killed" | "failed" | "timeout" | "done" | undefined {
@@ -61,16 +56,6 @@ export function resolveSubagentSessionStatus(
     return "killed";
   }
   const status = entry.execution.outcome?.status;
-  if (status === "error" && entry.execution.interruptionReason === "gateway-restart") {
-    const delivery = entry.delivery;
-    return delivery &&
-      delivery.disposition !== "intentional_non_delivery" &&
-      (delivery.status === "failed" ||
-        delivery.status === "suspended" ||
-        delivery.status === "discarded")
-      ? "failed"
-      : "interrupted";
-  }
   if (status === "error") {
     return "failed";
   }
@@ -80,6 +65,15 @@ export function resolveSubagentSessionStatus(
   return "done";
 }
 
+/** A yielded run waiting for a continuation: a message or its children's results. */
+export function isSubagentRunPausedForContinuation(entry: SubagentSessionStatusRecord): boolean {
+  if (entry.pauseReason !== "sessions_yield") {
+    return false;
+  }
+  const status = resolveSubagentSessionStatus(entry);
+  return status !== "killed" && status !== "failed" && status !== "timeout";
+}
+
 /** Formats the authoritative run status while preserving unfinished descendants. */
 export function resolveSubagentDisplayStatus(
   entry: SubagentSessionStatusRecord,
@@ -87,19 +81,11 @@ export function resolveSubagentDisplayStatus(
 ): string {
   const status = resolveSubagentSessionStatus(entry) ?? "done";
   const pending = Math.max(0, pendingDescendants);
-  if (
-    entry.pauseReason === "sessions_yield" &&
-    status !== "killed" &&
-    status !== "failed" &&
-    status !== "timeout"
-  ) {
-    return pending > 0
-      ? `waiting on ${pending} ${pending === 1 ? "child" : "children"}`
-      : "waiting for external continuation";
+  const waiting = `waiting on ${pending} ${pending === 1 ? "child" : "children"}`;
+  if (isSubagentRunPausedForContinuation(entry)) {
+    return pending > 0 ? waiting : "waiting for external continuation";
   }
   if (pending > 0) {
-    const childLabel = pending === 1 ? "child" : "children";
-    const waiting = `waiting on ${pending} ${childLabel}`;
     // Pending descendants keep the row active without hiding a terminal failure.
     return status === "running" || status === "done"
       ? `active (${waiting})`

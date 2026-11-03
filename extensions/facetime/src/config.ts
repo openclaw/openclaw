@@ -3,39 +3,24 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES,
   type RealtimeVoiceAgentConsultToolPolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asBoolean,
+  asRecord,
+  normalizeOptionalString,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type FaceTimeConfig = {
-  enabled: boolean;
-  ownerHandles: string[];
-  realtime: {
-    provider?: string;
-    model?: string;
-    voice?: string;
-    sessionKey: string;
-    toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
-    instructions?: string;
-    providers: Record<string, Record<string, unknown>>;
-  };
+type ProducedFaceTimeConfig = ReturnType<typeof resolveFaceTimeConfig>;
+type OptionalRealtimeFields = "provider" | "model" | "voice" | "instructions";
+export type FaceTimeConfig = Omit<ProducedFaceTimeConfig, "realtime"> & {
+  realtime: Omit<ProducedFaceTimeConfig["realtime"], OptionalRealtimeFields> &
+    Partial<Pick<ProducedFaceTimeConfig["realtime"], OptionalRealtimeFields>>;
 };
 
 const DEFAULT_INSTRUCTIONS = [
   "You are the realtime voice surface for the configured OpenClaw agent during a private 1:1 FaceTime call.",
   "Keep replies concise, natural, and useful for a hands-free voice conversation.",
 ].join(" ");
-
-function resolveBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function resolveStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-}
 
 function resolveRealtimeVoiceAgentConsultToolPolicy(
   value: unknown,
@@ -64,15 +49,15 @@ function resolveProviders(value: unknown): Record<string, Record<string, unknown
   return providers;
 }
 
-export function resolveFaceTimeConfig(input: unknown): FaceTimeConfig {
+export function resolveFaceTimeConfig(input: unknown) {
   const raw = asRecord(input);
   const realtime = asRecord(raw.realtime);
   if (typeof realtime.instructions === "string" && realtime.instructions.length > 4000) {
     throw new Error("realtime.instructions must not exceed 4000 characters");
   }
   return {
-    enabled: resolveBoolean(raw.enabled, true),
-    ownerHandles: resolveStringArray(raw.ownerHandles),
+    enabled: asBoolean(raw.enabled) ?? true,
+    ownerHandles: normalizeTrimmedStringList(raw.ownerHandles),
     realtime: {
       provider: normalizeOptionalString(realtime.provider),
       model: normalizeOptionalString(realtime.model),

@@ -19,7 +19,7 @@ export function installDistArtifactScripts(
   if (compiler && !fs.existsSync(path.join(root, "node_modules/typescript/package.json"))) {
     materializeNativeCompiler(root);
   }
-  for (const script of ["tsx.mjs", ...scripts]) {
+  for (const script of ["tsx.mjs", "generate-kysely-types.mts", ...scripts]) {
     write(
       root,
       `scripts/${script}`,

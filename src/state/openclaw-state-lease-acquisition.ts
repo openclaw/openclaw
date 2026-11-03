@@ -10,8 +10,9 @@ import {
   OpenClawStateLeaseAcquisitionError,
   OpenClawStateLeaseError,
 } from "./openclaw-state-lease-error.js";
+import { LEASE_CONTENTION_RETRY_MS } from "./openclaw-state-lease-heartbeat-shared.js";
 import { STATE_LEASE_WRITE_BACKOFF } from "./openclaw-state-lease-storage.js";
-import type { OpenClawStateLeaseAcquisition } from "./openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseAcquisition } from "./openclaw-state-lease.types.js";
 
 const log = createSubsystemLogger("state/lease");
 
@@ -29,7 +30,7 @@ export async function acquireOpenClawStateLease(params: {
   let deadline = startedAt + params.waitMs;
   let preparation = params.prepare;
   let attempt = 0;
-  let lastReportedHolder: string | undefined;
+  let waitReported = false;
   const cancellation = params.signal ? new AbortController() : undefined;
   let aborted: OpenClawStateLeaseAcquisitionError | undefined;
   const abort = () => {
@@ -56,6 +57,7 @@ export async function acquireOpenClawStateLease(params: {
     while (true) {
       assertCurrent();
       let outcome: OpenClawStateLeaseAcquisition;
+      let acquiring = false;
       try {
         if (preparation) {
           const prepare = preparation;
@@ -63,6 +65,7 @@ export async function acquireOpenClawStateLease(params: {
           prepare();
           deadline = performance.now() + params.waitMs;
         }
+        acquiring = true;
         outcome = await params.acquire(assertCurrent, cancellation?.signal);
       } catch (error) {
         if (
@@ -82,6 +85,23 @@ export async function acquireOpenClawStateLease(params: {
         const failure = error instanceof OpenClawStateLeaseError ? error.cause : error;
         if (isSqliteLockError(failure)) {
           assertCurrent();
+          const remainingMs = deadline - performance.now();
+          if (acquiring && remainingMs > 0) {
+            if (!waitReported) {
+              log.warn(`Waiting for ${params.label} after SQLite lock contention.`);
+              waitReported = true;
+            }
+            try {
+              await sleepWithAbort(Math.min(remainingMs, LEASE_CONTENTION_RETRY_MS), params.signal);
+            } catch (sleepError) {
+              assertCurrent();
+              throw sleepError;
+            }
+            assertCurrent();
+            if (performance.now() < deadline) {
+              continue;
+            }
+          }
         }
         throw new OpenClawStateLeaseAcquisitionError(
           params.label,
@@ -103,9 +123,8 @@ export async function acquireOpenClawStateLease(params: {
       if (now >= deadline) {
         throw new OpenClawStateLeaseAcquisitionError(params.label, outcome);
       }
-      const holderIdentity = `${outcome.holder.owner}:${outcome.holder.epoch}`;
-      if (lastReportedHolder !== holderIdentity) {
-        lastReportedHolder = holderIdentity;
+      if (!waitReported) {
+        waitReported = true;
         const expiry =
           outcome.holder.expiresAt === null
             ? "has no recorded expiry"

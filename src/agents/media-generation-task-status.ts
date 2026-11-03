@@ -1,9 +1,3 @@
-/**
- * Image generation task status helpers.
- *
- * These wrap the shared media task status helpers with image-specific task kind,
- * source id, duplicate-guard timing, and prompt/status wording.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listMediaGenerationOperations } from "./media-generation-activity.js";
 import {
@@ -29,15 +23,8 @@ export const {
   promptCompletionLabel: "images",
 });
 
-/**
- * Music-generation task status adapters. The module specializes the shared
- * media-generation task helpers with music task ids, duplicate guards, and
- * user-facing status text.
- */
-
 export const MUSIC_GENERATION_TASK_KIND = "music_generation";
 
-/** Binds music-specific task identity, duplicate guards, and visible status text. */
 export const {
   findActiveTaskForSession: findActiveMusicGenerationTaskForSession,
   findDuplicateGuardTaskForSession: findDuplicateGuardMusicGenerationTaskForSession,
@@ -51,16 +38,8 @@ export const {
   promptCompletionLabel: "music tracks",
 });
 
-/**
- * Video generation task status helpers.
- *
- * These wrap the generic media task status helpers with video-specific kind,
- * source, labels, duplicate-guard timing, and prompt-context wording.
- */
-
 export const VIDEO_GENERATION_TASK_KIND = "video_generation";
 
-/** Binds video-specific task identity, duplicate guards, and visible status text. */
 export const {
   findActiveTaskForSession: findActiveVideoGenerationTaskForSession,
   findDuplicateGuardTaskForSession: findDuplicateGuardVideoGenerationTaskForSession,
@@ -79,6 +58,8 @@ export async function buildMediaTaskRuntimeContext(params: {
   capabilityToolNames: ReadonlySet<string>;
   sessionKey?: string;
   agentId: string;
+  /** Retained carriers need explicit empty snapshots to supersede older facts. */
+  includeEmptySnapshots?: boolean;
 }): Promise<string | undefined> {
   const sections = [
     ["image_generate", IMAGE_GENERATION_TASK_KIND],
@@ -91,14 +72,14 @@ export async function buildMediaTaskRuntimeContext(params: {
   }
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const tasks = sessionKey ? listMediaGenerationOperations(sessionKey, params.agentId) : [];
-  const facts = enabled.map(
-    ([tool, taskKind]) =>
-      buildActiveMediaGenerationTaskPromptContext({
-        tasks,
-        agentId: params.agentId,
-        taskKind,
-        sourcePrefix: tool,
-      }) ?? `- tool=${tool}; none`,
-  );
-  return ["## Media Generation Tasks", ...facts].join("\n");
+  const facts = enabled.flatMap(([tool, taskKind]) => {
+    const text = buildActiveMediaGenerationTaskPromptContext({
+      tasks,
+      agentId: params.agentId,
+      taskKind,
+      sourcePrefix: tool,
+    });
+    return text ? [text] : params.includeEmptySnapshots ? [`- tool=${tool}; none`] : [];
+  });
+  return facts.length ? ["## Media Generation Tasks", ...facts].join("\n") : undefined;
 }

@@ -37,17 +37,14 @@ struct SettingsProTab: View {
     @State var gatewayRegistry = GatewaySettingsStore.GatewayRegistry.empty
     @State var pendingForgetGateway: GatewaySettingsStore.GatewayRegistryEntry?
     @State var selectedAgentPickerId = ""
-    @State var gatewayToken = ""
-    @State var gatewayPassword = ""
-    @State var gatewayCredentialFieldStableID: String?
+    @State var gatewayAuthFields = GatewayConnectionController.ManualAuthOverride.Fields()
     @State var manualGatewayPortText = ""
     @State var manualGatewayContextPath: String?
     @State var setupStatusText: String?
     @State var gatewayActionStatusText: String?
-    @State var setupAttemptID: UUID?
+    @State var setupAttemptID: GatewaySetupAttempt?
     @State var manualConnectGeneration: UInt64 = 0
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
-    @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var scannerResultHandoff = QRScannerResultHandoff()
     @State var scannerScanID: UInt64 = 0
     @State var pendingTargetSuppression = GatewayPendingTargetSuppression()
@@ -156,6 +153,8 @@ struct SettingsProTab: View {
                     self.refreshNotificationSettings()
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: GatewaySettingsStore.gatewayRegistryDidChange)
+                .receive(on: DispatchQueue.main)) { _ in self.refreshGatewayRegistry() }
             .onChange(of: self.appModel.isLocalGatewayFixtureEnabled) { _, _ in
                 // Leaving a fixture must reload the saved registry and credentials before they are editable.
                 self.syncSettingsState()

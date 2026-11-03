@@ -1,5 +1,6 @@
 {
   "id": "openai",
+  "doctorHealthChecks": true,
   "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "sessionRouteStateOwners": [
@@ -52,10 +53,12 @@
         "baseUrl": "https://api.openai.com/v1",
         "api": "openai-responses",
         "defaultUtilityModel": "gpt-5.6-luna",
+        "family": "openai",
         "models": [
           {
             "id": "gpt-daybreak-blue-latest",
             "name": "Daybreak Blue",
+            "status": "deprecated",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 1050000,
@@ -72,6 +75,7 @@
           {
             "id": "gpt-daybreak-red-latest",
             "name": "Daybreak Red",
+            "status": "deprecated",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 400000,
@@ -166,6 +170,28 @@
           {
             "id": "gpt-6-luna",
             "name": "GPT-6 Luna",
+            "inference": {
+              "chat": true,
+              "decision": {
+                "protocol": "openai-decisions",
+                "input": ["text", "image"],
+                "reasoning": { "modes": ["auto"] },
+                "questions": {
+                  "boolean": { "probabilities": "boolean", "abstention": false },
+                  "choice": { "probabilities": "categorical", "abstention": false, "minOptions": 2, "maxOptions": 255 },
+                  "score": { "probabilities": "categorical", "abstention": false }
+                },
+                "confidence": "provider-specific",
+                "limits": {
+                  "maxQuestions": 400,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg", "image/webp"],
+                    "remoteUrls": false
+                  }
+                }
+              }
+            },
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 1050000,
@@ -307,6 +333,17 @@
             "contextWindow": 400000,
             "maxTokens": 128000,
             "cost": { "input": 0.2, "output": 1.25, "cacheRead": 0.02, "cacheWrite": 0 }
+          },
+          {
+            "id": "gpt-4.1",
+            "name": "GPT-4.1",
+            "status": "deprecated",
+            "statusReason": "API shutdown is scheduled for January 14, 2027.",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 1047576,
+            "maxTokens": 32768,
+            "cost": { "input": 2, "output": 8, "cacheRead": 0.5, "cacheWrite": 0 }
           }
         ]
       }
@@ -429,6 +466,7 @@
     }
   ],
   "contracts": {
+    "decisionProviders": ["openai"],
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
@@ -475,7 +513,7 @@
         "type": "string",
         "enum": ["friendly", "on", "off"],
         "default": "friendly",
-        "description": "Controls the canonical OpenAI-family GPT-5 friendly interaction style. Defaults to `friendly`; `on` aliases `friendly`; `off` removes only the style layer while shared stable behavior remains."
+        "description": "Controls the shared OpenAI-family GPT-5 friendly interaction style. Defaults to `friendly`; `on` aliases `friendly`; `off` removes only the style layer while shared stable behavior remains."
       }
     }
   }

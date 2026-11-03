@@ -133,7 +133,7 @@ describeLive("watched child follow-up yield", () => {
             status: "accepted",
             targetDisposition: "queued",
             watched: true,
-            delivery: { status: "pending", mode: "announce" },
+            delivery: { status: "pending" },
           });
           expect(
             yielded.details ?? JSON.parse(extractFirstTextBlock(yielded) ?? "null"),

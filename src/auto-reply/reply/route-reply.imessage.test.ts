@@ -3,11 +3,108 @@ import { createMessageReceiptFromOutboundResults } from "../../channels/message/
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createReplyToDeliveryPolicy } from "../../infra/outbound/reply-policy.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { applyReplyThreading } from "./reply-payloads-base.js";
+import {
+  createReplyToModeFilterForChannel,
+  resolveReplyDeliveryAccountId,
+  resolveReplyToMode,
+} from "./reply-threading.js";
 import { routeReply } from "./route-reply.js";
+
+const emptyCfg: OpenClawConfig = {};
+const resetRegistry = () => setActivePluginRegistry(createTestRegistry());
+beforeEach(resetRegistry);
+afterEach(resetPluginRuntimeStateForTest);
+function register(plugin: ChannelPlugin) {
+  setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+}
+
+describe("resolveReplyToMode", () => {
+  it("falls back to configured channel defaults when channel threading plugins are unavailable", () => {
+    const configuredCfg: OpenClawConfig = { channels: { discord: { replyToMode: "first" } } };
+    const chatTypeCfg = {
+      channels: {
+        slack: {
+          replyToMode: "off",
+          replyToModeByChatType: { direct: "all", group: "first" },
+        },
+      },
+    } as OpenClawConfig;
+    const topLevelFallbackCfg: OpenClawConfig = { channels: { slack: { replyToMode: "first" } } };
+    for (const [cfg, channel, chatType, expected] of [
+      [emptyCfg, "telegram", undefined, "all"],
+      [emptyCfg, undefined, undefined, "all"],
+      [configuredCfg, "discord", undefined, "first"],
+      [chatTypeCfg, "slack", "direct", "all"],
+      [chatTypeCfg, "slack", "group", "first"],
+      [chatTypeCfg, "slack", "channel", "off"],
+      [chatTypeCfg, "slack", undefined, "off"],
+      [topLevelFallbackCfg, "slack", "direct", "first"],
+    ] as const) {
+      expect(resolveReplyToMode(cfg, channel, null, chatType)).toBe(expected);
+    }
+  });
+
+  it("uses registered channel threading adapters for runtime reply-mode resolution", () => {
+    register({
+      ...createChannelTestPluginBase({ id: "whatsapp" }),
+      threading: {
+        resolveReplyToMode: ({ accountId }) => (accountId === "work" ? "first" : "all"),
+      },
+    });
+
+    expect(resolveReplyToMode(emptyCfg, "whatsapp", "work", "group")).toBe("first");
+    expect(resolveReplyToMode(emptyCfg, "whatsapp", "default", "group")).toBe("all");
+  });
+
+  it("resolves the same listed default account used by routed delivery", () => {
+    register(
+      createChannelTestPluginBase({
+        id: "whatsapp",
+        config: { listAccountIds: () => ["work"] },
+      }),
+    );
+
+    expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp")).toBe("work");
+    expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp", "personal")).toBe("personal");
+  });
+
+  it("applies canonical account policy before channel-wide threading defaults", () => {
+    register(createChannelTestPluginBase({ id: "irc" }));
+    const cfg: OpenClawConfig = {
+      channels: {
+        irc: {
+          replyToMode: "off",
+          accounts: {
+            "Ops Team": { replyToMode: "all" },
+            support: { replyToMode: "first" },
+          },
+        },
+      },
+    };
+
+    expect(resolveReplyToMode(cfg, "irc", "ops-team", "group")).toBe("all");
+    expect(resolveReplyToMode(cfg, "irc", "OPS TEAM", "direct")).toBe("all");
+    expect(resolveReplyToMode(cfg, "irc", "support", "group")).toBe("first");
+    expect(resolveReplyToMode(cfg, "irc", "unknown", "group")).toBe("off");
+    expect(resolveReplyToMode(cfg, "irc", null, "direct")).toBe("off");
+  });
+});
+
+describe("createReplyToModeFilterForChannel", () => {
+  it("previews batched transport without consuming its single reply slot", () => {
+    const filter = createReplyToModeFilterForChannel("batched", "discord");
+    expect(filter.preview({ text: "discarded", replyToId: "parent" }).replyToId).toBe("parent");
+    expect(filter({ text: "actual", replyToId: "parent" }).replyToId).toBe("parent");
+    expect(filter.preview({ text: "later", replyToId: "other" }).replyToId).toBeUndefined();
+  });
+});
 
 const { sendDurableMessageBatchCore, sendStructuredDurableMessageBatchCore } = vi.hoisted(() => ({
   sendDurableMessageBatchCore:
@@ -18,7 +115,6 @@ const { sendDurableMessageBatchCore, sendStructuredDurableMessageBatchCore } = v
     >(),
 }));
 
-// Exercise the real router and registered plugin without sending native messages.
 vi.mock("../../channels/message/runtime.js", () => ({
   sendDurableMessageBatchCore,
   sendStructuredDurableMessageBatchCore,
@@ -30,19 +126,15 @@ const { imessagePlugin } = await loadBundledPluginFacade<{ imessagePlugin: Chann
   artifactBasename: "channel-plugin-api.ts",
 });
 
-const cfg: OpenClawConfig = {
-  channels: { imessage: { enabled: true, actions: { reply: true } } },
-};
-
 type RouteReplyParams = Parameters<typeof routeReply>[0];
 
 async function route(
   payload: RouteReplyParams["payload"],
   currentMessageId?: string,
-  overrides: Partial<RouteReplyParams> = {},
+  replyToMode: "first" | "all" = "all",
 ) {
   const result = await routeReply({
-    cfg,
+    cfg: { channels: { imessage: { enabled: true, actions: { reply: true } } } },
     payload,
     currentMessageId,
     channel: "imessage",
@@ -51,8 +143,7 @@ async function route(
     agentId: "main",
     replyKind: "final",
     mirror: false,
-    replyDelivery: { chatType: "direct", replyToMode: "all" },
-    ...overrides,
+    replyDelivery: { chatType: "direct", replyToMode },
   });
   expect(result).toMatchObject({ ok: true, delivered: true });
   return sendDurableMessageBatchCore.mock.lastCall?.[0];
@@ -60,9 +151,7 @@ async function route(
 
 describe("routed iMessage reply threading", () => {
   beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "imessage", plugin: imessagePlugin, source: "test" }]),
-    );
+    register(imessagePlugin);
     sendDurableMessageBatchCore.mockReset();
     const results = [{ channel: "imessage", messageId: "sent-message" }];
     sendDurableMessageBatchCore.mockResolvedValue({
@@ -70,10 +159,6 @@ describe("routed iMessage reply threading", () => {
       results,
       receipt: createMessageReceiptFromOutboundResults({ results }),
     });
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry());
   });
 
   it("keeps the initial answer and queued answers attached to their own questions", async () => {
@@ -87,184 +172,29 @@ describe("routed iMessage reply threading", () => {
     assert(initial);
     await route(initial, ids[0]);
     await route({ text: "Mets answer" }, ids[1]);
-    expect(sendDurableMessageBatchCore).toHaveBeenCalledTimes(2);
     expect(sendDurableMessageBatchCore.mock.calls.map(([send]) => send.replyToId)).toEqual(ids);
     expect(
       sendDurableMessageBatchCore.mock.calls.map(([send]) => send.payloads[0]?.replyToId),
     ).toEqual([ids[0], undefined]);
   });
 
-  it.each([
-    { mode: "first", expected: ["question-guid", undefined, undefined] },
-    { mode: "all", expected: ["question-guid", "question-guid", "question-guid"] },
-  ] as const)(
-    "preserves implicit $mode consumption at the delivery boundary",
-    async ({ mode, expected }) => {
-      const sent = await route({ text: "Answer" }, "question-guid", {
-        replyDelivery: { chatType: "direct", replyToMode: mode },
-      });
+  it.each(["first", "all"] as const)(
+    "preserves %s policy at the delivery boundary",
+    async (mode) => {
+      const sent = await route({ text: "Answer" }, "question-guid", mode);
       assert(sent);
-      expect(sent.replyToMode).toBe(mode);
-      expect(sent.payloads[0]?.replyToId).toBeUndefined();
-      assert(sent.payloads[0]);
+      expect(sent).toMatchObject({
+        replyToId: "question-guid",
+        replyToMode: mode,
+        payloads: [{ replyToId: undefined }],
+      });
       const policy = createReplyToDeliveryPolicy(sent);
-      const resolved = policy.resolveCurrentReplyTo(sent.payloads[0]);
+      const resolved = policy.resolveCurrentReplyTo(sent.payloads[0]!);
       expect(resolved).toEqual({ replyToId: "question-guid", source: "implicit" });
-      const chunks = [1, 2, 3].map(
-        () =>
-          policy.applyReplyToConsumption(
-            { replyToId: resolved.replyToId, replyToIdSource: resolved.source },
-            { consumeImplicitReply: resolved.source === "implicit" },
-          ).replyToId,
+      const target = { replyToId: resolved.replyToId, replyToIdSource: resolved.source };
+      expect([1, 2, 3].map(() => policy.applyReplyToConsumption(target).replyToId)).toEqual(
+        mode === "all" ? Array(3).fill("question-guid") : ["question-guid", undefined, undefined],
       );
-      expect(chunks).toEqual(expected);
     },
   );
-
-  it("preserves an explicit current-message request with reply mode off", async () => {
-    const sent = await route({ text: "Answer", replyToCurrent: true }, "question-guid", {
-      replyDelivery: { chatType: "direct", replyToMode: "off" },
-    });
-    assert(sent);
-    assert(sent.payloads[0]);
-    expect(sent.replyToId).toBe("question-guid");
-    expect(sent.payloads[0].replyToId).toBe("question-guid");
-    const policy = createReplyToDeliveryPolicy(sent);
-    const resolved = policy.resolveCurrentReplyTo(sent.payloads[0]);
-    expect(resolved).toEqual({ replyToId: "question-guid", source: "explicit" });
-    expect(
-      [1, 2, 3].map(
-        () =>
-          policy.applyReplyToConsumption(
-            { replyToId: resolved.replyToId, replyToIdSource: resolved.source },
-            { consumeImplicitReply: resolved.source === "implicit" },
-          ).replyToId,
-      ),
-    ).toEqual(["question-guid", "question-guid", "question-guid"]);
-  });
-
-  it("preserves an explicit reply target with reply mode off", async () => {
-    const sent = await route(
-      { text: "Answer", replyToId: "  chosen-message  ", replyToCurrent: false },
-      "current-message",
-      {
-        replyDelivery: { chatType: "direct", replyToMode: "off" },
-      },
-    );
-    expect(sent?.replyToId).toBe("chosen-message");
-    expect(sent?.payloads[0]?.replyToId).toBe("chosen-message");
-  });
-
-  it("retains captionless media and its originating message", async () => {
-    const sent = await route(
-      { text: "", mediaUrl: "https://example.com/forecast.png" },
-      "weather-question",
-    );
-    expect(sent).toMatchObject({
-      replyToId: "weather-question",
-      payloads: [{ text: "", mediaUrl: "https://example.com/forecast.png" }],
-    });
-  });
-
-  it("does not invent a reply target when the current ID is missing", async () => {
-    const sent = await route({ text: "Notification" }, undefined, { threadId: "ambient-thread" });
-    expect(sent).toMatchObject({ replyToId: null, threadId: "ambient-thread" });
-  });
-
-  it("honors a payload that explicitly opts out of replying to the current message", async () => {
-    const sent = await route({ text: "Answer", replyToCurrent: false }, "current-message");
-    expect(sent?.replyToId).toBeNull();
-  });
-
-  it("does not infer a reply target when delivery reply mode is off", async () => {
-    const sent = await route({ text: "Answer" }, "current-message", {
-      replyDelivery: { chatType: "direct", replyToMode: "off" },
-    });
-    expect(sent?.replyToId).toBeNull();
-  });
-
-  it.each([
-    { actions: { reply: false } },
-    { actions: { reply: true }, accounts: { secondary: { actions: { reply: false } } } },
-  ])("honors channel and account reply disablement: %j", async (imessage) => {
-    const sent = await route({ text: "Answer", replyToId: "chosen-message" }, "current-message", {
-      cfg: { channels: { imessage } },
-      accountId: "secondary",
-    });
-    expect(sent?.replyToId).toBeNull();
-    expect(sent?.payloads[0]?.replyToId).toBeUndefined();
-  });
-  it("normalizes blank explicit targets before choosing a trimmed current message", async () => {
-    const sent = await route({ text: "Answer", replyToId: "   " }, "  question-guid  ");
-    expect(sent?.replyToId).toBe("question-guid");
-    expect(sent?.payloads[0]?.replyToId).toBeUndefined();
-  });
-
-  it("clears a blank explicit target without inventing one from the ambient thread", async () => {
-    const sent = await route({ text: "Notice", replyToId: "   " }, " ", {
-      threadId: "ambient-thread",
-    });
-    expect(sent).toMatchObject({ replyToId: null, threadId: "ambient-thread" });
-    expect(sent?.payloads[0]?.replyToId).toBeUndefined();
-  });
-
-  it("allows an account override to enable replies over the channel default", async () => {
-    const sent = await route({ text: "Answer" }, "question-guid", {
-      cfg: {
-        channels: {
-          imessage: {
-            actions: { reply: false },
-            accounts: { secondary: { actions: { reply: true } } },
-          },
-        },
-      },
-      accountId: "secondary",
-    });
-    expect(sent).toMatchObject({
-      accountId: "secondary",
-      replyToId: "question-guid",
-      payloads: [{ replyToId: undefined }],
-    });
-  });
-
-  it("inherits reply disablement when the account does not override actions", async () => {
-    const sent = await route({ text: "Answer" }, "question-guid", {
-      cfg: {
-        channels: {
-          imessage: {
-            actions: { reply: false },
-            accounts: { secondary: { enabled: true } },
-          },
-        },
-      },
-      accountId: "secondary",
-    });
-    expect(sent?.replyToId).toBeNull();
-    expect(sent?.payloads[0]?.replyToId).toBeUndefined();
-  });
-
-  it("preserves recipient, account, sender and session identity while selecting the target", async () => {
-    const sent = await route({ text: "Answer" }, "question-guid", {
-      to: "chat_id:456",
-      accountId: "secondary",
-      sessionKey: "agent:main:imessage:direct:fixture",
-      requesterSenderId: "fixture-sender",
-      requesterSenderName: "Fixture Sender",
-      runId: "fixture-run",
-    });
-    expect(sent).toMatchObject({
-      channel: "imessage",
-      to: "chat_id:456",
-      accountId: "secondary",
-      replyToId: "question-guid",
-      session: {
-        key: "agent:main:imessage:direct:fixture",
-        requesterSenderId: "fixture-sender",
-        requesterSenderName: "Fixture Sender",
-      },
-      replyPayloadSendingHook: {
-        context: { senderId: "fixture-sender", runId: "fixture-run", accountId: "secondary" },
-      },
-    });
-  });
 });

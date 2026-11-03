@@ -7,20 +7,22 @@ import Testing
 @MainActor
 enum AppKitTestSupport {
     /// Rendered suites share one process and must initialize AppKit only once.
-    private static let initializedApplication: (application: NSApplication, didSetActivationPolicy: Bool) = {
+    private static let initializedApplication: NSApplication = {
         let application = NSApplication.shared
         let didSetActivationPolicy = application.setActivationPolicy(.accessory)
-        #expect(didSetActivationPolicy)
+        let policy = application.activationPolicy()
+        print("AppKit activation: setter=\(didSetActivationPolicy) policy=\(policy.rawValue)")
+        #expect(policy == .accessory)
         application.finishLaunching()
-        return (application, didSetActivationPolicy)
+        return application
     }()
 
     static var application: NSApplication {
-        self.initializedApplication.application
+        self.initializedApplication
     }
 
-    static var didSetActivationPolicy: Bool {
-        self.initializedApplication.didSetActivationPolicy
+    static var hasAccessoryActivationPolicy: Bool {
+        self.application.activationPolicy() == .accessory
     }
 
     static func startApplication() async throws {
@@ -58,16 +60,19 @@ enum AppKitTestSupport {
         diagnosticContext: String? = nil) async throws -> [AnyObject]
     {
         let before = diagnosticContext.map { _ in self.accessibilityDiagnosticState(in: root) }
-        // SwiftUI materializes its virtual accessibility children after a real client request.
+        // Prime SwiftUI's virtual children through the stable application role. Other suites can
+        // close windows while this request runs, making child/window attributes unavailable.
         let result = await Task.detached {
             let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
-            var windows: CFTypeRef?
-            return AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windows)
+            var role: CFTypeRef?
+            let error = AXUIElementCopyAttributeValue(application, kAXRoleAttribute as CFString, &role)
+            return (error, role as? String)
         }.value
         let after = diagnosticContext.map { _ in self.accessibilityDiagnosticState(in: root) }
-        try #require(result == .success, diagnosticContext.map {
+        try #require(result.0 == .success, diagnosticContext.map {
             Comment(rawValue: "\($0) before=[\(before ?? "")] after=[\(after ?? "")]")
         })
+        try #require(result.1 == kAXApplicationRole as String)
         var elements: [AnyObject] = []
         var visited = Set<ObjectIdentifier>()
         func visit(_ element: AnyObject) {
@@ -109,36 +114,38 @@ enum AppKitTestSupport {
         description: String,
         matching find: ([AnyObject]) -> AnyObject?) async throws -> AnyObject
     {
-        let deadline = ContinuousClock.now + .seconds(3)
         var observedElements: [AnyObject] = []
-        repeat {
-            window.contentView?.layoutSubtreeIfNeeded()
-            let elements = try await self.accessibilityElements(in: window)
-            observedElements = elements
-            if let element = find(elements) {
-                return element
+        var found: AnyObject?
+        do {
+            try await TestWait.state("accessibility element \(description)") {
+                window.contentView?.layoutSubtreeIfNeeded()
+                let elements = try await self.accessibilityElements(in: window)
+                observedElements = elements
+                found = find(elements)
+                return found != nil
             }
-            try await Task.sleep(for: .milliseconds(20))
-        } while ContinuousClock.now < deadline
-        let toolbarItems: String = (window.toolbar?.items ?? []).map {
-            "\($0.itemIdentifier.rawValue): view=\(String(describing: $0.view))"
-        }.joined(separator: "\n")
-        let accessibility: String = observedElements.map {
-            let role = String(describing: $0.accessibilityRole?())
-            let title = String(describing: self.accessibilityTitle(of: $0))
-            let label = String(describing: $0.accessibilityLabel?())
-            let value: Any? = $0.accessibilityValue?()
-            let identifier = String(describing: $0.accessibilityIdentifier?())
-            return "role=\(role) title=\(title) label=\(label) value=\(String(describing: value)) identifier=\(identifier)"
-        }.joined(separator: "\n")
-        throw InteractionFailure(message: """
-        The rendered window must expose \(description)
-        appActive=\(NSApp.isActive) windowVisible=\(window.isVisible) windowKey=\(window.isKeyWindow)
-        Toolbar items:
-        \(toolbarItems)
-        Accessibility elements:
-        \(accessibility)
-        """)
+        } catch is CancellationError {
+            let toolbarItems: String = (window.toolbar?.items ?? []).map {
+                "\($0.itemIdentifier.rawValue): view=\(String(describing: $0.view))"
+            }.joined(separator: "\n")
+            let accessibility: String = observedElements.map {
+                let role = String(describing: $0.accessibilityRole?())
+                let title = String(describing: self.accessibilityTitle(of: $0))
+                let label = String(describing: $0.accessibilityLabel?())
+                let value: Any? = $0.accessibilityValue?()
+                let identifier = String(describing: $0.accessibilityIdentifier?())
+                return "role=\(role) title=\(title) label=\(label) value=\(String(describing: value)) identifier=\(identifier)"
+            }.joined(separator: "\n")
+            throw InteractionFailure(message: """
+            The rendered window must expose \(description)
+            appActive=\(NSApp.isActive) windowVisible=\(window.isVisible) windowKey=\(window.isKeyWindow)
+            Toolbar items:
+            \(toolbarItems)
+            Accessibility elements:
+            \(accessibility)
+            """)
+        }
+        return try #require(found)
     }
 
     static func openMenu(
@@ -280,12 +287,10 @@ enum AppKitTestSupport {
         ]
         try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
             .write(to: directory.appendingPathComponent("\(name)-capture-request.json"), options: .atomic)
-        let deadline = ContinuousClock.now + .seconds(30)
         let acknowledged = directory.appendingPathComponent(acknowledgement).path
-        while !FileManager.default.fileExists(atPath: acknowledged), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(100))
+        try await TestWait.state("external screenshot \(name)") {
+            FileManager.default.fileExists(atPath: acknowledged)
         }
-        try #require(FileManager.default.fileExists(atPath: acknowledged), "The external screenshot must complete")
     }
 
     static func record(menu: NSMenu, content: NSView?, name: String) throws {

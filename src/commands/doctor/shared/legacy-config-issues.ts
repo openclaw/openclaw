@@ -1,4 +1,3 @@
-// Doctor legacy config issue finder that combines core, channel, and plugin rules.
 import { collectChannelLegacyConfigRules } from "../../../channels/plugins/legacy-config.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { LegacyConfigRule } from "../../../config/legacy.shared.js";
@@ -12,6 +11,7 @@ import {
   collectDoctorConfigRepairPluginIds,
   listPluginDoctorLegacyConfigRules,
 } from "../../../plugins/doctor-contract-registry.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { findLegacySystemAgentOwnerIssue } from "./legacy-config-migrations.runtime.system-agent.js";
@@ -36,23 +36,23 @@ export function findDoctorLegacyConfigIssues(
   sourceRaw?: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigIssue[] {
-  return findLegacyConfigIssues(
-    raw,
-    sourceRaw,
-    [
-      ...collectChannelLegacyConfigRules(raw, touchedPaths),
-      ...collectPluginLegacyConfigRules(raw, touchedPaths),
-    ],
-    touchedPaths,
-  );
+  return findLegacyConfigIssues(raw, sourceRaw, [
+    ...collectChannelLegacyConfigRules(raw, touchedPaths),
+    ...collectPluginLegacyConfigRules(raw, touchedPaths),
+  ]);
 }
 
-export function addDoctorLegacyIssues(
+export async function addDoctorLegacyIssues(
   snapshot: ConfigFileSnapshot,
   pluginMetadataSnapshot?: PluginMetadataSnapshot,
-): ConfigFileSnapshot {
+): Promise<ConfigFileSnapshot> {
   if (!snapshot.exists) {
     return snapshot;
+  }
+  if (!pluginMetadataSnapshot) {
+    // Core-invalid snapshots may skip metadata; diagnostics still need worker-owned policy facts.
+    const activatePluginState = await preparePluginMetadataMachineStateAsync({});
+    activatePluginState();
   }
   const resolvedRaw = snapshot.sourceConfig ?? snapshot.config ?? {};
   const collect = () => {

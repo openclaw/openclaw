@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
+import { createWaSocket } from "./session.js";
 import * as baileys from "./session.runtime.js";
 
 vi.mock("./session.runtime.js", () => createMockBaileys().mod);
@@ -68,7 +69,6 @@ describe("WhatsApp session media upload", () => {
   const received: Array<{ host: string | undefined; body: Buffer }> = [];
   const proxyRequests: string[] = [];
   const agents = new Set<NonNullable<SocketOptions["agent"]>>();
-  let createWaSocket: typeof import("./session.js").createWaSocket;
   let originalCas: string[];
   let originPort: number;
   let plainOriginPort: number;
@@ -162,7 +162,6 @@ describe("WhatsApp session media upload", () => {
   }
 
   beforeAll(async () => {
-    ({ createWaSocket } = await import("./session.js"));
     originalCas = tls.getCACertificates("default");
     tls.setDefaultCACertificates([...originalCas, PROXY_FIXTURE_CERTIFICATE]);
     const fixtureDir = suiteTempDirs.make("openclaw-whatsapp-upload-ca-");
@@ -332,29 +331,33 @@ describe("WhatsApp session media upload", () => {
     },
   );
 
-  it("keeps the session available but rejects media with an invalid-only proxy", async () => {
-    vi.stubEnv("HTTPS_PROXY", "socks5://127.0.0.1:1");
-    const session = await createUploadSession();
-    await expect(upload(session, "127.0.0.1")).rejects.toThrow("Unsupported proxy protocol");
-    expect(received).toEqual([]);
-    expect(proxyRequests).toEqual([]);
-  });
-
-  it("honors upload and redirect bypasses when every proxy route is invalid", async () => {
-    vi.stubEnv("HTTP_PROXY", "socks5://127.0.0.1:1");
-    vi.stubEnv("HTTPS_PROXY", "socks5://127.0.0.1:1");
-    vi.stubEnv("NO_PROXY", "127.0.0.0/8");
-    redirectUrl = `http://127.0.0.1:${plainOriginPort}/bypassed`;
-    const session = await createUploadSession();
-    await upload(session, "127.0.0.1");
-    expect(received).toEqual([
-      { host: `127.0.0.1:${originPort}`, body: mediaBytes },
-      { host: `127.0.0.1:${plainOriginPort}`, body: mediaBytes },
-    ]);
-    await expect(upload(session, "files.proxy.test")).rejects.toThrow("Unsupported proxy protocol");
-    expect(received).toHaveLength(2);
-    expect(proxyRequests).toEqual([]);
-  });
+  it.each([false, true])(
+    "rejects invalid proxy routes except bypassed hosts (bypass: %s)",
+    async (bypass) => {
+      vi.stubEnv("HTTPS_PROXY", "socks5://127.0.0.1:1");
+      if (bypass) {
+        vi.stubEnv("HTTP_PROXY", "socks5://127.0.0.1:1");
+        vi.stubEnv("NO_PROXY", "127.0.0.0/8");
+        redirectUrl = `http://127.0.0.1:${plainOriginPort}/bypassed`;
+      }
+      const session = await createUploadSession();
+      const expectedUploads = bypass
+        ? [
+            { host: `127.0.0.1:${originPort}`, body: mediaBytes },
+            { host: `127.0.0.1:${plainOriginPort}`, body: mediaBytes },
+          ]
+        : [];
+      if (bypass) {
+        await upload(session, "127.0.0.1");
+        expect(received).toEqual(expectedUploads);
+      }
+      await expect(upload(session, bypass ? "files.proxy.test" : "127.0.0.1")).rejects.toThrow(
+        "Unsupported proxy protocol",
+      );
+      expect(received).toEqual(expectedUploads);
+      expect(proxyRequests).toEqual([]);
+    },
+  );
 
   it.each([true, false])(
     "selects each upload host independently (WebSocket bypass: %s)",

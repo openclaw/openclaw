@@ -280,11 +280,10 @@ struct ChatComposerStateTests {
         vm.input = "continue"
         vm.setReplyTarget(messageID: UUID(), text: "quoted body", senderLabel: "Assistant")
 
-        vm.send()
-        try await waitUntil("quoted send accepted") { transport.sentMessages.count == 1 }
-        try await waitUntil("reply consumed") { await MainActor.run { vm.replyTarget == nil && vm.input.isEmpty } }
+        try await #require(vm.send()).value
 
         #expect(transport.sentMessages == ["> **Assistant:** quoted body\n\ncontinue"])
+        #expect(vm.replyTarget == nil && vm.input.isEmpty)
         vm.switchSession(to: "other")
         vm.switchSession(to: "main")
         #expect(vm.input.isEmpty)
@@ -298,14 +297,13 @@ struct ChatComposerStateTests {
         vm.beginAttachmentStaging()
 
         #expect(!vm.canSend)
-        vm.send()
-        await Task.yield()
+        await vm.send()?.value
         #expect(transport.sentMessages.isEmpty)
 
         vm.endAttachmentStaging()
         #expect(vm.canSend)
-        vm.send()
-        try await waitUntil("post-staging send accepted") { transport.sentMessages.count == 1 }
+        try await #require(vm.send()).value
+        #expect(transport.sentMessages.count == 1)
     }
 
     @Test func `slash send ignores and preserves reply target`() async throws {
@@ -316,8 +314,7 @@ struct ChatComposerStateTests {
         vm.input = "/remote-command"
         vm.setReplyTarget(messageID: targetID, text: "quoted body", senderLabel: "Assistant")
 
-        vm.send()
-        try await waitUntil("slash send accepted") { transport.sentMessages.count == 1 }
+        try await #require(vm.send()).value
 
         #expect(transport.sentMessages == ["/remote-command"])
         #expect(vm.replyTarget?.messageID == targetID)
@@ -335,10 +332,9 @@ struct ChatComposerStateTests {
             preview: nil)]
         vm.setReplyTarget(messageID: UUID(), text: "quoted body", senderLabel: "User")
 
-        vm.send()
-        try await waitUntil("attachment reply accepted") { transport.sentMessages.count == 1 }
-        try await waitUntil("attachment reply consumed") { await MainActor.run { vm.replyTarget == nil } }
+        try await #require(vm.send()).value
 
         #expect(transport.sentMessages == ["> **User:** quoted body\n\n"])
+        #expect(vm.replyTarget == nil)
     }
 }

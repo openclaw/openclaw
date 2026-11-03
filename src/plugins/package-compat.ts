@@ -12,18 +12,14 @@ function normalizePartialComparableVersion(version: string): {
     : { version: trimmed, isPartial: false };
 }
 
-function shouldPreservePluginApiPrereleaseFloor(target: string): boolean {
-  return Boolean(parseSemverPrerelease(normalizePartialComparableVersion(target).version));
-}
-
 function normalizePluginApiVersionForComparator(version: string, target: string): string {
-  const normalizedCorrection = normalizeOpenClawNumericCorrectionForPluginApi(version);
+  const normalizedCorrection = OPENCLAW_NUMERIC_CORRECTION_PATTERN.exec(version.trim())?.[1];
   if (normalizedCorrection) {
     return normalizedCorrection;
   }
-  return shouldPreservePluginApiPrereleaseFloor(target)
+  return parseSemverPrerelease(normalizePartialComparableVersion(target).version)
     ? version
-    : normalizeOpenClawReleaseSuffixForPluginApi(version);
+    : (OPENCLAW_RELEASE_SUFFIX_PATTERN.exec(version.trim())?.[1] ?? version);
 }
 
 function satisfiesComparator(version: string, token: string): boolean {
@@ -63,17 +59,6 @@ function satisfiesSemverRange(version: string, range: string): boolean {
 const OPENCLAW_RELEASE_SUFFIX_PATTERN =
   /^[vV]?(\d{4}\.[1-9]\d?\.[1-9]\d*)(?:-\d+|-(?:alpha|beta|rc)\.\d+)$/i;
 const OPENCLAW_NUMERIC_CORRECTION_PATTERN = /^[vV]?(\d{4}\.[1-9]\d?\.[1-9]\d*)-\d+$/;
-
-function normalizeOpenClawNumericCorrectionForPluginApi(
-  pluginApiVersion: string,
-): string | undefined {
-  return OPENCLAW_NUMERIC_CORRECTION_PATTERN.exec(pluginApiVersion.trim())?.[1];
-}
-
-function normalizeOpenClawReleaseSuffixForPluginApi(pluginApiVersion: string): string {
-  const match = OPENCLAW_RELEASE_SUFFIX_PATTERN.exec(pluginApiVersion.trim());
-  return match?.[1] ?? pluginApiVersion;
-}
 
 /** Result of reading package.json openclaw.compat.pluginApi metadata. */
 type PackagePluginApiRangeResult = { ok: true; range?: string } | { ok: false; error: string };

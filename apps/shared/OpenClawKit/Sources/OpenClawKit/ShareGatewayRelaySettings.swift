@@ -8,6 +8,7 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
     public let sessionKey: String
     public let deliveryChannel: String?
     public let deliveryTo: String?
+    public let requiresForegroundSignIn: Bool?
 
     public init(
         gatewayURLString: String,
@@ -16,7 +17,8 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
         password: String?,
         sessionKey: String,
         deliveryChannel: String? = nil,
-        deliveryTo: String? = nil)
+        deliveryTo: String? = nil,
+        requiresForegroundSignIn: Bool? = nil)
     {
         self.gatewayURLString = gatewayURLString
         self.gatewayStableID = gatewayStableID
@@ -25,6 +27,7 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
         self.sessionKey = sessionKey
         self.deliveryChannel = deliveryChannel
         self.deliveryTo = deliveryTo
+        self.requiresForegroundSignIn = requiresForegroundSignIn
     }
 }
 
@@ -74,7 +77,8 @@ public enum ShareGatewayRelaySettings {
             password: credentials?.password,
             sessionKey: config.sessionKey,
             deliveryChannel: config.deliveryChannel,
-            deliveryTo: config.deliveryTo)
+            deliveryTo: config.deliveryTo,
+            requiresForegroundSignIn: config.requiresForegroundSignIn)
     }
 
     /// An endpoint is not a gateway identity. If the extension launches before the
@@ -130,7 +134,8 @@ public enum ShareGatewayRelaySettings {
             password: nil,
             sessionKey: config.sessionKey,
             deliveryChannel: config.deliveryChannel,
-            deliveryTo: config.deliveryTo)
+            deliveryTo: config.deliveryTo,
+            requiresForegroundSignIn: config.requiresForegroundSignIn)
         guard let data = try? JSONEncoder().encode(metadata) else { return }
         self.defaults.set(data, forKey: self.relayConfigKey)
     }
@@ -165,8 +170,7 @@ public enum ShareGatewayRelaySettings {
             service: self.relayCredentialService,
             account: self.relayCredentialAccount,
             accessGroup: OpenClawAppGroup.identifier),
-            let data = json.data(using: .utf8),
-            let credentials = try? JSONDecoder().decode(ShareGatewayRelayConfig.self, from: data)
+            let credentials = try? JSONDecoder().decode(ShareGatewayRelayConfig.self, from: Data(json.utf8))
         else { return nil }
         return credentials
     }
@@ -175,11 +179,9 @@ public enum ShareGatewayRelaySettings {
         guard config.token != nil || config.password != nil else {
             return self.deleteCredentials()
         }
-        guard let data = try? JSONEncoder().encode(config),
-              let json = String(data: data, encoding: .utf8)
-        else { return false }
+        guard let data = try? JSONEncoder().encode(config) else { return false }
         return GenericPasswordKeychainStore.saveString(
-            json,
+            String(bytes: data, encoding: .utf8)!,
             service: self.relayCredentialService,
             account: self.relayCredentialAccount,
             accessGroup: OpenClawAppGroup.identifier)

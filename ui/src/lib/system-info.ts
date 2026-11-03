@@ -1,5 +1,6 @@
 import type { SystemInfoResult } from "../../../packages/gateway-protocol/src/index.js";
-import type { ApplicationGateway } from "../app/gateway.ts";
+import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import { canCallGatewayMethod } from "./gateway-methods.ts";
 import { subscribeToSharedRequest } from "./shared-request-subscription.ts";
 
 export const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
@@ -24,6 +25,12 @@ type SystemInfoRead = {
 // The transport hello is replaced on reconnect; credentials also advance the owner revision.
 const reads = new WeakMap<ApplicationGateway, SystemInfoRead>();
 
+export function canReadSystemInfo(
+  snapshot: ApplicationGatewaySnapshot | null | undefined,
+): boolean {
+  return canCallGatewayMethod(snapshot, "system.info", "operator.read");
+}
+
 export async function readSystemInfo(
   gateway: ApplicationGateway,
   signal?: AbortSignal,
@@ -33,11 +40,13 @@ export async function readSystemInfo(
   if (document.visibilityState === "hidden") {
     throw new DOMException("Page is hidden", "AbortError");
   }
-  const { client, hello, phase } = gateway.snapshot;
-  if (!client || phase !== "connected") {
-    throw new DOMException("Gateway is disconnected", "AbortError");
-  }
+  const { client, hello } = gateway.snapshot;
   let read = reads.get(gateway);
+  if (!client || !canReadSystemInfo(gateway.snapshot)) {
+    read?.controller.abort();
+    reads.delete(gateway);
+    throw new DOMException("System information is unavailable", "AbortError");
+  }
   if (
     !read ||
     read.client !== client ||
@@ -82,5 +91,21 @@ export async function readSystemInfo(
     reads.set(gateway, next);
     read = next;
   }
-  return subscribeToSharedRequest(read, {}, signal);
+  const sample = await subscribeToSharedRequest(read, {}, signal);
+  // A cached or transport-completed result still belongs to its admitted connection.
+  // Recheck before exposure: scope changes can retire it while the request is pending.
+  if (
+    !canReadSystemInfo(gateway.snapshot) ||
+    read.client !== gateway.snapshot.client ||
+    read.hello !== gateway.snapshot.hello ||
+    read.revision !== gateway.connectionRevision ||
+    read.controller.signal.aborted
+  ) {
+    read.controller.abort();
+    if (reads.get(gateway) === read) {
+      reads.delete(gateway);
+    }
+    throw new DOMException("System information read was retired", "AbortError");
+  }
+  return sample;
 }

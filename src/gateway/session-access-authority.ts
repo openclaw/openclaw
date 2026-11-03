@@ -6,12 +6,13 @@ import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { parseAgentSessionKey, isIncognitoSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
-import type { GatewayMethodSessionAccess } from "./methods/descriptor.js";
+import type { GatewayMethodOwner, GatewayMethodSessionAccess } from "./methods/descriptor.js";
 import {
   onOperatorRolePolicyChanged,
   resolveGatewayOperatorRoleActor,
@@ -75,16 +76,36 @@ class SessionAccessPreparationPendingError extends SessionMutationAuthorizationC
 /** Prepare session/profile facts through resident owners; retain the original source authority. */
 export async function prepareGatewaySessionAccessAuthority(request: {
   policy: GatewayMethodSessionAccess;
+  methodOwner?: GatewayMethodOwner;
+  pluginRegistry?: PluginRegistry;
   requestParams: unknown;
   client: GatewayClient | null;
   context: GatewayRequestContext;
   ownSessionOnly: boolean;
   hasCurrentClientAuthority?: () => boolean;
   assertInvocationCurrent?: () => void;
-}): Promise<GatewaySessionAccessAuthority> {
+  assertPreparationCurrent?: () => void;
+}): Promise<{
+  authority: GatewaySessionAccessAuthority;
+  assertPreparationCurrent: () => void;
+}> {
   const params = { ...request, policy: { ...request.policy } };
   const assertInvocationCurrent = params.assertInvocationCurrent;
-  assertInvocationCurrent?.();
+  const assertPreparationSourceCurrent = params.assertPreparationCurrent ?? assertInvocationCurrent;
+  assertPreparationSourceCurrent?.();
+  const pluginId = params.methodOwner?.kind === "plugin" ? params.methodOwner.pluginId : undefined;
+  const requiredToolName = params.policy.requiredTool?.trim();
+  // Only the selected method's registered owner can supply plugin policy aliases.
+  const toolMeta =
+    pluginId &&
+    requiredToolName &&
+    params.pluginRegistry?.tools.some(
+      (entry) =>
+        entry.pluginId === pluginId &&
+        (entry.declaredNames?.has(requiredToolName) ?? entry.names.includes(requiredToolName)),
+    )
+      ? { pluginId }
+      : undefined;
   const input = params.requestParams;
   const sessionKey =
     isRecord(input) && typeof input.sessionKey === "string" ? input.sessionKey : "";
@@ -95,9 +116,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
     isIncognitoSessionKey(sessionKey) ||
     (isRecord(input) && input.agentId !== undefined && input.agentId !== parsed.agentId)
   ) {
-    denied(
-      "This operation requires a canonical, non-incognito sessionKey and its matching agentId.",
-    );
+    denied("This operation requires a full, non-incognito sessionKey and its matching agentId.");
   }
   // Capture ingress facts before preparation yields. A newly selected profile or renewed grant
   // cannot authorize an invocation admitted under a different source.
@@ -174,7 +193,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
     denied("Session access is unavailable during Gateway startup; retry when it is ready.");
   }
   const assertIngress = () => {
-    assertInvocationCurrent?.();
+    assertPreparationSourceCurrent?.();
     assertRun();
     originalGrant?.assertCurrent();
     originalRun?.assertCurrent();
@@ -237,6 +256,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
             current,
             readPreparedSessionEntry: (sourceQuery) => projection.sharingTarget(sourceQuery)?.entry,
             toolName: params.policy.requiredTool,
+            toolMeta,
           })
         : undefined;
     const toolPolicy = resolveToolPolicy(original);
@@ -326,14 +346,16 @@ export async function prepareGatewaySessionAccessAuthority(request: {
         throw error;
       }
     };
-    const assertCurrent = () => {
+    const assertAccessCurrent = (assertRequestCurrent: (() => void) | undefined) => {
       if (invocationClosed) {
         denied();
       }
-      assertInvocationCurrent?.();
+      assertRequestCurrent?.();
       assertRun();
       assertActor();
     };
+    const assertCurrent = () => assertAccessCurrent(assertInvocationCurrent);
+    const assertPreparationCurrent = () => assertAccessCurrent(assertPreparationSourceCurrent);
     const retain = (sessionOnly: boolean): RetainedGatewaySessionAccess => {
       assertCurrent();
       const assert = sessionOnly ? assertSession : assertActor;
@@ -420,16 +442,20 @@ export async function prepareGatewaySessionAccessAuthority(request: {
         release,
       };
     };
-    assertCurrent();
+    assertPreparationCurrent();
+    // Services receive invocation-bound authority; only the router retains the pure preflight.
     return {
-      target,
-      sandboxRequired,
-      assertCurrent,
-      retain: () => retain(false),
-      retainSession: () => retain(true),
-      release: () => {
-        invocationClosed = true;
-        captured?.release();
+      assertPreparationCurrent,
+      authority: {
+        target,
+        sandboxRequired,
+        assertCurrent,
+        retain: () => retain(false),
+        retainSession: () => retain(true),
+        release: () => {
+          invocationClosed = true;
+          captured?.release();
+        },
       },
     };
   } catch (error) {

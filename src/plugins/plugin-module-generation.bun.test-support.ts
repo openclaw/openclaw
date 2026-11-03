@@ -118,8 +118,11 @@ try {
       });
       const instance = createInstance(directory, false, entry);
       const loaded = instance.loadModule(path.join(directory, entry)) as { value: string[][] };
+      assert.ok(Array.isArray(loaded.value), extension);
+      assert.ok(loaded.value.every(Array.isArray), extension);
       assert.deepEqual(
-        loaded.value,
+        // Bun compares wrapped array constructors by identity; compare the projected contents.
+        Array.from(loaded.value, (row) => Array.from(row)),
         [
           ["demo", "ready"],
           ["helper", "ready"],

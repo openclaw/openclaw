@@ -4,13 +4,17 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import {
   DEFAULT_UPDATE_TIMEOUT_MS,
   summarizeUpdateRunResponse,
 } from "../../gateway/update-run-summary.js";
+import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { parseConfigPathArrayIndex } from "../../shared/path-array-index.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { getAdmittedRunSource } from "../admitted-run-context.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
@@ -28,18 +32,6 @@ import { callInProcessGatewayTool, getInProcessGatewayToolContext } from "./in-p
 // Keep complete JSON below the smallest default tool-result presentation budget.
 const MAX_GATEWAY_CONFIG_GET_TEXT_CHARS = 12_000;
 const CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE = "config schema path not found";
-
-function getSnapshotConfig(snapshot: unknown): Record<string, unknown> {
-  const record = asOptionalObjectRecord(snapshot);
-  if (!record) {
-    throw new Error("config.get response is not an object.");
-  }
-  const config = asOptionalRecord(record.config);
-  if (!config) {
-    throw new Error("config.get response is missing a config object.");
-  }
-  return config;
-}
 
 function resolveGatewayConfigGetPath(config: Record<string, unknown>, path: string): unknown {
   const parts = path
@@ -71,33 +63,6 @@ function resolveGatewayConfigGetPath(config: Record<string, unknown>, path: stri
   return current;
 }
 
-function selectGatewayConfigGetResult(snapshot: unknown, path: string | undefined): unknown {
-  if (!path) {
-    return snapshot;
-  }
-  const value = resolveGatewayConfigGetPath(getSnapshotConfig(snapshot), path);
-  if (value === undefined) {
-    throw new ToolInputError(`config path not found: ${path}`);
-  }
-  const hash = readStringValue((snapshot as { hash?: unknown }).hash);
-  return {
-    ...(hash ? { hash } : {}),
-    path,
-    config: value,
-  };
-}
-
-function createGatewayConfigGetToolResult(result: unknown) {
-  const payload = { ok: true, result };
-  const text = JSON.stringify(payload, null, 2);
-  if (text.length > MAX_GATEWAY_CONFIG_GET_TEXT_CHARS) {
-    throw new ToolInputError(
-      "config.get response is too large; use path to request a narrower config subtree",
-    );
-  }
-  return textResult(text, payload);
-}
-
 function isConfigSchemaPathNotFoundError(error: unknown): boolean {
   return (
     error instanceof GatewayClientRequestError &&
@@ -106,13 +71,17 @@ function isConfigSchemaPathNotFoundError(error: unknown): boolean {
   );
 }
 
-const GATEWAY_ACTIONS = ["config.get", "config.schema.lookup", "update.run"] as const;
+const MAINTENANCE_ACTIONS = ["update.run", "restart", "update.cleanup"] as const;
+const GATEWAY_ACTIONS = ["config.get", "config.schema.lookup", ...MAINTENANCE_ACTIONS] as const;
 
 const GatewayToolSchema = Type.Object({
   action: stringEnum(GATEWAY_ACTIONS),
   ...gatewayCallOptionSchemaProperties(),
   note: Type.Optional(
-    Type.String({ description: "Short human note for the post-update restart notice." }),
+    Type.String({ description: "Short human note for the update or post-restart notice." }),
+  ),
+  dryRun: Type.Optional(
+    Type.Boolean({ description: "update.cleanup only: preview without removing recovery copies." }),
   ),
   path: Type.Optional(
     Type.String({
@@ -122,8 +91,9 @@ const GatewayToolSchema = Type.Object({
 });
 
 const GatewayUpdateToolSchema = Type.Object({
-  action: stringEnum(["update.run"]),
+  action: stringEnum(MAINTENANCE_ACTIONS),
   note: GatewayToolSchema.properties.note,
+  dryRun: GatewayToolSchema.properties.dryRun,
 });
 
 export function createGatewayTool(options?: {
@@ -136,13 +106,13 @@ export function createGatewayTool(options?: {
     label: "Gateway",
     name: "gateway",
     description: allowConfigReads
-      ? "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell."
-      : "Update OpenClaw with update.run on an explicit owner request or an operator-scheduled automation. Restart and completion notice are automatic. Never via shell.",
+      ? "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup. Use runtime-owned actions."
+      : "Owner request/operator schedule: update.run, restart, update.cleanup. Cleanup permanently retires eligible rollback copies; dryRun previews. Use runtime-owned actions.",
     parameters: allowConfigReads ? GatewayToolSchema : GatewayUpdateToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
-      if (action === "update.run") {
+      if (action === "update.run" || action === "restart" || action === "update.cleanup") {
         const caller = getGatewayToolCallerIdentity();
         const operatorSchedule =
           !options?.requesterSenderId &&
@@ -158,6 +128,70 @@ export function createGatewayTool(options?: {
             reason: "owner_required",
             message: `No authenticated owner chat principal or operator-scheduled admission authorizes this update. ${hint}`,
           });
+        }
+        if (action !== "update.run") {
+          const context = getInProcessGatewayToolContext();
+          if (!context) {
+            throw new Error(`Gateway instance unavailable for ${action}`);
+          }
+          const channel = caller?.turnSourceChannel;
+          const chat =
+            action === "update.cleanup" &&
+            !operatorSchedule &&
+            channel &&
+            !isInternalMessageChannel(channel);
+          const authority = chat
+            ? await prepareCommandOwnerAuthority(context.getRuntimeConfig(), {
+                channel,
+                accountId: caller?.turnSourceAccountId,
+                senderId: options?.requesterSenderId ?? undefined,
+              })
+            : undefined;
+          const assertCurrent = () => {
+            if (chat && !authority?.isCurrent(context.getRuntimeConfig())) {
+              throw new Error("Gateway maintenance requires a current owner principal.");
+            }
+          };
+          assertCurrent();
+          const owner =
+            action === "update.cleanup"
+              ? captureGatewayStateOwner(resolveOpenClawStateSqlitePath())
+              : undefined;
+          if (action === "update.cleanup" && owner?.role !== "gateway") {
+            throw new Error("Gateway does not own the selected state; nothing was removed.");
+          }
+          const result = await callInProcessGatewayTool(
+            action === "restart" ? "gateway.restart.request" : "update.recovery.cleanup",
+            action === "restart"
+              ? {
+                  reason: "gateway.restart.agent",
+                  requester: operatorSchedule
+                    ? undefined
+                    : {
+                        channel: caller?.turnSourceChannel,
+                        accountId: caller?.turnSourceAccountId,
+                        senderId: options?.requesterSenderId ?? undefined,
+                      },
+                  sessionKey: caller?.sessionKey,
+                  deliveryContext: caller
+                    ? {
+                        channel: caller.turnSourceChannel,
+                        to: caller.turnSourceTo,
+                        accountId: caller.turnSourceAccountId,
+                        threadId: caller.turnSourceThreadId,
+                      }
+                    : undefined,
+                  note: readToolStringParam(params, "note"),
+                }
+              : { expectedOwnerId: owner!.ownerId, dryRun: params.dryRun === true },
+            {
+              resolveGatewayContext: getInProcessGatewayToolContext,
+              sessionMutationCommitGuard: assertCurrent,
+              timeoutMs: DEFAULT_UPDATE_TIMEOUT_MS,
+              signal,
+            },
+          );
+          return jsonResult(result);
         }
         // Routing comes from the admitted caller, never model-authored destinations or credentials.
         const deliveryContext = caller
@@ -202,8 +236,31 @@ export function createGatewayTool(options?: {
       if (action === "config.get") {
         const path = readToolStringParam(params, "path");
         const snapshot = await callConfigGateway("config.get", {});
-        const result = selectGatewayConfigGetResult(snapshot, path);
-        return createGatewayConfigGetToolResult(result);
+        let result = snapshot;
+        if (path) {
+          const record = asOptionalObjectRecord(snapshot);
+          if (!record) {
+            throw new Error("config.get response is not an object.");
+          }
+          const config = asOptionalRecord(record.config);
+          if (!config) {
+            throw new Error("config.get response is missing a config object.");
+          }
+          const value = resolveGatewayConfigGetPath(config, path);
+          if (value === undefined) {
+            throw new ToolInputError(`config path not found: ${path}`);
+          }
+          const hash = readStringValue(record.hash);
+          result = { ...(hash ? { hash } : {}), path, config: value };
+        }
+        const payload = { ok: true, result };
+        const text = JSON.stringify(payload, null, 2);
+        if (text.length > MAX_GATEWAY_CONFIG_GET_TEXT_CHARS) {
+          throw new ToolInputError(
+            "config.get response is too large; use path to request a narrower config subtree",
+          );
+        }
+        return textResult(text, payload);
       }
       if (action === "config.schema.lookup") {
         const path = readToolStringParam(params, "path", {

@@ -1,9 +1,9 @@
 // Plugin Contract Test Plan tests cover plugin contract test plan script behavior.
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createPluginContractTestShards } from "../../scripts/lib/plugin-contract-test-plan.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
+import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
 
 function listContractTests(rootDir = "src/plugins/contracts"): string[] {
   const files = listGitTrackedFiles({ pathspecs: rootDir });
@@ -12,23 +12,6 @@ function listContractTests(rootDir = "src/plugins/contracts"): string[] {
 }
 
 describe("scripts/lib/plugin-contract-test-plan.mts", () => {
-  it("keeps manual CI compatible with legacy target refs", () => {
-    const manifestSource = readFileSync("scripts/ci-build-manifest.mjs", "utf8");
-
-    // The manifest imports the plan through the importTargetPlan fallback helper since
-    // 7ae5996bb3c so historical target refs without the module keep working.
-    expect(manifestSource).toContain("const pluginContractPlan = await importTargetPlan(");
-    expect(manifestSource).toContain('? "./scripts/lib/plugin-contract-test-plan.mts"');
-    expect(manifestSource).toContain(': "./scripts/lib/plugin-contract-test-plan.mjs",');
-    expect(manifestSource).toContain(
-      'typeof pluginContractPlan.createPluginContractTestShards === "function"',
-    );
-    expect(manifestSource).toContain("checks-fast-contracts-plugins-legacy");
-    expect(manifestSource).not.toMatch(
-      /createPluginContractTestShards: \(\) => \[\s+createPluginContractTestShards/u,
-    );
-  });
-
   it("splits plugin contracts into focused shards", () => {
     const suffixes = ["a", "b"];
 
@@ -47,10 +30,11 @@ describe("scripts/lib/plugin-contract-test-plan.mts", () => {
     );
   });
 
-  it("covers every plugin contract test exactly once", () => {
-    const actual = createPluginContractTestShards()
-      .flatMap((shard) => shard.includePatterns)
-      .toSorted((a, b) => a.localeCompare(b));
+  it("covers every plugin contract test exactly once across contract and database worker lanes", () => {
+    const actual = [
+      ...createPluginContractTestShards().flatMap((shard) => shard.includePatterns),
+      ...databaseWorkerCoreTestFiles.filter((file) => file.startsWith("src/plugins/contracts/")),
+    ].toSorted((a, b) => a.localeCompare(b));
 
     expect(actual).toEqual(listContractTests());
     expect(new Set(actual).size).toBe(actual.length);

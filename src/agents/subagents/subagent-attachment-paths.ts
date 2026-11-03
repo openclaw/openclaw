@@ -8,11 +8,10 @@ export const SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT = "/openclaw/attachments";
 export function resolveSubagentSessionAttachmentRootDir(params: {
   agentId: string;
   childSessionKey: string;
-  env?: NodeJS.ProcessEnv;
 }): string {
   const sessionRef = createHash("sha256").update(params.childSessionKey).digest("hex").slice(0, 32);
   return path.join(
-    resolveStateDir(params.env),
+    resolveStateDir(),
     "attachments",
     "subagents",
     normalizeAgentId(params.agentId),
@@ -20,7 +19,6 @@ export function resolveSubagentSessionAttachmentRootDir(params: {
   );
 }
 
-/** Resolves a per-session attachment root only when a run identity is available. */
 export function subagentAttachmentRootForRun(
   agentId: string | undefined,
   childSessionKey: string | undefined,
@@ -28,16 +26,4 @@ export function subagentAttachmentRootForRun(
   return agentId && childSessionKey
     ? resolveSubagentSessionAttachmentRootDir({ agentId, childSessionKey })
     : undefined;
-}
-
-export function resolveSubagentAttachmentDir(
-  agentId: string,
-  childSessionKey: string,
-  attachmentId: string,
-  env?: NodeJS.ProcessEnv,
-): string {
-  return path.join(
-    resolveSubagentSessionAttachmentRootDir({ agentId, childSessionKey, env }),
-    attachmentId,
-  );
 }

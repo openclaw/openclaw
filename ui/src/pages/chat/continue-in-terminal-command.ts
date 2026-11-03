@@ -12,30 +12,25 @@ export function buildContinueInTerminalCommand(params: {
   selectedAgentId?: string;
 }): ContinueInTerminalCommandResult {
   const { gatewayUrl, sessionKey } = params;
-  let parsedGatewayUrl: URL;
   try {
-    parsedGatewayUrl = new URL(gatewayUrl);
-  } catch {
-    return { ok: false, reason: "unavailable" };
-  }
-  if (parsedGatewayUrl.hash) {
-    return { ok: false, reason: "unavailable" };
-  }
-  if (
-    (parsedGatewayUrl.protocol === "ws:" || parsedGatewayUrl.protocol === "wss:") &&
-    parsedGatewayUrl.search
-  ) {
-    return { ok: false, reason: "query-routed" };
-  }
-  let qualifiedKey = sessionKey;
-  if (!parseAgentSessionKey(sessionKey)) {
-    const agentId = params.rowAgentId || params.selectedAgentId;
-    if (!agentId) {
+    const parsedGatewayUrl = new URL(gatewayUrl);
+    if (parsedGatewayUrl.hash) {
       return { ok: false, reason: "unavailable" };
     }
-    qualifiedKey = `agent:${agentId}:${sessionKey}`;
-  }
-  try {
+    if (
+      (parsedGatewayUrl.protocol === "ws:" || parsedGatewayUrl.protocol === "wss:") &&
+      parsedGatewayUrl.search
+    ) {
+      return { ok: false, reason: "query-routed" };
+    }
+    let qualifiedKey = sessionKey;
+    if (!parseAgentSessionKey(sessionKey)) {
+      const agentId = params.rowAgentId || params.selectedAgentId;
+      if (!agentId) {
+        return { ok: false, reason: "unavailable" };
+      }
+      qualifiedKey = `agent:${agentId}:${sessionKey}`;
+    }
     return {
       ok: true,
       command: `openclaw resume --handoff ${encodeResumeHandoff({ sessionKey: qualifiedKey, gatewayUrl })}`,

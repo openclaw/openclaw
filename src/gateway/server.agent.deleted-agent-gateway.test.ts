@@ -12,7 +12,7 @@ const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 async function configurePerAgentSessionStore(dir: string) {
   const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
   testState.sessionStorePath = storeTemplate;
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.agentsConfig = { entries: { main: {} } };
   return storeTemplate;
 }
 

@@ -109,7 +109,7 @@ function dependencyEntriesFromSnapshot(snapshot: JsonObject = {}) {
 function collectClosure(lockfile: Lockfile, rootKeys: Array<string | undefined>): Closure {
   const seen = new Set<string>();
   const missing = new Set<string>();
-  const queue = rootKeys.filter((key): key is string => typeof key === "string");
+  const queue = rootKeys.filter((key): key is string => Boolean(key));
   for (const key of queue) {
     if (seen.has(key)) {
       continue;
@@ -247,18 +247,14 @@ export function collectDependencyOwnershipSurfaceReport(params: ReportParams = {
 
   const rootClosure = collectClosure(
     lockfile,
-    rootDependencies
-      .map((dependency) => lockKeyForDependency(dependency.name, dependency.version))
-      .filter(Boolean),
+    rootDependencies.map((dependency) => lockKeyForDependency(dependency.name, dependency.version)),
   );
   const importerClosures = Object.entries(lockfile.importers ?? {})
     .map(([importer, record]) => {
       const dependencies = normalizeDependencies(record);
       const closure = collectClosure(
         lockfile,
-        dependencies
-          .map((dependency) => lockKeyForDependency(dependency.name, dependency.version))
-          .filter(Boolean),
+        dependencies.map((dependency) => lockKeyForDependency(dependency.name, dependency.version)),
       );
       return {
         importer,

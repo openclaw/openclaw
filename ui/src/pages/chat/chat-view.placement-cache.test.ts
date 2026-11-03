@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { nativeMessage } from "./chat-thread-fixtures.test-support.ts";
 import * as chatThread from "./chat-thread.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
+import { createChatProps, renderChatInto, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -18,18 +18,13 @@ afterEach(() => {
   resetTranscriptTestDom();
 });
 
-describe("placement startup transcript cache", () => {
+describe("chat transcript cache", () => {
   it("reuses loaded history across fresh placement statuses and invalidates changed queue inputs", () => {
     const buildCachedChatItems = chatThread.buildCachedChatItems;
     let messageReads = 0;
     let historyBuildReads = 0;
     const loaded = new Proxy(
-      {
-        role: "assistant",
-        content: "Loaded history",
-        timestamp: 1,
-        __openclaw: { id: "loaded", seq: 1 },
-      },
+      nativeMessage("assistant", "Loaded history", 1, { id: "loaded", seq: 1 }),
       {
         get(target, key, receiver) {
           messageReads += 1;
@@ -59,28 +54,78 @@ describe("placement startup transcript cache", () => {
       initialTurn,
     };
     const props = createChatProps({ messages: [loaded], queue: [queued], placementStartup });
-    const container = document.createElement("div");
-    render(renderChat(props), container);
+    const container = createComposerContainer();
+    renderChatPropsInto(container, props);
     expect(historyBuildReads).toBeGreaterThan(0);
 
-    render(renderChat({ ...props, placementStartup: { ...placementStartup } }), container);
+    renderChatPropsInto(container, { ...props, placementStartup: { ...placementStartup } });
     expect(historyBuildReads).toBe(0);
 
-    render(
-      renderChat({
-        ...props,
-        placementStartup: { ...placementStartup, initialTurn: { ...initialTurn } },
-      }),
-      container,
-    );
+    renderChatPropsInto(container, {
+      ...props,
+      placementStartup: { ...placementStartup, initialTurn: { ...initialTurn } },
+    });
     expect(historyBuildReads).toBeGreaterThan(0);
 
-    render(renderChat(props), container);
+    renderChatPropsInto(container, props);
     queued.sendState = "failed";
-    render(renderChat({ ...props, queue: [...props.queue] }), container);
+    renderChatPropsInto(container, { ...props, queue: [...props.queue] });
     expect(historyBuildReads).toBeGreaterThan(0);
 
-    render(renderChat({ ...props, sessionKey: "agent:main:other" }), container);
+    renderChatPropsInto(container, { ...props, sessionKey: "agent:main:other" });
     expect(historyBuildReads).toBeGreaterThan(0);
+  });
+
+  it("keeps multi-part run usage current when only output tokens change", () => {
+    const runId = "run-composed";
+    const group = (id: string, role: string, timestamp: number, content: string) => ({
+      kind: "group",
+      key: `group:${id}`,
+      role,
+      visibleContent: "text",
+      messages: [
+        {
+          key: `message:${id}`,
+          message: {
+            role,
+            content,
+            timestamp,
+            ...(role === "user" ? { __openclaw: { id, idempotencyKey: `${runId}:user` } } : {}),
+          },
+        },
+      ],
+      timestamp,
+      isStreaming: false,
+      ...(role === "user" ? {} : { runId }),
+    });
+    const user = group("user:run-composed", "user", 0, "Start the work.");
+    const assistant = group("assistant:run-start", "assistant", 1, "Starting the work.");
+    const tool = { ...group("tool:run-work", "toolResult", 2, "Tool complete."), role: "tool" };
+    const reading = {
+      kind: "reading-indicator",
+      key: "reading:run-composed",
+      startedAt: 1,
+      runId,
+    };
+    vi.spyOn(chatThread, "buildCachedChatItems").mockReturnValue([
+      user,
+      assistant,
+      tool,
+      reading,
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    const container = createComposerContainer();
+
+    const drawUsage = (outputTokens: number, seq: number) =>
+      renderChatInto(container, {
+        canAbort: true,
+        runId,
+        stream: null,
+        runUsageById: new Map([[runId, { outputTokens, seq }]]),
+      });
+    const tokens = () => container.querySelector(".chat-working-indicator__tokens")?.textContent;
+    drawUsage(5_500, 1);
+    expect(tokens()).toContain("5.5k");
+    drawUsage(7_200, 2);
+    expect(tokens()).toContain("7.2k");
   });
 });

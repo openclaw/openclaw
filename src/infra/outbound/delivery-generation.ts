@@ -13,19 +13,15 @@ export async function prepareOutboundDeliveryGeneration(generation: SessionDeliv
       { cause: error, retryable: !isSessionDeliveryGenerationRevokedError(error) },
     );
   };
-  try {
-    const prepared = await prepareSessionDeliveryGeneration(generation);
-    return {
-      assertCurrent() {
-        try {
-          prepared.assertCurrent();
-        } catch (error) {
-          notDispatched(error);
-        }
-      },
-      release: prepared.release,
-    };
-  } catch (error) {
-    return notDispatched(error);
-  }
+  const prepared = await prepareSessionDeliveryGeneration(generation).catch(notDispatched);
+  return {
+    assertCurrent() {
+      try {
+        prepared.assertCurrent();
+      } catch (error) {
+        notDispatched(error);
+      }
+    },
+    release: prepared.release,
+  };
 }

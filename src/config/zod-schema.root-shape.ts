@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { REPOSITORY_BRANCH_PREFIX_PATTERN } from "./repository-branch-prefix.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
@@ -16,6 +17,7 @@ import {
   SsrFPolicyConfigSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
+import { DatabaseConfigSchema } from "./zod-schema.database.js";
 import { DesktopConfigSchema } from "./zod-schema.desktop.js";
 import { GatewayConfigSchema } from "./zod-schema.gateway.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
@@ -34,6 +36,7 @@ import {
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
+import { StorageConfigSchema } from "./zod-schema.storage.js";
 import { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
 
 export const OpenClawSchemaShape = {
@@ -45,6 +48,10 @@ export const OpenClawSchemaShape = {
         .strictObject({
           modelPolicyAllowlist: z.literal(true).optional(),
           utilityModelSeparation: z.literal(true).optional(),
+          skillWorkshopPlugin: z.literal(true).optional(),
+          webhookListeners: z
+            .union([z.literal(true), z.record(z.string(), z.array(z.array(z.string())))])
+            .optional(),
         })
         .optional(),
     })
@@ -57,7 +64,7 @@ export const OpenClawSchemaShape = {
           timeoutMs: z.number().int().nonnegative().optional(),
         })
         .optional(),
-      vars: z.record(z.string(), z.string()).optional(),
+      vars: z.record(z.string(), z.string().register(sensitive)).optional(),
     })
     .optional(),
   wizard: z
@@ -104,7 +111,7 @@ export const OpenClawSchemaShape = {
       cdpUrl: z.string().optional(),
       /** Override the browser executable path (all platforms). */
       executablePath: z.string().optional(),
-      /** Start Chrome headless (best-effort). Default: false */
+      /** Local managed browsers default to headless; false requests a visible window. */
       headless: z.boolean().optional(),
       /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
       noSandbox: z.boolean().optional(),
@@ -359,7 +366,9 @@ export const OpenClawSchemaShape = {
       "worktreeRoot must be an absolute path or a path starting with ~",
     )
     .optional(),
+  repositoryBranchPrefix: z.string().regex(REPOSITORY_BRANCH_PREFIX_PATTERN).optional(),
   worktreeAcceleration: z.boolean().optional(),
+  worktreeMaxCount: z.number().int().positive().optional(),
   tools: ToolsSchema,
   security: SecuritySchema,
   bindings: BindingsSchema,
@@ -382,6 +391,8 @@ export const OpenClawSchemaShape = {
   cron: z
     .strictObject({
       enabled: z.boolean().optional(),
+      /** Add to new nonempty agent-tool selections before creator policy and approval. */
+      defaultTools: z.array(z.string().trim().min(1)).optional(),
       /** Skip missed recurring slots at startup; one-shot catch-up is unchanged. Default: false. */
       skipMissedJobs: z.boolean().optional(),
       triggers: z
@@ -504,6 +515,8 @@ export const OpenClawSchemaShape = {
   talk: TalkSchema.optional(),
   gateway: GatewayConfigSchema,
   cloudWorkers: CloudWorkersConfigSchema,
+  database: DatabaseConfigSchema,
+  storage: StorageConfigSchema,
   desktop: DesktopConfigSchema,
   memory: MemorySchema,
   mcp: McpConfigSchema,
@@ -523,7 +536,7 @@ export const OpenClawSchemaShape = {
            * sit outside the configured source root.
            */
           allowSymlinkTargets: z.array(z.string()).optional(),
-          /** Watch skill folders for changes and refresh the skills snapshot. */
+          /** Enable passive skill rescans; explicit changes and startup still refresh immediately. */
           watch: z.boolean().optional(),
         })
         .optional(),
@@ -549,23 +562,6 @@ export const OpenClawSchemaShape = {
           maxSkillsPromptChars: z.number().int().min(0).optional(),
           /** Max size (bytes) allowed for a SKILL.md file to be considered. */
           maxSkillFileBytes: z.number().int().min(0).optional(),
-        })
-        .optional(),
-      workshop: z
-        .strictObject({
-          /** Autonomous Skill Workshop behavior controlled separately from user-prompted proposals. */
-          autonomous: z
-            .strictObject({
-              /** Capture policy for durable conversation signals and substantial completed work. */
-              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
-            })
-            .optional(),
-          /** Whether proposal lifecycle actions need explicit approval. */
-          approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
-          /** Maximum pending/quarantined proposals retained per workspace. */
-          maxPending: z.number().int().min(1).optional(),
-          /** Maximum generated skill proposal size in bytes. */
-          maxSkillBytes: z.number().int().min(1).optional(),
         })
         .optional(),
       entries: z.record(z.string(), SkillEntrySchema).optional(),

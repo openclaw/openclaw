@@ -16,7 +16,7 @@ export function parseNonNegativeByteSize(value: unknown): number | null {
     }
     try {
       // Bare numbers in config strings are bytes, matching numeric config values.
-      const bytes = parseByteSize(trimmed, { defaultUnit: "b" });
+      const bytes = parseByteSize(trimmed);
       return bytes >= 0 ? bytes : null;
     } catch {
       return null;

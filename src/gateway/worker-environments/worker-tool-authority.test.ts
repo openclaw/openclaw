@@ -1,405 +1,391 @@
+import assert from "node:assert/strict";
+import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../../agents/test-helpers/fast-bash-tools.js";
+import "../../agents/test-helpers/fast-coding-tools.js";
+import { finalizeAgentToolAvailability } from "../../agents/agent-tool-availability.js";
+import { createOpenClawCodingToolsInternal } from "../../agents/agent-tools.js";
+import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import { resolveNodeExecutionTarget } from "../../agents/bash-tools.exec-host-node-phases.js";
-import type { ExecuteNodeHostCommandParams } from "../../agents/bash-tools.exec-host-node.types.js";
+import * as conversationPolicy from "../../agents/conversation-capability-profile.js";
+import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
-import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
+import { createInstalledSkillTools } from "../../agents/tools/installed-skill-tools.js";
+import { createFixtureSkillEntry } from "../../skills/test-support/test-helpers.js";
+import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 
 const gatewayMocks = vi.hoisted(() => ({ callGatewayTool: vi.fn() }));
+type TurnOverrides = Partial<SessionPlacementTurnParams>;
+const modelRef = { provider: "openai", model: "gpt-test" };
+const placement = { agentId: "main", sessionKey: "agent:main:cron:job:run:session" };
+const sessionNode = {
+  execHost: "node",
+  execNode: "session-node",
+  execCwd: "/remote/session/workspace",
+} satisfies NonNullable<SessionPlacementTurnParams["execSession"]>;
 
 vi.mock("../../agents/tools/gateway.js", () => ({
   callGatewayTool: gatewayMocks.callGatewayTool,
 }));
 
-function turn(overrides: Partial<SessionPlacementTurnParams> = {}): SessionPlacementTurnParams {
+function turn(overrides: TurnOverrides = {}): SessionPlacementTurnParams {
   return {
+    ...placement,
+    ...modelRef,
     sessionId: "session-worker-authority",
-    sessionKey: "agent:main:cron:job:run:session",
     sessionFile: "/tmp/session.jsonl",
     workspaceDir: "/tmp/workspace",
     prompt: "run",
     timeoutMs: 1_000,
     runId: "run-worker-authority",
-    provider: "openai",
-    model: "gpt-test",
-    agentId: "main",
     ...overrides,
   } as SessionPlacementTurnParams;
 }
 
-function authority(overrides: Partial<SessionPlacementTurnParams> = {}, portalAvailable = false) {
+function resolvedAuthority(
+  overrides: TurnOverrides = {},
+  computerAvailable = false,
+  assertCurrent = () => {},
+) {
   return resolveWorkerToolAuthority({
-    launchToolNames: WORKER_TOOL_NAMES,
-    modelRef: { provider: "openai", model: "gpt-test" },
+    modelRef,
     turn: turn(overrides),
-    portalAvailable,
-  }).toolAuthority.allowedToolNames;
+    computerAvailable,
+    placement,
+    assertCurrent,
+  });
 }
 
-function resolvedAuthority(overrides: Partial<SessionPlacementTurnParams> = {}) {
-  return resolveWorkerToolAuthority({
-    launchToolNames: WORKER_TOOL_NAMES,
-    modelRef: { provider: "openai", model: "gpt-test" },
-    turn: turn(overrides),
-  }).toolAuthority;
+async function authority(overrides: TurnOverrides = {}, computerAvailable = false) {
+  const input = turn(overrides);
+  const resolved = await resolvedAuthority(input, computerAvailable);
+  const { policy, capabilityProfile, exec, execUnavailable } = resolved;
+  const tools: AnyAgentTool[] = createWorkerPlacementTools({
+    ...placement,
+    policy,
+    cwd: input.workspaceDir,
+    containmentRoot: input.workspaceDir,
+    execAuthority: execUnavailable ? undefined : exec,
+    permissionMode: input.permissionMode,
+    sessionId: input.sessionId,
+    runId: input.runId,
+  });
+  if (computerAvailable) {
+    tools.push({
+      name: "computer",
+      label: "Computer",
+      description: "Synthetic prepared desktop",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ content: [], details: {} }),
+    });
+  }
+  const codingTools = createOpenClawCodingToolsInternal(
+    {
+      ...input,
+      cronCreatorAuthorityUnavailableReason: undefined,
+      conversationCapabilityProfile: capabilityProfile,
+      wrapBeforeToolCallHook: false,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
+    },
+    undefined,
+    undefined,
+    { tools, policy },
+  );
+  return applyEmbeddedAttemptToolsAllow(codingTools, input.toolsAllow).map((tool) => tool.name);
 }
 
 afterEach(() => {
   gatewayMocks.callGatewayTool.mockReset();
+  vi.restoreAllMocks();
 });
 
 describe("resolveWorkerToolAuthority", () => {
-  it("keeps browser available when a text-only model excludes computer", () => {
-    const tools = resolveWorkerToolAuthority({
-      launchToolNames: WORKER_TOOL_NAMES,
-      modelRef: { provider: "openai", model: "gpt-test" },
-      turn: turn({ modelHasVision: false, toolsAllow: ["computer", "browser"] }),
-      availableOptionalToolNames: ["computer", "browser"],
-    }).toolAuthority.allowedToolNames;
-    expect(tools).not.toContain("computer");
-    expect(tools).toContain("browser");
+  it.each<[string, TurnOverrides]>([
+    ["default", {}],
+    [
+      "configured review",
+      { config: { tools: { exec: { host: "gateway", mode: "auto", strictInlineEval: true } } } },
+    ],
+  ])("preserves launch fingerprint bytes across JSON for %s policy", async (_name, overrides) => {
+    const { exec } = await resolvedAuthority(overrides);
+    // The node supervisor fingerprints the projection before and after JSON transport.
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise JSON transport, which omits undefined fields.
+    expect(stableStringify(JSON.parse(JSON.stringify(exec)))).toBe(stableStringify(exec));
   });
 
-  it.each([
-    { name: "default", tools: {}, allowed: true },
-    {
-      name: "additive sandbox tools",
-      tools: { sandbox: { tools: { alsoAllow: ["web_fetch"] } } },
-      allowed: true,
+  it.each(["auto", "ask"] as const)(
+    "preserves %s exec mode without withholding worker shell tools",
+    async (mode) => {
+      const overrides: TurnOverrides = { config: { tools: { exec: { host: "gateway", mode } } } };
+      const result = await resolvedAuthority(overrides);
+      expect(result.exec).toMatchObject({ mode });
+      expect(result.execUnavailable).toBe(false);
+      expect(await authority(overrides)).toEqual(expect.arrayContaining(["exec", "process"]));
     },
-    {
-      name: "explicit sandbox allow",
-      tools: { sandbox: { tools: { allow: ["read"] } } },
-      allowed: false,
-    },
-    {
-      name: "explicit sandbox deny",
-      tools: { sandbox: { tools: { deny: ["computer"] } } },
-      allowed: false,
-    },
-    { name: "global deny", tools: { deny: ["computer"] }, allowed: false },
-    { name: "coding profile", tools: { profile: "coding" as const }, allowed: false },
-  ])("respects $name policy for a prepared sandbox-contained desktop", ({ tools, allowed }) => {
-    const turnParams = turn({
-      sessionKey: "agent:main:worker-sandboxed",
-      config: { agents: { defaults: { sandbox: { mode: "all" } } }, tools },
-    });
-    const params = {
-      launchToolNames: WORKER_TOOL_NAMES,
-      modelRef: { provider: "openai", model: "gpt-test" },
-      turn: turnParams,
+  );
+  it("refuses an existing delegated session before exporting worker tool authority", async () => {
+    const sessionKey = "agent:main:dashboard:delegated";
+    const config = {
+      agents: {
+        entries: {
+          intake: { subagents: { allowAgents: ["main"], delegateToolsTo: ["main"] } },
+          main: {},
+        },
+      },
     };
-    expect(resolveWorkerToolAuthority(params).toolAuthority.allowedToolNames).not.toContain(
-      "computer",
+    const profile = conversationPolicy.resolveConversationCapabilityProfile({
+      config,
+      agentId: "main",
+      sessionKey,
+      preparedSessionCapabilityStore: {
+        [sessionKey]: {
+          sessionId: "delegated",
+          spawnedBy: "agent:intake:main",
+          spawnDepth: 1,
+          inheritedToolPolicyVersion: 1,
+          inheritedToolDeny: ["exec"],
+          delegatedToolPolicy: {
+            requesterSessionKey: "agent:intake:main",
+            targetAgentId: "main",
+            deny: [],
+            requesterDeny: ["exec"],
+          },
+        },
+      },
+    });
+    expect(profile.policy.delegatedToolPolicy).toBeDefined();
+    vi.spyOn(conversationPolicy, "prepareConversationCapabilityProfile").mockResolvedValue(profile);
+    await expect(resolvedAuthority({ config, sessionKey })).rejects.toThrow(
+      "Worker execution cannot enforce a delegated tool grant",
     );
-    expect(
-      resolveWorkerToolAuthority({
-        ...params,
-        availableOptionalToolNames: ["computer"],
-      }).toolAuthority.allowedToolNames.includes("computer"),
-    ).toBe(allowed);
+  });
+  it("retains installed skill discovery and read authority across placement", async () => {
+    const skill = {
+      ...createFixtureSkillEntry("deployment-guide").skill,
+      readContent: "# Deployment guide\nUse the canary, then verify the rollback target.\n",
+    };
+    let current = true;
+    const resolved = await resolvedAuthority(
+      {
+        skillsSnapshot: { prompt: "", skills: [{ name: skill.name }], discoverySkills: [skill] },
+      },
+      false,
+      () => {
+        if (!current) {
+          throw new Error("worker skill source authority closed");
+        }
+      },
+    );
+    expect(resolved.presentation.skills).toEqual([
+      { name: skill.name, description: skill.description, location: skill.filePath },
+    ]);
+    const tools = createInstalledSkillTools(resolved.installedSkills);
+    finalizeAgentToolAvailability(tools);
+    const search = tools.find((tool) => tool.name === "skills_search")!;
+    const read = tools.find((tool) => tool.name === "skills_read")!;
+    expect((await search.execute("search", { query: "canary" })).details).toMatchObject({
+      skills: [{ name: skill.name }],
+    });
+    expect((await read.execute("read", { name: skill.name })).details).toEqual({
+      name: skill.name,
+      location: skill.filePath,
+      content: skill.readContent,
+    });
+    current = false;
+    await expect(read.execute("read-closed", { name: skill.name })).rejects.toThrow(
+      "source authority closed",
+    );
+    await expect(search.execute("search-closed", { query: "canary" })).rejects.toThrow(
+      "source authority closed",
+    );
   });
 
   it.each([
-    {
-      name: "explicit deny",
-      exec: { security: "deny" as const, ask: "off" as const },
-      expected: { security: "deny", ask: "off" },
-    },
-    {
-      name: "allowlist mode",
-      exec: { mode: "allowlist" as const },
-      expected: { security: "allowlist", ask: "off" },
-    },
-  ])(
-    "carries effective exec authority for $name instead of only the tool name",
-    ({ exec, expected }) => {
-      const resolved = resolvedAuthority({
-        config: { tools: { exec } },
-        toolsAllow: ["exec", "process"],
-      });
-
-      expect(resolved.allowedToolNames).toEqual(["exec", "process"]);
-      expect(resolved.exec).toMatchObject(expected);
+    ["default", {}, true, null],
+    ["additive sandbox tools", { sandbox: { tools: { alsoAllow: ["web_fetch"] } } }, true, null],
+    ["explicit sandbox allow", { sandbox: { tools: { allow: ["read"] } } }, false, ["read"]],
+    ["explicit sandbox deny", { sandbox: { tools: { deny: ["computer"] } } }, false, null],
+    ["global deny", { deny: ["computer"] }, false, null],
+    ["coding profile", { profile: "coding" }, false, null],
+  ] satisfies Array<
+    [string, NonNullable<SessionPlacementTurnParams["config"]>["tools"], boolean, string[] | null]
+  >)(
+    "respects %s policy for a prepared sandbox-contained desktop",
+    async (_name, tools, allowed, expected) => {
+      const overrides = {
+        sessionKey: "agent:main:worker-sandboxed",
+        config: { agents: { defaults: { sandbox: { mode: "all" as const } } }, tools },
+      };
+      const unprepared = await authority(overrides);
+      expect(unprepared).not.toContain("computer");
+      expect((await authority(overrides, true)).includes("computer")).toBe(allowed);
+      if (expected) {
+        expect(unprepared).toEqual(expected);
+      }
     },
   );
 
   it.each(["sandbox", "node"] as const)(
-    "emits reachable %s-host authority that the worker consumer must honor",
-    (host) => {
+    "withholds exec and process when the captured host is %s",
+    async (host) => {
       expect(
-        resolvedAuthority({
+        await resolvedAuthority({
           config: { tools: { exec: { host, mode: "full" } } },
           toolsAllow: ["exec", "process"],
         }),
       ).toMatchObject({
-        allowedToolNames: ["exec", "process"],
         exec: { host, security: "full", ask: "off" },
       });
+      const tools = await authority({ config: { tools: { exec: { host, mode: "full" } } } });
+      expect(tools.filter((name) => name === "exec" || name === "process")).toEqual([]);
     },
   );
 
   it.each([
-    {
-      name: "deny",
-      execSession: { permissionMode: "read-only" as const },
-      expected: { host: "gateway", security: "deny", ask: "off" },
-    },
-    {
-      name: "approval",
-      execSession: { permissionMode: "guarded" as const },
-      expected: { host: "gateway", security: "allowlist", ask: "on-miss" },
-    },
-    {
-      name: "node binding",
-      execSession: {
-        execHost: "node" as const,
-        execNode: "session-node",
-        execCwd: " /remote/session/workspace ",
-      },
-      expected: {
-        host: "node",
-        security: "full",
-        ask: "off",
-        node: "session-node",
-      },
-    },
-  ])("preserves session-owned exec $name at the worker boundary", ({ execSession, expected }) => {
+    ["deny", { security: "deny", ask: "off" }],
+    ["allowlist", { mode: "allowlist" }],
+  ] as const)("preserves effective exec authority for configured %s", async (security, exec) => {
     expect(
-      resolvedAuthority({
-        config: { tools: { exec: { host: "gateway", mode: "full" } } },
-        execSession,
-        toolsAllow: ["exec", "process"],
-      }).exec,
-    ).toEqual({ ...expected, safeBins: [] });
+      await resolvedAuthority({ config: { tools: { exec } }, toolsAllow: ["exec", "process"] }),
+    ).toMatchObject({ exec: { security, ask: "off" } });
   });
 
   it.each([
-    {
-      name: "resolved node differs from the session binding",
-      execOverrides: { host: "node" as const, node: "other-node" },
-      expectedHost: "node",
+    ["deny", { permissionMode: "read-only" }, { mode: "deny", security: "deny", ask: "off" }],
+    [
+      "approval",
+      { permissionMode: "guarded" },
+      { mode: "ask", security: "allowlist", ask: "on-miss" },
+    ],
+    [
+      "node binding",
+      { ...sessionNode, execCwd: " /remote/session/workspace " },
+      { host: "node", mode: "full", node: "session-node", security: "full", ask: "off" },
+    ],
+  ] as const)(
+    "preserves effective exec authority for session %s",
+    async (_name, execSession, expected) => {
+      const { exec } = await resolvedAuthority({
+        config: { tools: { exec: { host: "gateway", mode: "full" } } },
+        toolsAllow: ["exec", "process"],
+        execSession,
+      });
+      expect(exec).toEqual({ host: "gateway", safeBins: [], ...expected });
     },
-    {
-      name: "resolved host is not node",
-      execOverrides: { host: "gateway" as const },
-      expectedHost: "gateway",
-    },
-  ])("omits the session node cwd when $name", ({ execOverrides, expectedHost }) => {
-    const exec = resolvedAuthority({
-      execSession: {
-        execHost: "node",
-        execNode: "session-node",
-        execCwd: "/remote/session/workspace",
-      },
-      execOverrides,
-    }).exec;
+  );
 
+  it.each([
+    ["node binding differs", { host: "node", node: "other-node" }, "node"],
+    ["host is not node", { host: "gateway" }, "gateway"],
+  ] as const)("omits the session node cwd when %s", async (_name, execOverrides, expectedHost) => {
+    const { exec } = await resolvedAuthority({ execSession: sessionNode, execOverrides });
     expect(exec?.host).toBe(expectedHost);
     expect(exec).not.toHaveProperty("nodeCwd");
   });
 
   it("keeps the resolved node binding authoritative when a worker request names another node", async () => {
     gatewayMocks.callGatewayTool.mockResolvedValue({
-      nodes: [
-        {
-          nodeId: "bound-node",
-          displayName: "Bound Node",
-          platform: process.platform,
-          commands: ["system.run"],
-        },
-        {
-          nodeId: "other-node",
-          displayName: "Other Node",
-          platform: process.platform,
-          commands: ["system.run"],
-        },
-      ],
+      nodes: [{ nodeId: "bound-node" }, { nodeId: "other-node" }],
     });
-    const resolved = resolvedAuthority({
+    const resolved = await resolvedAuthority({
       config: { tools: { exec: { host: "node", mode: "full", node: "bound-node" } } },
       toolsAllow: ["exec", "process"],
     });
-    if (resolved.exec?.host !== "node") {
-      throw new Error("expected node-host worker authority");
-    }
-    const request = {
-      command: "echo worker-node-binding",
-      workdir: undefined,
-      env: {},
-      requestedNode: "other-node",
-      boundNode: resolved.exec.node,
-      security: "full",
-      ask: "off",
-      defaultTimeoutSec: 30,
-      approvalRunningNoticeMs: 0,
-      warnings: [],
-    } satisfies ExecuteNodeHostCommandParams;
-
-    await expect(resolveNodeExecutionTarget(request)).rejects.toThrow(
+    expect(resolved.exec).toMatchObject({ host: "node", node: "bound-node" });
+    assert(resolved.exec?.host === "node");
+    await expect(
+      resolveNodeExecutionTarget({
+        command: "echo worker-node-binding",
+        workdir: undefined,
+        env: {},
+        requestedNode: "other-node",
+        boundNode: resolved.exec.node,
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+      }),
+    ).rejects.toThrow(
       "exec node not allowed (bound to bound-node, requested resolved to other-node)",
     );
   });
 
-  it("still carries exec authority when every tool is withheld", () => {
-    expect(resolvedAuthority({ disableTools: true })).toMatchObject({
-      allowedToolNames: [],
-      exec: { security: "full", ask: "off" },
-    });
-  });
-
-  it("keeps the deterministic complete worker surface when no policy narrows it", () => {
-    expect(authority()).toEqual([
-      "read",
-      "write",
-      "edit",
-      "apply_patch",
-      "exec",
-      "process",
-      "sessions_spawn",
-      "sessions_send",
-      "presence",
-    ]);
-  });
-
-  it("adds the optional browser surface only when the launcher makes it available", () => {
-    expect(
-      resolveWorkerToolAuthority({
-        launchToolNames: WORKER_TOOL_NAMES,
-        modelRef: { provider: "openai", model: "gpt-test" },
-        turn: turn(),
-        availableOptionalToolNames: ["browser"],
-      }).toolAuthority.allowedToolNames,
-    ).toEqual([
-      "read",
-      "write",
-      "edit",
-      "apply_patch",
-      "exec",
-      "process",
-      "browser",
-      "sessions_spawn",
-      "sessions_send",
-      "presence",
-    ]);
-    expect(
-      resolveWorkerToolAuthority({
-        launchToolNames: WORKER_TOOL_NAMES,
-        modelRef: { provider: "openai", model: "gpt-test" },
-        turn: turn({ toolsAllow: ["browser"] }),
-        availableOptionalToolNames: ["browser"],
-      }).toolAuthority.allowedToolNames,
-    ).toEqual(["browser"]);
-    expect(authority({ toolsAllow: ["browser"] })).toEqual([]);
-  });
-
-  it("projects runtime caps with canonical write-to-apply_patch semantics", () => {
-    expect(authority({ toolsAllow: ["write"] })).toEqual(["write", "apply_patch"]);
-    expect(authority({ toolsAllow: [] })).toEqual([]);
-    expect(authority({ toolsAllow: ["web_search"] })).toEqual([]);
-    expect(authority({ toolsAllow: ["sessions_send"] })).toEqual(["sessions_send"]);
-    expect(authority({ toolsAllow: ["portal"] })).toEqual([]);
-    expect(authority({ toolsAllow: ["portal"] }, true)).toEqual(["portal"]);
-  });
-
-  it("exposes portals only for SSH-backed placements and allowed capability policy", () => {
-    expect(authority()).not.toContain("portal");
-    expect(authority({}, true)).toContain("portal");
-    expect(authority({ config: { tools: { deny: ["portal"] } } }, true)).not.toContain("portal");
-    expect(
-      authority(
-        {
-          sessionKey: "agent:main:worker-sandboxed",
+  it.each([
+    { senderId: "restricted", expected: ["read"] },
+    { senderId: "authorized", expected: ["read", "write", "apply_patch"] },
+  ])(
+    "projects destination policy for original requester $senderId",
+    async ({ senderId, expected }) => {
+      expect(
+        await authority({
+          senderId: "worker-route-sender",
+          senderIsOwner: true,
+          toolsAllow: ["read", "write"],
           config: {
-            agents: { defaults: { sandbox: { mode: "all" } } },
-            tools: { sandbox: { tools: { deny: ["portal"] } } },
+            agents: {
+              entries: {
+                research: { tools: { deny: ["write", "apply_patch"] } },
+                main: {
+                  tools: { toolsBySender: { "id:restricted": { deny: ["write", "apply_patch"] } } },
+                },
+              },
+            },
           },
-        },
-        true,
-      ),
-    ).not.toContain("portal");
-  });
+          requesterOrigin: {
+            sessionKey: "agent:research:whatsapp:group:requesters",
+            messageProvider: "whatsapp",
+            senderId,
+          },
+        }),
+      ).toEqual(expected);
+    },
+  );
 
-  it("uses scheduled owner group policy without reapplying fresh sender overlays", () => {
-    const config = {
-      tools: {
-        deny: ["exec"],
-        toolsBySender: { "*": { deny: ["write", "apply_patch"] } },
-      },
+  it("applies current owner policy and the appropriate sender overlays", async () => {
+    const denyWrites = { deny: ["write", "apply_patch"] };
+    const toolsAllow = ["read", "write", "exec"];
+    const toolsBySender = { "*": denyWrites };
+    const config: NonNullable<SessionPlacementTurnParams["config"]> = {
+      tools: { deny: ["exec"], toolsBySender },
       channels: {
         whatsapp: {
-          groups: {
-            team: {
-              tools: { allow: ["read", "write", "exec"] },
-              toolsBySender: { "*": { deny: ["write", "apply_patch"] } },
-            },
-          },
+          groups: { team: { tools: { allow: toolsAllow }, toolsBySender } },
         },
       },
-    } as SessionPlacementTurnParams["config"];
-
+    };
+    const scheduledToolPolicy: NonNullable<SessionPlacementTurnParams["scheduledToolPolicy"]> = {
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:whatsapp:group:team",
+      ownerAccountId: "default",
+    };
+    const sender = { messageProvider: "whatsapp", config, senderId: "guest", toolsAllow };
+    expect(await authority({ ...sender, scheduledToolPolicy })).toEqual([
+      "read",
+      "write",
+      "apply_patch",
+    ]);
+    expect(await authority(sender)).toEqual(["read"]);
     expect(
-      authority({
-        config,
+      await authority({
         messageProvider: "whatsapp",
-        senderId: "guest",
-        toolsAllow: ["read", "write", "exec"],
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:whatsapp:group:team",
-          ownerAccountId: "default",
-        },
-      }),
-    ).toEqual(["read", "write", "apply_patch"]);
-    expect(
-      authority({
-        config,
-        messageProvider: "whatsapp",
-        senderId: "guest",
-        toolsAllow: ["read", "write", "exec"],
-      }),
-    ).toEqual(["read"]);
-  });
-
-  it("re-resolves current owner-group restrictions for every scheduled turn", () => {
-    expect(
-      authority({
-        config: {
-          channels: {
-            whatsapp: {
-              groups: { team: { tools: { deny: ["write", "apply_patch"] } } },
-            },
-          },
-        },
-        messageProvider: "whatsapp",
+        config: { channels: { whatsapp: { groups: { team: { tools: denyWrites } } } } },
         toolsAllow: ["write"],
         scheduledToolPolicy: {
           version: 1,
           mode: "account",
-          ownerSessionKey: "agent:main:whatsapp:group:team",
           ownerAccountId: "default",
+          ownerSessionKey: "agent:main:whatsapp:group:team",
         },
       }),
     ).toEqual([]);
   });
-
-  it("applies sandbox tool policy when the session is configured for sandboxing", () => {
-    expect(
-      authority({
-        sessionKey: "agent:main:worker-sandboxed",
-        config: {
-          agents: { defaults: { sandbox: { mode: "all" } } },
-          tools: { sandbox: { tools: { allow: ["read"] } } },
-        },
-      }),
-    ).toEqual(["read"]);
-  });
-
-  it.each([{ disableTools: true }, { modelRun: true }, { promptMode: "none" as const }])(
-    "exposes no tools for non-tool run mode %#",
-    (overrides) => {
-      expect(authority(overrides)).toEqual([]);
-    },
-  );
 });

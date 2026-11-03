@@ -40,12 +40,22 @@ function requireStable(version: string): void {
 }
 
 async function metadata(url: string, signal: AbortSignal): Promise<unknown> {
+  const github = url.startsWith(`${GITHUB}/`);
+  const token = github
+    ? process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim()
+    : undefined;
   const response = await fetch(url, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
-    headers: { Accept: "application/json", "User-Agent": "openclaw-ios-qualification" },
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "openclaw-ios-qualification",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
   });
   if (!response.ok) {
-    throw new Error(`Stable Gateway metadata request failed (HTTP ${response.status}).`);
+    throw new Error(
+      `Stable Gateway ${github ? "GitHub tag" : "npm registry"} metadata request failed (HTTP ${response.status}).`,
+    );
   }
   return response.json();
 }
