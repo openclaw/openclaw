@@ -22,12 +22,16 @@ import {
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
+import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 
 export type PluginCatalogDetailProps = {
   registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
   registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
   registerIcon?: (readId: () => string) => () => void;
   onAskPlugin?: () => void;
+  onSelectPrompt?: (prompt: string) => void;
+  promptBusy?: boolean;
+  promptBlockedReason?: string | null;
   busy?: boolean;
   installProgress?: PluginInstallProgress;
   message?: PluginRowMessage;
@@ -101,29 +105,46 @@ function CatalogDetailContent(props: {
           )}
         />
       }
-      headerAction={renderPluginAskAction(props.state.onAskPlugin, false)}
       titleAction={
-        plugin().local.action === "install" || installing() ? (
-          <ReasonedDisabledControl
-            reason={props.state.installBlockedReason}
-            descriptionTarget={() => installButton ?? null}
-          >
-            <PluginInstallAction
-              registerInstallAction={props.state.registerInstallAction}
-              onButtonRef={(element) => (installButton = element)}
-              buttonClass="btn oc-action plugin-catalog-detail__install"
-              popupPlacement="bottom-end"
-              primary
-              disabled={!props.state.canInstall}
-              busy={Boolean(props.state.busy)}
-              progress={props.state.installProgress}
-              onInstall={props.state.onInstall}
-            />
-          </ReasonedDisabledControl>
-        ) : undefined
+        <>
+          {plugin().local.action === "install" || installing() ? (
+            <ReasonedDisabledControl
+              reason={props.state.installBlockedReason}
+              descriptionTarget={() => installButton ?? null}
+            >
+              <PluginInstallAction
+                registerInstallAction={props.state.registerInstallAction}
+                onButtonRef={(element) => (installButton = element)}
+                buttonClass="btn oc-action plugin-catalog-detail__install"
+                primary
+                disabled={!props.state.canInstall}
+                busy={Boolean(props.state.busy)}
+                progress={props.state.installProgress}
+                onInstall={props.state.onInstall}
+              />
+            </ReasonedDisabledControl>
+          ) : undefined}
+          {renderPluginAskAction(
+            props.state.onAskPlugin,
+            plugin().local.action !== "install" && !installing(),
+          )}
+        </>
       }
       identity={renderPluginPublisher(props.value)}
-      details={renderPluginMetadata(props.value)}
+      sidebar={renderPluginMetadata(props.value)}
+      recommendations={
+        <PluginRecommendedPrompts
+          id={plugin().id}
+          name={plugin().catalog.name}
+          prompts={detail().recommendedPrompts}
+          iconUrl={packageIcon()}
+          registerIcon={props.state.registerIcon}
+          busy={props.state.busy || props.state.promptBusy}
+          disabled={Boolean(props.state.promptBlockedReason)}
+          disabledReason={props.state.promptBlockedReason}
+          onSelect={props.state.onSelectPrompt}
+        />
+      }
       panel={
         <>
           {renderPluginRowMessage(props.state.message, {
@@ -154,12 +175,14 @@ function CatalogDetailLoading() {
     >
       <div class="plugin-catalog-detail__back skeleton" />
       <PluginDetailLoadingHero />
-      <div class="plugin-catalog-detail__main" aria-hidden="true">
-        <div class="plugin-catalog-detail__loading-card skeleton" />
-        <div class="plugin-catalog-detail__loading-card skeleton" />
-      </div>
-      <div class="plugin-catalog-detail__details">
-        {renderPluginMetadata(undefined, undefined, true)}
+      <div class="plugin-catalog-detail__content">
+        <div class="plugin-catalog-detail__main" aria-hidden="true">
+          <div class="plugin-catalog-detail__loading-card skeleton" />
+          <div class="plugin-catalog-detail__loading-card skeleton" />
+        </div>
+        <aside class="plugin-catalog-detail__sidebar">
+          {renderPluginMetadata(undefined, undefined, undefined, true)}
+        </aside>
       </div>
     </section>
   );
@@ -171,7 +194,7 @@ export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): JSX.
   const resultId = createMemo(() => props.result?.plugin.id);
   const read = () => source().value();
   return (
-    <SettingsPage carapace={true}>
+    <SettingsPage {...{ wide: true, carapace: true }}>
       <Loading on={resultId() ?? receipt()} fallback={<CatalogDetailLoading />}>
         <Errored
           fallback={(error, reset) => (
