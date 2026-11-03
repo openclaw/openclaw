@@ -179,7 +179,11 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     }
     state.sharedCodexClientRetiredForOneShotCleanup = true;
     const client = state.client;
-    const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(client);
+    // The first close starts the memoized transport shutdown; joining it cannot extend grace.
+    const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
+      client,
+      CODEX_ONE_SHOT_CLIENT_CLOSE_OPTIONS,
+    );
     // Retained peers prevent retirement; preserve their client without treating
     // missing close evidence as a completed one-shot cleanup.
     const result =
