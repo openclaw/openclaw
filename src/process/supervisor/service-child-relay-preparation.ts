@@ -1,4 +1,5 @@
 import type { Writable } from "node:stream";
+import { isSupported as isNativeChildReapingSupported } from "@openclaw/proc-safe/reaper";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../spawn-secret-input.js";
@@ -61,7 +62,8 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
   const useNativeProcessOwner =
     nativeProcessOwner !== undefined &&
     (!params.ownedWorker || params.nativeProcessOwnerSupported === true);
-  const useLinuxSubreaper = process.platform === "linux" && useNativeProcessOwner;
+  const useLinuxSubreaper =
+    process.platform === "linux" && useNativeProcessOwner && isNativeChildReapingSupported();
   if (!useLinuxSubreaper) {
     assertProcessGroupControl();
   }
