@@ -377,7 +377,17 @@ suite.define(() => {
         const nativeInput = element.parentElement!.querySelector("textarea")!;
         const nativeStyle = getComputedStyle(nativeInput);
         const mirrorStyle = getComputedStyle(element);
+        const person = element.querySelector(".chat-composer-mention")!;
+        const avatarBounds = person
+          .querySelector(".markdown-person-reference__avatar")!
+          .getBoundingClientRect();
+        const nameNode = [...person.childNodes].find(
+          (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
+        )!;
+        const nameRange = document.createRange();
+        nameRange.selectNodeContents(nameNode);
         return {
+          avatarGap: nameRange.getBoundingClientRect().left - avatarBounds.right,
           nativeFont: [nativeStyle.fontFamily, nativeStyle.fontSize, nativeStyle.lineHeight],
           mirrorFont: [mirrorStyle.fontFamily, mirrorStyle.fontSize, mirrorStyle.lineHeight],
           nativeWidth: nativeInput.clientWidth,
@@ -385,6 +395,7 @@ suite.define(() => {
           horizontalOverflow: element.scrollWidth > element.clientWidth,
         };
       });
+      expect(metrics.avatarGap).toBeGreaterThanOrEqual(2);
       expect(metrics.mirrorFont).toEqual(metrics.nativeFont);
       expect(metrics.mirrorWidth).toBe(metrics.nativeWidth);
       expect(metrics.horizontalOverflow).toBe(false);

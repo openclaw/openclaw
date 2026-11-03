@@ -1572,9 +1572,11 @@
 .chat-composer-mention .markdown-person-reference__avatar {
   position: absolute;
   inset-inline-start: 0;
-  top: 0.05em;
-  width: 1em;
-  height: 1em;
+  /* Fit the avatar plus a gap inside the native @ advance. Adding inline
+     padding would move the painted name away from the caret and selection. */
+  top: 0.2em;
+  width: 0.7em;
+  height: 0.7em;
   margin: 0;
 }
 
