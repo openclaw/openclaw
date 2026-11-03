@@ -16,13 +16,16 @@ import {
   agentIdPattern,
   canonicalJson,
   effectiveBinding,
+  coveringGrant,
   parseMembership,
+  grantsRevision,
   readStoresSection,
   storesRevision,
+  type ConversationGrants,
   type Membership,
   type Policy,
 } from "./stores-config.js";
-import type { StoreState } from "./stores-contract.js";
+import type { GrantAccess, StoreState } from "./stores-contract.js";
 
 const reloaded = () =>
   new KnowledgeRestartError(
@@ -38,6 +41,7 @@ export type Opened =
   | { kind: "ready"; runtime: StoreRuntime; access: VaultAccess; binding: string }
   | { kind: Exclude<StoreState, "ready">; agentId: string; binding?: string; message: string };
 type Host = Pick<OpenClawPluginApi, "runtime">;
+const NO_GRANTS: ConversationGrants = Object.freeze({});
 
 /** Main-thread owner of store resolution (spec §5, §6). Membership comes from
  * the registry's reconciled copy of configuration; physical stores come from
@@ -48,6 +52,7 @@ export class Stores {
   private readonly provisioning = new Map<string, Promise<RegistrySnapshot>>();
   private readonly fenced = new Set<string>();
   private memo?: Membership;
+  private grantsMemo?: { revision: string; section: ConversationGrants };
   private syncing?: Promise<void>;
   // Revisions config.current() may report until the host publishes our write.
   private readonly lagging = new Set<string>();
@@ -88,6 +93,21 @@ export class Stores {
     }
     return this.memo;
   }
+  /** Owner conversation grants, as the registry last published them. A grant
+   * selects a partition of an agent's own store, never a physical store, and
+   * every principal re-resolves it at each live check, so a change applies as
+   * soon as its registry write returns. Empty until the registry first loads;
+   * every store resolution awaits that load first. */
+  grants(): { revision: string; section: ConversationGrants } {
+    const section = this.registry.current?.grants ?? NO_GRANTS;
+    if (this.grantsMemo?.section !== section) {
+      this.grantsMemo = { section, revision: grantsRevision(section) };
+    }
+    return this.grantsMemo;
+  }
+  /** The grant covering a conversation session key (bound for passing as a lookup). */
+  readonly grantFor = (sessionKey: string): GrantAccess | undefined =>
+    coveringGrant(this.grants().section, sessionKey);
   /** Physical store currently serving an agent, if any. */
   vaultFor(agentId: string): string | undefined {
     const binding = effectiveBinding(this.membership(), agentId);

@@ -17,7 +17,8 @@ import { watchChildMemory } from "../child-memory.js";
 import { setProcessTimeout } from "../process-deadline.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
-import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
+import { GRACEFUL_CANCEL_TIMEOUT_MS, isTimeoutReason } from "./cancellation-policy.js";
+import { waitForExecRootCompletion } from "./supervisor-completion.js";
 import type {
   ManagedRun,
   ProcessExtinctionResult,
@@ -77,10 +78,6 @@ function appendCapturedOutput(
   const marker = `[openclaw: captured ${stream} truncated to last ${maxChars} chars]\n`;
   const tailChars = Math.max(0, maxChars - marker.length);
   return `${marker}${sliceUtf16Safe(next, -tailChars)}`;
-}
-
-function isTimeoutReason(reason: TerminationReason) {
-  return reason === "overall-timeout" || reason === "no-output-timeout";
 }
 
 export function createProcessSupervisor(): ProcessSupervisor & {
@@ -299,13 +296,6 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       { min: 256 },
     );
 
-    const setForcedReason = (reason: TerminationReason) => {
-      if (forcedReason || resultSettled) {
-        return;
-      }
-      forcedReason = reason;
-    };
-
     let cancelAdapter: ((reason: TerminationReason) => void) | null = null;
     const constructionAbort = new AbortController();
     const constructionAbortError = new Error("adapter construction aborted");
@@ -315,7 +305,9 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     });
 
     const requestCancel = (reason: TerminationReason) => {
-      setForcedReason(reason);
+      if (!forcedReason && !resultSettled) {
+        forcedReason = reason;
+      }
       input.onCancel?.(reason);
       cancelAdapter?.(reason);
       // Any cancel must abort construction: the relay may already be spawned
@@ -392,6 +384,8 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       overallDeadline.reset();
       outputDeadline.reset();
       const construction = {
+        executionIntent: input.executionIntent,
+        executionScopeKey: input.executionScopeKey ?? scopeKey,
         assertCurrent: input.assertCurrent,
         beforeSpawn: input.beforeSpawn,
         initiateSpawn: input.initiateSpawn,
@@ -624,7 +618,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       }
 
       const waitPromise = (async (): Promise<RunExit> => {
-        const result = await adapter.wait();
+        const result = await waitForExecRootCompletion(input, adapter, () => forcedReason !== null);
         const terminalReason = forcedReason;
         settleResult(adapter);
 

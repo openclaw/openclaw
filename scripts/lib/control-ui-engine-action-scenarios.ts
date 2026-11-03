@@ -1,17 +1,19 @@
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
-import { frames } from "./control-ui-interaction-navigation.ts";
-import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
+import { frames, openNavigationDrawer } from "./control-ui-interaction-navigation.ts";
+import { cronLoadedJobCount, interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 
 /** Fixed work spans WebKit's coarse CPU samples; probes also count hot-path operations. */
 export function createEngineActionScenarios(): readonly EngineScenario[] {
   const cron = interactionScenarios.find(({ id }) => id === "cron-search-typing-pending");
-  if (!cron) {
-    throw new Error("Missing shared held Cron scenario");
+  const cronSearch = interactionScenarios.find(({ id }) => id === "cron-search");
+  if (!cron || !cronSearch) {
+    throw new Error("Missing shared Cron scenarios");
   }
   const cycles = 8;
   const chatPicker = interactionScenarios.find(({ id }) => id === "model-picker-first-open-search");
   const sessions = interactionScenarios.find(({ id }) => id === "sessions-sort");
-  if (!chatPicker || !sessions) {
+  const sidebar = interactionScenarios.find(({ id }) => id === "sidebar-toggle");
+  if (!chatPicker || !sessions || !sidebar) {
     throw new Error("Missing shared chat picker or Sessions scenario");
   }
   const repeated = (
@@ -51,6 +53,86 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
     });
   });
   return [
+    ...(["open", "close"] as const).map((direction): EngineScenario =>
+      Object.assign({}, sidebar, {
+        id: `sidebar-${direction}`,
+        explicitOnly: true,
+        viewports: ["mobile"],
+        expected: `One native activation ${direction}s the populated drawer and preserves the conversation.`,
+        prepare: async (page, gateway) => {
+          await sidebar.prepare(page, gateway);
+          if (direction === "open") {
+            await page.keyboard.press("Escape");
+            await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+            await page
+              .locator(".shell-nav")
+              .evaluate((drawer) =>
+                Promise.all(drawer.getAnimations().map((animation) => animation.finished)),
+              );
+          }
+        },
+        run: async (page) => {
+          if (direction === "open") {
+            await openNavigationDrawer(page);
+            if (!(await page.locator(".shell-nav :focus").first().isVisible())) {
+              throw new Error("Opening the mobile drawer must focus a control inside it");
+            }
+          } else {
+            await page.keyboard.press("Escape");
+            await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+            await page
+              .locator(".shell-nav")
+              .evaluate((drawer) =>
+                Promise.all(drawer.getAnimations().map((animation) => animation.finished)),
+              );
+            if ((await page.locator("#control-ui-main").getAttribute("inert")) !== null) {
+              throw new Error("Closing the mobile drawer must restore the conversation");
+            }
+          }
+          return { nativeActivations: 1 };
+        },
+      } satisfies Partial<EngineScenario>),
+    ),
+    {
+      ...cronSearch,
+      id: "cron-unbound-input-paste",
+      explicitOnly: true,
+      diagnostic: "Native input in the populated Cron document without its filtering handler.",
+      expected: "The unbound input receives the query while retaining 500 jobs without a request.",
+      prepare: async (page, gateway) => {
+        await cronSearch.prepare(page, gateway);
+        await page.getByRole("searchbox", { name: "Search automations" }).evaluate((input) => {
+          if (
+            !(input instanceof HTMLInputElement) ||
+            input.value ||
+            input === document.activeElement
+          ) {
+            throw new Error("Expected an empty, unfocused Cron search input");
+          }
+          const unbound = input.cloneNode(false);
+          if (!(unbound instanceof HTMLInputElement)) {
+            throw new Error("Expected a cloned search input");
+          }
+          unbound.value = input.value;
+          input.replaceWith(unbound);
+        });
+      },
+      run: async (page, gateway) => {
+        const before = (await gateway.getRequests("cron.list")).length;
+        const search = page.getByRole("searchbox", { name: "Search automations" });
+        const query = "Warm automation 0499";
+        await search.fill(query);
+        await frames(page);
+        if (
+          (await search.inputValue()) !== query ||
+          (await cronLoadedJobCount(page)) !== 500 ||
+          (await gateway.getRequests("cron.list")).length !== before
+        ) {
+          throw new Error("Unbound Cron input changed the retained rows or issued a request");
+        }
+        return { inputCharacters: query.length, retainedRows: 500, additionalRequests: 0 };
+      },
+    },
     ...repeated,
     {
       ...chatPicker,
@@ -139,7 +221,7 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
           await frames(page);
           if (
             (await search.inputValue()) !== query ||
-            (await page.locator(".cron-table__row").count()) !== 500 ||
+            (await cronLoadedJobCount(page)) !== 500 ||
             (await page.locator(".cron-table").getAttribute("aria-busy")) !== "true" ||
             (await gateway.getRequests("cron.list")).length !== heldRequests ||
             !(await search.evaluate((element) => element === document.activeElement))

@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -279,7 +280,7 @@ describe("managed npm root", () => {
     });
   });
 
-  it("syncs managed peer pins with an unbounded update budget", async () => {
+  it("syncs managed peer pins without blocking filesystem writes and an unbounded update budget", async () => {
     const npmRoot = await makeTempRoot({
       private: true,
       dependencies: { "existing-root": "1.0.0", "old-peer": "1.0.0", plugin: "1.0.0" },
@@ -318,6 +319,8 @@ describe("managed npm root", () => {
       },
     );
 
+    const synchronousWrites = ["writeFileSync", "writeSync", "fsyncSync", "renameSync"] as const;
+    const writeSpies = synchronousWrites.map((method) => vi.spyOn(syncFs, method));
     await expect(
       syncManagedNpmRootPeerDependencies({
         npmRoot,
@@ -326,6 +329,9 @@ describe("managed npm root", () => {
         workTimeoutMs: null,
       }),
     ).resolves.toBe(true);
+    for (const spy of writeSpies) {
+      expect(spy).not.toHaveBeenCalled();
+    }
 
     const [args, rawOptions] = expectDefined(
       runCommand.mock.calls[0],
@@ -392,6 +398,33 @@ describe("managed npm root", () => {
       overrides: { "runtime-peer": "4.12.18" },
       openclaw: { managedOverrides: ["runtime-peer"], managedPeerDependencies: ["runtime-peer"] },
     });
+  });
+
+  it("retains the manifest when authority expires during temporary publication", async () => {
+    const original = { private: true, dependencies: { plugin: "1.0.0" } };
+    const npmRoot = await makeTempRoot(original);
+    const open = fs.open.bind(fs);
+    let current = true;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (path.dirname(String(args[0])) === npmRoot && args[1] === "wx") {
+        current = false;
+      }
+      return handle;
+    });
+    await expect(
+      syncManagedNpmRootPeerDependencies({
+        npmRoot,
+        managedOverrides: { axios: "1.18.0" },
+        runCommand: peerPlan({}),
+        beforePersistentApply: () => {
+          if (!current) {
+            throw new Error("publication authority expired");
+          }
+        },
+      }),
+    ).rejects.toThrow("publication authority expired");
+    await expect(readManifest(npmRoot)).resolves.toEqual(original);
   });
 
   it("reconciles preserved stale pins with managed overrides when peer planning fails", async () => {

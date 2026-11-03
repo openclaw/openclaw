@@ -1,4 +1,5 @@
 import path from "node:path";
+import { serialize } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -9,6 +10,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import * as hostTranscriptWriter from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import {
   onInternalDiagnosticEvent,
@@ -18,8 +20,11 @@ import { SessionManager } from "../../plugin-sdk/agent-sessions.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
+import * as actorAppend from "./session-manager-actor-append.js";
 import { sessionManagerOpenCompaction } from "./session-manager-core.js";
 import { sessionScope } from "./session-manager-fixtures.test-support.js";
+import * as persistenceReceipt from "./session-manager-persistence-error.js";
+import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
 import type { SessionEntry } from "./session-manager-types.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -198,6 +203,70 @@ it("awaits leaf, branch, raw persistence, and static transcript operations witho
     expect(reopened.getLeafId()).toBe(staticId);
   });
 });
+
+it.each(["actor", "worker"] as const)(
+  "keeps raw %s persist receipts bounded without rebuilding the caller's retained view",
+  async (backend) => {
+    const receiptBytes: number[] = [];
+    for (const count of [16, 512, 4096]) {
+      await withFixture(
+        `raw-receipt-${count}`,
+        async ({ target, manager: seedManager, reopen }) => {
+          const header = seedManager.getHeader();
+          const history = Array.from({ length: count }, (_, index) => ({
+            ...rawEntry(`history-${index}`, index ? `history-${index - 1}` : ""),
+            parentId: index ? `history-${index - 1}` : null,
+            data: { text: "x".repeat(1024) },
+          }));
+          await replaceTranscriptEvents(target, [header, ...history]);
+          const persist = async () => {
+            const manager = await reopen();
+            const before = manager.getEntries();
+            const entry = rawEntry("raw-append", "history-0");
+            const capture = vi.spyOn(persistenceReceipt, "receiveSessionManagerCommit");
+            const actorCapture = vi.spyOn(actorAppend, "appendSessionManagerActor");
+            try {
+              await expect(
+                manager.persistAsync(entry, { appendIntent: "active-branch" }),
+              ).resolves.toMatchObject({
+                appended: true,
+                effectiveParentId: `history-${count - 1}`,
+              });
+              const value =
+                backend === "actor"
+                  ? (await expectDefined(actorCapture.mock.results.at(-1), "actor reply").value)
+                      .committed.value
+                  : (await expectDefined(capture.mock.results.at(-1), "metadata reply").value)
+                      .value;
+              receiptBytes.push(serialize(value).byteLength);
+            } finally {
+              capture.mockRestore();
+              actorCapture.mockRestore();
+            }
+            // Raw persistence never adopts the returned history; explicit reload owns that change.
+            expect(manager.getEntries()).toEqual(before);
+            expect(manager.getEntry(entry.id)).toBeUndefined();
+            expect(entry.parentId).toBe("history-0");
+            const expected = [...history, { ...entry, parentId: `history-${count - 1}` }];
+            expect((await reopen()).getEntries()).toEqual(expected);
+            await manager.reloadPersistedTranscriptAsync();
+            expect(manager.getEntries()).toEqual(expected);
+          };
+          if (backend === "actor") {
+            await withSelectedTranscriptReader(target, persist, true);
+          } else {
+            await persist();
+          }
+        },
+      );
+    }
+    expect(
+      receiptBytes.every((bytes) => bytes < 4096),
+      JSON.stringify(receiptBytes),
+    ).toBe(true);
+    expect(Math.max(...receiptBytes) - Math.min(...receiptBytes)).toBeLessThan(128);
+  },
+);
 
 it("propagates queued write revocation and user/custom commit failures without publishing or falling back", async () => {
   await withFixture("failure", async ({ target, manager, seed }) => {

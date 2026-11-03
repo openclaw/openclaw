@@ -28,9 +28,18 @@ export function isHostGeneratedInputProvenance(provenance: InputProvenance | und
   return provenance?.kind === "internal_system" || provenance?.kind === "inter_session";
 }
 
-export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
-
 export const PROGRESS_CARD_REFRESH_SOURCE_TOOL = "progress_card_refresh" as const;
+
+/** A background fork of another session's conversation; `sourceSessionKey` names that session. */
+export const SESSION_FORK_SOURCE_TOOL = "session_fork" as const;
+
+/** The session a background fork reads, or undefined for every other input. */
+export function readSessionForkSource(provenance: InputProvenance | undefined): string | undefined {
+  return provenance?.kind === "internal_system" &&
+    provenance.sourceTool === SESSION_FORK_SOURCE_TOOL
+    ? provenance.sourceSessionKey
+    : undefined;
+}
 
 /** Execution input, never a delivered cron announcement or a user-authored prompt. */
 export const CRON_EXECUTION_SOURCE_TOOL = "cron_execution" as const;
@@ -152,14 +161,6 @@ export function isSubagentCoordinationInputProvenance(
   );
 }
 
-export function isMainSessionRestartRecoveryInputProvenance(value: unknown): boolean {
-  const provenance = normalizeInputProvenance(value);
-  return (
-    provenance?.kind === "internal_system" &&
-    provenance.sourceTool?.toLowerCase() === MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL
-  );
-}
-
 const AGENT_MEDIATED_COMPLETION_SOURCE_TOOL_SET: ReadonlySet<string> = new Set(
   AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS,
 );
@@ -187,7 +188,6 @@ const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = n
   "exec_approval_followup",
   "subagent_announce",
   "subagent_settle",
-  "subagent_interrupted_resume",
 ]);
 
 export function shouldPreserveUserFacingSessionStateForInputProvenance(value: unknown): boolean {

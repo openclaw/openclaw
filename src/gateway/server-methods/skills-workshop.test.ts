@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { workshopPluginConfig } from "../../skills/workshop/config.test-support.js";
 import { WorkshopReviewNotFoundError } from "../../skills/workshop/review-undo.js";
 import {
   resolveWorkshopDraftsDir,
@@ -28,8 +29,8 @@ vi.mock("../../skills/workshop/library.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../skills/workshop/library.js")>()),
   ...library,
 }));
-vi.mock("../../skills/workshop/skill-usage.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../skills/workshop/skill-usage.js")>()),
+vi.mock("../../skills/runtime/skill-usage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/runtime/skill-usage.js")>()),
   readSkillUsage,
 }));
 vi.mock("../../skills/workshop/review-undo.js", async (importOriginal) => ({
@@ -39,7 +40,7 @@ vi.mock("../../skills/workshop/review-undo.js", async (importOriginal) => ({
 
 const config: OpenClawConfig = {
   agents: { entries: { ops: {} } },
-  skills: { workshop: { autonomous: { mode: "off" } } },
+  ...workshopPluginConfig({ autonomous: { mode: "off" } }),
 };
 const context = { getRuntimeConfig: () => config };
 const call = (method: string, params: Record<string, unknown>) =>

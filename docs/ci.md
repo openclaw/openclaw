@@ -119,8 +119,10 @@ not compared. See
 
 Add `ci:full` before a PR run to select every `checks-ui` unit shard, all
 `checks-ui-e2e` shards (Control UI and browser extension), and every
-`checks-ui-e2e-real-gateway` shard, including desktop resize proof. These use the
-same UI inventories and shard budgets as scheduled `main` CI. Unlabeled PRs keep
+`checks-ui-e2e-real-gateway` shard. These use the same UI inventories and shard
+budgets as scheduled `main` CI, including the release-only exclusions. Editing
+a release-only test selects that test; full manual/release runs retain the
+complete inventory, including desktop resize proof. Unlabeled PRs keep
 change-selected UI coverage; the label does not expand unrelated platform lanes.
 
 Current UI unit/browser CI retains three native shards with three workers each,
@@ -148,18 +150,18 @@ browser cases do not load backend stores or Gateway policy. The shared E2E
 cleanup hook reads the canonical admission state through its thin state module;
 policy and logging remain owned by the Gateway admission module.
 
-When artifact reuse is enabled, service-worker-update, phone stale-build, and
-real protocol-mismatch recovery fixtures run in `build-artifacts`. Each copies
+When artifact reuse is enabled, service-worker-update and phone stale-build
+fixtures run in `build-artifacts`. Each copies
 the verified production UI artifact and refreshes its own build identity before
-serving it. Protocol recovery also uses the producer’s built Gateway and retains
-its incompatible-protocol UI build. Local, compatibility, and frozen targets
+serving it. Local, compatibility, and frozen targets
 retain their ordinary preparation path.
 
-When the selected mocked Control UI shard includes production stale-build recovery,
-its workflow step prepares the Gateway runtime before starting Vitest. This moves
-the existing cold build outside the fixture's subprocess budget without adding a
-job or building on shards that do not select that fixture. Production-artifact
-reuse still omits the delegated fixture from the mocked shards.
+Real protocol-mismatch recovery runs in the prebuilt real-Gateway pool, sharing
+that job's Gateway and current UI artifacts while retaining its incompatible
+protocol UI build. It no longer makes a mocked browser shard prepare a Gateway.
+Isolated child-Gateway fixtures share the existing two-worker parallel pool;
+in-process global Gateway fixtures remain serial. Both parallel phases start
+their longest measured files first without crossing the serial phase barrier.
 
 The exact Doctor plugin-index and SQLite sessions/transcripts built-CLI proofs
 use the runtime-only compiled-worker registry. The local TUI file does the same
@@ -210,7 +212,7 @@ chunk allows 75 minutes; the remaining OpenAI package chunk allows 60 minutes. S
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
 
-Updater, state-lease, SQLite identity, native-plugin, startup-trace, and updater-tooling PRs also require the [published-driver update cell](/ci/scope-and-routing/selection#published-driver-update-cell). One GitHub-hosted Linux job runs the latest stable npm updater against the candidate package with two synthetic agents. Its twenty-minute budget and result are included in `openclaw/ci-gate`; the broader main/release Docker survivor remains separate.
+Main-tier and selected manual/release CI run the [published-driver update cell](/ci/scope-and-routing/selection#published-driver-update-cell). One GitHub-hosted Linux job runs the latest stable npm updater against the candidate package with two synthetic agents. The Docker cell retains its twenty-minute budget, followed by a fifteen-minute native systemd survivor step using the same candidate and published `2026.10.9`. Both results are included in `openclaw/ci-gate`; the broader main/release Docker survivor remains separate.
 
 Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted upstream `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches run static correctness gates, owner-bounded tests, transitive import consumers, protected regressions, and a six-file runtime smoke set. Node rows target at most 150 estimated test seconds. Single files and indivisible standard groups can exceed that target; setup, builds, and queues are separate from test time. Node shards selecting sandbox container E2E cases prepare the Docker sandbox image when the runner does not already have it. Missing or unbounded runtime selection fails preflight instead of falling back to every test. Windows, browser, Docker, QA Smoke, packaging, contract, and extension families opt in through their existing owners; individual built-process proofs have independent owner flags. Full static fallback does not widen them. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. The existing Plugin Prerelease workflow owns complete extension runtime coverage hourly and in Full Release Validation; normal CI selects affected extension owners on PRs. Windows retains its complete inventory across five measured file shards on hourly main and ordinary manual/release validation; Windows-owner PRs retain that complete inventory.
 
@@ -222,7 +224,15 @@ Current iOS Debug builds log CPU count, memory, machine model, booted simulators
 
 Shared OpenClawKit Periphery scans restore the same verified Watch RTC libraries published by trusted main CI, without saving caches. Both Apple consumers build their complete index in a separate timed step with streamed output retained as `build.log` in the consumer artifact. iOS uses a fresh run-owned index; Periphery analyzes that exact index without rebuilding. Scan scope and the shared dead-code intersection stay unchanged. Cache misses retain the locked Cargo build.
 
-iOS screenshot capture, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
+iOS screenshot capture, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time. Before creating each device, it requires ten continuous seconds with at least 30% idle host CPU, using qualification's existing five-minute headroom deadline. A host that stays busy fails before the next simulator starts; boots and captures are not retried. The screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
+
+Main CI screenshot capture installs the Mermaid renderer workspace and its dependencies with a frozen lockfile, retaining pnpm's root dependencies for the existing native helpers. It skips the general pnpm store cache and unrelated workspace installs. Project generation still builds Mermaid assets on a cold checkout. Screenshot capture restores the same verified Watch RTC simulator libraries published by trusted main CI, without saving that cache. Its Swift package sources and binary downloads use a separate cache for `SnapshotDerivedData/SourcePackages`, keyed by runner platform, architecture, Xcode, package manifests, and available lockfiles. Screenshot preparation preserves only that directory and deletes all other DerivedData contents; automatic package resolution and fresh compilation remain enabled. The screenshot build omits compiler index data while retaining the normal Debug configuration and all screenshot products. Only successful trusted current-main runs save screenshot downloads, including manual CI runs because hourly main CI omits screenshots. PRs restore only, historical and frozen targets skip both caches, and cache transfer failures retain the cold build path. Store Release's screenshot-only validation consumes these same two caches without saving them, and reports the verified Watch RTC reuse count after capture. Its upload operations retain their separate release caches.
+
+iOS and Android releases check out the exact selected commit at depth one and gather their release plans there. The release entry point creates a detached worktree and fetches complete ancestry only when preparing notes, without unrelated branches, tags, or historical file contents. TestFlight attempts that are unchanged or deferred for review or processing skip that extra checkout and history transfer. Release-note reads fetch their recorded baseline refs and hydrate historical contents as needed. Source identity and main-ancestry checks remain unchanged.
+
+Both release destinations share a separate Watch RTC device-library cache, populated only by successful trusted `main` release runs. It retains both `arm64` and `arm64_32` device slices without sharing the simulator cache. The existing build phase verifies each slice's input fingerprint and checksum before reuse; a miss runs the locked Cargo build. Cache transfer failures do not block a release.
+
+The same release job caches Xcode's `SourcePackages` downloads separately from ordinary CI, keyed by runner platform, architecture, Xcode, package manifests, and available lockfiles. Both destinations use the canonical `$RUNNER_TEMP/ios-release-recovery/source` project path, which determines Xcode's default DerivedData directory. Automatic package resolution and clean compilation remain enabled; build products and screenshot DerivedData are excluded. Only successful release jobs save downloads, and cache transfer failures retain the cold resolution path. Changing the canonical project path requires a new cache namespace.
 
 Release qualification disables Spotlight indexing on the disposable runner's Data volume before checkout. After Simulator boot, it requires ten seconds of at least 30% idle host CPU within five minutes before issuing the pairing credential. This keeps first-launch background work out of the Gateway and XCTest deadlines. Local qualification uses the same CPU readiness check and leaves host indexing settings to the operator.
 
@@ -230,6 +240,13 @@ Android screenshot-input PRs and ordinary full manual CI run the existing phone
 and Wear store capture script in one hosted Ubuntu job. The final CI gate requires
 capture to succeed; unit-test-only and documentation changes omit it. See
 [the job graph](/ci/pipeline#pipeline-overview) for capture evidence and scope details.
+
+Android Store Release and Internal distribution use the Blacksmith 32-class for
+their shared build/upload job. A controlled cold-build comparison measured eight
+usable CPUs on this class and reduced median signing preflight plus phone/Wear
+bundle time from 621 to 217 seconds. This trades paid compute for shorter release
+runs; qualification and ordinary screenshot CI retain hosted Ubuntu. See
+[runner evidence and cost](/ci/runners#android-release-runner).
 
 Android Release E2E adds one hosted Ubuntu KVM job to exact-source, full-scope
 manual validation when Android is selected, matching the iOS qualification
@@ -587,3 +604,41 @@ Every section heading from the previous single-page version keeps its anchor her
 - [Release channels](/install/development-channels)
 
 Ordinary PR iOS smoke keeps app and test-bundle compilation while selecting its two simulator groups by source owner. With neither group selected, simulator preparation is skipped. `OPENCLAW_CI_IOS_SIMULATOR_FULL=true` restores full PR execution; [selection and routing](/ci/scope-and-routing/selection) documents the owners and full hourly/release coverage.
+
+Android's existing `android-access-native` emulator rows retain their packaged
+Access-crypto proof and exercise Gateway WebSocket and widget HTTPS clients on
+Android Conscrypt. Each client must pass matching leaf-pin and platform-root
+controls, reject a wrong pin and wrong hostname before an origin request, and
+reject the verified incident OV G3C intermediate in both trust modes. The report
+reducer requires all twelve TLS class/method identities exactly once, separately
+from the existing Access case and packaged-library checks.
+
+These rows use the Android toolchain action's filtered dependency install for
+native resource generation. They skip the full workspace pnpm store cache so the
+hosted runner has space to unpack the Android system image.
+
+Platform-root incident cases require either exact Conscrypt key rejection or
+OkHttp's specific blocklist rejection after verifying the raw peer chain and
+hostname. They do not depend on Android downloading a platform blocklist update.
+
+These secretless, disposable emulators temporarily import a synthetic localhost
+root and the verified incident root into copied APEX CA stores in the zygote
+mount namespaces before launching the test app. Stock roots and SELinux remain
+intact. Cleanup stops/uninstalls the task app, unmounts the copied stores, verifies
+the full original-store manifests and SELinux state, and always disposes the
+emulator and deletes its AVD without a snapshot. Failed restoration is preserved as contaminated
+runner evidence; that emulator must never be reused. Reports include fixture
+identities, before/after manifests and cleanup/disposal receipts. This adds no
+jobs, runner tiers or fanout and never changes host trust.
+Cleanup bounds device commands and trust restoration so an unavailable emulator
+cannot prevent disposal or report upload. The emulator boot log is copied into
+the reports and its last 100 lines are printed before device cleanup. A cleanup
+timeout remains a failure even when the owned emulator is killed and its AVD deleted.
+
+## Adaptive observation pilot
+
+The [adaptive CI observation pilot](/ci/adaptive-testing#observation-pilot) samples
+existing `unit-fast` Vitest invocations after runtime selection. It adds no matrix
+rows, runner registrations or skipped tests. Its isolated dependency cache and
+artifact upload add measurable overhead; projected selection savings are not
+realized savings.

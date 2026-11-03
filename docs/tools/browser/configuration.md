@@ -240,7 +240,7 @@ main model can read the screenshot directly.
 
 <Accordion title="Profile behavior">
 
-- `attachOnly: true` means never launch a local browser; only attach if one is already running.
+- `attachOnly: true` means never launch a local browser; only attach to one you run yourself. If the CDP endpoint accepts connections but is not ready yet, for example a socket-activated browser starting on demand, the first browser operation waits up to about 30 seconds for it. A refused connection fails immediately because nothing is listening to start a browser.
 - Local managed profiles are headless by default. Set `headless: false` for a visible window; existing explicit headed settings are preserved. `headless` can be set globally or per local managed profile. Per-profile values override `browser.headless`, so one locally launched profile can stay headless while another remains visible.
 - `POST /start?headless=true` and `openclaw browser start --headless` request a
   one-shot headless launch for local managed profiles without rewriting

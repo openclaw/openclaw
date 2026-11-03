@@ -14,11 +14,7 @@ import {
   type SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
-import {
-  areUiSessionKeysEquivalent,
-  parseAgentSessionKey,
-  resolveUiConfiguredMainKey,
-} from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
@@ -285,23 +281,6 @@ export abstract class AppSidebarBase {
   pendingSessionCreate() {
     const pending = this.context.chatSubmissions.readCreate();
     return this.activeRouteId === "chat" && !pending?.creation.admitted ? pending : undefined;
-  }
-
-  sessionCreateDisplay() {
-    const pending = this.pendingSessionCreate();
-    if (pending) {
-      return pending;
-    }
-    const accepted = this.context.chatSubmissions.readAcceptedCreate();
-    return this.activeRouteId === "chat" &&
-      this.sessionsStatusFilter === "active" &&
-      accepted &&
-      areUiSessionKeysEquivalent(accepted.creation.sessionKey, this.sessionKey) &&
-      !this.sessionData.sessionsResult?.sessions.some((row) =>
-        areUiSessionKeysEquivalent(row.key, accepted.creation.sessionKey),
-      )
-      ? accepted
-      : undefined;
   }
 
   public getRouteSessionKey(): string {

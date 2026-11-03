@@ -8,7 +8,6 @@ import type {
   ChatFastModeSelectValue,
 } from "../../../lib/chat/model-select-state.ts";
 import type { ChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ChatAccessProgramControlProps } from "./chat-access-program-control.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -21,7 +20,6 @@ const EFFORT_GAUGE_PATH = "M3.34 17a10 10 0 1 1 17.32 0";
 const ChatEffortPickerPanel = lazy(() => import("./chat-effort-picker-panel.tsx"), {
   export: "ChatEffortPickerPanel",
 });
-warmWhenIdle(ChatEffortPickerPanel.preload);
 
 export type ChatEffortPickerParams = {
   accessProgram?: ChatAccessProgramControlProps;

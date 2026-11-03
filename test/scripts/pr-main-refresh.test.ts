@@ -22,6 +22,7 @@ import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
+import type { validReview } from "./pr-review-artifact-fixture.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const setupSnapshots = useAutoCleanupTempDirTracker(afterAll);
@@ -377,6 +378,45 @@ process.exit(result.status ?? 1);
       ).toBe(false);
     },
   );
+
+  it.each(["ready", "correction"])("reuses admitted worktree entry for %s preparation", (mode) => {
+    const f = fixture();
+    const reviewPath = join(f.local, "review.json");
+    if (mode === "correction") {
+      const review = JSON.parse(readFileSync(reviewPath, "utf8")) as ReturnType<typeof validReview>;
+      review.recommendation = "NEEDS WORK";
+      review.findings = [
+        {
+          id: "F1",
+          severity: "IMPORTANT",
+          title: "Fixture defect",
+          area: "src/subject.ts",
+          fix: "Repair fixture",
+        },
+      ];
+      writeFileSync(reviewPath, JSON.stringify(review));
+    }
+    const incomingReview = readFileSync(reviewPath, "utf8");
+    const result = f.shell(
+      [
+        "eval \"$(declare -f enter_worktree | sed '1s/enter_worktree/observed_enter_worktree/')\"",
+        "entries=0",
+        'enter_worktree() { entries=$((entries + 1)); observed_enter_worktree "$@"; }',
+        `prepare_init 42 "" ${mode}`,
+        'printf "worktree-entries=%s\\n" "$entries"',
+      ].join("\n"),
+      { supervised: true },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("worktree-entries=1\n");
+    expect(f.git(f.worktree, "branch", "--show-current")).toBe("pr-42-prep");
+    expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.head);
+    expect(readFileSync(reviewPath, "utf8")).toBe(incomingReview);
+    expect(readFileSync(join(f.local, "prep-context.env"), "utf8")).toContain(
+      `PREP_REVIEW_MODE=${mode}\n`,
+    );
+    expect(f.events().filter((event) => event.kind === "main-fetch")).toHaveLength(1);
+  });
 
   it.each(["staged", "unstaged", "untracked", "unmerged"])(
     "refuses same-head preparation with %s foreign state",
@@ -980,7 +1020,7 @@ ${readFileSync(gitShim, "utf8")}
     (fault) => {
       const f = fixture();
       f.enableReviewTests();
-      expect(f.run("review-checkout-main").status).toBe(0);
+      expect(f.shell("review_checkout_main 42").status).toBe(0);
       const modePath = join(f.local, "review-mode.env");
       let mode = readFileSync(modePath, "utf8");
       if (fault === "missing" || fault === "inherited") {
@@ -1027,7 +1067,7 @@ ${readFileSync(gitShim, "utf8")}
     const f = fixture();
     f.enableReviewTests();
     if (mode === "main") {
-      expect(f.run("review-checkout-main").status).toBe(0);
+      expect(f.shell("review_checkout_main 42").status).toBe(0);
     }
     const metaPath = join(f.local, "pr-meta.env");
     let meta = readFileSync(metaPath, "utf8");
@@ -1078,7 +1118,7 @@ ${readFileSync(gitShim, "utf8")}
     const f = fixture();
     if (command === "review_tests") {
       f.enableReviewTests();
-      expect(f.run("review-checkout-main").status).toBe(0);
+      expect(f.shell("review_checkout_main 42").status).toBe(0);
     }
     const result = f.shell(`
 printf() {

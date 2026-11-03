@@ -667,7 +667,11 @@ jobs:
                       if deadline is not None and time.monotonic() >= deadline:
                           timed_out = True
                           raise FetchTimeout()
-                      time.sleep(0.05)
+                      # Wake on Git exit without delaying cancellation/deadline checks beyond 50ms.
+                      try:
+                          child.wait(timeout=0.05)
+                      except subprocess.TimeoutExpired:
+                          pass
               finally:
                   # Failed inspection/cleanup permanently fences this policy process. Only
                   # verified extinction permits another command, even after a caught error.
@@ -787,6 +791,10 @@ jobs:
                   "scripts/generate-npm-package-lock.mts",
                   "scripts/changed-lanes.mts",
                   "scripts/lib/merge-head-diff-base.mjs",
+                  "scripts/lib/npm-lock-package-selection.mjs",
+                  "scripts/lib/npm-lock-package-selection.d.mts",
+                  "scripts/lib/record-shared.mjs",
+                  "scripts/lib/record-shared.d.mts",
               )
               linux_node_scripts = (
                   *upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh",
@@ -1988,6 +1996,7 @@ jobs:
         id: published_driver_package
         if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') && needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha }}
         run: |
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts
           node scripts/package-openclaw-for-docker.mjs --skip-build \
             --allow-unreleased-changelog --output-dir .artifacts/published-driver-package \
             --output-name openclaw-candidate.tgz
@@ -2638,7 +2647,10 @@ jobs:
           import { resolve } from "node:path";
           const webkitSuites = new Set([
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
+            resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-history-reading-stability.e2e.test.ts"),
           ].filter(existsSync));
           const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
           let requiresWebkit = false;
@@ -3644,6 +3656,7 @@ jobs:
           semantic-checks: "true"
           cache-mode: *cache_mode
           node-version: "${{ (matrix.runner == 'runson-c8i-8xlarge' || startsWith(matrix.check_name, 'checks-node-runson-cron-')) && env.NODE_VERSION || matrix.node_version || '24.22.1' }}"
+          native-secret-service: ${{ matrix.requires_native_secret_service == true && 'true' || 'false' }}
           install-bun: "false"
           # Only Node 24 consumes the trusted compile seed.
           dependency-cache: ${{ matrix.runner != 'runson-c8i-8xlarge' && (matrix.node_version == null || matrix.node_version == '24.x') && (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && runner.environment == 'self-hosted' && (github.event_name != 'workflow_dispatch' || ((needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
@@ -3806,6 +3819,7 @@ jobs:
       - name: Run Node test shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_CI_TEST_OBSERVATIONS_DIR: ${{ github.repository == 'openclaw/openclaw' && needs.preflight.outputs.frozen_target == 'false' && (github.event_name == 'schedule' || (github.event_name == 'pull_request' && endsWith(github.run_id, '0'))) && format('{0}/ci-test-observations', runner.temp) || '' }}
           OPENCLAW_E2E_USE_PREBUILT_DIST: ${{ steps.node-test-runtime.outcome == 'success' && matrix.pretest_build_mode == 'private-qa' && '1' || '' }}
           OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ matrix.test_runtime_policy || 'node' }}
           FROZEN_TARGET: *frozen_target
@@ -3830,6 +3844,16 @@ jobs:
             [[ -f "$runner" ]]
           fi
           time -p node --import tsx "$runner"
+
+      - name: Upload adaptive CI observations
+        if: ${{ always() && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.frozen_target == 'false' && (github.event_name == 'schedule' || (github.event_name == 'pull_request' && endsWith(github.run_id, '0'))) }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-test-observations-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/ci-test-observations/*/observations.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - &runner_memory_peak_step
         name: Record runner memory peak
@@ -4969,6 +4993,9 @@ jobs:
           }
           const result = spawnSync(process.execPath, [
             "--import", "./scripts/tsx.mjs", "scripts/test-projects.mts", ...targets, "--fileParallelism",
+            "--reporter=verbose",
+            "--reporter=github-actions",
+            "--reporter=./scripts/lib/vitest-resource-reporter.mts",
           ], { stdio: "inherit" });
           if (result.error) throw result.error;
           process.exit(result.status ?? 1);
@@ -5606,7 +5633,8 @@ jobs:
       - *apple_mermaid_cache_key
       - *apple_mermaid_cache_restore
 
-      - name: Identify iOS native cache inputs
+      - &ios_native_cache_inputs
+        name: Identify iOS native cache inputs
         id: ios-cache-inputs
         if: env.HISTORICAL_TARGET != 'true' && needs.preflight.outputs.frozen_target != 'true' && hashFiles('apps/shared/OpenClawWatchRTC/build.sh') != ''
         run: |
@@ -5626,7 +5654,7 @@ jobs:
         id: watch-rtc-cache
         if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
+        with: &watch_rtc_cache_inputs
           path: &watch_rtc_cache_paths |
             ~/.cargo/registry
             ${{ runner.temp }}/openclaw-watch-rtc-libraries
@@ -5944,6 +5972,11 @@ jobs:
             -only-testing:OpenClawTests/OpenClawTypographyTests
             -only-testing:OpenClawTests/GatewayConnectionSecurityTests
             -only-testing:OpenClawTests/GatewaySettingsStoreTests
+            -only-testing:OpenClawTests/Security2AdvertisementTests
+            -only-testing:OpenClawTests/ESPSetupWireTests
+            -only-testing:OpenClawTests/ESPSetupSessionTests
+            -only-testing:OpenClawTests/ESPSetupGatewayPreviewTests
+            -only-testing:OpenClawTests/QRScannerResultHandoffTests
           )
           if [[ "$IOS_CI_PHASE" == "tests" ]]; then
             test_args+=(
@@ -6116,9 +6149,14 @@ jobs:
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('xcode-27-xlarge'))) || ('xcode-27-xlarge') }}
     timeout-minutes: 90
     env:
+      HISTORICAL_TARGET: *historical_target
       BUNDLE_DEPLOYMENT: "true"
       BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile
     steps:
+      - name: Reserve host CPU for screenshots
+        timeout-minutes: 2
+        run: sudo -n /usr/bin/mdutil -i off /System/Volumes/Data
+
       - *platform_checkout_step
 
       - name: Setup Ruby
@@ -6141,9 +6179,21 @@ jobs:
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: *cache_mode
+          cache-mode: "off"
           install-bun: "false"
+          install-deps: "false"
           node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}
+
+      - name: Install iOS screenshot asset dependencies
+        env:
+          CI: "true"
+        run: |
+          pnpm install --frozen-lockfile --prefer-offline --optional \
+            --filter '@openclaw/mermaid-renderer...' \
+            --config.ignore-scripts=false \
+            --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true \
+            --config.side-effects-cache=true
 
       - name: Install iOS screenshot tooling
         run: |
@@ -6156,6 +6206,26 @@ jobs:
           "$swift_tools_dir/swiftlint" version
 
       - *install_watch_rust_toolchain
+
+      - *ios_native_cache_inputs
+
+      - name: Restore Watch RTC build inputs
+        id: watch-rtc-cache
+        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: *watch_rtc_cache_inputs
+
+      - name: Restore screenshot source packages
+        id: ios-packages-cache
+        if: steps.ios-cache-inputs.outputs.xcode != '' && needs.preflight.outputs.cache_mode != 'off'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &ios_screenshot_packages_cache_path apps/ios/build/SnapshotDerivedData/SourcePackages
+          key: ios-screenshot-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/ios/**/Package.resolved', 'apps/ios/project.yml', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}
 
       # The default lane builds the simulator target once for all three families.
       - name: Capture iPhone, iPad, and Watch screenshots
@@ -6180,7 +6250,11 @@ jobs:
             run_ios_fastlane --version 2>&1 | awk 'match($0, /^fastlane [0-9]+\.[0-9]+\.[0-9]+$/) { print substr($0, RSTART + 9, RLENGTH - 9); exit }'
           )"
           xcode_version="$(xcodebuild -version | paste -sd ' ' -)"
-          test "$xcode_version" = "$IOS_SCREENSHOT_XCODE_VERSION"
+          if [[ "$xcode_version" != "$IOS_SCREENSHOT_XCODE_VERSION" ]]; then
+            printf '::error title=iOS screenshot Xcode mismatch::Expected %s, found %s\n' \
+              "$IOS_SCREENSHOT_XCODE_VERSION" "$xcode_version" >&2
+            exit 1
+          fi
           collect_args=(
             collect
             --screenshots apps/ios/fastlane/screenshots/en-US
@@ -6229,6 +6303,15 @@ jobs:
             apps/ios/build/screenshot-diagnostics.json
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Save screenshot source packages
+        if: steps.ios-cache-inputs.outputs.xcode != '' && steps.ios-packages-cache.outputs.cache-hit != 'true' && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.candidate_trust == 'main' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name)
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *ios_screenshot_packages_cache_path
+          key: ${{ steps.ios-packages-cache.outputs.cache-primary-key }}
 
   ios-screenshot-evidence:
     permissions:
@@ -6356,25 +6439,6 @@ jobs:
         with:
           cache-mode: ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
           install-native-deps: ${{ needs.preflight.outputs.use_compatible_android_ci != 'true' && 'true' || 'false' }}
-
-      - name: Mount Gradle sticky disk
-        if: &android_gradle_sticky_disk_gate vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !(contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt > 1) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
-        with:
-          # One disk per matrix task keeps thin dependency sets off heavier lanes. Gradle owns invalidation.
-          key: ${{ github.repository }}-gradle-v2-${{ matrix.task }}
-          path: /var/tmp/openclaw-gradle
-          # Only successful protected pushes publish. Explicit commit:true refreshes same-size changes.
-          commit: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
-
-      - name: Point Gradle at the sticky disk
-        if: *android_gradle_sticky_disk_gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          sticky_root=/var/tmp/openclaw-gradle
-          mkdir -p "$sticky_root/gradle-user-home"
-          echo "GRADLE_USER_HOME=$sticky_root/gradle-user-home" >> "$GITHUB_ENV"
 
       - name: Restore Robolectric Maven cache
         id: robolectric-cache
@@ -6625,18 +6689,21 @@ jobs:
 
       - *android_toolchain_checkout_step
 
+      - name: Setup Node environment for native resources
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          # A full workspace store competes with the emulator image for hosted disk.
+          cache-mode: "off"
+          install-bun: "false"
+          install-deps: "false"
+
       - name: Setup Android toolchain
         uses: ./.ci-harness/.github/actions/setup-android-toolchain
         with:
           cache-mode: *cache_mode
+          install-native-deps: "true"
 
-      - name: Setup Node environment for native resources
-        uses: ./.ci-harness/.github/actions/setup-node-env
-        with:
-          cache-mode: *cache_mode
-          install-bun: "false"
-
-      - name: Run packaged Access crypto on Android
+      - name: Run packaged Access crypto and production TLS on Android
         shell: bash
         env:
           EXPECTED_PAGE_SIZE: ${{ matrix.page-size }}
@@ -6652,25 +6719,64 @@ jobs:
           printf '%s\n' "$acceleration"
           grep -Eiq '\bKVM\b.*\b(available|usable)\b' <<<"$acceleration"
           printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
-          emulator -avd openclaw-access -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
+          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
           emulator_pid=$!
-          trap 'adb -s emulator-5554 emu kill >/dev/null 2>&1 || true; wait "$emulator_pid" || true' EXIT
+          trust_evidence="$RUNNER_TEMP/android-native-tls-trust"
+          mkdir -p "$trust_evidence"
+          cleanup() {
+            status=$?
+            trap - EXIT
+            cp "$RUNNER_TEMP/access-emulator.log" "$trust_evidence/access-emulator.log" || status=1
+            tail -n 100 "$trust_evidence/access-emulator.log" || status=1
+            # Preserve actual app/test output metadata and hashes even on native failure.
+            if [[ -d apps/android/app/build/outputs/apk ]]; then
+              find apps/android/app/build/outputs/apk -type f -name '*.apk' -print0 | sort -z | xargs -0 -r sha256sum > "$trust_evidence/APK.sha256" || status=1
+              while IFS= read -r -d '' apk_output; do
+                cp --parents "$apk_output" "$trust_evidence" || status=1
+              done < <(find apps/android/app/build/outputs/apk -type f -name '*.apk' -print0)
+              while IFS= read -r -d '' metadata; do
+                cp --parents "$metadata" "$trust_evidence" || status=1
+              done < <(find apps/android/app/build/outputs/apk -type f -name output-metadata.json -print0)
+            fi
+            /usr/bin/timeout --signal=TERM --kill-after=2s 10s adb -s emulator-5554 logcat -d -v threadtime > "$trust_evidence/logcat.txt" || status=1
+            if ! /usr/bin/timeout --signal=TERM --kill-after=2s 60s bash scripts/android-native-tls-trust.sh cleanup "$trust_evidence"; then
+              echo 'FAILED: trust cleanup; emulator is contaminated and must not be reused.' | tee "$trust_evidence/CLEANUP-FAILED.txt"
+              status=1
+            fi
+            /usr/bin/timeout --signal=TERM --kill-after=2s 10s adb -s emulator-5554 emu kill >"$trust_evidence/emulator-disposal.txt" 2>&1 || status=1
+            # The owned timeout forwards TERM, then kills its emulator group after 5s.
+            kill -TERM "$emulator_pid" 2>/dev/null || true
+            wait "$emulator_pid" || true
+            if /usr/bin/timeout --signal=TERM --kill-after=2s 15s avdmanager delete avd --name openclaw-access >>"$trust_evidence/emulator-disposal.txt" 2>&1; then
+              echo 'Owned emulator process exited and AVD deleted; no snapshot or reuse.' >> "$trust_evidence/emulator-disposal.txt"
+            else
+              echo 'FAILED: owned AVD deletion; do not reuse runner.' >> "$trust_evidence/emulator-disposal.txt"
+              status=1
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          # Bound boot, root reconnection and trust admission together; cleanup stays in the parent.
           /usr/bin/timeout --signal=TERM --kill-after=2s 180s bash -c '
+            set -euo pipefail
+            trust_evidence=$1
+            EXPECTED_PAGE_SIZE=$2
             adb -s emulator-5554 wait-for-device
             until [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 2; done
-          '
-          test "$(adb -s emulator-5554 shell getconf PAGE_SIZE | tr -d '\r')" = "$EXPECTED_PAGE_SIZE"
-          if [[ "$EXPECTED_PAGE_SIZE" == 16384 ]]; then
-            # ps16k simulates 16 KiB pages on x86_64; compat mode must not hide loader failures.
-            adb -s emulator-5554 shell setprop bionic.linker.16kb.app_compat.enabled false
-            adb -s emulator-5554 shell setprop pm.16kb.app_compat.disabled true
-            test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d '\r')" = false
-            test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d '\r')" = true
-          fi
+            test "$(adb -s emulator-5554 shell getconf PAGE_SIZE | tr -d "\r")" = "$EXPECTED_PAGE_SIZE"
+            if [[ "$EXPECTED_PAGE_SIZE" == 16384 ]]; then
+              # ps16k simulates 16 KiB pages on x86_64; compat mode must not hide loader failures.
+              adb -s emulator-5554 shell setprop bionic.linker.16kb.app_compat.enabled false
+              adb -s emulator-5554 shell setprop pm.16kb.app_compat.disabled true
+              test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d "\r")" = false
+              test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d "\r")" = true
+            fi
+            bash scripts/android-native-tls-trust.sh prepare "$trust_evidence"
+          ' bash "$trust_evidence" "$EXPECTED_PAGE_SIZE"
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
-            :app:connectedPlayDebugAndroidTest \
+            :app:connectedPlayDebugAndroidTest --info \
             -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
-            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest \
+            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.NativeTransportQualificationSuite \
             -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           apk="$(python3 - <<'PY'
           from pathlib import Path
@@ -6678,10 +6784,34 @@ jobs:
           import xml.etree.ElementTree as ET
           import zipfile
           reports = Path('apps/android/app/build/outputs/androidTest-results/connected').rglob('*.xml')
-          cases = [case for report in reports for case in ET.parse(report).getroot().iter('testcase')
+          all_cases = [case for report in reports for case in ET.parse(report).getroot().iter('testcase')]
+          cases = [case for case in all_cases
                    if case.get('classname') == 'ai.openclaw.app.gateway.CloudflareAccessNativeTest']
           assert len(cases) == 1, 'The packaged native test must execute exactly once'
           assert all(case.find(tag) is None for case in cases for tag in ('failure', 'error', 'skipped')), 'The packaged native test failed or skipped'
+          tls_cases = [case for case in all_cases if case.get('classname') in (
+              'ai.openclaw.app.gateway.GatewaySessionTlsNativeTest',
+              'ai.openclaw.app.ui.chat.ChatInlineWidgetTlsNativeTest')]
+          expected_tls = {
+              ('ai.openclaw.app.gateway.GatewaySessionTlsNativeTest', name) for name in (
+                  'platformRootReachesReadyWithMatchingHostname',
+                  'platformRootRejectsWrongHostnameBeforeWebSocketUpgrade',
+                  'platformRootCannotBypassBlocklistedRawIntermediate',
+                  'matchingLeafPinReachesReadyDespiteDiscoveredIpHostnameMismatch',
+                  'wrongLeafPinRejectsBeforeWebSocketUpgrade',
+                  'matchingLeafPinCannotBypassBlocklistedRawIntermediate')
+          } | {
+              ('ai.openclaw.app.ui.chat.ChatInlineWidgetTlsNativeTest', name) for name in (
+                  'platformRootFetchesDocumentWithMatchingHostname',
+                  'platformRootRejectsWrongHostnameWithoutOriginRequest',
+                  'platformRootCannotFetchThroughBlocklistedRawIntermediate',
+                  'matchingLeafPinFetchesDocumentDespiteDiscoveredIpHostnameMismatch',
+                  'wrongLeafPinReturnsUnavailableWithoutOriginRequest',
+                  'matchingLeafPinCannotFetchThroughBlocklistedRawIntermediate')
+          }
+          observed_tls = [(case.get('classname'), case.get('name')) for case in tls_cases]
+          assert set(observed_tls) == expected_tls and len(observed_tls) == len(expected_tls), 'Each required TLS class/method must execute exactly once'
+          assert all(case.find(tag) is None for case in tls_cases for tag in ('failure', 'error', 'skipped')), 'The native TLS proof failed or skipped'
           directory = Path('apps/android/app/build/outputs/apk/play/debug')
           metadata = json.loads((directory / 'output-metadata.json').read_text())
           assert metadata['variantName'] == 'playDebug' and metadata['artifactType']['type'] == 'APK'
@@ -6706,6 +6836,8 @@ jobs:
           path: |
             apps/android/app/build/outputs/androidTest-results/connected/**
             apps/android/app/build/reports/androidTests/connected/**
+            ${{ runner.temp }}/android-native-tls-trust/**
+            ${{ runner.temp }}/access-emulator.log
           if-no-files-found: error
           retention-days: 14
 
@@ -6784,13 +6916,14 @@ jobs:
           console.log(`OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=${scenario}`);
           NODE
 
-      # Smoke keeps runtime and SDK types.
+      # Smoke packages include declarations for every public entrypoint.
       - name: Prepare Docker smoke package
         if: github.event_name == 'pull_request' || (inputs.release_gate && needs.preflight.outputs.ci_qualification != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main') || needs.preflight.outputs.validation_tier == 'main' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && github.repository == 'openclaw/openclaw')
         run: |
           set -euo pipefail
           pnpm clean:dist
           pnpm build:ci-artifacts
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts
           package_dir="${RUNNER_TEMP}/docker-seed-package"
           node scripts/package-openclaw-for-docker.mjs --skip-build \
             --allow-unreleased-changelog --output-dir "$package_dir" \
@@ -6869,7 +7002,7 @@ jobs:
       - docker-seed-e2e
       - published-driver-update
       - postgres-conformance
-    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft }}
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || github.repository != 'openclaw/openclaw' || github.event.pull_request.head.repo.full_name != github.repository || needs.preflight.outputs.runner_profile == 'github') && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
     outputs:
@@ -7019,7 +7152,7 @@ jobs:
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
             published-driver-update=${{ needs.published-driver-update.result }}|${{ needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha }}
             postgres-conformance=${{ needs.postgres-conformance.result }}|${{ needs.preflight.outputs.run_postgres_conformance }}
-            pr-failure-report=${{ (github.run_attempt != 1 || needs.preflight.outputs.run_checks_node_core_nondist != 'true') && 'skipped' || needs.pr-failure-report.result }}|${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' }}
+            pr-failure-report=${{ (github.run_attempt != 1 || needs.preflight.outputs.run_checks_node_core_nondist != 'true') && 'skipped' || needs.pr-failure-report.result }}|${{ github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
         run: |
           set -euo pipefail
           echo "release fast lane: ${RELEASE_FAST_LANE:-false}"

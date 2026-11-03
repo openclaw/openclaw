@@ -68,7 +68,7 @@ console.log(JSON.stringify({ namespace, output, again, disabled: process.env.TSX
     };
     const { result, stdout, stderr } = await run({
       command: testNodeExecPath,
-      args: ["--import", tsxPreload, "--input-type=module", "-e", script],
+      args: ["--input-type=module", "-e", script],
       homeMode,
       options: { env, stdio: ["ignore", "pipe", "pipe"] },
     });

@@ -47,6 +47,39 @@ import {
 import { getActiveMemorySearchManagerCore } from "./memory-runtime.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 
+async function loadInstalledGlobalPluginFixture(stateDir: string, pluginId: string) {
+  const globalDir = path.join(stateDir, "extensions", pluginId);
+  mkdirSafe(globalDir);
+  writePlugin({
+    id: pluginId,
+    body: simplePluginBody(pluginId),
+    dir: globalDir,
+    filename: "index.cjs",
+  });
+  await refreshPersistedInstalledPluginIndex({
+    stateDir,
+    reason: "source-changed",
+    installRecords: {
+      [pluginId]: {
+        source: "npm",
+        installPath: globalDir,
+      },
+    },
+  });
+
+  return loadOpenClawPlugins({
+    cache: false,
+    config: {
+      plugins: {
+        allow: [pluginId],
+        entries: {
+          [pluginId]: { enabled: true },
+        },
+      },
+    },
+  });
+}
+
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
 
@@ -697,38 +730,9 @@ describe("loadOpenClawPlugins", () => {
             body: simplePluginBody("demo-installed-duplicate"),
           });
           const stateDir = makePluginLoaderTempDir();
-          return withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-            const globalDir = path.join(stateDir, "extensions", "demo-installed-duplicate");
-            mkdirSafe(globalDir);
-            writePlugin({
-              id: "demo-installed-duplicate",
-              body: simplePluginBody("demo-installed-duplicate"),
-              dir: globalDir,
-              filename: "index.cjs",
-            });
-            await refreshPersistedInstalledPluginIndex({
-              stateDir,
-              reason: "source-changed",
-              installRecords: {
-                "demo-installed-duplicate": {
-                  source: "npm",
-                  installPath: globalDir,
-                },
-              },
-            });
-
-            return loadOpenClawPlugins({
-              cache: false,
-              config: {
-                plugins: {
-                  allow: ["demo-installed-duplicate"],
-                  entries: {
-                    "demo-installed-duplicate": { enabled: true },
-                  },
-                },
-              },
-            });
-          });
+          return withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+            loadInstalledGlobalPluginFixture(stateDir, "demo-installed-duplicate"),
+          );
         },
         expectedLoadedOrigin: "global",
         expectedDisabledOrigin: "bundled",
@@ -752,38 +756,7 @@ describe("loadOpenClawPlugins", () => {
           const stateDir = makePluginLoaderTempDir();
           return withEnvAsync(
             { OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot, OPENCLAW_STATE_DIR: stateDir },
-            async () => {
-              const globalDir = path.join(stateDir, "extensions", "demo-dev-source-duplicate");
-              mkdirSafe(globalDir);
-              writePlugin({
-                id: "demo-dev-source-duplicate",
-                body: simplePluginBody("demo-dev-source-duplicate"),
-                dir: globalDir,
-                filename: "index.cjs",
-              });
-              await refreshPersistedInstalledPluginIndex({
-                stateDir,
-                reason: "source-changed",
-                installRecords: {
-                  "demo-dev-source-duplicate": {
-                    source: "npm",
-                    installPath: globalDir,
-                  },
-                },
-              });
-
-              return loadOpenClawPlugins({
-                cache: false,
-                config: {
-                  plugins: {
-                    allow: ["demo-dev-source-duplicate"],
-                    entries: {
-                      "demo-dev-source-duplicate": { enabled: true },
-                    },
-                  },
-                },
-              });
-            },
+            () => loadInstalledGlobalPluginFixture(stateDir, "demo-dev-source-duplicate"),
           );
         },
         expectedLoadedOrigin: "bundled",

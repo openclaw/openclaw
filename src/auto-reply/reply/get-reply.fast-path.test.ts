@@ -7,6 +7,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { FAST_RESET_LINEAGE_FIXTURE } from "../../config/sessions/session-lineage.test-support.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import {
@@ -19,6 +20,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { handleGoalCommand } from "./commands-goal.js";
@@ -233,10 +235,17 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
   });
 
-  it("uses the target session thinking override for native /status", async () => {
+  it("keeps native /status delivery canonical and uses the target session thinking override", async () => {
+    const delivery: SessionEntry["delivery"] = {
+      kind: "external",
+      route: { channel: "telegram", target: { to: "123" } },
+      context: { channel: "telegram", to: "123" },
+      origin: { provider: "telegram", to: "123" },
+    };
     await seedSession({
       sessionId: "existing-telegram-session",
       thinkingLevel: "xhigh",
+      delivery,
       updatedAt: 1,
     });
     vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
@@ -249,6 +258,11 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       await getReplyFromConfig(nativeCtx("/status"), undefined, cfg),
       "OpenClaw\nThink: xhigh",
     );
+    const persisted = readSession();
+    expect(persisted).not.toHaveProperty("channel");
+    expect(persisted.delivery).toEqual(delivery);
+    expect(sessionDeliveryChannel(persisted)).toBe("telegram");
+    expect(normalizeLegacySessionEntryDelivery(persisted)).toBe(persisted);
     expect(mocks.loadModelCatalog).toHaveBeenCalledExactlyOnceWith({
       config: cfg,
       agentId: "main",

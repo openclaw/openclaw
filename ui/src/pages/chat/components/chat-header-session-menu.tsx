@@ -16,7 +16,6 @@ import {
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
@@ -36,7 +35,6 @@ registerEnglishCatalog(registerChatSessionEnglish);
 const Content = lazy(() => import("./chat-header-session-menu-content.tsx"), {
   export: "ChatHeaderSessionMenuContent",
 });
-warmWhenIdle(Content.preload);
 
 export type { HeaderMenuQuickAction } from "./chat-quick-action.tsx";
 

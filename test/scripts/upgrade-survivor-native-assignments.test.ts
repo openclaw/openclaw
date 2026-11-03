@@ -105,8 +105,24 @@ it("rejects a no-op import, dropped result, changed owner, and mutated source", 
 it("requires package-bound proof before publishing a successful retirement cell", () => {
   const versions = { baselineVersion: "2026.9.4", candidateVersion: "2026.9.6" };
   const digest = "a".repeat(64);
+  // The native lane completes 66 phases, including overlapping and repeated spans.
+  const phases = [
+    ["prepare-native-assignment-proof", "started"],
+    ["repeated-phase", "started"],
+    ["prepare-native-assignment-proof", "passed"],
+    ["repeated-phase", "passed"],
+    ...Array.from({ length: 64 }, () => [
+      ["repeated-phase", "started"],
+      ["repeated-phase", "passed"],
+    ]).flat(),
+  ].map(([phase, status], index) => ({
+    phase,
+    status,
+    at: new Date(Date.UTC(2026, 8, 4) + index).toISOString(),
+  }));
   const snapshot = {
     ...successSummary(versions.baselineVersion, versions.candidateVersion),
+    phases,
     backupRollback: backupRollbackProof(versions.baselineVersion, versions.candidateVersion),
     nativeAssignmentEligibility: {
       status: "required",
@@ -139,6 +155,7 @@ it("requires package-bound proof before publishing a successful retirement cell"
     },
   };
   const report = publish(snapshot);
+  expect(report.phases).toEqual(phases);
   expect(report.logs["native-assignment-server.log"]).toBe("native fixture diagnostic");
   expect(report.nativeAssignments).toMatchObject({
     status: "passed",
@@ -164,4 +181,10 @@ it("requires package-bound proof before publishing a successful retirement cell"
       "Invalid native assignment preservation",
     );
   }
+  const invalidPhases = [...phases];
+  invalidPhases[131] = { ...invalidPhases[131]!, status: "omitted" };
+  for (const invalid of [undefined, {}, invalidPhases]) {
+    expect(() => publish({ ...snapshot, phases: invalid })).toThrow();
+  }
+  expect(() => publish({ ...snapshot, padding: "x".repeat(256 * 1024) })).toThrow();
 });

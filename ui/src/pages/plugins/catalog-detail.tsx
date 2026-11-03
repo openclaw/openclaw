@@ -13,7 +13,6 @@ import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import "../../styles/sidebar-markdown.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
-import { PluginNativeUiDisclosure } from "./native-ui-disclosure.tsx";
 import {
   renderPluginContentCapabilities,
   renderPluginMetadata,
@@ -23,12 +22,16 @@ import {
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
+import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 
 export type PluginCatalogDetailProps = {
   registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
   registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
   registerIcon?: (readId: () => string) => () => void;
   onAskPlugin?: () => void;
+  onSelectPrompt?: (prompt: string) => void;
+  promptBusy?: boolean;
+  promptBlockedReason?: string | null;
   busy?: boolean;
   installProgress?: PluginInstallProgress;
   message?: PluginRowMessage;
@@ -102,13 +105,6 @@ function CatalogDetailContent(props: {
           )}
         />
       }
-      notice={
-        plugin().local.action === "install" || installing() ? (
-          <PluginNativeUiDisclosure
-            variant={plugin().catalog.family === "bundle-plugin" ? "bundle" : "install"}
-          />
-        ) : undefined
-      }
       titleAction={
         <>
           {plugin().local.action === "install" || installing() ? (
@@ -136,6 +132,19 @@ function CatalogDetailContent(props: {
       }
       identity={renderPluginPublisher(props.value)}
       sidebar={renderPluginMetadata(props.value)}
+      recommendations={
+        <PluginRecommendedPrompts
+          id={plugin().id}
+          name={plugin().catalog.name}
+          prompts={detail().recommendedPrompts}
+          iconUrl={packageIcon()}
+          registerIcon={props.state.registerIcon}
+          busy={props.state.busy || props.state.promptBusy}
+          disabled={Boolean(props.state.promptBlockedReason)}
+          disabledReason={props.state.promptBlockedReason}
+          onSelect={props.state.onSelectPrompt}
+        />
+      }
       panel={
         <>
           {renderPluginRowMessage(props.state.message, {

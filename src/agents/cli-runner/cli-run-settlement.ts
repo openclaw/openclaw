@@ -509,11 +509,12 @@ export function buildCliRunResult(params: {
   const rawFinalText = output.rawFinalText;
   const { sourceReplyMirror } = preparedReply;
   const text = preparedReply.text;
-  const finalAssistantVisibleText = text;
+  const finalAssistantVisibleText = preparedReply.finalMessageText ?? text;
+  // Automatic finals still need route-scoped dedupe: an earlier send may be only progress.
   const payloads =
     sourceReplyMirror.payloads.length > 0
       ? sourceReplyMirror.payloads
-      : sourceReplyMirror.delivered
+      : sourceReplyMirror.delivered && runParams.sourceReplyDeliveryMode === "message_tool_only"
         ? undefined
         : text
           ? (output.textParts && text === output.text ? output.textParts : [text]).map(

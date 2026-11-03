@@ -48,6 +48,7 @@ import { requestChatSend, resolveDisplayedLeafEntryId } from "./chat-send-reques
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
@@ -73,6 +74,7 @@ import {
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { handleAbortChat, hasAbortableSessionRun, isChatStopCommand } from "./run-lifecycle.ts";
 import { handleChatScroll, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
+import { cacheChatAvatarSource } from "./session-message-cache.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
   updateSidebarSessionActivePanel,
@@ -286,6 +288,9 @@ export function createPageState(
     sessionWorkspaceState: undefined,
   }) as unknown as ChatPageHost;
 
+  state.cacheChatAvatarSource = (agentId, source) =>
+    cacheChatAvatarSource(chatMessagesBySession, state, state, agentId, source);
+  state.refreshCurrentChat = () => refreshPageChat(state);
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.scrollToBottom = (options) => {
@@ -702,6 +707,9 @@ export function createPageState(
       });
     }
   }
+  Object.defineProperty(state, "sessionWorkspaceReadDisabledReason", {
+    get: () => selectedChatSessionRow(state)?.workspaceReadDisabledReason,
+  });
   return projectChatFields(
     state,
     // SAFETY: This literal owns every enumerable key passed to the projection.
