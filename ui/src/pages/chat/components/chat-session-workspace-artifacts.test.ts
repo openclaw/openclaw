@@ -194,7 +194,7 @@ describe("session workspace artifacts", () => {
         message:
           condition === "denied"
             ? "Access denied"
-            : "This attachment is unavailable in this chat. Ask the sender to share it again.",
+            : "This attachment is unavailable in this session. Ask the sender to share it again.",
       });
       expect(
         fixture.request.mock.calls.filter(([method]) => method === "artifacts.download"),
