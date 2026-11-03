@@ -132,8 +132,8 @@ native OpenAI Decisions route. Inference then posts to
 `/v1/native/openai/v1/decisions` using upstream model `gpt-6-luna` and the same
 prepared auth/transport. No upstream OpenAI key is looked up on the host.
 A deployment without that native service route or key grant cannot evaluate
-these decisions; its existing chat access is not substituted. SystemOne and
-SubQ protocols are not implemented by this adapter.
+these decisions; its existing chat access is not substituted. SubQ is not
+implemented by this adapter.
 
 The typed-only declaration stays out of conversational model selection unless
 live chat discovery independently grants that model. For custom deployments,
@@ -143,6 +143,38 @@ this still does not bypass the per-call key grant check.
 
 See [Decision models](/concepts/decision-models) for the shared API and selector
 semantics.
+
+### Catalog-scoped Baseten SystemOne
+
+When the deployment implements `baseten.systemone` and the selected proxy key's
+current catalog grants it, ClawRouter can expose these decision-only models:
+
+- `clawrouter/baseten/decision-models/baseten-elephant-9b-latest`
+- `clawrouter/baseten/decision-models/baseten-mammoth-27b-latest`
+- `clawrouter/baseten/decision-models/baseten-joey-2b-latest`
+
+This client support does not activate a Worker route. Shared dispatch and actual
+client-through-Worker qualification must be available before use. The native
+path is `/v1/native/baseten/systemone`; a manifest offer uses
+`/v1/proxy/baseten/systemone` with the same encoded native body. The host uses
+only the prepared ClawRouter key and rechecks a recent, credential-scoped offer
+before each evaluation. Missing, stale, foreign, or incompatible offers fail
+closed; a local Baseten key is never substituted.
+
+The actual `decision_evaluate` consumer shares the direct provider's text codec:
+JSON state and structured criteria become text, booleans become Noul, and choice
+and fractional score answers retain native confidence. Choice accepts 2–255
+options, score 2–10 levels, and the entire batch at most 512 options (each boolean
+counts as two). Images, other question kinds, and explicit on/off reasoning are
+unsupported. The declared 16,384-token limit applies to each full encoded
+question, including shared state and criteria; the client does not substitute a
+byte estimate or advertise it as a conversational context window.
+
+The backend model in the response stays distinct from the selected route.
+Observed input tokens are counted once and observed output tokens must equal
+the question count. Missing or inconsistent usage is rejected. These facts do
+not establish a tariff; missing prices remain unknown. Decision rows have no
+Chat API and do not enter ordinary generation selection.
 
 ## Text embeddings for memory
 

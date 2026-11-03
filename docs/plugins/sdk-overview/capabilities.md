@@ -263,6 +263,17 @@ authority. The existing V1 `api.runtime.decisions.evaluate` contract remains
 available. V2 execution uses `api.runtime.decisions.evaluateV2` and a versioned
 provider registration; importing data types alone does not authorize execution.
 
+`encodeTextSystemOneRequest` and `decodeTextSystemOneResponse` share the native
+text-only SystemOne codec between direct and catalog-scoped adapters. They encode
+JSON state and criteria as text, encode booleans as Noul, preserve fractional
+scores and backend model identity, and require observed output usage to equal
+the question count. They do not estimate prices or fill missing usage.
+The lazy `openclaw/plugin-sdk/decisions-unary-runtime` entrypoint supplies
+`executeDecisionJsonRequest`: a bounded JSON transport with host-prepared
+credentials, deadline, cancellation, and a dispatch-time admission assertion.
+Adapters supply the exact URL, body, and decoder; the helper never selects a
+provider, refreshes credentials, or falls back to another protocol.
+
 `DecisionContentV2` distinguishes text, JSON, image data, and stable-ID lists.
 Answers preserve explicit Boolean decisions separately from P(true), nullable
 choices, fractional scores, sort/tag results, per-question errors, and reported

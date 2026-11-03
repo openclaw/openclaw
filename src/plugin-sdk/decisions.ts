@@ -33,3 +33,7 @@ export { validateDecisionResultV2 } from "../decisions/result-validation.js";
 export { DecisionContractError } from "../decisions/contract-error.js";
 export type { DecisionProviderContextV2 } from "../decisions/provider-context.js";
 export { encodeSystemOneQuestions, decodeSystemOneResponse } from "../decisions/systemone-codec.js";
+export {
+  encodeTextSystemOneRequest,
+  decodeTextSystemOneResponse,
+} from "../decisions/systemone-text-codec.js";

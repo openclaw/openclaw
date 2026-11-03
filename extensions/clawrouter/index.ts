@@ -615,8 +615,8 @@ export default defineSingleProviderPluginEntry({
       },
       // This is protocol support, not a key grant. The decision executor checks the
       // selected credential's catalog before using its native route.
-      augmentModelCatalog: ({ entries }) =>
-        entries.map((entry) =>
+      augmentModelCatalog: async (context) => {
+        const entries = context.entries.map((entry) =>
           entry.provider === PROVIDER_ID &&
           entry.id === "openai/gpt-6-luna" &&
           entry.api === "openai-responses"
@@ -625,7 +625,11 @@ export default defineSingleProviderPluginEntry({
                 inference: { ...decisionCapabilities, chat: entry.inference?.chat ?? true },
               }
             : entry,
-        ),
+        );
+        const { listClawRouterBasetenDecisionModels } =
+          await import("./decision-baseten-offers.js");
+        return [...entries, ...(await listClawRouterBasetenDecisionModels(context))];
+      },
       // Live catalog routing also applies to explicitly configured model rows.
       preferRuntimeResolvedModel: () => true,
       prepareDynamicModel: async (ctx) => {

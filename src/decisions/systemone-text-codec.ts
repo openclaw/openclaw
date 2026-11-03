@@ -1,11 +1,9 @@
-import {
-  decodeSystemOneResponse,
-  validateDecisionResultV2,
-  type DecisionBatchV2,
-  type DecisionEntry,
-  type ProviderDecisionOutcomeV2,
-} from "openclaw/plugin-sdk/decisions";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { DecisionEntry } from "./input-types.js";
+import type { ProviderDecisionOutcomeV2 } from "./provider-outcomes.js";
+import { validateDecisionResultV2 } from "./result-validation.js";
+import { decodeSystemOneResponse } from "./systemone-codec.js";
+import type { DecisionBatchV2 } from "./types-v2.js";
 
 function text(value: DecisionEntry | undefined): string {
   return typeof value === "string" ? value : value === undefined ? "" : JSON.stringify(value);
@@ -41,12 +39,12 @@ function questions(batch: DecisionBatchV2) {
       if (q.type === "score") {
         return [id, { type: "score", instructions, criteria: q.criteria.map(text) }];
       }
-      throw new Error("Unsupported Baseten decision question");
+      throw new Error("Unsupported text SystemOne question");
     }),
   );
 }
 
-export function decodeBasetenDecisionResult(
+export function decodeTextSystemOneResponse(
   batch: DecisionBatchV2,
   payload: Record<string, unknown>,
 ): ProviderDecisionOutcomeV2 {
@@ -72,7 +70,7 @@ export function decodeBasetenDecisionResult(
       return invalid;
     }
   }
-  // Baseten exposes the served model and token usage, without other native accounting fields.
+  // Keep the observed backend model and token receipt; do not import unqualified cost fields.
   const result = decodeSystemOneResponse(batch, {
     model: payload.model,
     answers: payload.answers,
@@ -81,7 +79,7 @@ export function decodeBasetenDecisionResult(
   return validateDecisionResultV2(batch, result) ? { status: "ok", result } : invalid;
 }
 
-export function encodeBasetenDecisionRequest(batch: DecisionBatchV2, modelId: string): string {
+export function encodeTextSystemOneRequest(batch: DecisionBatchV2, modelId: string): string {
   return JSON.stringify({
     model: modelId,
     state:
