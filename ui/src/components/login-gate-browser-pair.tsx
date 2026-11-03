@@ -38,14 +38,14 @@ export function LoginGateBrowserPair(props: { pair: LoginGateBrowserPairModel })
     return current.kind === "failed" ? current : null;
   };
   return (
-    <section class="login-gate__browser-pair" aria-live="polite">
+    <section class="stack" aria-live="polite">
       <Show
         when={waiting()}
         fallback={
           <>
             <Show when={failure()}>
               {(failed) => (
-                <p class="login-gate__browser-pair-note" role="status">
+                <p class="login-gate__lede" role="status">
                   {t(`login.browserPair.failure.${failed().reason}`)}
                 </p>
               )}
@@ -63,15 +63,15 @@ export function LoginGateBrowserPair(props: { pair: LoginGateBrowserPairModel })
       >
         {(request) => (
           <>
-            <p class="login-gate__browser-pair-code">{request().code}</p>
+            <p class="login-gate__heading mono login-gate__browser-pair-code">{request().code}</p>
             <div class="login-gate__hero">
               <span class="login-gate__hero-label">{t("login.runOnHost")}</span>
               <ConnectCommand command={`openclaw pair ${request().code}`} variant="hero" />
             </div>
-            <p class="login-gate__browser-pair-note">
+            <p class="login-gate__lede">
               {t("login.browserPair.browserId", { id: request().browserId })}
             </p>
-            <p class="login-gate__browser-pair-note">
+            <p class="login-gate__lede">
               <span class="session-run-spinner" aria-hidden="true" />
               {t("login.browserPair.waiting")}
             </p>
