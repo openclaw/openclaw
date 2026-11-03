@@ -9,6 +9,7 @@ import { iterateSessionContextEntries } from "../../../packages/agent-core/src/h
 import { stripCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import { derivePromptTokens, normalizeUsage } from "../../agents/usage.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER } from "../../shared/transcript-only-openclaw-assistant.js";
 import type {
   SessionParentForkDecision,
   ForkSessionFromParentTranscriptParams,
@@ -323,10 +324,12 @@ function findLastCompletedForkIndex(entries: readonly TranscriptEvent[]): number
       return true;
     }
     const message = isRecord(entry.message) ? entry.message : undefined;
-    // Tool-use assistant messages are mid-turn checkpoints. Any other persisted
-    // assistant message is a stable boundary, including legacy rows without a reason.
+    // Commands and delivery notices can commit while a model turn is still
+    // running; they must not make its unfinished tail a completed fork prefix.
+    // Legacy model responses without a reason remain stable boundaries.
     return (
       message?.role === "assistant" &&
+      message.provider !== OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
       !isPendingBackgroundResultMessage(message) &&
       message.stopReason !== "toolUse"
     );

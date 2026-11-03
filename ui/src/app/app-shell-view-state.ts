@@ -1,12 +1,16 @@
-import { isSettingsNavigationRoute, isSettingsTakeover, titleForRoute } from "../app-navigation.ts";
+import {
+  isSettingsNavigationRoute,
+  isSettingsTakeover,
+  pageTitleForRoute,
+} from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { SettingsSidebarFallbackProps } from "../components/settings-sidebar-lazy.tsx";
-import { askBrandLabel } from "../components/theme-brand-label.ts";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { settingsBackTarget } from "../lib/settings-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.tsx";
 import { isTemplatesAvailable } from "../pages/templates/availability.ts";
@@ -40,6 +44,7 @@ import {
 import { resolveProfileAppearancePrefs } from "./server-prefs-profile.ts";
 import { NAV_WIDTH_MAX, normalizeCatalogOpenTarget } from "./settings.ts";
 import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
+import { currentThemeBranding } from "./theme-branding.ts";
 
 export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElements {
   mobileGatewayStatus: GatewayStatusProps | null;
@@ -156,6 +161,16 @@ export function readShellView(host: ShellViewHost) {
       routeId: activeRoute,
       onboarding,
     });
+  const backTarget =
+    floatingHeader && settingsTakeover
+      ? settingsBackTarget(activeRoute, host.routeState.location, context.basePath)
+      : null;
+  const floatingBack = backTarget
+    ? () => {
+        const { routeId, ...location } = backTarget;
+        host.shellNavigation.navigate(routeId, location);
+      }
+    : undefined;
   // Drawer navigation always opens expanded; the tab's desktop collapse state
   // stays in memory for when the viewport returns to the desktop layout.
   // Settings needs expanded navigation, so the collapse state pauses there too.
@@ -299,6 +314,7 @@ export function readShellView(host: ShellViewHost) {
         host.shellNavigation.navigate("settings");
       }
     },
+    onEscape: nativeEmbed ? undefined : () => host.shellNavigation.leaveSettingsLevel(),
     canAdmin: operatorAccess.canAdmin,
     nativeDeviceSettings: context.nativeDeviceSettings,
   };
@@ -338,8 +354,12 @@ export function readShellView(host: ShellViewHost) {
     nativeWebChrome,
     mergedChatChrome,
     floatingHeader,
+    floatingBack,
     get pageTitle() {
-      return activeRoute === "custodian" ? askBrandLabel() : titleForRoute(activeRoute);
+      // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
+      return activeRoute === "custodian"
+        ? currentThemeBranding().brandName
+        : pageTitleForRoute(activeRoute, context.nativeDeviceSettings?.snapshot);
     },
     get navCollapsed() {
       return navCollapsed();

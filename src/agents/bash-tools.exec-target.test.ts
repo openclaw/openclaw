@@ -5,7 +5,7 @@ import { resolveExecHost, resolveExecTarget } from "./bash-tools.exec-target.js"
 import { createExecTool } from "./bash-tools.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
-import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
+import { consumeToolExecutionNotStarted as consumeTrustedToolNoStartError } from "./tool-effect-receipt.js";
 
 describe("resolveExecTarget", () => {
   it("authenticates the sandbox escape rejection once, not copies or invalid syntax", () => {

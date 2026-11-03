@@ -132,7 +132,12 @@ is never reused for an in-process restart. Node exits naturally after owned hand
 close; the native shutdown watchdog kills the process if leaked handles keep it
 alive two seconds past the shutdown deadline. Its worker and main-thread fallback
 share one monotonic deadline, including worker startup time, and report retained
-cleanup owners before forcing exit. A duplicate `SIGTERM` during shutdown is
+cleanup owners before forcing exit. After a clean shutdown retires those
+watchdogs, the command waits ten seconds past its own final cleanup. If a leaked
+handle still keeps the process alive, the Gateway prints the active resource types
+to stderr. On Linux and macOS, a stop with exit status `0` then ends with `SIGTERM`,
+which supervisors count as a clean stop. A non-zero status, which can be a
+supervisor restart instruction, and Windows keep the report only. A duplicate `SIGTERM` during shutdown is
 logged once and ignored. That signal exit is accepted, and the supervisor starts
 a fresh Gateway.
 
@@ -407,7 +412,11 @@ guaranteed exactly once.
 For a session with a human owner, the input uses that recorded principal's current
 role, scopes, and session access, narrowed by the session's current permission mode
 and tool policy. When no owner is set, the human creator is used. A removed
-principal, lost access, or archived/deleted session is skipped with a log entry.
+principal or lost access prevents automatic resume. An admission failure records
+a visible interruption notice in the existing session, with a bounded, redacted
+diagnostic. The warning identifies the session, interrupted run, and admission
+stage. Resolve the reported error, then send a new message to continue. Archived
+or deleted sessions remain skipped with a log entry.
 The Gateway never substitutes an administrator or restores a saved operator grant.
 Sessions with no human principal use ordinary system-event authority; if it lacks
 a needed capability, the agent must ask for an authorized input.
@@ -427,8 +436,10 @@ an ordinary failed send that the sender can resend. A channel identity without a
 profile does not authorize queued execution after restart.
 
 New messages arriving during a resumed run use ordinary steering and queue rules.
-There is no recovery-predecessor wait or special recovery admission lane. Explicit
-Stop, cancellation, archive, and reset keep their normal meanings.
+Resumed turns execute on the bounded `restart-recovery` lane at
+`agents.defaults.maxConcurrent`, independently of interactive and cron capacity.
+A recovery backlog cannot queue ahead of new cron runs. Per-session input order
+is unchanged; Stop, cancellation, archive, and reset keep their normal meanings.
 
 ### Subagents
 

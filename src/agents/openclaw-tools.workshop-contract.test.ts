@@ -16,6 +16,7 @@ import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
@@ -618,20 +619,41 @@ describe("Workshop through the OpenClaw tool set", () => {
   });
 
   it.each([false, true])(
-    "T2 T3: host-issued capability routes personal operations (multiple profiles: %s)",
+    "T2 T3: host-issued capability adds skill_library for personal operations (multiple profiles: %s)",
     async (multiple) => {
-      expect(tools({ sandboxed: true }).some((tool) => tool.name === "skill_workshop")).toBe(false);
+      const skillToolNames = (overrides: Parameters<typeof tools>[0]) =>
+        tools(overrides)
+          .map((tool) => tool.name)
+          .filter((name) => name === "skill_workshop" || name === "skill_library");
+      expect(skillToolNames({ sandboxed: true })).toEqual([]);
+      expect(skillToolNames({})).toEqual(["skill_workshop"]);
       const alice = ensureProfileForEmail("alice@example.test");
       if (multiple) {
         ensureProfileForEmail("bob@example.test");
       }
       const catalog = await prepareUserProfileCatalog();
+      const ownerConfig: OpenClawConfig = {
+        ...config,
+        gateway: {
+          roles: {
+            default: "administrator",
+            definitions: {
+              administrator: {
+                scopes: ["operator.admin"],
+                agents: "*",
+                sessions: { others: "view" },
+              },
+              reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "view" } },
+            },
+          },
+        },
+      };
       const owner = {
         client: {
           authenticatedUserProfile: { profileId: alice.id },
           connect: { scopes: ["operator.admin"] },
         },
-        context: { getRuntimeConfig: () => config },
+        context: { getRuntimeConfig: () => ownerConfig },
       } as Parameters<typeof prepareGatewaySkillAuthoring>[0];
       const capability = await prepareGatewaySkillAuthoring(owner, "agent:main:contract", true);
       expect(capability?.defaultTarget).toBe(multiple ? "personal" : "workspace");
@@ -644,8 +666,12 @@ describe("Workshop through the OpenClaw tool set", () => {
       try {
         const admitted = await admission.admit("embedded");
         capability!.bind(admitted);
-        const tool = workshop({ sandboxed: true, skillWorkshop: { libraryAuthoring: capability } });
-        const invoke = (args: Record<string, unknown>) =>
+        const run = { sandboxed: true, skillLibraryAuthoring: capability };
+        expect(skillToolNames(run)).toEqual(
+          multiple ? ["skill_library"] : ["skill_workshop", "skill_library"],
+        );
+        const surface = tools(run);
+        const invoke = (name: string, args: Record<string, unknown>) =>
           withGatewayToolCallerIdentity(
             {
               agentId: "main",
@@ -653,16 +679,20 @@ describe("Workshop through the OpenClaw tool set", () => {
               operationalRunInstance: admitted.operationalRunInstance,
               receiptAuthority: () => true,
             },
-            () => tool.execute("personal", args),
+            () => surface.find((tool) => tool.name === name)!.execute("personal", args),
           );
         if (!multiple) {
-          await invoke({ action: "create", name: "workspace", content: skill("workspace") });
+          await invoke("skill_workshop", {
+            action: "create",
+            name: "workspace",
+            content: skill("workspace"),
+          });
           expect(await fs.readFile(path.join(root, "workspace", "SKILL.md"), "utf8")).toBe(
             skill("workspace"),
           );
         }
         const personal = multiple ? {} : { target: "personal" };
-        const receipt = await invoke({
+        const receipt = await invoke("skill_library", {
           ...personal,
           action: "create",
           name: "personal",
@@ -673,14 +703,28 @@ describe("Workshop through the OpenClaw tool set", () => {
           target: "personal",
           entry: { ownerProfileId: alice.id },
         });
-        const listing = await invoke({ ...personal, action: "list" });
+        const listing = await invoke("skill_library", { ...personal, action: "list" });
         expect(text(listing)).toContain("personal");
         await expect(
-          invoke({ target: "personal", action: "view", name: "personal" }),
-        ).rejects.toThrow("Invalid personal Skill Workshop arguments");
+          invoke("skill_library", { target: "personal", action: "view", name: "personal" }),
+        ).rejects.toThrow("Invalid skill_library arguments");
         await expect(fs.stat(path.join(root, "personal"))).rejects.toMatchObject({
           code: "ENOENT",
         });
+        if (!multiple) {
+          // A demoted admin keeps the definition but loses workspace writes.
+          setUserProfileRole(alice.id, "reader");
+          await expect(
+            invoke("skill_workshop", {
+              action: "create",
+              name: "demoted",
+              content: skill("demoted"),
+            }),
+          ).rejects.toThrow("current administrator authority");
+          await expect(fs.stat(path.join(root, "demoted"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
       } finally {
         admission.close();
         catalog.release();
