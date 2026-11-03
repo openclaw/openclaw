@@ -3,6 +3,7 @@ import OpenClawKit
 import Testing
 @testable import OpenClaw
 
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct GatewayAccessDeviceAuthBindingTests {
     private final class MemoryStore {
@@ -273,88 +274,102 @@ struct GatewayAccessDeviceAuthBindingTests {
             fallbackAllowed: true))
     }
 
-    @Test func `node reconnect never presents A token to B and binds only after Gateway rotation`() throws {
+    @Test func `node reconnect withholds another principal's token and binds actual Gateway rotation`() async throws {
+        let isolation = await GatewayRegistryTestIsolation()
+        defer { isolation.restore() }
+        let state = try TemporaryOpenClawState(instanceID: "node-binding-\(UUID().uuidString)")
+        defer { state.restore() }
+        let server = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [])
+        defer { server.stop() }
+        server.acceptedOperatorScopes = []
+        let gatewayID = "node-binding-\(UUID().uuidString)"
         let tokens = try CloudflareAccessTestTokens()
         let application = try CloudflareAccessTestTokens.application()
         let ownerA = try principal(tokens: tokens, subject: "owner-A", application: application)
         let memberB = try principal(tokens: tokens, subject: "member-B", application: application)
-        let memory = MemoryStore()
-        memory.deviceAuth = self.storedToken("gateway-node-A", role: "node")
-        let store = self.bindingStore(memory: memory, role: "node")
-        #expect(store.bindGatewayIssuedToken(
-            principal: ownerA,
-            gatewayID: self.gatewayID,
-            role: "node",
-            profile: .primary,
-            persistedRoles: ["node"]))
-
-        let a = NodeAppModel._test_nodeDeviceAuthState(
-            gatewayID: self.gatewayID,
-            principal: ownerA,
-            profile: .primary,
-            fallbackAllowed: true,
-            bindingStore: store)
-        let b = NodeAppModel._test_nodeDeviceAuthState(
-            gatewayID: self.gatewayID,
-            principal: memberB,
-            profile: .primary,
-            fallbackAllowed: true,
-            bindingStore: store)
-        #expect(a.allowStoredDeviceAuth)
-        #expect(!b.allowStoredDeviceAuth)
-
-        var options = GatewayConnectOptions(
-            role: "node",
-            scopes: [],
-            caps: [],
-            commands: [],
-            permissions: [:],
-            clientId: "ios",
-            clientMode: "node",
-            clientDisplayName: "Phone",
-            allowStoredDeviceAuth: b.allowStoredDeviceAuth)
-        options = NodeAppModel._test_nodeOptionsAfterSuccessfulDeviceAuthHandshake(
-            options,
-            principal: memberB,
-            gatewayID: self.gatewayID,
-            profile: .primary,
-            previousTokenVersion: b.tokenVersion,
-            bindingStore: store)
-        #expect(!options.allowStoredDeviceAuth)
-        #expect(!NodeAppModel._test_nodeDeviceAuthState(
-            gatewayID: self.gatewayID,
-            principal: memberB,
-            profile: .primary,
-            fallbackAllowed: true,
-            bindingStore: store).allowStoredDeviceAuth)
-
-        memory.deviceAuth = self.storedToken("gateway-node-B", role: "node")
-        options = NodeAppModel._test_nodeOptionsAfterSuccessfulDeviceAuthHandshake(
-            options,
-            principal: memberB,
-            gatewayID: self.gatewayID,
-            profile: .primary,
-            previousTokenVersion: b.tokenVersion,
-            bindingStore: store)
-        #expect(options.allowStoredDeviceAuth)
-        #expect(NodeAppModel._test_nodeDeviceAuthState(
-            gatewayID: self.gatewayID,
-            principal: memberB,
-            profile: .primary,
-            fallbackAllowed: true,
-            bindingStore: store).allowStoredDeviceAuth)
-        #expect(!NodeAppModel._test_nodeDeviceAuthState(
-            gatewayID: self.gatewayID,
-            principal: ownerA,
-            profile: .primary,
-            fallbackAllowed: true,
-            bindingStore: store).allowStoredDeviceAuth)
-        #expect(NodeAppModel._test_nodeDeviceAuthState(
-            gatewayID: self.gatewayID,
-            principal: nil,
-            profile: .primary,
-            fallbackAllowed: true,
-            bindingStore: store).allowStoredDeviceAuth)
+        let store = GatewayAccessDeviceAuthBindingStore.shared
+        let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+        model.setScenePhase(.active)
+        func allows(_ principal: CloudflareAccessPrincipal) -> Bool {
+            store.allowsStoredDeviceAuth(
+                entry: store.storedDeviceAuth(role: "node", gatewayID: gatewayID, profile: .primary),
+                principal: principal,
+                gatewayID: gatewayID,
+                role: "node",
+                profile: .primary,
+                fallbackAllowed: true)
+        }
+        func reconnect(
+            as principal: CloudflareAccessPrincipal?,
+            issuing token: String?) async throws -> NativeGatewayWebSocketFixture.ConnectAuth
+        {
+            // Reset the channel too: its internal reconnect can reuse a newly persisted token
+            // without exercising NodeAppModel's next-attempt binding decision.
+            await model.resetGatewaySessionsForForcedReconnect()
+            let previousNodeCount = server.roles.filter { $0 == "node" }.count
+            server.issuedDeviceTokensByRole = token.map { ["node": $0] } ?? [:]
+            let authorization = principal.map { principal in
+                GatewayIngressAuthorization(
+                    origin: application.origin,
+                    principal: principal,
+                    revision: 1,
+                    registrationID: UUID(),
+                    headers: { _ in [:] },
+                    isCurrent: { true },
+                    dashboardCookie: { _ in nil },
+                    checkResponse: { _ in },
+                    load: { request, operation in try await operation(request) })
+            }
+            model.applyGatewayConnectConfig(GatewayConnectConfig(
+                url: server.url(),
+                stableID: gatewayID,
+                tls: GatewayTLSParams(required: false, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: GatewayConnectOptions(
+                    role: "node",
+                    scopes: [],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-ios",
+                    clientMode: "node",
+                    clientDisplayName: "Binding Test",
+                    deviceAuthGatewayID: gatewayID),
+                ingressAuthorization: authorization))
+            try await TestWait.observed("native node connected") { model.gatewayConnected }
+            try await TestWait.state("node connect frame") {
+                server.roles.filter { $0 == "node" }.count > previousNodeCount
+            }
+            let nodeIndex = try #require(server.roles.indices.filter { server.roles[$0] == "node" }
+                .dropFirst(previousNodeCount).first)
+            return try #require(server.capturedAuth(at: nodeIndex))
+        }
+        let empty = NativeGatewayWebSocketFixture.ConnectAuth(token: nil, bootstrapToken: nil, deviceToken: nil)
+        do {
+            #expect(try await reconnect(as: ownerA, issuing: "gateway-node-A") == empty)
+            // Connected state precedes post-handshake binding; observe it before resetting.
+            try await TestWait.state("issued A token bound") { allows(ownerA) }
+            #expect(try await reconnect(as: memberB, issuing: nil) == empty)
+            #expect(store.storedDeviceAuth(role: "node", gatewayID: gatewayID, profile: .primary)?.entry.token ==
+                "gateway-node-A")
+            #expect(!allows(memberB))
+            #expect(try await reconnect(as: memberB, issuing: "gateway-node-B") == empty)
+            try await TestWait.state("issued B token bound") { allows(memberB) }
+            #expect(!allows(ownerA))
+            #expect(try await reconnect(as: memberB, issuing: nil) == .init(
+                token: "gateway-node-B", bootstrapToken: nil, deviceToken: nil))
+            #expect(try await reconnect(as: ownerA, issuing: nil) == empty)
+            #expect(try await reconnect(as: nil, issuing: nil) == .init(
+                token: "gateway-node-B", bootstrapToken: nil, deviceToken: nil))
+        } catch {
+            model.disconnectGateway()
+            await model.waitForGatewaySessionResetIfNeeded()
+            throw error
+        }
+        model.disconnectGateway()
+        await model.waitForGatewaySessionResetIfNeeded()
     }
 
     @Test func `principal identity includes access origin issuer audience and subject`() throws {

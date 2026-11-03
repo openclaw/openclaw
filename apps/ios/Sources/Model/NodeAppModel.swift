@@ -4386,11 +4386,11 @@ extension NodeAppModel {
         gatewayID: String,
         principal: CloudflareAccessPrincipal?,
         profile: GatewayDeviceIdentityProfile,
-        fallbackAllowed: Bool,
-        bindingStore: GatewayAccessDeviceAuthBindingStore = .shared) -> (
+        fallbackAllowed: Bool) -> (
         allowStoredDeviceAuth: Bool,
         tokenVersion: GatewayAccessDeviceAuthBindingStore.TokenVersion?)
     {
+        let bindingStore = GatewayAccessDeviceAuthBindingStore.shared
         let stored = bindingStore.storedDeviceAuth(
             role: "node",
             gatewayID: gatewayID,
@@ -4411,11 +4411,10 @@ extension NodeAppModel {
         principal: CloudflareAccessPrincipal?,
         gatewayID: String,
         profile: GatewayDeviceIdentityProfile,
-        previousTokenVersion: GatewayAccessDeviceAuthBindingStore.TokenVersion?,
-        bindingStore: GatewayAccessDeviceAuthBindingStore = .shared) -> GatewayConnectOptions
+        previousTokenVersion: GatewayAccessDeviceAuthBindingStore.TokenVersion?) -> GatewayConnectOptions
     {
         guard let principal,
-              bindingStore.bindCurrentTokenAfterHandshake(
+              GatewayAccessDeviceAuthBindingStore.shared.bindCurrentTokenAfterHandshake(
                   principal: principal,
                   gatewayID: gatewayID,
                   role: "node",
@@ -9774,40 +9773,6 @@ extension NodeAppModel {
 
     func _test_shouldRequestStoredOperatorAdminScope(gatewayID: String) -> Bool {
         self.shouldRequestOperatorAdminScope(gatewayID: gatewayID, token: nil, password: nil)
-    }
-
-    static func _test_nodeDeviceAuthState(
-        gatewayID: String,
-        principal: CloudflareAccessPrincipal?,
-        profile: GatewayDeviceIdentityProfile,
-        fallbackAllowed: Bool,
-        bindingStore: GatewayAccessDeviceAuthBindingStore) -> (
-        allowStoredDeviceAuth: Bool,
-        tokenVersion: GatewayAccessDeviceAuthBindingStore.TokenVersion?)
-    {
-        self.nodeDeviceAuthState(
-            gatewayID: gatewayID,
-            principal: principal,
-            profile: profile,
-            fallbackAllowed: fallbackAllowed,
-            bindingStore: bindingStore)
-    }
-
-    static func _test_nodeOptionsAfterSuccessfulDeviceAuthHandshake(
-        _ options: GatewayConnectOptions,
-        principal: CloudflareAccessPrincipal?,
-        gatewayID: String,
-        profile: GatewayDeviceIdentityProfile,
-        previousTokenVersion: GatewayAccessDeviceAuthBindingStore.TokenVersion?,
-        bindingStore: GatewayAccessDeviceAuthBindingStore) -> GatewayConnectOptions
-    {
-        self.nodeOptionsAfterSuccessfulDeviceAuthHandshake(
-            options,
-            principal: principal,
-            gatewayID: gatewayID,
-            profile: profile,
-            previousTokenVersion: previousTokenVersion,
-            bindingStore: bindingStore)
     }
 
     func _test_completeSuccessfulGatewayAuthHandoff(
