@@ -1,0 +1,26 @@
+{
+  "state": "static-preparation-verified; native-checks-unrun",
+  "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
+  "candidateTree": "6bdc3018768492e101bb12ea603a067b4e2414bd",
+  "baselineCaptureTree": "cf5d2abcd19544541f4f25de3023fd73804827b2",
+  "checks": {
+    "gitDiffCheck": "PASS",
+    "sourceScope": "7 intended paths; index clean; no untracked source",
+    "candidatePatchApplyAndTree": "PASS exact W4 via private index",
+    "baselinePatchApplyAndTree": "PASS exact W4 via separate private index; only test file changed",
+    "complete7PostimageBytes": "PASS",
+    "baselineAppendPostimageBytes": "PASS",
+    "changedXamlXmlParsing": "PASS",
+    "stageCanonicalizationPlacement": "PASS source inspection only",
+    "terminalFreezeRevalidationPresent": "PASS source inspection only"
+  },
+  "unrun": [
+    "PowerShell AST/eight-case casing gate",
+    "C#/XAML native compilation",
+    "7 candidate native cases/14 after frames",
+    "6 baseline native cases/14 before frames",
+    "optional native failing-regression negative control"
+  ],
+  "Shared": "RED-unwaived",
+  "noCommitPushPrCiVmCloudGatewayDependencyConfigurationMediaActions": true
+}

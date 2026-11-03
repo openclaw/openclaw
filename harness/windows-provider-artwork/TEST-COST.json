@@ -1,0 +1,43 @@
+{
+  "status": "UNMEASURED-native-execution-not-authorized-or-available",
+  "candidate": {
+    "methods": 3,
+    "cases": 7,
+    "nativeFrames": 14,
+    "suiteBoots": 1,
+    "wallSeconds": null,
+    "ciSeconds": null
+  },
+  "baselineVisuals": {
+    "methods": 2,
+    "cases": 6,
+    "nativeFrames": 14,
+    "suiteBoots": 2,
+    "wallSeconds": null,
+    "ciSeconds": null,
+    "order": "2 picker cases first; only then 4 dialog cases"
+  },
+  "optionalNegativeControl": {
+    "cases": 7,
+    "expectedOmissionFailures": 6,
+    "expectedLifecyclePasses": 1,
+    "status": "not-run; build/bootstrap/schema/capture/timeouts-inconclusive"
+  },
+  "costReason": "Real mounted native ComboBox/DataTemplate, WinUI SVG Opened decode, ContentDialog names/typed inputs and control/session lifetime cannot be proven by a cheaper pure mock. Reuses existing suite window, wire fixture and event-driven render helper; no sleeps/new boot owner/ignore/poll loop.",
+  "measurementsToCollect": [
+    "driver per-command wallSeconds",
+    "fresh TRX per-test duration",
+    "build/native elapsed CI seconds separately"
+  ],
+  "localChecks": {
+    "gitDiffCheck": "passed",
+    "changedXamlXmlParse": "passed",
+    "candidatePrivateIndexApplyAndTree": "passed",
+    "completePostimageBytes": "passed",
+    "powershellAstAndCasingGate": "unrun: pwsh unavailable",
+    "csharpXamlCompilation": "unrun: dotnet/Windows unavailable",
+    "nativeTests": "unrun",
+    "runtimeFamilyProducer": "corrected to qualified family .2/source2.6.4.0; static only"
+  },
+  "Shared": "RED-unwaived"
+}

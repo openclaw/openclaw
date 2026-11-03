@@ -1,0 +1,345 @@
+diff --git a/docs/PROVIDER_ARTWORK.md b/docs/PROVIDER_ARTWORK.md
+index 054a3fd39fc651dccadcb143dca85166741c93b9..32afeba748c7e0711f67ffc1498db1e8144d9755 100644
+--- a/docs/PROVIDER_ARTWORK.md
++++ b/docs/PROVIDER_ARTWORK.md
+@@ -4,6 +4,11 @@
+ discovery and setup workflows. `AiSetupPage` forwards `brandId`, provider/candidate
+ ID, `icon`, provider `kind` and `actionLabel`. `ProviderArtwork` owns the WinUI
+ image and `ProviderArtworkSession` owns the AI page's download/cache lifetime.
++The manual-provider picker uses the same row artwork as the action cards. The
++provider dialog retains the explicitly invoked row's descriptor alongside its
++text title through notes, inputs and confirmation. It borrows the page session;
++dismissal detaches its control without disposing the session used by the chooser.
++The existing page close path cancels all artwork before connection cleanup.
+ 
+ ## Pinned platform comparison
+ 
+diff --git a/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml b/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml
+index e9a2dee82315e1e7e83d546c174e5cdd3eb93b16..0771c7037e15ccb88dac3435778dc510c8e7a048 100644
+--- a/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml
++++ b/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml
+@@ -3,13 +3,18 @@
+     x:Class="OpenClaw.SetupEngine.UI.Controls.ProviderSetupDialog"
+     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
++    xmlns:controls="using:OpenClaw.SetupEngine.UI.Controls"
+     DefaultButton="Primary"
+     PrimaryButtonClick="Continue_Click" SecondaryButtonClick="Refresh_Click"
+     Closing="Dialog_Closing">
+     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+         <StackPanel Spacing="16">
+-            <TextBlock x:Name="ProviderName" Style="{StaticResource BodyStrongTextBlockStyle}" TextWrapping="Wrap"
+-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="Collapsed" />
++            <Grid x:Name="ProviderHeader" ColumnDefinitions="Auto,*" ColumnSpacing="12" Visibility="Collapsed">
++                <controls:ProviderArtwork x:Name="ProviderIcon" VerticalAlignment="Center" Visibility="Collapsed" />
++                <TextBlock x:Name="ProviderName" Grid.Column="1" Style="{StaticResource BodyStrongTextBlockStyle}"
++                           TextWrapping="Wrap" VerticalAlignment="Center"
++                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="Collapsed" />
++            </Grid>
+             <TextBlock x:Name="DialogStatus" Style="{StaticResource BodyTextBlockStyle}" TextWrapping="Wrap"
+                        AutomationProperties.LiveSetting="Polite" />
+             <InfoBar x:Name="DialogError" IsOpen="False" IsClosable="False" Severity="Error" />
+diff --git a/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml.cs b/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml.cs
+index 1e18e9188641962a810bd11c95253ea8f00d8b33..3132de3fdbc6283cfaaeed1e9e27faec5ba9e445 100644
+--- a/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml.cs
++++ b/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml.cs
+@@ -81,6 +81,12 @@ public sealed partial class ProviderSetupDialog : ContentDialog
+         _step = null;
+         StepOptions.ItemsSource = null;
+         StepMessage.Text = "";
++        // The page owns this session. Detaching cancels only this control and
++        // releases its subscription, without closing artwork on the chooser.
++        ProviderIcon.Session = null;
++        ProviderIcon.Descriptor = null;
++        ProviderIcon.Visibility = Visibility.Collapsed;
++        ProviderHeader.Visibility = Visibility.Collapsed;
+         Hide();
+     }
+ 
+@@ -93,7 +99,8 @@ public sealed partial class ProviderSetupDialog : ContentDialog
+ 
+     public void Update(GatewayAiSetupWizardStep? step, GatewayAiSetupPhase phase,
+         bool busy, bool canCancel, bool cancelling, string status, string? error, string? providerTitle = null,
+-        bool isSubmittingAnswer = false)
++        bool isSubmittingAnswer = false, ProviderArtworkDescriptor? providerArtwork = null,
++        ProviderArtworkSession? artworkSession = null)
+     {
+         if (_closed)
+             return;
+@@ -102,9 +109,15 @@ public sealed partial class ProviderSetupDialog : ContentDialog
+         {
+             var showStep = GatewayAiSetupPresentation.ShowProviderStep(step, phase, busy, isSubmittingAnswer);
+             Title = step?.Title ?? providerTitle ?? S("Title.Text");
++            ProviderIcon.Descriptor = providerArtwork;
++            ProviderIcon.Session = artworkSession;
++            ProviderIcon.Visibility = providerArtwork is not null ? Visibility.Visible : Visibility.Collapsed;
+             ProviderName.Text = providerTitle ?? "";
+-            ProviderName.Visibility = step?.Title is not null && !string.IsNullOrWhiteSpace(providerTitle) &&
+-                !string.Equals(step.Title, providerTitle, StringComparison.Ordinal)
++            ProviderName.Visibility = !string.IsNullOrWhiteSpace(providerTitle) &&
++                (providerArtwork is not null || step?.Title is not null &&
++                    !string.Equals(step.Title, providerTitle, StringComparison.Ordinal))
++                ? Visibility.Visible : Visibility.Collapsed;
++            ProviderHeader.Visibility = ProviderIcon.Visibility == Visibility.Visible || ProviderName.Visibility == Visibility.Visible
+                 ? Visibility.Visible : Visibility.Collapsed;
+             DialogStatus.Text = cancelling ? S("Cancelling") : status;
+             DialogStatus.Visibility = !cancelling && phase == GatewayAiSetupPhase.Running && step is not null
+diff --git a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml
+index 7771ed9dea2d187d736be8315c92a69804b8be69..449036a3e3974681cc410b88dd67c6d99a063b59 100644
+--- a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml
++++ b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml
+@@ -36,7 +36,13 @@
+             </controls:SetupActionCard>
+         </DataTemplate>
+         <DataTemplate x:Key="ProviderPickerTemplate">
+-            <TextBlock Text="{Binding Label}" Style="{StaticResource BodyTextBlockStyle}" TextWrapping="Wrap" />
++            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
++                <Viewbox Width="24" Height="24" VerticalAlignment="Center">
++                    <controls:ProviderArtwork Descriptor="{Binding Artwork}" Session="{Binding ArtworkSession}" />
++                </Viewbox>
++                <TextBlock Grid.Column="1" Text="{Binding Label}" Style="{StaticResource BodyTextBlockStyle}"
++                           TextWrapping="Wrap" VerticalAlignment="Center" />
++            </Grid>
+         </DataTemplate>
+     </Page.Resources>
+     <Grid RowDefinitions="Auto,*,Auto" Padding="40,4,40,24">
+diff --git a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs
+index 4e7a01922f2e21664ec00d1822f7adbe766a1a87..f1843e3627bf60c2bcb90430b2756d864105bd3a 100644
+--- a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs
++++ b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs
+@@ -73,6 +73,7 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+     private bool _cancelling;
+     private bool _providerOperationActive;
+     private string? _operationTitle;
++    private ProviderArtworkDescriptor? _operationArtwork;
+     private sealed record ProviderBackdrop(Control? FocusTarget, double VerticalOffset, int Version);
+     private ProviderBackdrop? _providerBackdrop;
+     private Control? _providerRestoreFocus;
+@@ -673,6 +674,7 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+         _providerOperationActive = true;
+         ApiKeyInput.Password = "";
+         _operationTitle = row.Label;
++        _operationArtwork = row.Artwork;
+         var catalogPreference = _presentation.NativeSessionCatalogPreferenceRequired
+             ? CatalogPreference.IsChecked == true : (bool?)null;
+         return RunAsync(async ct =>
+@@ -1232,7 +1234,7 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+             if (showProvider)
+             {
+                 _providerDialog.Update(step, phase, _busy, canCancelProvider, _cancelling,
+-                    status, _providerError, _operationTitle, _submittingAnswer);
++                    status, _providerError, _operationTitle, _submittingAnswer, _operationArtwork, _artworkSession);
+                 if (XamlRoot is not null)
+                 {
+                     var showing = _providerDialog.ShowOwnedAsync(XamlRoot, ActualTheme);
+diff --git a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
+index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..24e3318980e7407d0d28ee842588ebd97940660e 100644
+--- a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
++++ b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
+@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Automation.Peers;
+ using Microsoft.UI.Xaml.Automation.Provider;
+ using Microsoft.UI.Xaml.Controls;
+ using Microsoft.UI.Xaml.Media;
++using Microsoft.UI.Xaml.Media.Imaging;
+ using OpenClaw.SetupEngine;
+ using OpenClaw.SetupEngine.UI;
+ using OpenClaw.SetupEngine.UI.Pages;
+@@ -22,6 +23,144 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+ {
+     private bool _nativeProof;
+ 
++    [Theory]
++    [InlineData(ElementTheme.Light)]
++    [InlineData(ElementTheme.Dark)]
++    public async Task ProviderPicker_ShowsAdvertisedBrandsAndHonestFallbacksWithoutStartingSetup(ElementTheme theme)
++    {
++        await WithPageAsync(async (page, transport, completed) =>
++        {
++            var picker = Find<ComboBox>(page, "ApiProviderPicker");
++            Assert.Equal(-1, picker.SelectedIndex);
++            picker.IsDropDownOpen = true;
++            try
++            {
++                await TestSupport.WaitForRenderedConditionAsync(
++                    () => picker.ContainerFromIndex(3) is ComboBoxItem { IsLoaded: true }, "provider inventory mounted");
++                var marks = Enumerable.Range(0, 4).Select(index => Assert.Single(
++                    TestSupport.FindDescendants<ProviderArtwork>(Assert.IsType<ComboBoxItem>(picker.ContainerFromIndex(index))))).ToArray();
++                await AssertBundledArtworkAsync(marks[0], "llama-app");
++                await AssertBundledArtworkAsync(marks[1], "ollama");
++                foreach (var mark in marks.Skip(2))
++                {
++                    Assert.Null(mark.Descriptor!.BundledFileName);
++                    Assert.Null(Assert.IsType<Image>(mark.FindName("ArtworkImage")).Source);
++                    Assert.Equal(Visibility.Visible, Assert.IsType<FontIcon>(mark.FindName("FallbackIcon")).Visibility);
++                }
++                Assert.All(marks, mark => Assert.Same(marks[0].Session, mark.Session));
++                if (_nativeProof)
++                    using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow, $"provider-inventory-{theme}", output,
++                        ["Llama app", "Ollama", "llama.cpp", "Unknown provider"], requiredContent: picker)) { }
++                Assert.Equal(-1, picker.SelectedIndex);
++                Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
++                Assert.Equal(0, completed());
++            }
++            finally { picker.IsDropDownOpen = false; }
++        }, theme: theme, nativeProof: !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENCLAW_UI_PROOF_DIR")),
++            configure: transport => transport.DetectionOverride = new()
++            {
++                Candidates = [], Workspace = "/synthetic-workspace", SetupComplete = false,
++                ManualProviders = [new("llama-app", "Llama app", BrandId: "llama-app"),
++                    new("ollama", "Ollama", BrandId: "ollama"), new("llamacpp", "llama.cpp"),
++                    new("fixture-unknown", "Unknown provider")],
++            });
++    }
++
++    [Theory]
++    [InlineData("llama-app", "Llama app", "LlamaAppChoices", ElementTheme.Light)]
++    [InlineData("llama-app", "Llama app", "LlamaAppChoices", ElementTheme.Dark)]
++    [InlineData("ollama", "Ollama", "PrepareChoices", ElementTheme.Light)]
++    [InlineData("ollama", "Ollama", "PrepareChoices", ElementTheme.Dark)]
++    public async Task ProviderDialog_KeepsSelectedArtworkThroughTypedPromptsAndReleasesOnlyItsBorrow(
++        string brand, string label, string group, ElementTheme theme)
++    {
++        await WithPageAsync(async (page, transport, completed) =>
++        {
++            var row = Assert.Single(TestSupport.FindDescendants<ProviderArtwork>(Find<ItemsControl>(page, group)));
++            await AssertBundledArtworkAsync(row, brand);
++            var session = Assert.IsType<ProviderArtworkSession>(row.Session);
++            Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
++            await InvokeChoiceAsync(page, group);
++            var dialog = GetDialog(page);
++            var icon = Assert.IsType<ProviderArtwork>(dialog.FindName("ProviderIcon"));
++            foreach (var type in new[] { "note", "text", "confirm" })
++            {
++                await TestSupport.WaitForRenderedConditionAsync(
++                    () => dialog.CanSubmit && Equals(dialog.Title, "Provider " + type), $"{brand} {type} prompt");
++                await AssertBundledArtworkAsync(icon, brand);
++                Assert.Same(session, icon.Session);
++                Assert.Equal(label, Assert.IsType<TextBlock>(dialog.FindName("ProviderName")).Text);
++                var peer = FrameworkElementAutomationPeer.CreatePeerForElement(dialog);
++                Assert.Equal("Provider " + type, peer.GetName());
++                if (type == "text")
++                {
++                    var input = Assert.IsType<TextBox>(dialog.FindName("TextInput"));
++                    Assert.Equal("Provider text", AutomationProperties.GetName(input));
++                    input.Text = "synthetic-endpoint";
++                }
++                if (type == "confirm")
++                    Assert.IsType<CheckBox>(dialog.FindName("ConfirmInput")).IsChecked = true;
++                if (_nativeProof)
++                    using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow, $"provider-{brand}-{type}-{theme}", output,
++                        [label, "Provider " + type, "Cancel"], requiredContent: Assert.IsType<ScrollViewer>(dialog.Content))) { }
++                Invoke(DialogButton(dialog, "PrimaryButton"));
++                await TestSupport.WaitForRenderedConditionAsync(
++                    () => transport.LastNext.ValueKind == JsonValueKind.Object &&
++                        transport.LastNext.GetProperty("answer").GetProperty("stepId").GetString() == type,
++                    $"{type} typed answer dispatched");
++                if (type == "text")
++                    Assert.Equal("synthetic-endpoint", transport.LastNext.GetProperty("answer").GetProperty("value").GetString());
++                if (type == "confirm")
++                    Assert.True(transport.LastNext.GetProperty("answer").GetProperty("value").GetBoolean());
++            }
++            Assert.Equal(brand, transport.LastActivation.GetProperty("authChoice").GetString());
++            Assert.Single(transport.MethodCalls, method => method == "openclaw.setup.prepare.start");
++            Assert.DoesNotContain("openclaw.setup.auth.start", transport.MethodCalls);
++            Assert.DoesNotContain("openclaw.setup.activate.start", transport.MethodCalls);
++            Invoke(Assert.IsType<Button>(dialog.FindName("CancelButton")));
++            await TestSupport.WaitForRenderedConditionAsync(
++                () => !Assert.IsType<ScrollViewer>(dialog.Content).IsLoaded, "cancelled dialog closed");
++            Assert.Null(icon.Session);
++            Assert.Null(icon.Descriptor);
++            Assert.Null(Assert.IsType<Image>(icon.FindName("ArtworkImage")).Source);
++            await AssertBundledArtworkAsync(row, brand);
++            Assert.Same(session, row.Session);
++            // Reopening on the same page proves dismissal did not dispose its borrowed session.
++            await TestSupport.WaitForSettingsCardReadyAsync(page,
++                Assert.Single(TestSupport.FindDescendants<SetupActionCard>(Find<ItemsControl>(page, group))));
++            transport.WizardStep = new() { Id = "note", Type = "note", Title = "Provider note", Executor = "client" };
++            await InvokeChoiceAsync(page, group);
++            await AssertBundledArtworkAsync(icon, brand);
++            await page.CloseAsync();
++            Assert.Null(icon.Session);
++            Assert.Null(Assert.IsType<Image>(icon.FindName("ArtworkImage")).Source);
++            Assert.Null(Assert.IsType<Image>(row.FindName("ArtworkImage")).Source);
++            Assert.Equal(0, completed());
++        }, theme: theme, nativeProof: !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENCLAW_UI_PROOF_DIR")),
++            configure: transport =>
++            {
++                transport.DetectionOverride = new()
++                {
++                    Candidates = [], ManualProviders = [], Workspace = "/synthetic-workspace", SetupComplete = false,
++                    PrepareOptions = [new(brand, label, BrandId: brand, ActionLabel: "Set up")],
++                };
++                transport.WizardStep = new() { Id = "note", Type = "note", Title = "Provider note", Executor = "client" };
++                transport.FollowingSteps.Enqueue(new() { Id = "text", Type = "text", Title = "Provider text", Executor = "client" });
++                transport.FollowingSteps.Enqueue(new() { Id = "confirm", Type = "confirm", Title = "Provider confirm", Executor = "client" });
++                transport.FollowingSteps.Enqueue(new() { Id = "review", Type = "note", Title = "Provider review", Executor = "client" });
++            });
++    }
++
++    private static async Task AssertBundledArtworkAsync(ProviderArtwork artwork, string brand)
++    {
++        await TestSupport.WaitForRenderedConditionAsync(
++            () => artwork.IsLoaded && Assert.IsType<FontIcon>(artwork.FindName("FallbackIcon")).Visibility == Visibility.Collapsed,
++            $"decoded {brand} artwork");
++        var image = Assert.IsType<Image>(artwork.FindName("ArtworkImage"));
++        Assert.Equal(Visibility.Visible, image.Visibility);
++        Assert.EndsWith($"/ProviderIcon-{brand}.svg", Assert.IsType<SvgImageSource>(image.Source).UriSource.AbsoluteUri);
++    }
++
+     [Fact]
+     public async Task AiGroups_KeepManualInputSeparateFromAuthenticationInTheMountedPage()
+     {
+diff --git a/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs b/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs
+index b0c2c596773e1ffaf0d5008bb44ca796df7cc1aa..cdd19006232624076c14b218bfab797edcbdeae5 100644
+--- a/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs
++++ b/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs
+@@ -693,6 +693,49 @@ public sealed class OnboardingArtworkRenderingTests(UIThreadFixture ui, ITestOut
+         });
+     }
+ 
++    [Fact]
++    public async Task ProviderArtwork_RebindingDetachesThePreviousSessionWithoutClosingTheBorrowedReplacement()
++    {
++        await ui.ResetContainerAsync();
++        await ui.RunOnUIAsync(async () =>
++        {
++            using var previous = new ProviderArtworkSession();
++            using var replacement = new ProviderArtworkSession();
++            var artwork = new ProviderArtwork
++            {
++                Session = previous,
++                Descriptor = GatewayAiSetupPresentation.GetProviderArtwork("llama-app", null, null, ProviderArtworkFallback.Install),
++            };
++            try
++            {
++                ui.Container.Children.Add(artwork);
++                var image = Assert.IsType<Image>(artwork.FindName("ArtworkImage"));
++                var fallback = Assert.IsType<FontIcon>(artwork.FindName("FallbackIcon"));
++                await TestSupport.WaitForRenderedConditionAsync(
++                    () => artwork.IsLoaded && fallback.Visibility == Visibility.Collapsed, "initial artwork decoded");
++                artwork.Session = replacement;
++                artwork.Descriptor = GatewayAiSetupPresentation.GetProviderArtwork("ollama", null, null, ProviderArtworkFallback.Install);
++                await TestSupport.WaitForRenderedConditionAsync(
++                    () => fallback.Visibility == Visibility.Collapsed, "replacement artwork decoded");
++                var decoded = Assert.IsType<SvgImageSource>(image.Source);
++                Assert.EndsWith("/ProviderIcon-ollama.svg", decoded.UriSource.AbsoluteUri);
++                previous.Dispose();
++                Assert.Same(decoded, image.Source);
++                artwork.Session = null;
++                Assert.Null(image.Source);
++                artwork.Session = replacement;
++                await TestSupport.WaitForRenderedConditionAsync(
++                    () => fallback.Visibility == Visibility.Collapsed, "borrowed replacement remains usable after detaching");
++                ui.Container.Children.Remove(artwork);
++                await TestSupport.WaitForRenderedConditionAsync(() => !artwork.IsLoaded, "artwork unloaded");
++                Assert.Null(image.Source);
++                replacement.Dispose();
++                Assert.Null(image.Source);
++            }
++            finally { ui.Container.Children.Clear(); }
++        });
++    }
++
+     internal static async Task SaveNativeWindowProofAsync(Window window, string name, ITestOutputHelper output,
+         FrameworkElement requiredContent)
+     {

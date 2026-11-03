@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentDialog
+    x:Class="OpenClaw.SetupEngine.UI.Controls.ProviderSetupDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:OpenClaw.SetupEngine.UI.Controls"
+    DefaultButton="Primary"
+    PrimaryButtonClick="Continue_Click" SecondaryButtonClick="Refresh_Click"
+    Closing="Dialog_Closing">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Spacing="16">
+            <Grid x:Name="ProviderHeader" ColumnDefinitions="Auto,*" ColumnSpacing="12" Visibility="Collapsed">
+                <controls:ProviderArtwork x:Name="ProviderIcon" VerticalAlignment="Center" Visibility="Collapsed" />
+                <TextBlock x:Name="ProviderName" Grid.Column="1" Style="{StaticResource BodyStrongTextBlockStyle}"
+                           TextWrapping="Wrap" VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="Collapsed" />
+            </Grid>
+            <TextBlock x:Name="DialogStatus" Style="{StaticResource BodyTextBlockStyle}" TextWrapping="Wrap"
+                       AutomationProperties.LiveSetting="Polite" />
+            <InfoBar x:Name="DialogError" IsOpen="False" IsClosable="False" Severity="Error" />
+            <StackPanel x:Name="StepPanel" Spacing="12">
+                <TextBlock x:Name="StepMessage" Style="{StaticResource BodyTextBlockStyle}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                <Button x:Name="ExternalLink" Visibility="Collapsed" Click="ExternalLink_Click" />
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                        CornerRadius="4" Padding="16" Visibility="{Binding Visibility, ElementName=DeviceCode}">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                    <TextBlock x:Name="DeviceCode" Style="{StaticResource SubtitleTextBlockStyle}" IsTextSelectionEnabled="True"
+                               Visibility="Collapsed" TextWrapping="Wrap" />
+                    <Button x:Name="CopyCodeButton" Grid.Column="1" Visibility="Collapsed" Click="CopyCode_Click" />
+                </Grid>
+                </Border>
+                <TextBlock x:Name="DeviceCodeDetail" Style="{StaticResource CaptionTextBlockStyle}" TextWrapping="Wrap" Visibility="Collapsed"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <ListView x:Name="StepOptions" Visibility="Collapsed" SelectionChanged="Options_Changed">
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding Hint}" TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+                <TextBox x:Name="TextInput" Visibility="Collapsed" TextChanged="TextInput_Changed" />
+                <PasswordBox x:Name="SecretInput" Visibility="Collapsed" PasswordRevealMode="Hidden" PasswordChanged="Input_Changed" />
+                <CheckBox x:Name="ConfirmInput" Visibility="Collapsed" Checked="Input_Changed" Unchecked="Input_Changed" />
+            </StackPanel>
+            <ProgressBar x:Name="DialogProgress" IsIndeterminate="True" Visibility="Collapsed" />
+            <Button x:Name="CancelButton" Click="Cancel_Click" />
+            <Expander x:Name="NativeRecovery" x:Uid="Onboarding_Native_Recovery" Header="Gateway recovery"
+                      Visibility="Collapsed" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                <StackPanel Spacing="8">
+                    <Button x:Uid="Onboarding_Native_Terminal" Content="Open terminal" Tag="OpenTerminal" Click="NativeRecovery_Click" />
+                    <Button x:Uid="Onboarding_Native_Restart" Content="Restart Gateway" Tag="RestartGateway" Click="NativeRecovery_Click" />
+                    <Button x:Uid="Onboarding_Native_RetryAi" Content="Start AI setup again" Tag="RestartAi" Click="NativeRecovery_Click" />
+                    <Button x:Uid="Onboarding_Native_Cancel" Content="Cancel setup" Tag="CancelSetup" Click="NativeRecovery_Click" />
+                    <ScrollViewer MaxHeight="160" HorizontalScrollBarVisibility="Disabled">
+                        <TextBlock x:Name="NativeOutput" TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                                   Style="{StaticResource CaptionTextBlockStyle}" />
+                    </ScrollViewer>
+                </StackPanel>
+            </Expander>
+        </StackPanel>
+    </ScrollViewer>
+</ContentDialog>

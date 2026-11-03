@@ -1,0 +1,194 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][string]$Source,
+    [Parameter(Mandatory)][string]$Artifacts,
+    [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{40}$')][string]$AcceptedTree,
+    [ValidateSet('Before','After')][string]$Stage = 'After',
+    [switch]$ExecutionAuthorized,
+    [switch]$BuildOnly,
+    [switch]$TestsOnly
+)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+# ValidateSet accepts case-insensitively. Canonicalize before selecting any source,
+# patch, filter or frame name so accepted casing cannot change stage provenance.
+$Stage = if ($Stage -ieq 'Before') { 'Before' } else { 'After' }
+# Preparation is not execution authority. The parent must select and authorize
+# an isolated Windows host before invoking this packet. This driver never allocates,
+# installs runtimes, changes a desktop/resolution, or mutates GitHub/configuration.
+if (!$ExecutionAuthorized -or !$IsWindows) { throw 'Requires separate native-execution authorization and a qualified Windows host.' }
+if ([bool]$BuildOnly -eq [bool]$TestsOnly) { throw 'Select exactly BuildOnly (ordinary source build) or TestsOnly (prepared private desktop).' }
+function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
+function Json($Value, [string]$Path) { ConvertTo-Json -InputObject $Value -Depth 16 | Set-Content -LiteralPath $Path -Encoding utf8NoBOM }
+function Git([string[]]$Arguments) {
+    $value = & git -C $Source @Arguments
+    if ($LASTEXITCODE -ne 0) { throw 'Git source query failed. Do not change safe.directory or ownership to bypass this guard.' }
+    $value
+}
+function Manifest {
+    @(Git @('-c','core.quotepath=false','ls-files','--cached','--others','--exclude-standard') |
+        Sort-Object -Unique | ForEach-Object { @{path=$_;sha256=(Hash (Join-Path $Source $_))} })
+}
+function Assert-Tree {
+    $previous = $env:GIT_INDEX_FILE
+    $index = Join-Path $Artifacts ('candidate-' + [guid]::NewGuid().ToString('N') + '.index')
+    try {
+        $env:GIT_INDEX_FILE = $index
+        Git @('read-tree','HEAD') | Out-Null
+        Git @('add','-u') | Out-Null
+        if ((Git @('write-tree')).Trim() -cne $ExpectedSourceTree) { throw 'Complete source tree differs from the accepted candidate.' }
+    } finally { $env:GIT_INDEX_FILE = $previous }
+}
+function Command([string]$Executable, [string[]]$Arguments, [string]$Name) {
+    $started = [DateTimeOffset]::UtcNow
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $priorNative = $PSNativeCommandUseErrorActionPreference
+    $priorError = $ErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $false
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Executable @Arguments 2>&1 | Tee-Object -FilePath (Join-Path $Artifacts ($Name + '.log')) | Out-Host
+        $exit = $LASTEXITCODE
+    } finally { $PSNativeCommandUseErrorActionPreference=$priorNative; $ErrorActionPreference=$priorError }
+    Json @{name=$Name;startedUtc=$started;endedUtc=[DateTimeOffset]::UtcNow;wallSeconds=$clock.Elapsed.TotalSeconds;exitCode=$exit;command=(@($Executable)+$Arguments)-join ' '} (Join-Path $Artifacts ($Name+'.json'))
+    if ($exit -ne 0) { throw "$Name failed. Stop at this exact leaf; no dependency, Reactor, analyzer or helper-name workaround is authorized." }
+}
+$Source = (Resolve-Path -LiteralPath $Source).Path
+$Artifacts = [IO.Path]::GetFullPath($Artifacts)
+if ($BuildOnly -and (Test-Path -LiteralPath $Artifacts)) { throw 'Choose a fresh artifact destination; stale reports are not admitted.' }
+if ($TestsOnly -and !(Test-Path -LiteralPath $Artifacts)) { throw 'TestsOnly requires the separately prepared build/freeze.' }
+if ($Artifacts.StartsWith($Source.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Artifacts must be outside source.' }
+$session = (Get-Process -Id $PID).SessionId
+if ($session -eq 0) { throw 'Native foreground proof cannot run from session 0.' }
+$pin = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'source-pins.json') -Raw | ConvertFrom-Json
+if ($AcceptedTree -cne $pin.candidateTree) { throw 'Parent-accepted tree does not match this packet.' }
+foreach ($file in $pin.packetFiles.PSObject.Properties) {
+    if ((Hash (Join-Path $PSScriptRoot $file.Name)) -cne $file.Value.ToUpperInvariant()) { throw "Packet seal mismatch: $($file.Name)" }
+}
+if ($BuildOnly -and @(Git @('status','--porcelain')).Count -ne 0) { throw 'Use a new clean task-owned source checkout.' }
+if ($BuildOnly) { New-Item -ItemType Directory -Path $Artifacts | Out-Null }
+$head = (Git @('rev-parse','HEAD')).Trim()
+$ExpectedSourceTree = if ($Stage -ceq 'Before') { $pin.baselineCaptureTree } else { $AcceptedTree }
+$changedFiles = if ($Stage -ceq 'Before') { $pin.baselineChangedFiles } else { $pin.changedFiles }
+if ($BuildOnly) {
+if ($Stage -ceq 'Before') {
+    if ($head -cne $pin.baseCommit) { throw 'Before requires the exact clean W4 base; candidate production sources are not admitted.' }
+    $patch = Join-Path $PSScriptRoot 'baseline-capture.patch'
+    Git @('apply','--check','--whitespace=error',$patch) | Out-Null
+    Git @('apply','--whitespace=error',$patch) | Out-Null
+} elseif ($head -ceq $pin.baseCommit) {
+    Git @('apply','--check','--whitespace=error',(Join-Path $PSScriptRoot 'candidate.patch')) | Out-Null
+    Git @('apply','--whitespace=error',(Join-Path $PSScriptRoot 'candidate.patch')) | Out-Null
+} elseif ((Git @('rev-parse','HEAD^{tree}')).Trim() -cne $AcceptedTree) {
+    throw 'Source is neither the exact W4 base nor a clean commit of the accepted tree.'
+}
+}
+Assert-Tree
+foreach ($file in $changedFiles) {
+    if ((Hash (Join-Path $Source $file.path)) -cne $file.afterSha256.ToUpperInvariant()) { throw "Postimage mismatch: $($file.path)" }
+}
+Push-Location $Source
+try { $sdk = (& dotnet --version).Trim() } finally { Pop-Location }
+if ($sdk -cne '10.0.403') { throw 'The exact qualified .NET SDK 10.0.403 is required; source global.json remains unchanged.' }
+[xml]$props=Get-Content (Join-Path $Source 'Directory.Build.props') -Raw
+$runtimeVersion=$props.SelectSingleNode('/Project/PropertyGroup/MicrosoftWindowsAppSDKVersion').InnerText.Trim()
+if ($runtimeVersion -cne '2.6.4') { throw 'Source-owned Windows App SDK version differs from the qualified 2.6.4 contract.' }
+# Qualified signed-installer/AppX receipts establish family .2, not channel .2.6.
+$runtimeFamily='Microsoft.WindowsAppRuntime.'+([version]$runtimeVersion).Major
+$minimumRuntime=[version]($runtimeVersion+'.0')
+$runtime = @(Get-AppxPackage -Name $runtimeFamily | Where-Object { $_.Name -ceq $runtimeFamily -and $_.Architecture.ToString() -ceq 'X64' -and $_.Status.ToString() -ceq 'Ok' -and $_.IsFramework -and [version]$_.Version -ge $minimumRuntime -and $_.Publisher -match 'CN=Microsoft Corporation' })
+if ($runtime.Count -eq 0) { throw "Source-declared $runtimeFamily x64 framework >= $minimumRuntime is not registered for this user. Runtime provisioning belongs to the reviewed CI initializer." }
+Json @{head=$head;candidateTree=$AcceptedTree;sdk=$sdk;sessionId=$session;runtime=@($runtime | Select-Object PackageFullName,Version,Architecture);state='prerequisites-observed'} (Join-Path $Artifacts 'prerequisites.json')
+$names = @('OPENCLAW_REPO_ROOT','OPENCLAW_TRAY_DATA_DIR','OPENCLAW_TRAY_APPDATA_DIR','OPENCLAW_TRAY_LOCALAPPDATA_DIR','OPENCLAW_UI_PROOF_DIR','OPENCLAW_UI_PROOF_FREEZE_DIR','OPENCLAW_UI_PROOF_MANIFEST_SHA256','GitVersion_NoNormalizeEnabled','GitVersion_NoFetchEnabled')
+$old = @{}
+foreach ($name in $names) { $old[$name]=[Environment]::GetEnvironmentVariable($name) }
+Push-Location $Source
+try {
+    $env:OPENCLAW_REPO_ROOT=$Source
+    $env:GitVersion_NoNormalizeEnabled='true'
+    $env:GitVersion_NoFetchEnabled='true'
+    $project='tests/OpenClaw.Tray.UITests/OpenClaw.Tray.UITests.csproj'
+    $freeze=Join-Path $Artifacts 'freeze'
+    $frames=Join-Path $Artifacts 'frames'
+    $bin=Join-Path $Source 'tests/OpenClaw.Tray.UITests/bin/Debug/net10.0-windows10.0.22621.0/win-x64'
+    if ($BuildOnly) {
+    Command 'dotnet' @('restore',$project,'-r','win-x64') 'ui-restore'
+    Command 'dotnet' @('build',$project,'-c','Debug','-r','win-x64','--no-restore','-p:WriteVersionInfoToBuildLog=false') 'ui-build'
+    Command (Join-Path $PSHOME 'pwsh.exe') @('-NoProfile','-File',(Join-Path $PSScriptRoot 'Save-CalculatedVersion.ps1'),'-Source',$Source,'-Artifacts',$Artifacts,'-Stage',$Stage) 'calculated-version'
+    Assert-Tree
+    New-Item -ItemType Directory -Path $freeze,$frames | Out-Null
+    $sourceFiles=@(Manifest)
+    Json $sourceFiles (Join-Path $freeze 'full-source-manifest.json')
+    $bin=Join-Path $Source 'tests/OpenClaw.Tray.UITests/bin/Debug/net10.0-windows10.0.22621.0/win-x64'
+    $binaryFiles=@(Get-ChildItem -LiteralPath $bin -File | Sort-Object Name | ForEach-Object { @{path=('build\ui-tests\'+$_.Name);sha256=(Hash $_.FullName)} })
+    if ($binaryFiles.Count -eq 0) { throw 'UI build emitted no binaries.' }
+    Json $binaryFiles (Join-Path $freeze 'build-manifest.json')
+    Json @{head=$head;candidateTree=$AcceptedTree;fullSourceManifestSha=(Hash (Join-Path $freeze 'full-source-manifest.json'));buildManifestSha=(Hash (Join-Path $freeze 'build-manifest.json'))} (Join-Path $freeze 'manifest.json')
+    Json @{state='build-and-freeze-prepared';head=$head;stage=$Stage;sourceTree=$ExpectedSourceTree;candidateTree=$AcceptedTree;driverSha256=(Hash $PSCommandPath);manifestSha256=(Hash (Join-Path $freeze 'manifest.json'))} (Join-Path $Artifacts 'prepared.json')
+    return
+    }
+    $prepared=Get-Content (Join-Path $Artifacts 'prepared.json') -Raw | ConvertFrom-Json
+    if ($prepared.state -cne 'build-and-freeze-prepared' -or $prepared.head -cne $head -or $prepared.stage -cne $Stage -or $prepared.sourceTree -cne $ExpectedSourceTree -or $prepared.candidateTree -cne $AcceptedTree -or $prepared.driverSha256 -cne (Hash $PSCommandPath) -or $prepared.manifestSha256 -cne (Hash (Join-Path $freeze 'manifest.json'))) { throw 'Prepared build identity differs from this stage/source/driver.' }
+    if (Test-Path (Join-Path $Artifacts 'result.json')) { throw 'This prepared native selection already completed; do not replay it.' }
+    $sourceFiles=@(Get-Content (Join-Path $freeze 'full-source-manifest.json') -Raw | ConvertFrom-Json)
+    $binaryFiles=@(Get-Content (Join-Path $freeze 'build-manifest.json') -Raw | ConvertFrom-Json)
+    foreach ($file in $sourceFiles) { if ((Hash (Join-Path $Source $file.path)) -cne $file.sha256) { throw 'Prepared source drift before native execution.' } }
+    foreach ($file in $binaryFiles) { if ((Hash (Join-Path $bin $file.path.Substring(15))) -cne $file.sha256) { throw 'Prepared binary drift before native execution.' } }
+    $env:OPENCLAW_TRAY_DATA_DIR=Join-Path $Artifacts 'isolated-data'
+    $env:OPENCLAW_TRAY_APPDATA_DIR=Join-Path $Artifacts 'isolated-roaming'
+    $env:OPENCLAW_TRAY_LOCALAPPDATA_DIR=Join-Path $Artifacts 'isolated-local'
+    $env:OPENCLAW_UI_PROOF_DIR=$frames
+    $env:OPENCLAW_UI_PROOF_FREEZE_DIR=$freeze
+    $env:OPENCLAW_UI_PROOF_MANIFEST_SHA256=Hash (Join-Path $freeze 'manifest.json')
+    $filter='FullyQualifiedName~OnboardingAiPageTests.ProviderPicker_ShowsAdvertisedBrandsAndHonestFallbacksWithoutStartingSetup|FullyQualifiedName~OnboardingAiPageTests.ProviderDialog_KeepsSelectedArtworkThroughTypedPromptsAndReleasesOnlyItsBorrow|FullyQualifiedName~OnboardingArtworkRenderingTests.ProviderArtwork_RebindingDetachesThePreviousSessionWithoutClosingTheBorrowedReplacement'
+    $expectedCases = 7
+    $framePrefix = ''
+    if ($Stage -ceq 'Before') {
+        $filter='FullyQualifiedName~OnboardingAiPageTests.BeforeArtworkPicker|FullyQualifiedName~OnboardingAiPageTests.BeforeArtworkDialog'
+        $expectedCases=6
+        $framePrefix='before-'
+    }
+    $selections=@(@{name='candidate';filter=$filter;cases=7})
+    if ($Stage -ceq 'Before') {
+        # The original picker is the named unknown leaf. Do not spend the dialog
+        # selection after a genuine popup/occlusion/PrintWindow failure here.
+        $selections=@(@{name='before-picker';filter='FullyQualifiedName~OnboardingAiPageTests.BeforeArtworkPicker';cases=2},
+            @{name='before-dialog';filter='FullyQualifiedName~OnboardingAiPageTests.BeforeArtworkDialog';cases=4})
+    }
+    . (Join-Path $Source 'scripts/TestResultContract.ps1')
+    $cases=@()
+    foreach ($selection in $selections) {
+        $report=Join-Path $Artifacts ($selection.name+'.trx')
+        if (Test-Path $report) { throw 'A selected native report already exists; do not retry uncertain/failed work.' }
+        $startedUtc=[datetime]::UtcNow
+        Command 'dotnet' @('test',$project,'-c','Debug','-r','win-x64','--no-build','--no-restore','--filter',$selection.filter,'--results-directory',$Artifacts,'--logger',('trx;LogFileName='+$selection.name+'.trx'),'--blame-hang','--blame-hang-timeout','120s','--blame-hang-dump-type','none') ($selection.name+'-tests')
+        $contract=Read-TestResultContract -Path $report -StartedUtc $startedUtc -ExitCode 0
+        [xml]$trx=Get-Content -LiteralPath $report -Raw
+        $rows=@($trx.SelectNodes("//*[local-name()='UnitTestResult']"))
+        $counters=$trx.SelectSingleNode("//*[local-name()='Counters']")
+        if ($rows.Count -ne $selection.cases -or @($rows | Where-Object {$_.outcome -cne 'Passed'}).Count -ne 0 -or [int]$counters.executed -ne $selection.cases -or [int]$counters.passed -ne $selection.cases) { throw 'Every selected stage case must execute and pass with zero skips.' }
+        Json $contract ($report+'.contract.json')
+        $cases += $rows
+    }
+    if ($cases.Count -ne $expectedCases) { throw 'Stage aggregate case inventory differs.' }
+    $expectedFrames=@("${framePrefix}provider-inventory-Light","${framePrefix}provider-inventory-Dark")
+    foreach ($brand in @('llama-app','ollama')) { foreach ($theme in @('Light','Dark')) { foreach ($step in @('note','text','confirm')) { $expectedFrames += "${framePrefix}provider-$brand-$step-$theme" } } }
+    if (@(Get-ChildItem -LiteralPath $frames -Filter '*.png').Count -ne $expectedFrames.Count) { throw 'Incomplete or extra frame inventory.' }
+    foreach ($name in $expectedFrames) {
+        $metadata=Get-Content -LiteralPath (Join-Path $frames ($name+'.json')) -Raw | ConvertFrom-Json
+        if ($metadata.head -cne $head -or $metadata.method -cne 'PrintWindow(PW_RENDERFULLCONTENT), no fallback' -or (Hash (Join-Path $frames ($name+'.png'))) -cne $metadata.sha256) { throw "Frame identity mismatch: $name" }
+    }
+    if (@(Manifest).Count -ne $sourceFiles.Count) { throw 'Frozen source inventory changed.' }
+    foreach ($file in $sourceFiles) { if ((Hash (Join-Path $Source $file.path)) -cne $file.sha256) { throw "Source drift: $($file.path)" } }
+    foreach ($file in $binaryFiles) { if ((Hash (Join-Path $bin $file.path.Substring(15))) -cne $file.sha256) { throw "Binary drift: $($file.path)" } }
+    Assert-Tree
+    Json @{state='focused-native-cases-passed-manual-pixel-review-required';head=$head;stage=$Stage;candidateTree=$AcceptedTree;sourceTree=$ExpectedSourceTree;executed=$expectedCases;passed=$expectedCases;skipped=0;frames=$expectedFrames;Shared='RED-unwaived';fullBuild='not executed by this narrow driver';priorW4='unchanged-contract evidence only; not current-tree aggregate proof';popup='Reject absent/cropped inventory pixels; no AX-only acceptance or unowned fallback'} (Join-Path $Artifacts 'result.json')
+} catch {
+    Json @{state='failed';error=($_ | Out-String);candidateTree=$AcceptedTree;Shared='RED-unwaived'} (Join-Path $Artifacts 'failure.json')
+    throw
+} finally {
+    Pop-Location
+    foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name,$old[$name]) }
+    Json @(Get-ChildItem -LiteralPath $Artifacts -Recurse -File | Where-Object {$_.Name -ne 'artifact-hashes.json'} | ForEach-Object { @{path=[IO.Path]::GetRelativePath($Artifacts,$_.FullName);bytes=$_.Length;sha256=(Hash $_.FullName)} }) (Join-Path $Artifacts 'artifact-hashes.json')
+}

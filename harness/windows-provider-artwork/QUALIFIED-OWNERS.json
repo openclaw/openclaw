@@ -1,0 +1,45 @@
+{
+  "harnessCommit": "a8c5a852138b3a078125d2fa489c88d963a17cf2",
+  "runtimeFamily": "Microsoft.WindowsAppRuntime.2",
+  "sourceSdkVersion": "2.6.4",
+  "frameworkMinimum": "2.6.4.0",
+  "dotnetSdk": "10.0.403",
+  "installerSha256": "9bf9c28bfa745a5d3c88b3da29b5c7bec0dc88b42fafa3f918ef0b85ea9bba33",
+  "installerBytes": 124949816,
+  "bootstrapMajorMinor": 131078,
+  "files": [
+    {
+      "file": "Program.cs",
+      "origin": "a8c5a852138b3a078125d2fa489c88d963a17cf2:harness/windows-ollama/Program.cs",
+      "originSha256": "d7337e908472033755a5c1c83046875523931ada52ad08f4f86ef736b9eb54a2",
+      "adaptation": "unchanged"
+    },
+    {
+      "file": "BootstrapProbe.csproj",
+      "origin": "a8c5a852138b3a078125d2fa489c88d963a17cf2:harness/windows-ollama/BootstrapProbe.csproj",
+      "originSha256": "f7d88528ac41739f81684ff10c6a0842387105703b299b7a78dcfed19fc16591",
+      "adaptation": "unchanged"
+    },
+    {
+      "file": "Save-CalculatedVersion.ps1",
+      "origin": "a8c5a852138b3a078125d2fa489c88d963a17cf2:harness/windows-ollama/Save-CalculatedVersion.ps1",
+      "originSha256": "a045b196c0e98341735aa8a21dc80cfdacf4504f574c602775e3e31f728e7e39",
+      "adaptation": "unchanged"
+    },
+    {
+      "file": "Proof.Common.ps1",
+      "origin": "a8c5a852138b3a078125d2fa489c88d963a17cf2:harness/windows-ollama/Proof.Common.ps1",
+      "originSha256": "99e0697d0d6db39478fb5e64b6785f72ff31ceaef209b0446058ef9ba4e520c7",
+      "adaptation": "only unchanged generic helper prefix; omit unused Ollama product/packet policy functions"
+    },
+    {
+      "file": "Initialize-NativeRuntime.ps1",
+      "origin": "a8c5a852138b3a078125d2fa489c88d963a17cf2:harness/windows-ollama/Initialize-NativeRuntime.ps1",
+      "originSha256": "5d3d0cc9f4cf553fc15477f858f7e35dbe6d60e9ca46108e28c003de5ac6cc6c",
+      "adaptation": "parent execution guard and payload admission replace Ollama packet guard; remove global safe.directory mutation; unique task runtime root; verify both unchanged source runtime versions. Signed installer/runtime/bootstrap/desktop owners unchanged."
+    }
+  ],
+  "buildLoggingProperty": "WriteVersionInfoToBuildLog=false; DisableGitVersionTask=false, GetVersion=true and UpdateVersionProperties=true must remain evaluated; computed SHA must bind HEAD",
+  "privateDesktopOwner": "c550174d517b5e8830726cd5c32d4e132c144659:scripts/Invoke-PrivateDesktop.ps1; Default DACL/label copied, never switched or modified",
+  "sourcePolicyAdaptation": "SDK queries execute from source; isolated bootstrap gets an unchanged copy of source global.json. No source/operator config or version rewrite."
+}
