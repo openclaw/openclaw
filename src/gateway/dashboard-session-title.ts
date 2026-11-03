@@ -26,6 +26,7 @@ import {
   SESSION_TITLE_SOURCE_MAX_CHARS,
   resolveSessionTitleSource,
 } from "../sessions/session-title-source.js";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import type { SkillCommandSpec } from "../skills/types.js";
@@ -86,7 +87,9 @@ export function buildDashboardSessionTitleSource(params: {
   attachments?: readonly ChatAttachment[];
 }): string {
   const visibleMessage = params.message.trim();
-  const slashCommand = visibleMessage.startsWith("/");
+  // Only real control commands skip the message body; pasted paths and other
+  // leading-slash task text still feed dashboard and worktree titles.
+  const slashCommand = Boolean(visibleMessage) && hasControlCommand(visibleMessage);
   let source = slashCommand ? "" : visibleMessage;
   for (const attachment of params.attachments ?? []) {
     const separatorLength = source ? 1 : 0;
