@@ -139,7 +139,11 @@ type McpLoopbackToolAuth = {
   store: AuthProfileStore;
 };
 
+type McpLoopbackClientGrantOwner = { bearerToken: string };
+const mintedClientGrantOwners = new WeakMap<McpLoopbackClientGrant, McpLoopbackClientGrantOwner>();
+
 type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
+  owner: McpLoopbackClientGrantOwner;
   runtimeOwnerToken: string;
   /** Originating turn policy, independent of the bridge-only executable catalog. */
   sessionEventSourcePolicy?: SessionEventSourcePolicy;
@@ -270,7 +274,10 @@ function sweepExpiredAttachGrants(nowMs: number = Date.now()): void {
 }
 
 export function mintMcpLoopbackClientGrant(
-  params: Omit<StoredMcpLoopbackClientGrant, "token" | "activeCaptureKey" | "assertCaptureCurrent">,
+  params: Omit<
+    StoredMcpLoopbackClientGrant,
+    "token" | "owner" | "activeCaptureKey" | "assertCaptureCurrent"
+  >,
 ): McpLoopbackClientGrant {
   const sessionKey = params.context.sessionKey.trim();
   if (!sessionKey) {
@@ -280,8 +287,10 @@ export function mintMcpLoopbackClientGrant(
   if (!runtimeOwnerToken) {
     throw new Error("mintMcpLoopbackClientGrant: runtimeOwnerToken is required");
   }
+  const owner = { bearerToken: crypto.randomBytes(32).toString("hex") };
   const grant: StoredMcpLoopbackClientGrant = {
-    token: crypto.randomBytes(32).toString("hex"),
+    token: owner.bearerToken,
+    owner,
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
     sessionEventSourcePolicy: params.sessionEventSourcePolicy,
@@ -299,10 +308,9 @@ export function mintMcpLoopbackClientGrant(
     ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
   };
   clientGrantsByToken.set(grant.token, grant);
-  return structuredClone({
-    token: grant.token,
-    context: grant.context,
-  });
+  const minted = structuredClone({ token: grant.token, context: grant.context });
+  mintedClientGrantOwners.set(minted, owner);
+  return minted;
 }
 
 function replaceMcpLoopbackClientGrant(grant: StoredMcpLoopbackClientGrant): void {
@@ -462,6 +470,7 @@ export function transferMcpLoopbackClientGrant(params: {
     token: params.targetToken,
   });
   clientGrantsByToken.delete(params.sourceToken);
+  source.owner.bearerToken = params.targetToken;
   // Both tokens may own cached server projections. Evict them only after the
   // map swap so a request can observe either the old grant or the new grant,
   // never a partially updated authority.
@@ -558,6 +567,16 @@ export function registerMcpLoopbackClientGrantRevocationListener(
 ): () => void {
   clientGrantRevocationListeners.add(listener);
   return () => clientGrantRevocationListeners.delete(listener);
+}
+
+/** Revoke only this minted turn, including after transfer to a warm process. */
+export function revokeMintedMcpLoopbackClientGrant(grant: McpLoopbackClientGrant): boolean {
+  const owner = mintedClientGrantOwners.get(grant);
+  // A delayed predecessor cleanup must never revoke the next turn on the same bearer.
+  if (!owner || clientGrantsByToken.get(owner.bearerToken)?.owner !== owner) {
+    return false;
+  }
+  return revokeMcpLoopbackClientGrant(owner.bearerToken);
 }
 
 export function revokeMcpLoopbackClientGrant(token: string): boolean {

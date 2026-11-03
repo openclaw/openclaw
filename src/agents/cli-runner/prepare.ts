@@ -20,6 +20,7 @@ import {
   deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
+  revokeMintedMcpLoopbackClientGrant,
   transferMcpLoopbackClientGrant,
 } from "../../gateway/mcp-grant-store.js";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
@@ -1027,7 +1028,7 @@ async function prepareCliRunContextWithinReadFence(
               return;
             }
             mcpClientGrantRevoked = true;
-            revokeMcpLoopbackClientGrant(mcpClientGrant.token);
+            revokeMintedMcpLoopbackClientGrant(mcpClientGrant);
           }
         : undefined,
       loopbackBundleMcp?.takeCleanup(),
