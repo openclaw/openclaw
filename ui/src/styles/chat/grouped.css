@@ -1950,6 +1950,16 @@ button.chat-reply-attribution__target:disabled {
     --chat-reply-attribution-gap: 8px;
   }
 
+  /* Peer bubbles keep the message width cap, but the footer spans the whole
+     row: its reserved touch controls otherwise truncate names that fit. */
+  .chat-group.user.chat-group--peer.chat-group--with-footer {
+    grid-template-columns: var(--chat-avatar-column) minmax(0, 1fr);
+  }
+
+  .chat-group.user.chat-group--peer.chat-group--with-footer > .chat-group-messages {
+    max-width: var(--chat-message-column-max);
+  }
+
   .chat-group:has(
     > .chat-group-messages > :is(.chat-reply-attribution, .chat-message--reply):first-child
   ) {

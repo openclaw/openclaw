@@ -486,6 +486,11 @@ suite.define(() => {
         await page.getByRole("textbox", { name: "Chat composer" }).focus();
         const restingTouchGeometry = await readFooterGeometry(longNamePeerGroup);
         const restingTouchHeight = (await longNamePeerGroup.boundingBox())?.height;
+        // Footer controls use the full row, so a phone-width name is not cut by the bubble cap.
+        const restingName = longNamePeerGroup.locator(".chat-group-footer .chat-sender-name");
+        if (width >= 390) {
+          expect(await restingName.evaluate((name) => name.scrollWidth - name.clientWidth)).toBe(0);
+        }
         await tapBubble(longNamePeerGroup);
         await expect(longNamePeerGroup).toHaveClass(/\bchat-group--meta-revealed\b/u);
         const revealed = await readFooterGeometry(longNamePeerGroup);
