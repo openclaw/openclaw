@@ -30,40 +30,65 @@ function object(value: unknown): Record<string, unknown> | undefined {
  * is unknown (never zero). A positive count does not establish eligibility.
  * Credit detail rows may be incomplete, so the count is not their length.
  */
+function isSelectedAccount(raw: unknown, expectedAccountId: string | undefined): boolean {
+  const response = object(raw);
+  return Boolean(response && (!expectedAccountId || response.accountId === expectedAccountId));
+}
+
+/**
+ * A reset credit cannot establish resettable subscription exhaustion by itself.
+ * In particular, purchased monetary credits and workspace spending caps are
+ * independent of the banked-credit inventory.
+ */
+function isResettableExhaustion(raw: unknown, accountId: string | undefined): boolean {
+  if (!isSelectedAccount(raw, accountId)) {
+    return false;
+  }
+  const response = object(raw);
+  if (response?.ordinaryUsageAllowed !== false) {
+    return false;
+  }
+  const limit = object(response.rateLimits);
+  const monetary = object(limit?.credits);
+  return Boolean(
+    limit &&
+      (limit.limitId === null || limit.limitId === undefined || limit.limitId === "codex") &&
+      limit.rateLimitReachedType === "rate_limit_reached" &&
+      limit.spendControlReached !== true &&
+      monetary?.hasCredits !== true &&
+      monetary?.unlimited !== true,
+  );
+}
+
+/**
+ * A positive availableCount is authoritative even if detail rows are capped
+ * or null. When details are incomplete, omit creditId and let Codex select it;
+ * never assert that the first detail row is the earliest overall expiry.
+ */
 export function chooseEarnedCodexResetCredit(
   raw: unknown,
   expectedAccountId: string | undefined,
   nowMs: number,
 ): CreditChoice | undefined {
-  const response = object(raw);
-  if (!response || response.ordinaryUsageAllowed !== false) {
+  if (!isResettableExhaustion(raw, expectedAccountId)) {
     return undefined;
   }
-  if (
-    expectedAccountId &&
-    response.accountId !== expectedAccountId
-  ) {
-    return undefined;
-  }
-  const limits = object(response.rateLimits);
-  if (
-    limits?.rateLimitReachedType !== "rate_limit_reached" ||
-    limits.spendControlReached === true
-  ) {
-    return undefined;
-  }
-  const inventory = object(response.rateLimitResetCredits);
+  const inventory = object(object(raw)?.rateLimitResetCredits);
   const count = inventory?.availableCount;
   if (typeof count !== "number" || !Number.isSafeInteger(count) || count <= 0) {
     return undefined;
   }
-
   const rows = inventory?.credits;
-  if (!Array.isArray(rows)) {
+  if (rows === null || rows === undefined) {
     return {};
   }
-  // Use a specific credit only for a confidently available, compatible row.
-  // Otherwise let the backend select a valid credit from its authoritative count.
+  if (!Array.isArray(rows)) {
+    return undefined;
+  }
+  if (rows.length === 0) {
+    return {};
+  }
+  const valid: Array<{ id: string; expiry: number }> = [];
   for (const candidate of rows) {
     const credit = object(candidate);
     if (
@@ -71,29 +96,32 @@ export function chooseEarnedCodexResetCredit(
       credit.status !== "available" ||
       credit.resetType !== "codexRateLimits" ||
       typeof credit.id !== "string" ||
-      !credit.id.trim()
+      !credit.id.trim() ||
+      (credit.expiresAt !== null &&
+        (typeof credit.expiresAt !== "number" ||
+          !Number.isSafeInteger(credit.expiresAt) ||
+          credit.expiresAt <= 0))
     ) {
-      continue;
+      // Contradictory or corrupt details are not permission to spend.
+      return undefined;
     }
-    if (
-      credit.expiresAt !== null &&
-      (typeof credit.expiresAt !== "number" ||
-        !Number.isSafeInteger(credit.expiresAt) ||
-        credit.expiresAt * 1000 <= nowMs)
-    ) {
-      continue;
+    const expiry =
+      credit.expiresAt === null ? Number.POSITIVE_INFINITY : credit.expiresAt * 1000;
+    if (expiry <= nowMs) {
+      return undefined;
     }
-    return { creditId: credit.id };
+    valid.push({ id: credit.id, expiry });
   }
-  return {};
+  if (rows.length !== count) {
+    // Count is authoritative, but these details are not complete.
+    return {};
+  }
+  valid.sort((a, b) => a.expiry - b.expiry || a.id.localeCompare(b.id));
+  return valid[0] ? { creditId: valid[0].id } : undefined;
 }
 
 function isAuthoritativelyAvailable(raw: unknown, accountId: string | undefined): boolean {
-  const response = object(raw);
-  return (
-    response?.ordinaryUsageAllowed === true &&
-    (!accountId || response.accountId === accountId)
-  );
+  return isSelectedAccount(raw, accountId) && object(raw)?.ordinaryUsageAllowed === true;
 }
 
 /**
