@@ -1095,6 +1095,21 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
     top: var(--app-toast-shell-top, calc(20px + var(--safe-area-top)));
   }
 
+  /* Top notices (a required refresh and its status) stay readable: the lanes start
+   * 8px under them. Engines without anchor positioning keep the shell offset. */
+  @supports (anchor-name: --a) {
+    .sidebar-update-card--floating .sidebar-update-card {
+      anchor-name: --openclaw-top-notices;
+    }
+
+    openclaw-toast-host[data-toast-placement] .app-toast-lanes {
+      top: max(
+        var(--app-toast-shell-top, calc(20px + var(--safe-area-top))),
+        calc(anchor(--openclaw-top-notices bottom, 0px) + 8px)
+      );
+    }
+  }
+
   .app-toast-lane,
   openclaw-toast-host[data-toast-placement] .app-toast-lane {
     position: relative;
