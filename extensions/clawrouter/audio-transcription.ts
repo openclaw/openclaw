@@ -222,7 +222,7 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
           },
         },
         prepared.apiKey,
-        "audio-transcription",
+        "audio",
       );
       const offers = await fetchClawRouterCapabilityOffers({
         context: http,
