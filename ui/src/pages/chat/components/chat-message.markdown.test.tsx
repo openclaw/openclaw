@@ -50,41 +50,69 @@ describe("grouped chat rendering", () => {
     render(renderTestMessageGroup(group, opts));
   }
 
-  it("preserves reference links in recovered media", async () => {
-    const fullText =
-      "[Before][proof]\n\nMEDIA:https://example.com/comparison.png\n\n[After][proof]\n\n[proof]: https://example.com/proof";
-    const fullMessage = createAssistantMessage(fullText, { timestamp: 1000 });
-    const message = createAssistantMessage("Loading preview", {
-      timestamp: 1000,
-      __openclaw: { id: "media-recovery", seq: 1, truncated: true },
-    });
-    markdownRenderMock.withImplementation(renderMarkdownHtml, () => {
-      renderAssistantMessageEntries([{ key: "media-order", message }], {
-        sessionKey: "agent:main:main",
-        loadFullAssistantMessage: async () => null,
-        getAssistantMessageExpansion: () => ({
-          status: "loaded",
-          markdown: fullText,
-          message: fullMessage,
-          revision: 1,
-        }),
-        onToggleAssistantMessageExpanded: vi.fn(),
+  it.each(["live", "cached", "changed"])(
+    "preserves reference links in %s recovered media",
+    async (mode) => {
+      const fullText =
+        "[Before][proof]\n\nMEDIA:https://example.com/comparison.png\n\n[After][proof]\n\n[proof]: https://example.com/proof";
+      const fullMessage = createAssistantMessage(fullText, { timestamp: 1000 });
+      const message = createAssistantMessage("Loading preview", {
+        timestamp: 1000,
+        __openclaw: { id: "media-recovery", seq: 1, truncated: true },
       });
-    });
-    await vi.dynamicImportSettled();
-    await waitForSolid(() =>
-      expect(
-        elements(".chat-text a, .chat-message-image").map((node) =>
-          node instanceof HTMLImageElement ? "image" : node.textContent,
-        ),
-      ).toEqual(["Before", "image", "After"]),
-    );
-    expect(elements<HTMLAnchorElement>(".chat-text a").map((link) => link.href)).toEqual([
-      "https://example.com/proof",
-      "https://example.com/proof",
-    ]);
-    expect(harness.view.textContent).not.toContain("Loading preview");
-  });
+      markdownRenderMock.withImplementation(renderMarkdownHtml, () => {
+        renderAssistantMessageEntries([{ key: "media-order", message }], {
+          sessionKey: "agent:main:main",
+          ...(mode !== "live"
+            ? {
+                displayFacts: {
+                  forRow: () => ({
+                    read: () => ({
+                      scope: "cached-media",
+                      facts: {
+                        recoveredMessage: {
+                          source: mode === "changed" ? "Old preview" : "Loading preview",
+                          message: fullMessage,
+                        },
+                      },
+                    }),
+                    write: vi.fn(),
+                  }),
+                },
+              }
+            : {
+                loadFullAssistantMessage: async () => null,
+                getAssistantMessageExpansion: () => ({
+                  status: "loaded",
+                  markdown: fullText,
+                  message: fullMessage,
+                  revision: 1,
+                }),
+                onToggleAssistantMessageExpanded: vi.fn(),
+              }),
+        });
+      });
+      if (mode === "changed") {
+        expect(harness.view.textContent).toContain("Loading preview");
+        expect(harness.view.textContent).not.toContain("Before");
+        expectAbsent(".chat-message-image");
+        return;
+      }
+      await vi.dynamicImportSettled();
+      await waitForSolid(() =>
+        expect(
+          elements(".chat-text a, .chat-message-image").map((node) =>
+            node instanceof HTMLImageElement ? "image" : node.textContent,
+          ),
+        ).toEqual(["Before", "image", "After"]),
+      );
+      expect(elements<HTMLAnchorElement>(".chat-text a").map((link) => link.href)).toEqual([
+        "https://example.com/proof",
+        "https://example.com/proof",
+      ]);
+      expect(harness.view.textContent).not.toContain("Loading preview");
+    },
+  );
 
   it("keeps list structure across an assistant image", async () => {
     markdownRenderMock.withImplementation(renderMarkdownHtml, () => {

@@ -584,7 +584,9 @@ async function resolveCodexBoundedTurnModel(params: {
     "model/list",
     { limit: null, cursor: null, includeHidden: params.selection.mode === "required" },
     {
-      timeoutMs: Math.min(params.timeoutMs, 5_000),
+      // Native cold discovery can spend five seconds refreshing before returning its catalog.
+      // The enclosing turn deadline already bounds this request.
+      timeoutMs: params.timeoutMs,
       signal: params.signal,
       assertCurrent: params.assertCurrent,
     },

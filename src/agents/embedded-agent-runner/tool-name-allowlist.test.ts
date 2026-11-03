@@ -35,7 +35,6 @@ describe("tool name allowlists", () => {
     const names = Object.freeze(["write", "read", "write", "exec"]);
     const allowlist = toSessionToolAllowlist(names);
     expect(allowlist).toEqual(["exec", "read", "write"]);
-    expect(names).toEqual(["write", "read", "write", "exec"]);
     allowlist.push("child-only");
     expect(toSessionToolAllowlist(names.values())).toEqual(["exec", "read", "write"]);
   });

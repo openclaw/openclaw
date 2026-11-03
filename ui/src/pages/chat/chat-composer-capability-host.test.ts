@@ -229,6 +229,31 @@ function createAddServerHarness(
 }
 
 describe("ChatComposerCapabilityHost", () => {
+  it("gates tool previews on session read access, including callbacks retained across revocation", async () => {
+    const request = vi.fn().mockResolvedValue(toolsResult("readable"));
+    const { context, props, open, load, result } = toolsHarness(request);
+    const scopes = (values: string[]) => {
+      context.gateway.snapshot.hello = gatewayHelloForMethods(["tools.effective"], values);
+    };
+    scopes([]);
+    open();
+    load();
+    expect(request).not.toHaveBeenCalled();
+    scopes(["operator.sessions.read"]);
+    open();
+    await result("readable");
+    const retained = props().onOpenToolAccess;
+    scopes([]);
+    retained?.("github");
+    expect(request).toHaveBeenCalledOnce();
+    expect(props().toolsEffectiveResult).toBeNull();
+    expect(props().onOpenToolAccess).toBeUndefined();
+    scopes(["operator.sessions.read"]);
+    open();
+    await result("readable");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps unavailable plugin settings distinct from an empty configuration in the open menu", async () => {
     const { context, props } = capabilityHarness(vi.fn(), null);
     const guest = sessionMutationGatewayHello([
@@ -404,9 +429,7 @@ describe("ChatComposerCapabilityHost", () => {
         mcp: { servers: { github: { url: "https://mcp.example.test", enabled: true } } },
       },
     });
-    context.gateway.snapshot.hello = {
-      features: { methods: ["tools.effective"] },
-    } as NonNullable<typeof context.gateway.snapshot.hello>;
+    context.gateway.snapshot.hello = gatewayHelloForMethods(["tools.effective"]);
     props().onOpenToolAccess?.("github");
     await vi.waitFor(() => expect(props().toolsEffectiveResult).toBe(firstResult));
 

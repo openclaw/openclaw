@@ -208,6 +208,13 @@ class SessionCapabilityReadRequired extends Error {
   }
 }
 
+class SessionCapabilityMetadataChangedError extends Error {
+  constructor(message: string, cause: Error) {
+    super(message, { cause });
+    this.name = "SessionCapabilityMetadataChangedError";
+  }
+}
+
 const preparedReads = new AsyncContext<{
   entries: Map<string, () => SessionCapabilityEntry | undefined>;
   retain: boolean;
@@ -269,7 +276,10 @@ async function prepareCapabilityReads<T>(
       return preparedReads.run(scope, read);
     } catch (error) {
       if (error instanceof SessionCapabilityReadRequired) {
-        throw new Error("Session capability metadata changed; prepare it again", { cause: error });
+        throw new SessionCapabilityMetadataChangedError(
+          "Session capability metadata changed; prepare it again",
+          error,
+        );
       }
       throw error;
     }
@@ -326,7 +336,10 @@ async function prepareCapabilityReads<T>(
               return () => {
                 assertAgentSessionWriteAdmission(database, query.agentId);
                 if (!missingCurrent) {
-                  throw new Error("Session capability metadata changed", { cause: error });
+                  throw new SessionCapabilityMetadataChangedError(
+                    "Session capability metadata changed",
+                    error,
+                  );
                 }
                 return undefined;
               };
@@ -359,7 +372,10 @@ async function prepareCapabilityReads<T>(
             return () => {
               assertAgentSessionWriteAdmission(database, query.agentId);
               if (!predicate.isCurrent() || !idCurrent) {
-                throw new Error("Session capability metadata changed", { cause: error });
+                throw new SessionCapabilityMetadataChangedError(
+                  "Session capability metadata changed",
+                  error,
+                );
               }
               return entry;
             };

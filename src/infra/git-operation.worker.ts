@@ -95,8 +95,8 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
               );
             case "repository.branches":
               return import("../agents/worktrees/branches.runtime.js").then(
-                ({ readRepositoryBranches }) =>
-                  readRepositoryBranches(command.input.repoRoot, command.input),
+                ({ readRepositoryBranchSnapshot }) =>
+                  readRepositoryBranchSnapshot(command.input.repoRoot, command.input),
               );
             case "checkout.revision":
               return import("../gateway/control-ui-session-prs-git.runtime.js").then(

@@ -37,6 +37,7 @@ import {
   WebSocket,
   WebSocketServer,
 } from "openclaw/plugin-sdk/websocket-runtime";
+import { resolveCallTranscriptionLanguage } from "../call-brief.js";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
@@ -928,6 +929,7 @@ export class RealtimeCallHandler {
       agentId,
       providerConfig,
       capabilities,
+      language: resolveCallTranscriptionLanguage(callRecord),
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
       interruptResponseOnInputAudio,
       instructions: handlesAgentConsult
@@ -991,6 +993,14 @@ export class RealtimeCallHandler {
           !owner ||
           !this.isActiveBridgeOwner(callId, owner)
         ) {
+          return;
+        }
+        if (role === "user" && !audioController.acceptUserTranscript(isFinal)) {
+          if (isFinal) {
+            console.log(
+              `[voice-call] Ignoring unconfirmed caller transcript during playback callId=${callId}`,
+            );
+          }
           return;
         }
         if (text.trim()) {
@@ -1264,6 +1274,7 @@ export class RealtimeCallHandler {
         activity.noteSpeech();
       }
       if (speechDetector.accept({ rms: inputRms, peak: 0 })) {
+        audioController.noteCallerSpeech();
         outboundGreeting.claim();
         if (localBargeIn && !activity.isPaused()) {
           audioController.cancelOutputAudioForBargeIn("local", (audioPlaybackActive) => {

@@ -590,7 +590,10 @@
 .chat-group-messages
   > .chat-message--reply:has(> .chat-bubble--actions-revealed)
   + :is(.chat-message-actions-row, .chat-message-footer),
-:is(.chat-message-actions-row, .chat-message-footer):focus-within {
+:is(.chat-message-actions-row, .chat-message-footer):is(
+  :focus-within,
+  :has([data-copy-state="error"])
+) {
   --chat-message-action-opacity: 0.6;
   --chat-message-action-pointer-events: auto;
   --chat-footer-disclosure-opacity: 1;
@@ -640,7 +643,7 @@
   --chat-footer-disclosure-pointer-events: auto;
 }
 
-.chat-group-footer:focus-within,
+.chat-group-footer:is(:focus-within, :has([data-copy-state="error"])),
 .chat-session-activity__message:focus-within,
 .chat-message-reactions:focus-within {
   --chat-footer-detail-position: static;
@@ -1432,14 +1435,7 @@ button.chat-reply-attribution__target:disabled {
   --chat-persistent-footer-opacity: 1;
 }
 
-.chat-group
-  :is(.chat-group-footer-actions, .chat-message-actions-row)
-  :is(
-    .chat-copy-btn,
-    .chat-reply-btn,
-    .chat-read-aloud-btn,
-    .chat-group-rewind
-  )[data-copy-state="copied"] {
+.chat-group :is(.chat-group-footer-actions, .chat-message-actions-row) [data-copy-state="copied"] {
   opacity: 1;
   border-color: var(--ok-subtle);
   background: var(--ok-subtle);
@@ -1489,6 +1485,13 @@ button.chat-reply-attribution__target:disabled {
       var(--bg-content, var(--bg));
   }
   border-color: transparent;
+}
+
+:root[data-theme="dark"]
+  .chat-group.user:not(.chat-group--sender-tint)
+  > .chat-group-messages
+  > .chat-bubble {
+  --chat-text: color-mix(in srgb, var(--text) 65%, var(--text-strong));
 }
 
 .chat-group.user .chat-bubble:hover {
@@ -1646,30 +1649,6 @@ button.chat-reply-attribution__target:disabled {
   white-space: nowrap;
   vertical-align: bottom;
   color: var(--text);
-}
-
-/* Reuse the shared text-shimmer owner; accessibility modes keep static text. */
-@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
-  .agent-chat__typing-text[data-typing] {
-    background-image: linear-gradient(
-      90deg,
-      var(--muted) 0%,
-      var(--muted) 35%,
-      var(--text) 50%,
-      var(--muted) 65%,
-      var(--muted) 100%
-    );
-    background-size: 200% 100%;
-    background-repeat: repeat-x;
-    background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    animation: text-shimmer 2.4s ease-in-out infinite;
-  }
-
-  .agent-chat__typing-text[data-typing] .agent-chat__typing-name {
-    color: inherit;
-  }
 }
 
 .agent-chat__typing-preview-text {
@@ -2043,7 +2022,8 @@ button.chat-reply-attribution__target:disabled {
     .chat-group-messages
     > .chat-message--reply:has(> .chat-bubble:is(:focus-within, .chat-bubble--actions-revealed))
     + .chat-message-footer,
-  .chat-group.user.chat-group--peer .chat-message-footer:focus-within {
+  .chat-group.user.chat-group--peer
+    .chat-message-footer:is(:focus-within, :has([data-copy-state="error"])) {
     --chat-footer-disclosure-opacity: 1;
     --chat-footer-disclosure-pointer-events: auto;
     --chat-footer-action-opacity: 0.6;
@@ -2060,10 +2040,39 @@ button.chat-reply-attribution__target:disabled {
     display: none;
   }
 
+  .chat-reply-attribution--reply {
+    align-items: center;
+    min-height: var(--chat-reply-attribution-line-height);
+  }
+
   .chat-reply-attribution--reply .chat-reply-attribution__label {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+  }
+
+  /* The icon carries the cue on screen; assistive tech still hears the label. */
+  .chat-reply-attribution--reply .chat-reply-attribution__label-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .chat-reply-attribution--reply .chat-reply-attribution__name-rest {
+    display: none;
+  }
+
+  .chat-reply-attribution--reply button.chat-reply-attribution__target {
+    position: relative;
+  }
+
+  /* A larger hit area without changing the line's height. */
+  .chat-reply-attribution--reply button.chat-reply-attribution__target::after {
+    content: "";
+    position: absolute;
+    inset: -8px -4px;
   }
 
   .chat-reply-attribution__mobile-icon {

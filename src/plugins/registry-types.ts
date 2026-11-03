@@ -191,7 +191,11 @@ export type PluginSessionActionRegistryRegistration = PluginRegistrationOwner & 
 
 export type PluginRecord = {
   id: string;
+  /** Manifest opt-in; the replacement owner also checks registered resource surfaces. */
+  generationOverlap?: boolean;
   nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup;
+  /** Manifest per-agent learned-skill folder name; the host resolves skill authoring roots from it. */
+  agentSkillsDir?: string;
   name: string;
   packageVersion?: string;
   version?: string;
@@ -383,6 +387,12 @@ export type PluginRegistry = {
     pluginConfig?: Record<string, unknown>;
   })[];
   gatewayAccessPolicies: Array<PluginRegistrationOwner & { policy: PluginGatewayAccessPolicy }>;
+  repositoryIntegrations: Array<
+    PluginRegistrationOwner & {
+      assertCurrent: () => void;
+      integration: import("./repository-integration.types.js").RepositoryIntegration;
+    }
+  >;
   securityAuditCollectors: Array<
     PluginRegistrationOwner & {
       collector: import("./types.js").OpenClawPluginSecurityAuditCollector;

@@ -10,12 +10,12 @@
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "0.6.6",
     "@matrix-org/matrix-sdk-crypto-wasm": "18.9.0",
-    "@openclaw/fs-safe": "0.26.13",
+    "@openclaw/fs-safe": "0.27.0",
     "fake-indexeddb": "6.2.6",
     "markdown-it": "15.0.3",
     "matrix-js-sdk": "43.0.0",
     "music-metadata": "12.2.3",
-    "typebox": "1.4.2",
+    "typebox": "1.4.3",
     "zod": "4.6.7"
   },
   "devDependencies": {

@@ -159,19 +159,13 @@
 
 .agent-chat__input {
   --chat-box-inset: 8px;
-  --chat-composer-secondary: var(
-    --control-secondary-text,
-    color-mix(in srgb, var(--text-strong) 65%, var(--chat-composer-surface))
-  );
-  --chat-composer-tertiary: color-mix(
-    in srgb,
-    var(--text-strong) 48%,
-    var(--chat-composer-surface)
-  );
+  /* Rest, glyph and disabled ink are steps of this surface (see base.css), so
+     an enabled control can never render at or below its own disabled state. */
+  --chat-composer-secondary: var(--chat-composer-control-text);
+  --chat-composer-tertiary: var(--chat-composer-control-disabled);
+  --icon-interactive: var(--chat-composer-control-icon);
   --chat-composer-hover: var(--surface-hover);
   --chat-composer-group-hover: var(--surface-hover);
-  --chat-composer-popover-border: var(--overlay-border);
-  --chat-composer-popover-radius: calc(14px * var(--openclaw-corner-radius-scale));
   /* Footer control box. Smaller than the editor's own line box on purpose: the
      controls read as chrome beside the text, not as peers of it. */
   --chat-composer-control-size: 28px;
@@ -206,7 +200,6 @@
   --chat-composer-menu-row-height: 40px;
   --chat-composer-menu-row-padding: 6px 9px;
   --chat-composer-menu-row-gap: 8px;
-  --chat-composer-menu-row-radius: calc(10px * var(--openclaw-corner-radius-scale));
   --chat-composer-menu-icon: 16px;
   --chat-composer-menu-selected: var(--menu-selected);
   /* Breathing room between the draft and the surface it sits in. Small on
@@ -404,6 +397,11 @@
   font-size: var(--chat-composer-editor-size);
   line-height: var(--chat-composer-editor-line);
   outline: none;
+}
+
+/* Enter before the session is ready keeps the draft, dimmed, until it sends. */
+.agent-chat__input--submit-queued .agent-chat__composer-combobox > textarea {
+  color: var(--muted);
 }
 
 .agent-chat__composer-combobox > textarea {
@@ -1018,7 +1016,7 @@
   display: contents;
 }
 
-/* Soft danger fill so Stop generating reads as the one destructive control
+/* Soft danger fill so Stop reads as the one destructive control
    next to the accent-filled send button. */
 .chat-send-btn--stop {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
@@ -1481,7 +1479,9 @@
 }
 
 /* Short panes spend height on a complete editor line and the action row first.
-   Context keeps its existing scrollport; neither region overflows the chat clip. */
+   Context keeps its existing scrollport; neither region overflows the chat clip.
+   The editor keeps its inset: a portrait phone keyboard moves the pane across
+   this height, and the draft must not jump against the frame when it does. */
 @container chat-conversation (max-height: 320px) {
   .chat-footer {
     --chat-footer-max-height: 100cqh;
@@ -1489,6 +1489,7 @@
 
   .agent-chat__input {
     --chat-composer-min-height: 0px;
+    --chat-composer-editor-max-lines: 1;
   }
 
   .agent-chat__composer-shell {
@@ -1498,6 +1499,16 @@
     gap: 0;
   }
 
+  .agent-chat__composer-footer {
+    margin-bottom: 0;
+    padding-block: 0;
+  }
+}
+
+/* Only a nearly closed pane (a landscape phone keyboard, a collapsed desktop
+   split) needs the editor's inset for the line and action row to fit. Portrait
+   phone keyboards leave far more, so they never cross this step. */
+@container chat-conversation (max-height: 160px) {
   .agent-chat__composer-input-row {
     padding-top: 0;
   }
@@ -1508,10 +1519,5 @@
     min-height: calc(var(--chat-composer-editor-line) + 4px);
     max-height: calc(var(--chat-composer-editor-line) + 4px);
     padding-block: 2px;
-  }
-
-  .agent-chat__composer-footer {
-    margin-bottom: 0;
-    padding-block: 0;
   }
 }

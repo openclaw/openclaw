@@ -1,11 +1,8 @@
 import { For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
-import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { PluginArtTile } from "./consent-dialog.tsx";
-import { pluginRowKey } from "./plugin-row-message.tsx";
-import type { DetailProps } from "./settings-view.tsx";
 import "../../styles/plugins.css";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
@@ -93,50 +90,5 @@ export function PluginRecommendedPrompts(props: {
         </div>
       </section>
     </Show>
-  );
-}
-
-/** Prefer the installed release's author metadata over the registry's latest release. */
-export function InstalledPluginRecommendedPrompts(props: {
-  plugin: PluginCatalogItem;
-  state: Pick<
-    DetailProps,
-    | "inspection"
-    | "catalog"
-    | "iconUrls"
-    | "catalogIconUrls"
-    | "registerIcon"
-    | "onIconError"
-    | "busy"
-    | "promptBusy"
-    | "promptBlockedReason"
-    | "onSelectPrompt"
-  >;
-}) {
-  const catalog = () => props.state.catalog ?? props.state.inspection?.catalog;
-  const icon = () => {
-    const url = catalog()?.plugin.catalog.imageUrl;
-    return (
-      props.state.iconUrls[props.plugin.id] ??
-      (url ? props.state.catalogIconUrls?.[url] : undefined)
-    );
-  };
-  return (
-    <PluginRecommendedPrompts
-      id={props.plugin.id}
-      name={props.plugin.name}
-      prompts={
-        props.plugin.recommendedPrompts ??
-        props.state.inspection?.overview?.recommendedPrompts ??
-        catalog()?.detail.recommendedPrompts
-      }
-      iconUrl={icon()}
-      registerIcon={props.state.registerIcon}
-      onIconError={() => props.state.onIconError(props.plugin.id)}
-      busy={Boolean(props.state.busy[pluginRowKey(props.plugin.id)]) || props.state.promptBusy}
-      disabled={Boolean(props.state.promptBlockedReason)}
-      disabledReason={props.state.promptBlockedReason}
-      onSelect={props.state.onSelectPrompt}
-    />
   );
 }

@@ -60,10 +60,12 @@ export function createSqliteWorkerLifecycle({
     inputAdmission,
     operations,
     waiters,
+    beforeSharedStateClose,
   }: {
     inputAdmission: Pick<SqliteWorkerInputAdmission, "joinOpens" | "joinPreparations">;
     operations: Iterable<Promise<void>>;
     waiters: Iterable<Iterable<(error?: unknown) => void>>;
+    beforeSharedStateClose?: () => Promise<void>;
   }): Promise<void> {
     // Seal clients and pending dispatch before the first await; accepted scopes still settle.
     for (const waiting of waiters) {
@@ -71,6 +73,13 @@ export function createSqliteWorkerLifecycle({
         resume(new SqliteWorkerError("SQLite worker host is closing", "overloaded"));
       }
     }
+    for (const client of stores.values()) {
+      // Retained state leases keep their binding until canonical resources finish.
+      if (!beforeSharedStateClose || !client.actor.stateContext) {
+        client.sealed = true;
+      }
+    }
+    await beforeSharedStateClose?.();
     for (const client of stores.values()) {
       client.sealed = true;
     }
@@ -276,6 +285,48 @@ export function createSqliteWorkerLifecycle({
     }
   }
 
+  /** Client references retire here before their last actor enters native close custody. */
+  function bindClientRelease({
+    actor,
+    client,
+    clientReservations,
+    releasePaths,
+    maintenanceScope,
+    resumeScheduledMaintenance,
+    readDraining,
+  }: {
+    actor: Actor;
+    client: object;
+    clientReservations: Set<object>;
+    releasePaths: () => void;
+    maintenanceScope: EnqueueOptions["maintenanceScope"];
+    resumeScheduledMaintenance: (() => void) | undefined;
+    readDraining: () => Promise<void> | undefined;
+  }): (store: object, reclaiming: boolean) => Promise<void> {
+    let referenceReleased = false;
+    return async (store, reclaiming) => {
+      if (!referenceReleased) {
+        referenceReleased = true;
+        resumeScheduledMaintenance?.();
+        releaseActorReference(actor);
+        stores.delete(store);
+        clientReservations.delete(client);
+        releasePaths();
+      }
+      const draining = readDraining();
+      if (draining && !reclaiming && !actor.stateContext) {
+        // Canonical shared-state close releases its clients before host drainage joins it.
+        await draining;
+      } else if (actor.slot.failed) {
+        // A nonlast client still joins the failed worker's native cleanup.
+        await actor.slot.exit;
+      }
+      if (!actor.references) {
+        await closeActor(actor, maintenanceScope);
+      }
+    };
+  }
+
   async function rejectSlotAdmission(slot: Slot, error: unknown): Promise<never> {
     slot.pendingOpens -= 1;
     try {
@@ -462,6 +513,7 @@ export function createSqliteWorkerLifecycle({
     createSlot,
     settleGeneration,
     releaseActorReference,
+    bindClientRelease,
     rejectSlotAdmission,
     rejectActorAdmission,
     retireActor,

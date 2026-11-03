@@ -122,17 +122,18 @@ function normalizeSetupProviderEnvVars(setup: PluginManifest["setup"]): Record<s
   );
 }
 
-function buildBundledPluginContractSnapshot(
-  manifest: BundledCapabilityManifest,
+// Raw manifests and loaded registry records keep their own ID and environment normalization.
+export function buildBundledPluginContractSnapshot(
+  manifest: Pick<PluginManifest, "id" | "cliBackends" | "providers" | "contracts">,
+  ids: (values: readonly string[] | undefined) => string[],
+  providerEnvVars: Record<string, string[]>,
 ): BundledPluginContractSnapshot {
-  const ids = (values: readonly string[] | undefined) =>
-    normalizeContractStringValues(values, (value) => value.trim());
   const contracts = manifest.contracts;
   return {
     pluginId: manifest.id,
     cliBackendIds: ids(manifest.cliBackends),
     providerIds: ids(manifest.providers),
-    providerEnvVars: normalizeSetupProviderEnvVars(manifest.setup),
+    providerEnvVars,
     workerProviderIds: ids(contracts?.workerProviders),
     storageProviderIds: ids(contracts?.storageProviders),
     embeddingProviderIds: ids(contracts?.embeddingProviders),
@@ -160,6 +161,12 @@ function hasBundledPluginContractSnapshotCapabilities(
 }
 
 export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSnapshot[] =
-  BUNDLED_CAPABILITY_MANIFESTS.map(buildBundledPluginContractSnapshot)
+  BUNDLED_CAPABILITY_MANIFESTS.map((manifest) =>
+    buildBundledPluginContractSnapshot(
+      manifest,
+      (values) => normalizeContractStringValues(values, (value) => value.trim()),
+      normalizeSetupProviderEnvVars(manifest.setup),
+    ),
+  )
     .filter(hasBundledPluginContractSnapshotCapabilities)
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));

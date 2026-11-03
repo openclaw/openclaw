@@ -25,7 +25,7 @@ import {
   PluginOperatorGrantsSchema,
 } from "./plugin-inspection.js";
 import { PluginJsonValueSchema } from "./plugin-json-value.js";
-import { PluginRuntimeRetentionSchema } from "./plugin-retention.js";
+import { PluginInspectRuntimeRetentionSchema } from "./plugin-retention.js";
 import { NonEmptyString } from "./primitives.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
@@ -138,6 +138,7 @@ export const PluginControlUiModuleSchema = closedObject({
   name: NonEmptyString,
   revision: NonEmptyString,
   entryUrl: NonEmptyString,
+  panelIcon: Type.Optional(Type.String({ maxLength: 16 * 1024 * 3 + 64 })),
   imports: Type.Optional(Type.Array(NonEmptyString, { maxItems: 128 })),
   uiCapabilities: Type.Optional(PluginUiCapabilitiesSchema),
   // Host-owned runtime provenance; plugin manifests cannot opt into this delivery route.
@@ -594,7 +595,7 @@ export const PluginsInspectResultSchema = closedObject({
     ),
   ),
   /** Live cross-session acquisition facts; emitted only for current administrators. */
-  runtimeRetention: Type.Optional(Type.Union([PluginRuntimeRetentionSchema, Type.Null()])),
+  runtimeRetention: Type.Optional(Type.Union([PluginInspectRuntimeRetentionSchema, Type.Null()])),
   decisions: Type.Optional(Type.Array(PluginDecisionProviderStatusSchema)),
   plugin: closedObject({
     id: NonEmptyString,

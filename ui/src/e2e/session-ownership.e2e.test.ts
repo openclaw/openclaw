@@ -56,7 +56,10 @@ function ownerSessions(visibility: "draft" | "shared" | "read-only", single = fa
 }
 
 async function newPage(width = 1200) {
-  const context = await suite.newBrowserContext({ viewport: { height: 800, width } });
+  const context = await suite.newBrowserContext({
+    reducedMotion: "reduce",
+    viewport: { height: 800, width },
+  });
   activePage = await context.newPage();
   return activePage;
 }
@@ -193,11 +196,11 @@ suite.define(() => {
       backSize: [18, 18],
       centerDelta: 0,
       frontSize: [18, 18],
-      overlap: 8,
-      reveal: 10,
+      overlap: 10,
+      reveal: 8,
       slotWidth: 20,
-      stackSize: [28, 20],
-      textGap: 4,
+      stackSize: [26, 20],
+      textGap: 5,
     });
     await expectBrowser(overflowRow.locator(".session-owner-stack__overflow")).toHaveText("+2");
     const [collaborative, single] = await Promise.all(
@@ -358,11 +361,11 @@ suite.define(() => {
     ]);
     expect(legacyOwner.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
     if (grouping === "Person") {
-      // The selected owner's rows sit directly below the owner picker.
+      // The 30px picker is centered in the 44px toolbar; the list adds 6px below it.
       const ownerTitleBottom = await page
         .locator("#sidebar-session-owner-title")
         .evaluate((element) => element.getBoundingClientRect().bottom);
-      expect(idle.top - ownerTitleBottom).toBeLessThanOrEqual(12);
+      expect(idle.top - ownerTitleBottom).toBeCloseTo(13, 1);
     }
     if (width === 1200 || grouping === "Person") {
       const frame = await takeControlUiScreenshotFrame(
@@ -416,8 +419,8 @@ suite.define(() => {
     await row("child").locator(".session-glyph__ring").waitFor();
     await row("child").hover({ position: { x: 2, y: 10 } });
     const child = await rowGeometry("child");
-    // Child actions already take their width in flow. The title should fill
-    // the link to within its normal inter-item gap, not lose an action reserve again.
+    // Child actions overlay padding inside the text box. Keep that box filling
+    // the link rather than reserving the action width a second time in flow.
     expect(child.text?.width).toBeGreaterThanOrEqual(
       child.link.right - child.text!.left - child.gap,
     );
@@ -730,8 +733,7 @@ suite.define(() => {
 
     await page.goto(`${suite.server?.baseUrl ?? ""}new`);
     // Playwright check()/isChecked() support role="switch" buttons via aria-checked.
-    const draftToggle = page.getByRole("switch", { name: "Draft", exact: true });
-    await page.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
+    const draftToggle = page.getByRole("switch", { name: /^Draft:/ });
     await draftToggle.waitFor();
 
     await draftToggle.check();
@@ -1004,7 +1006,7 @@ suite.define(() => {
       if (!refused) {
         await expectBrowser(notice).toBeVisible();
       }
-      await expectBrowser(page.locator(".new-session-page__visibility--draft")).toHaveAttribute(
+      await expectBrowser(page.locator(".new-session-page__draft-toggle")).toHaveAttribute(
         "aria-checked",
         "true",
       );

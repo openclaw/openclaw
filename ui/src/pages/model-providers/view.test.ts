@@ -325,6 +325,17 @@ describe("renderModelProviders", () => {
     ).toHaveLength(0);
   });
 
+  it("keeps decision model help behind the standard info button", () => {
+    const container = mount(props());
+    const row = settingsRow(container, "Decision Model");
+    const help = row.querySelector('button[aria-label="About the decision model"]');
+    expect(help).not.toBeNull();
+    expect(row.querySelector(".settings-row__desc")).toBeNull();
+    expect(text(row.querySelector('openclaw-tooltip [slot="content"]'))).toBe(
+      "Makes typed choices, scores, and yes/no judgments. Disabled until you select a decision model; chat models are not used as a fallback.",
+    );
+  });
+
   it("keeps invalid explicit model behavior values resettable", () => {
     const onThinkingReset = vi.fn();
     const onFastModeReset = vi.fn();
@@ -980,9 +991,9 @@ it("filters provider access without hiding global defaults and exposes an empty 
   const viewProps = props({
     cards: [
       card(),
-      card({ id: "anthropic", displayName: "Anthropic", credentialProviderIds: ["anthropic"] }),
+      card({ id: "anthropic", displayName: "A\u0308", credentialProviderIds: ["anthropic"] }),
     ],
-    providerQuery: " ANTHROPIC ",
+    providerQuery: " Ä ",
   });
   const container = mount(viewProps);
   expect(container.querySelectorAll("[data-provider-id]")).toHaveLength(1);

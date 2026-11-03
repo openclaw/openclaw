@@ -198,7 +198,7 @@ async function listCanonicalMeetingTranscriptExportDirs(params: {
   rootDir: string;
   env: NodeJS.ProcessEnv;
 }): Promise<string[]> {
-  const state = readMeetingTranscriptMigrationDetectionState({ env: params.env });
+  const state = await readMeetingTranscriptMigrationDetectionState({ env: params.env });
   const relativeDirs = await listLegacyMeetingTranscriptArtifactDirs(params.rootDir);
   return relativeDirs.filter((relativeDir) => {
     const selector = relativeDir.split(path.sep).join("/");
@@ -423,7 +423,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
       const relativeDirs = await listLegacyMeetingTranscriptArtifactDirs(detected.sourceDir);
       const sessionRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(detected.sourceDir);
       const sessionRelativeDirSet = new Set(sessionRelativeDirs);
-      const detectionState = readMeetingTranscriptMigrationDetectionState({
+      const detectionState = await readMeetingTranscriptMigrationDetectionState({
         env: { ...env, OPENCLAW_STATE_DIR: params.stateDir },
       });
       const legacyRelativeDirs: string[] = [];

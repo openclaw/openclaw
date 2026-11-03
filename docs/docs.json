@@ -1469,6 +1469,7 @@
                     "pages": [
                       "install/ansible",
                       "install/docker-vm-runtime",
+                      "install/jetson",
                       "install/kubernetes",
                       "install/macos-vm",
                       "install/raspberry-pi"
@@ -2245,6 +2246,7 @@
                       "providers/github-copilot",
                       "providers/gmi",
                       "providers/google",
+                      "providers/google-vertex",
                       "providers/groq",
                       "providers/huggingface",
                       "providers/levanto",
@@ -2273,6 +2275,7 @@
                       },
                       "providers/opencode",
                       "providers/opencode-go",
+                      "providers/particle",
                       "providers/perplexity-provider",
                       "providers/poolside",
                       "providers/qianfan",

@@ -699,7 +699,7 @@ suite.define(() => {
     await count(debugOverlay, 0);
 
     await trigger.click();
-    await page.mouse.click(899, 450);
+    await page.locator(".shell-nav-backdrop").click();
     await visible(dialog, false);
     await expectFocused(trigger);
 

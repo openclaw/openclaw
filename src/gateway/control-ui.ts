@@ -62,15 +62,12 @@ import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./con
 import { isControlUiSharePath, serveControlUiShareDocument } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
-  isControlUiFileUnmodified,
   isControlUiStaticAssetExtension,
   resolveControlUiAssetEncodings,
   resolveControlUiHtmlEncoding,
-  resolveControlUiRepresentation,
+  respondControlUiStaticAsset,
   respondControlUiNotAcceptable,
-  respondControlUiNotModified,
   respondHeadForControlUiFile,
-  serveControlUiAsset,
 } from "./control-ui-static.js";
 import { prepareHttpUserProfileCatalog } from "./http-auth-user-profile.js";
 import {
@@ -726,7 +723,9 @@ export async function handleControlUiHttpRequest(
   const encodings = resolveControlUiAssetEncodings({
     req,
     contentPath: fileRel,
-    precompressed: fingerprintedAsset,
+    // The mutable worker still revalidates; representation encoding is independent
+    // of the immutable cache policy used by fingerprinted assets.
+    precompressed: fingerprintedAsset || (isBundledRoot && fileRel === "sw.js"),
   });
   let asset = await readControlUiRootAsset(rootState, fileRel, readBody, encodings);
   if (!asset) {
@@ -799,34 +798,16 @@ export async function handleControlUiHttpRequest(
       );
       return true;
     }
-    const originatedAtMs = Date.now();
-    const lastModifiedMs = Math.floor(Math.min(asset.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
-    const representation = resolveControlUiRepresentation(asset, encodings);
-    if (!representation) {
-      respondControlUiNotAcceptable(res);
+    if (
+      respondControlUiStaticAsset(req, res, asset, {
+        fileRel,
+        encodings,
+        immutable: immutableAsset,
+      })
+    ) {
       return true;
     }
-    if (isControlUiFileUnmodified(req, lastModifiedMs, originatedAtMs)) {
-      respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
-      return true;
-    }
-    const headers = {
-      immutable: immutableAsset,
-      encoding: representation.encoding,
-      lastModifiedMs,
-    };
-    if (req.method === "HEAD") {
-      respondHeadForControlUiFile(res, fileRel, {
-        ...headers,
-        contentLength: representation.file.size,
-      });
-    } else if (representation.file.body) {
-      serveControlUiAsset(res, fileRel, representation.file.body, headers);
-    } else {
-      asset = await readControlUiRootAsset(rootState, fileRel, true, encodings);
-      continue;
-    }
-    return true;
+    asset = await readControlUiRootAsset(rootState, fileRel, true, encodings);
   }
   respondControlUiNotFound(res);
   return true;
