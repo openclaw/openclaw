@@ -8,6 +8,7 @@ import {
   type MembershipTarget,
 } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
+import { revocationReplayCases } from "../testing/revocation-replay.js";
 import { buildWorld, certBody, signChange, worldKey, WORLD_NOW } from "../testing/world.js";
 import { dropInactive, nextInactivityDrop, recordSeen } from "./allowlist.js";
 import { submitStatement, type WriteContext } from "./apply.js";
@@ -20,7 +21,6 @@ const DAY = 86400;
 type World = Awaited<ReturnType<typeof buildWorld>>;
 type Key = World["device1"];
 
-// Applies a write and fails loudly when it is refused.
 async function apply(state: AuthorityState, statement: unknown, context: WriteContext = tunnel) {
   const result = await submitStatement(state, statement, context);
   if (!result.ok) {
@@ -114,84 +114,9 @@ describe("revocation", () => {
     expect(result.state).not.toHaveProperty("revoked");
   });
 
-  it("keeps a newer approval when an older revocation is submitted again", async () => {
-    const world = await buildWorld();
-    const signed = await revocation(world.device2, world.device1);
-    const removed = await apply(world.state, signed, mailbox);
-    const cert = await signStatement(
-      "OwnerDeviceCert",
-      { ...certBody(world.device2), issued_at: WORLD_NOW },
-      world.device1.signer,
-    );
-    const restored = await apply(
-      removed.state,
-      await signChange(removed.state, world.device1.signer, { op: "add_owner_device", cert }),
-    );
-    const replay = await submitStatement(restored.state, signed, mailbox);
-    expect(replay).toMatchObject({ ok: true, events: [] });
-    expect(isAdmitted(restored.state, world.device2.peer, WORLD_NOW)).toBe(true);
-  });
-
-  it("still removes every device a revocable owner approved", async () => {
-    const world = await buildWorld();
-    const cert = await signStatement(
-      "OwnerDeviceCert",
-      { ...certBody(world.device2), issued_at: WORLD_NOW + 120 },
-      world.device1.signer,
-    );
-    const replaced = await apply(
-      world.state,
-      await signChange(world.state, world.device1.signer, { op: "add_owner_device", cert }),
-    );
-    const signed = await signStatement(
-      "Revocation",
-      {
-        target_fp: await fingerprint(world.device1.peer),
-        target_kind: "peer_key",
-        reason: "test",
-        root_epoch: 1,
-        issued_at: WORLD_NOW + 1,
-      },
-      world.device1.signer,
-    );
-    const removed = await apply(replaced.state, signed);
-    expect(removed.state.owner_devices).toEqual({});
-    expect(removed.events.map((event) => event.type)).toEqual([
-      "disconnect",
-      "invalidate_tokens",
-      "publish_snapshot",
-    ]);
-  });
-
-  it("honours a revocation that is newer on the signer's clock than the add", async () => {
-    const world = await buildWorld();
-    const gatewayNow = WORLD_NOW + 120;
-    const added = await apply(
-      world.state,
-      await signChange(world.state, world.device1.signer, {
-        op: "add",
-        account_id: "acct_bob",
-        role: "viewer",
-        peer_keys: [world.invitee.peer],
-        invite_id: null,
-      }),
-      { channel: "tunnel", now: gatewayNow },
-    );
-    const signed = await signStatement(
-      "Revocation",
-      {
-        target_fp: await fingerprint(world.invitee.peer),
-        target_kind: "peer_key",
-        reason: "test",
-        root_epoch: 1,
-        issued_at: WORLD_NOW + 1,
-      },
-      world.device1.signer,
-    );
-    const removed = await apply(added.state, signed, { channel: "mailbox", now: gatewayNow });
-    expect(removed.state.members.acct_bob?.peer_keys).toEqual([]);
-    expect(removed.events.map((event) => event.type)).toContain("invalidate_tokens");
-  });
+  for (const [name, run] of revocationReplayCases) {
+    it(name, run);
+  }
 
   it("is a no-op for a device the claw no longer lists, also through the mailbox", async () => {
     const world = await buildWorld();
