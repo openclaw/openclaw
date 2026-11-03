@@ -333,6 +333,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         isDefault,
         value: option.value,
         label: resolveChatModelPickerLabel(catalogEntry, option.label),
+        contextTokens: catalogEntry?.contextTokens,
         contextWindow: catalogEntry?.contextWindow,
         supportsTools: catalogEntry?.supportsTools,
         recommended: catalogEntry?.recommended,
@@ -372,6 +373,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           agentRuntime: choice.agentRuntime.id,
           runtimeOverride: choice.agentRuntime.id,
           agentRuntimeId: choice.agentRuntime.id,
+          contextTokens: choice.contextTokens,
           contextWindow: choice.contextWindow,
           supportsTools: choice.supportsTools,
           disabled: choice.available === false,
@@ -414,6 +416,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     ) {
       modelOptions.push({
         commitValue: currentOverride,
+        contextTokens: currentCatalogEntry?.contextTokens,
         contextWindow: currentCatalogEntry?.contextWindow,
         supportsTools: currentCatalogEntry?.supportsTools,
         disabled: currentCatalogEntry?.available === false,

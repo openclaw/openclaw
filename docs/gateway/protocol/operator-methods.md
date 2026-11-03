@@ -165,9 +165,12 @@ catalog consumers, retaining cancellation and any explicit request deadline.
   aliases. Unknown provider IDs return `INVALID_REQUEST` with the rejected ID.
   Omit the filter or run `openclaw models list --all` to list models and their
   provider IDs.
-- `includeDetails: true` includes available input modalities, effective
-  `contextTokens`, and a `local` endpoint classification. It does not expose
-  endpoint URLs, headers, credentials, costs or runtime request parameters.
+- Rows include `contextWindow` (the model maximum) and the effective
+  `contextTokens` budget when known, so pickers can display the active budget
+  without session metadata.
+- `includeDetails: true` also includes available input modalities and a `local`
+  endpoint classification. It does not expose endpoint URLs, headers,
+  credentials, costs or runtime request parameters.
 
 For a conversation picker, pass `sessionKey` to read the session's saved
 agent and saved account selection. A conflicting `agentId` is rejected. The
