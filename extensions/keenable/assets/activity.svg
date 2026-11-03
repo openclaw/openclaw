@@ -1,31 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 138 138">
 <!--
-Source: @lobehub/icons-static-svg@1.95.0, exa.svg
-https://www.npmjs.com/package/@lobehub/icons-static-svg/v/1.95.0
-https://github.com/lobehub/lobe-icons
+Source: keenableai/keenable-cursor-plugin, plugins/keenable/assets/logo.svg
+https://github.com/keenableai/keenable-cursor-plugin
 
-MIT License
-Copyright (c) 2023 LobeHub
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Official Keenable brand mark. White highlight paths omitted; fills normalized to
+currentColor for compact activity rendering.
 
 Names and marks remain the property of their respective owners.
 -->
-  <path clip-rule="evenodd" fill="currentColor" fill-rule="evenodd" stroke="none" d="M3 0h19v1.791L13.892 12 22 22.209V24H3V0zm9.62 10.348l6.589-8.557H6.03l6.59 8.557zM5.138 3.935v7.17h5.52l-5.52-7.17zm5.52 8.96h-5.52v7.17l5.52-7.17zM6.03 22.21l6.59-8.557 6.589 8.557H6.03z" />
+  <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M44.3046 22C51.039 22 57.2421 23.3884 62.9131 26.1649C68.5841 28.9413 73.4281 32.7809 77.445 37.6839C81.462 42.587 84.4158 48.2583 86.3061 54.6973C88.1964 61.0772 88.7876 67.8414 88.0787 74.9892L52.9776 75.0142C30.2356 75.0311 23.5753 106.041 44.3046 115.395C36.1527 115.395 28.7096 113.297 21.9753 109.103C15.3001 104.909 9.95348 99.297 5.93653 92.2674C1.97879 85.1787 0 77.3515 0 68.7861C5.76273e-06 62.288 1.15213 56.2327 3.45599 50.6207C5.75979 44.95 8.92 39.988 12.9368 35.7348C17.0128 31.4225 21.7391 28.0555 27.1147 25.6335C32.4903 23.2115 38.2202 22.0001 44.3046 22ZM48.0334 37.2783C43.775 37.2783 39.862 38.3148 36.2941 40.3865C32.7263 42.4006 29.7621 45.1622 27.4027 48.6725C25.0434 52.1827 23.4903 56.096 22.7421 60.4118H73.2392C72.7212 56.1535 71.2531 52.2692 68.8363 48.759C66.4769 45.2488 63.4845 42.4581 59.8592 40.3865C56.2338 38.3148 52.2919 37.2783 48.0334 37.2783Z" />
+  <circle cx="54.0184" cy="55.962" r="14.1507" fill="currentColor" />
+  <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M93.936 22C100.67 22 106.873 23.3884 112.544 26.1648C118.215 28.9413 123.059 32.7809 127.076 37.6839C131.093 42.587 134.047 48.2583 135.937 54.6973C137.828 61.0771 138.419 67.8414 137.71 74.9892H102.649C79.8901 74.9893 73.1997 106.015 93.936 115.395C85.784 115.395 78.3409 113.297 71.6067 109.103C64.9315 104.909 59.5848 99.297 55.5679 92.2673C51.6101 85.1787 49.6313 77.3515 49.6313 68.786C49.6314 62.288 50.7835 56.2327 53.0873 50.6207C55.3911 44.9499 58.5513 39.9879 62.5681 35.7348C66.6441 31.4225 71.3704 28.0554 76.7461 25.6334C82.1216 23.2115 87.8516 22.0001 93.936 22ZM96.6394 37.2782C92.381 37.2782 88.4679 38.3148 84.9001 40.3865C81.3324 42.4005 78.3689 45.1624 76.0096 48.6725C73.6503 52.1827 72.0962 56.096 71.3481 60.4118H121.845C121.327 56.1535 119.859 52.2692 117.442 48.759C115.083 45.2488 112.091 42.4581 108.465 40.3865C104.84 38.3148 100.898 37.2782 96.6394 37.2782Z" />
+  <circle cx="108.666" cy="55.962" r="14.1507" fill="currentColor" />
 </svg>

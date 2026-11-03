@@ -117,6 +117,8 @@ For LiteLLM, the small source stroke widths are unified at 1.35 source units bef
 
 Exa, Firecrawl, Tavily, and Voyage use the corresponding monochrome `exa.svg`, `firecrawl.svg`, `tavily.svg`, and `voyage.svg` files from [`@lobehub/icons-static-svg@1.95.0`](https://www.npmjs.com/package/@lobehub/icons-static-svg/v/1.95.0). Their geometry is unchanged. Source: [Lobe Icons](https://github.com/lobehub/lobe-icons), MIT license.
 
+Keenable preserves the official twin-lens mark from [keenable-cursor-plugin](https://github.com/keenableai/keenable-cursor-plugin) (`plugins/keenable/assets/logo.svg`). White highlight paths are omitted; fills are normalized to `currentColor`.
+
 TypeSafe AI preserves the single-path header mark from [typesafe.ai](https://typesafe.ai/), with its original `0 0 16.487 24` view box. The fill is normalized to `currentColor`; geometry is unchanged.
 
 Bifrost, Levanto, oMLX, and SubQ preserve their first-party marks: the [getbifrost.ai](https://getbifrost.ai/) header symbol without its wordmark; the leading L of the [levanto.ai](https://levanto.ai/) header wordmark, which its favicon also uses; the [oMLX penguin](https://github.com/jundot/omlx/blob/3df94603c047ec77f5381d11d1d6daff75794870/apps/omlx-web/omlx_web/static/logo-light.svg) (Apache-2.0) with its original transform and without its dark-mode style; and the [subq.ai favicon](https://subq.ai/favicon.svg), whose five squares are combined into one path. Fills are normalized to `currentColor`; geometry and view boxes are unchanged.
