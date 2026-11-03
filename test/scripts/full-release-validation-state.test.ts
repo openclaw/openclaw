@@ -833,6 +833,22 @@ describe("full release execution plan", () => {
     });
   });
 
+  it("routes qualified package validation through candidate release checks", () => {
+    const result = plan({
+      candidateRequired: true,
+      childPhaseVersion: 3,
+      rerunGroup: "qualified-package",
+    });
+
+    expect(result.children.filter((entry) => entry.selected).map((entry) => entry.key)).toEqual([
+      "releaseChecksCandidate",
+    ]);
+    expect(result.gates.at(-1)).toMatchObject({
+      name: "Acquire full release candidate",
+      required: true,
+    });
+  });
+
   it("retains every required artifact qualification result as a parent gate", () => {
     const result = plan({
       candidateRequired: false,
