@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -39,7 +40,7 @@ describe("diffs plugin language-pack discovery", () => {
           join(languagePackRoot, "openclaw.plugin.json"),
           '{"id":"diffs-language-pack"}\n',
         );
-        const config = { plugins: {} };
+        const config: OpenClawConfig = { plugins: {} };
         const openBlobStore = vi.fn(() => ({}));
         const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
         const api = createTestPluginApi({
@@ -76,6 +77,18 @@ describe("diffs plugin language-pack discovery", () => {
         fs.writeFileSync(join(languagePackRoot, assetDir, "viewer-runtime.js"), "export {};\n");
 
         checkAvailability(true);
+        for (const [plugins, available] of [
+          [{ allow: [] }, true],
+          [{ allow: ["diffs-language-pack"] }, true],
+          [{ allow: [" DIFFS-LANGUAGE-PACK "] }, true],
+          [{ allow: ["diffs"] }, false],
+          [{ deny: [" DIFFS-LANGUAGE-PACK "] }, false],
+          [{ entries: { " DIFFS-LANGUAGE-PACK ": { enabled: false } } }, false],
+          [{ enabled: false }, false],
+        ] satisfies Array<[NonNullable<OpenClawConfig["plugins"]>, boolean]>) {
+          config.plugins = plugins;
+          checkAvailability(available);
+        }
       } finally {
         fs.rmSync(root, { force: true, recursive: true });
         createDiffsToolMock.mockClear();
