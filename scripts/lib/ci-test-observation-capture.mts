@@ -46,6 +46,9 @@ export function createCiTestObservationCapture(options: {
   let bytes = 0;
   let disabled = false;
   let captureMs = 0;
+  let preExecution:
+    | { recordedAt: string; observations: ReturnType<typeof collectTestObservations> }
+    | undefined;
   const warn = () => console.warn("[adaptive-ci] observation export unavailable; tests unchanged");
 
   return {
@@ -54,6 +57,7 @@ export function createCiTestObservationCapture(options: {
         return;
       }
       const started = performance.now();
+      let preparedAt: number | undefined;
       try {
         const line = `[vitest:${kind}] ${JSON.stringify(value)}`;
         bytes += Buffer.byteLength(line) + 1;
@@ -61,53 +65,76 @@ export function createCiTestObservationCapture(options: {
           throw new Error("Observation receipts exceed the byte limit");
         }
         records.push(line);
-        if (kind !== "run") {
+        if (kind !== "inventory" && kind !== "run") {
           return;
         }
-        const root = options.repositoryRoot;
-        const git = (revision: string) =>
-          execFileSync("git", ["rev-parse", "--verify", revision], {
-            cwd: root,
-            encoding: "utf8",
-            timeout: 5_000,
-            stdio: ["ignore", "pipe", "ignore"],
-          }).trim();
-        const configFiles = [...new Set(options.configFiles)]
-          .toSorted()
-          .map((file) => [path.relative(root, file), readBounded(file)]);
-        const includes = [
-          "OPENCLAW_VITEST_INCLUDE_FILE",
-          "OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE",
-        ].map((key) => [key, env[key] ? readBounded(env[key]) : null]);
-        const context = {
-          repository: env.GITHUB_REPOSITORY ?? "openclaw/openclaw",
-          revision: git("HEAD"),
-          tree: git("HEAD^{tree}"),
-          configDigest: digest([configFiles, options.configuration]),
-          lockDigest: digest(
-            ["pnpm-lock.yaml", "pnpm-workspace.yaml", "package.json", ".npmrc"].map((file) => [
-              file,
-              readBounded(path.join(root, file)),
+        if (kind === "inventory") {
+          if (preExecution) {
+            throw new Error("Duplicate observation inventory");
+          }
+          const root = options.repositoryRoot;
+          const git = (revision: string) =>
+            execFileSync("git", ["rev-parse", "--verify", revision], {
+              cwd: root,
+              encoding: "utf8",
+              timeout: 5_000,
+              stdio: ["ignore", "pipe", "ignore"],
+            }).trim();
+          const configFiles = [...new Set(options.configFiles)]
+            .toSorted()
+            .map((file) => [path.relative(root, file), readBounded(file)]);
+          const includes = [
+            "OPENCLAW_VITEST_INCLUDE_FILE",
+            "OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE",
+          ].map((key) => [key, env[key] ? readBounded(env[key]) : null]);
+          const context = {
+            repository: env.GITHUB_REPOSITORY ?? "openclaw/openclaw",
+            revision: git("HEAD"),
+            tree: git("HEAD^{tree}"),
+            configDigest: digest([configFiles, options.configuration]),
+            lockDigest: digest(
+              ["pnpm-lock.yaml", "pnpm-workspace.yaml", "package.json", ".npmrc"].map((file) => [
+                file,
+                readBounded(path.join(root, file)),
+              ]),
+            ),
+            environmentDigest: digest([
+              semanticEnv.map((key) => [key, env[key] ?? null]),
+              includes,
+              process.version,
+              process.versions.bun ?? null,
+              process.platform,
+              process.arch,
             ]),
-          ),
-          environmentDigest: digest([
-            semanticEnv.map((key) => [key, env[key] ?? null]),
-            includes,
-            process.version,
-            process.versions.bun ?? null,
-            process.platform,
-            process.arch,
-          ]),
-        };
-        let dependencies: unknown = null;
-        try {
-          dependencies = JSON.parse(
-            readBounded(path.join(options.cacheDirectory, "dependencies.json")),
-          );
-        } catch {
-          // Missing native records are a data gap, never an empty impact set.
+          };
+          const observations = collectTestObservations(records.join("\n"), context);
+          preExecution = {
+            recordedAt: new Date().toISOString(),
+            observations,
+          };
         }
-        const observations = collectTestObservations(records.join("\n"), context, dependencies);
+        if (!preExecution) {
+          throw new Error("Observation completion without inventory");
+        }
+        let dependencies: unknown = null;
+        if (kind === "run") {
+          try {
+            dependencies = JSON.parse(
+              readBounded(path.join(options.cacheDirectory, "dependencies.json")),
+            );
+          } catch {
+            // Missing native records are a data gap, never an empty impact set.
+          }
+        }
+        const observations =
+          kind === "inventory"
+            ? preExecution.observations
+            : collectTestObservations(
+                records.join("\n"),
+                preExecution.observations.context,
+                dependencies,
+              );
+        preparedAt = performance.now();
         const output = JSON.stringify({
           version: 1,
           source: {
@@ -119,8 +146,9 @@ export function createCiTestObservationCapture(options: {
             startedAt,
             exportedAt: new Date().toISOString(),
           },
-          // Excludes final serialization/write, native recording, and cache misses.
-          capturePreparationMs: captureMs + performance.now() - started,
+          preExecution,
+          // Excludes serialization/write, native recording, and cache misses.
+          capturePreparationMs: captureMs + preparedAt - started,
           observations,
         });
         if (Buffer.byteLength(output) > MAX_BYTES) {
@@ -133,7 +161,7 @@ export function createCiTestObservationCapture(options: {
         disabled = true;
         warn();
       } finally {
-        captureMs += performance.now() - started;
+        captureMs += (preparedAt ?? performance.now()) - started;
       }
     },
   };
