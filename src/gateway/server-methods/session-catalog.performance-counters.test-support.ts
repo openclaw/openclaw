@@ -15,33 +15,42 @@ const workerCounter = vi.hoisted(() => ({
 vi.mock("../../plugin-state/plugin-state-worker-client.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../plugin-state/plugin-state-worker-client.js")>();
-  const counted = Object.fromEntries(
-    Object.entries(actual).map(([name, value]) => [
-      name,
-      typeof value !== "function"
-        ? value
-        : (...args: unknown[]) => {
-            if (workerCounter.enabled) {
-              workerCounter.operations++;
-              if (
-                [
-                  "lookupPluginStateInWorker",
-                  "lookupManyPluginStateInWorker",
-                  "listPluginStateInWorker",
-                  "listPluginStateInKeyRangeInWorker",
-                  "countPluginStateInWorker",
-                  "observePluginStateInWorker",
-                ].includes(name)
-              ) {
-                workerCounter.reads++;
-              }
-            }
-            return Reflect.apply(value, undefined, args);
-          },
-    ]),
-  );
+  function count<Args extends unknown[], Result>(
+    operation: (...args: Args) => Result,
+    read = false,
+  ) {
+    return (...args: Args): Result => {
+      if (workerCounter.enabled) {
+        workerCounter.operations++;
+        if (read) {
+          workerCounter.reads++;
+        }
+      }
+      return operation(...args);
+    };
+  }
   return {
-    ...counted,
+    ...actual,
+    executePluginStateOperationInWorker: count(actual.executePluginStateOperationInWorker),
+    replacePluginStateInWorker: count(actual.replacePluginStateInWorker),
+    replacePluginStateEntryInWorker: count(actual.replacePluginStateEntryInWorker),
+    observePluginStateRowInWorker: count(actual.observePluginStateRowInWorker),
+    observePluginStateInWorker: count(actual.observePluginStateInWorker, true),
+    comparePluginStateUpdateInWorker: count(actual.comparePluginStateUpdateInWorker),
+    comparePluginStateDeleteInWorker: count(actual.comparePluginStateDeleteInWorker),
+    registerPluginStateIfAbsentInWorker: count(actual.registerPluginStateIfAbsentInWorker),
+    deletePluginStateIfEqualInWorker: count(actual.deletePluginStateIfEqualInWorker),
+    lookupPluginStateInWorker: count(actual.lookupPluginStateInWorker, true),
+    lookupManyPluginStateInWorker: count(actual.lookupManyPluginStateInWorker, true),
+    consumePluginStateInWorker: count(actual.consumePluginStateInWorker),
+    deletePluginStateInWorker: count(actual.deletePluginStateInWorker),
+    listPluginStateInWorker: count(actual.listPluginStateInWorker, true),
+    clearPluginStateInWorker: count(actual.clearPluginStateInWorker),
+    clearRuntimeHealthInWorker: count(actual.clearRuntimeHealthInWorker),
+    countPluginStateInWorker: count(actual.countPluginStateInWorker, true),
+    registerPluginStateJournalInWorker: count(actual.registerPluginStateJournalInWorker),
+    listPluginStateInKeyRangeInWorker: count(actual.listPluginStateInKeyRangeInWorker, true),
+    movePluginStateEntriesInWorker: count(actual.movePluginStateEntriesInWorker),
     registerPluginStateInWorker: async (
       params: Parameters<typeof actual.registerPluginStateInWorker>[0],
     ) => {
