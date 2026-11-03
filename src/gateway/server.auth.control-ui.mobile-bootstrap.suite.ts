@@ -139,6 +139,129 @@ export function registerControlUiMobileBootstrapSuite(): void {
     mode: "node",
     deviceFamily: "Apple Watch",
   } satisfies ConnectParams["client"];
+
+  test.each([
+    { name: "iPhone Share", platform: "iOS 26.4.0", deviceFamily: "iPhone", allowed: true },
+    { name: "iPad Share", platform: "iPadOS 26.4.0", deviceFamily: "iPad", allowed: true },
+    { name: "node host", platform: "linux", deviceFamily: "Linux", allowed: true },
+    { name: "mismatched Share", platform: "Android 16", deviceFamily: "Android", allowed: false },
+  ])("node-only setup provisions $name without an operator grant", async (entry) => {
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { decodePairingSetupCode } = await import("../pairing/setup-code.js");
+    const { identityPath, identity } = await createOperatorIdentityFixture("openclaw-share-setup-");
+    const client = {
+      id: entry.name === "node host" ? "node-host" : "openclaw-ios",
+      version: "2026.10.50",
+      platform: entry.platform,
+      mode: "node" as const,
+      deviceFamily: entry.deviceFamily,
+      displayName: "OpenClaw Share",
+    };
+    const owner = await openWs(port);
+    expect((await connectReq(owner, { scopes: ["operator.admin"], prePairDevice: true })).ok).toBe(
+      true,
+    );
+    const setup = await rpcReq<{ setupCode: string }>(owner, "device.pair.setupCode", {
+      bootstrapProfile: "node",
+      includeQr: false,
+      publicUrl: `ws://127.0.0.1:${port}`,
+    });
+    expect(setup.ok).toBe(true);
+    if (!setup.payload?.setupCode) {
+      throw new Error("expected owner-authorized node-only setup");
+    }
+    const bootstrap = decodePairingSetupCode(setup.payload.setupCode);
+    const node = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+    const initial = await connectReq(node, {
+      skipDefaultAuth: true,
+      bootstrapToken: bootstrap.bootstrapToken,
+      role: "node",
+      scopes: [],
+      client,
+      deviceIdentityPath: identityPath,
+    });
+    expect(initial.ok).toBe(entry.allowed);
+    if (!entry.allowed) {
+      expect(initial.error?.details).toMatchObject({
+        code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+      });
+      expect(await getPairedDevice(identity.deviceId)).toBeNull();
+      return;
+    }
+    if (!isRecord(initial.payload) || !isRecord(initial.payload.auth)) {
+      throw new Error("expected node-only credential handoff");
+    }
+    const auth = initial.payload.auth;
+    expect(auth).toMatchObject({ role: "node", scopes: [] });
+    expect(auth.deviceTokens).toBeUndefined();
+    if (typeof auth.deviceToken !== "string" || !auth.deviceToken) {
+      throw new Error("expected Share node token");
+    }
+    const paired = await getPairedDevice(identity.deviceId);
+    expect(paired?.roles).toEqual(["node"]);
+    expect(paired?.tokens?.operator).toBeUndefined();
+    expect((await listDevicePairing()).pending).toEqual([]);
+    node.close();
+
+    const reconnect = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+    expect(
+      (
+        await connectReq(reconnect, {
+          skipDefaultAuth: true,
+          deviceToken: auth.deviceToken,
+          role: "node",
+          scopes: [],
+          client,
+          deviceIdentityPath: identityPath,
+        })
+      ).ok,
+    ).toBe(true);
+    reconnect.close();
+    const escalation = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+    const denied = await connectReq(escalation, {
+      skipDefaultAuth: true,
+      deviceToken: auth.deviceToken,
+      role: "operator",
+      scopes: ["operator.admin"],
+      client,
+      deviceIdentityPath: identityPath,
+    });
+    expect(denied.ok).toBe(false);
+    expect(denied.error?.details).toMatchObject({
+      code: ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
+    });
+  });
+
+  test("cloud-worker setup does not provision an iOS Share identity", async () => {
+    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const { CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
+      await import("../shared/device-bootstrap-profile.js");
+    const { getPairedDevice } = await import("../infra/device-pairing.js");
+    const { identityPath, identity } =
+      await createOperatorIdentityFixture("openclaw-share-worker-");
+    const issued = await issueDeviceBootstrapToken({
+      profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    });
+    const node = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+    const result = await connectReq(node, {
+      skipDefaultAuth: true,
+      bootstrapToken: issued.token,
+      role: "node",
+      scopes: [],
+      client: {
+        id: "openclaw-ios",
+        version: "2026.10.50",
+        platform: "iPadOS 26.4.0",
+        mode: "node",
+        deviceFamily: "iPad",
+      },
+      deviceIdentityPath: identityPath,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error?.details).toMatchObject({ code: ConnectErrorDetailCodes.PAIRING_REQUIRED });
+    expect(await getPairedDevice(identity.deviceId)).toBeNull();
+  });
+
   test.for([
     {
       name: "embedded WebSocket",
