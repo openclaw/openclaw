@@ -83,6 +83,11 @@ struct ESPSetupWireTests {
         #expect(hello.label == "Watch")
         #expect(hello.model == "Dial")
         #expect(hello.comparison == "ABCD 1234")
+        var invalidLabel = data
+        invalidLabel[18] = 0xFF
+        #expect(throws: ESPSetupError.self) {
+            try ESPSetupWire.response(invalidLabel, operation: .hello, generation: 0, id: 0).hello()
+        }
         #expect(throws: ESPSetupError.self) {
             try ESPSetupWire.response(data, operation: .status, generation: 1, id: 0)
         }

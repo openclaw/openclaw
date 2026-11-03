@@ -288,8 +288,10 @@ enum ESPSetupWire {
             let count = try Int(byte())
             guard (1...64).contains(count) else { throw ESPSetupError.invalidData }
             let value = try data(count)
-            guard !value.contains(0) else { throw ESPSetupError.invalidData }
-            return String(decoding: value, as: UTF8.self)
+            guard !value.contains(0), let label = String(bytes: value, encoding: .utf8) else {
+                throw ESPSetupError.invalidData
+            }
+            return label
         }
     }
 }
