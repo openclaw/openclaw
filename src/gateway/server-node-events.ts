@@ -33,7 +33,7 @@ import {
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
-import { resolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
+import { resolveChatAttachmentLimits } from "./chat-attachment-policy.js";
 import {
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
   parseMessageWithAttachments,
@@ -477,7 +477,7 @@ async function handlePreparedNodeEvent(
         }
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
-            maxBytes: resolveChatAttachmentMaxBytes(cfg),
+            ...resolveChatAttachmentLimits(cfg),
             log: ctx.logGateway,
             supportsInlineImages,
             // server-node-events dispatches via agentCommandFromIngress which

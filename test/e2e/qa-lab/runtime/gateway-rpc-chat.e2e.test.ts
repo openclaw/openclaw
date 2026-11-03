@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { z } from "zod";
@@ -203,6 +204,83 @@ async function readMockJson<T>(baseUrl: string, requestPath: string): Promise<T>
 }
 
 describe("Gateway chat RPCs", () => {
+  it(
+    "enforces independent media, file, and total limits through chat.send",
+    { timeout: 180_000 },
+    async () => {
+      const { gateway, mock } = await startChatGateway({
+        mutateConfig: (cfg) => {
+          cfg.attachments = { maxFileMb: 256 / 1048576, maxTotalMb: 300 / 1048576 };
+          ((cfg.agents ??= {}).defaults ??= {}).mediaMaxMb = 32 / 1048576;
+          return cfg;
+        },
+      });
+      const provider = expectDefined(mock, "deterministic provider");
+      const sessionKey = `agent:qa:attachment-limits-${randomUUID()}`;
+      const attachment = (fileName: string, content: Buffer, mimeType = "text/plain") => ({
+        type: "file",
+        fileName,
+        mimeType,
+        content: content.toString("base64"),
+      });
+      const image = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+        "base64",
+      );
+      const before = await readMockJson(provider.baseUrl, "/debug/request-cursor");
+      for (const [files, reason] of [
+        [[attachment("photo.txt", image)], "media exceeds size limit"],
+        [[attachment("large.txt", Buffer.alloc(257, "x"))], "exceeds size limit"],
+        [
+          [
+            attachment("first.txt", Buffer.alloc(151, "x")),
+            attachment("second.txt", Buffer.alloc(151, "y")),
+          ],
+          "total attachment size exceeds",
+        ],
+      ] as const) {
+        await expect(
+          gateway.call("chat.send", {
+            sessionKey,
+            message: "Reject oversized input",
+            idempotencyKey: randomUUID(),
+            attachments: files,
+          }),
+        ).rejects.toThrow(reason);
+      }
+      expect(await readMockJson(provider.baseUrl, "/debug/request-cursor")).toEqual(before);
+
+      const content = Buffer.from("Document above media cap: " + "x".repeat(104));
+      const reply = "QA_ATTACHMENT_LIMITS_ACCEPTED";
+      const started = z.object({ runId: z.string() }).parse(
+        await gateway.call("chat.send", {
+          sessionKey,
+          message: `Reply exactly ${reply}`,
+          idempotencyKey: randomUUID(),
+          attachments: [attachment("document.txt", content)],
+        }),
+      );
+      expect(await waitForRun(gateway, started.runId)).toMatchObject({ status: "ok" });
+      const history = await waitForChatHistory({
+        gateway,
+        sessionKey,
+        expectedUser: reply,
+        expectedAssistant: reply,
+      });
+      expect(JSON.stringify(history)).toContain("document.txt");
+      const stateDir = expectDefined(
+        gateway.runtimeEnv.OPENCLAW_STATE_DIR,
+        "owned state directory",
+      );
+      const inbound = path.join(stateDir, "media", "inbound");
+      const files = await fs.readdir(inbound);
+      const retained = await Promise.all(
+        files.map((file) => fs.readFile(path.join(inbound, file))),
+      );
+      expect(retained.some((bytes) => bytes.equals(content))).toBe(true);
+    },
+  );
+
   it("waits past a successful incomplete chat.history response", async () => {
     vi.useFakeTimers();
     try {

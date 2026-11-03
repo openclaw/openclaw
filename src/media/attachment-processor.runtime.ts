@@ -1,7 +1,7 @@
 import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
 import { inspectBase64 } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
+import { kindFromMime, mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
 import { readImageMetadataFromHeader } from "./image-ops.js";
 import { sniffMimeFromBase64 } from "./sniff-mime-from-base64.js";
 
@@ -12,6 +12,7 @@ export type AttachmentInput = {
   label: string;
   mime: string;
   imageStorage?: "inline";
+  maxMediaBytes?: number;
 };
 
 export type PreparedAttachment = {
@@ -82,7 +83,7 @@ export async function prepareAttachment(input: AttachmentInput): Promise<Prepare
   let buffer =
     input.imageStorage !== "inline" &&
     facts.decodedBytes > ATTACHMENT_OFFLOAD_THRESHOLD_BYTES &&
-    facts.decodedBytes <= MAX_IMAGE_BYTES
+    facts.decodedBytes <= Math.min(MAX_IMAGE_BYTES, input.maxMediaBytes ?? MAX_IMAGE_BYTES)
       ? Buffer.from(input.base64, "base64")
       : undefined;
   const inputMime = normalizeMimeType(input.mime);
@@ -94,6 +95,16 @@ export async function prepareAttachment(input: AttachmentInput): Promise<Prepare
         additionalMimeHints: [...hints.filter((hint) => !isGenericContainerMime(hint)), ...hints],
       },
     )) ?? "application/octet-stream";
+  const kind = kindFromMime(mime);
+  if (
+    input.maxMediaBytes !== undefined &&
+    (kind === "image" || kind === "audio" || kind === "video") &&
+    facts.decodedBytes > input.maxMediaBytes
+  ) {
+    throw new Error(
+      `attachment ${input.label}: media exceeds size limit (${facts.decodedBytes} > ${input.maxMediaBytes} bytes); check agents.defaults.mediaMaxMb`,
+    );
+  }
   if (!buffer && !mime.startsWith("image/")) {
     buffer = Buffer.from(input.base64, "base64");
   }

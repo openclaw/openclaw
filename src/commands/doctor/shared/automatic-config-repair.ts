@@ -30,6 +30,7 @@ import {
 } from "./config-flow-steps.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { findDoctorLegacyConfigIssues } from "./legacy-config-issues.js";
+import { ATTACHMENT_LIMITS_MIGRATION } from "./legacy-config-migrations.attachments.js";
 import { LEGACY_TALK_VOICE_CALL_INHERITANCE } from "./legacy-talk-config-normalizer.js";
 import { findRetiredConfigUpgradeRequirement } from "./retired-config-formats.js";
 
@@ -52,12 +53,15 @@ export function canPlanAutomaticConfigRepair(
     ) &&
     (snapshot.includedPaths?.length ?? 0) === 0 &&
     !containsConfigIncludeDirective(snapshot.parsed) &&
-    // Voice Call remains valid telephony config after its runtime Talk inheritance retires.
+    // These settings remain schema-valid after their runtime inheritance retires.
     (pendingStateMigration ||
       !snapshot.valid ||
       findLegacyConfigRuleIssues(
         snapshot.sourceConfig,
-        LEGACY_TALK_VOICE_CALL_INHERITANCE.legacyRules ?? [],
+        [
+          ...(LEGACY_TALK_VOICE_CALL_INHERITANCE.legacyRules ?? []),
+          ...(ATTACHMENT_LIMITS_MIGRATION.legacyRules ?? []),
+        ],
         snapshot.parsed,
       ).length > 0)
   );

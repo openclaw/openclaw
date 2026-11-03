@@ -356,7 +356,11 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "nodeHost.skills.enabled":
     "Scan and publish node-hosted skills after connecting (default: true). Set false to disable node skill publication.",
   attachments:
-    "Top-level retention behavior shared across providers and tools that persist media. Use ttlHours when general staged media needs bounded cleanup.",
+    "User-chat attachment size limits and general persisted-media retention. Size limits apply to incoming Gateway chat files, including media; channel and tool transfer limits remain separate.",
+  "attachments.maxFileMb":
+    "Maximum decoded size of each incoming chat attachment in MiB (1,048,576 bytes); default: 20. Images, audio, video, and documents all count. Transport, image-hydration, and model limits still apply. Reconnect clients after changing this limit.",
+  "attachments.maxTotalMb":
+    "Maximum combined decoded attachment size per chat message in MiB; default: the larger of 20 and maxFileMb. Includes media and repeated files, not message text or Base64 overhead. The encoded request must still fit the transport limit. Reconnect clients after changing this limit.",
   "attachments.ttlHours":
     "Optional retention window in hours for persisted media handled by the general mtime sweep. Leave unset to disable that sweep, or set values like 24 (1 day) or 168 (7 days) to periodically remove older staged media. Managed outgoing media (chat-generated attachments) is excluded and follows its own SQLite- and transcript-aware retention.",
   bindings:

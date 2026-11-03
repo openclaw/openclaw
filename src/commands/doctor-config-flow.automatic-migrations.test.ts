@@ -42,6 +42,28 @@ async function writeFixture(home: string, config: unknown) {
   return { configPath, original: await fs.readFile(configPath, "utf8") };
 }
 
+it("preserves the inherited attachment cap for an unmarked published updater", () =>
+  withMigrationHome(async (home) => {
+    const { configPath, original } = await writeFixture(home, {
+      gateway: { mode: "local" },
+      agents: { defaults: { mediaMaxMb: 5 } },
+      attachments: { ttlHours: 24 },
+      plugins: { enabled: false },
+    });
+    expect((await readConfigFileSnapshot()).valid).toBe(true);
+
+    await runDoctor(configPath);
+    const saved = await readConfigFileSnapshot();
+    expect(saved.valid).toBe(true);
+    expect(saved.sourceConfig.agents?.defaults?.mediaMaxMb).toBe(5);
+    expect(saved.sourceConfig.attachments).toEqual({ ttlHours: 24, maxFileMb: 5 });
+    expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
+
+    await runDoctor(configPath);
+    expect((await readConfigFileSnapshot()).raw).toBe(saved.raw);
+    expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
+  }));
+
 it("backs up and persists inherited Talk SecretRefs for an unmarked published updater", () =>
   withMigrationHome(async (home) => {
     const apiKey = { source: "env", provider: "default", id: "TALK_MIGRATION_TEST_KEY" } as const;

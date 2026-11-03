@@ -534,6 +534,7 @@ src/commands/doctor/shared/include-migration-ownership.ts
 src/commands/doctor/shared/legacy-config-binding-repair-input.ts
 src/commands/doctor/shared/legacy-config-compat.ts
 src/commands/doctor/shared/legacy-config-issues.ts
+src/commands/doctor/shared/legacy-config-migrations.attachments.ts
 src/commands/doctor/shared/legacy-config-migrations.audio.ts
 src/commands/doctor/shared/legacy-config-migrations.channels.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot-account.ts

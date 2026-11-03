@@ -12,6 +12,8 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as payloads from "../attachment-payload-store.ts";
 import "../../../lib/toast-host.tsx";
 import {
+  attachmentBatchRejection,
+  attachmentReservationBytes,
   chatAttachmentBatchBytes,
   resolveChatAttachmentLimits,
 } from "./chat-attachment-admission.ts";
@@ -38,6 +40,38 @@ it("memoizes each advertised policy and derives the default decoded frame budget
   });
   expect(resolveChatAttachmentLimits(undefined)).toBeUndefined();
   expect(resolveChatAttachmentLimits({ maxPayload: policy.maxPayload })).toBeUndefined();
+  expect(
+    resolveChatAttachmentLimits({
+      ...policy,
+      attachments: { ...policy.attachments, maxTotalBytes: 1024 },
+    })?.maxBatchBytes,
+  ).toBe(1024);
+  expect(
+    resolveChatAttachmentLimits({
+      ...policy,
+      attachments: { ...policy.attachments, maxTotalBytes: 50 * 1024 * 1024 },
+    })?.maxBatchBytes,
+  ).toBe(19_464_192);
+});
+
+it("applies the retained media ceiling to media, not documents", () => {
+  const policy = {
+    maxPayload: 25 * 1024 * 1024,
+    attachments: { maxBytes: 100, maxImageBytes: 10, maxMediaBytes: 10, maxTotalBytes: 200 },
+  };
+  const limits = resolveChatAttachmentLimits(policy);
+  for (const mimeType of [
+    "image/png",
+    "audio/mpeg",
+    "video/mp4",
+    "application/pdf",
+    "text/plain",
+  ]) {
+    const media = mimeType !== "application/pdf" && mimeType !== "text/plain";
+    expect(attachmentReservationBytes(11, mimeType, limits)).toBe(media ? 10 : 11);
+    const attachment: ChatAttachment = { id: mimeType, mimeType, sizeBytes: 11 };
+    expect(attachmentBatchRejection([attachment], policy) !== undefined).toBe(media);
+  }
 });
 
 it("counts restored payload bytes when size metadata is absent or invalid", () => {

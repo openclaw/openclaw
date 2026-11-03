@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { LegacyConfigMigrationSpec, LegacyConfigRule } from "../../../config/legacy.shared.js";
 import { selectLegacyHeartbeatVisibility } from "./channel-legacy-config-migrate.js";
+import { ATTACHMENT_LIMITS_MIGRATION } from "./legacy-config-migrations.attachments.js";
 import { LEGACY_CONFIG_MIGRATIONS_AUDIO } from "./legacy-config-migrations.audio.js";
 import { LEGACY_CONFIG_MIGRATIONS_CHANNELS } from "./legacy-config-migrations.channels.js";
 import { LEGACY_CONFIG_MIGRATIONS_QQBOT } from "./legacy-config-migrations.qqbot.js";
@@ -11,6 +12,7 @@ import { removeLegacyCopilotDiscovery } from "./legacy-copilot-discovery.js";
 import { LEGACY_CONFIG_MIGRATION_TOOLS_BY_SENDER } from "./legacy-tools-by-sender.js";
 
 export const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigrationSpec[] = [
+  ATTACHMENT_LIMITS_MIGRATION,
   {
     id: "plugins.empty-installs",
     legacyRules: [

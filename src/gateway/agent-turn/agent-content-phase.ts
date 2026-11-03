@@ -23,7 +23,7 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
+import { resolveChatAttachmentLimits } from "../chat-attachment-policy.js";
 import {
   MediaOffloadError,
   logAttachmentFailure,
@@ -226,7 +226,7 @@ export async function prepareAgentContentPhase(params: {
     params.assertAdmissionCurrent?.();
     try {
       content = await parseMessageWithAttachments(content.message, params.normalizedAttachments, {
-        maxBytes: resolveChatAttachmentMaxBytes(params.cfg),
+        ...resolveChatAttachmentLimits(params.cfg),
         log: params.context.logGateway,
         supportsImages,
         acceptNonImage: false,

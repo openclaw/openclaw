@@ -277,6 +277,8 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
       "diagnostics.cacheTrace.enabled",
       "acp",
       "attachments.ttlHours",
+      "attachments.maxFileMb",
+      "attachments.maxTotalMb",
       "update.checkOnStart",
       "update.channel",
       "update.auto.enabled",
