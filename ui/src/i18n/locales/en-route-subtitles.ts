@@ -15,7 +15,7 @@ const enRouteSubtitles = {
     workboard: "Agent work queue and session handoff.",
     worktrees: "Isolated agent task checkouts and recovery snapshots.",
     channels: "Channels and settings.",
-    connection: "Gateway endpoint, credentials, and handshake status.",
+    connection: "Gateway connection and browser sign-in.",
     sessions: "Active sessions and defaults.",
     systems: "Devices and desktops.",
     usage: "API usage and costs.",

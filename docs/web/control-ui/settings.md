@@ -127,9 +127,10 @@ In **Agent settings → Files**, an unread file stays unavailable for editing an
 
 Elsewhere, agents without a custom image or emoji use a generated face that fills the circular avatar. Its color, eyes, mouth, and solid or pastel background come from the agent ID, so the same agent keeps the same face across reloads and clients. Renaming the agent's display name does not change its face. Generated faces are decorative and do not indicate activity or model choice.
 
-## Gateway host status
+## Gateway connection
 
-The connection settings use one **Gateway secret** field for the configured
+The **Connection** page shows the Gateway connection and this tab’s saved sign-in.
+It uses one **Gateway secret** field for the configured
 token or password. The Gateway accepts either wire field; its auth mode selects
 the configured secret. After a successful token-mode connection, the UI remembers
 the secret in session storage for the current browser tab and Gateway only.
