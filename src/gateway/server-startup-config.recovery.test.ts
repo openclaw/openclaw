@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { ModelProviderConfigInput } from "../config/types.models.js";
+import { getPluginExecutionFrame } from "../plugins/plugin-instance-invocation.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { loadGatewayStartupConfigSnapshot } from "./server-startup-config.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
@@ -163,6 +164,10 @@ describe("gateway startup config validation", () => {
 
   it("reuses a CLI preflight snapshot without rereading config", async () => {
     const initialSnapshotRead = { snapshot: snapshot(), pluginMetadataSnapshot };
+    applyPluginAutoEnable.mockImplementationOnce((params) => {
+      expect(getPluginExecutionFrame()?.metadataScope?.snapshot).toBe(pluginMetadataSnapshot);
+      return { config: params.config, changes: [], autoEnabledReasons: {} };
+    });
     await expect(loadStartup({ minimalTestGateway: false, initialSnapshotRead })).resolves.toEqual(
       initialSnapshotRead,
     );
