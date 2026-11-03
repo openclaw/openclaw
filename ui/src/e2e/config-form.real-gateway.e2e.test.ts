@@ -189,7 +189,6 @@ suite.define(() => {
         hold = "write";
         await level.selectOption({ label: "debug" });
         await expect.poll(() => Boolean(release)).toBe(true);
-        // The fixture starts with error. This must be a real revision-changing writer.
         expect(await cliJson(["config", "get", "logging.consoleLevel", "--json"])).toBe("error");
         const external = await owner.cli(["config", "set", "logging.consoleLevel", "warn"]);
         expect(external.code, external.stderr).toBe(0);
@@ -198,6 +197,7 @@ suite.define(() => {
         await expect.poll(() => indicator.textContent()).toContain("Settings changed elsewhere");
         expect(await cliJson(["config", "get", "logging.level", "--json"])).toBe("error");
         await indicator.getByRole("button", { name: "Reload", exact: true }).click();
+        await page.getByRole("button", { name: "Discard changes", exact: true }).click();
         await expect.poll(selected).toBe("error");
         expect(await cliJson(["config", "get", "logging.consoleLevel", "--json"])).toBe("warn");
       } finally {
