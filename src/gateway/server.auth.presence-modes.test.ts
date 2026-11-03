@@ -6,7 +6,7 @@ import type { PresenceUpdate } from "../../packages/gateway-protocol/src/presenc
 import type { PresenceEntry } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { listSystemPresence, upsertPresence } from "../infra/system-presence.js";
+import { listSystemPresence } from "../infra/system-presence.js";
 import {
   connectReq,
   CONTROL_UI_CLIENT,
@@ -194,11 +194,9 @@ test("keeps multi-client presence compact through heartbeat, activity, and watch
       for (const { deviceId } of identities.values()) {
         expect(deviceId).toMatch(/^[a-f0-9]{64}$/);
       }
-      clock.mockReturnValue(Date.now() + 31_000);
+      // Expire the cached rows without introducing peers outside the live-client projection.
+      clock.mockReturnValue(Date.now() + 5 * 60_000 + 1);
       const recoveredAt = Date.now();
-      for (let index = 0; index < 201; index += 1) {
-        upsertPresence(`presence-pressure-${index}`, { text: "cache pressure" });
-      }
       expect(
         listSystemPresence().filter((row) => row.instanceId?.startsWith("presence-browser-")),
       ).toEqual([]);
