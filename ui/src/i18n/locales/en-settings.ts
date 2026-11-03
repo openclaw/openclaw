@@ -676,9 +676,9 @@ const enSettings = {
     access: "Agent setting",
     disableNamed: "Disable {name}",
     enableNamed: "Enable {name}",
-    defaultPresets: "Default Presets",
+    defaultPresets: "Default presets",
     previewVia: "Listed in preview via {source}.",
-    linkTool: "Link to This Tool",
+    linkTool: "Link to this tool",
   },
   searchPage: {
     enabled: "Web search",
