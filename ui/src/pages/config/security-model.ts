@@ -104,7 +104,7 @@ function widerAskOf(left: ExecAsk, right: string): ExecAsk {
 
 /** The requested tools.exec policy intersected with host approvals, as the Gateway enforces it. */
 function resolveExecPolicy(root: Record<string, unknown>, live: SecurityLiveFacts): string {
-  if (live.configLoaded === false) {
+  if (live.configLoaded === false || !live.execApprovalDefaults) {
     return "unknown";
   }
   const exec = asConfigRecord(asConfigRecord(root.tools)?.exec) ?? {};
@@ -119,9 +119,9 @@ function resolveExecPolicy(root: Record<string, unknown>, live: SecurityLiveFact
   const effectiveSecurity = stricterOf(
     EXEC_SECURITY_ORDER,
     security,
-    live.execApprovalDefaults?.security ?? security,
+    live.execApprovalDefaults.security,
   );
-  const effectiveAsk = widerAskOf(ask, live.execApprovalDefaults?.ask ?? ask);
+  const effectiveAsk = widerAskOf(ask, live.execApprovalDefaults.ask);
   if (mode && effectiveSecurity === security && effectiveAsk === ask) {
     return mode;
   }

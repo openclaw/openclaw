@@ -16,6 +16,8 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { PROFILE_OPTIONS } from "../../lib/agents/tool-catalog.ts";
+import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import {
@@ -229,20 +231,35 @@ export function SecurityPage(props: {
     null,
     { ownedWrite: true },
   );
-  let requestedClient: unknown = null;
-  // Host approvals bound the requested exec policy; the row tightens once they are known.
-  useGatewayPage({
+  let requestedScope: GatewayConnectionScope | null = null;
+  const clearHostPolicy = () => {
+    requestedScope = null;
+    setExecApprovalDefaults(null);
+  };
+  const connection = useGatewayPage({
     getGateway: () => props.context.gateway,
+    invalidateRequests: clearHostPolicy,
     onSnapshot: ({ snapshot }) => {
-      const client = snapshot.phase === "connected" ? snapshot.client : null;
-      if (client === requestedClient) {
+      if (!canCallGatewayMethod(snapshot, "exec.approvals.get", "operator.admin")) {
+        clearHostPolicy();
         return;
       }
-      requestedClient = client;
-      void client
-        ?.request<{ resolvedDefaults?: ExecApprovalDefaults }>("exec.approvals.get", {})
+      if (requestedScope && connection.isCurrent(requestedScope)) {
+        return;
+      }
+      const scope = connection.capture();
+      if (!scope) {
+        return;
+      }
+      requestedScope = scope;
+      void scope.client
+        .request<{ resolvedDefaults?: ExecApprovalDefaults }>("exec.approvals.get", {})
         .then((result) => {
-          if (requestedClient === client) {
+          if (
+            requestedScope === scope &&
+            connection.isCurrent(scope) &&
+            canCallGatewayMethod(connection.snapshot, "exec.approvals.get", "operator.admin")
+          ) {
             setExecApprovalDefaults(result.resolvedDefaults ?? null);
           }
         })

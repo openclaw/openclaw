@@ -2,9 +2,20 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { completeConfigContext } from "./config-page.test-support.ts";
 import { extractQuickSettingsSecurity } from "./security-model.ts";
-import { Security } from "./security.tsx";
+import { Security, SecurityPage } from "./security.tsx";
+
+type GatewayHello = NonNullable<ApplicationContext["gateway"]["snapshot"]["hello"]>;
 
 type SecurityViewProps = Parameters<typeof Security>[0];
 
@@ -235,7 +246,8 @@ describe("extractQuickSettingsSecurity", () => {
       extractQuickSettingsSecurity(
         { tools: { exec } },
         {
-          execApprovalDefaults: "security" in approvals ? (approvals as never) : null,
+          execApprovalDefaults:
+            "security" in approvals ? (approvals as never) : { security: "full", ask: "off" },
         },
       ).execPolicy,
     ).toBe(expected);
@@ -290,4 +302,77 @@ describe("extractQuickSettingsSecurity", () => {
     expect(security.networkAccess).toEqual({ kind: "unknown" });
     expect(security.execPolicy).toBe("unknown");
   });
+});
+
+it.each([["operator.admin"], ["operator.read"]])(
+  "does not invent host policy when the approval read is unavailable to %s",
+  async (scope) => {
+    const request = vi.fn().mockRejectedValue(new Error("Host policy unavailable"));
+    const { gateway } = createApplicationGateway(
+      createApplicationGatewaySnapshot({
+        phase: "connected",
+        client: { request } as unknown as GatewayBrowserClient,
+        hello: {
+          auth: { role: "operator", scopes: [scope] },
+          features: { methods: ["exec.approvals.get"] },
+        } as GatewayHello,
+      }),
+    );
+    const context = completeConfigContext({ gateway } as ApplicationContext);
+    const { container } = mountSolid(() => (
+      <SecurityPage
+        context={context}
+        configBusy={false}
+        configObject={{}}
+        configLoaded
+        buildEditor={() => undefined}
+      />
+    ));
+    await waitForSolid(() => {
+      const row = expectRowByTitle(container, "Exec policy");
+      expect(row.querySelector(".settings-row__control")?.textContent).toBe("Unknown");
+      expect(row.querySelector(".settings-row__desc")).toBeNull();
+    });
+    expect(request).toHaveBeenCalledTimes(scope === "operator.admin" ? 1 : 0);
+  },
+);
+
+it("retires host policy reads across reconnects of the same client", async () => {
+  const oldRead = createDeferred<{ resolvedDefaults: { security: string; ask: string } }>();
+  const currentRead = createDeferred<{ resolvedDefaults: { security: string; ask: string } }>();
+  const request = vi
+    .fn()
+    .mockReturnValueOnce(oldRead.promise)
+    .mockReturnValueOnce(currentRead.promise);
+  const live = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client: { request } as unknown as GatewayBrowserClient,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["exec.approvals.get"] },
+      } as GatewayHello,
+    }),
+  );
+  const context = completeConfigContext({ gateway: live.gateway } as ApplicationContext);
+  const { container } = mountSolid(() => (
+    <SecurityPage
+      context={context}
+      configBusy={false}
+      configObject={{}}
+      configLoaded
+      buildEditor={() => undefined}
+    />
+  ));
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
+  live.publish({ ...live.gateway.snapshot, phase: "reconnecting" });
+  live.publish({ ...live.gateway.snapshot, phase: "connected" });
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+  currentRead.resolve({ resolvedDefaults: { security: "deny", ask: "off" } });
+  const policy = () =>
+    expectRowByTitle(container, "Exec policy").querySelector(".settings-row__control")?.textContent;
+  await waitForSolid(() => expect(policy()).toBe("Deny"));
+  oldRead.resolve({ resolvedDefaults: { security: "full", ask: "off" } });
+  await oldRead.promise;
+  await waitForSolid(() => expect(policy()).toBe("Deny"));
 });
