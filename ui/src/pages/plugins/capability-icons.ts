@@ -16,7 +16,7 @@ export const pluginCapabilityPaths = {
   embeddingProviders:
     "M7 5h10M6 7l5 9M18 7l-5 9 M8 5A3 3 0 1 1 2 5A3 3 0 1 1 8 5Z M22 5A3 3 0 1 1 16 5A3 3 0 1 1 22 5Z M15 19A3 3 0 1 1 9 19A3 3 0 1 1 15 19Z M9 11h6",
   webSearchProviders:
-    "M15 3a8 8 0 1 0-5 16M2 11h13M10 3a17 17 0 0 0 0 16M10 3a17 17 0 0 1 2 10 M20 16A4 4 0 1 1 12 16A4 4 0 1 1 20 16Z m19 19 3 3",
+    "M15 3a8 8 0 1 0-5 16M2 11h13M10 3a17 17 0 0 0 0 16M10 3a17 17 0 0 1 2 10 M20 16A4 4 0 1 1 12 16A4 4 0 1 1 20 16Z M19 19l3 3",
   webFetchProviders:
     "M4 3H20A2 2 0 0 1 22 5V19A2 2 0 0 1 20 21H4A2 2 0 0 1 2 19V5A2 2 0 0 1 4 3Z M2 8h20M6 5.5h.01 M12 11v7m-3-3 3 3 3-3",
   webContentExtractors:
