@@ -169,6 +169,7 @@ async function ownerDevicesWithPeer(
   for (const [fp, record] of Object.entries(state.owner_devices)) {
     const peerFps = await Promise.all(record.cert.body.peer_keys.map((key) => fingerprint(key)));
     if (peerFps.includes(target)) {
+      // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
       approvalDescendants(state, fp as KeyFingerprint).forEach((each) => found.add(each));
     }
   }

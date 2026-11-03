@@ -136,6 +136,7 @@ export async function verifyOwnerStatement<T extends OwnerSignedType>(
   if (!caps) {
     return failure("not_an_owner", "signer is neither R nor a current owner device of this claw");
   }
+  // SAFETY: the ServerBinding member of the union returned above.
   const owned = statement as SignedStatement<Exclude<OwnerSignedType, "ServerBinding">>;
   const needed = requiredCapability(owned);
   if (needed !== null && !caps.includes(needed)) {

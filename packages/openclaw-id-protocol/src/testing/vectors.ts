@@ -189,7 +189,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
   // device-3, which may approve devices and bind but not invite. device-4 was removed.
   const cert1 = await signStatement("OwnerDeviceCert", certBody("device-1"), root);
   const cert2 = await signStatement("OwnerDeviceCert", certBody("device-2"), signers["device-1"]);
-  const limitedCaps = ["approve_device", "bind"] as StatementBodies["OwnerDeviceCert"]["caps"];
+  const limitedCaps: StatementBodies["OwnerDeviceCert"]["caps"] = ["approve_device", "bind"];
   const owners: OwnerVector[] = [
     { device_pub: pub("device-1"), caps: allCaps },
     { device_pub: pub("device-2"), caps: allCaps },

@@ -36,6 +36,7 @@ export function approvalDescendants(state: AuthorityState, fp: KeyFingerprint): 
   while (grew) {
     grew = false;
     for (const [candidate, record] of Object.entries(state.owner_devices)) {
+      // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
       const child = candidate as KeyFingerprint;
       if (!found.has(child) && record.approved_by !== "root" && found.has(record.approved_by)) {
         found.add(child);
@@ -54,6 +55,7 @@ export function withoutOwnerDevices(
   const remove = new Set(fps);
   const peers = fps.flatMap((fp) => state.owner_devices[fp]?.cert.body.peer_keys ?? []);
   const owner_devices = Object.fromEntries(
+    // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
     Object.entries(state.owner_devices).filter(([fp]) => !remove.has(fp as KeyFingerprint)),
   );
   return { state: { ...state, owner_devices }, peers: [...new Set(peers)] };
@@ -72,7 +74,10 @@ export function withoutMemberPeerKeys(
         ...member,
         peer_keys: member.peer_keys.filter((key) => !remove.has(key)),
         last_seen: Object.fromEntries(
-          Object.entries(member.last_seen).filter(([key]) => !remove.has(key as IrohEndpointKey)),
+          Object.entries(member.last_seen).filter(
+            // SAFETY: last_seen is keyed by IrohEndpointKey; Object.entries widens keys to string.
+            ([key]) => !remove.has(key as IrohEndpointKey),
+          ),
         ),
       } satisfies MemberRecord,
     ]),
@@ -130,6 +135,7 @@ export function dropInactive(
 ): { state: AuthorityState; peers: IrohEndpointKey[] } | null {
   const idleOwners = Object.entries(state.owner_devices)
     .filter(([, record]) => now - record.last_seen > windows.ownerDeviceSeconds)
+    // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
     .map(([fp]) => fp as KeyFingerprint);
   const idleKeys = Object.values(state.members).flatMap((member) =>
     member.peer_keys.filter(

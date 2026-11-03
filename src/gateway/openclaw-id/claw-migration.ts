@@ -29,6 +29,7 @@ type LegacyClaw = Omit<StoredClaw, "authority"> & {
 
 /** True when `record` was written before the allowlist model and must be upgraded. */
 export function needsAllowlistUpgrade(record: StoredClaw): boolean {
+  // SAFETY: a stored record is either current or the legacy shape; only optional fields differ.
   const legacy = record as unknown as LegacyClaw;
   return (
     "revocations" in legacy ||
@@ -45,7 +46,9 @@ export function needsAllowlistUpgrade(record: StoredClaw): boolean {
 
 // A statement without the retired `chain` member (signatures never covered it).
 function withoutChain<T extends SignedStatement>(statement: T): T {
+  // SAFETY: a legacy statement may carry `chain`; reading an absent optional member is harmless.
   const { chain: _chain, ...rest } = statement as T & { chain?: unknown };
+  // SAFETY: removing `chain` leaves exactly the current SignedStatement fields.
   return rest as T;
 }
 
@@ -62,6 +65,7 @@ async function upgradeOwnerDevices(
       continue;
     }
     const cert = withoutChain(device.cert);
+    // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
     devices[fp as KeyFingerprint] = {
       cert,
       approved_by:
@@ -79,6 +83,7 @@ function upgradeMembers(authority: LegacyAuthority, now: number): AuthorityState
     Object.entries(authority.members).map(([account, member]) => {
       const lastSeen: MemberRecord["last_seen"] = {};
       for (const key of member.peer_keys) {
+        // SAFETY: member peer keys are IrohEndpointKeys; the legacy type widens them to string.
         lastSeen[key as IrohEndpointKey] = member.last_seen?.[key] ?? now;
       }
       return [account, { role: member.role, peer_keys: member.peer_keys, last_seen: lastSeen }];
@@ -91,6 +96,7 @@ function upgradeMembers(authority: LegacyAuthority, now: number): AuthorityState
  * `revoked`, and the descriptor's binding without `chain`).
  */
 export async function upgradeToAllowlist(record: StoredClaw, now: number): Promise<StoredClaw> {
+  // SAFETY: a stored record is either current or the legacy shape; only optional fields differ.
   const legacy = record as unknown as LegacyClaw;
   const { revocations: _revocations, ...rest } = legacy;
   const { published_revocations: _published, ...discovery } = legacy.discovery;
@@ -104,6 +110,7 @@ export async function upgradeToAllowlist(record: StoredClaw, now: number): Promi
     };
   }
   return {
+    // SAFETY: the legacy-only fields were removed above; the rest is the current record.
     ...(rest as unknown as StoredClaw),
     authority,
     binding: legacy.binding ? withoutChain(legacy.binding) : null,
