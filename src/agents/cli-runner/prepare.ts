@@ -122,7 +122,7 @@ import {
 } from "./bundle-mcp-claude.js";
 import { prepareCliBundleMcpConfig, resolveCliNativeWebSearchEnabled } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
-import { runCliCleanup, sequenceCliCleanups } from "./cleanup.js";
+import { runCliCleanup, sequenceCliCleanups, throwCliPreparationFailure } from "./cleanup.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
 import { resolveCliSessionId } from "./cli-run-recovery.js";
@@ -1793,14 +1793,8 @@ async function prepareCliRunContextWithinReadFence(
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
     });
   } catch (err) {
-    try {
-      await runCliCleanup(params, "cli-prepare-failure", async () => {
-        await cleanupPreparedResources?.();
-      });
-    } catch (cleanupErr) {
-      cliBackendLog.warn(`cli backend cleanup after prepare failure failed: ${String(cleanupErr)}`);
-    }
-    throw err;
+    // Keep caller authority alive until the composed preparation cleanup settles.
+    return await throwCliPreparationFailure(params, err, cleanupPreparedResources);
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
