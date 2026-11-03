@@ -1,3 +1,4 @@
+import { assertRepositoryDispatchAdmission } from "../gateway/repository-dispatch.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { normalizePluginRepositoryUrl } from "./repository-source-url.js";
 import { getActivePluginRegistry } from "./runtime.js";
@@ -139,6 +140,7 @@ export function resolvePluginRepositorySource(
       const assertSourceCurrent = () => {
         assertCurrent();
         input.assertCurrent();
+        assertRepositoryDispatchAdmission(input.readCredential);
       };
       input.signal?.throwIfAborted();
       assertSourceCurrent();
@@ -199,6 +201,7 @@ export function resolvePluginRepositorySource(
       const assertSourceCurrent = () => {
         assertCurrent();
         input.assertCurrent();
+        assertRepositoryDispatchAdmission(input.readCredential);
       };
       assertSourceCurrent();
       await worker.checkout({ ...input, url: resolved.url, assertCurrent: assertSourceCurrent });

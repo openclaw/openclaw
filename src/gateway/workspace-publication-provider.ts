@@ -30,7 +30,10 @@ export type RepositoryPublicationApi = Pick<
   | "latestShared"
   | "latestPublishedShared"
 > &
-  Pick<RepositoryPublicationProvider, "inspectPullRequest" | "performPullRequestAction">;
+  Pick<
+    RepositoryPublicationProvider,
+    "supportsOrigin" | "inspectPullRequest" | "performPullRequestAction"
+  >;
 /** The Gateway retains accepted transaction custody independently from the current vendor service. */
 export function createWorkspacePublicationHost(params: {
   placements: WorkerSessionPlacementStore;
@@ -69,6 +72,7 @@ export function createWorkspacePublicationHost(params: {
         };
   const provider: RepositoryPublicationProvider = {
     id: "repository-publication",
+    supportsOrigin: (originUrl) => requireProvider().supportsOrigin(originUrl),
     assertCurrent: () => {
       requireProvider();
     },
@@ -218,6 +222,10 @@ export function createWorkspacePublicationHost(params: {
           next.assertCurrent();
         };
         const api: RepositoryPublicationApi = {
+          supportsOrigin: (originUrl) => {
+            guard();
+            return next.supportsOrigin(originUrl);
+          },
           performPullRequestAction: async (input) => {
             guard();
             const result = await (

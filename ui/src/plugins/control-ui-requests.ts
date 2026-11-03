@@ -1,8 +1,10 @@
 import type { ControlUiRequests } from "../../../src/plugin-sdk/control-ui-requests.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../app/operator-access.ts";
+import { isCronInventoryInvalidation as cronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createGatewaySetSyncLifecycle } from "../lib/gateway-set-sync-lifecycle.ts";
+import { subscribeGatewaySnapshot } from "../lib/gateway-snapshot-observation.ts";
 
 /** Activation-bound transport adapter. Native connection and retry owners remain authoritative. */
 export function createControlUiRequests(params: {
@@ -31,6 +33,9 @@ export function createControlUiRequests(params: {
       return canCallGatewayMethod(current().snapshot, method, requiredScope, {
         requireAdvertisement,
       });
+    },
+    isCronInventoryInvalidation(event) {
+      return cronInventoryInvalidation({ type: "event", ...event }, current().snapshot);
     },
     capture() {
       const gateway = current();
@@ -75,7 +80,7 @@ export function createControlUiRequests(params: {
       const gateway = current();
       let captured = requests.capture();
       return params.retain(
-        gateway.subscribe(() => {
+        subscribeGatewaySnapshot(gateway, "authority", () => {
           if (!params.signal.aborted && (!captured || !captured.isCurrent())) {
             captured = requests.capture();
             revision += 1;

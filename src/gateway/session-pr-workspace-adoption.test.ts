@@ -556,6 +556,7 @@ function stubPullRequestPreparation(sessionKey: string, cfg: OpenClawConfig) {
   });
   vi.spyOn(provider, "inspectPullRequest").mockResolvedValue({
     result: { ...pullRequest, author: { accountId: 9, login: "guest" }, state: "open" },
+    ownPublication: false,
     assertCurrent() {},
     assertSource() {},
     async verifyWriteAccess() {},

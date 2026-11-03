@@ -708,8 +708,12 @@ catalog replacement retires authority; a same-client reconnect preserves drafts 
 rejects earlier replies. `request` accepts a cancellation signal.
 
 Use `readConfig(path)` to read the existing config owner, and
-`runConfigMutation` to delegate serialization and refresh to that same owner. The
-host does not create a second config cache or grant new backend write permissions.
+`runConfigMutation` to delegate serialization and refresh to that same owner. Its
+admitted client can settle accepted work after the view retires. Use
+`projectOwner({ read, subscribe })` to project a Settings owner through the host
+reactive runtime without importing that runtime into the plugin. Dispose the
+projection with the owner; the Settings lifetime also retires it automatically.
+The host does not create a second config cache or grant new backend write permissions.
 Accepted configuration work can settle and clean up after its view closes; new
 view callbacks cannot dispatch after retirement. Shared controls include secret
 inputs, segmented choices, icons, confirmation, copying, locale formatting and
@@ -721,7 +725,9 @@ views.
 The V2 host's `requests` capability adapts the existing Gateway transport. Capture a request handle
 for work that must reject after its connection, authenticated handshake, or plugin
 lifetime changes. `createSetSync` delegates subscription batching, acknowledgements
-and retries to the native lifecycle; detach it when its observation ends. Scope
+and retries to the native lifecycle; detach it when its observation ends. Multiple
+observers share the physical connection observation while retaining their own
+authority scopes. Scope
 and method checks are presentation facts, never a substitute for Gateway
 authorization at dispatch.
 
@@ -730,7 +736,7 @@ Cron inventory readers are available from
 shares page validation without loading the protocol's schema runtime in a browser.
 
 The optional `host.presentation` capability mounts existing native controls:
-menus, icons, activity pills, lazy/error states, tooltips, clipped text and marquees.
+menus, icons, toggles, activity pills, lazy/error states, tooltips, clipped text and marquees.
 It also supplies locale, safe-URL, clipboard and notification services. The optional
 `host.native` capability supplies native diff and disclosure-overlay primitives.
 Dispose mounted handles when their container ends; activation/view retirement also
@@ -746,7 +752,7 @@ execution still checks current registration and action availability.
 ### Session accessories and retained operations
 
 V2 `host.ui.registerAccessory` accepts `ControlUiSessionAccessory` contributions
-for session headers, context strips, rows, hovercards, activity, summaries, and
+for session headers, context strips, Environment content (`session-environment`), rows, hovercards, activity, summaries, and
 mobile Details root/pages/activity. The original `ControlUiAccessory` remains a
 header-only contract. Slots are additive: registering an accessory does not
 replace native GitHub controls or other contributions.

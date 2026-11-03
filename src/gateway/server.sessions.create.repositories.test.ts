@@ -104,8 +104,7 @@ test("sessions.create retains a cloud repository across replay without creating 
       if (operation.type === "checkout.context") {
         return {
           root: operation.input.root,
-          owner: "openclaw",
-          repo: "openclaw",
+          originUrl: "https://github.com/openclaw/openclaw.git",
           branch: "previous-local-branch",
           defaultBranch: "main",
         };

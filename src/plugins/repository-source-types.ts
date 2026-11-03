@@ -1,3 +1,4 @@
+import type { RepositoryCredentialReader } from "./repository-integration.types.js";
 /** Vendor-neutral repository facts; credentials remain with the source implementation. */
 export type RepositorySourceProject = {
   id: string;
@@ -72,6 +73,10 @@ export type RepositorySourceV1 = {
       ref?: string;
       baseCommit?: string;
       expected?: { repositoryId: string; identityKey: string };
+      /** Current host-admitted actor/operation; source selection never grants credential access. */
+      readCredential?: RepositoryCredentialReader;
+      /** Retain an issued credential's cleanup with this worker operation. */
+      retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
       signal?: AbortSignal;
       assertCurrent: () => void;
     }) => Promise<RepositoryWorkerReadLease>;
@@ -79,6 +84,10 @@ export type RepositorySourceV1 = {
       url: string;
       agentId: string;
       transfer: import("./repository-checkout-transfer.js").RepositoryCheckoutTransfer;
+      /** Current host-admitted actor/operation; source selection never grants credential access. */
+      readCredential?: RepositoryCredentialReader;
+      /** Retain an issued credential's cleanup with this worker operation. */
+      retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
       assertCurrent: () => void;
     }) => Promise<void>;
   };

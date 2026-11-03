@@ -1,5 +1,5 @@
 import { resolveGitHubHost } from "../agents/github-host-runtime.js";
-import { githubRepositoryUrl } from "../agents/github-host.js";
+import { githubRepositoryUrl, resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import {
   resolveConfiguredGitHubToolIdentity,
   prepareGitHubPublicationIdentity,
@@ -94,6 +94,16 @@ export function createGitHubPublicationProvider(owner: {
   const assertCurrent = owner.assertCurrent;
 
   return {
+    supportsOrigin(originUrl) {
+      assertCurrent();
+      const remote = parseGitHubRemoteUrl(
+        originUrl,
+        resolveConfiguredGitHubHost(owner.getConfig()),
+      );
+      return Boolean(
+        remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo),
+      );
+    },
     id: "github-repositories",
     assertCurrent,
     formatReport: formatGitHubPublicationTranscript,

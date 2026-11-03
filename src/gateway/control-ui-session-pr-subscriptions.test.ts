@@ -88,7 +88,6 @@ describe("control UI session PR subscriptions", () => {
         identity: `session-${captured}`,
         readSource,
         source: null,
-        taskReceipts: { sessions: [] },
         assertCurrent: () => {
           if (!visible || captured !== revision) {
             throw new Error("Watcher grant changed");
@@ -137,7 +136,7 @@ describe("control UI session PR subscriptions", () => {
     };
     const active = start({ prepareRead: async () => async () => target });
     for (let index = 0; index < 64; index++) {
-      await active.replace(`reader-${index}`, [], new Set(), new Set(["session"]));
+      await active.replace(`reader-${index}`, [], new Set(), undefined, new Set(["session"]));
     }
     assertCurrent.mockClear();
     const pending = active.pollNow();
@@ -166,7 +165,6 @@ describe("control UI session PR subscriptions", () => {
         identity: "session",
         readSource,
         source: null,
-        taskReceipts: { sessions: [] },
       }));
       const active = start({ prepareRead: async () => readCurrent });
       await active.replace("reader", ["session"]);

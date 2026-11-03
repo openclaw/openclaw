@@ -64,6 +64,7 @@ function legacyHost(components: ControlUiComponents): ControlUiHost {
       registerAction: () => stop,
       registerAccessory: () => stop,
       registerWidget: () => stop,
+      registerInlineView: () => stop,
       registerReplacement: () => stop,
       selectReplacement: stop,
     },

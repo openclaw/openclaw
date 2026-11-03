@@ -38,17 +38,15 @@ import {
   type ExpectedWorktree,
   type PublicationSessionOwner,
 } from "./github-publication-worktree-owner.js";
-import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 // Discovery is best effort for 15 seconds; publication resolves the current Git repository again.
-const repositoryTargets = createStaleWhileRevalidateCache<boolean>({
+const repositoryOrigins = createStaleWhileRevalidateCache<string>({
   maxEntries: 256,
   maxPending: Number.POSITIVE_INFINITY,
   ttlMs: 15_000,
-  cacheable: (supported) => supported,
 });
 
 /** Only publication/session identity facts cross the host boundary. */
@@ -498,13 +496,6 @@ export async function prepareGitHubPublicationRepositoryIdentity(params: {
   return repositoryIdentity;
 }
 
-function isSupportedGitHubOrigin(originUrl: string): boolean {
-  const remote = parseGitHubRemoteUrl(originUrl);
-  return Boolean(
-    remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo),
-  );
-}
-
 type QualifiedPublicationSource = {
   custody: SessionGitHubReadinessResult["custody"];
   target: SessionGitHubReadinessResult["target"];
@@ -519,7 +510,7 @@ export async function qualifyGitHubPublicationSource(
   session: PublicationSessionIdentity,
   assertCurrent: () => void,
   readSession: () => PublicationSessionRead,
-  options: { readMode?: "existing-only" } = {},
+  options: { readMode?: "existing-only"; supportsOrigin: (originUrl: string) => boolean },
 ): Promise<PublicationSourceQualification> {
   const checkSession = () => {
     assertCurrent();
@@ -553,17 +544,19 @@ export async function qualifyGitHubPublicationSource(
         return resolveGitHubPublicationWorkspaceOwner(session, prepared, readSession);
       };
       const owner = current();
+      const supportsOrigin = options.supportsOrigin(owner.workspace.url);
       return {
         ok: true,
         custody: { kind: "qualified", source: "repository" },
-        target: isSupportedGitHubOrigin(owner.workspace.url)
+        target: supportsOrigin
           ? { kind: "supported", basis: "repository-url", freshness: "observed" }
           : { kind: "unsupported" },
         assertCurrent: () => {
           const latest = current();
           if (
             latest.workspace.workspaceId !== workspaceId ||
-            latest.workspace.revision !== owner.workspace.revision
+            latest.workspace.revision !== owner.workspace.revision ||
+            options.supportsOrigin(owner.workspace.url) !== supportsOrigin
           ) {
             throw new GitHubPublicationWorkspaceChangedError(
               "GitHub publication session repository owner changed.",
@@ -612,7 +605,7 @@ export async function qualifyGitHubPublicationSource(
     const { repoRoot, repoFingerprint } = owner.worktree;
     const key = JSON.stringify([context.admission.identity.key, repoRoot, repoFingerprint]);
     let observed = false;
-    const target = await repositoryTargets.read(
+    const target = await repositoryOrigins.read(
       key,
       async () => {
         const repository = await prepareGitHubPublicationRepositoryIdentity({
@@ -620,22 +613,30 @@ export async function qualifyGitHubPublicationSource(
           assertCurrent: () => context.admission.assertCurrent(),
         });
         observed = true;
-        return isSupportedGitHubOrigin(repository.originUrl);
+        return repository.originUrl;
       },
       { allowStale: false },
     );
     check();
+    const supportsOrigin = options.supportsOrigin(target.value);
     return {
       ok: true,
       custody: { kind: "qualified", source: "worktree" },
-      target: target.value
+      target: supportsOrigin
         ? {
             kind: "supported",
             basis: "registered-repository",
             freshness: observed ? "observed" : "cached",
           }
         : { kind: "unsupported" },
-      assertCurrent: check,
+      assertCurrent: () => {
+        check();
+        if (options.supportsOrigin(target.value) !== supportsOrigin) {
+          throw new GitHubPublicationWorkspaceChangedError(
+            "Publication provider target support changed.",
+          );
+        }
+      },
     };
   } catch (cause) {
     // Authority failure is never a successful observation of an unavailable source.

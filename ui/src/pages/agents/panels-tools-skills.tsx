@@ -623,7 +623,9 @@ export function AgentTools(
         identity={params.githubIdentity}
         onOpenConnections={params.onOpenGitHubConnections}
       />
-      {params.renderSettings?.()}
+      <Show when={params.renderSettings} keyed>
+        {(render) => render()}
+      </Show>
       <Show when={params.catalogRequest ?? params.agentId} keyed>
         <Errored fallback={(_error) => <Catalog catalog={null} />}>
           <Loading

@@ -70,7 +70,7 @@ describe("worker placement startup health lifetime", () => {
     mockDispatch();
     const environments = createEnvironments();
     const runtime = createRuntime({ environments: environments as never });
-    vi.spyOn(runtime.githubPublication, "resumeSessionRequests").mockImplementationOnce(
+    vi.spyOn(runtime.githubPublication!, "resumeSessionRequests").mockImplementationOnce(
       async () => {
         publicationStarted.resolve();
         await releasePublication.promise;

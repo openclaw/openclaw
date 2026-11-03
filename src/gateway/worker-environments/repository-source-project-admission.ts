@@ -54,6 +54,8 @@ export async function preparePluginRepositoryWorkerProject(
     throw new Error("Repository source identity changed; retry preparation.");
   }
   const lease = await source.prepareWorker({
+    readCredential: params.readNativeCredential,
+    retainCredentialCleanup: params.retainCredentialCleanup,
     agentId: agent.agentId,
     ref: request.ref,
     baseCommit: request.baseCommit,

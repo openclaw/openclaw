@@ -299,6 +299,7 @@ export type ControlUiSessionAccessory = {
   placement:
     | "session-header"
     | "session-context"
+    | "session-environment"
     | "session-row"
     | "session-hovercard"
     | "session-activity"
@@ -558,6 +559,7 @@ export type { ControlUiNativeHost } from "./control-ui-native.js";
 export type {
   ControlUiPresentationHost,
   ControlUiIconProps,
+  ControlUiToggleProps,
   ControlUiMarqueeOptions,
   ControlUiMenuControls,
   ControlUiMenuHandle,

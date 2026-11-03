@@ -67,6 +67,7 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
       ? result
       : undefined;
   };
+  const [accessoryPresent, setAccessoryPresent] = createSignal(false, { ownedWrite: true });
   const published = () => props.work?.publication?.result?.status === "published";
   const work = () => {
     const candidate = props.work;
@@ -105,7 +106,15 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
     return result && hasEnvironmentTextChanges(result) ? result : undefined;
   };
   const hasContent = createMemo(() =>
-    Boolean(machineMenu() || host() || branchName() || work() || facts().worktree || changes()),
+    Boolean(
+      machineMenu() ||
+      host() ||
+      branchName() ||
+      work() ||
+      accessoryPresent() ||
+      facts().worktree ||
+      changes(),
+    ),
   );
   // Capture cache availability before the first asynchronous arrival.
   const [initiallyEmpty] = createSignal<boolean>((previous) => previous ?? !hasContent());
@@ -128,75 +137,83 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
         return null;
       }}
     </Show>,
-    <Show when={hasContent()}>
-      {(_available) => {
-        let shell!: HTMLDivElement;
-        const content = (
-          <div ref={(element) => (shell = element)} class="chat-details-desktop-environment">
-            <ChatDetailsDesktopSection
-              section="environment"
-              title={t("chat.sessionDetails.environment")}
-              expanded={expanded()}
-              presented={props.presented}
-              animateContentResize
-              onExpandedChange={(next) => {
-                if (props.expanded === undefined) {
-                  setLocalExpanded(next);
-                }
-                props.onExpandedChange?.(next);
-              }}
-              metadata={
-                <Show when={!expanded()}>
-                  <span class="chat-environment-desktop__summary">
-                    <Show
-                      when={summaryHost()}
-                      fallback={
-                        <Show when={workspace()?.branch}>
-                          {(branch) => {
-                            const overflow = useScrollState(true, false);
-                            return (
-                              <span ref={overflow} class="chat-environment-desktop__branch">
-                                {branch()}
-                              </span>
-                            );
-                          }}
-                        </Show>
-                      }
-                    >
-                      <MachineIcon />
-                      <span ref={createTextOverflow(summaryHost)} title={summaryHost()}>
-                        {summaryHost()}
-                      </span>
-                    </Show>
-                  </span>
-                </Show>
+    (() => {
+      let shell!: HTMLDivElement;
+      const content = (
+        <div
+          ref={(element) => (shell = element)}
+          class="chat-details-desktop-environment"
+          hidden={!hasContent()}
+        >
+          <ChatDetailsDesktopSection
+            section="environment"
+            title={t("chat.sessionDetails.environment")}
+            expanded={expanded()}
+            presented={props.presented}
+            animateContentResize
+            mountWhileCollapsed
+            onExpandedChange={(next) => {
+              if (props.expanded === undefined) {
+                setLocalExpanded(next);
               }
-            >
-              <ChatLazyBoundary>
-                <ChatDetailsEnvironmentBody
-                  {...props}
-                  placement={placement}
-                  expanded={expanded()}
-                  machineMenu={machineMenu()}
-                  host={host()}
-                  branchName={branchName()}
-                  worktree={facts().worktree}
-                  work={work()}
-                  fallbackWork={props.work}
-                  diff={diff()}
-                  changes={changes()}
-                  renderMachineIcon={() => <MachineIcon />}
-                />
-              </ChatLazyBoundary>
-            </ChatDetailsDesktopSection>
-          </div>
-        );
-        // The disclosure must restore its initial body before measuring the whole entrance.
-        onSettled(() =>
-          initiallyEmpty() && props.presented ? animateDetailsDesktopEntrance(shell) : undefined,
-        );
-        return content;
-      }}
-    </Show>,
+              props.onExpandedChange?.(next);
+            }}
+            metadata={
+              <Show when={!expanded()}>
+                <span class="chat-environment-desktop__summary">
+                  <Show
+                    when={summaryHost()}
+                    fallback={
+                      <Show when={workspace()?.branch}>
+                        {(branch) => {
+                          const overflow = useScrollState(true, false);
+                          return (
+                            <span ref={overflow} class="chat-environment-desktop__branch">
+                              {branch()}
+                            </span>
+                          );
+                        }}
+                      </Show>
+                    }
+                  >
+                    <MachineIcon />
+                    <span ref={createTextOverflow(summaryHost)} title={summaryHost()}>
+                      {summaryHost()}
+                    </span>
+                  </Show>
+                </span>
+              </Show>
+            }
+          >
+            <ChatLazyBoundary>
+              <ChatDetailsEnvironmentBody
+                {...props}
+                placement={placement}
+                expanded={expanded()}
+                machineMenu={machineMenu()}
+                host={host()}
+                branchName={branchName()}
+                worktree={facts().worktree}
+                accessoryPresent={accessoryPresent()}
+                accessoryPresented={props.presented && (expanded() || !hasContent())}
+                onAccessoryPresenceChange={setAccessoryPresent}
+                work={work()}
+                fallbackWork={props.work}
+                diff={diff()}
+                changes={changes()}
+                renderMachineIcon={() => <MachineIcon />}
+              />
+            </ChatLazyBoundary>
+          </ChatDetailsDesktopSection>
+        </div>
+      );
+      // The disclosure must restore its initial body before measuring the whole entrance.
+      onSettled(() =>
+        initiallyEmpty() && props.presented && hasContent()
+          ? animateDetailsDesktopEntrance(shell)
+          : undefined,
+      );
+      return content;
+    })(),
   ];
 }

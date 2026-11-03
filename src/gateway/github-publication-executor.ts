@@ -212,10 +212,11 @@ export async function executeGitHubPublication<Row extends GitHubPublicationExec
       );
       assertCurrent();
       let expectedHead = pullRequest.head.commit;
+      // Retargeting changes the comparison, not the head this session already published.
       if (
         published?.head_commit &&
         published.repository === pullRequest.base.repository &&
-        published.base_branch === pullRequest.base.branch &&
+        published.branch === pullRequest.head.branch &&
         published.pull_request_url === pullRequest.url
       ) {
         const ancestry = await run(

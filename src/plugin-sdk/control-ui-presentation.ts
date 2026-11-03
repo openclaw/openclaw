@@ -1,5 +1,14 @@
 import type { ControlUiComponentHandle } from "./control-ui-components.js";
 export type ControlUiTranslationMap = { readonly [key: string]: string | ControlUiTranslationMap };
+export type ControlUiToggleProps = {
+  checked: boolean;
+  disabled?: boolean;
+  /** Block activation during a save without removing keyboard focus. */
+  saving?: boolean;
+  ariaLabel: string;
+  inputRef?: (element: HTMLInputElement) => void;
+  onChange: (checked: boolean) => boolean | void;
+};
 export type ControlUiIconProps = { name: string; className?: string };
 export type ControlUiMarqueeOptions = {
   delay?: number;
@@ -15,7 +24,10 @@ export type ControlUiMenuControls = {
 };
 export type ControlUiMenuHandle = {
   readonly overlay: { readonly trigger: HTMLElement | undefined; readonly open: boolean };
+  open: () => boolean;
   close: () => boolean;
+  focusFirst: () => void;
+  itemElement: (id: string) => HTMLElement | undefined;
 };
 /** Host-owned attributes are forwarded unchanged to the plugin-rendered root control. */
 export type ControlUiMenuItemAttributes = object;
@@ -105,6 +117,10 @@ export type ControlUiPresentationHost = {
     container: HTMLElement,
     props: ControlUiActivityPillProps,
   ) => ControlUiComponentHandle<ControlUiActivityPillProps>;
+  mountToggle: (
+    container: HTMLElement,
+    props: ControlUiToggleProps,
+  ) => ControlUiComponentHandle<ControlUiToggleProps>;
   mountIcon: (
     container: HTMLElement,
     props: ControlUiIconProps,

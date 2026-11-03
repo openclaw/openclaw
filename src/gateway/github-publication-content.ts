@@ -1,5 +1,4 @@
 import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
-import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import { appendPrAttribution, preparePrAttribution } from "../agents/pr-attribution.js";
 import { resolveControlUiPublicSessionUrl } from "../config/control-ui-link-base.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
@@ -74,13 +73,15 @@ export async function prepareRepositoryPublicationContentFacts(params: {
 
 /** Adapt the current native receipt without moving attribution or sharing custody. */
 export function createRepositoryPublicationContentHostV1(
-  params: Omit<Parameters<typeof prepareRepositoryPublicationContentFacts>[0], "host">,
+  params: Omit<Parameters<typeof prepareRepositoryPublicationContentFacts>[0], "host"> & {
+    baseRemoteUrl: string;
+  },
 ): RepositoryPublicationContentHostV1 {
   return {
     prepare: () =>
       prepareRepositoryPublicationContentFacts({
         ...params,
-        host: resolveConfiguredGitHubHost(params.config),
+        host: new URL(params.baseRemoteUrl).hostname,
       }),
   };
 }
@@ -90,7 +91,7 @@ export async function prepareWorkspacePublicationContent(
   provider: Pick<RepositoryPublicationProvider, "formatContent">,
   params: Omit<
     Parameters<typeof createRepositoryPublicationContentHostV1>[0],
-    "session" | "accountId"
+    "session" | "accountId" | "baseRemoteUrl"
   > &
     Pick<
       Parameters<RepositoryPublicationProvider["formatContent"]>[0],
@@ -106,6 +107,7 @@ export async function prepareWorkspacePublicationContent(
     publisher: params.publisher,
     host: createRepositoryPublicationContentHostV1({
       session: params.request.session,
+      baseRemoteUrl: params.target.baseRemoteUrl,
       accountId: params.request.publisher.account.accountId,
       requesterProfileId: params.requesterProfileId,
       storePath: params.storePath,

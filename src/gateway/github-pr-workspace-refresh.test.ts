@@ -358,11 +358,12 @@ describe("imported PR source refresh", () => {
         f.pr.head.sha = f.branch.commit.sha = commit!;
         return commandResult();
       }
-      if (argv.includes("ls-remote")) {
-        return commandResult(`${f.pr.head.sha}\trefs/heads/${published.branch}\n`);
+      if (endpoint?.includes("/git/matching-refs/heads/")) {
+        const ref = `refs/heads/${decodeURIComponent(endpoint.split("/git/matching-refs/heads/")[1]!)}`;
+        return json([{ ref, object: { sha: await upstreamGit("rev-parse", ref) } }]);
       }
       if (endpoint?.includes("/git/ref/")) {
-        const ref = `refs/${endpoint.split("/git/ref/")[1]}`;
+        const ref = `refs/${decodeURIComponent(endpoint.split("/git/ref/")[1]!)}`;
         return json({ ref, sha: await upstreamGit("rev-parse", ref) });
       }
       if (endpoint?.includes("/git/commits/")) {

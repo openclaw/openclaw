@@ -64,7 +64,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { createGitHubOAuthLifecycle } from "../github-oauth-lifecycle.js";
-import { bindPersonalGitHubPublicationSelection } from "../github-personal-publication.js";
+import { bindPersonalGitHubPublicationSelection } from "../github-personal-publication-selection.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -192,10 +192,6 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       {
         owner: owner(),
         assertCurrent() {},
-        sessionId: "publication-session",
-        sessionKey: "agent:main:publication",
-        agentId: "main",
-        lifecycleRevision: null,
       },
       { generation: connection.generation, account: connection.selection },
     );

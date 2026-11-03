@@ -64,6 +64,7 @@ import { getSessionRepositoryWorkspaceStore } from "../../state/session-reposito
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import * as oauth from "../github-oauth-lifecycle.js";
+import { createGitHubPublicationProvider } from "../github-publication-provider.js";
 import { digestGitHubPublicationRequest } from "../github-publication-receipt.js";
 import {
   claimGitHubPublicationExecutionFixture,
@@ -102,7 +103,15 @@ async function fixture(
 ) {
   await withReadFixture(async (f) => {
     Object.assign(f.context, createContext([], f.context.getRuntimeConfig));
+    const provider = createGitHubPublicationProvider({
+      signal: f.readScheduler.signal,
+      assertCurrent: () => f.readScheduler.signal.throwIfAborted(),
+      getConfig: f.context.getRuntimeConfig,
+      refreshIdentity: async () => {},
+      refreshPersonal: async () => {},
+    });
     const service = createGitHubPublicationCoordinator({
+      provider,
       placements: createWorkerSessionPlacementStore(),
       getCommittedRuntimeConfig: f.context.getRuntimeConfig,
     });
@@ -217,7 +226,7 @@ function seed(worktree: Awaited<ReturnType<typeof bind>>, key = sessionKey) {
       identity: {
         source: "system-configured",
         profileId: "fixture-profile",
-        account: { accountId: 7, login: "fixture-bot", avatarUrl: null },
+        account: { accountId: 7, login: "fixture-bot" },
       },
     }),
   );

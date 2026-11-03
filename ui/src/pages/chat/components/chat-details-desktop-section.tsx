@@ -176,13 +176,17 @@ export function ChatDetailsDesktopSection(props: {
   expanded: boolean;
   presented: boolean;
   animateContentResize?: boolean;
+  /** Optional content may discover its own presence before the first disclosure reveal. */
+  mountWhileCollapsed?: boolean;
   onExpandedChange: (expanded: boolean) => void;
   onRevealMotionChange?: (active: boolean) => void;
   metadata?: JSX.Element;
   children: JSX.Element;
 }) {
   // Closed sections need only their heading; retain content after its first reveal.
-  const [contentMounted] = createSignal((previous = false) => previous || props.expanded);
+  const [contentMounted] = createSignal(
+    (previous = false) => previous || props.expanded || props.mountWhileCollapsed === true,
+  );
   const reveal = createDetailsDesktopReveal(
     () => [props.expanded, props.presented, props.animateContentResize],
     (active) => props.onRevealMotionChange?.(active),

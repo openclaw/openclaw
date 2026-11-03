@@ -1,9 +1,9 @@
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
-  ControlUiReplacement,
+  ControlUiReplacementV2 as ControlUiReplacement,
   ControlUiSurfaceProps,
-  ControlUiViewContext,
+  ControlUiViewContextV2 as ControlUiViewContext,
 } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { ContentPresentation } from "../lib/solid/presentation.ts";

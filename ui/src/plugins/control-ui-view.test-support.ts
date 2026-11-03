@@ -4,6 +4,7 @@ import type {
   ControlUiReplacementV2 as ControlUiReplacement,
   ControlUiSurfaceProps,
   ControlUiViewContextV2 as ControlUiViewContext,
+  ControlUiViewV2,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
 
@@ -40,8 +41,8 @@ export function composerProps(
 
 export function replacement<S extends Surface>(
   surface: S,
-  mount: ControlUiReplacement<S>["mount"],
-): ControlUiReplacement<S> {
+  mount: ControlUiViewV2<ControlUiSurfaceProps[S]>,
+) {
   return { id: "fixture", label: "Fixture", surface, mount };
 }
 

@@ -1,0 +1,2 @@
+# Keep existing PR continuation proof backed by the real Git ref when native branch observation moves through the plugin API transport.
+1

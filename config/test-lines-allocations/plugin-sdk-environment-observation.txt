@@ -1,0 +1,2 @@
+# Prove cold discovery in a collapsed native Environment, preserve empty-shell visibility assertions, and share Gateway authority observation without multiplying physical subscriptions; includes current V1/V2 fixture contracts.
+117

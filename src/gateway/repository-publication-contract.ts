@@ -175,6 +175,8 @@ export type RepositoryPublicationActionInput = {
 /** Vendor policy and remote transport. No stores, rows, placement owners, or session projections. */
 export type RepositoryPublicationProvider = {
   id: string;
+  /** Readiness hint only; publication prepares its target again before effects. */
+  supportsOrigin(this: void, originUrl: string): boolean;
   assertCurrent(this: void): void;
   formatReport(
     this: void,

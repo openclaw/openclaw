@@ -2,6 +2,7 @@
 /** Canonical admitted OAuth-record reads; the plugin owns credential selection and refresh policy. */
 export {
   inspectGitHubOAuthRecord,
+  parseGitHubOAuthRecord,
   listGitHubOAuthRecords,
 } from "../agents/github-oauth-records.js";
 
@@ -35,6 +36,7 @@ export type { GitHubRepositoryAdmissionRequest as NativeGitHubRepositoryAdmissio
 /** Canonical native personal-account records. Storage admission and commit publication stay with their existing worker owner. */
 export {
   prepareUserGitHubConnection,
+  requirePendingUserGitHubConnection,
   readUserGitHubConnectionAsync,
   readCanonicalUserGitHubConnectionAsync,
   listUserGitHubConnectionsAsync,

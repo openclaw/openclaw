@@ -265,8 +265,8 @@ describe("createGatewayRequestContext", () => {
     params.runtime.sessionEventSubscribers.unsubscribe = unsubscribeAllSessionEvents;
     params.runtime.sessionMessageSubscribers.unsubscribeAll = unsubscribeMessages;
     params.runtime.sessionObserver.removeConnection = removeObserver;
-    params.runtime.runtimeState.controlUiSessionPullRequests = {
-      unsubscribe: unsubscribePullRequests,
+    params.runtime.runtimeState.repositorySessions = {
+      presentation: { unsubscribe: unsubscribePullRequests },
     } as never;
     params.runtime.runtimeState.sessionViewerPresence = {
       unsubscribe: unsubscribeViewerPresence,

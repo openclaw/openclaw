@@ -203,11 +203,17 @@ describe("registered guest publication target discovery", () => {
       expectReply(await options(fixture), sharedOptions);
       expect(lookup).toHaveBeenCalledOnce();
       await expect(
-        prepareGitHubPublicationTarget({
-          worktree,
-          identity: { ...publisherIdentity(), env: {} },
-          assertCurrent: () => {},
-        }),
+        (async () => {
+          const source = await availability.readRepositoryPublicationTargetFacts({
+            worktree,
+            assertCurrent: () => {},
+          });
+          return prepareGitHubPublicationTarget({
+            source,
+            identity: { ...publisherIdentity(), env: {} },
+            assertCurrent: () => {},
+          });
+        })(),
       ).rejects.toThrow(repositoryChanged);
       now += 1;
       expectFailure(await options(fixture), { message: repositoryChanged });

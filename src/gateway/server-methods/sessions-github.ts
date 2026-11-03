@@ -19,6 +19,7 @@ import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { githubAccountAvatarUrl } from "../../shared/github-account-avatar.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
+import { preparePullRequestSession } from "../github-pr-workspace-preparation.js";
 import { performSessionGitHubAction } from "../github-publication-actions.js";
 import {
   prepareGitHubPublicationSession,
@@ -228,7 +229,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       ) {
         throw new Error("Base refresh must use the current conversation's workspace.");
       }
-      using selected = await prepareGitHubPublicationSession(params.sessionKey, {
+      using selected = await preparePullRequestSession(params.sessionKey, {
         agentId: caller?.agentId ?? params.agentId,
         assertCurrent: () => options.sessionMutationAuthorization?.assertCurrent(),
       });
@@ -489,6 +490,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
               session,
               assertResponseCurrent,
               read.currentSessionRead,
+              { supportsOrigin: coordinator.supportsOrigin },
             );
             if (!source.ok) {
               throw source.cause;

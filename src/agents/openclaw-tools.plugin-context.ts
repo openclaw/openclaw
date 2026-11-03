@@ -31,6 +31,7 @@ export type OpenClawPluginToolOptions = Pick<
   | "agentDir"
   | "workspaceDir"
   | "config"
+  | "clientCaps"
   | "fsPolicy"
   | "modelProvider"
   | "modelId"

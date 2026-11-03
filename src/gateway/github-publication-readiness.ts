@@ -101,6 +101,12 @@ export async function readGitHubPublicationReadiness(
   const [source, request] = await Promise.all([
     qualifyGitHubPublicationSource(session, assertAuthority, read.currentSessionRead, {
       readMode: "existing-only",
+      supportsOrigin: (originUrl) => {
+        if (!service) {
+          throw new Error("Publication provider is unavailable.");
+        }
+        return service.supportsOrigin(originUrl);
+      },
     }),
     observeRequest(),
   ]);

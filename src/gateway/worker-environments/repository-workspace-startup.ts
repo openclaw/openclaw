@@ -103,6 +103,8 @@ export async function syncSessionRepositoryWorkspace(params: {
         params.assertCurrent,
       );
       await pluginSource.checkoutWorker({
+        readCredential: params.readNativeCredential,
+        retainCredentialCleanup: params.retainCredentialCleanup,
         agentId: params.agentId,
         transfer: bound.transfer,
         assertCurrent: params.assertCurrent,

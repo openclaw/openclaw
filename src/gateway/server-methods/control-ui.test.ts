@@ -12,7 +12,6 @@ import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-st
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as checkDetails from "../control-ui-session-pr-check-details.js";
-import { createControlUiSessionPullRequestSubscriptions } from "../control-ui-session-pr-subscriptions.js";
 import {
   createTestControlUiSessionPrSubscriptions,
   createTestSessionPrReadSource,
@@ -521,7 +520,6 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
         return async () => ({
           identity: session.sessionKey,
           params: { sessionKey: session.sessionKey, agentId: "main" },
-          taskReceiptsOnly: session.taskReceiptsOnly,
           readSource,
           source: null,
         });
@@ -584,7 +582,7 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
   it("reports subscription preparation failures without rejecting the request", async () => {
     const warn = vi.fn();
     const scheduler = createTestGatewayScheduler();
-    const subscriptions = createControlUiSessionPullRequestSubscriptions({
+    const subscriptions = createTestControlUiSessionPrSubscriptions({
       scheduler,
       broadcastToConnIds: vi.fn(),
       prepareRead: async () => {

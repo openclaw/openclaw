@@ -5,6 +5,7 @@ import { SessionGitDiff } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { PluginContributions } from "../../../plugins/control-ui-contributions.solid.tsx";
 import type { ChatDetailsEnvironmentDesktopProps } from "./chat-details-types.ts";
 import { EnvironmentAction, EnvironmentChangeCounts } from "./chat-environment-content.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -24,6 +25,9 @@ type Props = ChatDetailsEnvironmentDesktopProps & {
   diff: SessionsDiffResult | NonNullable<ChatDetailsEnvironmentDesktopProps["work"]>["branch"];
   changes: SessionsDiffResult | undefined;
   fallbackWork: ChatDetailsEnvironmentDesktopProps["work"];
+  accessoryPresent: boolean;
+  accessoryPresented: boolean;
+  onAccessoryPresenceChange: (present: boolean) => void;
   renderMachineIcon: () => JSX.Element;
 };
 
@@ -72,7 +76,16 @@ export function ChatDetailsEnvironmentBody(props: Props) {
           />
         </div>
       </Show>
-      <Show when={props.branchName || props.work}>
+      <PluginContributions
+        kind="session-environment"
+        sessionKey={props.details.sessionKey}
+        agentId={props.details.currentAgentId ?? undefined}
+        facts={props.details.sessionHeaderFacts}
+        presented={props.accessoryPresented}
+        onPresenceChange={props.onAccessoryPresenceChange}
+        onOpenSessionDiff={props.details.onOpenSessionDiff}
+      />
+      <Show when={(props.branchName || props.work) && !props.accessoryPresent}>
         <div class="chat-environment__branch">
           <div class="chat-details__row chat-environment__row" title={props.branchName}>
             <Icon name={props.branchName ? "gitBranch" : "gitPullRequest"} />
@@ -117,13 +130,13 @@ export function ChatDetailsEnvironmentBody(props: Props) {
           </Show>
         </div>
       </Show>
-      <Show when={props.worktree && !props.branchName}>
+      <Show when={props.worktree && !props.branchName && !props.accessoryPresent}>
         <div class="chat-details__row chat-environment__row chat-environment__worktree">
           <Icon name="folder" />
           <span>{t("chat.sessionDetails.worktree")}</span>
         </div>
       </Show>
-      <Show when={!props.branchName && !props.work && props.changes}>
+      <Show when={!props.branchName && !props.work && !props.accessoryPresent && props.changes}>
         <div class="chat-details__row chat-environment__row">
           <EnvironmentAction
             presented={props.presented}

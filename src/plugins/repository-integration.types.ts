@@ -1,5 +1,4 @@
 import type { IncomingHttpHeaders } from "node:http";
-import type { GitHubAppSelection } from "../agents/github-credential-reader.js";
 
 /** Host-authenticated connection metadata. Values alone never grant current authority. */
 export type RepositoryConnectionIdentity = Readonly<{
@@ -58,12 +57,25 @@ export type RepositoryCredentialScope = Readonly<{
 export type RepositoryAdmission = {
   kind: "repository-admission";
   host: string;
-  selection: Pick<GitHubAppSelection, "kind" | "profileId"> & {
-    app: Pick<
-      GitHubAppSelection["app"],
-      "appId" | "installationId" | "accountId" | "repositories" | "permissions"
-    >;
+  selection: {
+    kind: "app-installation";
+    profileId: string;
+    app: {
+      appId: number;
+      installationId: number;
+      accountId: number;
+      repositories: { id: number; fullName: string }[];
+      permissions: Record<string, "read" | "write">;
+    };
   };
+};
+/** Host-bound credential lookup and policy admission retain their original actor and operation. */
+export type RepositoryCredentialReader = ((
+  env: NodeJS.ProcessEnv,
+  admission?: RepositoryAdmission,
+) => Promise<string | undefined>) & {
+  admit?: () => Promise<void>;
+  assertCurrent?: () => void;
 };
 /** Registered callbacks execute under the plugin instance and fail after its closure. */
 export type RepositoryIntegration = {

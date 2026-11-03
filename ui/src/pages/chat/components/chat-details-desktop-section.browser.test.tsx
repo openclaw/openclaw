@@ -1,8 +1,16 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { userEvent } from "vitest/browser";
+import type { ControlUiSessionAccessory } from "../../../../../src/plugin-sdk/control-ui.ts";
+import { createTestControlUiPluginHost } from "../../../test-helpers/control-ui-plugin-host.ts";
+import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
+import { mountSolid as mountNativeSolid } from "../../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
+import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import baseStyles from "../../../styles/base.css?inline";
 
 let container: HTMLDivElement;
 afterEach(() => container?.remove());
@@ -161,4 +169,75 @@ it("reveals content that arrives after an initially empty opening", async () => 
   reveal.finish();
   await settleAnimations(disclosure);
   expect(body.getBoundingClientRect().height).toBe(80);
+});
+
+it("discovers a contributed Environment from a cold collapsed empty section", async () => {
+  const context = createInitializationContext(createTestGatewayClient(async () => ({})));
+  const host = createTestControlUiPluginHost(context, "fixture-environment");
+  let show: (() => void) | undefined;
+  const accessory: ControlUiSessionAccessory = {
+    id: "environment",
+    placement: "session-environment",
+    mount(target, current) {
+      current.props.onPresenceChange?.(false);
+      show = () => {
+        const button = document.createElement("button");
+        button.textContent = "Open fixture workspace";
+        target.append(button);
+        current.props.onPresenceChange?.(true);
+      };
+      return { dispose: () => target.replaceChildren() };
+    },
+  };
+  const registrations = [
+    {
+      key: "fixture-environment/environment",
+      pluginId: "fixture-environment",
+      host,
+      signal: host.signal,
+      value: accessory,
+    },
+  ];
+  Object.defineProperty(context, "plugins", {
+    value: new Proxy(context.plugins, {
+      get(target, key, receiver) {
+        if (key === "registrations") {
+          return (kind: string) => (kind === "accessories" ? registrations : []);
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    }),
+  });
+  container = document.body.appendChild(document.createElement("div"));
+  const view = mountNativeSolid(
+    () => (
+      <>
+        <style>{baseStyles}</style>
+        <ChatDetailsEnvironment
+          details={{
+            sessionKey: "agent:main:fixture",
+            currentAgentId: "main",
+            selectedSession: undefined,
+            messages: [],
+          }}
+          expanded={false}
+          presented
+        />
+      </>
+    ),
+    {
+      container,
+      wrapper: createSolidApplicationContextProvider(context).wrapper,
+    },
+  );
+  await expect.poll(() => typeof show).toBe("function");
+  const shell = container.querySelector<HTMLElement>(".chat-details-desktop-environment")!;
+  const disclosure = shell.querySelector("details")!;
+  expect(shell.hidden).toBe(true);
+  show!();
+  await expect.poll(() => shell.hidden).toBe(false);
+  expect(disclosure.open).toBe(false);
+  const button = shell.querySelector<HTMLButtonElement>("button")!;
+  expect(button.closest("[inert]")).not.toBeNull();
+  view.unmount();
 });
