@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { MessageChannel } from "node:worker_threads";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
-import { withCommandProcessScope } from "../process/exec-spawn.js";
+import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
 import { runUtf8CommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { attachBrokerNativeResource } from "../process/spawn-broker/resource-client.js";
@@ -136,7 +136,8 @@ export async function withStateInspectionStaging<T>(
   });
   const client = attachBrokerNativeResource(lease.attachment, port1, () => {}, fail);
   const run = async (argv: string[], commandOptions: StateInspectionOptions) => {
-    const { signal, onOutputChunk, baseEnv, env, ...serializable } = commandOptions;
+    const { signal: inputSignal, onOutputChunk, baseEnv, env, ...serializable } = commandOptions;
+    const signal = resolveCommandProcessSignal(inputSignal);
     signal?.throwIfAborted();
     const id = ++sequence;
     const result = createDeferredCore<SpawnResult>();

@@ -656,10 +656,10 @@ recovers a private copy without replaying the source journal. Ordinary unknown-o
 and WAL reads do not take that recovery path.
 
 Temporary update and Doctor inspection roots share a surviving owner with their
-inspection commands. If the caller exits, that owner stops and joins the command
-process groups before removing staged files. Uncertain command cleanup retains
-the files until process settlement is confirmed; durable restore staging keeps
-its existing recovery lifetime.
+inspection commands. Caller exit or command-scope cancellation stops the commands.
+The owner joins their process groups before removing staged files. Uncertain
+cleanup retains the files until process settlement is confirmed; durable restore
+staging keeps its existing recovery lifetime.
 
 Private snapshot files remain temporary artifacts: the creator registers cleanup
 before copying and publishes the finished copy by rename. Private inspection

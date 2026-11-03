@@ -13,6 +13,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import {
   runStateInspectionCommand,
   withStateInspectionStaging,
+  withUpdateStateInspectionWork,
 } from "./update-candidate-state.process.js";
 
 it.for(["sqlite-generations", "database-generations"] as const)(
@@ -68,6 +69,45 @@ await runWithWorkerStartObserver(script => {
       expect(paths.map((file) => fs.readFileSync(file))).toEqual(original);
       expect(fs.readdirSync(path.join(cache, "openclaw"))).toEqual([]);
       expect(fs.readFileSync(events, "utf8").trim().split("\n")).toEqual(["start"]);
+    });
+  },
+);
+
+it.for([false, true])(
+  "cancels inspection commands with their enclosing work (explicit signal=%s)",
+  async (explicitSignal, { expect, onTestFinished }) => {
+    const fixture = createFixtureLifetime();
+    onTestFinished(() => fixture.cleanup());
+    await fixture.run(async () => {
+      const root = fixture.createTempDir("update-inspection-cancel-");
+      const cancellation = new AbortController();
+      const result = await withUpdateStateInspectionWork(
+        () =>
+          withStateInspectionStaging(root, () =>
+            runStateInspectionCommand(
+              [
+                process.execPath,
+                "-e",
+                "process.stdout.write('ready'); setInterval(() => {}, 1000)",
+              ],
+              {
+                signal: explicitSignal ? new AbortController().signal : undefined,
+                timeoutMs: 5_000,
+                killProcessTree: true,
+                onOutputChunk() {
+                  cancellation.abort();
+                },
+              },
+            ),
+          ),
+        cancellation.signal,
+      );
+      expect(result).toMatchObject({
+        stdout: "ready",
+        termination: "signal",
+        killIssuedByAbort: true,
+      });
+      expect(fs.readdirSync(root)).toEqual([]);
     });
   },
 );
