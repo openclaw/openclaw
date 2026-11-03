@@ -116,7 +116,13 @@ it.each([1, 2])("shows %i annotations before and after server admission", (count
     id: String(id),
     fileName: "selection-comment.txt",
     mimeType: "text/plain",
-    selectionAnnotation: { text: "Selected passage", comment: "Clarify", start: 0, end: 16 },
+    selectionAnnotation: {
+      text: "Selected passage",
+      comment: "Clarify",
+      sessionKey: "agent:main",
+      start: 0,
+      end: 16,
+    },
   }));
   const message = {
     role: "user",
