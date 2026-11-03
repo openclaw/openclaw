@@ -5,7 +5,12 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type {
+  RunCliAgentInternalParams,
+  RunEmbeddedAgentInternalParams,
+} from "../../agents/embedded-agent-runner/run/internal-params.js";
+import { resolveCronRuntimeContextForTools } from "../../cron/isolated-agent/run-delivery-trace.js";
+import { resolveCronSourceDeliveryPlan } from "../../cron/isolated-agent/source-delivery-plan.js";
 import * as cronInference from "../../cron/run-inference.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import type { CronAgentExecutionPhaseUpdate } from "../../cron/types.js";
@@ -199,6 +204,78 @@ describe("ordinary session event execution", () => {
       },
     });
   });
+
+  it.each(["embedded", "cli"] as const)(
+    "retains scheduled destination context in the %s turn without changing the task or system prefix",
+    async (runtime) => {
+      const followupRun = createFollowupRun();
+      const automation = createScheduledAutomation();
+      const resolvedDelivery = {
+        ok: true as const,
+        channel: "telegram",
+        to: "scheduled-chat",
+        accountId: "scheduled-account",
+        threadId: "42",
+      };
+      const sourceDelivery = resolveCronSourceDeliveryPlan({
+        deliveryPlan: { source: "delivery", mode: "announce", requested: true },
+        resolvedDelivery,
+      });
+      automation.resolveRuntimeContextForTools = (params) =>
+        resolveCronRuntimeContextForTools({
+          ...params,
+          deliveryRequested: true,
+          resolvedDelivery,
+          sourceDelivery,
+        });
+      followupRun.run.scheduledAutomation = automation;
+      followupRun.run.extraSystemPrompt = "Existing shared session instructions";
+      followupRun.run.extraSystemPromptStatic = "Stable shared session instructions";
+      const observed: { prompt: string; context: string; messageToolAvailable: boolean }[] = [];
+      let observedSystemPrompt: string | undefined;
+      let observedStaticSystemPrompt: string | undefined;
+      const inspectCandidate = async (
+        params: RunEmbeddedAgentInternalParams | RunCliAgentInternalParams,
+      ) => {
+        expect(params.finalizePromptForResolvedTools).toBeUndefined();
+        for (const messageToolAvailable of [true, false]) {
+          const fragments = params.resolveRuntimeContextForTools?.({ messageToolAvailable });
+          observed.push({
+            prompt: params.prompt,
+            context: fragments?.map((fragment) => fragment.text).join("\n\n") ?? "",
+            messageToolAvailable,
+          });
+        }
+        observedSystemPrompt = params.extraSystemPrompt;
+        return { payloads: [{ text: "done" }], meta: {} };
+      };
+      if (runtime === "cli") {
+        useCliFallback(followupRun);
+        state.runCliAgentMock.mockImplementationOnce((params: RunCliAgentInternalParams) => {
+          observedStaticSystemPrompt = params.extraSystemPromptStatic;
+          return inspectCandidate(params);
+        });
+      } else {
+        state.runEmbeddedAgentMock.mockImplementationOnce(inspectCandidate);
+      }
+      const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+      expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
+      expect(observed).toHaveLength(2);
+      for (const { prompt, context, messageToolAvailable } of observed) {
+        expect(prompt).toBe("fix it");
+        expect(context).toContain("delivered automatically");
+        if (messageToolAvailable) {
+          expect(context).toContain('"target":"scheduled-chat"');
+        } else {
+          expect(context).not.toContain("Message delivery destination metadata");
+        }
+      }
+      expect(observedSystemPrompt).toBe("Existing shared session instructions");
+      if (runtime === "cli") {
+        expect(observedStaticSystemPrompt).toBe("Stable shared session instructions");
+      }
+    },
+  );
 
   it.for([
     {

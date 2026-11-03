@@ -1,0 +1,5 @@
+# PR #174465: exact net regression growth against the integrated main.
+# Covers immutable Cron admission, final tool-surface delivery formatting,
+# CLI Runtime facts, and embedded/plugin handoffs including retained context.
+# Retains all cases/assertions; does not change the shared scalar or checker.
+635

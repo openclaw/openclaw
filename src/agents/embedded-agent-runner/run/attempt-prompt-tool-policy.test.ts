@@ -1,11 +1,59 @@
-import { expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import {
   applyResolvedToolPromptFinalizer,
   createPromptBuildToolPolicy,
+  prepareEmbeddedAttemptPromptDispatch,
 } from "./attempt-prompt-support.js";
+
+describe("prepareEmbeddedAttemptPromptDispatch", () => {
+  const preparedPrompt = { prompt: "prepared", transcriptPrompt: "prepared transcript" };
+  const runtimeContextFragments = [
+    { kind: "runtime-instruction" as const, text: "Existing context." },
+  ];
+
+  it.each([undefined, "", "caller transcript"])(
+    "consumes plugin callbacks once with transcript pin %j",
+    (transcriptPrompt) => {
+      const finalizePromptForResolvedTools = vi.fn(
+        ({ prompt }: { prompt: string }) => `${prompt}:finalized`,
+      );
+      const resolveRuntimeContextForTools = vi.fn(() => [
+        { kind: "runtime-instruction" as const, text: "Delivery context." },
+      ]);
+      const result = prepareEmbeddedAttemptPromptDispatch({
+        ownsTransport: true,
+        preparedPrompt,
+        params: {
+          transcriptPrompt,
+          runtimeContextFragments,
+          finalizePromptForResolvedTools,
+          resolveRuntimeContextForTools,
+        },
+      });
+      expect(result.prompt).toBe("prepared:finalized");
+      expect(result.transcriptPrompt).toBe(
+        transcriptPrompt === undefined ? "prepared" : "prepared transcript",
+      );
+      expect(result.finalizePromptForResolvedTools).toBeUndefined();
+      expect(result.resolveRuntimeContextForTools).toBeUndefined();
+      expect(finalizePromptForResolvedTools).toHaveBeenCalledExactlyOnceWith({
+        prompt: "prepared",
+        messageToolAvailable: false,
+      });
+      expect(resolveRuntimeContextForTools).toHaveBeenCalledExactlyOnceWith({
+        messageToolAvailable: false,
+      });
+      expect(result.runtimeContextFragments).toEqual([
+        { kind: "runtime-instruction", text: "Existing context." },
+        { kind: "runtime-instruction", text: "Delivery context." },
+      ]);
+      expect(runtimeContextFragments).toHaveLength(1);
+    },
+  );
+});
 
 const named = (...names: string[]) => names.map((name) => ({ name }));
 

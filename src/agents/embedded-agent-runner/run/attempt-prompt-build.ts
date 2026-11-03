@@ -30,6 +30,7 @@ import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
+import { normalizeToolPolicyName } from "../../tool-policy.js";
 import { log } from "../logger.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
@@ -58,6 +59,7 @@ import {
 } from "./attempt-prompt-helpers.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import {
   buildRuntimeContextCustomMessage,
   buildSystemUpdateMessage,
@@ -70,7 +72,7 @@ type OrphanRepairPlan = ReturnType<typeof resolveOrphanRepairPlan>;
 
 export async function prepareEmbeddedAttemptPromptAssembly(input: {
   attempt: Omit<
-    EmbeddedRunAttemptParams,
+    EmbeddedRunAttemptInternalParams,
     | "authStorage"
     | "authProfileStore"
     | "modelRegistry"
@@ -251,6 +253,11 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     activeToolNames: callableToolNames,
     finalize: attempt.finalizePromptForResolvedTools,
   });
+  const runtimeContextFragments = attempt.resolveRuntimeContextForTools?.({
+    messageToolAvailable: callableToolNames.some(
+      (toolName) => normalizeToolPolicyName(toolName) === "message",
+    ),
+  });
   let effectiveTranscriptPrompt = attempt.transcriptPrompt ?? promptBeforeResolvedToolFinalization;
   if (attempt.suppressNextUserMessagePersistence && !effectiveTranscriptPrompt.trim()) {
     effectiveTranscriptPrompt = promptBeforeResolvedToolFinalization;
@@ -341,6 +348,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     promptBuildPrependContext,
     promptBuildAppendContext,
     effectiveTranscriptPrompt,
+    ...(runtimeContextFragments ? { runtimeContextFragments } : {}),
     originContext,
     transcriptLeafId,
   };
@@ -369,6 +377,7 @@ type PromptAssemblyContext = {
   promptBuildAppendContext?: string;
   effectivePrompt: string;
   effectiveTranscriptPrompt: string;
+  runtimeContextFragments?: RuntimeContextFragment[];
   originContext?: ReturnType<typeof buildInterSessionPromptContext>;
 };
 
@@ -452,6 +461,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   const eventFragments: RuntimeContextFragment[] = [
     ...buildAgentInternalEventContext(attempt.internalEvents),
     ...(attempt.runtimeContextFragments ?? []),
+    ...(input.prompt.runtimeContextFragments ?? []),
     ...(input.systemPromptRuntimeContextFragments ?? []),
     ...(input.prompt.originContext
       ? escapedProjection

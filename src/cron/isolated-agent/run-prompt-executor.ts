@@ -56,7 +56,7 @@ import {
   createCronCandidateExecutionResolver,
   createCronRuntimeOverrideResolver,
 } from "./run-candidate-runtime.js";
-import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
+import { resolveCronRuntimeContextForTools } from "./run-delivery-trace.js";
 import {
   getCliSessionBinding,
   resolveBootstrapWarningSignaturesSeen,
@@ -127,15 +127,12 @@ export function createCronPromptExecutor(
       senderPolicyMode: "never",
     });
   }
-  const finalizePromptForResolvedTools = ({
-    prompt,
+  const resolveRuntimeContextForTools = ({
     messageToolAvailable,
   }: {
-    prompt: string;
     messageToolAvailable: boolean;
   }) =>
-    finalizeCronPromptForResolvedTools({
-      prompt,
+    resolveCronRuntimeContextForTools({
       messageToolAvailable,
       deliveryRequested: params.deliveryRequested,
       resolvedDelivery: params.resolvedDelivery,
@@ -446,8 +443,8 @@ export function createCronPromptExecutor(
             messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
+            resolveRuntimeContextForTools,
             inputProvenance: params.inputProvenance,
-            finalizePromptForResolvedTools,
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
             thinkingExplicit: candidateConfiguredThinkLevel !== undefined,
