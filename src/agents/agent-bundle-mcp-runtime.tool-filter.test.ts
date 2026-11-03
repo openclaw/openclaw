@@ -50,12 +50,11 @@ it("admits the same model tools on a node and the Gateway", async () => {
   onTestFinished(() => runtime.dispose());
   const node = await startNodeHostMcpManager({ docs: server });
   onTestFinished(() => node.close());
-  const expected = ["query", "raw_mixed", "raw_plain"];
+  const expected = new Set(["query", "raw_mixed", "raw_plain"]);
   const { tools: modelTools } = await materializeBundleMcpToolsForRun({ runtime });
-  expect(modelTools.map((tool) => getPluginToolMeta(tool)?.mcp?.toolName).toSorted()).toEqual(
-    expected,
-  );
-  expect(node.descriptors.map((tool) => tool.mcp?.tool).toSorted()).toEqual(expected);
+  const gatewayNames = modelTools.map((tool) => getPluginToolMeta(tool)?.mcp?.toolName);
+  expect(new Set(gatewayNames)).toEqual(expected);
+  expect(new Set(node.descriptors.map((tool) => tool.mcp?.tool))).toEqual(expected);
   for (const tool of ["raw_app", "raw_excluded", "resources_list-2"]) {
     await expect(node.callMcpTool({ server: "docs", tool })).rejects.toMatchObject({
       code: "MCP_TOOL_UNAVAILABLE",
