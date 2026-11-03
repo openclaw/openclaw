@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import "../../styles.css";
+import { finishElementAnimations } from "../../test-helpers/animations.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { resolveRenderedColors } from "../../test-helpers/rendered-colors.ts";
 import { ConnectMachineDialog } from "../new-session/connect-machine-dialog-view.tsx";
 import { ConnectMachineSetupState } from "../new-session/connect-machine-dialog.ts";
 import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
@@ -30,7 +32,7 @@ function showInstalled(skill: Parameters<typeof createSkill>[0], messages = {}) 
 
 async function settledDialog() {
   const result = await getRenderedModalDialog(container!);
-  await Promise.all(result.dialog.getAnimations().map((animation) => animation.finished));
+  finishElementAnimations(result.dialog);
   return result;
 }
 
@@ -59,12 +61,16 @@ describe.runIf(browserMode)("skill reader shell", () => {
       const close = panel.querySelector<HTMLButtonElement>("button")!;
       const button = getComputedStyle(close);
       const icon = getComputedStyle(close.querySelector("svg")!);
-      return {
+      const colors = resolveRenderedColors({
         surface: style.backgroundColor,
+        button: button.backgroundColor,
+      });
+      return {
+        surface: colors.surface,
         image: style.backgroundImage,
         border: style.border,
         radius: style.borderRadius,
-        button: [button.background, button.border, button.boxShadow],
+        button: [colors.button, button.backgroundImage, button.border, button.boxShadow],
         icon: [icon.width, icon.height, icon.strokeWidth],
       };
     };
@@ -111,6 +117,45 @@ describe.runIf(browserMode)("skill reader shell", () => {
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => dialog.open).toBe(false);
   });
+  it.each(["success", "error"] as const)(
+    "keeps %s install feedback scrollable above reachable actions in landscape",
+    async (kind) => {
+      const { page, userEvent } = await import("vitest/browser");
+      await page.viewport(844, 390);
+      createContainer();
+      renderSkills(
+        createProps({
+          clawhubDetailRef: "@fixture/calendar",
+          clawhubDetail: {
+            skill: { slug: "calendar", displayName: "Calendar", createdAt: 1, updatedAt: 2 },
+          },
+          clawhubInstallMessage: {
+            ref: "@fixture/calendar",
+            kind,
+            text: "REVIEW RECOMMENDED — inspect this release before use.\n".repeat(24),
+          },
+        }),
+        container!,
+      );
+      const { dialog } = await settledDialog();
+      const panel = query(".skill-reader-dialog");
+      const notice = query(".skill-reader-dialog__notice", panel);
+      const actions = query(".skill-reader-dialog__actions", panel);
+      const button = actions.querySelector<HTMLButtonElement>("button")!;
+      expect(notice.getAttribute("role")).toBe(kind === "error" ? "alert" : "status");
+      expect(button.disabled).toBe(kind === "success");
+      const bounds = actions.getBoundingClientRect();
+      expect(bounds.bottom).toBeLessThanOrEqual(panel.getBoundingClientRect().bottom + 1);
+      expect(bounds.bottom).toBeLessThanOrEqual(dialog.getBoundingClientRect().bottom + 1);
+      expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+      expect(notice.scrollHeight).toBeGreaterThan(notice.clientHeight);
+      notice.focus();
+      await userEvent.keyboard("{End}");
+      await expect.poll(() => notice.scrollTop).toBeGreaterThan(0);
+      expect(actions.getBoundingClientRect().top).toBeCloseTo(bounds.top, 2);
+      expect(button.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom);
+    },
+  );
   it.each([320, 1440])(
     "keeps installed-skill completion actions below the scroller at %ipx",
     async (width) => {

@@ -49,7 +49,6 @@ import {
   resolveReplyScheduledToolPolicy,
   resolveRunModelHasVision,
 } from "./agent-runner-run-params.js";
-import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
@@ -309,6 +308,17 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   };
 }
 
+/** Share the executed turn's conversation facts with preflight consumers. */
+export function buildEmbeddedRunContext(
+  params: Parameters<typeof buildEmbeddedContextFromTemplate>[0],
+) {
+  return {
+    ...buildEmbeddedContextFromTemplate(params),
+    ...buildTemplateSenderContext(params.sessionCtx),
+    ...buildReplyRunStateParams(params.run),
+  };
+}
+
 /** Reuse the candidate's channel and sender projection for early model routing. */
 export function buildModelResolveContext(
   params: Parameters<typeof buildEmbeddedContextFromTemplate>[0] & {
@@ -316,9 +326,7 @@ export function buildModelResolveContext(
   },
 ) {
   const context = {
-    ...buildEmbeddedContextFromTemplate(params),
-    ...buildTemplateSenderContext(params.sessionCtx),
-    ...buildReplyRunStateParams(params.run),
+    ...buildEmbeddedRunContext(params),
     trigger: params.trigger,
   };
   return {
@@ -328,43 +336,15 @@ export function buildModelResolveContext(
   };
 }
 
-const MESSAGE_ACTION_SOURCE = Symbol.for("openclaw.replyMessageActionSource");
-type MessageActionSourceOwner = object & {
-  [MESSAGE_ACTION_SOURCE]?: InternalGetReplyOptions["prepareMessageActionTurnCapability"];
-};
-
-/** Transcript successors copy their source; unrelated queued input never borrows runner options. */
-export function bindReplyMessageActionSource(
-  run: MessageActionSourceOwner,
-  source: InternalGetReplyOptions["prepareMessageActionTurnCapability"],
-): void {
-  if (source) {
-    run[MESSAGE_ACTION_SOURCE] = source;
-  }
-}
-
 /** Bind either runtime to the same trusted source turn and requester. */
 export function mintReplyMessageActionTurnCapability(
   turn: Pick<AgentTurnParams, "followupRun" | "sessionCtx" | "opts" | "runtimePolicySessionKey">,
   runId: string,
 ): string | undefined {
-  // An event's captured delivery route is not a new trusted channel turn.
-  if (turn.followupRun.run.internalEventExecution) {
+  // An event's captured delivery route is not a new trusted channel turn, including
+  // for successors detached from the event occurrence.
+  if (turn.followupRun.run.internalEventExecution || turn.followupRun.run.sessionEventOrigin) {
     return undefined;
-  }
-  const run: MessageActionSourceOwner = turn.followupRun.run;
-  const prepareSourceCapability = run[MESSAGE_ACTION_SOURCE];
-  if (prepareSourceCapability) {
-    const { agentId, sessionId, sessionKey } = turn.followupRun.run;
-    return agentId && sessionKey
-      ? prepareSourceCapability({
-          agentId,
-          sessionId,
-          sessionKey,
-          runId,
-          runtimePolicySessionKey: turn.runtimePolicySessionKey,
-        })
-      : undefined;
   }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
   const dashboardAdmission = turn.opts?.dashboardReadAdmission;
@@ -458,8 +438,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
   allowTransientCooldownProbe?: boolean;
 }) {
   const authProfile = resolveRunAuthProfile(params.run, params.provider);
-  const embeddedContext = buildEmbeddedContextFromTemplate(params);
-  const senderContext = buildTemplateSenderContext(params.sessionCtx);
+  const embeddedContext = buildEmbeddedRunContext(params);
   const config = params.run.config;
   const automation = params.run.scheduledAutomation;
   automation?.assertCurrent();
@@ -504,8 +483,6 @@ export async function buildEmbeddedRunExecutionParams(params: {
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {
     ...embeddedContext,
-    ...senderContext,
-    ...buildReplyRunStateParams(params.run),
     providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
     permissionMode: params.run.permissionMode,
     sessionRoot: params.run.sessionRoot,

@@ -49,6 +49,8 @@
   --font-body: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
+  --link: var(--accent);
+  --link-on-tint: var(--link);
 }
 
 :root[data-theme="rose-light"] {
@@ -96,4 +98,6 @@
   --font-body: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
+  --link: #8f435a;
+  --link-on-tint: #843a51;
 }

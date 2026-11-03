@@ -154,24 +154,30 @@ describe("telegram ingress spool ordering", () => {
   it("fences a pending poll vote to its topic without blocking unrelated admission", async () => {
     await withTempState(async (stateDir) => {
       const entry = pollEntry("poll-pending-topic");
-      const registration = beginTelegramPollRegistration({ accountId: "acct", entry });
       const { dispatchOrder, queue, monitor } = createMonitor(stateDir);
+      const registration = beginTelegramPollRegistration({ accountId: "acct", entry });
 
-      monitor.start();
-      await monitor.waitForIdle();
-      const admissions = await Promise.all([
-        monitor.admit(vote(entry.pollId)),
-        monitor.admit(message(10, 100)),
-        monitor.admit(message(11, 99)),
-      ]);
-      expect(admissions.map(({ kind }) => kind)).toEqual(["durable", "durable", "durable"]);
-      await vi.waitFor(() => expect(dispatchOrder).toEqual([10]));
-      expect(await queue.listClaims()).toMatchObject([{ laneKey: "telegram:-100123:topic:99" }]);
+      try {
+        monitor.start();
+        await monitor.waitForIdle();
+        const admissions = await Promise.all([
+          monitor.admit(vote(entry.pollId)),
+          monitor.admit(message(10, 100)),
+          monitor.admit(message(11, 99)),
+        ]);
+        expect(admissions.map(({ kind }) => kind)).toEqual(["durable", "durable", "durable"]);
+        await vi.waitFor(() => expect(dispatchOrder).toEqual([10]));
+        expect(await queue.listClaims()).toMatchObject([{ laneKey: "telegram:-100123:topic:99" }]);
 
-      registration.complete(entry);
-      await monitor.waitForIdle();
-      expect(dispatchOrder.indexOf(9)).toBeLessThan(dispatchOrder.indexOf(11));
-      await monitor.stop();
+        registration.complete(entry);
+        await monitor.waitForIdle();
+        expect(dispatchOrder).toContain(9);
+        expect(dispatchOrder.indexOf(9)).toBeLessThan(dispatchOrder.indexOf(11));
+      } finally {
+        // Release pending delivery before waiting for the monitor to stop.
+        registration.complete(null);
+        await monitor.stop();
+      }
     });
   });
 });

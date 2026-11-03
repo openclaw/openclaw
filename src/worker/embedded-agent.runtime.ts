@@ -332,7 +332,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           arch: os.arch(),
           node: process.version,
           shell: detectRuntimeShell() ?? path.basename(getShellConfig().shell),
-          repoRoot: resolveSystemPromptRepoRoot({ workspaceDir: params.cwd, cwd: params.cwd }),
+          repoRoot: await resolveSystemPromptRepoRoot({
+            workspaceDir: params.cwd,
+            cwd: params.cwd,
+          }),
         });
         return await createAgentSession({
           systemPrompt: resources?.rewriteReferences(systemPrompt) ?? systemPrompt,

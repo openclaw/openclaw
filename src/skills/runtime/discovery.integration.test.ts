@@ -1,10 +1,11 @@
-import nativeFs, { writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as directoryWatch from "../../infra/directory-watch-host.js";
 import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
@@ -333,7 +334,7 @@ it("rediscovers replaced workspaces and roots that disappear and return", async 
   await write("Original");
   expect(await descriptions(request(), false)).toEqual(["Original"]);
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-  const watch = vi.spyOn(nativeFs, "watch");
+  const watch = vi.spyOn(directoryWatch, "watchDirectory");
   // Register the Windows observation on an already prepared source, so this
   // exercises its handle boundary without changing worker launch semantics.
   Object.defineProperty(process, "platform", { ...platform, value: "win32" });
@@ -353,6 +354,41 @@ it("rediscovers replaced workspaces and roots that disappear and return", async 
     expect(await descriptions()).toEqual(description ? [description] : []);
   }
 });
+
+it.each([false, true])(
+  "narrows Windows personal skill watches (initially missing=%s)",
+  async (missing) => {
+    const home = temporary.make("skills-personal-");
+    const skills = path.join(home, ".agents", "skills");
+    if (!missing) {
+      await write("Personal", home, ".agents/skills/guide");
+    }
+    const input = request();
+    input.sourcePlan.roots = [{ dir: skills, source: "openclaw-workspace", tier: "workspace" }];
+    expect(await descriptions(input, false)).toEqual(missing ? [] : ["Personal"]);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const watch = vi.spyOn(directoryWatch, "watchDirectory");
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    try {
+      await descriptions(input);
+      const opened = watch.mock.calls.filter(
+        (_, index) => watch.mock.results[index]?.type === "return",
+      );
+      expect(opened.map(([directory, , recursive]) => [directory, recursive])).toEqual([
+        [missing ? home : skills, !missing],
+      ]);
+      if (missing) {
+        await write("Created later", home, ".agents/skills/guide");
+        opened[0]![1]("rename", ".agents");
+        await completePassiveScan();
+        expect(await descriptions(input)).toEqual(["Created later"]);
+        expect(watch.mock.calls.at(-1)?.[0]).toBe(skills);
+      }
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  },
+);
 
 it("refreshes supporting resources without publishing an unchanged catalog", async () => {
   await write("Stable catalog");

@@ -42,7 +42,7 @@ function createInteraction(
 ): BaseComponentInteraction {
   return {
     userId: "123",
-    reply: vi.fn(),
+    reply: vi.fn(async () => undefined),
     acknowledge: vi.fn(),
     message: { id: "message-1" },
     fetchReply: vi.fn(async () => ({

@@ -1,18 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
-import { listNativeExecApprovalClientLabels } from "./exec-approval-surface.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  describeNativeExecApprovalClientSetup,
+  listNativeExecApprovalClientLabels,
+  supportsNativeExecApprovalClient,
+} from "./exec-approval-surface.js";
 
 // mock-isolation: reply formatting uses fixed channel capabilities without loading plugins.
 vi.mock("./exec-approval-surface.js", () => ({
-  describeNativeExecApprovalClientSetup: vi.fn(
-    ({ channel, accountId }: { channel?: string; accountId?: string }) =>
-      channel === "matrix"
-        ? `Configure \`channels.matrix.accounts.${accountId}.dm.allowFrom\`.`
-        : null,
-  ),
-  listNativeExecApprovalClientLabels: vi.fn(() => ["Discord", "Matrix", "Slack", "Telegram"]),
-  supportsNativeExecApprovalClient: vi.fn((channel?: string | null) =>
-    ["discord", "matrix", "slack", "telegram"].includes((channel ?? "").trim().toLowerCase()),
-  ),
+  describeNativeExecApprovalClientSetup: vi.fn<typeof describeNativeExecApprovalClientSetup>(),
+  listNativeExecApprovalClientLabels: vi.fn<typeof listNativeExecApprovalClientLabels>(),
+  supportsNativeExecApprovalClient: vi.fn<typeof supportsNativeExecApprovalClient>(),
 }));
 
 import {
@@ -50,11 +47,23 @@ function approvalButtons(approvalId: string, decisions: string[]) {
 }
 
 describe("exec approval reply helpers", () => {
+  beforeEach(() => {
+    vi.mocked(describeNativeExecApprovalClientSetup).mockReset().mockReturnValue(null);
+    vi.mocked(listNativeExecApprovalClientLabels)
+      .mockReset()
+      .mockReturnValue(["Discord", "Matrix", "Slack", "Telegram"]);
+    vi.mocked(supportsNativeExecApprovalClient).mockReset().mockReturnValue(true);
+  });
+
   it("only suggests exec-capable recovery surfaces without native clients", () => {
     vi.mocked(listNativeExecApprovalClientLabels).mockReturnValueOnce([]);
     const text = buildExecApprovalUnavailableReplyPayload({ reason: "no-approval-route" }).text;
 
     expect(text).toContain("Approve it from the Web UI");
+    expect(listNativeExecApprovalClientLabels).toHaveBeenCalledExactlyOnceWith({
+      host: undefined,
+      nodeId: undefined,
+    });
     expect(text).not.toMatch(/terminal UI|\bTUI\b/i);
   });
 
@@ -74,19 +83,33 @@ describe("exec approval reply helpers", () => {
     expect(text).not.toContain("`openclaw dashboard --no-open` or `openclaw approvals get");
     expect(text).not.toContain("Open the approval inbox with");
     expect(text).not.toContain("exec-approvals list");
+    expect(listNativeExecApprovalClientLabels).toHaveBeenCalledExactlyOnceWith({
+      host: "node",
+      nodeId: "mac-1",
+    });
     expect(text).not.toMatch(/terminal UI|\bTUI\b/i);
   });
 
   it("uses account-scoped disabled setup guidance for the initiating channel", () => {
+    vi.mocked(describeNativeExecApprovalClientSetup).mockReturnValueOnce(
+      "Configure `channels.matrix.accounts.work.dm.allowFrom`.",
+    );
     const text = buildExecApprovalUnavailableReplyPayload({
       reason: "initiating-platform-disabled",
-      channel: "matrix",
+      channel: " Matrix ",
       channelLabel: "Matrix",
       accountId: "work",
     }).text;
 
     expect(text).toContain("`channels.matrix.accounts.work.dm.allowFrom`");
     expect(text).not.toContain("`channels.matrix.dm.allowFrom`");
+    expect(supportsNativeExecApprovalClient).toHaveBeenCalledExactlyOnceWith("matrix");
+    expect(describeNativeExecApprovalClientSetup).toHaveBeenCalledExactlyOnceWith({
+      channel: "matrix",
+      channelLabel: "Matrix",
+      accountId: "work",
+    });
+    expect(listNativeExecApprovalClientLabels).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -225,6 +248,9 @@ describe("exec approval reply helpers", () => {
         execApprovalUnavailable: { reason: "no-approval-route" },
       },
     });
+    expect(supportsNativeExecApprovalClient).not.toHaveBeenCalled();
+    expect(describeNativeExecApprovalClientSetup).not.toHaveBeenCalled();
+    expect(listNativeExecApprovalClientLabels).not.toHaveBeenCalled();
   });
 
   it.each([

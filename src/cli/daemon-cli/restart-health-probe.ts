@@ -461,17 +461,20 @@ export async function resolveGatewayRestartProbeContext(
   env: NodeJS.ProcessEnv | undefined,
   explicitAuth?: GatewayRestartProbeAuth,
   signal?: AbortSignal,
+  config?: OpenClawConfig,
 ): Promise<GatewayRestartProbeContext> {
   signal?.throwIfAborted();
   const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
-  const cfg = await createConfigIO({
-    env: mergedEnv,
-    observe: false,
-    pluginValidation: "skip",
-    suppressFutureVersionWarning: true,
-  })
-    .readBestEffortConfig()
-    .catch((): OpenClawConfig => ({}));
+  const cfg =
+    config ??
+    (await createConfigIO({
+      env: mergedEnv,
+      observe: false,
+      pluginValidation: "skip",
+      suppressFutureVersionWarning: true,
+    })
+      .readBestEffortConfig()
+      .catch((): OpenClawConfig => ({})));
   signal?.throwIfAborted();
   const resolved = await resolveGatewayProbeAuthSafeWithSecretInputs({
     cfg,
@@ -489,7 +492,10 @@ export async function inspectGatewayPortHealth(params: {
   config?: OpenClawConfig;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   expectedListenerPid?: number;
+  /** Command-owned cancellation for the in-flight listener probe. */
+  signal?: AbortSignal;
 }): Promise<GatewayPortHealthSnapshot> {
+  params.signal?.throwIfAborted();
   let portUsage: PortUsage;
   try {
     portUsage = await inspectPortUsage(params.port, {
@@ -505,6 +511,7 @@ export async function inspectGatewayPortHealth(params: {
     };
   }
 
+  params.signal?.throwIfAborted();
   if (portUsage.status !== "busy") {
     return { portUsage, healthy: false };
   }
@@ -519,6 +526,7 @@ export async function inspectGatewayPortHealth(params: {
     ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
     env: process.env,
     allowDeviceIdentityRequired: listenerOwnershipVerified,
+    signal: params.signal,
   });
   return { portUsage, healthy: reachable, ...(probeError ? { probeError } : {}) };
 }

@@ -13,17 +13,17 @@
 
 | Database | Object        | Total | Translated | Reported |
 | -------- | ------------- | ----: | ---------: | -------: |
-| state    | table         |   135 |        135 |        0 |
-| state    | column        |  1413 |       1411 |        2 |
-| state    | index         |   290 |        290 |        0 |
+| state    | table         |   136 |        136 |        0 |
+| state    | column        |  1419 |       1417 |        2 |
+| state    | index         |   291 |        291 |        0 |
 | state    | foreignKey    |    33 |         33 |        0 |
 | state    | check         |   299 |        299 |        0 |
 | state    | trigger       |     0 |          0 |        0 |
 | state    | virtualTable  |     0 |          0 |        0 |
 | state    | internalTable |     1 |          0 |        1 |
-| agent    | table         |    46 |         46 |        0 |
-| agent    | column        |   430 |        394 |       36 |
-| agent    | index         |   103 |         99 |        4 |
+| agent    | table         |    47 |         47 |        0 |
+| agent    | column        |   438 |        402 |       36 |
+| agent    | index         |   107 |        103 |        4 |
 | agent    | foreignKey    |    29 |         29 |        0 |
 | agent    | check         |    73 |         73 |        0 |
 | agent    | trigger       |     8 |          4 |        4 |

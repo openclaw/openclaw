@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { setImmediate } from "node:timers/promises";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveAgentEntry } from "../agents/agent-scope-config.js";
 import { makeModel } from "../agents/embedded-agent-runner/model.test-harness.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -78,6 +78,32 @@ beforeEach(() => {
   mocks.catalog.mockReset().mockReturnValue([]);
   mocks.probe.mockReset().mockResolvedValue({ ok: true, latencyMs: 1, text: "OK", auth: {} });
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+it.each([-610_000, 610_000])(
+  "preserves the probe budget and aborts at the deadline after a %ims clock step",
+  async (jump) => {
+    vi.useFakeTimers();
+    mocks.hasAuth.mockImplementationOnce(() => {
+      vi.advanceTimersByTime(1_000);
+      vi.setSystemTime(Date.now() + jump);
+      return true;
+    });
+    mocks.probe.mockImplementationOnce(async ({ timeoutMs, signal }) => {
+      expect(timeoutMs).toBe(9_000);
+      await vi.advanceTimersByTimeAsync(8_999);
+      expect(signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal.aborted).toBe(true);
+      return { ok: false, status: "timeout", error: "aborted" };
+    });
+    expect(await select()).toMatchObject({ ok: false, reason: expect.stringContaining("budget") });
+    expect(mocks.probe).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([1, 3])(
   "preserves auth ownership while falling back after %s owner failures",

@@ -150,6 +150,11 @@ actor GatewayEndpointStore {
                 self.resolveLocalConfigAuthString($0, env: env, serviceEnv: launchdSnapshot?.environment ?? [:])
             }
         }
+        // Local clients must match Gateway startup's config-first credential precedence.
+        // An inherited app environment must not replace the configured local secret.
+        if !isRemote, let configured {
+            return configured
+        }
         if let override {
             // Password overrides always warn; token overrides warn only when different.
             if let configured, kind == .password || configured != override {
@@ -1032,6 +1037,7 @@ extension GatewayEndpointStore {
         for config: GatewayConnection.Config,
         mode: AppState.ConnectionMode,
         localBasePath: String? = nil,
+        remoteBasePath: String? = nil,
         authToken: String? = nil) throws -> URL
     {
         guard var components = URLComponents(url: config.url, resolvingAgainstBaseURL: false) else {
@@ -1055,7 +1061,8 @@ extension GatewayEndpointStore {
             let fallbackPath = localBasePath ?? self.localControlUiBasePath()
             components.path = self.normalizeDashboardPath(fallbackPath)
         } else {
-            components.path = "/"
+            // Tunnels and bare host:port URLs carry no mount; the connected Gateway advertises it.
+            components.path = self.normalizeDashboardPath(remoteBasePath)
         }
 
         let tokenCandidate = authToken ?? config.token
