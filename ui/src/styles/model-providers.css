@@ -813,7 +813,7 @@
     overflow-wrap: anywhere;
   }
 
-  /* The trend draws nothing yet: its stroke token is undefined, so it would only leave a gap. */
+  /* Phones have no room for the trend beside its totals; the totals keep their single line. */
   .provider-row__detail .provider-usage__trend .oc-sparkline {
     display: none;
   }
