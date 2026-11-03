@@ -1375,24 +1375,27 @@ button.chat-reply-attribution__target:disabled {
     justify-content: flex-end;
   }
 
+  /* Icons keep one compact rhythm; reaction chips share the same gap. */
+  :is(.chat-group-footer-actions, .chat-message-actions-row) {
+    gap: 8px;
+  }
+
   :is(.chat-group-footer-actions, .chat-message-actions-row)
     :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind) {
     position: relative;
-    margin-inline: 10px;
   }
 
-  /* This transparent extension belongs to the native button. It is anchored to
-     the button's bottom edge and grows up over the group's own message, never
-     into the turn gap; inline margins keep neighboring targets apart. It
-     inherits the button’s pointer policy during disclosure. */
+  /* This transparent extension belongs to the native button. It spans half of
+     each neighboring gap and grows up over the group's own message, never into
+     the turn gap, so spacing stays visual-only. It inherits the button's
+     pointer policy during disclosure. */
   :is(.chat-group-footer-actions, .chat-message-actions-row)
     :is(.chat-copy-btn, .chat-reply-btn, .chat-read-aloud-btn, .chat-group-rewind)::before {
     content: "";
     position: absolute;
     inset-block-end: 0;
-    inset-inline-start: -10px;
-    width: var(--chat-touch-target);
-    height: var(--chat-touch-target);
+    inset-inline: -4px;
+    height: 36px;
     pointer-events: inherit;
   }
 
