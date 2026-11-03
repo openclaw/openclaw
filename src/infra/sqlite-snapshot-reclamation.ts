@@ -22,15 +22,15 @@ export async function reclaimAbandonedSqliteSnapshots(
   }
   // Avoid a native worker when the installation has never needed a private copy.
   const entries = await fs.promises.opendir(root);
-  let count = 0;
   for await (const entry of entries) {
-    if (signal.aborted || ++count > 256) {
+    if (signal.aborted) {
       return empty;
     }
     if (entry.isDirectory() && entry.name.startsWith(SQLITE_SNAPSHOT_PREFIX)) {
       const { runSqliteReadOnlyWorkerOnce } = await import("./sqlite-readonly-worker.js");
       return await runSqliteReadOnlyWorkerOnce(root, { mode: "staging-sweep", signal });
     }
+    await setImmediate();
   }
   return empty;
 }
@@ -50,11 +50,9 @@ export async function reclaimSqliteSnapshotsInProcess(
   const result = { removed: 0, bytes: 0, skipped: 0 };
   const cutoff = Date.now() - GRACE_MS;
   const entries = await fs.promises.opendir(root);
-  let count = 0;
   for await (const entry of entries) {
-    if (++count > 256) {
-      break;
-    }
+    // A fixed prefix budget would revisit retained entries forever and starve later copies.
+    await setImmediate();
     if (!entry.isDirectory() || !entry.name.startsWith(SQLITE_SNAPSHOT_PREFIX)) {
       continue;
     }

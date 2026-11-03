@@ -213,6 +213,11 @@ try {
       }
       child.kill("SIGKILL");
       await closed;
+      // SIGSTOP delivery can lag the observed write; count the final stopped payload.
+      ready.copiedBytes = fs.statSync(ready.location).size;
+      if (ready.copiedBytes >= fs.statSync(source).size) {
+        throw new Error("Creator completed the copy before SIGKILL");
+      }
       // Model the next eligible sweep after the creator and failed probes stop changing metadata.
       age(ready.parent);
       const journalLeft = fs.existsSync(

@@ -678,8 +678,9 @@ Primary databases and backups are never removed by this owner.
 New snapshots use an installation-specific namespace under the cache root,
 derived from the resolved state-directory path. Delayed Gateway maintenance
 reclaims abandoned snapshots there, starting after the startup reconnect window
-and then hourly. Each pass examines at most 256 entries and requires 15 minutes
-without payload activity plus exclusive ownership of every nested SQLite token.
+and then hourly. The streaming scan yields between entries, so retained copies
+do not starve later entries. Retirement requires 15 minutes without payload
+activity plus exclusive ownership of every nested SQLite token.
 Live readers and creators prevent deletion even when the files are old. A crash
 or `SIGKILL` releases native locks, allowing a later pass to recover a leftover
 journal and retire the incomplete copy. Maintenance reports removed bytes and

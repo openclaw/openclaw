@@ -40,6 +40,20 @@ it("reclaims the installation's abandoned snapshots after startup reconnects", a
       const old = new Date(Date.now() - 60 * 60_000);
       fs.utimesSync(payload, old, old);
       fs.utimesSync(orphan.directory, old, old);
+      const orphans = [orphan.directory];
+      const unknown: string[] = [];
+      // More eligible copies than the former scan limit proves progress without
+      // depending on directory enumeration order; missing tokens must stay put.
+      const prefix = path.join(root, "openclaw-sqlite-readonly-v2-");
+      for (let index = 0; index < 256; index++) {
+        const copy = fs.mkdtempSync(prefix);
+        fs.cpSync(orphan.directory, copy, { recursive: true, preserveTimestamps: true });
+        fs.utimesSync(copy, old, old);
+        orphans.push(copy);
+        const missing = fs.mkdtempSync(prefix);
+        fs.utimesSync(missing, old, old);
+        unknown.push(missing);
+      }
       const otherRoot = resolvePrivateSqliteSnapshotStagingRoot({
         ...process.env,
         OPENCLAW_STATE_DIR: path.join(home, "other-state"),
@@ -67,7 +81,10 @@ it("reclaims the installation's abandoned snapshots after startup reconnects", a
         await clock.advanceBy(120_000);
         expect(fs.existsSync(payload)).toBe(true);
         await clock.advanceBy(10_000);
-        expect(fs.existsSync(orphan.directory), errors.join("\n")).toBe(false);
+        for (const directory of orphans) {
+          expect(fs.existsSync(directory), errors.join("\n")).toBe(false);
+        }
+        expect(unknown.every((directory) => fs.existsSync(directory))).toBe(true);
         expect(fs.existsSync(other.directory)).toBe(true);
       } finally {
         await timers.stopPeriodicTasks();
