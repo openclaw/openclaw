@@ -114,3 +114,67 @@ test("stream reset code is visible to the reader", async () => {
     await server.close();
   }
 });
+
+// Fails instead of hanging when an operation that must not wait on the peer does wait.
+function within(promise, ms, what) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} still pending after ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// Opens a stream from the client and returns both ends once the server has accepted it.
+async function openedStream(conn, sconn) {
+  const peerStream = sconn.acceptBi();
+  const local = await conn.openBi();
+  await local.send.write(Buffer.from("x"));
+  const peer = await peerStream;
+  assert.equal((await peer.recv.read(1)).toString(), "x");
+  return { local, peer };
+}
+
+// Proves the connection still carries a fresh stream end to end.
+async function assertConnectionUsable(conn, sconn) {
+  const { local, peer } = await openedStream(conn, sconn);
+  await peer.send.write(Buffer.from("ok"));
+  await peer.send.finish();
+  assert.equal((await within(local.recv.read(16), 2000, "read")).toString(), "ok");
+}
+
+test("stop interrupts a read the peer never answers", async () => {
+  const { server, client, conn, sconn } = await directPair();
+  try {
+    const { local, peer } = await openedStream(conn, sconn);
+    // The server keeps its sending half open and silent, so this read cannot complete.
+    const pending = assert.rejects(local.recv.read(16), /stopped/);
+    await within(local.recv.stop(7), 2000, "stop");
+    await pending;
+    await assert.rejects(within(peer.send.write(Buffer.from("late")), 2000, "write"), /7/);
+    await assertConnectionUsable(conn, sconn);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("reset abandons a write the peer never reads", async () => {
+  const { server, client, conn, sconn } = await directPair();
+  try {
+    const { local, peer } = await openedStream(conn, sconn);
+    // Far beyond the stream's flow-control window while the server reads nothing.
+    const pending = assert.rejects(local.send.write(Buffer.alloc(64 << 20)), /reset/);
+    await within(local.send.reset(5), 2000, "reset");
+    await pending;
+    await assert.rejects(within(drain(peer.recv), 2000, "peer read"), /5/);
+    await assertConnectionUsable(conn, sconn);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+// Reads until end of stream or error.
+async function drain(recv) {
+  while ((await recv.read(1 << 20)) !== null) {}
+}

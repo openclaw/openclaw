@@ -69,7 +69,10 @@ export declare class RecvStream {
    * Rejects if the peer reset the stream (message contains the reset code).
    */
   read(max: number): Promise<Buffer | null>
-  /** Asks the peer to stop sending, with an application error code. */
+  /**
+   * Asks the peer to stop sending, with an application error code. A pending read rejects
+   * first, so STOP_SENDING is not held up by a peer that stays silent.
+   */
   stop(code: number): Promise<void>
 }
 
@@ -79,7 +82,10 @@ export declare class SendStream {
   write(data: Uint8Array): Promise<void>
   /** Ends the send side cleanly (FIN). */
   finish(): Promise<void>
-  /** Abandons the send side with an application error code. */
+  /**
+   * Abandons the send side with an application error code. A pending write rejects first, so
+   * the reset is not held up by a peer that withholds flow-control credit.
+   */
   reset(code: number): Promise<void>
 }
 
