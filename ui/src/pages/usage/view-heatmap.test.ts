@@ -24,7 +24,7 @@ describe("UsageHeatmap", () => {
     (start) => {
       const container = mountHeatmap([dailyEntry("2026-07-09", 10)], start, "2026-07-09");
       expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
-        "Token Activity",
+        "Token activity",
       );
       const cells = [...container.querySelectorAll(".usage-heatmap__cell")];
       expect(cells).toHaveLength(364);

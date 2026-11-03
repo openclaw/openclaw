@@ -1417,8 +1417,8 @@ const startupEnglish = {
       approx: "≈ {value}",
     },
     loading: {
-      title: "Usage Overview",
-      badge: "Loading",
+      title: "Usage overview",
+      badge: "Loading usage…",
     },
     metrics: {
       tokens: "Tokens",
@@ -1427,8 +1427,8 @@ const startupEnglish = {
       sessions: "sessions",
     },
     heatmap: {
-      title: "Token Activity",
-      subtitle: "Daily token intensity for the selected range, up to one year.",
+      title: "Token activity",
+      subtitle: "Daily token intensity in this range, up to one year.",
       cellTokens: "{tokens} tokens",
       less: "Less",
       more: "More",
@@ -1446,14 +1446,14 @@ const startupEnglish = {
     breakdown: {
       output: "Output",
       input: "Input",
-      cacheWrite: "Cache Write",
-      cacheRead: "Cache Read",
+      cacheWrite: "Cache write",
+      cacheRead: "Cache read",
       total: "Total",
-      tokensByType: "Tokens by Type",
-      costByType: "Cost by Type",
+      tokensByType: "Tokens by type",
+      costByType: "Cost by type",
     },
     overview: {
-      title: "Usage Overview",
+      title: "Usage overview",
     },
     sessions: {},
     // Sidebar collapse stays eager; Usage registers the remaining detail copy.
