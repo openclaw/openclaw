@@ -152,11 +152,12 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
 
   /** A real form edit, so the page records it through its own onConfigPatch. */
   async function choose(page: HTMLElement, group: string, label: string) {
-    const option = Array.from(
-      page.querySelectorAll<HTMLLabelElement>(`[aria-label="${group}"] label`),
-    ).find((entry) => entry.textContent?.trim() === label);
+    const select = page.querySelector<HTMLSelectElement>(`select[aria-label="${group}"]`);
+    expect(select, `Missing ${group} select`).not.toBeNull();
+    const option = Array.from(select!.options).find((entry) => entry.label === label);
     expect(option, `Missing ${group} option ${label}`).toBeDefined();
-    option!.querySelector("input")!.click();
+    select!.value = option!.value;
+    select!.dispatchEvent(new Event("change", { bubbles: true }));
     await settle();
   }
 
