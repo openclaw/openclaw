@@ -80,3 +80,39 @@ it("keeps provider identification through probe and access changes", () => {
     { name: "Add account: OpenAI", text: "Add account", disabled: true },
   ]);
 });
+
+it("puts Replace on a key's row only when it is the provider's only key", () => {
+  const savedKey = (profileId: string) =>
+    ({ profileId, type: "api_key", status: "static" }) as const;
+  const rowReplace = (container: HTMLElement) =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[data-provider-id="openai"] .provider-row__accounts button',
+      ),
+    ]
+      .map((button) => button.getAttribute("aria-label"))
+      .filter((name) => name?.startsWith("Replace"));
+  const open = (cards: ReturnType<typeof card>[]) => {
+    const container = mount(props({ cards }));
+    container
+      .querySelector<HTMLButtonElement>('[data-provider-id="openai"] .provider-row__summary')!
+      .click();
+    flush();
+    return container;
+  };
+  const setKey = { name: "Set API key: OpenAI", text: "Set API key", disabled: false };
+
+  const single = open([card({ apiKey: undefined, profiles: [savedKey("openai:a")] })]);
+  expect(rowReplace(single)).toEqual(["Replace API key: OpenAI"]);
+  expect(actions(single, "openai")).not.toContainEqual(setKey);
+
+  // The Gateway replaces the first eligible key, which may not be the row a button sits on.
+  for (const cards of [
+    [card({ apiKey: undefined, profiles: [savedKey("openai:a"), savedKey("openai:b")] })],
+    [card({ apiKey: { source: "config" }, profiles: [savedKey("openai:a")] })],
+  ]) {
+    const container = open(cards);
+    expect(rowReplace(container)).toEqual([]);
+    expect(actions(container, "openai")).toContainEqual(setKey);
+  }
+});

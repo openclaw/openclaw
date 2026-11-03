@@ -58,12 +58,14 @@ function keySource(card: ModelProviderCard): string | undefined {
     : t("modelProviders.credentials.keyFromEnv");
 }
 
-/** A key the provider already has; replacing it belongs to that row, not to the footer. */
+/**
+ * The provider's only key, shown as a row; replacing it belongs to that row, not to the footer.
+ * With several keys the Gateway picks which one a new key replaces, so no row can promise it.
+ */
 function hasKeyRow(card: ModelProviderCard, showProfiles: boolean): boolean {
-  return (
-    keySource(card) !== undefined ||
-    (showProfiles && card.profiles.some((profile) => profile.type === "api_key"))
-  );
+  const savedKeys = card.profiles.filter((profile) => profile.type === "api_key").length;
+  const sourceKeys = keySource(card) === undefined ? 0 : 1;
+  return savedKeys + sourceKeys === 1 && (sourceKeys === 1 || showProfiles);
 }
 
 function CredentialRow(props: { title: string; detail?: string; action?: JSX.Element }) {
@@ -110,7 +112,8 @@ function hiddenCredentialSummary(card: ModelProviderCard): string | undefined {
 /** Every credential as one row: saved accounts, then a key from config or the environment. */
 function ProviderCredentials(props: ProviderRowProps) {
   const showProfiles = () => props.card.profiles.length > 0 && props.canViewProfiles;
-  const keyAction = () => <KeyButton {...props} replace />;
+  const keyAction = () =>
+    hasKeyRow(props.card, showProfiles()) ? <KeyButton {...props} replace /> : undefined;
   return (
     <section class="provider-row__accounts" aria-label={t("modelProviders.row.accounts")}>
       <Show

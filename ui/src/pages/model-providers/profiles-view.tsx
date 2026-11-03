@@ -440,7 +440,7 @@ export function ProviderAccountSummary(props: {
 export function ProviderProfiles(
   props: ProviderProfilesViewProps & {
     card: ModelProviderCard;
-    /** Replaces the key on the saved API-key row, the first one when there are several. */
+    /** Replaces the key on the provider's only key, when that key is a saved API-key row. */
     keyAction?: () => JSX.Element;
   },
 ) {
