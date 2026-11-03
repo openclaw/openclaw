@@ -228,6 +228,9 @@ struct OpenClawTypographyTests {
         let settingsHub = try String(
             contentsOf: Self.sourceURL("Settings/SettingsHubScreen.swift"),
             encoding: .utf8)
+        let healthSettings = try String(
+            contentsOf: Self.sourceURL("Health/AppleHealthSettingsSection.swift"),
+            encoding: .utf8)
         let dashboardPage = try String(
             contentsOf: Self.sourceURL("Settings/DashboardPageScreen.swift"),
             encoding: .utf8)
@@ -296,6 +299,11 @@ struct OpenClawTypographyTests {
         #expect(onboardingWizard.contains("if lastMode == .developerLocal"))
         #expect(onboardingWizard.contains("self.developerModeEnabled = true"))
         #expect(settingsSections.contains(".font(OpenClawType.body)"))
+        for label in ["Enable Apple Health Summaries", "Turn Off Summaries", "Allow", "Cancel", "OK"] {
+            let text = try Self.extract(healthSettings, from: "Text(\"\(label)\")", to: "}")
+            #expect(text.contains(".font(OpenClawType."))
+        }
+        #expect(!healthSettings.contains(".font(."))
         for label in ["Gateway", "Approvals", "Open Gateway"] {
             let text = try Self.extract(settingsHub, from: "Text(\"\(label)\")", to: "}")
             #expect(text.contains(".font(OpenClawType.subheadSemiBold)"))

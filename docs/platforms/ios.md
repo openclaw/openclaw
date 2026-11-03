@@ -118,9 +118,13 @@ that share. These changes do not remove the Gateway's `talk.speechLocale` option
 **This iPhone** and **This iPad** also open native **Apple Watch**, **Diagnostics**,
 **Licenses**, and **About** screens. When disconnected, connected without admin
 access, or running in demo or screenshot mode, Settings shows a native fallback:
-the Gateway connection controls followed by those four rows in a **Device**
-section. Connection and these device screens remain available without loading
-the Dashboard.
+the Gateway connection controls followed by **Apple Health Summaries**, **Apple
+Watch**, **Diagnostics**, **Licenses**, and **About** in a **Device** section.
+Cloudflare Access connections use this fallback while embedded browser-session
+support is unavailable. The native Health screen reuses the same local sharing
+choice, disclosure, and Apple permission prompt as the Dashboard. It also lets
+you stop sharing without loading the Dashboard. Gateway pairing and command
+authorization remain separate requirements.
 
 Channels (`/settings/channels`) and Skills (`/skills`) are managed in the
 Dashboard. Appearance, notifications, privacy, permissions, and Voice & Talk
