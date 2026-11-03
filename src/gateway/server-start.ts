@@ -10,6 +10,7 @@ import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { rethrowGatewayStartupError, runGatewayCloseSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
+import type { GatewayTailscaleExposure } from "./server-tailscale.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 
 const { log, logTailscale, logChannels, logHealth, logCron, logReload, logHooks, logWsControl } =
@@ -56,6 +57,11 @@ async function startGatewayServerWithSdkHost(
   }
   let startupSettled: Promise<void>;
   let tailscaleStopping: Promise<void> | undefined;
+  const tailscaleExposure: GatewayTailscaleExposure = {
+    requestedMode: gatewayKernel.tailscaleMode,
+    activeMode: "off",
+    status: gatewayKernel.tailscaleMode === "off" ? "off" : "starting",
+  };
   let stopStartingTailscale: (() => void) | undefined;
   const { closeOnStartupFailure, prepareClose, terminalSessions, shutdownRuntime } = gatewayKernel;
   try {
@@ -89,6 +95,7 @@ async function startGatewayServerWithSdkHost(
               const { startGatewayTailscaleExposure } = await import("./server-tailscale.js");
               const cleanup = await startGatewayTailscaleExposure({
                 tailscaleMode: gatewayKernel.tailscaleMode,
+                exposure: tailscaleExposure,
                 preserveFunnel: gatewayKernel.tailscaleConfig.preserveFunnel ?? false,
                 port,
                 backend,
@@ -113,6 +120,7 @@ async function startGatewayServerWithSdkHost(
     });
     gatewayKernel.transportBridge.attach(transport);
     const startup = await finishGatewayStartup({
+      tailscaleExposure,
       kernelRuntime: { ...gatewayKernel, ...transport },
       port,
       opts,

@@ -511,3 +511,18 @@ it("retires host policy reads across reconnects of the same client", async () =>
   await oldRead.promise;
   await waitForSolid(() => expect(policy()).toBe("Deny"));
 });
+
+it("shows inactive requested Serve with its failure reason instead of reassurance", async () => {
+  const mounted = renderSecurity({
+    networkAccess: { kind: "reportedLoopback" },
+    tailscaleExposure: {
+      requestedMode: "serve",
+      activeMode: "off",
+      status: "failed",
+      reason: "Enable Serve and restart the Gateway.",
+    },
+  });
+  expect(mounted.container.textContent).toContain(
+    "Tailscale requested: Serve. Active: Off. Enable Serve and restart the Gateway.",
+  );
+});
