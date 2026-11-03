@@ -96,7 +96,7 @@ describe("continuation cross-session targeting", () => {
         },
         {
           enqueueSessionDelivery,
-          refuseSessionDelivery: vi.fn(),
+          refuseDelivery: vi.fn(),
           enqueueSystemEvent: vi.fn(),
           requestContinuationWake: vi.fn(),
         },
@@ -119,7 +119,7 @@ describe("continuation cross-session targeting", () => {
         },
         {
           enqueueSessionDelivery,
-          refuseSessionDelivery: vi.fn(),
+          refuseDelivery: vi.fn(),
           enqueueSystemEvent: vi.fn(),
           requestContinuationWake: vi.fn(),
         },
@@ -141,7 +141,7 @@ describe("continuation cross-session targeting", () => {
         },
         {
           enqueueSessionDelivery,
-          refuseSessionDelivery: vi.fn(),
+          refuseDelivery: vi.fn(),
           enqueueSystemEvent: vi.fn(),
           requestContinuationWake: vi.fn(),
         },
@@ -186,7 +186,7 @@ describe("continuation cross-session targeting", () => {
       enqueued.push(payload);
       return `delivery-${enqueued.length}`;
     });
-    const refuseSessionDelivery = vi.fn(async () => undefined);
+    const refuseDelivery = vi.fn(async () => undefined);
     const mockEnqueueSystemEvent = vi.fn<EnqueueSystemEvent>((text, opts) => {
       systemEvents.push({ text, sessionKey: opts.sessionKey });
       return true;
@@ -204,7 +204,7 @@ describe("continuation cross-session targeting", () => {
       },
       {
         enqueueSessionDelivery,
-        refuseSessionDelivery,
+        refuseDelivery,
         enqueueSystemEvent: mockEnqueueSystemEvent,
         requestContinuationWake,
       },
@@ -239,7 +239,7 @@ describe("continuation cross-session targeting", () => {
     // queue file must persist until the recipient consumes it via the recovery
     // loop. Acking here would destroy the only durable channel and leave
     // targeted recipients silently unreached.
-    expect(refuseSessionDelivery).not.toHaveBeenCalled();
+    expect(refuseDelivery).not.toHaveBeenCalled();
   });
 
   it("keeps a recipient idempotency key stable when earlier tree recipients disappear", async () => {
@@ -250,7 +250,7 @@ describe("continuation cross-session targeting", () => {
     });
     const deps = {
       enqueueSessionDelivery,
-      refuseSessionDelivery: vi.fn(async () => undefined),
+      refuseDelivery: vi.fn(async () => undefined),
       enqueueSystemEvent: vi.fn<EnqueueSystemEvent>(() => true),
       requestContinuationWake: vi.fn(),
     };
@@ -401,7 +401,7 @@ describe("continuation cross-session targeting", () => {
       enqueued.push(payload);
       return `delivery-${enqueued.length}`;
     });
-    const refuseSessionDelivery = vi.fn(async () => undefined);
+    const refuseDelivery = vi.fn(async () => undefined);
     const mockEnqueueSystemEvent = vi.fn<EnqueueSystemEvent>((_text, opts) => {
       systemEvents.push({ sessionKey: opts.sessionKey, traceparent: opts.traceparent });
       return true;
@@ -417,7 +417,7 @@ describe("continuation cross-session targeting", () => {
       },
       {
         enqueueSessionDelivery,
-        refuseSessionDelivery,
+        refuseDelivery,
         enqueueSystemEvent: mockEnqueueSystemEvent,
         requestContinuationWake: vi.fn(),
       },
@@ -453,7 +453,7 @@ describe("continuation cross-session targeting", () => {
       },
       {
         enqueueSessionDelivery,
-        refuseSessionDelivery: vi.fn(async () => undefined),
+        refuseDelivery: vi.fn(async () => undefined),
         enqueueSystemEvent: mockEnqueueSystemEvent,
         requestContinuationWake: vi.fn(),
       },
@@ -499,7 +499,7 @@ describe("continuation cross-session targeting", () => {
           enqueued.push(payload);
           return `delivery-${enqueued.length}`;
         }),
-        refuseSessionDelivery: vi.fn(async () => undefined),
+        refuseDelivery: vi.fn(async () => undefined),
         enqueueSystemEvent: vi.fn<EnqueueSystemEvent>(() => true),
         requestContinuationWake: vi.fn(),
       },

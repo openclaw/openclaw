@@ -165,7 +165,7 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
       enqueued.push(payload);
       return `delivery-${enqueued.length}`;
     });
-    const refuseSessionDelivery = vi.fn(async () => undefined);
+    const refuseDelivery = vi.fn(async () => undefined);
     const mockEnqueueSystemEvent = vi.fn<EnqueueSystemEvent>((text, opts) => {
       systemEvents.push({ text, sessionKey: opts.sessionKey });
       return true;
@@ -183,7 +183,7 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
       },
       {
         enqueueSessionDelivery,
-        refuseSessionDelivery,
+        refuseDelivery,
         enqueueSystemEvent: mockEnqueueSystemEvent,
         requestContinuationWake,
       },
@@ -202,7 +202,7 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
       },
     ]);
     expect(requestContinuationWake).toHaveBeenCalledTimes(1);
-    expect(refuseSessionDelivery).not.toHaveBeenCalled();
+    expect(refuseDelivery).not.toHaveBeenCalled();
   });
 
   it("delivers to multiple nonexistent targets, all complete gracefully", async () => {
@@ -224,7 +224,7 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
       },
       {
         enqueueSessionDelivery,
-        refuseSessionDelivery: vi.fn(async () => undefined),
+        refuseDelivery: vi.fn(async () => undefined),
         enqueueSystemEvent: vi.fn<EnqueueSystemEvent>(() => true),
         requestContinuationWake,
       },
@@ -259,7 +259,7 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
       },
       {
         enqueueSessionDelivery,
-        refuseSessionDelivery: vi.fn(async () => undefined),
+        refuseDelivery: vi.fn(async () => undefined),
         enqueueSystemEvent: vi.fn<EnqueueSystemEvent>(() => true),
         requestContinuationWake,
       },

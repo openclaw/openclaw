@@ -13,19 +13,12 @@ function makeDeps(overrides: { enqueueSystemEvent: () => boolean }) {
   const enqueueSessionDelivery = vi.fn<ReturnDeliveryDeps["enqueueSessionDelivery"]>(
     async () => "delivery-id-1",
   );
-  const refuseSessionDelivery = vi.fn<NonNullable<ReturnDeliveryDeps["refuseSessionDelivery"]>>(
-    async () => {},
-  );
+  const refuseDelivery = vi.fn<NonNullable<ReturnDeliveryDeps["refuseDelivery"]>>(async () => {});
   const enqueueSystemEvent = vi.fn<ReturnDeliveryDeps["enqueueSystemEvent"]>(() =>
     overrides.enqueueSystemEvent(),
   );
   const requestContinuationWake = vi.fn<ReturnDeliveryDeps["requestContinuationWake"]>();
-  return {
-    enqueueSessionDelivery,
-    refuseSessionDelivery,
-    enqueueSystemEvent,
-    requestContinuationWake,
-  };
+  return { enqueueSessionDelivery, refuseDelivery, enqueueSystemEvent, requestContinuationWake };
 }
 
 describe("enqueueContinuationReturnDeliveries :: de-duplicated ack reconciliation", () => {
@@ -47,7 +40,7 @@ describe("enqueueContinuationReturnDeliveries :: de-duplicated ack reconciliatio
     expect(deps.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     // The existing queued event carries the ack id; retiring it here would delete
     // the restart-recovery backing row before prompt drain consumes it.
-    expect(deps.refuseSessionDelivery).not.toHaveBeenCalled();
+    expect(deps.refuseDelivery).not.toHaveBeenCalled();
     // The content still counts as delivered via the surviving duplicate.
     expect(result.enqueued).toBe(1);
   });
@@ -68,6 +61,6 @@ describe("enqueueContinuationReturnDeliveries :: de-duplicated ack reconciliatio
 
     expect(deps.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     // Queued event carries the ack id; the prompt-drain path acks it later.
-    expect(deps.refuseSessionDelivery).not.toHaveBeenCalled();
+    expect(deps.refuseDelivery).not.toHaveBeenCalled();
   });
 });

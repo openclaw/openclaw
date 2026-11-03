@@ -76,7 +76,7 @@ export function resolveContinuationReturnTargetSessionKeys(
 type ContinuationReturnDeliveryDeps = {
   enqueueSessionDelivery: typeof enqueueSessionDelivery;
   /** Retires a written row whose recipient authority advanced; enqueue never acks a row. */
-  refuseSessionDelivery?: typeof refuseContinuationReturnDelivery;
+  refuseDelivery?: typeof refuseContinuationReturnDelivery;
   enqueueSystemEvent: typeof enqueueSystemEvent;
   requestContinuationWake: typeof requestContinuationWake;
   /** Decides synchronously under the recipient's authority read (writer admission). */
@@ -259,7 +259,7 @@ export async function enqueueContinuationReturnDeliveries(
         : Promise.resolve(decide(true));
     const refuseStaleRecipient = async (deliveryId?: string) => {
       if (deliveryId) {
-        await (deps.refuseSessionDelivery ?? refuseContinuationReturnDelivery)(
+        await (deps.refuseDelivery ?? refuseContinuationReturnDelivery)(
           deliveryId,
           captureContinuationQueueContext(params.stateDir),
         );

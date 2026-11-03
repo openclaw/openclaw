@@ -80,7 +80,7 @@ describe("branch 1 — target session never existed (cold-start)", () => {
       enqueued.push(payload);
       return `delivery-${enqueued.length}`;
     });
-    const refuseSessionDelivery = vi.fn(async () => undefined);
+    const refuseDelivery = vi.fn(async () => undefined);
     const enqueueSystemEvent = vi.fn<EnqueueSystemEvent>((text, opts) => {
       systemEvents.push({ text, sessionKey: opts.sessionKey });
       return true;
@@ -96,12 +96,7 @@ describe("branch 1 — target session never existed (cold-start)", () => {
         wakeRecipients: true,
         childRunId: "run-cold-start",
       },
-      {
-        enqueueSessionDelivery,
-        refuseSessionDelivery,
-        enqueueSystemEvent,
-        requestContinuationWake,
-      },
+      { enqueueSessionDelivery, refuseDelivery, enqueueSystemEvent, requestContinuationWake },
     );
 
     // Substrate guarantees no panic and a clean structural return — the durable
@@ -116,12 +111,12 @@ describe("branch 1 — target session never existed (cold-start)", () => {
     expect(requestContinuationWake).toHaveBeenCalledTimes(1);
     // No ack on the durable file: the queue must persist so the recovery loop
     // can replay if the target session materializes on the next gateway boot.
-    expect(refuseSessionDelivery).not.toHaveBeenCalled();
+    expect(refuseDelivery).not.toHaveBeenCalled();
   });
 
   it("returns deliveryIds matching the input targets one-to-one with no extra in-flight state", async () => {
     const enqueueSessionDelivery = vi.fn(async () => "delivery-cold-N");
-    const refuseSessionDelivery = vi.fn(async () => undefined);
+    const refuseDelivery = vi.fn(async () => undefined);
     const enqueueSystemEvent = vi.fn<EnqueueSystemEvent>(() => true);
     const requestContinuationWake = vi.fn();
 
@@ -132,12 +127,7 @@ describe("branch 1 — target session never existed (cold-start)", () => {
         text: "[continuation:enrichment-return] cold-start fanout",
         idempotencyKeyBase: "continuation-return:cold-start-fanout",
       },
-      {
-        enqueueSessionDelivery,
-        refuseSessionDelivery,
-        enqueueSystemEvent,
-        requestContinuationWake,
-      },
+      { enqueueSessionDelivery, refuseDelivery, enqueueSystemEvent, requestContinuationWake },
     );
 
     expect(result.enqueued).toBe(2);
@@ -153,7 +143,7 @@ describe("branch 1 — target session never existed (cold-start)", () => {
 describe("branch 2 — target session deleted before dispatch", () => {
   it("delivers identically whether the target was deleted-before or never-existed (sessionless substrate)", async () => {
     const enqueueSessionDelivery = vi.fn(async () => "delivery-deleted-before");
-    const refuseSessionDelivery = vi.fn(async () => undefined);
+    const refuseDelivery = vi.fn(async () => undefined);
     const enqueueSystemEvent = vi.fn<EnqueueSystemEvent>(() => true);
     const requestContinuationWake = vi.fn();
 
@@ -166,26 +156,21 @@ describe("branch 2 — target session deleted before dispatch", () => {
         wakeRecipients: true,
         childRunId: "run-deleted-before",
       },
-      {
-        enqueueSessionDelivery,
-        refuseSessionDelivery,
-        enqueueSystemEvent,
-        requestContinuationWake,
-      },
+      { enqueueSessionDelivery, refuseDelivery, enqueueSystemEvent, requestContinuationWake },
     );
 
     expect(result).toMatchObject({ enqueued: 1, delivered: 1 });
     expect(enqueueSessionDelivery).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(requestContinuationWake).toHaveBeenCalledTimes(1);
-    expect(refuseSessionDelivery).not.toHaveBeenCalled();
+    expect(refuseDelivery).not.toHaveBeenCalled();
   });
 
   it("does not call enqueueSystemEvent when the prior enqueue throws (no half-write into the in-memory bus)", async () => {
     const enqueueSessionDelivery = vi.fn(async () => {
       throw new Error("ENOENT: durable queue dir vanished mid-call");
     });
-    const refuseSessionDelivery = vi.fn(async () => undefined);
+    const refuseDelivery = vi.fn(async () => undefined);
     const enqueueSystemEvent = vi.fn<EnqueueSystemEvent>(() => true);
     const requestContinuationWake = vi.fn();
 
@@ -197,12 +182,7 @@ describe("branch 2 — target session deleted before dispatch", () => {
           text: "[continuation:enrichment-return] enqueue fails",
           idempotencyKeyBase: "continuation-return:enqueue-fail",
         },
-        {
-          enqueueSessionDelivery,
-          refuseSessionDelivery,
-          enqueueSystemEvent,
-          requestContinuationWake,
-        },
+        { enqueueSessionDelivery, refuseDelivery, enqueueSystemEvent, requestContinuationWake },
       ),
     ).rejects.toThrow("ENOENT: durable queue dir vanished mid-call");
 
@@ -211,7 +191,7 @@ describe("branch 2 — target session deleted before dispatch", () => {
     // claims delivery but the durable file never landed.
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestContinuationWake).not.toHaveBeenCalled();
-    expect(refuseSessionDelivery).not.toHaveBeenCalled();
+    expect(refuseDelivery).not.toHaveBeenCalled();
   });
 });
 
@@ -228,7 +208,7 @@ describe("branch 3 — target deleted during dispatch race", () => {
       authorityCurrent = false;
       return "delivery-stale-authority";
     });
-    const refuseSessionDelivery = vi.fn(async () => undefined);
+    const refuseDelivery = vi.fn(async () => undefined);
     const enqueueSystemEvent = vi.fn<EnqueueSystemEvent>(() => true);
     const requestContinuationWake = vi.fn();
     const isRecipientAuthorityCurrent = vi.fn(() => authorityCurrent);
@@ -254,7 +234,7 @@ describe("branch 3 — target deleted during dispatch race", () => {
       },
       {
         enqueueSessionDelivery,
-        refuseSessionDelivery,
+        refuseDelivery,
         enqueueSystemEvent,
         requestContinuationWake,
         withRecipientAuthority,
@@ -270,7 +250,7 @@ describe("branch 3 — target deleted during dispatch race", () => {
       resetHeldSessionKeys: [],
       refusedSessionKeys: [EXISTING_TARGET],
     });
-    expect(refuseSessionDelivery).toHaveBeenCalledWith(
+    expect(refuseDelivery).toHaveBeenCalledWith(
       "delivery-stale-authority",
       expectProcessQueueContext(),
     );
@@ -282,7 +262,7 @@ describe("branch 3 — target deleted during dispatch race", () => {
     let authorityChecks = 0;
     const systemEvents: SystemEvent[] = [{ text: "unrelated", ts: 1 }];
     const enqueueSessionDelivery = vi.fn(async () => "delivery-stale-before-wake");
-    const refuseSessionDelivery = vi.fn(async () => undefined);
+    const refuseDelivery = vi.fn(async () => undefined);
     const enqueueSystemEvent = vi.fn<EnqueueSystemEvent>((text, options) => {
       systemEvents.push({ text, ts: 2, ...options });
       return true;
@@ -322,7 +302,7 @@ describe("branch 3 — target deleted during dispatch race", () => {
       },
       {
         enqueueSessionDelivery,
-        refuseSessionDelivery,
+        refuseDelivery,
         enqueueSystemEvent,
         removeSystemEvents,
         requestContinuationWake,
@@ -341,7 +321,7 @@ describe("branch 3 — target deleted during dispatch race", () => {
     });
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(removeSystemEvents).toHaveBeenCalledWith(EXISTING_TARGET, expect.any(Function));
-    expect(refuseSessionDelivery).toHaveBeenCalledWith(
+    expect(refuseDelivery).toHaveBeenCalledWith(
       "delivery-stale-before-wake",
       expectProcessQueueContext(),
     );
@@ -358,7 +338,7 @@ describe("branch 3 — target deleted during dispatch race", () => {
       }
       return `delivery-${call}`;
     });
-    const refuseSessionDelivery = vi.fn(async () => undefined);
+    const refuseDelivery = vi.fn(async () => undefined);
     const enqueueSystemEvent = vi.fn<EnqueueSystemEvent>(() => true);
     const requestContinuationWake = vi.fn();
 
@@ -371,12 +351,7 @@ describe("branch 3 — target deleted during dispatch race", () => {
           idempotencyKeyBase: "continuation-return:race",
           wakeRecipients: true,
         },
-        {
-          enqueueSessionDelivery,
-          refuseSessionDelivery,
-          enqueueSystemEvent,
-          requestContinuationWake,
-        },
+        { enqueueSessionDelivery, refuseDelivery, enqueueSystemEvent, requestContinuationWake },
       ),
     ).rejects.toThrow("ENOENT: session-delivery file deleted during race");
 
@@ -392,14 +367,14 @@ describe("branch 3 — target deleted during dispatch race", () => {
     expect(requestContinuationWake).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey: EXISTING_TARGET, reason: "delegate-return" }),
     );
-    expect(refuseSessionDelivery).not.toHaveBeenCalled();
+    expect(refuseDelivery).not.toHaveBeenCalled();
   });
 
   it("delivers all targets when the race resolves with no dep failure (success-pre-delete shape)", async () => {
     // Same call shape as the failing race, except no dep throws. The substrate
     // must reach `delivered === N` and never leave a partial-write window.
     const enqueueSessionDelivery = vi.fn(async () => "delivery-race-ok");
-    const refuseSessionDelivery = vi.fn(async () => undefined);
+    const refuseDelivery = vi.fn(async () => undefined);
     const enqueueSystemEvent = vi.fn<EnqueueSystemEvent>(() => true);
     const requestContinuationWake = vi.fn();
 
@@ -411,12 +386,7 @@ describe("branch 3 — target deleted during dispatch race", () => {
         idempotencyKeyBase: "continuation-return:race-ok",
         wakeRecipients: true,
       },
-      {
-        enqueueSessionDelivery,
-        refuseSessionDelivery,
-        enqueueSystemEvent,
-        requestContinuationWake,
-      },
+      { enqueueSessionDelivery, refuseDelivery, enqueueSystemEvent, requestContinuationWake },
     );
 
     expect(result).toMatchObject({ enqueued: 3, delivered: 3 });
@@ -434,7 +404,7 @@ describe("branch 4 — happy-path control (sanity-check the mock harness)", () =
       enqueued.push(payload);
       return `delivery-happy-${enqueued.length}`;
     });
-    const refuseSessionDelivery = vi.fn(async () => undefined);
+    const refuseDelivery = vi.fn(async () => undefined);
     const enqueueSystemEvent = vi.fn<EnqueueSystemEvent>((text, opts) => {
       systemEvents.push({ text, sessionKey: opts.sessionKey });
       return true;
@@ -450,12 +420,7 @@ describe("branch 4 — happy-path control (sanity-check the mock harness)", () =
         wakeRecipients: true,
         childRunId: "run-happy",
       },
-      {
-        enqueueSessionDelivery,
-        refuseSessionDelivery,
-        enqueueSystemEvent,
-        requestContinuationWake,
-      },
+      { enqueueSessionDelivery, refuseDelivery, enqueueSystemEvent, requestContinuationWake },
     );
 
     expect(result).toMatchObject({ enqueued: 1, delivered: 1 });
@@ -472,6 +437,6 @@ describe("branch 4 — happy-path control (sanity-check the mock harness)", () =
     expect(requestContinuationWake).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey: EXISTING_TARGET, reason: "delegate-return" }),
     );
-    expect(refuseSessionDelivery).not.toHaveBeenCalled();
+    expect(refuseDelivery).not.toHaveBeenCalled();
   });
 });
