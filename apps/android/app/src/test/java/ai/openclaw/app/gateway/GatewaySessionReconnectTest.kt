@@ -925,6 +925,51 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
+  fun failedTalkDetachReconnectsOnlyItsOwningSocket() =
+    runBlocking {
+      val ready = Channel<GatewaySession.RequestLease>(Channel.UNLIMITED)
+      val connections = AtomicInteger()
+      val server =
+        startGatewayServer(json = Json) { webSocket, id, method ->
+          webSocket.send(
+            if (method == "connect") {
+              val capabilities = if (connections.incrementAndGet() == 1) setOf("talk-session-close-disposition") else emptySet()
+              connectResponseFrame(id, capabilities = capabilities)
+            } else {
+              """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"close unavailable"}}"""
+            },
+          )
+        }
+      val harness = createReconnectHarness()
+      try {
+        connectSession(harness.session, server.port, onReady = {
+          ready.trySend(requireNotNull(harness.session.captureRequestLease()))
+        })
+        val original = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() }
+        val abort = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Abort) }
+        assertTrue(abort.exceptionOrNull() is GatewayRequestRejected)
+        assertTrue(original.isCurrent())
+
+        val detach = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Detach) }
+        assertTrue(detach.exceptionOrNull() is GatewayRequestRejected)
+        val replacement = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() }
+        assertFalse(original.isCurrent())
+
+        val stale = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Detach) }
+        assertTrue(stale.exceptionOrNull() is GatewayRequestNotEnqueued)
+        assertTrue(replacement.isCurrent())
+
+        val legacyAbort = runCatching { replacement.closeTalkSession("relay-2", TalkSessionCloseDisposition.Abort) }
+        assertTrue(legacyAbort.exceptionOrNull() is GatewayRequestRejected)
+        assertTrue(replacement.isCurrent())
+        val closes = server.requestFrames.filter { it["method"]?.jsonPrimitive?.content == "talk.session.close" }
+        assertEquals(listOf("abort", "detach", null), closes.map { it.getValue("params").jsonObject["disposition"]?.jsonPrimitive?.content })
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
   fun capturedRequestLeaseRejectsReplacementSocketBeforeEnqueue() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }

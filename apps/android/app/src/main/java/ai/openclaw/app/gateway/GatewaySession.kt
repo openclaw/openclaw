@@ -96,6 +96,13 @@ data class GatewayLoadedImage(
   val mimeType: String,
 )
 
+enum class TalkSessionCloseDisposition(
+  val wireValue: String,
+) {
+  Abort("abort"),
+  Detach("detach"),
+}
+
 enum class GatewayMediaKind(
   val wireValue: String,
   val maximumBufferedBytes: Long,
@@ -399,11 +406,35 @@ class GatewaySession(
     private val commitIfCurrentImpl: ((block: () -> Unit) -> Boolean)? = null,
     private val advertisedMethods: Set<String> = emptySet(),
     val controlUiCredential: NativeControlUiCredential? = null,
+    private val advertisedCapabilities: Set<String> = emptySet(),
+    private val reconnectIfCurrentImpl: () -> Unit = {},
     private val requestImpl: suspend (method: String, paramsJson: String?, timeoutMs: Long, withEnqueue: (() -> Unit) -> Unit) -> String,
   ) {
     fun isCurrent(): Boolean = isCurrentImpl()
 
     fun supportsMethod(method: String): Boolean = method in advertisedMethods
+
+    suspend fun closeTalkSession(
+      sessionId: String,
+      disposition: TalkSessionCloseDisposition,
+      withEnqueue: (() -> Unit) -> Unit = { it() },
+    ): String =
+      try {
+        request(
+          "talk.session.close",
+          buildJsonObject {
+            put("sessionId", JsonPrimitive(sessionId))
+            // Older Gateways reject unknown fields and retain the legacy aborting close.
+            if ("talk-session-close-disposition" in advertisedCapabilities) put("disposition", JsonPrimitive(disposition.wireValue))
+          }.toString(),
+          timeoutMs = 5_000,
+          withEnqueue = withEnqueue,
+        )
+      } catch (error: Throwable) {
+        // Disconnect also detaches accepted work if the close could not be confirmed.
+        if (disposition == TalkSessionCloseDisposition.Detach) reconnectIfCurrentImpl()
+        throw error
+      }
 
     fun commitIfCurrent(block: () -> Unit): Boolean {
       commitIfCurrentImpl?.let { return it(block) }
@@ -873,6 +904,12 @@ class GatewaySession(
         endpointStableId = conn.target.endpoint.stableId,
         advertisedMethods = conn.advertisedMethods,
         controlUiCredential = conn.controlUiCredential,
+        advertisedCapabilities = conn.advertisedCapabilities,
+        reconnectIfCurrentImpl = {
+          synchronized(lifecycleLock) {
+            if (currentConnection === conn && conn.isReady()) reconnect()
+          }
+        },
         isCurrentImpl = { currentConnection === conn && conn.isReady() },
         commitIfCurrentImpl = { block ->
           synchronized(lifecycleLock) {
@@ -997,6 +1034,9 @@ class GatewaySession(
     val target: DesiredConnection,
   ) {
     var advertisedMethods: Set<String> = emptySet()
+      private set
+
+    var advertisedCapabilities: Set<String> = emptySet()
       private set
 
     var controlUiCredential: NativeControlUiCredential? = null
@@ -1384,9 +1424,10 @@ class GatewaySession(
 
     fun hasOpenTransport(): Boolean = state.get() != ConnectionState.CLOSED && connectHandshakeJob != null
 
-    fun markReady(methods: Set<String>?): Boolean {
+    fun markReady(hello: GatewayHelloSummary): Boolean {
       if (!state.compareAndSet(ConnectionState.CONNECTING, ConnectionState.READY)) return false
-      advertisedMethods = methods.orEmpty().toSet()
+      advertisedMethods = hello.methods.orEmpty()
+      advertisedCapabilities = hello.capabilities.orEmpty()
       return true
     }
 
@@ -2206,7 +2247,7 @@ class GatewaySession(
       val connected = conn.connect()
       synchronized(notificationLock) {
         synchronized(lifecycleLock) {
-          if (currentConnection !== conn || desired !== target || job?.isActive != true || !conn.markReady(connected.hello.methods)) return@withContext
+          if (currentConnection !== conn || desired !== target || job?.isActive != true || !conn.markReady(connected.hello)) return@withContext
           // Ready metadata precedes callbacks; retries requested by a callback remain queued.
           pluginSurfaceUrls = connected.pluginSurfaceUrls
           sessionRouting = connected.sessionRouting

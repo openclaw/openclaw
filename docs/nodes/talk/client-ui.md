@@ -42,6 +42,11 @@ Watch background behavior. See [Watch setup and limits](/platforms/ios#standalon
   the Gateway does not advertise GPT-Live relay support or explicitly rejects
   relay support for the configuration.
   Explicit `stt-tts` mode is shown as native Talk, not as a realtime failure.
+- **End Talk** stops listening and playback without canceling accepted agent
+  work. Its answer can still finish in chat history. To cancel work instead, say
+  "cancel" before ending the call or use the chat run's Stop control. Realtime
+  detachment requires a Gateway that advertises `talk-session-close-disposition`;
+  older Gateways retain their legacy aborting close.
 - Dictation, voice-note recording, and Talk are mutually exclusive microphone
   paths; starting one stops or blocks the others.
 - Realtime Talk prefers a connected Bluetooth Classic or BLE headset
