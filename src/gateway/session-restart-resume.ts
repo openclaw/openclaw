@@ -45,7 +45,10 @@ import {
 } from "../sessions/session-controller.state.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
-import { withAgentInputRecovery } from "../state/agent-database-preparation-context.js";
+import {
+  waitForAgentDatabaseWriteAdmission,
+  withAgentInputRecovery,
+} from "../state/agent-database-preparation-context.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -386,13 +389,28 @@ function resumePreparedRestartStore(
   const recovery = getRestartRecovery(params.context);
   let work = recovery.stores.get(prepared.target.storePath);
   if (!work) {
-    work = Promise.resolve().then(() =>
-      withAgentInputRecovery(
+    work = Promise.resolve().then(async () => {
+      // A shared store can be discovered through a ready logical agent while its
+      // physical owner is still preparing. Join writes, never our own input recovery.
+      try {
+        await waitForAgentDatabaseWriteAdmission(prepared.target.physicalAgentId, {
+          owner: params.context.agentDatabaseStartup,
+          env: prepared.target.env,
+          signal: params.signal,
+        });
+      } catch (error) {
+        params.signal.throwIfAborted();
+        params.log.warn(
+          `Skipped restart resume for agent ${prepared.target.agentId}: ${String(error)}`,
+        );
+        return;
+      }
+      return withAgentInputRecovery(
         params.context.agentDatabaseStartup,
         prepared.target.physicalAgentId,
         () => resumeRestartStore(params, prepared),
-      ),
-    );
+      );
+    });
     recovery.stores.set(prepared.target.storePath, work);
   }
   return work;

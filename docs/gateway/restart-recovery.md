@@ -91,9 +91,11 @@ and shutdown cancels pending recovery without consuming its markers.
 The initial recovery pass keeps the existing external-input fence until its
 retained inputs own their ordinary queue slots. A store prepared later keeps its
 own input readiness pending until its retained inputs are admitted. This also
-applies when several logical agents share the same physical store. Database
-reads and writes retain their normal admission rules; recovery does not borrow
-startup's temporary database access or wait for model executions to finish.
+applies when several logical agents share the same physical store: recovery waits
+for that store’s physical owner to finish writable preparation, even when another
+logical agent is already ready. Database reads and writes retain their normal
+admission rules; recovery does not borrow startup's temporary database access or
+wait for model executions to finish.
 
 <a id="graceful-restarts-drain-first" />
 

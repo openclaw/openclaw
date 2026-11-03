@@ -23,11 +23,13 @@ import {
 import * as pendingInputWithdrawal from "../config/sessions/session-pending-input-withdrawal.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import { createAgentDatabaseStartupObservation } from "../state/agent-database-startup-observation.js";
+import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import type { PendingAgentDatabaseRecovery } from "../state/agent-database-startup.types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -42,6 +44,159 @@ import {
   prepareAgentRestartRecovery,
   resumeMarkedSessions,
 } from "./session-restart-resume.js";
+
+it.each(["ready", "failed", "aborted"] as const)(
+  "waits for shared-store writable startup before consuming restart markers (%s)",
+  (outcome) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const storePath = process.env.OPENCLAW_STATE_DIR + "/shared.sqlite";
+      const canonicalPath = openOpenClawAgentDatabase({ agentId: "main" }).path;
+      const cfg = { agents: { entries: { main: {}, other: {} } }, session: { store: storePath } };
+      setRuntimeConfigSnapshot(cfg);
+      const targets = ["main", "other"].map((agentId) => ({
+        agentId,
+        storePath,
+        sessionKey: "agent:" + agentId + ":write-pending",
+      }));
+      for (const target of targets) {
+        replaceSessionEntrySync(target, { sessionId: target.agentId, updatedAt: 1 });
+        replaceSessionEntrySync(target, {
+          ...loadExactSessionEntry(target)!.entry,
+          resumeAfterRestart: { queuedInputIds: [] },
+        });
+      }
+      const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
+        accepted: Promise.resolve({ ok: true }),
+        id: "write-pending-resume",
+        settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+        cancel: () => false,
+      });
+      try {
+        await withAgentDatabaseStartupAdmission(async (admission) => {
+          const lifetime = admission.adopt();
+          const opened = createDeferredCore();
+          const release = createDeferredCore();
+          const reached = createDeferredCore<string>();
+          const warnings: string[] = [];
+          const controller = new AbortController();
+          const context = createContext([], () => cfg);
+          context.agentDatabaseStartup = admission.observation;
+          context.resolveGatewayContext = () => context;
+          const params = {
+            context,
+            signal: controller.signal,
+            log: {
+              warn(message: string) {
+                warnings.push(message);
+                reached.resolve(message);
+              },
+            },
+          };
+          const wait = admission.observation.waitForAgentPreparation.bind(admission.observation);
+          const observe = vi
+            .spyOn(admission.observation, "waitForAgentPreparation")
+            .mockImplementation((agentId, options) => {
+              const work = wait(agentId, options);
+              if (agentId === "main" && options?.forWrite && work) {
+                reached.resolve("waiting-for-write");
+              }
+              return work;
+            });
+          let startup: Promise<void> | undefined;
+          try {
+            const refusals = admission.defer({
+              env: process.env,
+              inspections: [
+                {
+                  target: { agentId: "main", path: canonicalPath },
+                  result: Promise.resolve({
+                    incompatible: [],
+                    indeterminate: [],
+                    readReadyAgentPaths: [canonicalPath],
+                  }),
+                },
+              ],
+              reason: "Controlled restart writable readiness",
+            });
+            recordAgentDatabaseAdmissions(refusals, { source: "startup" });
+            admission.activate({
+              isCurrent: () => true,
+              preparationReady: Promise.resolve(),
+              captureReadAdmission: ({ assertCurrent }) => assertCurrent,
+              openAgent: async ({ signal }) => {
+                opened.resolve();
+                await racePromiseWithAbortSignal(release.promise, signal);
+                if (outcome === "failed") {
+                  throw new Error("Synthetic writable preparation failure");
+                }
+              },
+              publishAgent: async () => {},
+              migrateAgent: async ({ agentId, env, signal, assertCurrent }) => ({
+                recoverInputs: await prepareAgentRestartRecovery({
+                  context,
+                  agentId,
+                  env,
+                  signal,
+                  assertCurrent,
+                  log: params.log,
+                }),
+              }),
+            });
+            await Promise.race([
+              opened.promise,
+              admission.pendingPreparation?.then(() => {
+                throw new Error("Startup preparation ended before opening the fixture");
+              }),
+            ]);
+            expect(admission.observation.isAgentInputRecoveryPending("main")).toBe(false);
+            startup = resumeMarkedSessions(params);
+            expect(
+              await Promise.race([reached.promise, startup.then(() => "startup-completed")]),
+            ).toBe("waiting-for-write");
+            expect(resume).not.toHaveBeenCalled();
+            if (outcome === "aborted") {
+              controller.abort(new Error("Synthetic restart cancellation"));
+              await expect(startup).rejects.toThrow("Synthetic restart cancellation");
+              await lifetime.stop();
+            } else {
+              release.resolve();
+              await startup;
+              await admission.pendingPreparation;
+            }
+            if (outcome === "ready") {
+              expect(warnings).toEqual([]);
+              expect(resume.mock.calls.map(([, options]) => options.sessionKey).toSorted()).toEqual(
+                targets.map(({ sessionKey }) => sessionKey).toSorted(),
+              );
+              await resumeMarkedSessions(params);
+              expect(resume).toHaveBeenCalledTimes(2);
+            } else {
+              expect(resume).not.toHaveBeenCalled();
+              if (outcome === "failed") {
+                expect(warnings.join("\n")).toContain("Synthetic writable preparation failure");
+              }
+              // The stopped/failed owner is no longer running; lift only the test's
+              // refusal to inspect that no marker was consumed while writes were barred.
+              recordAgentDatabaseAdmissions([], { source: "startup" });
+            }
+            for (const target of targets) {
+              expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(
+                outcome === "ready" ? undefined : { queuedInputIds: [] },
+              );
+            }
+          } finally {
+            release.resolve();
+            controller.abort();
+            await Promise.allSettled(startup ? [startup] : []);
+            await lifetime.stop();
+            observe.mockRestore();
+          }
+        });
+      } finally {
+        resume.mockRestore();
+      }
+    }),
+);
 
 it("reuses a prepared restart snapshot and joins its queue admission before startup unlocks", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
