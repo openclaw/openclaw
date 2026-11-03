@@ -198,45 +198,58 @@ it.each(["internal", "injected"] as const)(
     }),
 );
 
-it.each([true, false])("settles a linked card after agent_end (success=%s)", (success) =>
-  withStateDirEnv("workboard-deferred-agent-end-", async () => {
-    vi.useFakeTimers();
-    using clock = { [Symbol.dispose]: () => vi.useRealTimers() };
-    await using store = openStore();
-    const sessionKey = "agent:worker:subagent:workboard-delayed";
-    const card = await store.create({ title: "Delayed worker", status: "running", sessionKey });
-    const settledAt = Date.now() + 1_000;
-    await using prepared = registerGeneration();
-    await using generation = registerGeneration((api) =>
-      plugin.register({
-        ...api,
-        runtime: {
-          ...api.runtime,
-          gateway: {
-            ...api.runtime.gateway,
-            isAvailable: async () => true,
-            // The Gateway request contract lets the caller select the response type.
-            request: async <T>() =>
-              ({
-                session: {
-                  key: sessionKey,
-                  status: "running",
-                  hasActiveRun: Date.now() < settledAt,
-                  updatedAt: card.updatedAt + 1,
-                },
-              }) as T,
+it.each([
+  { success: true, fallback: false },
+  { success: false, fallback: false },
+  { success: true, fallback: true },
+])(
+  "settles a linked card after agent_end ($success, fallback=$fallback)",
+  ({ success, fallback }) =>
+    withStateDirEnv("workboard-deferred-agent-end-", async () => {
+      vi.useFakeTimers();
+      using clock = { [Symbol.dispose]: () => vi.useRealTimers() };
+      await using store = openStore();
+      const sessionKey = "agent:worker:subagent:workboard-delayed";
+      const card = await store.create({ title: "Delayed worker", status: "running", sessionKey });
+      const settledAt = Date.now() + (fallback ? 650 : 1_000);
+      await using prepared = registerGeneration();
+      await using generation = registerGeneration((api) =>
+        plugin.register({
+          ...api,
+          runtime: {
+            ...api.runtime,
+            gateway: {
+              ...api.runtime.gateway,
+              isAvailable: async () => true,
+              // The Gateway request contract lets the caller select the response type.
+              request: async <T>() =>
+                ({
+                  session: {
+                    key: sessionKey,
+                    status: "running",
+                    hasActiveRun: Date.now() < settledAt,
+                    updatedAt: card.updatedAt + 1,
+                  },
+                }) as T,
+            },
           },
+        }),
+      );
+      await generation.start();
+      if (fallback) {
+        await prepared.agentEnd({ messages: [], success: false }, { sessionKey });
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      await prepared.agentEnd({ messages: [], success }, { sessionKey });
+      await vi.waitFor(
+        async () => {
+          expect((await store.get(card.id))?.status).toBe(success ? "review" : "blocked");
         },
-      }),
-    );
-    await generation.start();
-    await prepared.agentEnd({ messages: [], success }, { sessionKey });
-    await vi.waitFor(
-      async () => {
-        expect((await store.get(card.id))?.status).toBe(success ? "review" : "blocked");
-      },
-      { timeout: 5_000, interval: 100 },
-    );
-    expect(generation.warn).not.toHaveBeenCalled();
-  }),
+        { timeout: 5_000, interval: 100 },
+      );
+      if (success) {
+        expect((await store.get(card.id))?.metadata?.failureCount).toBeUndefined();
+      }
+      expect(generation.warn).not.toHaveBeenCalled();
+    }),
 );

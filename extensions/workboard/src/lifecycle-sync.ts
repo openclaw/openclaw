@@ -22,12 +22,11 @@ const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 const AGENT_END_RETRY_MAX_DELAY_MS = 1_600;
 const WORKBOARD_SESSION_LOOKUP_LIMIT = 2;
 const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
-// Prepared hook generations share the active service reader, never a worker's
-// caller authority. Gateway restart clears both readiness and that reader.
+// Prepared hook generations route to the active service, never a worker's
+// caller authority. Gateway restart clears readiness and the active handler.
 const workboardLifecycleGatewayState = resolveGlobalSingleton<{
   ready: boolean;
   abortSignal?: AbortSignal;
-  readSessions?: WorkboardLifecycleSessionReader;
   onAgentEnd?: WorkboardAgentEndHandler;
 }>(
   Symbol.for("openclaw.workboard.lifecycleGatewayState"),
@@ -35,7 +34,6 @@ const workboardLifecycleGatewayState = resolveGlobalSingleton<{
   (state) => {
     state.ready = false;
     state.abortSignal = undefined;
-    state.readSessions = undefined;
     state.onAgentEnd = undefined;
   },
 );
@@ -94,6 +92,12 @@ type WorkboardAgentEndHandler = (
   event: WorkboardAgentEndEvent,
   context: WorkboardAgentEndContext,
 ) => Promise<void>;
+
+type PendingAgentEnd = {
+  event: WorkboardAgentEndEvent;
+  context: WorkboardAgentEndContext & { sessionKey: string };
+  timer?: ReturnType<typeof setTimeout>;
+};
 
 type WorkboardLifecycleService = OpenClawPluginService & {
   stop: () => void;
@@ -218,9 +222,7 @@ export async function syncWorkboardAgentEnded(params: {
   now?: number;
   allowIdleRunningTerminal?: boolean;
   onSessionActive?: () => void;
-  readSessions: (
-    options: WorkboardLifecycleSessionReadOptions,
-  ) => Promise<WorkboardLifecycleSessionSnapshot>;
+  readSessions: WorkboardLifecycleSessionReader;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
   const now = params.now ?? Date.now();
@@ -424,9 +426,7 @@ export async function readWorkboardLifecycleSessions(
 export function createWorkboardLifecycleService(params: {
   store: WorkboardStore;
   worktrees?: WorkboardWorktreeCleanupRuntime;
-  readSessions: (
-    options: WorkboardLifecycleSessionReadOptions,
-  ) => Promise<WorkboardLifecycleSessionSnapshot>;
+  readSessions: WorkboardLifecycleSessionReader;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): WorkboardLifecycleService {
   let generation = 0;
@@ -434,9 +434,8 @@ export function createWorkboardLifecycleService(params: {
   let begin: (() => void) | undefined;
   let removeDrainListener: (() => void) | undefined;
   let cleanupCursor = 0;
-  let serviceReader: WorkboardLifecycleSessionReader | undefined;
   let handleAgentEnd: WorkboardAgentEndHandler | undefined;
-  const agentEndRetryTimers = new Set<ReturnType<typeof setTimeout>>();
+  const pendingAgentEnds = new Map<string, PendingAgentEnd>();
   const cleanupWorktrees = async (
     cards: readonly WorkboardCard[],
     warn: (message: string) => void,
@@ -462,18 +461,14 @@ export function createWorkboardLifecycleService(params: {
     }
   };
   const stop = () => {
-    if (workboardLifecycleGatewayState.readSessions === serviceReader) {
-      workboardLifecycleGatewayState.readSessions = undefined;
-    }
-    serviceReader = undefined;
     if (workboardLifecycleGatewayState.onAgentEnd === handleAgentEnd) {
       workboardLifecycleGatewayState.onAgentEnd = undefined;
     }
     handleAgentEnd = undefined;
-    for (const retryTimer of agentEndRetryTimers) {
-      clearTimeout(retryTimer);
+    for (const pending of pendingAgentEnds.values()) {
+      clearTimeout(pending.timer);
     }
-    agentEndRetryTimers.clear();
+    pendingAgentEnds.clear();
     removeDrainListener?.();
     removeDrainListener = undefined;
     generation += 1;
@@ -510,8 +505,6 @@ export function createWorkboardLifecycleService(params: {
     start(ctx) {
       const owner = ++generation;
       const readSessions = AsyncResource.bind(params.readSessions);
-      serviceReader = readSessions;
-      workboardLifecycleGatewayState.readSessions = serviceReader;
       let begun = false;
       const onMatched: WorkboardLifecycleMatchHandler = async (input) => {
         if (generation === owner) {
@@ -630,70 +623,88 @@ export function createWorkboardLifecycleService(params: {
         }
       };
       const isCurrent = () =>
-        generation === owner && workboardLifecycleGatewayState.readSessions === readSessions;
-      const readAgentEndSessions: WorkboardLifecycleSessionReader = async (options) => {
-        const snapshot = await readSessions(options);
-        return isCurrent() ? snapshot : { sessions: [], complete: false };
-      };
-      // agent_end precedes session settlement. Retries belong to the active service,
-      // not the prepared plugin generation or worker invocation delivering the hook.
-      const retryAgentEnd = AsyncResource.bind(
-        (event: WorkboardAgentEndEvent, context: WorkboardAgentEndContext, delayMs = 100) => {
-          const retryTimer = setTimeout(() => {
-            agentEndRetryTimers.delete(retryTimer);
-            if (!isCurrent()) {
-              return;
-            }
-            let sessionActive = false;
-            void params.store
-              .runOperation(async () => {
-                const matched = await syncWorkboardAgentEnded({
-                  store: params.store,
-                  event,
-                  context,
-                  readSessions: readAgentEndSessions,
-                  allowIdleRunningTerminal: true,
-                  onMatched,
-                  onSessionActive: () => {
-                    sessionActive = true;
-                  },
-                });
-                if (matched > 0 && isCurrent()) {
-                  await cleanupWorktrees(await params.store.list(), (message) =>
-                    ctx.logger.warn(message),
-                  );
-                }
-              })
-              .catch((error: unknown) => {
-                if (isCurrent()) {
-                  ctx.logger.warn(`workboard agent-end retry failed: ${String(error)}`);
-                }
-              })
-              .finally(() => {
-                if (sessionActive && isCurrent() && delayMs < AGENT_END_RETRY_MAX_DELAY_MS) {
-                  retryAgentEnd(event, context, delayMs * 2);
-                }
+        generation === owner && workboardLifecycleGatewayState.onAgentEnd === handleAgentEnd;
+      const isPending = (pending: PendingAgentEnd) =>
+        isCurrent() && pendingAgentEnds.get(pending.context.sessionKey) === pending;
+      const syncAgentEnd = (
+        pending: PendingAgentEnd,
+        delayed: boolean,
+        onSessionActive?: () => void,
+      ) =>
+        syncWorkboardAgentEnded({
+          store: params.store,
+          event: pending.event,
+          context: pending.context,
+          readSessions: async (options) => {
+            const snapshot = await readSessions(options);
+            return isPending(pending) ? snapshot : { sessions: [], complete: false };
+          },
+          allowIdleRunningTerminal: delayed,
+          onMatched,
+          onSessionActive,
+        });
+      // A later fallback attempt replaces the earlier outcome before inactivity
+      // can settle the card. Prepared hook generations still use this service owner.
+      const retryAgentEnd = AsyncResource.bind((pending: PendingAgentEnd, delayMs = 100) => {
+        pending.timer = setTimeout(() => {
+          pending.timer = undefined;
+          if (!isPending(pending)) {
+            return;
+          }
+          let sessionActive = false;
+          void params.store
+            .runOperation(async () => {
+              const matched = await syncAgentEnd(pending, true, () => {
+                sessionActive = true;
               });
-          }, delayMs);
-          agentEndRetryTimers.add(retryTimer);
-          retryTimer.unref?.();
-        },
-      );
+              if (matched > 0 && isPending(pending)) {
+                await cleanupWorktrees(await params.store.list(), (message) =>
+                  ctx.logger.warn(message),
+                );
+              }
+            })
+            .catch((error: unknown) => {
+              if (isPending(pending)) {
+                ctx.logger.warn(`workboard agent-end retry failed: ${String(error)}`);
+              }
+            })
+            .finally(() => {
+              if (!isPending(pending)) {
+                return;
+              }
+              if (sessionActive && delayMs < AGENT_END_RETRY_MAX_DELAY_MS) {
+                retryAgentEnd(pending, delayMs * 2);
+              } else {
+                pendingAgentEnds.delete(pending.context.sessionKey);
+              }
+            });
+        }, delayMs);
+        pending.timer.unref?.();
+      });
       handleAgentEnd = AsyncResource.bind(async (event, context) => {
         if (!isCurrent() || !context.sessionKey) {
           return;
         }
-        const matched = await params.store.runOperation(() =>
-          syncWorkboardAgentEnded({
-            store: params.store,
-            event,
-            context,
-            readSessions: readAgentEndSessions,
-            onMatched,
-          }),
-        );
-        if (matched === 0 && isCurrent()) {
-          retryAgentEnd(event, context);
+        clearTimeout(pendingAgentEnds.get(context.sessionKey)?.timer);
+        const pending: PendingAgentEnd = {
+          event,
+          context: { ...context, sessionKey: context.sessionKey },
+        };
+        pendingAgentEnds.set(context.sessionKey, pending);
+        try {
+          const matched = await params.store.runOperation(() => syncAgentEnd(pending, false));
+          if (isPending(pending)) {
+            if (matched === 0) {
+              retryAgentEnd(pending);
+            } else {
+              pendingAgentEnds.delete(context.sessionKey);
+            }
+          }
+        } catch (error) {
+          if (isPending(pending)) {
+            pendingAgentEnds.delete(context.sessionKey);
+          }
+          throw error;
         }
       });
       workboardLifecycleGatewayState.onAgentEnd = handleAgentEnd;

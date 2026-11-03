@@ -1,2 +1,2 @@
-51
-# Registered-plugin deferred completion and stale-service read regression proof.
+64
+# Registered-plugin deferred completion, fallback overlap, and stale-service proof.
