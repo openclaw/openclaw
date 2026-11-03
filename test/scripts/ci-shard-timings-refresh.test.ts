@@ -130,6 +130,7 @@ it.each([
       },
       { ...job, id: 7, name: "checks-node-compact-small-1" },
       { ...job, id: 8, name: "checks-node-release-packed-1" },
+      { ...job, id: 100, name: "checks-node-worker-e2e" },
       ...[
         ["boat"],
         ["boat-small/from=snapshot"],
