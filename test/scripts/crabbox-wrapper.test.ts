@@ -2485,7 +2485,7 @@ describe("scripts/crabbox-wrapper", () => {
       { flags: ["--no-sync"], command: ["node", "scripts/source-fixture.mjs"] },
       { flags: ["--sync-only"], command: [] },
       { flags: ["--target", "windows"], command: ["node", "scripts/source-fixture.mjs"] },
-    ].flatMap((entry) => ["aws", "boat"].map((provider) => ({ ...entry, provider }))),
+    ].flatMap((entry) => ["aws", "boat"].map((provider) => Object.assign({}, entry, { provider }))),
   )("preserves native $provider source selection for $flags", ({ provider, flags, command }) => {
     const { output, remoteCommand } = runSuccessfulDefaultWrapper(
       runArgs(provider, ...flags, "--", ...command),
@@ -2544,7 +2544,7 @@ describe("scripts/crabbox-wrapper", () => {
       { flags: ["--no-hydrate", "--no-hydrate=false"], capsule: true },
       { flags: ["--no-hydrate=false", "--no-hydrate"], capsule: false },
       { flags: ["--label", "--no-hydrate"], capsule: true },
-    ].flatMap((entry) => ["aws", "boat"].map((provider) => ({ ...entry, provider }))),
+    ].flatMap((entry) => ["aws", "boat"].map((provider) => Object.assign({}, entry, { provider }))),
   )(
     "preserves native $provider hydration option semantics: $flags",
     ({ provider, flags, capsule }) => {
