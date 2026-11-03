@@ -334,7 +334,7 @@ const enCron = {
       nextRelative: "Next {at}",
     },
     runEntry: {
-      tokens: "{count} tokens",
+      tokens: "{count} Tokens",
       inputOutputTokens: "{input} in / {output} out",
       noSummary: "No summary.",
       deliverySuppression: "Delivery suppression: {reason}",
