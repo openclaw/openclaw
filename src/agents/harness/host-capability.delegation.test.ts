@@ -12,7 +12,7 @@ import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-
 import * as support from "../../gateway/worker-environments/service.test-support.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
-import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import type { ToolOutcomeObserver } from "../agent-tools.before-tool-call.types.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.wrapper.js";
 import { createCodingToolsGatewayCaller } from "../agent-tools.caller.js";
@@ -26,10 +26,42 @@ import { resolveToolSearchConfig } from "../tool-search-config.js";
 import { ToolSearchRuntime } from "../tool-search-runtime.js";
 import { jsonResult, type AnyAgentTool } from "../tools/common.js";
 import { wrapToolWithGatewayCallerIdentity } from "../tools/gateway-caller-context.js";
+import { testTool } from "./host-capability.shard.test-support.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
+async function callCatalog(
+  host: Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>,
+  identity: Pick<
+    Parameters<typeof createAdmittedHostCapabilityTestFixture>[0],
+    "agentId" | "sessionId" | "sessionKey" | "runId" | "config"
+  >,
+  tool: AnyAgentTool,
+  options: { instance?: PluginInstance; outcome?: ToolOutcomeObserver } = {},
+) {
+  const catalogRef = createToolSearchCatalogRef();
+  const bound = host.hostCapabilities.bindToolSurface([tool]);
+  try {
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: options.instance ? options.instance.wrap(bound) : bound,
+      hookContext: { ...identity, onToolOutcome: options.outcome },
+    });
+    const runtime = new ToolSearchRuntime(
+      { ...identity, catalogRef },
+      resolveToolSearchConfig(identity.config),
+      { prepareInput: true, validateInput: true },
+    );
+    return await runtime.call(tool.name, {});
+  } finally {
+    clearToolSearchCatalog({ catalogRef });
+  }
+}
+
 describe("harness tool delegation through the catalog", () => {
-  support.setupWorkerEnvironmentServiceSuite();
+  support.setupWorkerEnvironmentServiceSuite((config, root) => {
+    config.tools = { profile: "full" };
+    config.session = { store: path.join(root, "sessions.json") };
+  });
 
   it.each([true, false])(
     "preserves captured screen permission=%s when presenting an environment",
@@ -41,10 +73,8 @@ describe("harness tool delegation through the catalog", () => {
       };
       const runId = "delegation-preview-run";
       const config = support.testState.config;
-      config.tools = { profile: "full" };
-      config.session = { store: path.join(support.testState.root, "sessions.json") };
       ensureSessionEntrySync(
-        { ...identity, storePath: config.session.store },
+        { ...identity, storePath: config.session!.store },
         { sessionId: identity.sessionId, updatedAt: 1 },
       );
       const provision = vi.fn(async () => ({
@@ -74,10 +104,8 @@ describe("harness tool delegation through the catalog", () => {
       });
       const respond = vi.fn<RespondFn>();
       const plugin: AnyAgentTool = {
+        ...testTool().tool,
         name: "crabbox",
-        label: "Crabbox",
-        description: "Present the conversation environment",
-        parameters: { type: "object", properties: {} },
         async execute() {
           await environmentsSessionHandlers["environments.session.create"]!({
             req: { type: "req", id: "create-preview", method: "environments.session.create" },
@@ -113,27 +141,14 @@ describe("harness tool delegation through the catalog", () => {
         wrapToolWithBeforeToolCallHook(routed, { ...identity, runId }),
       );
       const host = await createAdmittedHostCapabilityTestFixture({ ...identity, runId, config });
-      const catalogRef = createToolSearchCatalogRef();
       try {
-        registerHeadlessToolSearchCatalog({
-          catalogRef,
-          tools: host.hostCapabilities.bindToolSurface([assembled]),
-          hookContext: { ...identity, runId },
-        });
-        const runtime = new ToolSearchRuntime(
-          { ...identity, runId, config, catalogRef },
-          resolveToolSearchConfig(config),
-          { prepareInput: true, validateInput: true },
-        );
-        await runtime.call("crabbox", {});
+        await callCatalog(host, { ...identity, runId, config }, assembled);
 
         if (screenAllowed) {
-          expect(respond).toHaveBeenCalledWith(
+          expect(respond.mock.lastCall).toMatchObject([
             true,
-            expect.objectContaining({
-              environment: expect.objectContaining({ status: "available" }),
-            }),
-          );
+            { environment: { status: "available" } },
+          ]);
           expect(context.broadcastToConnIds).toHaveBeenCalledWith(
             "ui.command",
             expect.objectContaining({
@@ -143,19 +158,16 @@ describe("harness tool delegation through the catalog", () => {
           );
           expect(provision).toHaveBeenCalledOnce();
         } else {
-          expect(respond).toHaveBeenCalledWith(
+          expect(respond.mock.lastCall).toMatchObject([
             false,
             undefined,
-            expect.objectContaining({
-              message: "screen is not allowed by this conversation's tool policy",
-            }),
-          );
+            { message: "screen is not allowed by this conversation's tool policy" },
+          ]);
           expect(provision).not.toHaveBeenCalled();
           expect(context.broadcastToConnIds).not.toHaveBeenCalled();
           expect(service.getSessionAttachmentStatus(identity.sessionId)).toBeUndefined();
         }
       } finally {
-        clearToolSearchCatalog({ catalogRef });
         host.closeHost();
         host.closeAdmission();
         resetAgentRunRegistryForTest();
@@ -165,94 +177,47 @@ describe("harness tool delegation through the catalog", () => {
   );
 });
 
-it("rejects a catalog result when its admitted owner ends during hook finalization", async () => {
-  const identity = {
-    agentId: "main",
-    sessionId: "delegation-result",
-    sessionKey: "agent:main:delegation-result",
-    runId: "delegation-result-run",
-  };
-  const host = await createAdmittedHostCapabilityTestFixture(identity);
-  const outcome = vi.fn<ToolOutcomeObserver>((observation) => {
-    if (!observation.presentationOnly) {
-      host.closeAdmission();
-    }
-  });
-  const execute = vi.fn(async () => jsonResult({ marker: "finished-source" }));
-  const tool: AnyAgentTool = {
-    name: "delegation_result",
-    label: "Delegation result",
-    description: "Return a result through its current owner",
-    parameters: { type: "object", properties: {} },
-    execute,
-  };
-  const catalogRef = createToolSearchCatalogRef();
-  try {
-    registerHeadlessToolSearchCatalog({
-      catalogRef,
-      tools: host.hostCapabilities.bindToolSurface([tool]),
-      hookContext: { ...identity, onToolOutcome: outcome },
-    });
-    const runtime = new ToolSearchRuntime({ ...identity, catalogRef }, resolveToolSearchConfig(), {
-      prepareInput: true,
-      validateInput: true,
-    });
-    await expect(runtime.call("delegation_result", {})).rejects.toThrow("no longer active");
-    expect(execute).toHaveBeenCalledOnce();
-    expect(
-      outcome.mock.calls.filter(([observation]) => !observation.presentationOnly),
-    ).toHaveLength(1);
-  } finally {
-    clearToolSearchCatalog({ catalogRef });
-    host.closeHost();
-    host.closeAdmission();
-    resetAgentRunRegistryForTest();
-  }
-});
-
-it.each([false, true])(
-  "stops source execution after preparation revokes its owner through a plugin view=%s",
-  async (pluginView) => {
+it.each(["preparation", "finalization"] as const)(
+  "fences catalog execution when its admitted owner ends during %s",
+  async (stage) => {
+    const suffix = stage === "preparation" ? "preparation" : "result";
     const identity = {
       agentId: "main",
-      sessionId: "delegation-preparation",
-      sessionKey: "agent:main:delegation-preparation",
-      runId: "delegation-preparation-run",
+      sessionId: `delegation-${suffix}`,
+      sessionKey: `agent:main:delegation-${suffix}`,
+      runId: `delegation-${suffix}-run`,
     };
     const host = await createAdmittedHostCapabilityTestFixture(identity);
-    const instance = pluginView ? new PluginInstance("delegation-view") : undefined;
-    const execute = vi.fn(async () => jsonResult({ effect: "must-not-run" }));
-    const tool: AnyAgentTool = {
-      name: "delegation_preparation",
-      label: "Delegation preparation",
-      description: "Retain source authority through preparation",
-      parameters: { type: "object", properties: {} },
-      prepareBeforeToolCallParams: (args) => {
+    const instance = stage === "preparation" ? new PluginInstance("delegation-view") : undefined;
+    const outcome = vi.fn<ToolOutcomeObserver>((observation) => {
+      if (!observation.presentationOnly) {
         host.closeAdmission();
-        return args;
-      },
+      }
+    });
+    const execute = vi.fn(async () => jsonResult({}));
+    const prepareBeforeToolCallParams: AnyAgentTool["prepareBeforeToolCallParams"] = (args) => {
+      host.closeAdmission();
+      return args;
+    };
+    const tool: AnyAgentTool = {
+      ...testTool().tool,
+      name: `delegation_${suffix}`,
+      ...(stage === "preparation" ? { prepareBeforeToolCallParams } : {}),
       execute,
     };
-    const catalogRef = createToolSearchCatalogRef();
     try {
-      const bound = host.hostCapabilities.bindToolSurface([tool]);
-      registerHeadlessToolSearchCatalog({
-        catalogRef,
-        tools: instance ? instance.wrap(bound) : bound,
-        hookContext: identity,
-      });
-      const runtime = new ToolSearchRuntime(
-        { ...identity, catalogRef },
-        resolveToolSearchConfig(),
-        {
-          prepareInput: true,
-          validateInput: true,
-        },
-      );
-      await expect(runtime.call("delegation_preparation", {})).rejects.toThrow("no longer active");
-      expect(execute).not.toHaveBeenCalled();
+      await expect(
+        callCatalog(host, identity, tool, stage === "preparation" ? { instance } : { outcome }),
+      ).rejects.toThrow("no longer active");
+      if (stage === "preparation") {
+        expect(execute).not.toHaveBeenCalled();
+      } else {
+        expect(execute).toHaveBeenCalledOnce();
+        expect(
+          outcome.mock.calls.filter(([observation]) => !observation.presentationOnly),
+        ).toHaveLength(1);
+      }
     } finally {
-      clearToolSearchCatalog({ catalogRef });
       host.closeHost();
       host.closeAdmission();
       await instance?.dispose();

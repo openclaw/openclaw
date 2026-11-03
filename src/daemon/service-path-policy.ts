@@ -1,4 +1,3 @@
-/** Classifies service PATH entries that should not be frozen into daemons. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +5,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
 
-// Service PATH policy keeps managed services away from user shell package-manager paths.
 export function normalizeServicePathEntry(entry: string, platform: NodeJS.Platform): string {
   const pathModule = platform === "win32" ? path.win32 : path.posix;
   const normalized = pathModule.normalize(entry).replaceAll("\\", "/");
@@ -25,7 +23,6 @@ export function isNonMinimalServicePathEntry(entry: string, platform: NodeJS.Pla
   // should be replaced by stable system/runtime paths.
   return (
     matchesVersionManagerPath(normalized, "service-path") ||
-    normalized.includes("/.local/share/pnpm/") ||
     normalized.includes("/pnpm/") ||
     normalized.endsWith("/pnpm")
   );
@@ -66,26 +63,24 @@ export function mergeServicePath(
     if (isSameOrChildPath(normalized, cwd)) {
       return undefined;
     }
+    const realSegment = resolveIdentityPathViaExistingAncestorSync(normalized);
     try {
-      const realSegment = resolveIdentityPathViaExistingAncestorSync(normalized);
       const realCwd = path.normalize(fs.realpathSync.native(cwd));
-      if (realSegment && isSameOrChildPath(realSegment, realCwd)) {
+      if (isSameOrChildPath(realSegment, realCwd)) {
         return undefined;
       }
     } catch {
-      // Legacy PATH entries may no longer exist; keep filtering best-effort.
+      // Unavailable cwd identity leaves the lexical check in force.
     }
-    return normalized;
-  };
-  const shouldPreserveNormalizedPathSegment = (segment: string) => {
-    if (isNonMinimalServicePathEntry(segment, platform)) {
-      return false;
+    if (isNonMinimalServicePathEntry(normalized, platform)) {
+      return undefined;
     }
-    const resolved = path.resolve(segment);
-    const realResolved = resolveIdentityPathViaExistingAncestorSync(resolved);
-    return ![...normalizedTmpDirs, ...realTmpDirs].some(
-      (tmpRoot) => isSameOrChildPath(resolved, tmpRoot) || isSameOrChildPath(realResolved, tmpRoot),
-    );
+    return [...normalizedTmpDirs, ...realTmpDirs].some(
+      (tmpRoot) =>
+        isSameOrChildPath(normalized, tmpRoot) || isSameOrChildPath(realSegment, tmpRoot),
+    )
+      ? undefined
+      : normalized;
   };
   const addPath = (value: string | undefined, options?: { preserve?: boolean }) => {
     if (typeof value !== "string" || value.trim().length === 0) {
@@ -94,9 +89,6 @@ export function mergeServicePath(
     for (const segment of value.split(path.delimiter)) {
       const trimmed = segment.trim();
       const candidate = options?.preserve ? normalizePreservedPathSegment(trimmed) : trimmed;
-      if (options?.preserve && (!candidate || !shouldPreserveNormalizedPathSegment(candidate))) {
-        continue;
-      }
       if (!candidate || seen.has(candidate)) {
         continue;
       }

@@ -151,7 +151,7 @@ private actor GatewayEndpointRemoteEnsureGate {
     }
 }
 
-@Suite(.gatewayTLSStoreIsolated)
+@Suite(.gatewayTLSStoreIsolated, .testWaitLimit)
 struct GatewayEndpointStoreTests {
     @MainActor
     @Test func `live local source uses canonical default and named profile ports`() async throws {
@@ -391,6 +391,27 @@ struct GatewayEndpointStoreTests {
             mode: mode,
             localBasePath: localBasePath,
             authToken: authToken)
+    }
+
+    @Test(arguments: ["token", "password"], [false, true])
+    func `local credentials prefer config while remote credentials retain env overrides`(
+        credential: String,
+        isRemote: Bool) throws
+    {
+        let kind = try #require(GatewayEndpointStore.Credential(rawValue: credential))
+        let root: [String: Any] = [
+            "gateway": [isRemote ? "remote" : "auth": [credential: "  configured-secret  "]],
+        ]
+        let resolved = GatewayEndpointStore.resolveGatewayCredential(
+            kind,
+            isRemote: isRemote,
+            root: root,
+            env: ["OPENCLAW_GATEWAY_\(credential.uppercased())": "stale-environment-secret"],
+            launchdSnapshot: self.makeLaunchAgentSnapshot(
+                token: "service-token",
+                password: "service-password"))
+
+        #expect(resolved == (isRemote ? "stale-environment-secret" : "configured-secret"))
     }
 
     @Test func `resolve gateway token prefers env and falls back to launchd`() {
@@ -1172,16 +1193,14 @@ extension GatewayEndpointStoreTests {
 
             // Observe publication only. Another endpoint read would hide this bug by
             // completing the abandoned waiter's ready/error publication itself.
-            let outcome = try? await AsyncTimeout.withTimeout(
-                seconds: 1,
-                onTimeout: { CancellationError() },
-                operation: { () async -> GatewayEndpointState? in
-                    for await state in stream where state.routeRevision == connecting.routeRevision {
-                        if case .connecting = state { continue }
-                        return state
-                    }
-                    return nil
-                })
+            let outcome: GatewayEndpointState? = try await {
+                for await state in stream where state.routeRevision == connecting.routeRevision {
+                    if case .connecting = state { continue }
+                    return state
+                }
+                Issue.record("Still waiting for remote recovery publication")
+                throw CancellationError()
+            }()
             if fails {
                 #expect(outcome == .unavailable(
                     mode: .remote,

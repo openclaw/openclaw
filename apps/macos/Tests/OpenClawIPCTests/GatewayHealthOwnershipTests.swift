@@ -17,6 +17,7 @@ private final class HealthGatewayFixture {
     let revision = LockIsolated<UInt64>(1)
     let requests = LockIsolated<[Request]>([])
     let held = LockIsolated<Request?>(nil)
+    private let heldRequestRecorded = AsyncTestSignal()
     let onHeldRequest = LockIsolated<(@Sendable (Request) -> Void)?>(nil)
     let holdHealth = LockIsolated(false)
     let holdPreflight = LockIsolated(true)
@@ -33,6 +34,7 @@ private final class HealthGatewayFixture {
         let revision = self.revision
         let requests = self.requests
         let held = self.held
+        let heldRequestRecorded = self.heldRequestRecorded
         let onHeldRequest = self.onHeldRequest
         let holdHealth = self.holdHealth
         let holdPreflight = self.holdPreflight
@@ -61,6 +63,7 @@ private final class HealthGatewayFixture {
                         onHeldRequest(request)
                     } else {
                         held.setValue(request)
+                        heldRequestRecorded.notify()
                     }
                 } else {
                     Self.respond(request)
@@ -99,10 +102,12 @@ private final class HealthGatewayFixture {
         AppStateStore.shared.profileAccentHex = self.previousAccent
     }
 
-    func waitForHeld(after previousID: String? = nil) async throws -> Request {
-        let deadline = ContinuousClock.now + .seconds(2)
-        while self.held.value == nil || self.held.value?.id == previousID, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(2))
+    func waitForHeld(
+        after previousID: String? = nil,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws -> Request
+    {
+        try await self.heldRequestRecorded.wait("held health request", sourceLocation: sourceLocation) {
+            self.held.value != nil && self.held.value?.id != previousID
         }
         let request = try #require(self.held.value)
         try #require(request.id != previousID)
@@ -129,7 +134,7 @@ private final class HealthGatewayFixture {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct GatewayHealthOwnershipTests {
     @Test(arguments: [false, true], [false, true])
@@ -215,9 +220,8 @@ struct GatewayHealthOwnershipTests {
                 let lease = try #require(await fixture.gateway.captureServerLease())
                 let socket = try #require(fixture.requests.value.last?.socket)
                 socket.emitReceiveFailure()
-                let deadline = ContinuousClock.now + .seconds(2)
-                while fixture.gateway.serverLeaseMatchesCurrentState(lease), ContinuousClock.now < deadline {
-                    try await Task.sleep(for: .milliseconds(2))
+                try await TestWait.state("retired health server lease") {
+                    !fixture.gateway.serverLeaseMatchesCurrentState(lease)
                 }
                 #expect(!fixture.gateway.serverLeaseMatchesCurrentState(lease))
                 fixture.holdHealth.setValue(true)
@@ -260,17 +264,11 @@ struct GatewayHealthOwnershipTests {
             do {
                 let a = try await fixture.waitForHeld()
                 HealthGatewayFixture.respond(a)
-                let firstDeadline = ContinuousClock.now + .seconds(2)
-                while store.snapshot == nil, ContinuousClock.now < firstDeadline {
-                    try await Task.sleep(for: .milliseconds(2))
-                }
+                try await TestWait.state("Gateway A health snapshot") { store.snapshot != nil }
                 #expect(store.snapshot?.channelLabels?["fixture"] == "Gateway A")
                 fixture.isReachable.setValue(false)
                 a.socket.emitReceiveFailure()
-                let disconnectDeadline = ContinuousClock.now + .seconds(2)
-                while store.lastError == nil, ContinuousClock.now < disconnectDeadline {
-                    try await Task.sleep(for: .milliseconds(2))
-                }
+                try await TestWait.state("health disconnect error") { store.lastError != nil }
                 #expect(store.lastError != nil)
                 #expect(store.snapshot?.channelLabels?["fixture"] == "Gateway A")
                 fixture.revision.setValue(2)
@@ -280,10 +278,7 @@ struct GatewayHealthOwnershipTests {
                 let b = try await fixture.waitForHeld(after: a.id)
                 #expect(store.snapshot == nil)
                 HealthGatewayFixture.respond(b)
-                let secondDeadline = ContinuousClock.now + .seconds(2)
-                while store.snapshot == nil, ContinuousClock.now < secondDeadline {
-                    try await Task.sleep(for: .milliseconds(2))
-                }
+                try await TestWait.state("Gateway B health snapshot") { store.snapshot != nil }
                 #expect(store.snapshot?.channelLabels?["fixture"] == "Gateway B")
                 #expect(!store.isRefreshing)
             } catch {
@@ -306,9 +301,8 @@ struct GatewayHealthOwnershipTests {
             do {
                 let initial = try await fixture.waitForHeld()
                 HealthGatewayFixture.respond(initial)
-                let deadline = ContinuousClock.now + .seconds(2)
-                while store.isRefreshing || store.snapshot == nil, ContinuousClock.now < deadline {
-                    try await Task.sleep(for: .milliseconds(2))
+                try await TestWait.state("completed initial health refresh") {
+                    !store.isRefreshing && store.snapshot != nil
                 }
                 try #require(store.snapshot?.channelLabels?["fixture"] == "Gateway A")
                 try #require(!store.isRefreshing)
@@ -319,10 +313,7 @@ struct GatewayHealthOwnershipTests {
                 fixture.isReachable.setValue(false)
                 pending.socket.emitReceiveFailure()
                 await read.value
-                let disconnectDeadline = ContinuousClock.now + .seconds(2)
-                while store.lastError == nil, ContinuousClock.now < disconnectDeadline {
-                    try await Task.sleep(for: .milliseconds(2))
-                }
+                try await TestWait.state("health disconnect error") { store.lastError != nil }
                 #expect(store.lastError != nil)
                 #expect(!store.isRefreshing)
                 #expect(store.snapshot?.channelLabels?["fixture"] == (onDemand ? nil : "Gateway A"))

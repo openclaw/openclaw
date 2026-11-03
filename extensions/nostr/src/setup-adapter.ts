@@ -33,13 +33,12 @@ export function buildNostrSetupPatch(accountId: string, patch: Record<string, un
 export function parseRelayUrls(raw: string): { relays: string[]; error?: string } {
   const relays: string[] = [];
   for (const entry of splitSetupEntries(raw)) {
-    try {
-      const parsed = new URL(entry);
-      if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-        return { relays: [], error: `Relay must use ws:// or wss:// (${entry})` };
-      }
-    } catch {
+    const parsed = URL.parse(entry);
+    if (!parsed) {
       return { relays: [], error: `Invalid relay URL: ${entry}` };
+    }
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return { relays: [], error: `Relay must use ws:// or wss:// (${entry})` };
     }
     relays.push(entry);
   }

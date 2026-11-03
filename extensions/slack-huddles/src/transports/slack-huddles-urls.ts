@@ -1,5 +1,5 @@
 import type { MeetingBrowserCandidateTab } from "openclaw/plugin-sdk/meeting-runtime";
-import { slackHuddlesInvalidRequest } from "../errors.js";
+import { SlackHuddlesInvalidRequestError } from "../errors.js";
 
 type SlackHuddleIdentity = { channel: string; team?: string };
 
@@ -23,29 +23,26 @@ function parseSlackHuddleIdentity(input: string | undefined): SlackHuddleIdentit
   ) {
     return { team, channel: qualifiedChannel };
   }
-  try {
-    const url = new URL(value);
-    if (
-      url.protocol !== "https:" ||
-      url.port ||
-      url.username ||
-      url.password ||
-      !/^[a-z0-9-]+\.slack\.com$/i.test(url.hostname)
-    ) {
-      return undefined;
-    }
-    const match = url.pathname.match(/^\/huddle\/(?:([TE][A-Z0-9]{8,})\/)?([CGD][A-Z0-9]{8,})\/?$/);
-    const matchedChannel = match?.[2];
-    return matchedChannel ? { team: match?.[1], channel: matchedChannel } : undefined;
-  } catch {
+  const url = URL.parse(value);
+  if (
+    !url ||
+    url.protocol !== "https:" ||
+    url.port ||
+    url.username ||
+    url.password ||
+    !/^[a-z0-9-]+\.slack\.com$/i.test(url.hostname)
+  ) {
     return undefined;
   }
+  const match = url.pathname.match(/^\/huddle\/(?:([TE][A-Z0-9]{8,})\/)?([CGD][A-Z0-9]{8,})\/?$/);
+  const matchedChannel = match?.[2];
+  return matchedChannel ? { team: match?.[1], channel: matchedChannel } : undefined;
 }
 
 export function normalizeSlackHuddleUrl(input: unknown): string {
   const identity = typeof input === "string" ? parseSlackHuddleIdentity(input) : undefined;
   if (!identity) {
-    throw slackHuddlesInvalidRequest(
+    throw new SlackHuddlesInvalidRequestError(
       "Use a Slack Copy huddle link (https://app.slack.com/huddle/TEAM/CHANNEL), an uppercase channel id such as C0123ABCD or channel:C0123ABCD, or team:T0123ABCD:channel:C0123ABCD. Message permalinks, user ids, and slack:// links are not huddle links.",
     );
   }

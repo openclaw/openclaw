@@ -1,7 +1,8 @@
-import { constants, DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, expect, it, vi } from "vitest";
 import { decodeMemoryEmbedding } from "../../packages/memory-host-sdk/src/host/embedding-vector.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { collectErrorGraphCandidates, readErrorCauses } from "../infra/errors.js";
 import { decodeUsageCostRollup } from "../infra/session-cost-usage-rollup-codec.js";
 import { createSessionUsageRollupData } from "../infra/session-cost-usage-rollup.js";
 import { resolveZstdCodec } from "../infra/zstd-codec.js";
@@ -11,21 +12,62 @@ import { AGENT_DATABASE_MAINTENANCE_LEASE } from "./openclaw-agent-db-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
-  seedOpenClawAgentSchemaV21,
-  OPENCLAW_AGENT_SCHEMA_V21_SQL,
-} from "./openclaw-agent-schema-v21.test-support.js";
-import {
   seedOpenClawAgentSchemaV22,
   OPENCLAW_AGENT_SCHEMA_V22_SQL,
 } from "./openclaw-agent-schema-v22.test-support.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-function seedHistoricalData(db: DatabaseSync, version: number) {
+function readRows(db: DatabaseSync, sql: string, bigints = false) {
+  const statement = db.prepare(sql);
+  statement.setReadBigInts(bigints);
+  return statement.all();
+}
+
+function select(db: DatabaseSync, table: string, columns = "*", order = "rowid") {
+  return readRows(db, `SELECT ${columns} FROM ${table} ORDER BY ${order}`);
+}
+
+function withHistoricalDatabase(
+  run: (fixture: {
+    db: DatabaseSync;
+    pathname: string;
+    env: NodeJS.ProcessEnv;
+    event: string;
+    migrate: () => void;
+    publish: () => Promise<void>;
+  }) => Promise<void>,
+  encoding?: string,
+) {
+  return withOpenClawTestState({ scenario: "minimal" }, async ({ path, env }) => {
+    const pathname = path("legacy.sqlite");
+    let event: string;
+    {
+      using seed = new DatabaseSync(pathname);
+      if (encoding) {
+        seed.exec(`PRAGMA encoding = '${encoding}'; PRAGMA journal_mode = WAL`);
+      }
+      seedOpenClawAgentSchemaV22(seed);
+      ({ event } = seedHistoricalData(seed));
+    }
+    using db = new DatabaseSync(pathname);
+    const migrateFixture = () =>
+      ensureOpenClawAgentDatabaseSchema(db, { agentId: "main", path: pathname, env });
+    await run({
+      db,
+      pathname,
+      env,
+      event,
+      migrate: migrateFixture,
+      publish: () => withAgentDatabaseMaintenanceLease({ env }, async () => migrateFixture()),
+    });
+  });
+}
+
+function seedHistoricalData(db: DatabaseSync) {
   const event = ` {"type":"message","id":"first","id":"second","parentId":null,"message":{"role":"assistant","content":${JSON.stringify("saffronquasar 雪🦞 ".repeat(1024))}}}\n`;
   db.exec(`
     INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at)
@@ -103,21 +145,13 @@ function seedHistoricalData(db: DatabaseSync, version: number) {
   db.exec(`INSERT INTO session_transcript_index_state
     (session_id, indexed_seq, needs_rebuild, active_event_count, active_message_count, updated_at)
     VALUES ('hot', 99, 1, 1, 1, 101);`);
-  if (version === 22) {
-    seedDeployedFtsOwnership(db);
-  }
-  return { event, usage };
+  seedDeployedFtsOwnership(db);
+  return { event };
 }
 
-const dirtyV22Sessions = new Set([
-  "hot",
-  "missing-map",
-  "partial",
-  "dangling",
-  "claimed",
-  "misowned",
-  "misowner",
-]);
+const dirtyV22Sessions = new Set(
+  "hot missing-map partial dangling claimed misowned misowner".split(" "),
+);
 
 function seedDeployedFtsOwnership(db: DatabaseSync): void {
   db.exec(`
@@ -147,532 +181,247 @@ function seedDeployedFtsOwnership(db: DatabaseSync): void {
   `);
 }
 
-const preservedTables = [
-  "session_nodes",
-  "session_canonical_validation_pending",
-  "session_windows",
-  "transcript_event_identities",
-  "session_transcript_active_events",
-  "transcript_rewrite_watermarks",
-  "session_transcript_cold_archives",
-  "session_transcript_fts",
-  "memory_index_sources",
-  "memory_index_chunk_provenance",
-  "memory_index_chunk_recall_metadata",
-  "memory_index_state",
-] as const;
+const preservedTables = `session_nodes session_canonical_validation_pending session_windows
+  transcript_event_identities session_transcript_active_events transcript_rewrite_watermarks
+  session_transcript_cold_archives session_transcript_fts memory_index_sources
+  memory_index_chunk_provenance memory_index_chunk_recall_metadata memory_index_state`.split(/\s+/);
 
-function preservedRows(db: DatabaseSync) {
-  return Object.fromEntries(
-    preservedTables.map((table) => [
-      table,
-      db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
-    ]),
-  );
-}
-
-function ftsStorage(db: DatabaseSync) {
-  return Object.fromEntries(
+function legacySnapshot(db: DatabaseSync) {
+  const ftsStorage = Object.fromEntries(
     [
       ["data", "rowid"],
       ["idx", "segid, term"],
       ["content", "rowid"],
       ["docsize", "rowid"],
       ["config", "k"],
-    ].map(([suffix, order]) => {
-      const statement = db.prepare(
-        `SELECT * FROM session_transcript_fts_${suffix} ORDER BY ${order}`,
-      );
-      statement.setReadBigInts(true);
-      return [suffix, statement.all()];
-    }),
+    ].map(([suffix, order]) => [
+      suffix,
+      readRows(db, `SELECT * FROM session_transcript_fts_${suffix} ORDER BY ${order}`, true),
+    ]),
   );
-}
-
-function legacySnapshot(db: DatabaseSync) {
-  const fts = db.prepare("SELECT rowid, * FROM session_transcript_fts ORDER BY rowid");
-  fts.setReadBigInts(true);
-  const matches = db.prepare(
-    "SELECT rowid FROM session_transcript_fts WHERE session_transcript_fts MATCH 'saffronquasar' ORDER BY rank",
-  );
-  matches.setReadBigInts(true);
   return {
-    schema: db
-      .prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
-      .all(),
+    schema: select(db, "sqlite_schema", "type, name, tbl_name, sql", "type, name"),
     version: db.prepare("PRAGMA user_version").get(),
-    owner: db.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all(),
-    events: db
-      .prepare(
-        "SELECT rowid, session_id, seq, hex(CAST(event_json AS BLOB)) AS bytes, created_at FROM transcript_events ORDER BY rowid",
-      )
-      .all(),
-    chunks: db.prepare("SELECT rowid, * FROM memory_index_chunks ORDER BY rowid").all(),
-    vectors: db.prepare("SELECT rowid, * FROM memory_embedding_cache ORDER BY rowid").all(),
-    cache: db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all(),
-    indexState: db
-      .prepare("SELECT * FROM session_transcript_index_state ORDER BY session_id")
-      .all(),
-    ftsMapping: (() => {
-      if (
-        !db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'session_transcript_fts_rows'").get()
-      ) {
-        return undefined;
-      }
-      const statement = db.prepare("SELECT * FROM session_transcript_fts_rows ORDER BY rowid");
-      statement.setReadBigInts(true);
-      return statement.all();
-    })(),
-    ftsStorage: ftsStorage(db),
-    fts: fts.all(),
-    matches: matches.all(),
-    preserved: preservedRows(db),
+    owner: select(db, "schema_meta", "*", "meta_key"),
+    events: select(
+      db,
+      "transcript_events",
+      "rowid, session_id, seq, hex(CAST(event_json AS BLOB)) AS bytes, created_at",
+    ),
+    chunks: select(db, "memory_index_chunks", "rowid, *"),
+    vectors: select(db, "memory_embedding_cache", "rowid, *"),
+    cache: select(db, "cache_entries", "*", "scope, key"),
+    indexState: select(db, "session_transcript_index_state", "*", "session_id"),
+    ftsMapping: db
+      .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'session_transcript_fts_rows'")
+      .get()
+      ? readRows(db, "SELECT * FROM session_transcript_fts_rows ORDER BY rowid", true)
+      : undefined,
+    ftsStorage,
+    fts: readRows(db, "SELECT rowid, * FROM session_transcript_fts ORDER BY rowid", true),
+    matches: readRows(
+      db,
+      "SELECT rowid FROM session_transcript_fts WHERE session_transcript_fts MATCH 'saffronquasar' ORDER BY rank",
+      true,
+    ),
+    preserved: Object.fromEntries(preservedTables.map((table) => [table, select(db, table)])),
   };
 }
 
-it("keeps independently sourced schema21 and deployed schema22 fixtures byte-exact", () => {
-  expect(sha256Hex(OPENCLAW_AGENT_SCHEMA_V21_SQL)).toBe(
-    "8deb7d7000eab7c43bbee427f2e7a9b603bc549562594088a14eecf7c8cc5926",
-  );
-  expect(sha256Hex(OPENCLAW_AGENT_SCHEMA_V22_SQL)).toBe(
-    "23f2a1e85494a512bce3f32623aed2beaf4e82bbeeb4362f6cc33d5dd3b8a6ea",
-  );
+it("refuses a schema22 dependent view without changing storage", async () => {
+  await withHistoricalDatabase(async ({ db, publish }) => {
+    db.exec(
+      "CREATE VIEW retained_fts_map AS SELECT fts_rowid, session_id FROM session_transcript_fts_rows",
+    );
+    const before = legacySnapshot(db);
+    await expect(publish()).rejects.toThrow();
+    expect(legacySnapshot(db)).toEqual(before);
+  });
 });
 
-it.each(["missing mapping", "extra column", "dependent view", "draft layout"] as const)(
-  "refuses an unsupported schema22 %s without changing storage",
-  async (shape) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const pathname = state.path("unsupported22.sqlite");
-      const db = new DatabaseSync(pathname);
-      try {
-        if (shape === "draft layout") {
-          db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-          db.exec(`PRAGMA user_version = 22;
-            INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-            VALUES ('primary', 'agent', 22, 'main', 1, 1)`);
-        } else {
-          seedOpenClawAgentSchemaV22(db);
-          seedHistoricalData(db, 22);
-          if (shape === "missing mapping") {
-            db.exec("DROP TABLE session_transcript_fts_rows");
-          } else if (shape === "extra column") {
-            db.exec(
-              "ALTER TABLE session_transcript_fts_rows ADD COLUMN retained_text TEXT; UPDATE session_transcript_fts_rows SET retained_text = 'preserved'",
-            );
-          } else {
-            db.exec(
-              "CREATE VIEW retained_fts_map AS SELECT fts_rowid, session_id FROM session_transcript_fts_rows",
-            );
-          }
-        }
-        const before = legacySnapshot(db);
-        await expect(
-          withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-            ensureOpenClawAgentDatabaseSchema(db, {
-              agentId: "main",
-              path: pathname,
-              env: state.env,
-            });
-          }),
-        ).rejects.toThrow();
-        expect(legacySnapshot(db)).toEqual(before);
-      } finally {
-        db.close();
-      }
-    });
-  },
-);
-
-it("checks deployed ownership through indexes across 5000 sessions", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const pathname = state.path("scaled22.sqlite");
-    const db = new DatabaseSync(pathname);
+it("rolls back converted storage when the maintenance scope rejects publication", async () => {
+  await withHistoricalDatabase(async ({ db, pathname, publish }) => {
+    const scope = createOpenClawDatabaseMaintenanceScope();
+    const refusal = new Error("Recovery backup coverage is no longer current");
+    let reachedPublication = false;
     try {
-      seedOpenClawAgentSchemaV22(db);
-      seedHistoricalData(db, 22);
-      db.exec(`WITH RECURSIVE sessions(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM sessions WHERE n < 5000)
-        INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
-        SELECT 'scale-' || n, 'agent:main:history', 1, 2 FROM sessions;
-        INSERT INTO session_transcript_fts(text, session_id, message_id)
-        SELECT 'indexed ownership', session_id, session_id FROM session_windows WHERE session_id LIKE 'scale-%';
-        INSERT INTO session_transcript_fts_rows(session_id, fts_rowid)
-        SELECT session_id, rowid FROM session_transcript_fts WHERE session_id LIKE 'scale-%';
-        INSERT INTO session_transcript_index_state(session_id, indexed_seq, needs_rebuild, active_event_count, active_message_count, fts_row_count, updated_at)
-        SELECT session_id, 1, 0, 1, 1, 1, 2 FROM session_windows WHERE session_id LIKE 'scale-%';
-        UPDATE session_transcript_index_state SET fts_row_count = NULL WHERE session_id = 'scale-42';`);
-      const plans: string[] = [];
-      const exec = db.exec.bind(db);
-      const write = vi.spyOn(db, "exec").mockImplementation((sql) => {
-        if (sql.startsWith("UPDATE session_transcript_index_state AS state")) {
-          const update = sql.split(";")[0];
-          for (const row of db.prepare(`EXPLAIN QUERY PLAN ${update}`).all()) {
-            if (typeof row.detail !== "string") {
-              throw new Error("Missing ownership migration query-plan detail");
-            }
-            plans.push(row.detail);
-          }
+      const before = legacySnapshot(db);
+      scope.addAgentSchemaMigrationCheck((migration) => {
+        if (
+          migration.path === pathname &&
+          db.prepare("PRAGMA user_version").get()?.user_version === OPENCLAW_AGENT_SCHEMA_VERSION
+        ) {
+          reachedPublication = true;
+          throw refusal;
         }
-        exec(sql);
       });
-      await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-        ensureOpenClawAgentDatabaseSchema(db, { agentId: "main", path: pathname, env: state.env });
-      });
-      write.mockRestore();
-      expect(plans.some((detail) => detail.includes("idx_agent_transcript_fts_rows_session"))).toBe(
-        true,
-      );
-      expect(
-        plans.some((detail) => detail.includes("idx_session_transcript_fts_rows_session_message")),
-      ).toBe(true);
-      expect(plans.some((detail) => detail.includes("INTEGER PRIMARY KEY"))).toBe(true);
-      expect(plans.filter((detail) => /SCAN (old|current)\b/.test(detail))).toEqual([]);
-      expect(
-        db
-          .prepare(
-            "SELECT session_id FROM session_transcript_index_state WHERE session_id LIKE 'scale-%' AND needs_rebuild != 0",
-          )
-          .all(),
-      ).toEqual([{ session_id: "scale-42" }]);
+      await expect(scope.run(publish)).rejects.toBe(refusal);
+      expect(reachedPublication).toBe(true);
+      expect(legacySnapshot(db)).toEqual(before);
     } finally {
-      db.close();
+      await scope.close();
     }
   });
 });
 
-describe.each([21, 22])("agent schema %s storage cutover", (version) => {
-  const seedSchema = version === 21 ? seedOpenClawAgentSchemaV21 : seedOpenClawAgentSchemaV22;
-  it("rolls back converted storage when the maintenance scope rejects publication", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const pathname = state.path("revoked-coverage21.sqlite");
-      const db = new DatabaseSync(pathname);
-      const scope = createOpenClawDatabaseMaintenanceScope();
-      const refusal = new Error("Recovery backup coverage is no longer current");
-      let reachedPublication = false;
+it.each(["UTF-8", "UTF-16le"] as const)(
+  "atomically publishes all new formats from a genuine %s historical database",
+  async (encoding) => {
+    expect(sha256Hex(OPENCLAW_AGENT_SCHEMA_V22_SQL)).toBe(
+      "23f2a1e85494a512bce3f32623aed2beaf4e82bbeeb4362f6cc33d5dd3b8a6ea",
+    );
+    await withHistoricalDatabase(async ({ db, pathname, event, publish, migrate }) => {
+      const before = legacySnapshot(db);
+      // These entries have no cold fields, start time, or optional references.
+      const expectedPreserved = {
+        ...before.preserved,
+        session_windows: select(
+          db,
+          "session_windows",
+          "*, NULL AS row_transcript_json, NULL AS row_transcript_updated_at",
+        ),
+        session_nodes: select(
+          db,
+          "session_nodes",
+          "*, 0 AS snapshot_revision, NULL AS session_started_at, 0 AS has_optional_references",
+        ),
+      };
+      using reader = new DatabaseSync(pathname, { readOnly: true });
+      let observedPublication = false;
+      const exec = db.exec.bind(db);
+      const write = vi.spyOn(db, "exec").mockImplementation((sql) => {
+        exec(sql);
+        if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`) {
+          observedPublication = true;
+          expect(legacySnapshot(reader)).toEqual(before);
+        }
+      });
+      await publish();
+      write.mockRestore();
+      expect(observedPublication).toBe(true);
+      const after = legacySnapshot(reader);
+      expect(after.version).toEqual({ user_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+      expect(reader.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+        schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(reader.prepare("SELECT * FROM session_entry_snapshots").all()).toEqual([]);
+      expect(after.preserved).toEqual(expectedPreserved);
+      for (const field of ["fts", "ftsStorage", "matches"] as const) {
+        expect(after[field]).toEqual(before[field]);
+      }
+      expect(after.ftsMapping).toEqual(
+        before.fts.map((row) => ({
+          id: row.rowid,
+          session_id: row.session_id,
+          message_id: row.message_id,
+        })),
+      );
+      expect(after.indexState).toEqual(
+        before.indexState.map((row) => {
+          const { fts_row_count: _count, ...preserved } = row;
+          return {
+            ...preserved,
+            needs_rebuild: dirtyV22Sessions.has(String(row.session_id)) ? 1 : row.needs_rebuild,
+          };
+        }),
+      );
+      const rows = select(
+        reader,
+        "transcript_events",
+        "rowid, seq, event_json, event_zstd, event_utf8_bytes, hex(CAST(event_json AS BLOB)) AS bytes",
+      );
+      expect(rows.map((row) => [row.rowid, row.seq])).toEqual([
+        [41, 7],
+        [52, 90],
+        [63, 99],
+      ]);
+      for (const [index, row] of rows.entries()) {
+        if (row.event_zstd instanceof Uint8Array) {
+          const codec = resolveZstdCodec();
+          expect(codec).not.toBeNull();
+          expect(
+            codec!.decompress(row.event_zstd, Number(row.event_utf8_bytes)).toString("utf8"),
+          ).toBe(event);
+          expect(row.event_json).toBeNull();
+        } else {
+          expect(row.bytes).toBe(before.events[index]?.bytes);
+        }
+      }
+      expect(rows[0]?.event_zstd instanceof Uint8Array).toBe(
+        encoding === "UTF-8" && resolveZstdCodec() !== null,
+      );
+      const chunk = after.chunks.find((row) => row.id === "chunk")!;
+      expect(chunk.chunk_rowid).toBe(17);
+      const vector = after.vectors[0]!;
+      expect(vector).toMatchObject({ rowid: 23, dims: 2, updated_at: 20 });
+      for (const { embedding } of [chunk, vector]) {
+        if (!(embedding instanceof Uint8Array)) {
+          throw new Error("Expected binary vector");
+        }
+        expect(decodeMemoryEmbedding(embedding)).toEqual([1 + Number.EPSILON, 0.1]);
+      }
+      const cached = after.cache.find((row) => row.key === "usage")!;
+      expect(cached).toMatchObject({ scope: "session-cost-usage-rollup-v3", updated_at: 31 });
+      if (typeof cached.value_json !== "string" || !(cached.blob instanceof Uint8Array)) {
+        throw new Error("Expected migrated usage envelope/body");
+      }
+      // Version-6 reports predate the current pricing rules, so readers rebuild them.
+      expect(decodeUsageCostRollup(cached.value_json, "synthetic", cached.blob)).toBeUndefined();
+      expect(reader.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(reader.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+      const migrated = legacySnapshot(db);
+      migrate();
+      expect(legacySnapshot(db)).toEqual(migrated);
+    }, encoding);
+  },
+);
+
+it("rolls every conversion back when maintenance authority is lost", async () => {
+  await withHistoricalDatabase(async ({ db, env, migrate, publish }) => {
+    const before = legacySnapshot(db);
+    let reachedPublication = false;
+    const migrating = withAgentDatabaseMaintenanceLease({ env }, async (maintenance) => {
+      const exec = db.exec.bind(db);
+      vi.spyOn(db, "exec").mockImplementation((sql) => {
+        exec(sql);
+        if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`) {
+          reachedPublication = true;
+          runOpenClawStateWriteTransaction(
+            ({ db: shared }) => {
+              shared
+                .prepare("UPDATE state_leases SET expires_at = 0 WHERE scope = ? AND lease_key = ?")
+                .run(AGENT_DATABASE_MAINTENANCE_LEASE.scope, AGENT_DATABASE_MAINTENANCE_LEASE.key);
+            },
+            { env },
+          );
+        }
+      });
       try {
-        seedSchema(db);
-        seedHistoricalData(db, version);
-        const before = legacySnapshot(db);
-        scope.addAgentSchemaMigrationCheck((migration) => {
-          if (
-            migration.path === pathname &&
-            db.prepare("PRAGMA user_version").get()?.user_version === OPENCLAW_AGENT_SCHEMA_VERSION
-          ) {
-            reachedPublication = true;
-            throw refusal;
-          }
-        });
-        await expect(
-          scope.run(() =>
-            withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-              ensureOpenClawAgentDatabaseSchema(db, {
-                agentId: "main",
-                path: pathname,
-                env: state.env,
-              });
-            }),
-          ),
-        ).rejects.toBe(refusal);
-        expect(reachedPublication).toBe(true);
-        expect(legacySnapshot(db)).toEqual(before);
+        migrate();
       } finally {
-        try {
-          await scope.close();
-        } finally {
-          db.close();
+        vi.restoreAllMocks();
+        if (reachedPublication) {
+          expect(() => maintenance.assertOwned()).toThrowError(
+            expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" }),
+          );
         }
       }
     });
+    const rejection: unknown = await migrating.catch((error: unknown) => error);
+    expect(
+      collectErrorGraphCandidates(rejection, readErrorCauses).some(
+        (error) =>
+          error instanceof OpenClawStateLeaseError && error.code === "OPENCLAW_STATE_LEASE_LOST",
+      ),
+    ).toBe(true);
+    expect(reachedPublication).toBe(true);
+    expect(legacySnapshot(db)).toEqual(before);
+    expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    await publish();
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
-
-  it.each(["UTF-8", "UTF-16le"] as const)(
-    "atomically publishes all new formats from a genuine %s historical database",
-    async (encoding) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const pathname = state.path("legacy21.sqlite");
-        let db = new DatabaseSync(pathname);
-        let observer: DatabaseSync | undefined;
-        try {
-          db.exec(`PRAGMA encoding = '${encoding}'; PRAGMA journal_mode = WAL`);
-          seedSchema(db);
-          const { event, usage } = seedHistoricalData(db, version);
-          db.close();
-          db = new DatabaseSync(pathname);
-          const before = legacySnapshot(db);
-          // These entries have no cold fields: migration only adds their initial revision.
-          const expectedPreserved = {
-            ...before.preserved,
-            session_nodes: db
-              .prepare("SELECT *, 0 AS snapshot_revision FROM session_nodes ORDER BY rowid")
-              .all(),
-          };
-          expect(
-            db
-              .prepare(
-                `SELECT type, "notnull" AS not_null FROM pragma_table_info('transcript_events') WHERE name = 'event_json'`,
-              )
-              .get(),
-          ).toEqual({ type: "TEXT", not_null: 1 });
-          expect(
-            db
-              .prepare(
-                "SELECT name FROM pragma_table_info('transcript_events') WHERE name = 'event_zstd'",
-              )
-              .get(),
-          ).toBeUndefined();
-          observer = new DatabaseSync(pathname, { readOnly: true });
-          const reader = observer;
-          let observedPublication = false;
-          const exec = db.exec.bind(db);
-          const write = vi.spyOn(db, "exec").mockImplementation((sql) => {
-            exec(sql);
-            if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`) {
-              observedPublication = true;
-              expect(legacySnapshot(reader)).toEqual(before);
-            }
-          });
-          await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-            ensureOpenClawAgentDatabaseSchema(db, {
-              agentId: "main",
-              path: pathname,
-              env: state.env,
-            });
-          });
-          write.mockRestore();
-          expect(observedPublication).toBe(true);
-          expect(reader.prepare("PRAGMA user_version").get()).toEqual({
-            user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-          });
-          expect(reader.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-            schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-          });
-          expect(preservedRows(reader)).toEqual(expectedPreserved);
-          expect(reader.prepare("SELECT * FROM session_entry_snapshots").all()).toEqual([]);
-          const fts = reader.prepare("SELECT rowid, * FROM session_transcript_fts ORDER BY rowid");
-          fts.setReadBigInts(true);
-          expect(fts.all()).toEqual(before.fts);
-          expect(ftsStorage(reader)).toEqual(before.ftsStorage);
-          const matches = reader.prepare(
-            "SELECT rowid FROM session_transcript_fts WHERE session_transcript_fts MATCH 'saffronquasar' ORDER BY rank",
-          );
-          matches.setReadBigInts(true);
-          expect(matches.all()).toEqual(before.matches);
-          const identities = reader.prepare(
-            "SELECT id, session_id, message_id FROM session_transcript_fts_rows ORDER BY id",
-          );
-          identities.setReadBigInts(true);
-          expect(identities.all()).toEqual(
-            before.fts.map((row) => ({
-              id: row.rowid,
-              session_id: row.session_id,
-              message_id: row.message_id,
-            })),
-          );
-          expect(
-            reader
-              .prepare("SELECT * FROM session_transcript_index_state ORDER BY session_id")
-              .all(),
-          ).toEqual(
-            before.indexState.map((row) => {
-              const { fts_row_count: _count, ...preserved } = row;
-              return {
-                ...preserved,
-                needs_rebuild:
-                  version === 22 && dirtyV22Sessions.has(String(row.session_id))
-                    ? 1
-                    : row.needs_rebuild,
-              };
-            }),
-          );
-          const rows = reader
-            .prepare(
-              "SELECT rowid, seq, event_json, event_zstd, event_utf8_bytes, hex(CAST(event_json AS BLOB)) AS bytes FROM transcript_events ORDER BY rowid",
-            )
-            .all();
-          expect(rows.map((row) => [row.rowid, row.seq])).toEqual([
-            [41, 7],
-            [52, 90],
-            [63, 99],
-          ]);
-          for (const [index, row] of rows.entries()) {
-            if (row.event_zstd instanceof Uint8Array) {
-              const codec = resolveZstdCodec();
-              expect(codec).not.toBeNull();
-              expect(
-                codec!.decompress(row.event_zstd, Number(row.event_utf8_bytes)).toString("utf8"),
-              ).toBe(event);
-              expect(row.event_json).toBeNull();
-            } else {
-              expect(row.bytes).toBe(before.events[index]?.bytes);
-            }
-          }
-          expect(rows[0]?.event_zstd instanceof Uint8Array).toBe(
-            encoding === "UTF-8" && resolveZstdCodec() !== null,
-          );
-          const chunk = reader
-            .prepare("SELECT chunk_rowid, embedding FROM memory_index_chunks WHERE id = 'chunk'")
-            .get()!;
-          expect(chunk.chunk_rowid).toBe(17);
-          if (!(chunk.embedding instanceof Uint8Array)) {
-            throw new Error("Expected binary chunk vector");
-          }
-          expect(decodeMemoryEmbedding(chunk.embedding)).toEqual([1 + Number.EPSILON, 0.1]);
-          const vector = reader
-            .prepare("SELECT rowid, embedding, dims, updated_at FROM memory_embedding_cache")
-            .get()!;
-          expect(vector).toMatchObject({ rowid: 23, dims: 2, updated_at: 20 });
-          if (!(vector.embedding instanceof Uint8Array)) {
-            throw new Error("Expected binary cached vector");
-          }
-          expect(decodeMemoryEmbedding(vector.embedding)).toEqual([1 + Number.EPSILON, 0.1]);
-          const cached = reader
-            .prepare(
-              "SELECT scope, value_json, blob, updated_at FROM cache_entries WHERE key = 'usage'",
-            )
-            .get()!;
-          expect(cached).toMatchObject({ scope: "session-cost-usage-rollup-v3", updated_at: 31 });
-          if (typeof cached.value_json !== "string" || !(cached.blob instanceof Uint8Array)) {
-            throw new Error("Expected migrated usage envelope/body");
-          }
-          expect(decodeUsageCostRollup(cached.value_json, "synthetic", cached.blob)).toEqual(usage);
-          expect(reader.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-          expect(reader.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-          expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
-          const migrated = legacySnapshot(db);
-          ensureOpenClawAgentDatabaseSchema(db, {
-            agentId: "main",
-            path: pathname,
-            env: state.env,
-          });
-          expect(legacySnapshot(db)).toEqual(migrated);
-        } finally {
-          observer?.close();
-          db.close();
-        }
-      });
-    },
-  );
-
-  it.each(["publication interrupted", "maintenance authority lost"] as const)(
-    "rolls every conversion back when %s",
-    async (failure) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const pathname = state.path("interrupted21.sqlite");
-        let db = new DatabaseSync(pathname);
-        try {
-          seedSchema(db);
-          seedHistoricalData(db, version);
-          db.close();
-          db = new DatabaseSync(pathname);
-          const before = legacySnapshot(db);
-          let reachedPublication = false;
-          const migrating = withAgentDatabaseMaintenanceLease(
-            { env: state.env },
-            async (maintenance) => {
-              if (failure === "publication interrupted") {
-                db.setAuthorizer((action, name, value) => {
-                  if (
-                    action === constants.SQLITE_PRAGMA &&
-                    name === "user_version" &&
-                    value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
-                  ) {
-                    reachedPublication = true;
-                    return constants.SQLITE_DENY;
-                  }
-                  return constants.SQLITE_OK;
-                });
-              } else {
-                const exec = db.exec.bind(db);
-                vi.spyOn(db, "exec").mockImplementation((sql) => {
-                  exec(sql);
-                  if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`) {
-                    reachedPublication = true;
-                    runOpenClawStateWriteTransaction(
-                      ({ db: shared }) => {
-                        shared
-                          .prepare(
-                            "UPDATE state_leases SET expires_at = 0 WHERE scope = ? AND lease_key = ?",
-                          )
-                          .run(
-                            AGENT_DATABASE_MAINTENANCE_LEASE.scope,
-                            AGENT_DATABASE_MAINTENANCE_LEASE.key,
-                          );
-                      },
-                      { env: state.env },
-                    );
-                  }
-                });
-              }
-              try {
-                ensureOpenClawAgentDatabaseSchema(db, {
-                  agentId: "main",
-                  path: pathname,
-                  env: state.env,
-                });
-              } finally {
-                db.setAuthorizer(null);
-                vi.restoreAllMocks();
-                if (failure === "maintenance authority lost" && reachedPublication) {
-                  expect(() => maintenance.assertOwned()).toThrowError(
-                    expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" }),
-                  );
-                }
-              }
-            },
-          );
-          const rejection: unknown = await migrating.catch((error: unknown) => error);
-          if (failure === "publication interrupted") {
-            expect(rejection).toMatchObject({ message: expect.stringMatching(/authoriz/i) });
-          } else {
-            const pending = [rejection];
-            const causes = new Set<unknown>();
-            for (const error of pending) {
-              if (causes.has(error)) {
-                continue;
-              }
-              causes.add(error);
-              if (error instanceof Error && error.cause) {
-                pending.push(error.cause);
-              }
-              if (error instanceof AggregateError) {
-                pending.push(...error.errors);
-              }
-            }
-            expect(
-              [...causes].some(
-                (error) =>
-                  error instanceof OpenClawStateLeaseError &&
-                  error.code === "OPENCLAW_STATE_LEASE_LOST",
-              ),
-            ).toBe(true);
-          }
-          expect(reachedPublication).toBe(true);
-          expect(legacySnapshot(db)).toEqual(before);
-          expect(
-            Boolean(
-              db
-                .prepare(
-                  "SELECT name FROM sqlite_schema WHERE name = 'session_transcript_fts_rows'",
-                )
-                .get(),
-            ),
-          ).toBe(version === 22);
-          expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
-          await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-            ensureOpenClawAgentDatabaseSchema(db, {
-              agentId: "main",
-              path: pathname,
-              env: state.env,
-            });
-          });
-          expect(db.prepare("PRAGMA user_version").get()).toEqual({
-            user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-          });
-          expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-        } finally {
-          db.close();
-        }
-      });
-    },
-  );
 });

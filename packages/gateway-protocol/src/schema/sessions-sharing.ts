@@ -4,6 +4,7 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 import { SessionCreatedActorSchema } from "./sessions.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 /** A selectable sharing identity is a created actor with a durable id. */
 export const SessionSharingIdentitySchema = closedObject({
@@ -19,10 +20,10 @@ export {
   type SessionVisibility,
 } from "./sessions-sharing-values.js";
 
-export const SessionSharingActionSchema = Type.Union([
-  Type.Literal("visibility"),
-  Type.Literal("member-added"),
-  Type.Literal("member-removed"),
+export const SessionSharingActionSchema = stringLiteralUnion([
+  "visibility",
+  "member-added",
+  "member-removed",
 ]);
 
 const SessionSharingTargetParamsSchema = {
@@ -87,8 +88,22 @@ export const SessionMembersListResultSchema = closedObject({
   allowedVisibilities: Type.Array(SessionVisibilitySchema),
 });
 
+export const SessionMemberPermissionLevelSchema = stringLiteralUnion(["read", "suggest", "send"]);
+
+export const SessionMemberPermissionSchema = closedObject({
+  identityId: NonEmptyString,
+  level: SessionMemberPermissionLevelSchema,
+  options: Type.Array(SessionMemberPermissionLevelSchema, {
+    minItems: 1,
+    maxItems: 2,
+    uniqueItems: true,
+  }),
+});
+
 export const SessionMembersListEvidenceResultSchema = closedObject({
   sessionKey: NonEmptyString,
+  /** Current profile-policy participation; independent of connection/login state. */
+  permissions: Type.Optional(Type.Array(SessionMemberPermissionSchema)),
   publicShare: Type.Optional(SessionPublicShareSchema),
   owner: Type.Optional(SessionSharingIdentitySchema),
   members: Type.Array(SessionMemberEvidenceSchema),
@@ -148,6 +163,8 @@ export type SessionMembersListParams = Static<typeof SessionMembersListParamsSch
 export type SessionMember = Static<typeof SessionMemberSchema>;
 export type SessionMemberEvidence = Static<typeof SessionMemberEvidenceSchema>;
 export type SessionMembersListResult = Static<typeof SessionMembersListResultSchema>;
+export type SessionMemberPermission = Static<typeof SessionMemberPermissionSchema>;
+export type SessionMemberPermissionLevel = Static<typeof SessionMemberPermissionLevelSchema>;
 export type SessionMembersListEvidenceResult = Static<
   typeof SessionMembersListEvidenceResultSchema
 >;

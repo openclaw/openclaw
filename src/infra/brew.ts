@@ -1,15 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-function isExecutable(filePath: string): boolean {
-  try {
-    fs.accessSync(filePath, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
+import { canAccessSync } from "./path-existence.js";
 
 type BrewResolutionOptions = {
   homeDir?: string;
@@ -19,20 +11,6 @@ type BrewResolutionOptions = {
    */
   env?: NodeJS.ProcessEnv;
 };
-
-function resolveBrewFromPath(pathEnv = process.env.PATH): string | undefined {
-  for (const dir of (pathEnv ?? "").split(path.delimiter)) {
-    const trimmed = dir.trim();
-    if (!trimmed || !path.isAbsolute(trimmed)) {
-      continue;
-    }
-    const candidate = path.join(trimmed, "brew");
-    if (isExecutable(candidate)) {
-      return candidate;
-    }
-  }
-  return undefined;
-}
 
 /** Returns standard Homebrew bin directories suitable for PATH augmentation. */
 export function resolveBrewPathDirs(opts?: BrewResolutionOptions): string[] {
@@ -54,9 +32,15 @@ export function resolveBrewExecutable(opts?: BrewResolutionOptions): string | un
 
   // Use the real process PATH, not opts.env, because callers may pass workspace
   // env loaded from untrusted project state.
-  const pathBrew = resolveBrewFromPath();
-  if (pathBrew) {
-    return pathBrew;
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    const trimmed = dir.trim();
+    if (!trimmed || !path.isAbsolute(trimmed)) {
+      continue;
+    }
+    const candidate = path.join(trimmed, "brew");
+    if (canAccessSync(candidate, fs.constants.X_OK)) {
+      return candidate;
+    }
   }
 
   return [
@@ -64,7 +48,7 @@ export function resolveBrewExecutable(opts?: BrewResolutionOptions): string | un
     "/home/linuxbrew/.linuxbrew/bin/brew",
     "/opt/homebrew/bin/brew",
     "/usr/local/bin/brew",
-  ].find(isExecutable);
+  ].find((candidate) => canAccessSync(candidate, fs.constants.X_OK));
 }
 
 /** Recognize formula-owned OpenClaw files and keep service paths independent of the keg version. */

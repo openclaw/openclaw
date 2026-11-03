@@ -276,7 +276,6 @@ export async function startWhatsAppQaDriverSession(params: {
   const observedMessages: WhatsAppQaDriverObservedMessage[] = [];
   const waiters = new Set<Waiter>();
   let pendingNotificationsWaiter: VoidWaiter | undefined;
-  let closed = false;
   let closedError: Error | undefined;
   let receivedPendingNotifications = false;
 
@@ -334,18 +333,15 @@ export async function startWhatsAppQaDriverSession(params: {
     sock.ev.off("connection.update", onConnectionUpdate);
   };
 
-  const closeSessionResources = (waiterError?: Error) => {
-    if (closed) {
+  const closeSessionResources = (waiterError: Error) => {
+    if (closedError) {
       return;
     }
-    closed = true;
     closedError = waiterError;
     settlePendingNotifications(waiterError);
     for (const waiter of waiters) {
       removeWaiter(waiter);
-      if (waiterError) {
-        waiter.reject(waiterError);
-      }
+      waiter.reject(waiterError);
     }
     removeMessageListener();
     void sock.end(undefined);
@@ -361,8 +357,8 @@ export async function startWhatsAppQaDriverSession(params: {
           resolve();
           return;
         }
-        if (closed) {
-          reject(closedError ?? new Error("WhatsApp QA driver session closed"));
+        if (closedError) {
+          reject(closedError);
           return;
         }
         const timeoutMs = params.connectionTimeoutMs ?? 45_000;
@@ -436,8 +432,8 @@ export async function startWhatsAppQaDriverSession(params: {
       if (existing) {
         return existing;
       }
-      if (closed) {
-        throw closedError ?? new Error("WhatsApp QA driver session closed");
+      if (closedError) {
+        throw closedError;
       }
       return await new Promise<WhatsAppQaDriverObservedMessage>((resolve, reject) => {
         const waiter: Waiter = {

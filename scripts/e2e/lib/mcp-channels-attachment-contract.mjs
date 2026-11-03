@@ -12,15 +12,6 @@ const CANONICAL_SEEDED_ATTACHMENT = {
   },
 };
 
-const LEGACY_SEEDED_ATTACHMENT = {
-  type: "image",
-  source: { type: "base64", media_type: "image/png", data: "abc" },
-};
-
-/** Match the candidate's persisted-media contract selected by the trusted Docker harness. */
-export function hasExpectedSeededMcpAttachment(attachment, frozenTarget) {
-  return isDeepStrictEqual(
-    attachment,
-    frozenTarget ? LEGACY_SEEDED_ATTACHMENT : CANONICAL_SEEDED_ATTACHMENT,
-  );
+export function hasExpectedSeededMcpAttachment(attachment) {
+  return isDeepStrictEqual(attachment, CANONICAL_SEEDED_ATTACHMENT);
 }

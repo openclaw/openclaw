@@ -10,27 +10,23 @@ import {
   type NodeSession,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   asNullableRecord,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { createBrowserControlContext } from "../browser-control-state.js";
-import {
-  inspectBrowserDashboard,
-  requestBrowserDashboard,
-  stopBrowserDashboard,
-  assertBrowserDashboardTargetCurrent,
-} from "../browser-dashboard.js";
 import {
   BROWSER_PROXY_COMMAND,
   BROWSER_PROXY_UPLOAD_COMMAND,
   browserProxyUploadUnavailableMessage,
 } from "../browser-node-commands.js";
 import { isBrowserControlHostUnavailableError } from "../browser-node-fallback.js";
-import { resolveBrowserNodeTarget } from "../browser-node-routing.js";
+import { createBrowserNodeSessionTabRoute } from "../browser-node-proxy.js";
+import { resolveBrowserNodeTarget, type BrowserNodeTarget } from "../browser-node-routing.js";
 import {
   BROWSER_PROXY_ERROR_ENVELOPE,
   parseBrowserProxyFailure,
@@ -42,7 +38,9 @@ import {
   isBrowserProxyUploadRequest,
   prepareBrowserProxyUploadRequest,
 } from "../browser-proxy-upload.js";
+import { getOptionalBrowserStateRuntime } from "../browser-runtime-state.js";
 import { applyBrowserTabToolBinding } from "../browser-tool-binding.js";
+import { createBrowserToolSessionTabs } from "../browser-tool-session-tabs.js";
 import { persistBrowserProxyResultFiles } from "../browser/proxy-files.js";
 import {
   isBrowserHostLocalRoute,
@@ -52,10 +50,11 @@ import {
 } from "../browser/request-policy.js";
 import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
 import type { BrowserRequest } from "../browser/routes/types.js";
+import { resolveBrowserSessionKey } from "../browser/session-tab-identity.js";
+import * as registry from "../browser/session-tab-registry.js";
 import { startBrowserControlServiceFromConfig } from "../control-service.js";
 import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
 import { withTimeout } from "../sdk-node-runtime.js";
-import { applyBrowserRequestTabScope, browserTabScopeSchema } from "./browser-request-tab-scope.js";
 
 const logger = createSubsystemLogger("browser");
 const dashboardRequestSchema = z.object({
@@ -63,6 +62,31 @@ const dashboardRequestSchema = z.object({
   agentId: z.string().trim().min(1).optional(),
   name: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
   instanceId: z.string().min(1).optional(),
+});
+
+const browserTabScopeSchema = z.strictObject({
+  sessionKey: z
+    .string()
+    .trim()
+    .min(1)
+    .max(512)
+    .refine(
+      (value) => Boolean(resolveBrowserSessionKey(value)),
+      "Browser tab scope requires an agent-qualified session key",
+    ),
+  referencedTabs: z
+    .array(
+      z
+        .strictObject({
+          target: z.enum(["host", "node"]),
+          node: z.string().trim().min(1).max(256).optional(),
+          profile: z.string().trim().min(1).optional(),
+          targetId: z.string().trim().min(1),
+        })
+        .refine((tab) => tab.target === "node" || tab.node === undefined),
+    )
+    .max(64)
+    .optional(),
 });
 
 type BrowserRequestParams = {
@@ -139,6 +163,111 @@ export async function handleBrowserGatewayRequest({
   }
   const tabScope = parsedTabScope?.data;
 
+  // Apply session membership only after the execution owner has completed the route.
+  const applyTabScope = async (scopeParams: {
+    result: unknown;
+    nodeTarget?: BrowserNodeTarget;
+    profile?: string;
+    defaultProfile?: string;
+    closeTab: (targetId: string, profile?: string) => Promise<void>;
+  }): Promise<unknown> => {
+    if (!tabScope) {
+      return scopeParams.result;
+    }
+    const requestedProfile = resolveRequestedBrowserProfile({ query, body });
+    assertRequesterCurrent();
+    const listTabs = methodRaw === "GET" && path === "/tabs";
+    const openTab = methodRaw === "POST" && path === "/tabs/open";
+    const closeTab = methodRaw === "DELETE" && /^\/tabs\/[^/]+$/.test(path);
+    const touchTab = methodRaw === "POST" && (path === "/navigate" || path === "/tabs/focus");
+    if (!listTabs && !openTab && !closeTab && !touchTab) {
+      return scopeParams.result;
+    }
+    const authority = {
+      runtime: getOptionalBrowserStateRuntime() ?? undefined,
+      assertCurrent: assertRequesterCurrent,
+    };
+    const nodeRoute = scopeParams.nodeTarget
+      ? createBrowserNodeSessionTabRoute(scopeParams.nodeTarget)
+      : undefined;
+    assertRequesterCurrent();
+    const route = nodeRoute ?? { kind: "browser-control" as const };
+    const profile = normalizeOptionalLowercaseString(scopeParams.profile);
+    if (listTabs) {
+      const responseRecord = asNullableRecord(scopeParams.result);
+      if (!Array.isArray(responseRecord?.tabs)) {
+        return scopeParams.result;
+      }
+      const tabs = responseRecord.tabs.flatMap((value: unknown) => {
+        const tab = asNullableRecord(value);
+        const targetId = normalizeOptionalString(tab?.targetId);
+        return targetId ? [{ value, targetId, tabId: normalizeOptionalString(tab?.tabId) }] : [];
+      });
+      const tracked = new Set(
+        await registry.filterTrackedSessionBrowserTabs({
+          sessionKey: tabScope.sessionKey,
+          route,
+          profile,
+          tabs,
+          authority,
+        }),
+      );
+      assertRequesterCurrent();
+      const referenced = new Set(
+        (tabScope.referencedTabs ?? [])
+          .filter((tab) => {
+            if (
+              nodeRoute
+                ? tab.target !== "node" || tab.node !== nodeRoute.nodeId
+                : tab.target !== "host"
+            ) {
+              return false;
+            }
+            const referenceProfile = normalizeOptionalLowercaseString(
+              tab.profile ??
+                (nodeRoute
+                  ? !requestedProfile
+                    ? profile
+                    : undefined
+                  : scopeParams.defaultProfile),
+            );
+            return referenceProfile === profile;
+          })
+          .map((tab) => tab.targetId),
+      );
+      return {
+        ...responseRecord,
+        tabs: tabs
+          .filter(
+            (tab) =>
+              tracked.has(tab) ||
+              referenced.has(tab.targetId) ||
+              Boolean(tab.tabId && referenced.has(tab.tabId)),
+          )
+          .map((tab) => tab.value),
+      };
+    }
+
+    const sessionTabs = createBrowserToolSessionTabs({
+      sessionKey: tabScope.sessionKey,
+      requestedProfile,
+      defaultProfile: scopeParams.defaultProfile ?? "",
+      nodeRoute,
+      routeProfile: () => scopeParams.profile,
+      registry,
+      authority,
+    });
+    if (openTab) {
+      await sessionTabs.trackOpened(scopeParams.result, scopeParams.closeTab);
+    } else if (closeTab) {
+      await sessionTabs.untrack(decodeURIComponent(path.slice(6)));
+    } else if (touchTab) {
+      await sessionTabs.touch(normalizeOptionalString(asNullableRecord(body)?.targetId));
+    }
+    assertRequesterCurrent();
+    return scopeParams.result;
+  };
+
   if (
     (typed.target !== undefined && typed.target !== "host" && !explicitNode) ||
     (typed.node !== undefined &&
@@ -181,6 +310,8 @@ export async function handleBrowserGatewayRequest({
       return;
     }
     try {
+      const { stopBrowserDashboard, inspectBrowserDashboard, requestBrowserDashboard } =
+        await import("../browser-dashboard.js");
       const run =
         methodRaw === "DELETE"
           ? stopBrowserDashboard
@@ -208,6 +339,8 @@ export async function handleBrowserGatewayRequest({
       return;
     }
     try {
+      const { inspectBrowserDashboard, assertBrowserDashboardTargetCurrent } =
+        await import("../browser-dashboard.js");
       const authority = { signal: requestSignal, assertCurrent: assertRequesterCurrent };
       const dashboard = await inspectBrowserDashboard(scope.data, authority);
       const tab = dashboard.browserTab;
@@ -309,7 +442,6 @@ export async function handleBrowserGatewayRequest({
   }
   if (nodeTarget) {
     try {
-      assertRequesterCurrent();
       preparedUpload = await prepareBrowserProxyUploadRequest({
         method: methodRaw,
         path,
@@ -412,19 +544,13 @@ export async function handleBrowserGatewayRequest({
         assertRequesterCurrent();
         const resolvedRoute = parseBrowserProxyRoute(proxy);
         const scopedResult = tabScope
-          ? await applyBrowserRequestTabScope({
-              scope: tabScope,
-              method: methodRaw,
-              path,
-              body,
+          ? await applyTabScope({
               result,
               nodeTarget,
               profile:
                 resolvedRoute?.status === "resolved"
                   ? resolvedRoute.profile
                   : resolveRequestedBrowserProfile({ query, body }),
-              requestedProfile: resolveRequestedBrowserProfile({ query, body }),
-              assertCurrent: assertRequesterCurrent,
               closeTab: async (targetId, profile) => {
                 const closed = await invokeProxy({
                   method: "DELETE",
@@ -532,16 +658,10 @@ export async function handleBrowserGatewayRequest({
 
   try {
     const scopedResult = tabScope
-      ? await applyBrowserRequestTabScope({
-          scope: tabScope,
-          method: methodRaw,
-          path,
-          body,
+      ? await applyTabScope({
           result: result.body,
           profile: resolvedProfile,
-          requestedProfile: resolveRequestedBrowserProfile({ query, body }),
           defaultProfile: ready.resolved.defaultProfile,
-          assertCurrent: assertRequesterCurrent,
           closeTab: async (targetId, profile) => {
             assertRequesterCurrent();
             const closed = await dispatcher.dispatch({

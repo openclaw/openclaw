@@ -1,13 +1,8 @@
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-function moduleNotFoundError(filePath: string): Error {
-  return Object.assign(new Error(`Cannot find module '${filePath}'`), {
-    code: "ERR_MODULE_NOT_FOUND",
-    url: pathToFileURL(filePath).href,
-  });
-}
+import { moduleNotFoundError } from "../../stale-install.test-support.js";
 
 describe("authenticated request dispatcher load failures", () => {
   afterEach(() => {

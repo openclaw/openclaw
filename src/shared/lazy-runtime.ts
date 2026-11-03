@@ -2,15 +2,10 @@ import { createLazyPromiseLoader } from "./lazy-promise.js";
 
 export { createLazyPromise, createLazyPromiseLoader } from "./lazy-promise.js";
 
-type LazyRuntimeLoader<T> = (() => Promise<T>) & {
-  peek: () => Promise<T> | undefined;
-  clear: () => void;
-};
-
 export function createLazyRuntimeSurface<TModule, TSurface>(
   importer: () => Promise<TModule>,
   select: (module: TModule) => TSurface,
-): LazyRuntimeLoader<TSurface> {
+) {
   const loader = createLazyPromiseLoader(() => importer().then(select), {
     cacheRejections: true,
   });
@@ -18,9 +13,7 @@ export function createLazyRuntimeSurface<TModule, TSurface>(
 }
 
 /** Cache the raw dynamically imported runtime module behind a stable loader. */
-export function createLazyRuntimeModule<TModule>(
-  importer: () => Promise<TModule>,
-): LazyRuntimeLoader<TModule> {
+export function createLazyRuntimeModule<TModule>(importer: () => Promise<TModule>) {
   return createLazyRuntimeSurface(importer, (module) => module);
 }
 

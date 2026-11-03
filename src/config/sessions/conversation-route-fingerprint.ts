@@ -1,5 +1,5 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import type { ConversationRecord } from "./conversation-registry.js";
+import type { ConversationRecord } from "./conversation-registry.types.js";
 import {
   parseConversationRouteContext,
   type ConversationRouteContext,

@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Writable } from "node:stream";
 import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { createNullWriter } from "../shared/null-writer.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { probeLaunchAgentState, resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import {
@@ -25,6 +25,7 @@ import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import {
   GatewayServiceDefinitionBackupReceiptSchema,
   matchesServiceFilePublication,
+  matchesServiceFileState,
   publishServiceFile,
   readServiceFileState,
   type GatewayServiceDefinitionBackupReceipt,
@@ -173,15 +174,33 @@ function mutationHooks(
         ) {
           file.after = current;
           delete file.prepared;
-        } else if (isDeepStrictEqual(current, file.after)) {
+        } else if (matchesServiceFileState(current, file.after)) {
           delete file.prepared;
         }
       }
     }
-    for (const { sourcePath, after } of [...receipt.files, ...receipt.guards]) {
-      if (!isDeepStrictEqual(after, await readServiceFileState(sourcePath))) {
-        throw new Error(`SERVICE_DEFINITION_UNKNOWN: Service definition changed: ${sourcePath}`);
+    for (const file of receipt.files) {
+      const current = await readServiceFileState(file.sourcePath);
+      if (!matchesServiceFileState(current, file.after)) {
+        throw new Error(
+          `SERVICE_DEFINITION_UNKNOWN: Service definition changed: ${file.sourcePath}`,
+        );
       }
+      if (matchesServiceFileState(current, file.before)) {
+        file.before = current;
+      }
+      // Checkpoints retain exact observations; historical replaced files keep
+      // their legacy facts because their original precision cannot be recovered.
+      file.after = current;
+    }
+    for (const guard of receipt.guards) {
+      const current = await readServiceFileState(guard.sourcePath);
+      if (!matchesServiceFileState(current, guard.after)) {
+        throw new Error(
+          `SERVICE_DEFINITION_UNKNOWN: Service definition changed: ${guard.sourcePath}`,
+        );
+      }
+      guard.after = current;
     }
     if (receipt.task) {
       const current = taskPolicy(await readScheduledTaskDefinition(params.env));
@@ -319,7 +338,7 @@ export async function captureGatewayServiceDefinitionBackup(
     hooks,
     finish: async () => {
       await hooks.beforeWrite();
-      return structuredClone(receipt);
+      return receipt;
     },
     compensate: async (): Promise<boolean> => {
       const prepared = await prepareGatewayServiceDefinitionRestore({ ...params, receipt });
@@ -413,11 +432,7 @@ async function restorePreparedGatewayServiceDefinitionBackup(
       // its inputs; only the caller's later restart may bootstrap the restored plist.
       await stopLaunchAgent({
         env: params.env,
-        stdout: new Writable({
-          write(_chunk, _encoding, done) {
-            done();
-          },
-        }),
+        stdout: createNullWriter(),
         assertCurrent: hooks.assertCurrent,
       });
       await hooks.beforeWrite();

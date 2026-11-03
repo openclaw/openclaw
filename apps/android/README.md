@@ -5,8 +5,10 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 ### App features
 
 - Pair with a Gateway using a QR code, setup code, or manual connection. Gateway credentials are stored encrypted.
-- Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The draft has its own full-width row above one control row: **+**, model, and reasoning on the left; microphone and Talk/send on the right. Session permissions are inside the **+** menu, with the current access mode shown. The model name opens a compact searchable provider menu above the composer; the configured default is marked on its model row, without settings buttons in the picker. The top-right **Chat actions** menu includes **Context** with its live usage ring, which opens context usage, latest tokens, and the cost breakdown. Tap the microphone for dictation. While listening, a Stop icon replaces the microphone; tap it to finish listening. While starting or transcribing, a Close icon cancels that attempt. Long-press for voice messages or Talk, or use the Talk button beside the microphone when the draft is empty. The effort dial opens the live-preview slider and Fast mode.
+- Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The draft has its own full-width row above one control row: **+**, model, and reasoning on the left; microphone and Talk/send on the right. Session permissions are inside the **+** menu, with the current access mode shown. The model name opens a compact searchable provider menu above the composer; the configured default is marked on its model row, without settings buttons in the picker. The top-right **Chat actions** menu includes **Context** with its live usage ring, which opens context usage, latest tokens, and the cost breakdown. Tap the microphone for dictation. While listening, a Stop icon replaces the microphone; tap it to finish listening. While starting or transcribing, a Close icon cancels that attempt. Long-press for voice messages or Talk, or use the Talk button beside the microphone when the draft is empty. The effort dial opens the live-preview slider and Fast mode. Both controls require Gateway write access; read-only connections cannot change them.
 - Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history. Native sessions keep their runtime-owned model: Android shows that ownership instead of offering a model change. New session starts independently of the current native thread. Generic child-session forks and new worktrees are unavailable for those sessions; supported message-level forks remain available.
+- The sidebar reads Gateway folders and section order, including empty folders. Show more expands each section; Load more sessions fetches the next roster page without losing previously loaded members. Folder editing and migration of device-local folder names are separate from this display step.
+- Session group renames and deletions stay on the Gateway where they started. Switching Gateways never carries unfinished group changes or their error messages to the replacement Gateway.
 - Search from Overview or Settings to find settings by their displayed name or category, alongside quick actions and recent threads. Local destinations such as Appearance, Profile, and Licenses work without connecting a Gateway. Back from a settings detail returns to the screen that opened search; Desktop appears only when the connected Gateway supports it.
 - Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect, without discarding or replacing newer device-local choices.
 - Choose **Text size** in **Settings → Appearance**: 90%, 100% (default), 110%, 125%, or 140%. This device-local choice survives restarting the app and does not sync to your profile. It combines with Android system font scaling, including nonlinear scaling, without changing spacing or typefaces.
@@ -16,16 +18,42 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Setup offers optional notifications, microphone, camera, and location access; other permissions are under **Additional features**. **Request all** asks for the available runtime permissions without enabling the camera or location features; Android handles consent through its system prompts. Notification access stays separate under **Special access**. Continue without granting access, or enable phone capabilities individually or later in Settings. Blocked individual setup requests offer Android Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
 - SMS is available only in third-party builds on supported telephony devices. Setup distinguishes partial read/send access. Android Settings can recover user denial, but installer or device-policy restrictions may leave SMS unavailable; OpenClaw cannot override them. Returning from Settings rereads the actual grants without restarting Gateway setup.
 - View the phone's memory and disk meters on the Control UI Devices page. Connected Android nodes report host resource stats immediately and every 60 seconds; disk meters require an available storage sample and a Gateway that supports host stats.
-- Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
+- Manage installed skills and Gateway-verified ClawHub releases, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
+
+## Certificate-pinned Gateways
+
+Use the app's native screens when a Gateway connection uses a stored TLS
+certificate fingerprint. Embedded Control UI pages, including terminal, desktop,
+dashboard, and browser previews, are unavailable on that connection because
+Android WebView cannot enforce the same pin for every page and WebSocket
+connection. The native Gateway connection and native chat retain their pin.
 
 ## Open in Android Studio
 
 - Open the folder `apps/android`.
 
+Gradle sync generates the native localization lookup and resources before IDE
+indexing. Use the repository's supported Node.js version on your PATH, as for
+the build commands below; no separate localization generation step is required.
+
+## Tool icons
+
+Chat tool activity uses the shared tool display icons with native Android glyphs.
+Command, read, edit, write, search, and fetch rows take precedence over the tool's
+configured icon; unknown tools use a puzzle piece. Tool Search calls use the
+called tool's icon. Failed rows retain their error mark, and progress cards keep
+their receipt presentation.
+
 ## Session colors
 
 Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
+
+## Session snooze
+
+Long-press an eligible session on **Threads** and choose **Snooze**, then **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, when more than one hour away), **Tomorrow** (09:00 local), or **Next week** (next Monday at 09:00 local). Next week is omitted on Sundays because it matches Tomorrow. Archived, child, and protected sessions cannot be snoozed.
+
+Snoozed sessions leave **Recent**, **Current**, and sidebar recents. Open the **Snoozed** pill to see their **Wakes** times, or long-press and choose **Wake session** to bring one back early. The Gateway saves the wake time across clients. A session wakes at its deadline, when a real message arrives, or when a run completes; pinning or archiving also clears its snooze. Snooze never stops a run, blocks messages, or disables an automation.
 
 ## Camera attachments
 
@@ -45,6 +73,13 @@ show the current percentage (tap to reset), and zoom in. Close with **X**,
 Android Back, or a stationary tap on empty background. Image taps, drags,
 and two-finger gestures do not dismiss the preview. Rotation or recreation
 refits the image rather than restoring offsets from the old viewport.
+
+Photo and voice-note messages keep their attachments after history refresh. Queued
+photos use their stored attachment bytes for previews. The default Gateway transcript
+echo appears beneath its transcribed voice note, and Copy, Share, and Reply include the
+visible transcript. Custom transcript formats remain ordinary message text. Cached
+history keeps media references and transcription state; loading an uncached photo
+still requires reconnecting to its Gateway.
 
 ## Completed work in Chat
 
@@ -99,7 +134,11 @@ truncated patches, stopped workspaces, and unavailable repositories are identifi
 in the viewer. Switching conversation or Gateway closes the review; safe fold
 layout changes preserve the opening.
 
-## Foldable layout
+## Large-screen and foldable layout
+
+Without an intersecting separator, tablet and desktop windows at least 840 dp
+wide and 320 dp tall keep a 360 dp sidebar beside the active page. The sidebar
+follows the reading direction. Narrower or shorter windows use the modal sidebar.
 
 With a full-height vertical separator reported by AndroidX WindowManager, the
 main app places its sidebar on the reading-direction start plane and the active
@@ -107,12 +146,13 @@ page on the other plane. Both use the reported bounds, including off-center
 hinges. The sidebar remains visible after selecting a page or session.
 
 Book panes require at least 280 dp for the sidebar, 320 dp for the active page,
-and 320 dp of height. Onboarding and layouts without a supported split use the
+and 320 dp of height, even when the window is narrower than 840 dp.
+Onboarding and layouts without a supported split use the
 largest rectangular region clear of separating folds and fully occluding hinges.
 Equal regions prefer the top, then the reading-direction start side. Opening
 the keyboard does not select a different fallback region for this outer host.
-Without an intersecting separator, the app keeps its full-window layout and
-modal sidebar.
+Width-based sidebars require the entire host to be clear of separating folds
+and fully occluding hinges; they never subdivide a reduced fallback region.
 
 In Chat, a full-width horizontal separator can place the conversation header,
 transcript, and status above the hinge and the same composer below it. Each
@@ -199,6 +239,17 @@ Install the repository's Node.js and pnpm dependencies before building. Gradle
 builds the shared Mermaid renderer automatically and packages its local assets
 with the app; no CDN or Gateway renderer is needed.
 
+Gradle also generates the Kotlin localization lookup and `native_` string
+resources in the ignored `app/build/generated/native-i18n/` directory. Builds,
+tests, and Android Studio sync share the same task; unchanged inputs skip
+generation, and clean builds can restore the outputs from Gradle's build cache.
+Keep manual XML resources in `app/src/main/res`. Native source strings and
+translations remain in `apps/.i18n/native-source.json` and
+`apps/.i18n/native/<locale>.json`; the existing `pnpm native:i18n:baseline` and
+`pnpm native:i18n:sync` workflow owns updates. Never edit or commit the generated
+lookup or `native_` resources. `pnpm android:i18n:check` validates the catalog
+against those source inputs.
+
 ```bash
 pnpm install
 cd apps/android
@@ -239,13 +290,27 @@ tasks still require explicit `openclawBuildCommit` and
 `openclawBuildTimestamp` properties so signed artifacts remain reproducible.
 
 Android release archives use the pinned version in `apps/android/version.json`.
-Run **Android Store Release** from `main` without input parameters, or run
+Run **Android Store Release** from `main` with the default `release` operation, or run
 `pnpm android:release:upload` from a clean local `main` matching `origin/main`.
 The pipeline selects unused phone and Wear build numbers from Google Play and
 generates OpenAI release notes from changes since each form factor's public
 release. It saves the plan and notes as release artifacts and uploads the selected
 clean source commit. Tracked version defaults and notes stay unchanged; the flow
 creates no preparation commits or follow-up PRs.
+
+For daily Google Play Internal testing builds, the same workflow runs at
+**7:00 AM Pacific** using the `America/Los_Angeles` time zone, including daylight
+saving changes. Scheduled runs require the repository variable
+`ANDROID_INTERNAL_ENABLED=true` and use the `android-internal` environment.
+They upload the phone and Wear builds and generated notes to `internal` and
+`wear:internal`, without capturing screenshots or changing the store listing.
+Production promotion remains manual.
+
+To run this distribution manually, choose `operation=internal` from `main`, or
+run `pnpm android:release:upload -- --destination internal` from a clean local
+`main` matching `origin/main`. Manual runs work while the schedule is disabled.
+See [daily Internal testing setup](VERSIONING.md#daily-internal-testing) for the
+environment, credentials, and enablement steps.
 
 For local preparation or inspection:
 
@@ -282,6 +347,26 @@ Install the API 36 Google APIs and API 34 Wear OS system images in the local
 Android SDK. Use `--form-factor phone|wear` with `--avd` or `--device` to
 explicitly capture one form factor from another emulator.
 
+Each form factor's debug APK is built before starting its screenshot emulator,
+so compilation does not compete with emulator boot or rendering.
+
+**Android Store Release** enables bounded screenshot diagnostics. If capture
+fails, the existing emulator diagnostic artifact retains phase timings, host
+resource samples, image identity, and system/ANR evidence for 30 days. App debug
+logs and signing files are excluded. Local Linux runs can opt in with
+`ANDROID_SCREENSHOT_DIAGNOSTICS=1`.
+
+For a nonpublishing hosted replay, select `screenshots` in **Android Emulator
+Diagnostic**, choose the candidate branch in **Use workflow from**, and supply
+that branch's exact commit SHA. Screenshot execution is pinned to the selected
+workflow revision; a different target SHA fails before candidate code runs.
+It runs the same phone
+and Wear capture script with `ANDROID_SCREENSHOT_DIAGNOSTICS=1`, recording phase
+timings, host resource samples, emulator/image identity, and bounded system/ANR
+diagnostics on failure before emulator cleanup. Diagnostic artifacts expire after
+seven days. This operation uses debug apps and does not access signing or store
+credentials.
+
 For local branch-switching proof, launch a debug build with the intent extras
 `openclaw.screenshotMode=true` and `openclaw.screenshotScene=branches`. This Chat
 scene has 12 local branch alternatives and no active run. Switching updates the
@@ -290,6 +375,8 @@ Start a fresh app process before choosing a scene; restarting only the Activity
 reuses the process runtime. Same-scene re-entry retains the selected branch.
 
 For sidebar attention proof, use `openclaw.screenshotScene=attention`. The native drawer contains inactive sessions with multiple questions and execution, plugin, and Gateway-settings approvals. Tap or keyboard-focus an attention icon to inspect the oldest request. The `attention-expiry` scene uses successive short deadlines to exercise live removal without another Gateway event. These fixtures use the normal request parsers and lifecycle owners with synthetic in-memory responses; start a fresh app process between scenes.
+
+For session snooze proof, run `pnpm android:screenshots --snooze-proof before` before adding the feature, then `pnpm android:screenshots --snooze-proof after`. The synthetic `snooze` scene supplies one active and one snoozed session through the production list parser. The capture steps open Threads and both row menus, saving PNGs under `.artifacts/android-snooze-proof/before/` and `after/`. This mode requires no existing ADB devices, starts and stops its own phone emulator, and leaves store screenshots unchanged.
 
 For completed-work proof, use `openclaw.screenshotScene=completed-work`,
 `active-work`, or `work-boundaries`. These scenes use the same Chat screen with
@@ -375,7 +462,7 @@ Reports are written under:
 
 ## Perf CLI (low-noise)
 
-Deterministic startup measurement + hotspot extraction with compact CLI output:
+Repeatable startup measurement + hotspot extraction with compact CLI output:
 
 ```bash
 cd apps/android
@@ -532,6 +619,79 @@ Reference links:
 - [AccessibilityService policy](https://support.google.com/googleplay/android-developer/answer/10964491?hl=en-GB)
 - [Photo and Video Permissions policy](https://support.google.com/googleplay/android-developer/answer/14594990)
 
+## Release validation
+
+Run from a clean checkout with the Android SDK, Java, and emulator acceleration
+available:
+
+```bash
+pnpm android:release:validate -- \
+  --target-sha "$(git rev-parse HEAD)" \
+  --output /tmp/android-release-e2e-proof.json
+```
+
+The harness builds the Play Debug phone app, Debug Wear app, and their
+instrumentation APKs once, then uses fresh
+API 36 phone and API 34 round Wear emulators. It owns their temporary state,
+processes, and cleanup. Both emulators boot with a 16 KiB VSOCK packet limit to
+avoid large contiguous kernel allocations that can disconnect ADB during
+transfers. The harness verifies each guest's limit before installing its app and
+records it in the qualification proof.
+
+The **Android Release E2E** workflow runs this command directly, during eligible
+full manual CI at the workflow's exact source SHA, and before a manual Android
+Store Release accesses signing credentials. Scheduled and manual internal
+distributions retain their existing path. Gateway APK publication in
+`android-release.yml` remains separate.
+
+The phone completes setup-code onboarding against a pinned published stable
+Gateway and a local deterministic model fixture, sends messages, relaunches with
+its saved connection, and opens Overview. Native keyboard and transcript checks
+verify that replies remain visible above the real keyboard, dismissing the
+keyboard preserves a multiline draft, and the beginning and end of a long reply
+remain reachable. Wear checks exercise native input, chat, reply history, relaunch,
+phone restart, and the round-screen reply reader. A local raw-message transport
+replaces the Google Data Layer boundary through the existing transport
+interfaces. Requests still pass through the production wire codec, phone bridge
+and controller, authenticated Gateway, and deterministic model fixture; responses
+and streaming events return through the same application owners. The phone
+executes the requests; the transport does not supply canned successful replies.
+
+**This CI gate does not qualify Google's live Wear Data Layer, device pairing,
+or companion provisioning.** CI starts fresh standard SDK emulators and uses no
+Google account, companion APK, or saved paired-device image. In particular, it
+excludes real Google capability discovery, `WearableListenerService` delivery,
+and Play services package-name/signature enforcement. The APK checks still
+verify the built debug artifacts' hashes, signatures, matching package names and
+certificates, version codes, and declared listener services. They do not exercise
+Google's enforcement or delivery path. Release/R8 behavior, store signing, and
+upload remain owned by the existing archive/release lane; this native gate tests
+instrumented Debug APKs. Physical radios, voice, microphone permissions,
+notifications, Tiles, and battery behavior also remain outside its coverage.
+
+Each run freezes its stable Gateway version and dependency lock in an artifact;
+reruns reuse that selection. Missing or invalid saved selections fail instead of
+silently choosing a newer Gateway. Qualification retains sanitized proof and
+synthetic UI screenshots, with no raw Gateway or instrumentation logs or setup
+credentials. Failed proof records bounded SDK operation/exit facts and native
+test source locations, excluding command arguments and assertion text. Skipped
+selected tests, crashes, timeouts, and incomplete cleanup fail qualification.
+
+Keep a small physical-device smoke separate, using matching Play-signed phone
+and Wear apps:
+
+1. Pair the real devices normally, connect the phone to a Gateway, and confirm
+   the watch discovers the phone and loads session history.
+2. Enter a unique text turn through the watch's native input and confirm its
+   reply on the watch. Repeat with the phone app in the background to exercise
+   real listener-service delivery.
+3. Disconnect and reconnect the pair, restart both apps, then reload history
+   and send another turn. Confirm history and replies remain usable.
+
+Record app/package/signing identities, device/Wear OS versions, connection type,
+and observed results. This smoke supplies real Data Layer discovery, delivery,
+and reconnect evidence separately; CI has no Google provisioning prerequisite.
+
 ## Integration Capability Test (Preconditioned)
 
 This suite assumes setup is already done manually. It does **not** install/run/pair automatically.
@@ -571,7 +731,7 @@ What it does:
 - Skips `screen.record` and `talk.ptt.*` in this suite because they require
   interactive capture. Use `apps/android/scripts/voice-e2e.sh` for microphone
   and voice-path proof.
-- Asserts command contracts (success or expected deterministic error for safe-invalid calls like `sms.send` and `notifications.actions`).
+- Asserts command contracts (success or the expected error for safe-invalid calls like `sms.send` and `notifications.actions`).
 
 Common failure quick-fixes:
 
@@ -580,4 +740,4 @@ Common failure quick-fixes:
 
 ## Contributions
 
-Maintainer: @obviyus. For issues/questions/contributions, please open an issue or reach out on Discord.
+Maintainer: @obviyus. For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/). For reproducible bugs, use the [issue chooser](https://github.com/openclaw/openclaw/issues/new/choose). For contribution coordination, reach out on Discord.

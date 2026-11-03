@@ -37,8 +37,11 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
     private(set) var availability = Availability.loading
     private(set) var currentDocumentId: String?
     private(set) var state: NativeConversationState?
+    private(set) var capabilities: Set<String> = []
+    private(set) var sessionFacts: NativeConversationSessionFacts?
     var onReady: (() -> Void)?
     var onState: ((NativeConversationState) -> Void)?
+    var onSessionFacts: ((NativeConversationSessionFacts) -> Void)?
     var onRouteChanged: ((NativeConversationRouteChanged) -> Void)?
     var onOpenDashboard: ((NativeConversationDashboardRoute) -> Bool)?
     var onUnavailable: ((Availability) -> Void)?
@@ -142,6 +145,8 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
         self.document.retireDocument()
         self.currentDocumentId = nil
         self.state = nil
+        self.capabilities = []
+        self.sessionFacts = nil
         let requests = self.pending
         self.pending.removeAll()
         for request in requests.values {
@@ -165,8 +170,12 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
         replyHandler: @escaping @MainActor (Any?, String?) -> Void)
     {
         NativeConversationTrace.receive(message.body)
+        // Match JSON.stringify so slash-containing session keys share the web's byte budget.
         guard self.isTrusted(message),
-              let data = try? JSONSerialization.data(withJSONObject: message.body),
+              let fields = message.body as? [String: Any],
+              let data = try? JSONSerialization.data(withJSONObject: fields, options: [.withoutEscapingSlashes]),
+              fields["type"] as? String != "session-facts" ||
+              data.count <= NativeConversationSessionFacts.maximumBytes,
               let decoded = try? JSONDecoder().decode(
                   NativeConversationMessage.self,
                   from: data)
@@ -175,7 +184,7 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
             return
         }
         let generation = self.document.generation
-        if case .ready = decoded.body {
+        if case let .ready(ready) = decoded.body {
             Task { @MainActor [weak self] in
                 guard let self else {
                     replyHandler(["ok": false, "error": "stale-document"], nil)
@@ -198,6 +207,7 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
                         return
                     }
                     self.currentDocumentId = decoded.documentId
+                    self.capabilities = Set(ready.capabilities)
                     self.readyTimeout?.cancel()
                     self.availability = .ready
                     self.onReady?()
@@ -219,6 +229,17 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
             }
             self.state = state
             self.onState?(state)
+        case let .sessionFacts(facts):
+            guard self.capabilities.contains("session-facts-v1") else {
+                replyHandler(["ok": false, "error": "unsupported"], nil)
+                return
+            }
+            guard facts.revision > (self.sessionFacts?.revision ?? 0) else {
+                replyHandler(["ok": false, "error": "stale-state"], nil)
+                return
+            }
+            self.sessionFacts = facts
+            self.onSessionFacts?(facts)
         case let .commandResult(result):
             if let request = self.pending.removeValue(forKey: result.requestId) {
                 self.complete(request, with: result)
@@ -261,6 +282,9 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
             requestId: UUID().uuidString,
             action: action)
         NativeConversationTrace.command(command)
+        if case .openSessionActions = action, !self.capabilities.contains("session-actions-v1") {
+            return Self.failure(for: command, error: "unsupported")
+        }
         guard self.currentDocumentId != nil, self.document.hasCurrentBrowserSession,
               let script = try? command.javaScript()
         else {
@@ -273,7 +297,7 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
         let generation = self.document.generation
         return await withCheckedContinuation { continuation in
             let timeout = Task { @MainActor [weak self] in
-                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                do { try await Task.sleep(for: .seconds(15)) } catch { return }
                 self?.reject(
                     command.requestId,
                     error: "timeout")
@@ -342,6 +366,7 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
     func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
         guard webView === self.document.webView else { return }
         let failure = error as NSError
+        if self.document.consumeDownloadPolicyInterruption(failure) { return }
         guard failure.domain != NSURLErrorDomain || failure.code != NSURLErrorCancelled else { return }
         self.fail(error.localizedDescription)
     }
@@ -367,6 +392,10 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
     {
+        if self.document.shouldDownload(navigationResponse) {
+            decisionHandler(.download)
+            return
+        }
         if navigationResponse.isForMainFrame, let response = navigationResponse.response as? HTTPURLResponse,
            response.statusCode >= 400
         {
@@ -375,6 +404,14 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
             return
         }
         decisionHandler(.allow)
+    }
+
+    func webView(_: WKWebView, navigationAction _: WKNavigationAction, didBecome download: WKDownload) {
+        self.document.adoptDownload(download)
+    }
+
+    func webView(_: WKWebView, navigationResponse _: WKNavigationResponse, didBecome download: WKDownload) {
+        self.document.adoptDownload(download)
     }
 
     func webView(
@@ -400,6 +437,17 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
         self.document.authenticationChallenge(
             challenge,
             completionHandler: completionHandler)
+    }
+
+    /// WebKit defaults to prompting when this delegate method is absent.
+    func webView(
+        _: WKWebView,
+        requestMediaCapturePermissionFor _: WKSecurityOrigin,
+        initiatedByFrame _: WKFrameInfo,
+        type _: WKMediaCaptureType,
+        decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void)
+    {
+        decisionHandler(ControlUIDocumentHost.mediaCaptureDecision(.prompt))
     }
 
     func webView(
@@ -437,7 +485,7 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
             for: navigationAction.request.url,
             sourceIsNativeReadingTab: false)
         {
-            NSWorkspace.shared.open(url)
+            AppActivation.shared.open(url)
         }
         return nil
     }

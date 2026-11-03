@@ -1,4 +1,3 @@
-// Shares channel-configured checks across config and runtime surfaces.
 import { getChannelEnvVars } from "../secrets/channel-env-vars.js";
 import {
   hasMeaningfulChannelConfigShallow,
@@ -17,5 +16,5 @@ export function isStaticallyChannelConfigured(
       return true;
     }
   }
-  return hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId));
+  return hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId), channelId);
 }

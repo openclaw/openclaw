@@ -16,6 +16,9 @@ const FORBIDDEN_CSS_VALUE_PARTS = [
   "paint(",
   "@import",
   "expression(",
+  "/*",
+  "*/",
+  "\\",
 ] as const;
 
 const MODE_TOKEN_ORDER = [
@@ -100,21 +103,9 @@ export function requireSafeCssValue(value: unknown, label: string) {
   if (FORBIDDEN_CSS_VALUE_PARTS.some((part) => lowered.includes(part))) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
-  if (normalized.includes("/*") || normalized.includes("*/") || normalized.includes("\\")) {
-    throw new Error(`Unsupported tweakcn token: ${label}`);
-  }
   for (const char of normalized) {
     const code = char.charCodeAt(0);
-    if (
-      code < 0x20 ||
-      code === 0x7f ||
-      char === "{" ||
-      char === "}" ||
-      char === ";" ||
-      char === "<" ||
-      char === ">" ||
-      char === "`"
-    ) {
+    if (code < 0x20 || code === 0x7f || "{};<>`".includes(char)) {
       throw new Error(`Unsupported tweakcn token: ${label}`);
     }
   }
@@ -147,10 +138,7 @@ function normalizeStoredTokenMap(value: Record<string, unknown> | undefined): Th
 
 export function describeThemeLabel(value: string | undefined) {
   const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return "Custom";
-  }
-  return truncateUtf16Safe(normalized, 80);
+  return normalized ? truncateUtf16Safe(normalized, 80) : "Custom";
 }
 
 export function parseImportedCustomTheme(value: unknown): ImportedCustomTheme | null {
@@ -187,24 +175,6 @@ export function parseImportedCustomTheme(value: unknown): ImportedCustomTheme | 
   }
 }
 
-function buildCustomThemeStyles(theme: Pick<ImportedCustomTheme, "light" | "dark">) {
-  const light = normalizeStoredTokenMap(theme.light);
-  const dark = normalizeStoredTokenMap(theme.dark);
-  if (!light || !dark) {
-    throw new Error("Stored custom theme is missing required tokens.");
-  }
-  const renderDeclarations = (modeTokens: ThemeTokenMap) =>
-    MODE_TOKEN_ORDER.map((key) => `  --${key}: ${modeTokens[key]};`).join("\n");
-  return [
-    `:root[data-theme="custom"] {`,
-    renderDeclarations(dark),
-    `}`,
-    `:root[data-theme="custom-light"] {`,
-    renderDeclarations(light),
-    `}`,
-  ].join("\n");
-}
-
 export function syncCustomThemeStyleTag(
   theme: Pick<ImportedCustomTheme, "light" | "dark"> | null | undefined,
 ) {
@@ -218,7 +188,21 @@ export function syncCustomThemeStyleTag(
   }
   let cssText;
   try {
-    cssText = buildCustomThemeStyles(theme);
+    const light = normalizeStoredTokenMap(theme.light);
+    const dark = normalizeStoredTokenMap(theme.dark);
+    if (!light || !dark) {
+      throw new Error("Stored custom theme is missing required tokens.");
+    }
+    const renderDeclarations = (modeTokens: ThemeTokenMap) =>
+      MODE_TOKEN_ORDER.map((key) => `  --${key}: ${modeTokens[key]};`).join("\n");
+    cssText = [
+      `:root[data-theme="custom"] {`,
+      renderDeclarations(dark),
+      `}`,
+      `:root[data-theme="custom-light"] {`,
+      renderDeclarations(light),
+      `}`,
+    ].join("\n");
   } catch {
     style?.remove();
     return;

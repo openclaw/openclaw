@@ -72,3 +72,250 @@
     --dialog-backdrop: rgb(33 30 26 / 30%);
   }
 }
+
+/* Shared local companion controls; Quick Chat keeps its compact control layout. */
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body:where(.companion-page) {
+  min-width: 320px;
+  margin: 0;
+}
+
+.shell {
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 24px;
+}
+
+.panel,
+.gateways-panel {
+  width: min(560px, 100%);
+  margin-block: auto;
+  padding: 24px 32px 28px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: var(--shadow-sm);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+
+:where(.companion-page) h1 {
+  color: var(--text-strong);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+:where(.companion-page) svg {
+  flex: none;
+}
+
+.remote-field input,
+:where(.companion-page) select,
+.field input,
+.field select {
+  width: 100%;
+  min-width: 0;
+  height: var(--gateway-control-height, var(--control-height));
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  color: var(--text-strong);
+  background: var(--card);
+  box-shadow: var(--input-shadow);
+}
+
+.remote-field label,
+.controls > label,
+.field label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.select-field,
+.field-select,
+.remote-credential,
+.gateway-credential {
+  position: relative;
+}
+
+.select-field select,
+.field-select select {
+  appearance: none;
+  padding-right: 34px;
+}
+
+.select-field::after,
+.field-select::after {
+  position: absolute;
+  right: 15px;
+  bottom: calc(var(--gateway-control-height, var(--control-height)) / 2 - 3px);
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  content: "";
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+input::placeholder {
+  color: var(--muted);
+}
+
+.remote-field input:focus-visible,
+:where(.companion-page) select:focus-visible,
+.field input:focus-visible,
+.field select:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+:where(.companion-page) button:focus-visible,
+:where(.companion-page) summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.remote-auth,
+.gateway-auth {
+  display: grid;
+  grid-template-columns: 124px minmax(0, 1fr);
+  align-items: end;
+  gap: 12px;
+}
+
+.remote-credential input,
+.gateway-credential input {
+  padding-right: 42px;
+}
+
+button.secret-toggle {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 32px;
+  height: 32px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.secret-toggle[aria-pressed="true"] .secret-hidden {
+  display: none;
+}
+
+button {
+  font: inherit;
+  cursor: default;
+}
+
+:where(.companion-page) button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+:where(.companion-page) button:disabled,
+:where(.companion-page) input:disabled,
+:where(.companion-page) select:disabled {
+  opacity: 0.5;
+}
+
+:where(.companion-page) button.primary {
+  padding: 10px 16px;
+  border-color: var(--accent);
+  color: var(--primary-foreground);
+  background: var(--primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.welcome-notice,
+.hint,
+.gateway-hint,
+.gateway-status,
+.gateway-footer,
+.update-copy span,
+.remote-feedback {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.gateway-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.gateway-endpoint,
+.discovery-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 768px) {
+  .panel,
+  .gateways-panel {
+    padding: 20px 20px 24px;
+  }
+  button.secret-toggle {
+    width: 38px;
+    height: 38px;
+  }
+}
+
+@media (max-width: 560px) {
+  .shell,
+  .gateways-shell {
+    padding: 16px;
+  }
+  .remote-auth,
+  .gateway-auth {
+    grid-template-columns: 110px minmax(0, 1fr);
+    gap: 8px;
+  }
+}

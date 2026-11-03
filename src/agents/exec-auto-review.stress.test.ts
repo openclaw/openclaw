@@ -1,24 +1,39 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDispatchWrapperTrustPlan } from "../infra/dispatch-wrapper-resolution.js";
 import type { ExecAutoReviewInput } from "../infra/exec-auto-review.js";
 import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
 import { buildExecAutoReviewInputForShellCommand } from "../plugin-sdk/agent-harness-exec-review-runtime.js";
+import {
+  input as baselineInput,
+  preparedModel,
+  response,
+} from "./exec-auto-review.test-support.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
+import * as completionRuntime from "./simple-completion-runtime.js";
 
-const baselineInput: ExecAutoReviewInput = {
-  command: "git status",
-  argv: ["git", "status"],
-  resolvedPath: "/usr/bin/git",
-  cwd: "/repo",
-  envKeys: [],
-  host: "gateway",
-  reason: "approval-required",
-  analysis: {
-    parsed: true,
-    allowlistMatched: false,
-    inlineEval: false,
-  },
-};
+type ReviewerFixtures = Pick<
+  typeof completionRuntime,
+  "acquireSimpleCompletionModelForAgent" | "completeWithPreparedSimpleCompletionModel"
+>;
+const reviewerFixtures = new WeakMap<object, ReviewerFixtures>();
+
+function reviewerFixture(cfg: object | undefined): ReviewerFixtures {
+  const fixture = cfg && reviewerFixtures.get(cfg);
+  if (!fixture) {
+    throw new Error("missing configured stress reviewer fixture");
+  }
+  return fixture;
+}
+
+beforeEach(() => {
+  vi.spyOn(completionRuntime, "acquireSimpleCompletionModelForAgent").mockImplementation((params) =>
+    reviewerFixture(params.cfg).acquireSimpleCompletionModelForAgent(params),
+  );
+  vi.spyOn(completionRuntime, "completeWithPreparedSimpleCompletionModel").mockImplementation(
+    (params) => reviewerFixture(params.cfg).completeWithPreparedSimpleCompletionModel(params),
+  );
+});
+afterEach(() => vi.restoreAllMocks());
 
 type StressCompletionRequest = {
   context: { messages: Array<{ content: string }> };
@@ -30,42 +45,38 @@ type StressCompletionResult = {
   content: Array<{ type: "text"; text: string }>;
 };
 
+function caseInput(index: number, kind = "case"): ExecAutoReviewInput {
+  return {
+    ...baselineInput,
+    command: `git status --${kind}=${index}`,
+    argv: ["git", "status", `--${kind}=${index}`],
+  };
+}
+
 function createStressReviewer(params: {
   complete: (request: StressCompletionRequest) => Promise<StressCompletionResult>;
   signal?: AbortSignal;
   timeoutMs?: number;
 }) {
-  const prepare = vi.fn(async () => ({
-    selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
-    model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
-    auth: { apiKey: "redacted", mode: "env" as const },
-    [Symbol.asyncDispose]: async () => {},
-  }));
+  const prepare = vi.fn(async () => preparedModel());
   const complete = vi.fn(params.complete);
+  const cfg = {};
+  reviewerFixtures.set(cfg, {
+    acquireSimpleCompletionModelForAgent:
+      prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+    completeWithPreparedSimpleCompletionModel:
+      complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+  });
   const reviewer = createModelExecAutoReviewer({
-    cfg: {},
+    cfg,
     signal: params.signal,
     ...(params.timeoutMs === undefined ? {} : { reviewer: { timeoutMs: params.timeoutMs } }),
-    deps: {
-      acquireSimpleCompletionModelForAgent:
-        prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
-      completeWithPreparedSimpleCompletionModel:
-        complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
-    },
   });
   return { reviewer, prepare, complete };
 }
 
 function modelResponse(decision: "allow" | "deny" | "ask", risk: "low" | "medium") {
-  return {
-    stopReason: "stop" as const,
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify({ decision, risk, rationale: "stress fixture" }),
-      },
-    ],
-  };
+  return response(decision, risk, "stress fixture");
 }
 
 function createSeededRandom(seed: number): () => number {
@@ -87,291 +98,188 @@ function chooseSeeded<T>(random: () => number, values: readonly T[]): T {
   return selected;
 }
 
+const dispatchWrappers = [
+  ["env", "--"],
+  ["nice", "-n", "5"],
+  ["nohup", "--"],
+  ["timeout", "5s"],
+  ["stdbuf", "-o", "L"],
+  ["time", "-p"],
+] as const;
+
 describe("exec auto-review shell stress", () => {
-  it("fails closed for 4,096 seeded login and interactive wrapper chains", () => {
-    const random = createSeededRandom(0x20260727);
-    const shells = ["bash", "sh", "dash", "zsh", "ksh", "mksh", "yash"] as const;
-    const startupOptions = [
-      ["-lc"],
-      ["-cl"],
-      ["-l", "-c"],
-      ["--login", "-c"],
-      ["-ic"],
-      ["-i", "-c"],
-      ["--interactive", "-c"],
-    ] as const;
-    const dispatchWrappers = [
-      ["env", "--"],
-      ["nice", "-n", "5"],
-      ["nohup", "--"],
-      ["timeout", "5s"],
-      ["stdbuf", "-o", "L"],
-      ["time", "-p"],
-    ] as const;
-
-    for (let index = 0; index < 4_096; index += 1) {
-      const argv = [
-        chooseSeeded(random, shells),
-        ...chooseSeeded(random, startupOptions),
-        `echo auto-review-stress-${index}`,
-      ];
-      const wrapperDepth = Math.floor(random() * 7);
-      for (let depth = 0; depth < wrapperDepth; depth += 1) {
+  it.each([
+    {
+      seed: 0x20260727,
+      count: 4_096,
+      argv(random: () => number, index: number) {
+        return [
+          chooseSeeded(random, ["bash", "sh", "dash", "zsh", "ksh", "mksh", "yash"]),
+          ...chooseSeeded(random, [
+            ["-lc"],
+            ["-cl"],
+            ["-l", "-c"],
+            ["--login", "-c"],
+            ["-ic"],
+            ["-i", "-c"],
+            ["--interactive", "-c"],
+          ]),
+          `echo auto-review-stress-${index}`,
+        ];
+      },
+    },
+    {
+      seed: 0x20260728,
+      count: 16_384,
+      argv(random: () => number) {
+        return [
+          ...chooseSeeded(random, [
+            ["cmd", "/c", "echo safe"],
+            ["cmd.exe", "/C", "echo safe"],
+            ["CMD.EXE", "-c", "echo safe"],
+            ["cmd", "/k", "echo safe"],
+            ["cmd.exe", "/d", "/k", "echo safe"],
+            ["cmd", "/D", "/S", "/K", "echo safe"],
+            ["cmd", "-d", "-c", "echo safe"],
+            ["cmd", "/?"],
+            ["cmd", "/?", "/c", "echo safe"],
+            ["cmd.exe", "/d", "/?"],
+            ["cmd", "/r", "/d", "/c", "echo safe"],
+            ["cmd", "/d", "/r", "/c", "echo safe"],
+            ["cmd", "/unknown", "/d", "/c", "echo safe"],
+            ["cmd", "/t:0f/k", "/d", "/c", "echo safe"],
+            ["cmd", "/e:on/k", "/d", "/c", "echo safe"],
+            ["cmd", "/v:on/r", "/d", "/c", "echo safe"],
+            ["cmd.exe", "/d", "/c"],
+            ["cmd", "/c", "echo", "/d"],
+            ["cmd.exe"],
+          ]),
+        ];
+      },
+    },
+  ])("fails closed for $count seeded wrapper chains (seed $seed)", (scenario) => {
+    const { seed, count } = scenario;
+    const random = createSeededRandom(seed);
+    for (let index = 0; index < count; index++) {
+      const argv = scenario.argv(random, index);
+      const depth = Math.floor(random() * 7);
+      for (let wrapper = 0; wrapper < depth; wrapper++) {
         argv.unshift(...chooseSeeded(random, dispatchWrappers));
       }
-
-      const trustPlan = resolveDispatchWrapperTrustPlan(argv);
+      const plan = resolveDispatchWrapperTrustPlan(argv);
       expect(
-        trustPlan.policyBlocked || isBlockedShellWrapperCommand(trustPlan.argv),
-        `startup wrapper escaped at seed 0x20260727, case ${index}: ${JSON.stringify(argv)}`,
+        plan.policyBlocked || isBlockedShellWrapperCommand(plan.argv),
+        `seed ${seed}, case ${index}: ${JSON.stringify(argv)}`,
       ).toBe(true);
     }
   });
 
-  it("fails closed for 16,384 seeded Windows cmd startup wrapper chains", () => {
-    const random = createSeededRandom(0x20260728);
-    const opaqueShells = [
-      ["cmd", "/c", "echo safe"],
-      ["cmd.exe", "/C", "echo safe"],
-      ["CMD.EXE", "-c", "echo safe"],
-      ["cmd", "/k", "echo safe"],
-      ["cmd.exe", "/d", "/k", "echo safe"],
-      ["cmd", "/D", "/S", "/K", "echo safe"],
-      ["cmd", "-d", "-c", "echo safe"],
-      ["cmd", "/?"],
-      ["cmd", "/?", "/c", "echo safe"],
-      ["cmd.exe", "/d", "/?"],
-      ["cmd", "/r", "/d", "/c", "echo safe"],
-      ["cmd", "/d", "/r", "/c", "echo safe"],
-      ["cmd", "/unknown", "/d", "/c", "echo safe"],
-      ["cmd", "/t:0f/k", "/d", "/c", "echo safe"],
-      ["cmd", "/e:on/k", "/d", "/c", "echo safe"],
-      ["cmd", "/v:on/r", "/d", "/c", "echo safe"],
-      ["cmd.exe", "/d", "/c"],
-      ["cmd", "/c", "echo", "/d"],
-      ["cmd.exe"],
-    ] as const;
-    const dispatchWrappers = [
-      ["env", "--"],
-      ["nice", "-n", "5"],
-      ["nohup", "--"],
-      ["timeout", "5s"],
-      ["stdbuf", "-o", "L"],
-      ["time", "-p"],
-    ] as const;
-
-    for (let index = 0; index < 16_384; index += 1) {
-      const argv: string[] = [...chooseSeeded(random, opaqueShells)];
-      const wrapperDepth = Math.floor(random() * 7);
-      for (let depth = 0; depth < wrapperDepth; depth += 1) {
-        argv.unshift(...chooseSeeded(random, dispatchWrappers));
-      }
-
-      const trustPlan = resolveDispatchWrapperTrustPlan(argv);
-      expect(
-        trustPlan.policyBlocked || isBlockedShellWrapperCommand(trustPlan.argv),
-        `Windows cmd startup escaped at seed 0x20260728, case ${index}: ${JSON.stringify(argv)}`,
-      ).toBe(true);
-    }
-  });
-
-  it.runIf(process.platform !== "win32").each([
-    ["bash combined login", "bash -lc 'echo startup'"],
-    ["bash reversed login flags", "bash -cl 'echo startup'"],
-    ["bash separate login flags", "bash -l -c 'echo startup'"],
-    ["bash long login", "bash --login -c 'echo startup'"],
-    ["bash combined interactive", "bash -ic 'echo startup'"],
-    ["bash separate interactive", "bash -i -c 'echo startup'"],
-    ["bash long interactive", "bash --interactive -c 'echo startup'"],
-    ["POSIX login", "sh -lc 'echo startup'"],
-    ["absolute POSIX login", "/bin/sh -lc 'echo startup'"],
-    ["dash login", "dash -l -c 'echo startup'"],
-    ["zsh interactive", "zsh -i -c 'echo startup'"],
-    ["fish init command", "fish -C 'echo startup' -c 'echo payload'"],
-    ["fish long init command", "fish --init-command='echo startup' -c 'echo payload'"],
-    ["Nushell login", "nu --login -c 'echo startup'"],
-    ["Nushell interactive", "nu --interactive -c 'echo startup'"],
-    ["Nushell custom config", "nu --config /tmp/auto-review-stress.nu -c 'echo startup'"],
-    ["BusyBox shell", "busybox sh -lc 'echo startup'"],
-    ["Toybox shell", "toybox sh -lc 'echo startup'"],
-    ["env passthrough", "env -- bash -lc 'echo startup'"],
-    ["env startup mutation", "env BASH_ENV=/tmp/auto-review-stress bash -c 'echo startup'"],
-    ["nice carrier", "nice -n 5 bash -lc 'echo startup'"],
-    ["nohup carrier", "nohup -- bash -lc 'echo startup'"],
-    ["timeout carrier", "timeout 5s bash -lc 'echo startup'"],
-    ["nested carriers", "nohup -- nice -n 5 env -- bash -lc 'echo startup'"],
-    ["opaque privileged carrier", "sudo bash -lc 'echo startup'"],
-    ["Windows cmd default AutoRun", "cmd /c echo safe"],
-    ["Windows cmd.exe default AutoRun", "cmd.exe /c echo safe"],
-    ["Windows cmd uppercase default AutoRun", "CMD.EXE /C echo safe"],
-    ["Windows cmd hyphenated default AutoRun", "cmd -c echo safe"],
-    ["Windows cmd hyphenated switches do not disable AutoRun", "cmd -d -c echo safe"],
-    ["Windows cmd persistent interactive shell", "cmd /k echo safe"],
-    ["Windows cmd persistent shell despite disabled AutoRun", "cmd /d /k echo safe"],
-    ["Windows cmd switch-only interactive shell", "cmd /d"],
-    ["Windows cmd bare interactive shell", "cmd.exe"],
-    ["Windows cmd missing inline payload", "cmd /d /c"],
-    ["Windows cmd help still enables AutoRun", "cmd /?"],
-    ["Windows cmd help cannot bind a later command", "cmd /? /c echo safe"],
-    ["Windows cmd disabled AutoRun help still has no bound payload", "cmd /d /?"],
-    ["Windows cmd /r binds before a later AutoRun switch", "cmd /r /d /c echo safe"],
-    ["Windows cmd /r after disabled AutoRun is not a bound /c", "cmd /d /r /c echo safe"],
-    ["Windows cmd unknown switches cannot hide startup", "cmd /unknown /d /c echo safe"],
-    ["Windows cmd color option cannot smuggle /k", "cmd /t:0f/k /d /c echo safe"],
-    ["Windows cmd extension option cannot smuggle /k", "cmd /e:on/k /d /c echo safe"],
-    ["Windows cmd expansion option cannot smuggle /r", "cmd /v:on/r /d /c echo safe"],
-    ["Windows cmd payload cannot disable prior AutoRun", "cmd /c echo /d"],
-    ["Windows cmd AutoRun inside transparent carrier", "env -- cmd.exe /c echo safe"],
-    [
-      "Windows cmd persistent shell inside nested carriers",
+  it
+    .runIf(process.platform !== "win32")
+    .each([
+      "bash -lc 'echo startup'",
+      "bash -cl 'echo startup'",
+      "bash -l -c 'echo startup'",
+      "bash --login -c 'echo startup'",
+      "bash -ic 'echo startup'",
+      "bash -i -c 'echo startup'",
+      "bash --interactive -c 'echo startup'",
+      "sh -lc 'echo startup'",
+      "/bin/sh -lc 'echo startup'",
+      "dash -l -c 'echo startup'",
+      "zsh -i -c 'echo startup'",
+      "fish -C 'echo startup' -c 'echo payload'",
+      "fish --init-command='echo startup' -c 'echo payload'",
+      "nu --login -c 'echo startup'",
+      "nu --interactive -c 'echo startup'",
+      "nu --config /tmp/auto-review-stress.nu -c 'echo startup'",
+      "busybox sh -lc 'echo startup'",
+      "toybox sh -lc 'echo startup'",
+      "env -- bash -lc 'echo startup'",
+      "env BASH_ENV=/tmp/auto-review-stress bash -c 'echo startup'",
+      "nice -n 5 bash -lc 'echo startup'",
+      "nohup -- bash -lc 'echo startup'",
+      "timeout 5s bash -lc 'echo startup'",
+      "nohup -- nice -n 5 env -- bash -lc 'echo startup'",
+      "sudo bash -lc 'echo startup'",
+      "cmd /c echo safe",
+      "cmd.exe /c echo safe",
+      "CMD.EXE /C echo safe",
+      "cmd -c echo safe",
+      "cmd -d -c echo safe",
+      "cmd /k echo safe",
+      "cmd /d /k echo safe",
+      "cmd /d",
+      "cmd.exe",
+      "cmd /d /c",
+      "cmd /?",
+      "cmd /? /c echo safe",
+      "cmd /d /?",
+      "cmd /r /d /c echo safe",
+      "cmd /d /r /c echo safe",
+      "cmd /unknown /d /c echo safe",
+      "cmd /t:0f/k /d /c echo safe",
+      "cmd /e:on/k /d /c echo safe",
+      "cmd /v:on/r /d /c echo safe",
+      "cmd /c echo /d",
+      "env -- cmd.exe /c echo safe",
       "nohup -- nice -n 5 env -- cmd.exe /d /k echo safe",
-    ],
-    ["PowerShell default profile", "pwsh -Command 'Write-Output safe'"],
-    ["Windows PowerShell default profile", "powershell -Command 'Write-Output safe'"],
-    ["PowerShell positional script profile", "pwsh ./safe.ps1"],
-    ["Windows PowerShell positional script profile", "powershell ./safe.ps1"],
-    ["PowerShell explicit file profile", "pwsh -File ./safe.ps1"],
-    ["PowerShell interactive default profile", "pwsh"],
-    ["PowerShell profile-free interactive session", "pwsh -NoProfile"],
-    ["PowerShell profile-free positional stdin", "pwsh -NoProfile -"],
-    ["PowerShell profile-free delimited stdin", "pwsh -NoProfile -- -"],
-    ["PowerShell profile-free positional script", "pwsh -NoProfile ./safe.ps1"],
-    ["PowerShell profile-free explicit script", "pwsh -NoProfile -File ./safe.ps1"],
-    ["PowerShell profile-free delimited script", "pwsh -NoProfile -- ./safe.ps1"],
-    [
-      "Windows PowerShell console startup despite disabled profiles",
+      "pwsh -Command 'Write-Output safe'",
+      "powershell -Command 'Write-Output safe'",
+      "pwsh ./safe.ps1",
+      "powershell ./safe.ps1",
+      "pwsh -File ./safe.ps1",
+      "pwsh",
+      "pwsh -NoProfile",
+      "pwsh -NoProfile -",
+      "pwsh -NoProfile -- -",
+      "pwsh -NoProfile ./safe.ps1",
+      "pwsh -NoProfile -File ./safe.ps1",
+      "pwsh -NoProfile -- ./safe.ps1",
       "powershell -NoProfile -PSConsoleFile ./evil.psc1 -Command 'Write-Output safe'",
-    ],
-    [
-      "Windows PowerShell abbreviated console startup",
       "powershell -NoProfile -pscf ./evil.psc1 -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell session configuration despite disabled profiles",
       "pwsh -NoProfile -ConfigurationFile /tmp/evil.pssc -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell named session configuration despite disabled profiles",
       "pwsh -NoProfile -ConfigurationName Unreviewed -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell custom settings despite disabled profiles",
       "pwsh -NoProfile -SettingsFile /tmp/evil.json -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell custom IPC despite disabled profiles",
       "pwsh -NoProfile -CustomPipeName unreviewed -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell opaque encoded arguments",
       "pwsh -NoProfile -EncodedArguments ZQBjAGgAbwA= -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell encoded-arguments alias",
       "pwsh -NoProfile -ea ZQBjAGgAbwA= -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell slash-prefixed encoded-arguments alias",
       "pwsh /NoProfile /ea ZQBjAGgAbwA= /Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell encoded-arguments alias inside transparent carrier",
       "env -- pwsh -NoProfile -ea ZQBjAGgAbwA= -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell remoting server despite disabled profiles",
       "pwsh -NoProfile -ServerMode -Command 'Write-Output safe'",
-    ],
-    ["PowerShell abbreviated remoting server", "pwsh -NoProfile -s -Command 'Write-Output safe'"],
-    [
-      "PowerShell socket remoting server",
+      "pwsh -NoProfile -s -Command 'Write-Output safe'",
       "pwsh -NoProfile -SocketServerMode -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell abbreviated socket remoting server",
       "pwsh -NoProfile -so -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell named-pipe remoting server",
       "pwsh -NoProfile -NamedPipeServerMode -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell abbreviated named-pipe remoting server",
       "pwsh -NoProfile -nam -Command 'Write-Output safe'",
-    ],
-    [
-      "Windows PowerShell V2 socket remoting server",
       "powershell -NoProfile -V2SocketServerMode -Command 'Write-Output safe'",
-    ],
-    [
-      "Windows PowerShell abbreviated V2 socket remoting server",
       "powershell -NoProfile -v2so -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell slash-prefixed socket remoting server",
       "pwsh /NoProfile /so /Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell remoting server inside transparent carrier",
       "env -- pwsh -NoProfile -ServerMode -Command 'Write-Output safe'",
-    ],
-    ["PowerShell stdin command", "pwsh -NoProfile -Command -"],
-    ["PowerShell stdin script", "pwsh -NoProfile -File -"],
-    [
-      "PowerShell interactive execution despite disabled profiles",
+      "pwsh -NoProfile -Command -",
+      "pwsh -NoProfile -File -",
       "pwsh -NoProfile -Interactive -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell persistent interactive session",
       "pwsh -NoProfile -NoExit -Command 'Write-Output safe'",
-    ],
-    ["PowerShell abbreviated default profile", "pwsh /c 'Write-Output safe'"],
-    ["PowerShell login profile", "pwsh -Login -Command 'Write-Output safe'"],
-    ["PowerShell abbreviated login profile", "pwsh -l -Command 'Write-Output safe'"],
-    [
-      "PowerShell login despite disabled PowerShell profiles",
+      "pwsh /c 'Write-Output safe'",
+      "pwsh -Login -Command 'Write-Output safe'",
+      "pwsh -l -Command 'Write-Output safe'",
       "pwsh -Login -NoProfile -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell login after disabled PowerShell profiles",
       "pwsh -NoProfile -Login -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell login before a profile-free positional script",
       "pwsh -Login -NoProfile ./safe.ps1",
-    ],
-    [
-      "PowerShell profile-load-time flag without profile suppression",
       "pwsh -NoProfileLoadTime -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell option value resembling a profile switch",
       "pwsh -WorkingDir /nop -Command 'Write-Output safe'",
-    ],
-    [
-      "PowerShell default profile inside transparent carrier",
       "env -- pwsh -Command 'Write-Output safe'",
-    ],
-    ["PowerShell encoded command", "pwsh -EncodedCommand ZQBjAGgAbwAgAHAAdwBuAGUAZAA="],
-    ["PowerShell abbreviated encoded command", "pwsh /ec ZQBjAGgAbwAgAHAAdwBuAGUAZAA="],
-    ["PowerShell short encoded command", "pwsh -e ZQBjAGgAbwAgAHAAdwBuAGUAZAA="],
-    ["PowerShell prefix encoded command", "pwsh -en ZQBjAGgAbwAgAHAAdwBuAGUAZAA="],
-    ["PowerShell long slash encoded command", "pwsh /EncodedCommand ZQBjAGgAbwAgAHAAdwBuAGUAZAA="],
-    [
-      "PowerShell encoded command after startup flags",
+      "pwsh -EncodedCommand ZQBjAGgAbwAgAHAAdwBuAGUAZAA=",
+      "pwsh /ec ZQBjAGgAbwAgAHAAdwBuAGUAZAA=",
+      "pwsh -e ZQBjAGgAbwAgAHAAdwBuAGUAZAA=",
+      "pwsh -en ZQBjAGgAbwAgAHAAdwBuAGUAZAA=",
+      "pwsh /EncodedCommand ZQBjAGgAbwAgAHAAdwBuAGUAZAA=",
       "pwsh -NoProfile -EncodedCommand ZQBjAGgAbwAgAHAAdwBuAGUAZAA=",
-    ],
-    [
-      "PowerShell encoded command after valued options",
       "pwsh -win hidden -if XML /ec ZQBjAGgAbwAgAHAAdwBuAGUAZAA=",
-    ],
-    [
-      "PowerShell encoded command inside transparent carrier",
       "env -- pwsh /ec ZQBjAGgAbwAgAHAAdwBuAGUAZAA=",
-    ],
-    ["multiple commands", "echo safe && bash -lc 'echo startup'"],
-    ["unterminated command", "bash -lc 'echo startup"],
-  ])("keeps %s outside plugin auto-review", async (_name, command) => {
+      "echo safe && bash -lc 'echo startup'",
+      "bash -lc 'echo startup",
+    ])("keeps %s outside plugin auto-review", async (command) => {
     for (const host of ["gateway", "node", "codex-app-server"] as const) {
       await expect(
         buildExecAutoReviewInputForShellCommand({
@@ -413,58 +321,45 @@ describe("exec auto-review shell stress", () => {
 describe("exec auto-review adversarial model-response stress", () => {
   it("fails closed for 4,096 seeded concurrent malformed reviewer responses", async () => {
     const random = createSeededRandom(0x20260729);
+    const makeVariant = (name: string, text: string, expected = "ask") => ({
+      name,
+      text,
+      expected,
+    });
     const variants = [
-      {
-        name: "duplicate decision",
-        text: '{"decision":"ask","risk":"low","decision":"allow"}',
-        expected: "ask",
-      },
-      {
-        name: "duplicate risk",
-        text: '{"decision":"allow","risk":"high","risk":"low"}',
-        expected: "ask",
-      },
-      {
-        name: "escaped duplicate decision",
-        text: String.raw`{"decision":"ask","risk":"low","\u0064ecision":"allow"}`,
-        expected: "ask",
-      },
-      {
-        name: "escaped duplicate risk",
-        text: String.raw`{"decision":"allow","risk":"high","r\u0069sk":"low"}`,
-        expected: "ask",
-      },
-      {
-        name: "unexpected approval scope",
-        text: '{"decision":"allow","risk":"low","scope":"session"}',
-        expected: "ask",
-      },
-      {
-        name: "unexpected executable",
-        text: '{"decision":"allow","risk":"low","approvedCommand":"rm -rf /"}',
-        expected: "ask",
-      },
-      {
-        name: "truncated JSON",
-        text: '{"decision":"allow","risk":"low"',
-        expected: "ask",
-      },
-      {
-        name: "concatenated decisions",
-        text: '{"decision":"ask","risk":"high"}{"decision":"allow","risk":"low"}',
-        expected: "ask",
-      },
-      {
-        name: "valid low-risk allow",
-        text: '{"decision":"allow","risk":"low","rationale":"safe seeded control"}',
-        expected: "allow-once",
-      },
-      {
-        name: "valid human escalation",
-        text: '{"decision":"ask","risk":"high","rationale":"safe seeded control"}',
-        expected: "ask",
-      },
-    ] as const;
+      makeVariant("duplicate decision", '{"decision":"ask","risk":"low","decision":"allow"}'),
+      makeVariant("duplicate risk", '{"decision":"allow","risk":"high","risk":"low"}'),
+      makeVariant(
+        "escaped duplicate decision",
+        String.raw`{"decision":"ask","risk":"low","\u0064ecision":"allow"}`,
+      ),
+      makeVariant(
+        "escaped duplicate risk",
+        String.raw`{"decision":"allow","risk":"high","r\u0069sk":"low"}`,
+      ),
+      makeVariant(
+        "unexpected approval scope",
+        '{"decision":"allow","risk":"low","scope":"session"}',
+      ),
+      makeVariant(
+        "unexpected executable",
+        '{"decision":"allow","risk":"low","approvedCommand":"rm -rf /"}',
+      ),
+      makeVariant("truncated JSON", '{"decision":"allow","risk":"low"'),
+      makeVariant(
+        "concatenated decisions",
+        '{"decision":"ask","risk":"high"}{"decision":"allow","risk":"low"}',
+      ),
+      makeVariant(
+        "valid low-risk allow",
+        '{"decision":"allow","risk":"low","rationale":"safe seeded control"}',
+        "allow-once",
+      ),
+      makeVariant(
+        "valid human escalation",
+        '{"decision":"ask","risk":"high","rationale":"safe seeded control"}',
+      ),
+    ];
     const cases = Array.from({ length: 4_096 }, () => chooseSeeded(random, variants));
     const { reviewer, prepare, complete } = createStressReviewer({
       complete: async (request) => {
@@ -486,13 +381,7 @@ describe("exec auto-review adversarial model-response stress", () => {
       const decisions = await Promise.all(
         batch.map((_variant, offset) => {
           const index = start + offset;
-          return Promise.resolve(
-            reviewer({
-              ...baselineInput,
-              command: `git status --case=${index}`,
-              argv: ["git", "status", `--case=${index}`],
-            }),
-          );
+          return Promise.resolve(reviewer(caseInput(index)));
         }),
       );
       for (const [offset, decision] of decisions.entries()) {
@@ -518,12 +407,7 @@ describe("exec auto-review concurrency stress", () => {
         if (index % 4 === 0) {
           return { error: providerFailure };
         }
-        return {
-          selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
-          model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
-          auth: { apiKey: "redacted", mode: "env" as const },
-          [Symbol.asyncDispose]: async () => {},
-        };
+        return preparedModel();
       });
       const complete = vi.fn(async () => {
         if (index % 4 === 1) {
@@ -538,27 +422,20 @@ describe("exec auto-review concurrency stress", () => {
         }
         return modelResponse("allow", "low");
       });
-      const reviewer = createModelExecAutoReviewer({
-        cfg: {},
-        deps: {
-          acquireSimpleCompletionModelForAgent:
-            prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
-          completeWithPreparedSimpleCompletionModel:
-            complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
-        },
+      const cfg = {};
+      reviewerFixtures.set(cfg, {
+        acquireSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModel:
+          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
       });
+      const reviewer = createModelExecAutoReviewer({ cfg });
       return { reviewer, prepare, complete };
     });
 
     const decisions = await Promise.all(
       cases.map(({ reviewer }, index) =>
-        Promise.resolve(
-          reviewer({
-            ...baselineInput,
-            command: `git status --failure-case=${index}`,
-            argv: ["git", "status", `--failure-case=${index}`],
-          }),
-        ),
+        Promise.resolve(reviewer(caseInput(index, "failure-case"))),
       ),
     );
 
@@ -594,13 +471,7 @@ describe("exec auto-review concurrency stress", () => {
           });
         },
       });
-      return Promise.resolve(
-        reviewer({
-          ...baselineInput,
-          command: `git status --cancel-case=${index}`,
-          argv: ["git", "status", `--cancel-case=${index}`],
-        }),
-      );
+      return Promise.resolve(reviewer(caseInput(index, "cancel-case")));
     });
     const settled = Promise.allSettled(requests);
     await vi.waitFor(() => expect(observedSignals).toHaveLength(controllers.length));
@@ -642,15 +513,7 @@ describe("exec auto-review concurrency stress", () => {
     });
 
     const decisions = await Promise.all(
-      Array.from({ length: 128 }, (_unused, index) =>
-        Promise.resolve(
-          reviewer({
-            ...baselineInput,
-            command: `git status --case=${index}`,
-            argv: ["git", "status", `--case=${index}`],
-          }),
-        ),
-      ),
+      Array.from({ length: 128 }, (_unused, index) => Promise.resolve(reviewer(caseInput(index)))),
     );
 
     for (const [index, decision] of decisions.entries()) {
@@ -683,15 +546,7 @@ describe("exec auto-review concurrency stress", () => {
       });
 
       const pending = Promise.all(
-        Array.from({ length: 64 }, (_unused, index) =>
-          Promise.resolve(
-            reviewer({
-              ...baselineInput,
-              command: `git status --case=${index}`,
-              argv: ["git", "status", `--case=${index}`],
-            }),
-          ),
-        ),
+        Array.from({ length: 64 }, (_unused, index) => Promise.resolve(reviewer(caseInput(index)))),
       );
 
       await vi.advanceTimersByTimeAsync(1_001);

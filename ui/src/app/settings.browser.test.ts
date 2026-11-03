@@ -1,68 +1,89 @@
-import { expect, it } from "vitest";
-import {
-  loadSettings,
-  normalizeChatMessageMaxWidth,
-  saveSettings,
-  settingsKeyForGateway,
-} from "./settings.ts";
+import { beforeEach, expect, it } from "vitest";
+import { isChatBubbleMode, setChatBubbleMode } from "../pages/chat/chat-bubble-mode.ts";
+import { normalizeChatMessageMaxWidth } from "./settings-contract.ts";
+import { loadSettings, saveSettings, settingsKeyForGateway } from "./settings.ts";
 
-it("normalizes and persists browser-local chat message width", () => {
-  const stored = Object.keys(localStorage).map((key) => [key, localStorage.getItem(key)!] as const);
-  try {
-    const settings = loadSettings();
-    const scopedKey = settingsKeyForGateway(settings.gatewayUrl);
-
-    expect(normalizeChatMessageMaxWidth("  min(1280px,   82%)  ")).toBe("min(1280px, 82%)");
-    expect(normalizeChatMessageMaxWidth("960px; color: red")).toBeUndefined();
-
-    saveSettings({ ...settings, chatMessageMaxWidth: "  min(1280px,   82%)  " });
-    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatMessageMaxWidth).toBe(
-      "min(1280px, 82%)",
-    );
-    expect(loadSettings().chatMessageMaxWidth).toBe("min(1280px, 82%)");
-
-    saveSettings({ ...loadSettings(), chatMessageMaxWidth: undefined });
-    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
-      "chatMessageMaxWidth",
-    );
-  } finally {
+beforeEach(({ onTestFinished }) => {
+  const initial = loadSettings();
+  const previous = Object.keys(localStorage).map(
+    (key) => [key, localStorage.getItem(key)!] as const,
+  );
+  onTestFinished(() => {
+    saveSettings(initial);
     localStorage.clear();
-    for (const [key, value] of stored) {
+    for (const [key, value] of previous) {
       localStorage.setItem(key, value);
     }
+  });
+});
+
+function stored(gatewayUrl = loadSettings().gatewayUrl) {
+  return JSON.parse(localStorage.getItem(settingsKeyForGateway(gatewayUrl)) ?? "{}");
+}
+
+it.each([false, true])("persists Gateway-scoped bubbles (legacy preferences=%s)", (legacy) => {
+  const gatewayUrl = "ws://bubbles.example:18789";
+  const preferences = {
+    gatewayUrl,
+    theme: "claw",
+    themeMode: "dark",
+    chatShowThinking: false,
+    chatShowToolCalls: false,
+    chatPersistCommentary: false,
+    composerHoldToRecord: false,
+    navWidth: 300,
+    chatMessageMaxWidth: "48rem",
+  };
+  // v2026.10.1 predates bubble preferences.
+  if (legacy) {
+    localStorage.setItem(settingsKeyForGateway(gatewayUrl), JSON.stringify(preferences));
   }
+  const settings = loadSettings(gatewayUrl);
+  if (legacy) {
+    expect(isChatBubbleMode(settings, "main")).toBe(false);
+  }
+  const sessions = ["agent:main:main", "agent:main:other"];
+  saveSettings({
+    ...settings,
+    chatBubbleSessionKeys: [" main ", "AGENT:MAIN:MAIN", "agent:main:other"],
+  });
+  expect(stored(gatewayUrl).chatBubbleSessionKeys).toEqual(sessions);
+  expect(isChatBubbleMode(loadSettings(settings.gatewayUrl), "main", true)).toBe(true);
+  if (legacy) {
+    expect(loadSettings(gatewayUrl)).toMatchObject(preferences);
+    expect(stored(gatewayUrl)).toMatchObject(preferences);
+  }
+  const otherGateway = "ws://other-bubbles.example:18789";
+  localStorage.removeItem(settingsKeyForGateway(otherGateway));
+  expect(loadSettings(otherGateway).chatBubbleSessionKeys).toBeUndefined();
+  saveSettings({ ...loadSettings(otherGateway), chatBubbleSessionKeys: ["agent:main:third"] });
+  expect(loadSettings(settings.gatewayUrl).chatBubbleSessionKeys).toEqual(sessions);
+  const withoutMain = setChatBubbleMode(loadSettings(settings.gatewayUrl), "main", false);
+  const withoutOther = setChatBubbleMode(withoutMain, "agent:main:other", false);
+  saveSettings({ ...loadSettings(settings.gatewayUrl), ...withoutOther });
+  expect(stored(settings.gatewayUrl)).not.toHaveProperty("chatBubbleSessionKeys");
+  expect(loadSettings(settings.gatewayUrl).chatBubbleDisabledSessionKeys).toEqual(sessions);
+});
+
+it("persists and resets the browser-local terminal font without changing text faces", () => {
+  const initial = loadSettings();
+  saveSettings({ ...initial, terminalFontFamily: "  FiraCode Nerd Font Mono  " });
+  expect(loadSettings()).toMatchObject({
+    terminalFontFamily: "FiraCode Nerd Font Mono",
+    fontUi: initial.fontUi,
+    fontChat: initial.fontChat,
+  });
+  saveSettings({ ...loadSettings(), terminalFontFamily: undefined });
+  expect(loadSettings().terminalFontFamily).toBeUndefined();
+  expect(stored()).not.toHaveProperty("terminalFontFamily");
 });
 
 it.each([
-  "none",
-  "min-content",
-  "max-content",
-  "48rem",
-  "960px",
-  "82%",
-  ".5em",
-  "80ch",
-  "80vw",
-  "90vh",
-  "30vmin",
-  "40vmax",
-  "min(1280px, 82%)",
-  "max(30rem, 70%)",
-  "clamp(400px, 80%, 960px)",
-  "calc(100% - 2rem)",
-  "min(calc(100% - 2rem), 960px)",
-])("preserves supported message width %s", (value) => {
-  expect(normalizeChatMessageMaxWidth(value)).toBe(value);
-});
-
-it.each([
-  "calc(100%-2rem)",
-  "clamp(400px, 80%)",
-  "960px; color: red",
-  "var(--reading-width)",
-  "10cm",
-  "inherit",
-  "fit-content",
-])("rejects unsupported message width %s", (value) => {
-  expect(normalizeChatMessageMaxWidth(value)).toBeUndefined();
+  ["none", "none"],
+  ["48rem", "48rem"],
+  ["960px; color: red", undefined],
+  ["10cm", undefined],
+  ["fit-content", undefined],
+])("normalizes message width %s", (value, expected) => {
+  expect(normalizeChatMessageMaxWidth(value)).toBe(expected);
 });

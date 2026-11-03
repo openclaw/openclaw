@@ -1,21 +1,22 @@
 // Telegram tests cover polling liveness plugin behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 
 const POLL_STALL_THRESHOLD_MS = 90_000;
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("TelegramPollingLivenessTracker", () => {
   it("does not treat a wall-clock correction as an active getUpdates stall", () => {
-    let wallNow = 1_000;
+    const wallClock = vi.spyOn(Date, "now").mockReturnValue(1_000);
     let monotonicNow = 0;
     const tracker = new TelegramPollingLivenessTracker({
-      now: () => wallNow,
       monotonicNow: () => monotonicNow,
     });
 
-    tracker.noteGetUpdatesStarted({ offset: 7 });
+    tracker.noteGetUpdatesStarted({ offset: 7 }, Date.now());
 
-    wallNow += 154_000;
+    wallClock.mockReturnValue(155_000);
     monotonicNow += 30_000;
 
     expect(tracker.detectStall({ thresholdMs: POLL_STALL_THRESHOLD_MS })).toBeNull();
@@ -31,10 +32,9 @@ describe("TelegramPollingLivenessTracker", () => {
   it("rebases liveness after the watchdog itself was paused", () => {
     let now = 1_000;
     const tracker = new TelegramPollingLivenessTracker({
-      now: () => now,
       monotonicNow: () => now,
     });
-    tracker.noteGetUpdatesStarted({ offset: 7 });
+    tracker.noteGetUpdatesStarted({ offset: 7 }, now);
 
     now += 10 * 60 * 60 * 1_000;
     expect(tracker.detectStall({ thresholdMs: POLL_STALL_THRESHOLD_MS })).toBeNull();
@@ -51,9 +51,9 @@ describe("TelegramPollingLivenessTracker", () => {
   it("starts a fresh stall window after a failed poll completes", () => {
     let now = 0;
     const tracker = new TelegramPollingLivenessTracker({ monotonicNow: () => now });
-    tracker.noteGetUpdatesStarted({ offset: 1 });
+    tracker.noteGetUpdatesStarted({ offset: 1 }, Date.now());
     now = 80_000;
-    tracker.noteGetUpdatesError(new Error("network unavailable"));
+    tracker.noteGetUpdatesError(new Error("network unavailable"), Date.now());
     tracker.noteGetUpdatesFinished();
     now = 120_000;
     expect(tracker.detectStall({ thresholdMs: POLL_STALL_THRESHOLD_MS })).toBeNull();

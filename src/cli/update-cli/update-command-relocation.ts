@@ -3,14 +3,84 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { hasErrnoCode } from "../../infra/errors.js";
+import {
+  DEFAULT_GIT_CHANNEL,
+  resolveEffectiveUpdateChannel,
+  type UpdateChannel,
+} from "../../infra/update-channels.js";
 import { resolveGlobalInstallTarget } from "../../infra/update-global.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { resolveGitInstallDir, UpdatePreMutationError } from "./shared.js";
+import { VERSION } from "../../version.js";
+import { normalizeTag, resolveGitInstallDir, UpdatePreMutationError } from "./shared.js";
 import type { GitInstallRelocation } from "./update-command-git.js";
+import type { RefuseUpdate } from "./update-command-result.js";
+import type { prepareUpdateCommand } from "./update-command-run.js";
+
+export async function prepareGitUpdateTarget(
+  params: Pick<
+    NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
+    "requestedChannel"
+  > & {
+    installKind: "git" | "package";
+    root: string;
+    timeoutMs: number;
+    storedChannel: UpdateChannel | null;
+    sourceUpdate: boolean;
+    tag: string | undefined;
+    refuseUpdate: RefuseUpdate;
+  },
+) {
+  const channel =
+    (params.sourceUpdate ? DEFAULT_GIT_CHANNEL : params.requestedChannel) ??
+    params.storedChannel ??
+    (params.installKind === "git"
+      ? DEFAULT_GIT_CHANNEL
+      : resolveEffectiveUpdateChannel({ currentVersion: VERSION, installKind: params.installKind })
+          .channel);
+  if (channel === "extended-stable" && params.installKind === "git") {
+    await params.refuseUpdate("unsupported_git_channel");
+    return undefined;
+  }
+  let gitRelocation: GitInstallRelocation | undefined;
+  if (params.installKind === "git" && params.requestedChannel === "dev") {
+    try {
+      gitRelocation = await prepareDirtyGitRelocation(params.root, params.timeoutMs);
+    } catch (error) {
+      if (!(error instanceof UpdatePreMutationError)) {
+        throw error;
+      }
+      await params.refuseUpdate(error.reason, error.message, error.failureFacts);
+      return undefined;
+    }
+  }
+  // An effective dev channel selects Git, except that --tag keeps a stored-dev
+  // package installation on the package path. Explicit --channel dev wins.
+  const explicitTag = normalizeTag(params.tag);
+  const switchToGit =
+    Boolean(gitRelocation) ||
+    (params.installKind !== "git" &&
+      (params.requestedChannel === "dev" || (channel === "dev" && explicitTag === null)));
+  const switchToPackage =
+    params.requestedChannel !== null &&
+    params.requestedChannel !== "dev" &&
+    params.installKind === "git";
+  return {
+    channel,
+    gitRelocation,
+    explicitTag,
+    switchToGit,
+    switchToPackage,
+    updateInstallKind: switchToGit
+      ? ("git" as const)
+      : switchToPackage
+        ? ("package" as const)
+        : params.installKind,
+  };
+}
 
 // Resolve the invoking launcher before reusing the package-to-Git transaction.
 // The original checkout is operator-owned; only its npm exposure may move.
-export async function prepareDirtyGitRelocation(
+async function prepareDirtyGitRelocation(
   root: string,
   timeoutMs: number,
 ): Promise<GitInstallRelocation | undefined> {

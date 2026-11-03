@@ -1,5 +1,43 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { lstatIfExists } from "./git.js";
+import { lstatIfExists } from "../../infra/path-existence.js";
+
+type DirectoryIdentity = { path: string; dev: number; ino: number };
+
+export async function captureParentDirectoryIdentities(
+  root: string,
+  relativePath: string,
+): Promise<DirectoryIdentity[]> {
+  const directories = [root];
+  let current = root;
+  for (const segment of relativePath.split("/").slice(0, -1)) {
+    current = path.join(current, segment);
+    directories.push(current);
+  }
+  const identities: DirectoryIdentity[] = [];
+  for (const directory of directories) {
+    const stat = await fs.lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(`unsafe provisioned parent directory: ${directory}`);
+    }
+    identities.push({ path: directory, dev: stat.dev, ino: stat.ino });
+  }
+  return identities;
+}
+
+export async function validateDirectoryIdentities(identities: readonly DirectoryIdentity[]) {
+  for (const identity of identities) {
+    const stat = await fs.lstat(identity.path);
+    if (
+      !stat.isDirectory() ||
+      stat.isSymbolicLink() ||
+      stat.dev !== identity.dev ||
+      stat.ino !== identity.ino
+    ) {
+      throw new Error(`provisioned parent directory changed: ${identity.path}`);
+    }
+  }
+}
 
 export function normalizeProvisionedRelativePath(relativePath: string): string | undefined {
   if (path.isAbsolute(relativePath)) {
@@ -24,7 +62,7 @@ export async function hasSafeParentDirectories(
   let current = root;
   for (const segment of segments.slice(0, -1)) {
     current = path.join(current, segment);
-    const stat = await lstatIfExists(current);
+    const stat = await lstatIfExists(current, "ENOENT");
     if (stat && (stat.isSymbolicLink() || !stat.isDirectory())) {
       return false;
     }
@@ -52,7 +90,7 @@ export async function inspectProvisionedFiles(
       throw new Error(`unsafe provisioned path: ${relativePath}`);
     }
     const target = resolveGitPath(worktreePath, normalized);
-    const stat = await lstatIfExists(target);
+    const stat = await lstatIfExists(target, "ENOENT");
     if (!stat) {
       files.push({ path: normalized, target, mode: null });
       continue;

@@ -2,17 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
-import { resolveGatewaySystemdServiceName, resolveNodeLaunchAgentLabel } from "./constants.js";
-import {
-  detectMarkerLineWithGateway,
-  hasSystemdGatewayServiceMarker,
-  isOpenClawGatewaySystemdService,
-} from "./inspect-markers.js";
+import { resolveGatewaySystemdServiceName, isNodeLaunchAgentLabel } from "./constants.js";
+import { detectMarkerLineWithGateway, hasGatewayServiceMarker } from "./inspect-markers.js";
+import { parseSystemdInlineEnvironment } from "./systemd-unit.js";
 
 export type ExtraGatewayService = {
   platform: "darwin" | "linux" | "win32";
   label: string;
   detail: string;
+  sourcePath?: string;
   scope: "user" | "system";
   marker?: "openclaw" | "clawdbot";
   legacy?: boolean;
@@ -22,10 +20,6 @@ export type ExtraGatewayService = {
 
 type ScannedGatewayService = ExtraGatewayService & { extra: boolean; managedGateway: boolean };
 
-export async function readServiceFile(filePath: string): Promise<Buffer | null> {
-  return fs.readFile(filePath).catch(() => null);
-}
-
 export function isPotentialGatewayServiceName(
   name: string,
   platform: "darwin" | "linux",
@@ -34,7 +28,7 @@ export function isPotentialGatewayServiceName(
   return (
     name === selected ||
     (platform === "darwin"
-      ? (name.startsWith("ai.openclaw.") && name !== resolveNodeLaunchAgentLabel()) ||
+      ? (name.startsWith("ai.openclaw.") && !isNodeLaunchAgentLabel(name)) ||
         /clawdbot.*gateway/.test(name)
       : /^(?:openclaw|clawdbot)(?:$|@|-gateway(?:$|[-.@]))/.test(name))
   );
@@ -106,9 +100,8 @@ export async function scanSystemdDir(params: {
 
   for (const { entry, name, fullPath, contents: bytes } of candidates) {
     const contents = bytes.toString("utf8");
-    const marker = hasSystemdGatewayServiceMarker(contents)
-      ? "openclaw"
-      : detectMarkerLineWithGateway(contents);
+    const serviceMarker = hasGatewayServiceMarker(parseSystemdInlineEnvironment(contents));
+    const marker = serviceMarker ? "openclaw" : detectMarkerLineWithGateway(contents);
     if (!marker) {
       continue;
     }
@@ -116,6 +109,7 @@ export async function scanSystemdDir(params: {
       platform: "linux",
       label: entry,
       detail: `unit: ${fullPath}`,
+      sourcePath: fullPath,
       scope: params.scope,
       marker,
       legacy: marker !== "openclaw",
@@ -128,7 +122,8 @@ export async function scanSystemdDir(params: {
           params.scope === "user" &&
           name === params.selectedName
         ) &&
-        !(marker === "openclaw" && isOpenClawGatewaySystemdService(name, contents)),
+        !serviceMarker &&
+        !(marker === "openclaw" && name.startsWith("openclaw-gateway")),
     });
   }
 

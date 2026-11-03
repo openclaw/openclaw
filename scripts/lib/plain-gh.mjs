@@ -1,7 +1,6 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { promisify } from "node:util";
 
 /** @typedef {import("node:child_process").ExecFileSyncOptions} ExecFileSyncOptions */
 /** @typedef {import("node:child_process").ExecFileSyncOptionsWithBufferEncoding} ExecFileSyncOptionsWithBufferEncoding */
@@ -15,7 +14,142 @@ import { promisify } from "node:util";
  */
 
 const PLAIN_GH_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
-const execFileAsync = promisify(execFile);
+const ASYNC_GH_DRAIN_GRACE_MS = 1_000;
+let activeAsyncGh = 0;
+const pendingAsyncGh = [];
+let asyncGhRefusal;
+
+function refuseFurtherAsyncGh(cause) {
+  asyncGhRefusal ??= Object.assign(
+    new Error("Earlier GitHub child output did not drain; refusing further asynchronous reads", {
+      cause,
+    }),
+    { code: "OPENCLAW_GH_UNJOINED" },
+  );
+  for (const pending of pendingAsyncGh.splice(0)) {
+    pending.reject(asyncGhRefusal);
+  }
+}
+
+// Share the process-wide budget across protected-writer and cache-aware reads.
+async function runGhAsync(file, args, options) {
+  if (asyncGhRefusal) {
+    throw asyncGhRefusal;
+  }
+  if (activeAsyncGh >= 4) {
+    await new Promise((resolve, reject) => {
+      pendingAsyncGh.push({ resolve, reject });
+    });
+  } else {
+    activeAsyncGh += 1;
+  }
+  try {
+    if (asyncGhRefusal) {
+      throw asyncGhRefusal;
+    }
+    return await new Promise((resolve, reject) => {
+      const child = spawn(file, args, {
+        ...options,
+        stdio: options.stdio ?? ["ignore", "pipe", "pipe"],
+      });
+      const output = { stdout: [], stderr: [] };
+      const lengths = { stdout: 0, stderr: 0 };
+      const maxBuffer = options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES;
+      /** @type {Error | undefined} */
+      let failure;
+      let timeout;
+      let drainTimeout;
+      let stopping = false;
+      const stop = () => {
+        if (stopping) {
+          return;
+        }
+        stopping = true;
+        clearTimeout(timeout);
+        // Give a terminated leader's output time to reach EOF on a slow host.
+        // Forced capture closure cannot prove inherited notifier/input lifetime.
+        drainTimeout = setTimeout(() => {
+          const outputs = [child.stdout, child.stderr].filter(Boolean);
+          if (outputs.some((pipe) => !pipe.readableEnded && !pipe.destroyed)) {
+            Object.assign(failure, { processTreeState: "indeterminate" });
+            refuseFurtherAsyncGh(failure);
+          }
+          for (const pipe of outputs) {
+            pipe.destroy();
+          }
+        }, ASYNC_GH_DRAIN_GRACE_MS);
+        child.kill(options.killSignal ?? "SIGTERM");
+      };
+      for (const stream of ["stdout", "stderr"]) {
+        child[stream]?.on("data", (bytes) => {
+          const chunk = Buffer.from(bytes);
+          lengths[stream] += chunk.length;
+          if (lengths[stream] > maxBuffer && !failure) {
+            failure = Object.assign(new Error(`${stream} maxBuffer length exceeded`), {
+              code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+            });
+            stop();
+          }
+          if (lengths[stream] <= maxBuffer) {
+            output[stream].push(chunk);
+          }
+        });
+      }
+      child.on("error", (error) => {
+        failure ??= error;
+      });
+      // Settle only after streams and the child close, including failure paths.
+      child.on("close", (code, signal) => {
+        clearTimeout(timeout);
+        clearTimeout(drainTimeout);
+        const decode = (chunks) => {
+          const bytes = Buffer.concat(chunks);
+          return options.encoding && options.encoding !== "buffer"
+            ? bytes.toString(options.encoding)
+            : bytes;
+        };
+        const stdout = decode(output.stdout),
+          stderr = decode(output.stderr);
+        if (failure || code !== 0) {
+          const error = failure ?? new Error(`Command failed: ${file}\n${String(stderr)}`);
+          Object.assign(error, {
+            ...(failure ? {} : { code }),
+            status: typeof code === "number" ? code : 1,
+            signal,
+            killed: child.killed ?? false,
+            stdout,
+            stderr,
+            output: [null, stdout, stderr],
+          });
+          reject(error);
+        } else {
+          resolve(stdout);
+        }
+      });
+      // spawn's timer ends at leader exit; a wrapper's descendants can retain
+      // its output longer. The read deadline also covers that drainage.
+      if (options.timeout > 0) {
+        timeout = setTimeout(() => {
+          failure ??= Object.assign(
+            new Error(`GitHub child timed out after ${options.timeout}ms`),
+            {
+              code: "ETIMEDOUT",
+            },
+          );
+          stop();
+        }, options.timeout);
+      }
+      child.stdin?.end(options.input);
+    });
+  } finally {
+    const next = pendingAsyncGh.shift();
+    if (next) {
+      next.resolve();
+    } else {
+      activeAsyncGh -= 1;
+    }
+  }
+}
 
 /**
  * @param {string} filePath
@@ -213,13 +347,21 @@ function ghReadEnv(env) {
  * @returns {Promise<string>}
  */
 export async function execGhReadAsync(args, options = {}) {
-  const { stdout } = await execFileAsync("gh", args, {
+  return runGhAsync("gh", args, {
     ...options,
     encoding: "utf8",
     env: ghReadEnv(options.env),
-    maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
   });
-  return stdout;
+}
+
+/** Protected-writer counterpart with the same child environment and binary selection. */
+export async function execPlainGhAsync(args, options = {}) {
+  const env = plainGhAuthenticatedEnv(options.env ?? process.env);
+  return runGhAsync(resolvePlainGhBin(env, options.cwd ?? process.cwd()), args, {
+    ...options,
+    encoding: "utf8",
+    env,
+  });
 }
 
 /**

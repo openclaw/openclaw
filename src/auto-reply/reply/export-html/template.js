@@ -2,8 +2,6 @@
 (function () {
   "use strict";
 
-  // DATA LOADING
-
   const base64 = document.getElementById("session-data").textContent;
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -21,8 +19,6 @@
     warning,
   } = data;
 
-  // URL PARAMETER HANDLING
-
   // Check for injected params (when loaded in iframe via srcdoc) or use window.location
   const injectedParams = document.querySelector('meta[name="openclaw-url-params"]');
   const searchString = injectedParams
@@ -33,11 +29,6 @@
   const urlTargetId = urlParams.get("targetId");
   const leafId = urlLeafId || defaultLeafId;
 
-  // DATA STRUCTURES
-
-  const byId = new Map(entries.map((entry) => [entry.id, entry]));
-
-  // Tool call lookup (toolCallId -> {name, arguments})
   const toolCallMap = new Map();
   for (const entry of entries) {
     if (entry.type === "message" && entry.message.role === "assistant") {
@@ -52,7 +43,6 @@
     }
   }
 
-  // Label lookup (entryId -> label string)
   // Labels are stored in 'label' entries that reference their target via targetId
   const labelMap = new Map();
   for (const entry of entries) {
@@ -61,12 +51,6 @@
     }
   }
 
-  // TREE DATA PREPARATION (no DOM, pure data)
-
-  /**
-   * Build tree structure from flat entries.
-   * Returns array of root nodes, each with { entry, children, label }.
-   */
   function buildTree() {
     const nodeMap = new Map();
     const roots = [];
@@ -81,48 +65,36 @@
 
     for (const entry of entries) {
       const node = nodeMap.get(entry.id);
-      if (entry.parentId === null || entry.parentId === undefined || entry.parentId === entry.id) {
-        roots.push(node);
-      } else {
-        const parent = nodeMap.get(entry.parentId);
-        if (parent) {
-          parent.children.push(node);
-        } else {
-          roots.push(node);
-        }
-      }
+      const parent =
+        entry.parentId != null && entry.parentId !== entry.id
+          ? nodeMap.get(entry.parentId)
+          : undefined;
+      (parent ? parent.children : roots).push(node);
     }
 
-    function sortChildren(node) {
+    for (const node of nodeMap.values()) {
       node.children.sort(
         (a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime(),
       );
-      node.children.forEach(sortChildren);
     }
-    roots.forEach(sortChildren);
 
-    return roots;
+    return { roots, nodeMap };
   }
 
-  /**
-   * Get array of entries from root to target (the conversation path).
-   */
   function getPath(targetId) {
     const path = [];
-    let current = byId.get(targetId);
+    let current = treeNodeMap.get(targetId)?.entry;
     while (current) {
       path.push(current);
-      // Stop if no parent or self-referencing (root)
       if (!current.parentId || current.parentId === current.id) {
         break;
       }
-      current = byId.get(current.parentId);
+      current = treeNodeMap.get(current.parentId)?.entry;
     }
     return path.reverse();
   }
 
-  // Tree node lookup for finding leaves
-  let treeNodeMap = null;
+  const { roots: tree, nodeMap: treeNodeMap } = buildTree();
 
   /**
    * Find the newest leaf node reachable from a given node.
@@ -130,22 +102,11 @@
    * Children are sorted by timestamp, so the newest is always last.
    */
   function findNewestLeaf(nodeId) {
-    if (!treeNodeMap) {
-      treeNodeMap = new Map();
-      const tree = buildTree();
-      function mapNodes(node) {
-        treeNodeMap.set(node.entry.id, node);
-        node.children.forEach(mapNodes);
-      }
-      tree.forEach(mapNodes);
-    }
-
     const node = treeNodeMap.get(nodeId);
     if (!node) {
       return nodeId;
     }
 
-    // Follow the newest (last) child at each level
     let current = node;
     while (current.children.length > 0) {
       current = current.children[current.children.length - 1];
@@ -191,7 +152,6 @@
       // Indent branches and their first generation; single-child chains stay flat.
       const childIndent = multipleChildren || (justBranched && indent > 0) ? indent + 1 : indent;
 
-      // Build gutters for children
       const connectorDisplayed = showConnector && !isVirtualRootChild;
       const currentDisplayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
       const connectorPosition = Math.max(0, currentDisplayIndent - 1);
@@ -217,20 +177,9 @@
   /** Flatten the full tree with the active branch first at each level. */
   function flattenTree(roots, activePathIds) {
     const result = [];
-    const containsActive = new Map();
-    function markActive(node) {
-      let has = activePathIds.has(node.entry.id);
-      for (const child of node.children) {
-        if (markActive(child)) {
-          has = true;
-        }
-      }
-      containsActive.set(node, has);
-      return has;
-    }
-    roots.forEach(markActive);
-
-    const activeFirst = (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a));
+    // The active path already includes every ancestor of the selected leaf.
+    const activeFirst = (a, b) =>
+      Number(activePathIds.has(b.entry.id)) - Number(activePathIds.has(a.entry.id));
     layoutTree(
       roots.toSorted(activeFirst),
       (node) => node.children.toSorted(activeFirst),
@@ -263,8 +212,6 @@
     return prefix.join("");
   }
 
-  // FILTERING (pure data)
-
   let filterMode = "default";
   let searchQuery = "";
 
@@ -272,20 +219,6 @@
     return entry.type === "message"
       ? entry.message.display === false
       : entry.type === "custom_message" && !entry.display;
-  }
-
-  function hasTextContent(content) {
-    if (typeof content === "string") {
-      return content.trim().length > 0;
-    }
-    if (Array.isArray(content)) {
-      for (const c of content) {
-        if (c.type === "text" && c.text && c.text.trim().length > 0) {
-          return true;
-        }
-      }
-    }
-    return false;
   }
 
   function extractContent(content) {
@@ -377,10 +310,9 @@
       // Hide assistant messages with only tool calls (no text) unless error/aborted
       if (entry.type === "message" && entry.message.role === "assistant") {
         const msg = entry.message;
-        const hasText = hasTextContent(msg.content);
         const isErrorOrAborted =
           msg.stopReason && msg.stopReason !== "stop" && msg.stopReason !== "toolUse";
-        if (!hasText && !isErrorOrAborted) {
+        if (!messageText(msg.content).trim() && !isErrorOrAborted) {
           return false;
         }
       }
@@ -404,7 +336,7 @@
         case "all":
           passesFilter = true;
           break;
-        default: // 'default'
+        default:
           passesFilter = !isSettingsEntry;
           break;
       }
@@ -456,7 +388,7 @@
     }
 
     const visibleChildren = new Map();
-    visibleChildren.set(null, []); // root-level nodes
+    visibleChildren.set(null, []);
 
     for (const flatNode of filteredNodes) {
       const nodeId = flatNode.node.entry.id;
@@ -479,8 +411,6 @@
       (nodeId) => filteredNodeMap.get(nodeId),
     );
   }
-
-  // TREE DISPLAY TEXT (pure data -> string)
 
   function shortenPath(p) {
     if (typeof p !== "string") {
@@ -585,11 +515,11 @@
     }
     return `<img src="data:${mimeType};base64,${imgBase64}" class="${className}" />`;
   }
-  function truncate(s, maxLen = 100) {
-    if (s.length <= maxLen) {
+  function truncate(s) {
+    if (s.length <= 100) {
       return s;
     }
-    return truncateUtf16Safe(s, maxLen) + "...";
+    return truncateUtf16Safe(s, 100) + "...";
   }
 
   function getTreeNodeDisplayHtml(entry, label) {
@@ -680,14 +610,11 @@
     }
   }
 
-  // TREE RENDERING (DOM manipulation)
-
   let currentLeafId = leafId;
   let currentTargetId = urlTargetId || leafId;
   let treeRendered = false;
 
   function renderTree() {
-    const tree = buildTree();
     const activePathIds = new Set(getPath(currentLeafId).map((entry) => entry.id));
     const flatNodes = flattenTree(tree, activePathIds);
     const filtered = filterNodes(flatNodes, currentLeafId);
@@ -772,8 +699,6 @@
     renderTree();
   }
 
-  // MESSAGE RENDERING
-
   function formatTokens(count) {
     if (count < 1000) {
       return count.toString();
@@ -850,14 +775,14 @@
   }
 
   function findToolResult(toolCallId) {
-    for (const entry of entries) {
-      if (entry.type === "message" && entry.message.role === "toolResult") {
-        if (entry.message.toolCallId === toolCallId) {
-          return entry.message;
-        }
-      }
-    }
-    return null;
+    return (
+      entries.find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message.role === "toolResult" &&
+          entry.message.toolCallId === toolCallId,
+      )?.message ?? null
+    );
   }
 
   function highlightCode(code, lang) {
@@ -870,7 +795,7 @@
 
   function formatOutputLines(lines, lang) {
     if (lang) {
-      return highlightCode(lines.join("\n"), lang);
+      return `<pre><code class="hljs">${highlightCode(lines.join("\n"), lang)}</code></pre>`;
     }
     return lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
   }
@@ -881,34 +806,14 @@
     const displayLines = lines.slice(0, maxLines);
     const remaining = lines.length - maxLines;
 
-    if (lang) {
-      const highlighted = formatOutputLines(lines, lang);
-
-      if (remaining > 0) {
-        const previewHighlighted = formatOutputLines(displayLines, lang);
-
-        return `<div class="tool-output expandable" onclick="this.classList.toggle('expanded')">
-              <div class="output-preview"><pre><code class="hljs">${previewHighlighted}</code></pre>
-              <div class="expand-hint">... (${remaining} more lines)</div></div>
-              <div class="output-full"><pre><code class="hljs">${highlighted}</code></pre></div></div>`;
-      }
-
-      return `<div class="tool-output"><pre><code class="hljs">${highlighted}</code></pre></div>`;
-    }
-
     if (remaining > 0) {
-      let out =
-        '<div class="tool-output expandable" onclick="this.classList.toggle(\'expanded\')">';
-      out += '<div class="output-preview">';
-      out += formatOutputLines(displayLines);
-      out += `<div class="expand-hint">... (${remaining} more lines)</div></div>`;
-      out += '<div class="output-full">';
-      out += formatOutputLines(lines);
-      out += "</div></div>";
-      return out;
+      return `<div class="tool-output expandable" onclick="this.classList.toggle('expanded')">
+              <div class="output-preview">${formatOutputLines(displayLines, lang)}
+              <div class="expand-hint">... (${remaining} more lines)</div></div>
+              <div class="output-full">${formatOutputLines(lines, lang)}</div></div>`;
     }
 
-    return `<div class="tool-output">${formatOutputLines(displayLines)}</div>`;
+    return `<div class="tool-output">${formatOutputLines(displayLines, lang)}</div>`;
   }
 
   function renderContentImages(content, containerClass, imageClass) {
@@ -951,7 +856,8 @@
         if (filePath !== null && (offset !== undefined || limit !== undefined)) {
           const startLine = offset ?? 1;
           const endLine = limit !== undefined ? startLine + limit - 1 : "";
-          pathHtml += `<span class="line-numbers">:${startLine}${endLine ? "-" + endLine : ""}</span>`;
+          const lineNumbers = `:${startLine}${endLine ? "-" + endLine : ""}`;
+          pathHtml += `<span class="line-numbers">${escapeHtml(lineNumbers)}</span>`;
         }
 
         html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;
@@ -1032,10 +938,6 @@
     return html;
   }
 
-  /**
-   * Download the session data as a JSONL file.
-   * Reconstructs the original format: header line + entry lines.
-   */
   window.downloadSessionJson = function () {
     const lines = [];
     if (header) {
@@ -1062,7 +964,7 @@
    * URL format: base?gistId&leafId=<leafId>&targetId=<entryId>
    */
   function buildShareUrl(entryId) {
-    // Check for injected base URL (used when loaded in iframe via srcdoc)
+    // The iframe's srcdoc location cannot identify the share target.
     const baseUrlMeta = document.querySelector('meta[name="openclaw-share-base-url"]');
 
     const url = new URL(window.location.href);
@@ -1073,20 +975,14 @@
     params.set("leafId", currentLeafId);
     params.set("targetId", entryId);
 
-    // If we have an injected base URL (iframe context), use it directly
     if (baseUrlMeta) {
       return `${baseUrlMeta.content}&${params.toString()}`;
     }
 
-    // Otherwise build from current location (direct file access)
     url.search = gistId ? `?${gistId}&${params.toString()}` : `?${params.toString()}`;
     return url.toString();
   }
 
-  /**
-   * Copy text to clipboard with visual feedback.
-   * Uses navigator.clipboard with fallback to execCommand for HTTP contexts.
-   */
   async function copyToClipboard(text, button) {
     let success = false;
     try {
@@ -1240,8 +1136,6 @@
     return "";
   }
 
-  // HEADER / STATS
-
   function computeStats(entryList) {
     let userMessages = 0,
       assistantMessages = 0,
@@ -1266,15 +1160,11 @@
             models.add(msg.provider ? `${msg.provider}/${msg.model}` : msg.model);
           }
           if (msg.usage) {
-            tokens.input += msg.usage.input || 0;
-            tokens.output += msg.usage.output || 0;
-            tokens.cacheRead += msg.usage.cacheRead || 0;
-            tokens.cacheWrite += msg.usage.cacheWrite || 0;
-            if (msg.usage.cost) {
-              cost.input += msg.usage.cost.input || 0;
-              cost.output += msg.usage.cost.output || 0;
-              cost.cacheRead += msg.usage.cost.cacheRead || 0;
-              cost.cacheWrite += msg.usage.cost.cacheWrite || 0;
+            for (const key of Object.keys(tokens)) {
+              tokens[key] += msg.usage[key] || 0;
+              if (msg.usage.cost) {
+                cost[key] += msg.usage.cost[key] || 0;
+              }
             }
           }
           toolCalls += (Array.isArray(msg.content) ? msg.content : []).filter(
@@ -1354,7 +1244,6 @@
             </div>
           </div>`;
 
-    // Render system prompt (user's base prompt, applies to all providers)
     if (systemPrompt) {
       const lines = systemPrompt.split("\n");
       const previewLines = 10;
@@ -1414,8 +1303,6 @@
 
     return html;
   }
-
-  // NAVIGATION
 
   const entryCache = new Map();
 
@@ -1488,8 +1375,6 @@
       }
     }, 0);
   }
-
-  // INITIALIZATION
 
   // Escape HTML tags in text (but not code blocks)
   function escapeHtmlTags(text) {
@@ -1579,12 +1464,10 @@
     return `${html}>${text}</a>`;
   }
 
-  // Configure marked with syntax highlighting and HTML escaping for text
   marked.use({
     breaks: true,
     gfm: true,
     renderer: {
-      // Code blocks: syntax highlight, no HTML escaping
       code(token) {
         const code = token.text;
         const lang = token.lang;
@@ -1595,7 +1478,6 @@
       text(token) {
         return token.tokens ? false : escapeHtmlTags(escapeHtml(token.text));
       },
-      // Inline code: escape HTML
       codespan(token) {
         return `<code>${escapeHtml(token.text)}</code>`;
       },
@@ -1669,6 +1551,7 @@
     if (e.key === "Escape") {
       searchInput.value = "";
       searchQuery = "";
+      treeRendered = false;
       navigateTo(leafId, "bottom");
     }
     if (e.ctrlKey && e.key === "t") {
@@ -1681,9 +1564,8 @@
     }
   });
 
-  // If URL has targetId, scroll to that specific message; otherwise stay at top
   if (leafId) {
-    if (urlTargetId && byId.has(urlTargetId)) {
+    if (urlTargetId && treeNodeMap.has(urlTargetId)) {
       navigateTo(leafId, "target", urlTargetId);
     } else {
       navigateTo(leafId, "none");

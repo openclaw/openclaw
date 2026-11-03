@@ -46,13 +46,10 @@ function addStringListDetail(details: string[], label: string, value: unknown) {
   if (!Array.isArray(value)) {
     return;
   }
-  const entries = value.flatMap((entry) => {
-    if (typeof entry !== "string") {
-      return [];
-    }
-    const trimmed = redactSensitiveText(entry.trim());
-    return trimmed ? [trimmed] : [];
-  });
+  const entries: string[] = [];
+  for (const entry of value) {
+    addStringDetail(entries, "", entry);
+  }
   if (entries.length) {
     details.push(`${label}: ${entries.join(", ")}`);
   }
@@ -146,10 +143,6 @@ function collectSlackErrorDetails(error: unknown, seen: Set<Error>): string[] {
   }
   if (isRecord(error)) {
     addRecordDetails(details, error);
-    const fallback = safeStringify(error);
-    if (details.length === 0 && fallback && fallback !== "{}") {
-      details.push(fallback);
-    }
   }
   return details;
 }

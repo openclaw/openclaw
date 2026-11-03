@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-// Codex App Server Protocol Source tests cover codex app server protocol source script behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
@@ -17,7 +16,6 @@ import {
   resolveCodexAppServerProtocolSource,
   resolveCodexProtocolCargoTargetDir,
   resolveCodexProtocolMinFreeBytes,
-  resolveCodexProtocolPnpmCommand,
   selectedCodexAppServerJsonSchemas,
   validateCodexProtocolSourceVersion,
   validateCodexProtocolGenerationHeadroom,
@@ -26,6 +24,10 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 const originalOpenClawCodexRepo = process.env.OPENCLAW_CODEX_REPO;
+const schemaFixture = () =>
+  new Map<string, unknown>(selectedCodexAppServerJsonSchemas.map((title) => [title, { title }]));
+const checkHeadroom = (freeBytes: number, minFreeBytes: number) =>
+  validateCodexProtocolGenerationHeadroom({ freeBytes, minFreeBytes, pathLabel: "/repo" });
 
 afterEach(() => {
   if (originalOpenClawCodexRepo === undefined) {
@@ -35,19 +37,33 @@ afterEach(() => {
   }
 });
 
+function versionFixture(version: string, cargoVersion = version) {
+  const repoRoot = createTempDir("openclaw-protocol-version-root-");
+  const codexRepo = createTempDir("openclaw-protocol-version-codex-");
+  fs.mkdirSync(path.join(repoRoot, "extensions/codex"), { recursive: true });
+  fs.mkdirSync(path.join(codexRepo, "codex-rs"), { recursive: true });
+  fs.writeFileSync(
+    path.join(repoRoot, "extensions/codex/package.json"),
+    JSON.stringify({ dependencies: { "@openai/codex": version } }),
+  );
+  fs.writeFileSync(
+    path.join(codexRepo, "codex-rs/Cargo.toml"),
+    `[workspace.package]\nversion = "${cargoVersion}"\n`,
+  );
+  return { codexRepo, repoRoot };
+}
+
 describe("Codex app-server generated artifact staging", () => {
   it("copies JSON bytes and normalizes nested TypeScript files in one pass", async () => {
     const sourceRoot = createTempDir("openclaw-protocol-artifacts-source-");
     const targetRoot = createTempDir("openclaw-protocol-artifacts-target-");
     const typescriptRoot = path.join(targetRoot, "typescript");
     const jsonRoot = path.join(targetRoot, "json");
-    const rootTypeScript = [
-      'import type { Root } from "./Root";',
-      "export type { Parent } from '../Parent.js';",
-      'export * as v2 from "./v2.js";',
-      "export type Nullable = string | null | null;",
-      "",
-    ].join("\n");
+    const rootTypeScript = `import type { Root } from "./Root";
+export type { Parent } from '../Parent.js';
+export * as v2 from "./v2.js";
+export type Nullable = string | null | null;
+`;
     const nestedTypeScript = 'export type { Shared } from "../Shared";\n';
     const json = '{\n  "z": 1,\n  "a": 2\n}\n';
     fs.mkdirSync(path.join(sourceRoot, "v2"), { recursive: true });
@@ -59,13 +75,11 @@ describe("Codex app-server generated artifact staging", () => {
     await stageCodexAppServerProtocolArtifacts(sourceRoot, { jsonRoot, typescriptRoot });
 
     expect(fs.readFileSync(path.join(typescriptRoot, "index.ts"), "utf8")).toBe(
-      [
-        'import type { Root } from "./Root.js";',
-        "export type { Parent } from '../Parent.js';",
-        'export * as v2 from "./v2/index.js";',
-        "export type Nullable = string | null;",
-        "",
-      ].join("\n"),
+      `import type { Root } from "./Root.js";
+export type { Parent } from '../Parent.js';
+export * as v2 from "./v2/index.js";
+export type Nullable = string | null;
+`,
     );
     expect(fs.readFileSync(path.join(typescriptRoot, "v2/Thing.ts"), "utf8")).toBe(
       'export type { Shared } from "../Shared.js";\n',
@@ -122,37 +136,13 @@ version = "9.9.9"
   });
 
   it("rejects a Codex checkout that differs from the pinned package version", async () => {
-    const repoRoot = createTempDir("openclaw-protocol-version-root-");
-    const codexRepo = createTempDir("openclaw-protocol-version-codex-");
-    fs.mkdirSync(path.join(repoRoot, "extensions/codex"), { recursive: true });
-    fs.mkdirSync(path.join(codexRepo, "codex-rs"), { recursive: true });
-    fs.writeFileSync(
-      path.join(repoRoot, "extensions/codex/package.json"),
-      JSON.stringify({ dependencies: { "@openai/codex": "0.142.5" } }),
-    );
-    fs.writeFileSync(
-      path.join(codexRepo, "codex-rs/Cargo.toml"),
-      '[workspace.package]\nversion = "0.142.4"\n',
-    );
-
-    await expect(validateCodexProtocolSourceVersion({ codexRepo, repoRoot })).rejects.toThrow(
-      /0\.142\.4 does not match @openai\/codex 0\.142\.5/,
-    );
+    await expect(
+      validateCodexProtocolSourceVersion(versionFixture("0.142.5", "0.142.4")),
+    ).rejects.toThrow(/0\.142\.4 does not match @openai\/codex 0\.142\.5/);
   });
 
   it("requires a Git repository, exact-version tag, and matching tagged commit", async () => {
-    const repoRoot = createTempDir("openclaw-protocol-version-root-");
-    const codexRepo = createTempDir("openclaw-protocol-version-codex-");
-    fs.mkdirSync(path.join(repoRoot, "extensions/codex"), { recursive: true });
-    fs.mkdirSync(path.join(codexRepo, "codex-rs"), { recursive: true });
-    fs.writeFileSync(
-      path.join(repoRoot, "extensions/codex/package.json"),
-      JSON.stringify({ dependencies: { "@openai/codex": "0.149.0" } }),
-    );
-    fs.writeFileSync(
-      path.join(codexRepo, "codex-rs/Cargo.toml"),
-      '[workspace.package]\nversion = "0.149.0"\n',
-    );
+    const { repoRoot, codexRepo } = versionFixture("0.149.0");
     await expect(validateCodexProtocolSourceVersion({ codexRepo, repoRoot })).rejects.toThrow(
       /Could not resolve Codex protocol source HEAD/,
     );
@@ -189,18 +179,10 @@ version = "9.9.9"
         CARGO_TARGET_DIR: "/cache/codex-target",
       }),
     ).toEqual({
-      args: [
-        "test",
-        "--manifest-path",
-        "/codex/codex-rs/Cargo.toml",
-        "-p",
-        "codex-app-server-protocol",
-        "--lib",
-        "schema_fixtures_tests::write_schema_fixtures_from_env",
-        "--",
-        "--exact",
-        "--ignored",
-      ],
+      args: (
+        "test --manifest-path /codex/codex-rs/Cargo.toml -p codex-app-server-protocol " +
+        "--lib schema_fixtures_tests::write_schema_fixtures_from_env -- --exact --ignored"
+      ).split(" "),
       env: {
         CARGO_TARGET_DIR: "/cache/codex-target",
         CODEX_APP_SERVER_SCHEMA_ROOT: "/tmp/protocol",
@@ -210,26 +192,16 @@ version = "9.9.9"
   });
 
   it("fails before cargo protocol generation when local disk headroom is too low", () => {
-    expect(() =>
-      validateCodexProtocolGenerationHeadroom({
-        freeBytes: 6 * 1024 * 1024 * 1024,
-        minFreeBytes: 10 * 1024 * 1024 * 1024,
-        pathLabel: "/repo",
-      }),
-    ).toThrow(/Run this check on Crabbox\/Testbox/);
+    expect(() => checkHeadroom(6 * 1024 ** 3, 10 * 1024 ** 3)).toThrow(
+      /Run this check on Crabbox\/Testbox/,
+    );
   });
 
   it("allows an explicit local disk headroom override", () => {
     expect(resolveCodexProtocolMinFreeBytes({ OPENCLAW_CODEX_PROTOCOL_MIN_FREE_BYTES: "0" })).toBe(
       0,
     );
-    expect(() =>
-      validateCodexProtocolGenerationHeadroom({
-        freeBytes: 1,
-        minFreeBytes: 0,
-        pathLabel: "/repo",
-      }),
-    ).not.toThrow();
+    expect(() => checkHeadroom(1, 0)).not.toThrow();
   });
 
   it("rejects malformed local disk headroom overrides", () => {
@@ -238,62 +210,12 @@ version = "9.9.9"
     ).toThrow(/non-negative byte count/);
   });
 
-  it("checks the Codex workspace target dir by default", () => {
-    expect(resolveCodexProtocolCargoTargetDir("/codex", {})).toBe(
-      path.join("/codex", "codex-rs", "target"),
-    );
-  });
-
-  it("checks an explicit Cargo target dir override", () => {
-    expect(
-      resolveCodexProtocolCargoTargetDir("/codex", { CARGO_TARGET_DIR: "/cache/target" }),
-    ).toBe(path.resolve("/cache/target"));
-  });
-
-  it("resolves relative Cargo target dir overrides from the Codex checkout", () => {
-    expect(resolveCodexProtocolCargoTargetDir("/codex", { CARGO_TARGET_DIR: "target-cache" })).toBe(
-      path.join("/codex", "target-cache"),
-    );
-  });
-
-  it("checks Cargo's build target dir override", () => {
-    expect(
-      resolveCodexProtocolCargoTargetDir("/codex", {
-        CARGO_BUILD_TARGET_DIR: "/cache/build-target",
-      }),
-    ).toBe(path.resolve("/cache/build-target"));
-  });
-
-  it("prefers Cargo's target dir override over the build config env override", () => {
-    expect(
-      resolveCodexProtocolCargoTargetDir("/codex", {
-        CARGO_BUILD_TARGET_DIR: "/cache/build-target",
-        CARGO_TARGET_DIR: "/cache/target",
-      }),
-    ).toBe(path.resolve("/cache/target"));
-  });
-
-  it("wraps Windows pnpm formatting through cmd.exe without shell mode", () => {
-    expect(
-      resolveCodexProtocolPnpmCommand(
-        ["exec", "oxfmt", "--write", "--threads=1", String.raw`C:\tmp\generated types`],
-        {
-          comSpec: String.raw`C:\Windows\System32\cmd.exe`,
-          npmExecPath: String.raw`C:\Program Files\nodejs\pnpm.cmd`,
-          platform: "win32",
-        },
-      ),
-    ).toEqual({
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        String.raw`""C:\Program Files\nodejs\pnpm.cmd" exec oxfmt --write --threads=1 "C:\tmp\generated types""`,
-      ],
-      command: String.raw`C:\Windows\System32\cmd.exe`,
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
+  it.each([
+    [{}, path.join("/codex", "codex-rs", "target")],
+    [{ CARGO_TARGET_DIR: "target-cache" }, path.join("/codex", "target-cache")],
+    [{ CARGO_BUILD_TARGET_DIR: "/cache/build-target" }, path.resolve("/cache/build-target")],
+  ] as const)("resolves Cargo target directory %j", (env, expected) => {
+    expect(resolveCodexProtocolCargoTargetDir("/codex", env)).toBe(expected);
   });
 
   it("uses OPENCLAW_CODEX_REPO when provided", async () => {
@@ -334,134 +256,67 @@ version = "9.9.9"
 describe("Codex app-server protocol JSON canonicalizer", () => {
   it("sorts object keys recursively before formatting", () => {
     const source = JSON.stringify({
-      z: {
-        d: 1,
-        b: {
-          y: 2,
-          x: 3,
-        },
-      },
-      a: [
-        {
-          z: 4,
-          a: {
-            c: 5,
-            b: 6,
-          },
-        },
-      ],
-      definitions: {
-        Zebra: { type: "string", description: "last" },
-        Alpha: {
-          properties: {
-            z: { type: "number" },
-            a: { type: "string" },
-          },
-          type: "object",
-        },
-      },
+      z: { b: { z: 0, a: 1 }, a: 2 },
+      a: [{ z: 0, a: 1 }],
+      definitions: { Z: { z: 0, a: 1 }, A: { type: "string" } },
     });
 
     expect(formatCodexAppServerProtocolJsonText(source)).toBe(`{
-  "a": [{"a":{"b":6,"c":5},"z":4}],
+  "a": [{"a":1,"z":0}],
   "definitions": {
-    "Alpha": {"properties":{"a":{"type":"string"},"z":{"type":"number"}},"type":"object"},
-    "Zebra": {"description":"last","type":"string"}
+    "A": {"type":"string"},
+    "Z": {"a":1,"z":0}
   },
-  "z": {"b":{"x":3,"y":2},"d":1}
+  "z": {"a":2,"b":{"a":1,"z":0}}
 }
 `);
   });
 
   it("sorts typed-object arrays only for order-insensitive schema keywords", () => {
+    const values = [
+      { type: "z", n: 1 },
+      { type: "a", n: 2 },
+      { type: "z", n: 3 },
+    ];
+    const sorted = [values[1], values[0], values[2]];
+    const unchanged = {
+      mixed: [values[0], "item", values[1]],
+      prefixItems: values,
+      typed: values,
+    };
     expect(
-      canonicalizeCodexAppServerProtocolJson({
-        anyOf: [
-          { z: 1, type: "string" },
-          { type: "integer", a: 2 },
-        ],
-        enum: [
-          { z: 1, type: "z" },
-          { type: "a", a: 2 },
-        ],
-        mixed: [{ type: "b" }, "item", { type: "a" }],
-        oneOf: [
-          { type: "object", z: true },
-          { a: true, type: "array" },
-          { type: "object", z: false },
-        ],
-        prefixItems: [
-          { z: 1, type: "string" },
-          { type: "number", a: 2 },
-        ],
-        required: [
-          { z: 1, type: "z" },
-          { type: "a", a: 2 },
-        ],
-        typed: [
-          { type: "beta", z: 1 },
-          { type: "alpha", z: 2 },
-          { type: "beta", z: 3 },
-        ],
-      }),
+      canonicalizeCodexAppServerProtocolJson(
+        structuredClone({
+          anyOf: values,
+          enum: values,
+          required: values,
+          oneOf: values,
+          ...unchanged,
+        }),
+      ),
     ).toEqual({
-      anyOf: [
-        { a: 2, type: "integer" },
-        { type: "string", z: 1 },
-      ],
-      enum: [
-        { a: 2, type: "a" },
-        { type: "z", z: 1 },
-      ],
-      mixed: [{ type: "b" }, "item", { type: "a" }],
-      oneOf: [
-        { a: true, type: "array" },
-        { type: "object", z: true },
-        { type: "object", z: false },
-      ],
-      prefixItems: [
-        { type: "string", z: 1 },
-        { a: 2, type: "number" },
-      ],
-      required: [
-        { a: 2, type: "a" },
-        { type: "z", z: 1 },
-      ],
-      typed: [
-        { type: "beta", z: 1 },
-        { type: "alpha", z: 2 },
-        { type: "beta", z: 3 },
-      ],
+      anyOf: sorted,
+      enum: sorted,
+      required: sorted,
+      oneOf: sorted,
+      ...unchanged,
     });
   });
 
   it("factors repeated definitions and exactly reconstructs every source schema", () => {
-    const schemas = new Map<string, unknown>(
-      selectedCodexAppServerJsonSchemas.map((schemaPath) => [
-        schemaPath,
-        { $schema: "http://json-schema.org/draft-07/schema#", title: schemaPath, type: "object" },
-      ]),
-    );
+    const schemas = schemaFixture();
     const shared = { properties: { value: { $ref: "#/definitions/Leaf" } }, type: "object" };
     const leaf = { type: "string" };
     schemas.set("DynamicToolCallParams.json", {
       definitions: { Leaf: leaf },
-      properties: { arguments: { $ref: "#/definitions/Leaf" } },
-      title: "DynamicToolCallParams",
-      type: "object",
+      $ref: "#/definitions/Leaf",
     });
+    const definitions = { Leaf: leaf, Shared: shared };
     schemas.set("v2/ErrorNotification.json", {
-      definitions: { Leaf: leaf, Shared: shared },
+      definitions,
       properties: { error: { $ref: "#/definitions/Shared" } },
-      title: "ErrorNotification",
-      type: "object",
     });
-    schemas.set("v2/GetAccountResponse.json", {
-      definitions: { Leaf: leaf, Shared: shared },
-      properties: { account: { $ref: "#/definitions/Shared" } },
-      title: "GetAccountResponse",
-      type: "object",
-    });
+    schemas.set("v2/GetAccountResponse.json", { definitions, $ref: "#/definitions/Shared" });
 
     const compacted = compactCodexAppServerProtocolJsonSchemas(schemas);
     const sharedSchema = compacted.get(codexAppServerSharedDefinitionsSchema);
@@ -471,17 +326,11 @@ describe("Codex app-server protocol JSON canonicalizer", () => {
     });
     expect(compacted.get("v2/ErrorNotification.json")).toMatchObject({
       properties: {
-        error: {
-          $ref: "./CodexAppServerProtocolDefinitions.json#/definitions/Shared",
-        },
+        error: { $ref: "./CodexAppServerProtocolDefinitions.json#/definitions/Shared" },
       },
     });
     expect(compacted.get("DynamicToolCallParams.json")).toMatchObject({
-      properties: {
-        arguments: {
-          $ref: "./v2/CodexAppServerProtocolDefinitions.json#/definitions/Leaf",
-        },
-      },
+      $ref: "./v2/CodexAppServerProtocolDefinitions.json#/definitions/Leaf",
     });
 
     for (const schemaPath of selectedCodexAppServerJsonSchemas) {
@@ -496,12 +345,7 @@ describe("Codex app-server protocol JSON canonicalizer", () => {
   });
 
   it("rejects same-name definitions with different schema semantics", () => {
-    const schemas = new Map<string, unknown>(
-      selectedCodexAppServerJsonSchemas.map((schemaPath) => [
-        schemaPath,
-        { title: schemaPath, type: "object" },
-      ]),
-    );
+    const schemas = schemaFixture();
     schemas.set("v2/ErrorNotification.json", {
       definitions: { Shared: { type: "string" } },
       $ref: "#/definitions/Shared",

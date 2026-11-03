@@ -5,7 +5,12 @@ import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
+import {
+  addPluginGenerationMetrics,
+  createPluginGenerationMetrics,
+} from "../plugins/plugin-generation-metrics.js";
 import { settlePluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
@@ -18,18 +23,18 @@ import type {
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
+import { prepareConfiguredModelFacts } from "./prepared-model-runtime.configured-facts.js";
 import {
   assertPreparedModelRuntimeInputCurrent,
   assertPreparedModelRuntimeCandidatesCurrent,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
 import {
-  fingerprintPreparedRuntimeFacts,
-  prepareConfiguredModelFacts,
   prepareConfiguredRuntimeFactsBatch,
   prepareWorkspaceBuildGroup,
   type PreparedConfiguredModelRegistries,
 } from "./prepared-model-runtime.facts.js";
+import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 import {
   createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
@@ -74,20 +79,6 @@ export type PreparedModelRuntimeBuildResult = Readonly<{
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }>;
 
-function groupBuildCandidates<T extends PreparedModelRuntimeBuildCandidate, K>(
-  candidates: readonly T[],
-  keyOf: (candidate: T) => K,
-): Map<K, T[]> {
-  const groups = new Map<K, T[]>();
-  for (const candidate of candidates) {
-    const key = keyOf(candidate);
-    const group = groups.get(key) ?? [];
-    group.push(candidate);
-    groups.set(key, group);
-  }
-  return groups;
-}
-
 async function buildSnapshotBatch(
   requestedCandidates: readonly PreparedModelRuntimeBuildCandidate[],
   registryResources: PreparedModelRuntimeBuildResources,
@@ -98,6 +89,7 @@ async function buildSnapshotBatch(
   onStage?: (stage: string) => void,
   onPrepared?: (input: PreparedModelRuntimeInput, result: PreparedModelRuntimeBuildResult) => void,
   signal?: AbortSignal,
+  providerDiscoveryTimeoutMs?: number,
 ): Promise<PreparedModelRuntimeBuildResult[]> {
   const configs = new Map<
     OpenClawConfig,
@@ -134,6 +126,7 @@ async function buildSnapshotBatch(
   ) => {
     const catalogAccess = await createFullModelCatalogAccess(
       {
+        catalogOwner: candidate.catalogOwner,
         agentFacts,
         nativeConfigFingerprint: candidate.nativeConfigFingerprint,
         catalogFacts,
@@ -161,14 +154,14 @@ async function buildSnapshotBatch(
     assertPreparedModelRuntimeInputCurrent(input, candidateByInput.get(input)!.isBuildCurrent);
   const preparedGenerations = new Set<PreparedModelRuntimePluginGeneration>();
   try {
-    const generations = groupBuildCandidates(candidates, (candidate) => candidate.pluginGeneration);
+    const generations = groupRecords(candidates, (candidate) => candidate.pluginGeneration);
     const fresh = generations.get(undefined) ?? [];
     // Reusable generations precede fresh ones; preserve first-seen order within each group.
     generations.delete(undefined);
     generations.set(undefined, fresh);
     const groups = [...generations].flatMap(([pluginGeneration, generationCandidates]) =>
       [
-        ...groupBuildCandidates(generationCandidates, (candidate) => {
+        ...groupRecords(generationCandidates, (candidate) => {
           const workspace = preparedModelRuntimeWorkspaceFactsKey(candidate.input);
           if (candidate.inspectRegistry) {
             return `inspection\0${workspace}`;
@@ -217,6 +210,7 @@ async function buildSnapshotBatch(
       }
       return facts;
     };
+    const pluginPreparation = createPluginGenerationMetrics();
     let runtimePluginMs = 0;
     let pluginMetadataMs = 0;
     let staticProviderCatalogMs = 0;
@@ -273,6 +267,9 @@ async function buildSnapshotBatch(
       preparedGenerations.add(prepared.pluginGeneration);
       assertPreparedModelRuntimeCandidatesCurrent(groupCandidates);
       runtimePluginMs += prepared.buildStats.runtimePluginMs;
+      if (prepared.buildStats.pluginPreparation) {
+        addPluginGenerationMetrics(pluginPreparation, prepared.buildStats.pluginPreparation);
+      }
       pluginMetadataMs += prepared.buildStats.pluginMetadataMs;
       staticProviderCatalogMs += prepared.buildStats.staticProviderCatalogMs;
       ambientCredentialsMs += prepared.buildStats.ambientCredentialsMs;
@@ -317,10 +314,7 @@ async function buildSnapshotBatch(
     onStage?.("agent catalog sources");
     const catalogSources = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogSource>();
     if (catalogMode === "live") {
-      const sourceCandidatesByAgentDir = groupBuildCandidates(
-        candidates,
-        ({ input }) => input.agentDir,
-      );
+      const sourceCandidatesByAgentDir = groupRecords(candidates, ({ input }) => input.agentDir);
       const sourceErrors: unknown[] = [];
       const sourceBuild = await runTasksWithConcurrency({
         limit: MAX_CONCURRENT_MODEL_RUNTIME_AGENT_SOURCE_BUILDS,
@@ -342,6 +336,8 @@ async function buildSnapshotBatch(
               agentFacts,
               pluginGeneration,
               catalogMode,
+              true,
+              { providerDiscoveryTimeoutMs },
             );
             assertPreparedModelRuntimeInputCurrent(input, candidate.isBuildCurrent);
             catalogSources.set(input, catalogSource);
@@ -412,6 +408,7 @@ async function buildSnapshotBatch(
       generatedCatalogReadCount,
       workspaceFactsMs,
       runtimePluginMs,
+      pluginPreparation,
       pluginMetadataMs,
       staticProviderCatalogMs,
       ambientCredentialsMs,
@@ -468,6 +465,7 @@ export function startSerializedSnapshotBuildBatch(
     onPrepared: (input: PreparedModelRuntimeInput, result: PreparedModelRuntimeBuildResult) => void;
   },
   acquisitionSignal?: AbortSignal,
+  providerDiscoveryTimeoutMs?: number,
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult[]>;
   completion: Promise<void>;
@@ -533,6 +531,7 @@ export function startSerializedSnapshotBuildBatch(
           }
         : undefined,
       signal,
+      providerDiscoveryTimeoutMs,
     );
   })();
   let abandoned = false;

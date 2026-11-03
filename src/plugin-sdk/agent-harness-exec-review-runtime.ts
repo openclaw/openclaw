@@ -48,7 +48,7 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
   };
 }): Promise<import("../infra/exec-auto-review.js").ExecAutoReviewInput | undefined> {
   const [
-    { commandRequiresSecurityAuditSuppressionApproval, evaluateShellAllowlistWithAuthorization },
+    { evaluateShellAllowlistWithAuthorization },
     { detectUnsafeExecControlShellCommand },
     { detectInlineEvalInSegments },
     { isBlockedShellWrapperCommand },
@@ -81,15 +81,6 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
   }
   // Blocked carriers and startup files execute outside the reviewed payload.
   if (segment.resolution?.policyBlocked === true || isBlockedShellWrapperCommand(segment.argv)) {
-    return undefined;
-  }
-  if (
-    commandRequiresSecurityAuditSuppressionApproval({
-      command,
-      cwd: params.cwd ?? undefined,
-      segments: allowlistEval.segments,
-    })
-  ) {
     return undefined;
   }
   if ((await detectUnsafeExecControlShellCommand(command)) !== null) {

@@ -432,9 +432,20 @@ export async function proveHotReloadChannelPolicy({
       senderId,
       text,
     });
-    const cursor = state.getSnapshot().cursor;
-    await waitForHotReloadFact("channel policy turn consumed", () =>
-      state.getAcknowledgedPollCursor("default") >= cursor ? true : undefined,
+    const event = state
+      .getSnapshot()
+      .events.find(
+        (candidate) =>
+          candidate.kind === "inbound-message" &&
+          candidate.accountId === message.accountId &&
+          candidate.message.id === message.id &&
+          candidate.message.conversation.kind === message.conversation.kind &&
+          candidate.message.conversation.id === message.conversation.id,
+      );
+    assert(event);
+    await waitForHotReloadFact(
+      "channel policy turn consumed",
+      () => state.hasCompletedInboundEvent(message.accountId, event.cursor) || undefined,
     );
     return message;
   };

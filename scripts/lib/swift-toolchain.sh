@@ -11,7 +11,7 @@ select_xcode_toolchain() {
   swift --version
 }
 
-prepare_ios_test_simulator() {
+select_ios_test_simulator() {
   local simulator_id
   simulator_id="$(
     xcrun simctl list devices available --json | node --input-type=module -e '
@@ -25,8 +25,6 @@ prepare_ios_test_simulator() {
       process.stdout.write(simulator.udid);
     '
   )" || return
-  # Finish first-boot setup before XCTest's launch deadline starts.
-  xcrun simctl bootstatus "$simulator_id" -b >&2 || return
   printf '%s\n' "$simulator_id"
 }
 

@@ -143,20 +143,18 @@ extension RootTabs {
         session.boardFace == "dashboard" ? .dashboard : .chat
     }
 
-    static func sidebarLayoutContainerSize(contentSize: CGSize, windowSize: CGSize?) -> CGSize {
-        windowSize ?? contentSize
-    }
-
-    /// A content budget, not an OS-defined breakpoint. Keep phones and accessibility
-    /// text in one column even when their window is wider than the tablet threshold.
+    /// The sidebar needs regular space in both axes and enough usable detail width.
+    /// Keyboard avoidance changes height, not this width budget or the size classes.
     static func sidebarLayoutMode(
         containerSize: CGSize,
-        isPad: Bool,
+        horizontalSizeClass: UserInterfaceSizeClass?,
+        verticalSizeClass: UserInterfaceSizeClass?,
         usesAccessibilityText: Bool = false) -> SidebarLayoutMode
     {
-        !isPad || usesAccessibilityText || containerSize.width < self.sidebarPersistentWidthThreshold
-            ? .drawer
-            : .split
+        horizontalSizeClass == .regular && verticalSizeClass == .regular &&
+            !usesAccessibilityText && containerSize.width >= self.sidebarPersistentWidthThreshold
+            ? .split
+            : .drawer
     }
 
     static func sidebarVisibility(layoutMode: SidebarLayoutMode, splitPreference: Bool?) -> Bool {
@@ -207,13 +205,9 @@ extension RootTabs {
     }
 
     static func requestedInitialSidebarVisibility(arguments: [String]) -> Bool? {
-        guard let flagIndex = arguments.firstIndex(of: "--openclaw-sidebar-visibility") else {
-            return nil
-        }
-        let valueIndex = arguments.index(after: flagIndex)
-        guard arguments.indices.contains(valueIndex) else { return nil }
-
-        switch arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        guard let value = arguments.drop(while: { $0 != "--openclaw-sidebar-visibility" }).dropFirst().first
+        else { return nil }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "visible", "show", "shown", "open", "true", "1":
             return true
         case "hidden", "hide", "closed", "false", "0":
