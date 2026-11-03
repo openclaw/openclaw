@@ -292,7 +292,33 @@ function buildRoutedModel(
             offer.url.endsWith("/chat/completions"),
         )
       : undefined;
-  if (cohereChat) {
+  if (provider.id === "vercel-ai-gateway") {
+    // Frozen Vercel row uses the native Anthropic SDK, even when Chat is also
+    // offered. The SDK appends /v1/messages; the older /messages route cannot
+    // serve it. Require the key's exact mapped native offer, without Chat fallback.
+    const messages =
+      id === "vercel-ai-gateway/anthropic/claude-sonnet-4.6" &&
+      upstream === "anthropic/claude-sonnet-4.6" &&
+      capabilities.includes("llm.messages") &&
+      provider.httpOffers.find(
+        (offer) =>
+          offer.routeKind === "native" &&
+          offer.endpoint === "messages" &&
+          offer.model?.id === id &&
+          offer.model.upstream === upstream &&
+          offer.requestFormat === "anthropic.messages" &&
+          offer.responseFormat === "anthropic.messages" &&
+          offer.methods.includes("POST") &&
+          offer.url === `${rootUrl}/v1/native/vercel-ai-gateway/v1/messages`,
+      );
+    if (!messages) {
+      return undefined;
+    }
+    api = "anthropic-messages";
+    endpoint = messages.endpoint;
+    baseUrl = messages.url.slice(0, -"/v1/messages".length);
+    upstreamModel = upstream;
+  } else if (cohereChat) {
     api = "openai-completions";
     baseUrl = cohereChat.url.slice(0, -"/chat/completions".length);
     upstreamModel = upstream;
