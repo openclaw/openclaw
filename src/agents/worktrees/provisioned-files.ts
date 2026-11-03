@@ -5,6 +5,7 @@ import { writeFileWindowFully } from "../../infra/file-descriptor.js";
 import { root as fsRoot, FsSafeError, type Root } from "../../infra/fs-safe.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { lstatIfExists } from "../../infra/path-existence.js";
+import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import {
   captureParentDirectoryIdentities,
   hasSafeParentDirectories,
@@ -73,12 +74,14 @@ export async function provisionIncludedFiles(
   worktreePath: string,
   options: { signal?: AbortSignal; assertCurrent?: () => void } = {},
 ): Promise<string[]> {
-  const inspection = await runGitWorkerOperation(
-    {
-      type: "worktree.provisioning-inspection",
-      input: { sourceRoot: repoRoot, estimateBytes: false },
-    },
-    options,
+  const inspection = await timeWorktreePreparationPhase("provisionInspect", () =>
+    runGitWorkerOperation(
+      {
+        type: "worktree.provisioning-inspection",
+        input: { sourceRoot: repoRoot, estimateBytes: false },
+      },
+      options,
+    ),
   );
   const assertCurrent = () => {
     options.signal?.throwIfAborted();
@@ -88,24 +91,29 @@ export async function provisionIncludedFiles(
     return [];
   }
   assertCurrent();
-  const [sourceRoot, destinationRoot] = await Promise.all([fsRoot(repoRoot), fsRoot(worktreePath)]);
-  const provisioned: string[] = [];
-  for (const relativePath of inspection.paths) {
-    const normalized = normalizeProvisionedRelativePath(relativePath);
-    if (
-      normalized &&
-      (await copyProvisionedFile({
-        sourceRoot,
-        destinationRoot,
-        relativePath: normalized,
-        assertCurrent,
-        signal: options.signal,
-      }))
-    ) {
-      provisioned.push(normalized);
+  return await timeWorktreePreparationPhase("provisionCopy", async () => {
+    const [sourceRoot, destinationRoot] = await Promise.all([
+      fsRoot(repoRoot),
+      fsRoot(worktreePath),
+    ]);
+    const provisioned: string[] = [];
+    for (const relativePath of inspection.paths) {
+      const normalized = normalizeProvisionedRelativePath(relativePath);
+      if (
+        normalized &&
+        (await copyProvisionedFile({
+          sourceRoot,
+          destinationRoot,
+          relativePath: normalized,
+          assertCurrent,
+          signal: options.signal,
+        }))
+      ) {
+        provisioned.push(normalized);
+      }
     }
-  }
-  return provisioned.toSorted();
+    return provisioned.toSorted();
+  });
 }
 
 /** Restores provisioned bytes and modes from SQLite, never from the mutable source checkout. */

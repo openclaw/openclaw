@@ -6,7 +6,6 @@ import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-detail
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-details-subagents.css";
-import "./chat-subagents-working.css";
 import {
   isDetailsSubagentWorking as isWorking,
   projectDetailsSubagents,
@@ -93,10 +92,7 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
           class={[
             "chat-details-subagents__status",
             {
-              "sr-only":
-                props.row.status === "done" || (props.mobile && props.row.status === "running"),
-              "chat-details-subagents__working text-shimmer":
-                !props.mobile && props.row.status === "running",
+              "sr-only": props.row.status === "done" || props.row.status === "running",
             },
           ]}
         >

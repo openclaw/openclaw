@@ -61,6 +61,8 @@ import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outb
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import { readUpdateRunAdmissionCommand } from "../infra/update-run-admission.read.js";
+import { isUpdateRunAdmissionReadCommand } from "../infra/update-run-admission.types.js";
 import {
   readInterruptedUpdateCandidate,
   readUpdateRunStatusInDatabase,
@@ -68,10 +70,6 @@ import {
   readUpdateRunRecord,
   readUpdateRuns,
 } from "../infra/update-run-read.kernel.js";
-import {
-  inspectUpdateRunReconciliation,
-  readUpdateRunReconciliationCandidates,
-} from "../infra/update-run-reconciliation.read.js";
 import {
   canCollectPluginSourceSnapshotsInDatabase,
   inspectPluginCohortRecoveryRows,
@@ -302,18 +300,8 @@ export function readOpenClawStateDatabaseCommand(
       runs: readUpdateRuns(db, command.input),
     };
   }
-  if (command.type === "updateRuns.reconciliationCandidates") {
-    return {
-      type: command.type,
-      candidates: readUpdateRunReconciliationCandidates(db, command.input),
-    };
-  }
-  if (command.type === "updateRuns.reconciliationCandidate") {
-    const run = tableExists(db, "update_runs") ? readUpdateRunRecord(db, command.runId) : undefined;
-    return {
-      type: command.type,
-      candidate: run ? inspectUpdateRunReconciliation(db, run, {}) : undefined,
-    };
+  if (isUpdateRunAdmissionReadCommand(command)) {
+    return readUpdateRunAdmissionCommand(db, command);
   }
   if (command.type === "updateRuns.status") {
     return {

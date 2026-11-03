@@ -179,6 +179,10 @@ GitHub item URLs and repository-qualified references such as `owner/repo#126` re
 
 GitHub polling uses conditional requests when GitHub supplies an ETag. Unchanged responses reuse parsed metadata without downloading the body again. Reuse is bounded and isolated by API endpoint and credential; every refresh still checks GitHub and the current access rules. Authenticated `304 Not Modified` responses do not consume GitHub’s primary REST rate limit.
 
+The Gateway measures link-preview and CI check-detail cache freshness using
+elapsed time. Adjusting the host's wall clock does not shorten or extend those
+cache windows; existing connection, credential, and session access scopes still apply.
+
 The cached transcript also preserves its conversation title and selected model label when the conversation is outside the saved sidebar page. You can type in the restored draft while the Gateway reconnects. The saved model control shows “Refreshing models…” and stays disabled until live catalog data arrives. Live session metadata replaces that display projection when it arrives. Reloading a full-UUID chat link can show that scoped cache while the Gateway confirms the route. Sending and restored queued messages wait for confirmation; a deleted or moved conversation replaces the cached view with the Gateway's result.
 
 An authenticated same-origin reload includes shared display settings and your profile’s appearance and sidebar preferences in the document. Chat uses this display projection while connecting, without loading the full editable configuration. Preference changes from other tabs refresh through the Gateway’s existing notifications; settings pages and configuration writes still load the full snapshot.
