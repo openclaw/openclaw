@@ -14,6 +14,34 @@ function mutate(config: Parameters<typeof apply>[0]["config"], mutation: unknown
 const synthesisInput = { title: "Alpha Synthesis", body: "Summary.", sourceIds: ["source.alpha"] };
 
 describe("applyMemoryWikiMutation", () => {
+  it("keeps untouched frontmatter source when a metadata mutation writes the page", async () => {
+    const { config, write, read } = await createVault();
+    await write(
+      "entities/alpha.md",
+      [
+        "---",
+        "# provenance: imported from the OKF export",
+        "pageType: entity",
+        "id: entity.alpha",
+        "title: Alpha",
+        "build: 007",
+        "big: 12345678901234567890",
+        "---",
+        "",
+        "# Alpha",
+        "",
+      ].join("\n"),
+    );
+
+    await mutate(config, { op: "metadata", lookup: "entity.alpha", status: "review" });
+
+    const raw = await read("entities/alpha.md");
+    expect(raw).toContain("# provenance: imported from the OKF export\n");
+    expect(raw).toContain("\nbuild: 007\n");
+    expect(raw).toContain("\nbig: 12345678901234567890\n");
+    expect(raw).toContain("\nstatus: review\n");
+  });
+
   it.each([false, true])(
     "persists metadata, indexes and human blocks (update: %s)",
     async (update) => {

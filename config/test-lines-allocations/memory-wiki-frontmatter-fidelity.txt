@@ -1,0 +1,4 @@
+# Patching frontmatter key by key needs a page carrying comments and numeric spellings, plus
+# one declined page per source contract the patcher cannot re-derive (anchors, aliases and
+# explicit tags) in both the renderer and the mutation suite.
+142

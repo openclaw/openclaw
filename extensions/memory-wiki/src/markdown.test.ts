@@ -3,6 +3,7 @@ import {
   extractHumanNotesBlock,
   parseWikiMarkdown,
   preserveHumanNotesBlock,
+  renderWikiMarkdown,
   scanWikiPageSummary,
   slugifyWikiSegment,
   toWikiPageSummary,
@@ -76,6 +77,119 @@ describe("human Notes blocks", () => {
     const existing = `~~~markdown\n## Notes\n${startMarker}\nProducer example.\n${endMarker}\n~~~`;
 
     expect(preserveHumanNotesBlock(rendered, existing, { producerMarkdown: true })).toBe(rendered);
+  });
+});
+
+describe("renderWikiMarkdown", () => {
+  const original = [
+    "---",
+    "# provenance: imported from the OKF export",
+    "title: Alpha",
+    "build: 007",
+    "big: 12345678901234567890",
+    "confidence: 0.3",
+    "tags:",
+    "  - alpha # team tag",
+    "---",
+    "",
+    "# Alpha",
+    "",
+  ].join("\n");
+
+  it("keeps a keep-chomped block scalar's trailing newlines when a sibling key is removed", () => {
+    const page = [
+      "---",
+      "notes: |+",
+      "  body",
+      "",
+      "",
+      "extra: drop me",
+      "---",
+      "",
+      "# Alpha",
+      "",
+    ].join("\n");
+    const { frontmatter } = parseWikiMarkdown(page);
+    const { extra: _extra, ...kept } = frontmatter;
+
+    const rendered = renderWikiMarkdown({ frontmatter: kept, body: "# Alpha\n", original: page });
+
+    // The removed sibling's line break stays so the kept blank lines read back as the value.
+    expect(rendered).toContain("notes: |+\n  body\n");
+    expect(rendered).not.toContain("extra");
+    expect(parseWikiMarkdown(rendered).frontmatter).toEqual(kept);
+  });
+
+  it("drops keys the caller removed and re-renders pages without readable source", () => {
+    const { frontmatter } = parseWikiMarkdown(original);
+    const { confidence: _confidence, ...kept } = frontmatter;
+    const patched = renderWikiMarkdown({ frontmatter: kept, body: "# Alpha\n", original });
+    expect(patched).not.toContain("confidence");
+    // The sibling comments and numeric tokens the caller left alone are the page's own spelling.
+    expect(patched).toContain("# provenance: imported from the OKF export\n");
+    expect(patched).toContain("build: 007\n");
+    expect(patched).toContain("big: 12345678901234567890\n");
+    expect(patched).toContain("- alpha # team tag\n");
+    expect(renderWikiMarkdown({ frontmatter: { title: "Alpha" }, body: "# Alpha\n" })).toBe(
+      "---\ntitle: Alpha\n---\n\n# Alpha\n",
+    );
+    // Non-string keys cannot be addressed by `Document.set`/`delete`, so such a page re-renders
+    // from values instead of gaining a second pair for the same key.
+    expect(
+      renderWikiMarkdown({
+        frontmatter: { "1": "beta", title: "T" },
+        body: "# Alpha\n",
+        original: "---\n1: alpha\ntitle: T\n---\n\n# Alpha\n",
+      }),
+    ).toBe('---\n"1": beta\ntitle: T\n---\n\n# Alpha\n');
+  });
+
+  it.each([
+    {
+      shape: "value anchor",
+      source: "---\nbuild: 007\nstatus: &s active\ncustomStatus: *s\n---\n\n# Alpha\n",
+      frontmatter: { build: 7, customStatus: "active", status: "review" },
+      rendered: "---\nbuild: 7\ncustomStatus: active\nstatus: review\n---\n\n# Alpha\n",
+    },
+    {
+      shape: "anchored key spelled twice",
+      source: "---\nbuild: 007\n? &k status\n: active\n? *k\n: draft\nmirror: *k\n---\n\n# Alpha\n",
+      frontmatter: { build: 7, mirror: "status", status: "review" },
+      rendered: "---\nbuild: 7\nmirror: status\nstatus: review\n---\n\n# Alpha\n",
+    },
+    {
+      shape: "self-containing list",
+      source: "---\nbuild: 007\nquestions: &q\n  - *q\nmirror: *q\ntitle: Alpha\n---\n\n# Alpha\n",
+      frontmatter: { build: 7, questions: ["x"], mirror: ["x"], title: "Alpha" },
+      rendered: "---\nbuild: 7\nquestions:\n  - x\nmirror:\n  - x\ntitle: Alpha\n---\n\n# Alpha\n",
+    },
+    {
+      shape: "explicit !!bool tag",
+      source: "---\nbuild: 007\nstatus: !!bool true\n---\n\n# Alpha\n",
+      frontmatter: { build: 7, status: "review" },
+      rendered: "---\nbuild: 7\nstatus: review\n---\n\n# Alpha\n",
+    },
+  ])(
+    "re-renders a declined page ($shape) from values so the requested write survives",
+    ({ source, frontmatter, rendered }) => {
+      const page = renderWikiMarkdown({ frontmatter, body: "# Alpha\n", original: source });
+      expect(page).toBe(rendered);
+      expect(parseWikiMarkdown(page).frontmatter).toEqual(frontmatter);
+    },
+  );
+
+  it("renders an explicitly tagged page from values instead of throwing", () => {
+    // apply.ts writes `updatedAt` as an ISO string, and yaml hands that string to the source
+    // node's `!!timestamp` schema, which reads it as a Date and dies.
+    const source = "---\nupdatedAt: !!timestamp 2026-01-01\nbuild: 007\n---\n\n# Alpha\n";
+
+    expect(
+      renderWikiMarkdown({
+        frontmatter: { build: 7, updatedAt: "2026-11-04T05:00:00.000Z" },
+        body: "# Alpha\n",
+        original: source,
+      }),
+    ).toBe("---\nbuild: 7\nupdatedAt: 2026-11-04T05:00:00.000Z\n---\n\n# Alpha\n");
   });
 });
 
