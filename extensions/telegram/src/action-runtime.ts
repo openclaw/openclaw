@@ -75,7 +75,7 @@ import {
 } from "./send.js";
 import { TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST } from "./status-reaction-variants.js";
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
-import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
+import { formatTelegramDeliveryTarget, normalizeTelegramOutboundTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
 import { updateTopicName } from "./topic-name-cache.js";
 
@@ -114,19 +114,6 @@ function resolveActionTopicNameCacheScope(cfg: OpenClawConfig, accountId?: strin
   return resolveStorePath(cfg.session?.store, {
     agentId: resolveTelegramAccountOwnerAgentId({ cfg, accountId: resolvedAccountId }),
   });
-}
-
-function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {
-  const parsed = parseTelegramTarget(to);
-  const directTopicId = parsed.directMessagesTopicId;
-  if (directTopicId != null) {
-    return `${parsed.chatId}:direct-topic:${directTopicId}`;
-  }
-  const topicId = messageThreadId ?? parsed.messageThreadId;
-  if (topicId == null) {
-    return to;
-  }
-  return `${parsed.chatId}:topic:${topicId}`;
 }
 
 function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
