@@ -1,0 +1,2 @@
+# Bounded OTel content redaction: cut-boundary masking on the five export paths, open-secret and registered-length probes, emitted-body and root consumer regressions.
+977
