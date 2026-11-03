@@ -151,7 +151,7 @@ private actor GatewayEndpointRemoteEnsureGate {
     }
 }
 
-@Suite(.gatewayTLSStoreIsolated)
+@Suite(.gatewayTLSStoreIsolated, .testWaitLimit)
 struct GatewayEndpointStoreTests {
     @MainActor
     @Test func `live local source uses canonical default and named profile ports`() async throws {
@@ -228,7 +228,7 @@ struct GatewayEndpointStoreTests {
     {
         GatewayEndpointStore.SourceSnapshot(
             routingGeneration: routingGeneration,
-            mode: .init(mode),
+            mode: mode,
             token: token,
             password: password,
             deviceAuthGatewayID: deviceAuthGatewayID,
@@ -236,7 +236,7 @@ struct GatewayEndpointStoreTests {
             localHost: localHost,
             scheme: scheme,
             bindMode: bindMode,
-            remoteTransport: .init(transport),
+            remoteTransport: transport,
             directRemoteURL: directURL,
             remoteTLSFingerprint: tlsFingerprint,
             sshRouteIdentity: mode == .remote && transport == .ssh
@@ -393,17 +393,40 @@ struct GatewayEndpointStoreTests {
             authToken: authToken)
     }
 
+    @Test(arguments: ["token", "password"], [false, true])
+    func `local credentials prefer config while remote credentials retain env overrides`(
+        credential: String,
+        isRemote: Bool) throws
+    {
+        let kind = try #require(GatewayEndpointStore.Credential(rawValue: credential))
+        let root: [String: Any] = [
+            "gateway": [isRemote ? "remote" : "auth": [credential: "  configured-secret  "]],
+        ]
+        let resolved = GatewayEndpointStore.resolveGatewayCredential(
+            kind,
+            isRemote: isRemote,
+            root: root,
+            env: ["OPENCLAW_GATEWAY_\(credential.uppercased())": "stale-environment-secret"],
+            launchdSnapshot: self.makeLaunchAgentSnapshot(
+                token: "service-token",
+                password: "service-password"))
+
+        #expect(resolved == (isRemote ? "stale-environment-secret" : "configured-secret"))
+    }
+
     @Test func `resolve gateway token prefers env and falls back to launchd`() {
         let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
 
-        let envToken = GatewayEndpointStore._testResolveGatewayToken(
+        let envToken = GatewayEndpointStore.resolveGatewayCredential(
+            .token,
             isRemote: false,
             root: [:],
             env: ["OPENCLAW_GATEWAY_TOKEN": "env-token"],
             launchdSnapshot: snapshot)
         #expect(envToken == "env-token")
 
-        let fallbackToken = GatewayEndpointStore._testResolveGatewayToken(
+        let fallbackToken = GatewayEndpointStore.resolveGatewayCredential(
+            .token,
             isRemote: false,
             root: [:],
             env: [:],
@@ -415,7 +438,8 @@ struct GatewayEndpointStoreTests {
         let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
         let root = self.localAuthRoot("token", value: "${OPENCLAW_GATEWAY_TOKEN}")
 
-        let token = GatewayEndpointStore._testResolveGatewayToken(
+        let token = GatewayEndpointStore.resolveGatewayCredential(
+            .token,
             isRemote: false,
             root: root,
             env: [:],
@@ -434,7 +458,8 @@ struct GatewayEndpointStoreTests {
         let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
         let root = self.localAuthRoot("token", value: "$OPENCLAW_GATEWAY_TOKEN")
 
-        let token = GatewayEndpointStore._testResolveGatewayToken(
+        let token = GatewayEndpointStore.resolveGatewayCredential(
+            .token,
             isRemote: false,
             root: root,
             env: [:],
@@ -451,7 +476,8 @@ struct GatewayEndpointStoreTests {
             token: "launchd-token")
         let root = self.localAuthRoot("token", value: "${CUSTOM_GATEWAY_TOKEN}")
 
-        let token = GatewayEndpointStore._testResolveGatewayToken(
+        let token = GatewayEndpointStore.resolveGatewayCredential(
+            .token,
             isRemote: false,
             root: root,
             env: ["CUSTOM_GATEWAY_TOKEN": "  custom-token  "],
@@ -464,7 +490,8 @@ struct GatewayEndpointStoreTests {
             env: ["CUSTOM_GATEWAY_TOKEN": "  service-token  "])
         let root = self.localAuthRoot("token", value: "${CUSTOM_GATEWAY_TOKEN}")
 
-        let token = GatewayEndpointStore._testResolveGatewayToken(
+        let token = GatewayEndpointStore.resolveGatewayCredential(
+            .token,
             isRemote: false,
             root: root,
             env: ["CUSTOM_GATEWAY_TOKEN": "  "],
@@ -476,7 +503,8 @@ struct GatewayEndpointStoreTests {
         let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
         let root = self.localAuthRoot("token", value: "${custom_gateway_token}")
 
-        let token = GatewayEndpointStore._testResolveGatewayToken(
+        let token = GatewayEndpointStore.resolveGatewayCredential(
+            .token,
             isRemote: false,
             root: root,
             env: ["custom_gateway_token": "custom-token"],
@@ -487,7 +515,8 @@ struct GatewayEndpointStoreTests {
     @Test func `resolve gateway token omits unresolved env template without fallback`() throws {
         let root = self.localAuthRoot("token", value: "${OPENCLAW_GATEWAY_TOKEN}")
 
-        let token = GatewayEndpointStore._testResolveGatewayToken(
+        let token = GatewayEndpointStore.resolveGatewayCredential(
+            .token,
             isRemote: false,
             root: root,
             env: [:],
@@ -505,7 +534,8 @@ struct GatewayEndpointStoreTests {
     @Test func `resolve gateway token ignores launchd in remote mode`() {
         let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
 
-        let token = GatewayEndpointStore._testResolveGatewayToken(
+        let token = GatewayEndpointStore.resolveGatewayCredential(
+            .token,
             isRemote: true,
             root: [:],
             env: [:],
@@ -514,7 +544,8 @@ struct GatewayEndpointStoreTests {
     }
 
     @Test func `resolve gateway token uses remote config token`() {
-        let token = GatewayEndpointStore._testResolveGatewayToken(
+        let token = GatewayEndpointStore.resolveGatewayCredential(
+            .token,
             isRemote: true,
             root: [
                 "gateway": [
@@ -543,7 +574,8 @@ struct GatewayEndpointStoreTests {
     @Test func `resolve gateway password falls back to launchd`() {
         let snapshot = self.makeLaunchAgentPasswordSnapshot("launchd-pass")
 
-        let password = GatewayEndpointStore._testResolveGatewayPassword(
+        let password = GatewayEndpointStore.resolveGatewayCredential(
+            .password,
             isRemote: false,
             root: [:],
             env: [:],
@@ -555,7 +587,8 @@ struct GatewayEndpointStoreTests {
         let snapshot = self.makeLaunchAgentPasswordSnapshot("launchd-pass")
         let root = self.localAuthRoot("password", value: "${OPENCLAW_GATEWAY_PASSWORD}")
 
-        let password = GatewayEndpointStore._testResolveGatewayPassword(
+        let password = GatewayEndpointStore.resolveGatewayCredential(
+            .password,
             isRemote: false,
             root: root,
             env: [:],
@@ -567,7 +600,8 @@ struct GatewayEndpointStoreTests {
         let snapshot = self.makeLaunchAgentPasswordSnapshot("launchd-pass")
         let root = self.localAuthRoot("password", value: "$OPENCLAW_GATEWAY_PASSWORD")
 
-        let password = GatewayEndpointStore._testResolveGatewayPassword(
+        let password = GatewayEndpointStore.resolveGatewayCredential(
+            .password,
             isRemote: false,
             root: root,
             env: [:],
@@ -580,7 +614,8 @@ struct GatewayEndpointStoreTests {
             env: ["CUSTOM_GATEWAY_PASSWORD": "  service-pass  "])
         let root = self.localAuthRoot("password", value: "${CUSTOM_GATEWAY_PASSWORD}")
 
-        let password = GatewayEndpointStore._testResolveGatewayPassword(
+        let password = GatewayEndpointStore.resolveGatewayCredential(
+            .password,
             isRemote: false,
             root: root,
             env: [:],
@@ -840,15 +875,15 @@ extension GatewayEndpointStoreTests {
             bindMode: "tailnet",
             routingGeneration: 7)
 
-        #expect(GatewayEndpointStore._testLiveSourceIsCurrent(
+        #expect(GatewayEndpointStore.liveSourceIsCurrent(
             source,
             currentRoutingGeneration: 7,
             currentTailnetIP: "100.64.1.5"))
-        #expect(!GatewayEndpointStore._testLiveSourceIsCurrent(
+        #expect(!GatewayEndpointStore.liveSourceIsCurrent(
             source,
             currentRoutingGeneration: 7,
             currentTailnetIP: "100.64.1.6"))
-        #expect(!GatewayEndpointStore._testLiveSourceIsCurrent(
+        #expect(!GatewayEndpointStore.liveSourceIsCurrent(
             source,
             currentRoutingGeneration: 8,
             currentTailnetIP: "100.64.1.5"))
@@ -1158,16 +1193,14 @@ extension GatewayEndpointStoreTests {
 
             // Observe publication only. Another endpoint read would hide this bug by
             // completing the abandoned waiter's ready/error publication itself.
-            let outcome = try? await AsyncTimeout.withTimeout(
-                seconds: 1,
-                onTimeout: { CancellationError() },
-                operation: { () async -> GatewayEndpointState? in
-                    for await state in stream where state.routeRevision == connecting.routeRevision {
-                        if case .connecting = state { continue }
-                        return state
-                    }
-                    return nil
-                })
+            let outcome: GatewayEndpointState? = try await {
+                for await state in stream where state.routeRevision == connecting.routeRevision {
+                    if case .connecting = state { continue }
+                    return state
+                }
+                Issue.record("Still waiting for remote recovery publication")
+                throw CancellationError()
+            }()
             if fails {
                 #expect(outcome == .unavailable(
                     mode: .remote,

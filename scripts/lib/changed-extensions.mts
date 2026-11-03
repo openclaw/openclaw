@@ -5,6 +5,12 @@ import path from "node:path";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
+const EXTENSION_METADATA_FILES = ["package.json", "openclaw.plugin.json"];
+
+/** Bundled plugins can declare their identity without an npm package. */
+export function hasExtensionMetadata(directory: string): boolean {
+  return EXTENSION_METADATA_FILES.some((file) => fs.existsSync(path.join(directory, file)));
+}
 
 type ChangedPathsBaseParams = Partial<Record<"base" | "fallbackBaseRef" | "head", string>>;
 type ChangedExtensionParams = Partial<Record<"base" | "cwd" | "head", string>> & {
@@ -69,18 +75,22 @@ function listChangedPaths(base: string, head = "HEAD") {
 }
 
 function listAvailableExtensionIdsFromGit(cwd: string) {
-  const packageFiles = runGit(
-    ["ls-files", "-z", "--", `:(glob)${BUNDLED_PLUGIN_PATH_PREFIX}*/package.json`],
+  const metadataFiles = runGit(
+    [
+      "ls-files",
+      "-z",
+      "--",
+      ...EXTENSION_METADATA_FILES.map((file) => `:(glob)${BUNDLED_PLUGIN_PATH_PREFIX}*/${file}`),
+    ],
     cwd,
   )
     .split("\0")
     .filter(Boolean);
-  return packageFiles
-    .flatMap((file) => {
-      const match = file.match(new RegExp(`^${BUNDLED_PLUGIN_PATH_PREFIX}([^/]+)/package\\.json$`));
-      return match?.[1] ? [match[1]] : [];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+  const extensionIds = metadataFiles.flatMap((file) => {
+    const match = file.match(new RegExp(`^${BUNDLED_PLUGIN_PATH_PREFIX}([^/]+)/[^/]+$`));
+    return match?.[1] ? [match[1]] : [];
+  });
+  return [...new Set(extensionIds)].toSorted((left, right) => left.localeCompare(right));
 }
 
 function listAvailableExtensionIdsFromDirectory(cwd: string) {
@@ -94,7 +104,7 @@ function listAvailableExtensionIdsFromDirectory(cwd: string) {
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .filter((extensionId) =>
-      fs.existsSync(path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR, extensionId, "package.json")),
+      hasExtensionMetadata(path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR, extensionId)),
     )
     .toSorted((left, right) => left.localeCompare(right));
 }

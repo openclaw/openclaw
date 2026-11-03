@@ -22,13 +22,11 @@ export const boundaryTestFiles = [
   "src/infra/path-env.test.ts",
   "src/infra/stable-node-path.test.ts",
   "test/control-ui-import-boundary.test.ts",
-  "test/extension-import-boundaries.test.ts",
   "test/extension-test-boundary.test.ts",
   "test/plugin-extension-import-boundary.test.ts",
 ];
 
 export const bundledPluginDependentUnitTestFiles = [
-  "src/infra/matrix-plugin-helper.test.ts",
   "src/plugin-sdk/facade-runtime.test.ts",
   "src/plugins/loader.test.ts",
 ];
@@ -56,7 +54,6 @@ export const unitTestAdditionalExcludePatterns = [
   "src/process/**",
   "src/secrets/**",
   "src/shared/**",
-  "src/tasks/**",
   "src/media-understanding/**",
   "src/logging/**",
   "src/tui/**",

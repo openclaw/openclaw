@@ -7,6 +7,7 @@ import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createNativeCopilotPolicyHarnessFixtureForTest,
+  makeUserTurnRecorder,
   type CopilotSessionBindingForTest,
 } from "../extensions/copilot/test-api.js";
 import {
@@ -69,30 +70,6 @@ afterEach(async () => {
   await Promise.all(harnesses.splice(0).map((fixture) => fixture.dispose()));
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createUserTurnRecorder(message: Extract<AgentMessage, { role: "user" }>) {
-  let blocked = false;
-  let persisted = false;
-  return {
-    message,
-    resolveMessage: vi.fn(async () => message),
-    markRuntimePersistencePending: vi.fn(),
-    markRuntimePersisted: vi.fn(() => {
-      persisted = true;
-    }),
-    markBlocked: vi.fn(() => {
-      blocked = true;
-    }),
-    hasPersisted: () => persisted,
-    isBlocked: () => blocked,
-    hasRuntimePersistencePending: () => false,
-    getAdmissionReceipt: () => undefined,
-    waitForRuntimePersistence: vi.fn(async () => undefined),
-    persistApproved: vi.fn(async () => undefined),
-    persistBlocked: vi.fn(async () => undefined),
-    persistFallback: vi.fn(async () => undefined),
-  };
-}
 
 function createHostCapabilities(): AgentHarnessAttemptParamsV2["hostCapabilities"] {
   return Object.freeze({
@@ -185,7 +162,7 @@ async function runLiveCopilotTurn(params: {
       thinkLevel: "low" as const,
       timeoutMs: 90_000,
       toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-      userTurnTranscriptRecorder: createUserTurnRecorder(message),
+      userTurnTranscriptRecorder: makeUserTurnRecorder(message),
       workspaceDir: params.workspaceDir,
       ...params.policy,
     } satisfies CopilotLiveAttemptParams;

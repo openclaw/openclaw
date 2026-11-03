@@ -17,12 +17,20 @@ const release = {
     { name: "OpenClaw-2026.6.8.dSYM.zip", digest: `sha256:${"c".repeat(64)}` },
   ],
 };
+const releaseAssets = (names: string[]) =>
+  names.map((name, index) => ({ name, digest: `sha256:${index.toString(16).repeat(64)}` }));
+const macAssetNames = (version: string, suffix = "") =>
+  ["zip", "dmg", "dSYM.zip"].map((extension) => `OpenClaw-${version}${suffix}.${extension}`);
 const remainingAppAssets = [
   "OpenClaw-Android-SHA256SUMS.txt",
   "OpenClaw-Android.apk",
   "OpenClawCompanion-SHA256SUMS.txt",
   "OpenClawCompanion-Setup-arm64.exe",
   "OpenClawCompanion-Setup-x64.exe",
+];
+const completeAppAssets = [
+  ...release.assets,
+  ...remainingAppAssets.map((name) => ({ name, digest: `sha256:${"d".repeat(64)}` })),
 ];
 const changelog =
   "# Changelog\n\n## 2026.6.8\n\n### Fixes\n\n- Shipped fix.\n\n## 2026.6.7\n\n- Old.\n";
@@ -42,6 +50,74 @@ const validCloseoutParams = {
   releasePublishRunId: "12",
   rollbackDrillId: "rollback-drill-2026-q2",
   rollbackDrillDate: "2026-06-01",
+  nowMs: Date.parse("2026-06-17T00:00:00Z"),
+};
+const appcastEvidenceError =
+  "Recorded appcast evidence presence or format does not match canonical macOS release asset state.";
+const changelogError =
+  "main CHANGELOG.md ## 2026.6.8 does not exactly match the shipped release section.";
+const errors = {
+  attempt: "full release validation run attempt is invalid: <missing>.",
+  calendar: "rollback drill date is invalid: 2026-02-31.",
+  appcast: "main appcast.xml does not point at OpenClaw-2026.6.8.zip from v2026.6.8.",
+  intel: "main appcast-x86_64.xml does not point at OpenClaw-2026.9.6-x86_64.zip from v2026.9.6.",
+  platform: "Recorded app platform states do not match canonical release asset digests.",
+  accounting:
+    "main changelog 2026.6.8 frozen contribution record does not match the shipped release accounting.",
+};
+type CloseoutParams = Parameters<typeof verifyStableMainCloseout>[0];
+function verify(params: CloseoutParams = {}) {
+  return verifyStableMainCloseout({ ...validCloseoutParams, ...params });
+}
+function rejects(params: CloseoutParams, ...expectedErrors: string[]) {
+  const result = verify(params);
+  expect(result.errors).toEqual(expect.arrayContaining(expectedErrors));
+  expect(result.manifest).toBeNull();
+}
+function succeeds(params: CloseoutParams) {
+  const result = verify(params);
+  expect(result.errors).toEqual([]);
+  return result.manifest;
+}
+function expectReplay(params: CloseoutParams, manifest: ReturnType<typeof verify>["manifest"]) {
+  expect(JSON.stringify(succeeds(params))).toBe(JSON.stringify(manifest));
+}
+function versionParams(
+  version: string,
+  releaseChangelog = changelog.replaceAll("2026.6.8", version),
+) {
+  return {
+    tag: `v${version}`,
+    mainPackageJson: { version },
+    tagPackageJson: { version },
+    mainChangelog: releaseChangelog,
+    tagChangelog: releaseChangelog,
+  };
+}
+type CloseoutOverrides = Partial<typeof validCloseoutParams> & {
+  publishedAppcast?: string;
+  mainArm64Appcast?: string;
+  mainX86_64Appcast?: string;
+};
+const thinVersion = "2026.9.6";
+const thinTag = `v${thinVersion}`;
+const thinFeed = (suffix = "") =>
+  `https://github.com/openclaw/openclaw/releases/download/${thinTag}/OpenClaw-${thinVersion}${suffix}.zip`;
+const thinChangelog = `# Changelog\n\n## ${thinVersion}\n\n- Shipped thin macOS releases.\n`;
+const thinCloseoutParams = {
+  ...validCloseoutParams,
+  ...versionParams(thinVersion, thinChangelog),
+  release: {
+    tagName: thinTag,
+    isDraft: false,
+    isPrerelease: false,
+    assets: releaseAssets(
+      ["", "-arm64", "-x86_64"].flatMap((suffix) => macAssetNames(thinVersion, suffix)),
+    ),
+  },
+  mainAppcast: thinFeed(),
+  mainArm64Appcast: thinFeed("-arm64"),
+  mainX86_64Appcast: thinFeed("-x86_64"),
 };
 
 function sha256(value: string) {
@@ -53,15 +129,10 @@ function shippedReplayFixture(version: string, mainVersion: string, complete: bo
   const changelogSection = `## ${version}\n\n- Shipped release.`;
   const replayChangelog = `# Changelog\n\n${changelogSection}`;
   const mainAppcast = `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}.zip\n`;
-  const githubReleaseAssets = [
-    `OpenClaw-${version}.zip`,
-    `OpenClaw-${version}.dmg`,
-    `OpenClaw-${version}.dSYM.zip`,
+  const githubReleaseAssets = releaseAssets([
+    ...macAssetNames(version),
     ...(complete ? remainingAppAssets : []),
-  ].map((name, index) => ({
-    name,
-    digest: `sha256:${index.toString(16).repeat(64)}`,
-  }));
+  ]);
   const manifest = {
     version: 2,
     releaseTag: tag,
@@ -91,11 +162,8 @@ function shippedReplayFixture(version: string, mainVersion: string, complete: bo
     manifest,
     params: {
       ...validCloseoutParams,
-      tag,
+      ...versionParams(version, replayChangelog),
       mainPackageJson: { version: mainVersion },
-      tagPackageJson: { version },
-      mainChangelog: replayChangelog,
-      tagChangelog: replayChangelog,
       mainAppcast,
       release: { tagName: tag, isDraft: false, isPrerelease: false, assets: githubReleaseAssets },
       existingManifest: manifest,
@@ -119,74 +187,91 @@ describe("stable release closeout", () => {
     );
   });
 
-  it("extracts only the requested stable changelog section", () => {
-    expect(extractStableChangelogSection(changelog, "2026.6.8")).toBe(
-      "## 2026.6.8\n\n### Fixes\n\n- Shipped fix.",
-    );
-  });
-
-  it("accepts an exact stable closeout with a current rollback drill", () => {
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(result.errors).toEqual([]);
-    expect(result.manifest).toMatchObject({
-      version: 2,
-      releaseTag: "v2026.6.8",
-      releaseVersion: "2026.6.8",
-      fullReleaseValidationRunAttempt: "2",
-      rollbackDrill: { id: "rollback-drill-2026-q2", date: "2026-06-01" },
-    });
-    expect(result.manifest).not.toHaveProperty("verifiedAt");
-  });
-
-  it("accepts closeout after main advances to a later stable CalVer", () => {
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      mainPackageJson: { version: "2026.7.1" },
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(result.errors).toEqual([]);
-    expect(result.manifest).toMatchObject({
-      releaseVersion: "2026.6.8",
-      mainPackageVersion: "2026.7.1",
-      releaseTagPackageVersion: "2026.6.8",
+  it.each([
+    ["exact correction", "2026.6.8-2", "2026.6.8-2"],
+    ["fallback correction", "2026.6.8", "2026.6.9"],
+  ])("records %s versions for release state and assets", (_name, version, mainVersion) => {
+    const tag = "v2026.6.8-2";
+    expect(
+      verify({
+        ...versionParams(version),
+        tag,
+        mainPackageJson: { version: mainVersion },
+        release: {
+          ...release,
+          tagName: tag,
+          assets: release.assets.map((asset) => ({
+            ...asset,
+            name: asset.name.replaceAll("2026.6.8", version),
+          })),
+        },
+        mainAppcast: `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}.zip\n`,
+      }),
+    ).toMatchObject({
+      errors: [],
+      manifest: {
+        releaseVersion: version,
+        mainPackageVersion: mainVersion,
+        releaseTagPackageVersion: version,
+      },
     });
   });
 
-  it("requires an exact Full Release Validation run attempt", () => {
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      fullReleaseValidationRunAttempt: "",
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(result.errors).toContain("full release validation run attempt is invalid: <missing>.");
-    expect(result.manifest).toBeNull();
+  it.each<[string, CloseoutOverrides, ...string[]]>([
+    ["missing validation attempt", { fullReleaseValidationRunAttempt: "" }, errors.attempt],
+    [
+      "stale Intel feed",
+      {
+        ...thinCloseoutParams,
+        mainX86_64Appcast: "<rss>stale Intel feed</rss>",
+        nowMs: Date.parse("2026-09-21T00:00:00Z"),
+      },
+      errors.intel,
+    ],
+    [
+      "stale main snapshot despite valid published feed",
+      {
+        mainAppcast: "<rss>stale main feed</rss>",
+        publishedAppcast:
+          "https://github.com/openclaw/openclaw/releases/download/v2026.6.8/OpenClaw-2026.6.8.zip",
+      },
+      errors.appcast,
+    ],
+    ["invalid calendar date", { rollbackDrillDate: "2026-02-31" }, errors.calendar],
+    [
+      "older main, appcast drift, and stale rollback drill",
+      {
+        mainPackageJson: { version: "2026.6.7" },
+        mainChangelog: changelog.replace("Shipped fix.", "Different fix."),
+        mainAppcast: "https://example.test/old.zip\n",
+        rollbackDrillId: "rollback-drill-2026-q1",
+        rollbackDrillDate: "2026-03-01",
+      },
+      "main package.json version is 2026.6.7, expected shipped version 2026.6.8 or a later stable OpenClaw CalVer.",
+      changelogError,
+      errors.appcast,
+      "rollback drill is older than 90 days: 2026-03-01. Run the private rollback drill before stable closeout.",
+    ],
+    [
+      "prerelease main",
+      { mainPackageJson: { version: "2026.6.9-beta.1" } },
+      "main package.json version is 2026.6.9-beta.1, expected shipped version 2026.6.8 or a later stable OpenClaw CalVer.",
+    ],
+  ])("rejects %s", (_name, params, ...expectedErrors) => {
+    rejects(params, ...expectedErrors);
   });
 
   it("writes identical closeout evidence when replayed", () => {
-    const first = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-    const replay = verifyStableMainCloseout({
-      ...validCloseoutParams,
+    const first = verify();
+    const replay = verify({
       release: {
         ...release,
         assets: [
           ...release.assets,
-          {
-            name: "openclaw-2026.6.8-stable-main-closeout.json",
-            digest: `sha256:${"d".repeat(64)}`,
-          },
-          {
-            name: "openclaw-2026.6.8-stable-main-closeout.json.sha256",
-            digest: `sha256:${"e".repeat(64)}`,
-          },
+          ...["d", "e"].map((digit, index) => ({
+            name: `openclaw-2026.6.8-stable-main-closeout.json${index === 0 ? "" : ".sha256"}`,
+            digest: `sha256:${digit.repeat(64)}`,
+          })),
         ],
       },
       nowMs: Date.parse("2026-06-18T00:00:00Z"),
@@ -200,217 +285,49 @@ describe("stable release closeout", () => {
       ...release,
       assets: release.assets.map((asset, index) => (index === 0 ? { name: asset.name } : asset)),
     };
-    const first = verifyStableMainCloseout({
-      ...validCloseoutParams,
+    const first = succeeds({ release: releaseWithMissingDigest });
+    const replay = succeeds({
       release: releaseWithMissingDigest,
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-    const replay = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      release: releaseWithMissingDigest,
-      existingManifest: first.manifest,
+      existingManifest: first,
       publishedAppcast: "<rss>newer app release without the old entry</rss>",
       allowStaleRollbackDrill: true,
       nowMs: Date.parse("2026-10-01T00:00:00Z"),
     });
 
-    expect(first.manifest?.githubReleaseAssets[0]).toEqual({
+    expect(first?.githubReleaseAssets[0]).toEqual({
       name: "OpenClaw-2026.6.8.zip",
       digest: null,
     });
-    expect(replay.errors).toEqual([]);
-    expect(replay.manifest).toEqual(first.manifest);
+    expect(replay).toEqual(first);
   });
 
   it.each(shippedReplayFixtures)("replays $label byte-for-byte", ({ manifest, params }) => {
-    const result = verifyStableMainCloseout({
-      ...params,
-      mainAppcast: "<rss>current feed without the historical release</rss>",
-    });
-    expect(result.errors).toEqual([]);
-    expect(JSON.stringify(result.manifest)).toBe(JSON.stringify(manifest));
-  });
-
-  it("preserves the last pre-thin v2026.9.5 receipt byte-for-byte after upgrade", () => {
-    const { manifest, params } = shippedReplayFixture("2026.9.5", "2026.9.6", false);
-    const serializedReceipt = JSON.stringify(manifest);
-
-    const result = verifyStableMainCloseout({
-      ...params,
-      mainAppcast: "<rss>current feed without the historical release</rss>",
-    });
-
-    expect(result.errors).toEqual([]);
-    expect(JSON.stringify(result.manifest)).toBe(serializedReceipt);
-    expect(
-      result.manifest?.githubReleaseAssets.map((asset: { name: string }) => asset.name),
-    ).toEqual(["OpenClaw-2026.9.5.zip", "OpenClaw-2026.9.5.dmg", "OpenClaw-2026.9.5.dSYM.zip"]);
+    expectReplay(
+      {
+        ...params,
+        mainAppcast: "<rss>current feed without the historical release</rss>",
+      },
+      manifest,
+    );
   });
 
   it("rejects replay with a noncanonical recorded appcast hash", () => {
     const { manifest, params } = shippedSeptemberReplayFixture;
-    const result = verifyStableMainCloseout({
-      ...params,
-      existingManifest: { ...manifest, appcastSha256: "f".repeat(63) },
-    });
-
-    expect(result.errors).toContain(
-      "Recorded appcast evidence presence or format does not match canonical macOS release asset state.",
+    rejects(
+      { ...params, existingManifest: { ...manifest, appcastSha256: "f".repeat(63) } },
+      appcastEvidenceError,
     );
-    expect(result.manifest).toBeNull();
-  });
-
-  it("records pending apps and appcast before app publication", () => {
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      release: { ...release, assets: [] },
-      mainAppcast: "https://example.test/old.zip\n",
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(result.errors).toEqual([]);
-    expect(result.manifest).toMatchObject({ apps: "pending", appcast: "pending" });
-    expect(result.manifest).not.toHaveProperty("appcastSha256");
-  });
-
-  it("uses exact correction versions for correction-release state and assets", () => {
-    const correctionRelease = {
-      ...release,
-      tagName: "v2026.6.8-2",
-      assets: release.assets.map((asset) => ({
-        ...asset,
-        name: asset.name.replaceAll("2026.6.8", "2026.6.8-2"),
-      })),
-    };
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      tag: "v2026.6.8-2",
-      mainPackageJson: { version: "2026.6.8-2" },
-      tagPackageJson: { version: "2026.6.8-2" },
-      mainChangelog: changelog.replaceAll("2026.6.8", "2026.6.8-2"),
-      tagChangelog: changelog.replaceAll("2026.6.8", "2026.6.8-2"),
-      release: correctionRelease,
-      mainAppcast:
-        "https://github.com/openclaw/openclaw/releases/download/v2026.6.8-2/OpenClaw-2026.6.8-2.zip\n",
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(result.errors).toEqual([]);
-    expect(result.manifest).toMatchObject({
-      releaseVersion: "2026.6.8-2",
-      mainPackageVersion: "2026.6.8-2",
-      releaseTagPackageVersion: "2026.6.8-2",
-    });
-  });
-
-  it("allows a fallback correction tag for an existing base stable package", () => {
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      tag: "v2026.6.8-2",
-      mainPackageJson: { version: "2026.6.9" },
-      release: {
-        ...release,
-        tagName: "v2026.6.8-2",
-      },
-      mainAppcast:
-        "https://github.com/openclaw/openclaw/releases/download/v2026.6.8-2/OpenClaw-2026.6.8.zip\n",
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(result.errors).toEqual([]);
-    expect(result.manifest).toMatchObject({
-      releaseVersion: "2026.6.8",
-      mainPackageVersion: "2026.6.9",
-      releaseTagPackageVersion: "2026.6.8",
-    });
-  });
-
-  it("records attached apps when every app family has published", () => {
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      release: {
-        ...release,
-        assets: [
-          ...release.assets,
-          ...remainingAppAssets.map((name) => ({
-            name,
-            digest: `sha256:${"d".repeat(64)}`,
-          })),
-        ],
-      },
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(result.errors).toEqual([]);
-    expect(result.manifest).toMatchObject({ apps: "attached", appcast: "verified" });
-  });
-
-  it("requires all thin macOS assets and architecture-specific feeds from 2026.9.6", () => {
-    const version = "2026.9.6";
-    const tag = `v${version}`;
-    const macAssets = ["", "-arm64", "-x86_64"].flatMap((suffix) =>
-      ["zip", "dmg", "dSYM.zip"].map((extension) => `OpenClaw-${version}${suffix}.${extension}`),
-    );
-    const futureChangelog = `# Changelog\n\n## ${version}\n\n- Shipped thin macOS releases.\n`;
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      tag,
-      mainPackageJson: { version },
-      tagPackageJson: { version },
-      mainChangelog: futureChangelog,
-      tagChangelog: futureChangelog,
-      release: {
-        tagName: tag,
-        isDraft: false,
-        isPrerelease: false,
-        assets: macAssets.map((name, index) => ({
-          name,
-          digest: `sha256:${index.toString(16).repeat(64)}`,
-        })),
-      },
-      mainAppcast: `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}.zip`,
-      mainArm64Appcast: `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}-arm64.zip`,
-      mainX86_64Appcast: "<rss>stale Intel feed</rss>",
-      nowMs: Date.parse("2026-09-21T00:00:00Z"),
-    });
-
-    expect(result.errors).toContain(
-      `main appcast-x86_64.xml does not point at OpenClaw-${version}-x86_64.zip from ${tag}.`,
-    );
-    expect(result.manifest).toBeNull();
   });
 
   describe("withdrawn macOS appcast", () => {
-    const version = "2026.9.6";
-    const tag = `v${version}`;
+    const version = thinVersion;
+    const tag = thinTag;
     const withdrawal = { commit: "a".repeat(40), reason: "Refs #156861" };
     const olderFeed =
       "<rss><sparkle:shortVersionString>2026.9.5</sparkle:shortVersionString></rss>";
-    const thinFeed = (asset: string) =>
-      `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}${asset}.zip`;
-    const changelogSection = `# Changelog\n\n## ${version}\n\n- Shipped thin macOS releases.\n`;
-    const macAssets = ["", "-arm64", "-x86_64"].flatMap((suffix) =>
-      ["zip", "dmg", "dSYM.zip"].map((extension) => `OpenClaw-${version}${suffix}.${extension}`),
-    );
     const params = {
-      ...validCloseoutParams,
-      tag,
-      mainPackageJson: { version },
-      tagPackageJson: { version },
-      mainChangelog: changelogSection,
-      tagChangelog: changelogSection,
-      release: {
-        tagName: tag,
-        isDraft: false,
-        isPrerelease: false,
-        assets: macAssets.map((name, index) => ({
-          name,
-          digest: `sha256:${index.toString(16).repeat(64)}`,
-        })),
-      },
+      ...thinCloseoutParams,
       mainAppcast: olderFeed,
-      mainArm64Appcast: thinFeed("-arm64"),
-      mainX86_64Appcast: thinFeed("-x86_64"),
       rollbackDrillDate: "2026-09-01",
       nowMs: Date.parse("2026-09-23T00:00:00Z"),
     };
@@ -436,27 +353,6 @@ describe("stable release closeout", () => {
       ).toEqual({ commit: withdrawal.commit, reason: marker.commit.message.split("\n")[0] });
     });
 
-    it("records the withdrawal instead of the feed link contracts", () => {
-      const lookups: string[] = [];
-      const result = verifyStableMainCloseout({
-        ...params,
-        findAppcastWithdrawal: (requested: string) => {
-          lookups.push(requested);
-          return withdrawal;
-        },
-      });
-
-      expect(result.errors).toEqual([]);
-      expect(lookups).toEqual([version]);
-      expect(result.manifest).toMatchObject({
-        apps: "pending",
-        appPlatforms: { macos: "withdrawn", android: "pending", windows: "pending" },
-        appcast: "withdrawn",
-        appcastWithdrawal: withdrawal,
-      });
-      expect(result.manifest).not.toHaveProperty("appcastSha256");
-    });
-
     it.each([
       ["without a marker commit", olderFeed, undefined],
       ["when the newest entry is not older", olderFeed.replace("2026.9.5", version), withdrawal],
@@ -473,41 +369,32 @@ describe("stable release closeout", () => {
       expect(result.manifest).toBeNull();
     });
 
-    it("replays a withdrawn receipt byte-for-byte without another lookup", () => {
-      const first = verifyStableMainCloseout({
+    it("rejects forged withdrawal and platform state in a withdrawn receipt", () => {
+      const first = succeeds({
         ...params,
         findAppcastWithdrawal: () => withdrawal,
       });
       const replayParams = {
         ...params,
-        existingManifest: first.manifest,
-        publishedAppcast:
-          "<rss><sparkle:shortVersionString>2026.9.7</sparkle:shortVersionString></rss>",
-        findAppcastWithdrawal: () => {
-          throw new Error("replay must not look up the withdrawal again");
-        },
+        existingManifest: first,
       };
-      const replay = verifyStableMainCloseout(replayParams);
-
-      expect(replay.errors).toEqual([]);
-      expect(JSON.stringify(replay.manifest)).toBe(JSON.stringify(first.manifest));
-      expect(
-        verifyStableMainCloseout({
+      rejects(
+        {
           ...replayParams,
-          existingManifest: { ...first.manifest, appcastWithdrawal: { commit: "main" } },
-        }).errors,
-      ).toContain(
-        "Recorded appcast evidence presence or format does not match canonical macOS release asset state.",
+          existingManifest: { ...first, appcastWithdrawal: { commit: "main" } },
+        },
+        appcastEvidenceError,
       );
-      expect(
-        verifyStableMainCloseout({
+      rejects(
+        {
           ...replayParams,
           existingManifest: {
-            ...first.manifest,
-            appPlatforms: { ...first.manifest?.appPlatforms, macos: "attached" },
+            ...first,
+            appPlatforms: { ...first?.appPlatforms, macos: "attached" },
           },
-        }).errors,
-      ).toContain("Recorded app platform states do not match canonical release asset digests.");
+        },
+        errors.platform,
+      );
     });
 
     it("preserves a pending receipt when macOS attaches and is then withdrawn", () => {
@@ -515,32 +402,17 @@ describe("stable release closeout", () => {
         ...params,
         release: { ...params.release, assets: [] },
       });
-      const replay = verifyStableMainCloseout({
-        ...params,
-        existingManifest: pending.manifest,
-        publishedAppcast: olderFeed,
-        findAppcastWithdrawal: () => withdrawal,
-      });
-
       expect(pending.manifest).toMatchObject({ appcast: "pending" });
-      expect(replay.errors).toEqual([]);
-      expect(JSON.stringify(replay.manifest)).toBe(JSON.stringify(pending.manifest));
+      expectReplay(
+        {
+          ...params,
+          existingManifest: pending.manifest,
+          publishedAppcast: olderFeed,
+          findAppcastWithdrawal: () => withdrawal,
+        },
+        pending.manifest,
+      );
     });
-  });
-
-  it("validates the main appcast snapshot recorded by fresh closeout", () => {
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      mainAppcast: "<rss>stale main feed</rss>",
-      publishedAppcast:
-        "https://github.com/openclaw/openclaw/releases/download/v2026.6.8/OpenClaw-2026.6.8.zip",
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(result.errors).toContain(
-      "main appcast.xml does not point at OpenClaw-2026.6.8.zip from v2026.6.8.",
-    );
-    expect(result.manifest).toBeNull();
   });
 
   it.each([
@@ -549,21 +421,10 @@ describe("stable release closeout", () => {
     ["OpenClawCompanion-Setup-x64.exe", `sha256:${"d".repeat(63)}`, "windows", "verified"],
     ["OpenClawCompanion-SHA256SUMS.txt", `sha256:${"d".repeat(64)}\n`, "windows", "verified"],
   ])("keeps noncanonical %s evidence pending", (assetName, digest, platform, appcast) => {
-    const assets = [
-      ...release.assets,
-      ...remainingAppAssets.map((name) => ({
-        name,
-        digest: `sha256:${"d".repeat(64)}`,
-      })),
-    ].map((asset) => (asset.name === assetName ? { name: asset.name, digest } : asset));
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      release: { ...release, assets },
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(result.errors).toEqual([]);
-    expect(result.manifest).toMatchObject({
+    const assets = completeAppAssets.map((asset) =>
+      asset.name === assetName ? { name: asset.name, digest } : asset,
+    );
+    expect(succeeds({ release: { ...release, assets } })).toMatchObject({
       apps: "pending",
       appPlatforms: { [platform]: "pending" },
       appcast,
@@ -571,40 +432,23 @@ describe("stable release closeout", () => {
   });
 
   it("rejects replay when recorded attached state lacks canonical digests", () => {
-    const assets = [
-      ...release.assets,
-      ...remainingAppAssets.map((name) => ({
-        name,
-        digest: `sha256:${"d".repeat(64)}`,
-      })),
-    ];
-    const first = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      release: { ...release, assets },
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-    const invalidAssets = assets.map((asset) =>
+    const first = verify({ release: { ...release, assets: completeAppAssets } });
+    const invalidAssets = completeAppAssets.map((asset) =>
       asset.name === "OpenClaw-Android.apk"
         ? { name: asset.name, digest: asset.digest.toUpperCase() }
         : asset,
     );
-    const replay = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      release: { ...release, assets: invalidAssets },
-      existingManifest: {
-        ...first.manifest,
-        githubReleaseAssets: invalidAssets,
+    rejects(
+      {
+        release: { ...release, assets: invalidAssets },
+        existingManifest: {
+          ...first.manifest,
+          githubReleaseAssets: invalidAssets,
+        },
       },
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(replay.errors).toContain(
-      "Recorded app platform states do not match canonical release asset digests.",
-    );
-    expect(replay.errors).toContain(
+      errors.platform,
       "Recorded aggregate app state does not match canonical release asset digests.",
     );
-    expect(replay.manifest).toBeNull();
   });
 
   it("records the independently verified split attempts and refuses missing or changed replay proof", () => {
@@ -621,22 +465,18 @@ describe("stable release closeout", () => {
     };
     const params = {
       ...validCloseoutParams,
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
       allowFailedPublishRecovery: true,
       publishRecovery,
     };
-    const first = verifyStableMainCloseout(params);
-    expect(first.errors).toEqual([]);
-    expect(first.manifest?.releasePublishRecovery).toEqual(publishRecovery);
-    const replay = { ...params, existingManifest: first.manifest };
-    expect(verifyStableMainCloseout(replay).manifest).toEqual(first.manifest);
+    const first = succeeds(params);
+    expect(first?.releasePublishRecovery).toEqual(publishRecovery);
+    const replay = { ...params, existingManifest: first };
+    expect(verify(replay).manifest).toEqual(first);
     for (const replacement of [
       undefined,
       { ...publishRecovery, docker: { ...publishRecovery.docker, runAttempt: "2" } },
     ]) {
-      expect(
-        verifyStableMainCloseout({ ...replay, publishRecovery: replacement }).manifest,
-      ).toBeNull();
+      rejects({ ...replay, publishRecovery: replacement });
     }
     for (const patch of [
       { allowFailedPublishRecovery: false },
@@ -645,43 +485,8 @@ describe("stable release closeout", () => {
       { fullReleaseValidationRunAttempt: "3" },
       { releasePublishRunId: "15" },
     ]) {
-      expect(verifyStableMainCloseout({ ...params, ...patch }).manifest).toBeNull();
+      rejects({ ...params, ...patch });
     }
-  });
-
-  it("rejects calendar-normalized rollback drill dates", () => {
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      rollbackDrillDate: "2026-02-31",
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(result.errors).toContain("rollback drill date is invalid: 2026-02-31.");
-  });
-
-  it("rejects older main state, appcast drift, and stale rollback drills", () => {
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      mainPackageJson: { version: "2026.6.7" },
-      mainChangelog: changelog.replace("Shipped fix.", "Different fix."),
-      mainAppcast: "https://example.test/old.zip\n",
-      rollbackDrillId: "rollback-drill-2026-q1",
-      rollbackDrillDate: "2026-03-01",
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(result.errors).toContain(
-      "main package.json version is 2026.6.7, expected shipped version 2026.6.8 or a later stable OpenClaw CalVer.",
-    );
-    expect(result.errors).toContain(
-      "main CHANGELOG.md ## 2026.6.8 does not exactly match the shipped release section.",
-    );
-    expect(result.errors).toContain(
-      "main appcast.xml does not point at OpenClaw-2026.6.8.zip from v2026.6.8.",
-    );
-    expect(result.errors).toContain(
-      "rollback drill is older than 90 days: 2026-03-01. Run the private rollback drill before stable closeout.",
-    );
   });
 
   it("allows mirrored prose changes only with unchanged frozen release accounting", () => {
@@ -696,40 +501,23 @@ describe("stable release closeout", () => {
         record,
       },
       tagRelease: { section, format: "initial", record },
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
     };
-    const result = verifyStableMainCloseout(params);
-    expect(result.errors).toEqual([]);
-    expect(result.manifest?.changelogSha256).toBe(sha256(section!));
+    expect(succeeds(params)?.changelogSha256).toBe(sha256(section!));
     for (const changedRecord of [null, "Changed accounting"]) {
-      expect(
-        verifyStableMainCloseout({
+      rejects(
+        {
           ...params,
           mainRelease: { ...params.mainRelease, record: changedRecord },
-        }).errors,
-      ).toContain(
-        "main changelog 2026.6.8 frozen contribution record does not match the shipped release accounting.",
+        },
+        errors.accounting,
       );
     }
-    expect(
-      verifyStableMainCloseout({
+    rejects(
+      {
         ...params,
         mainRelease: { ...params.mainRelease, format: "initial" },
-      }).errors,
-    ).toContain(
-      "main CHANGELOG.md ## 2026.6.8 does not exactly match the shipped release section.",
-    );
-  });
-
-  it("rejects prerelease main state", () => {
-    const result = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      mainPackageJson: { version: "2026.6.9-beta.1" },
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(result.errors).toContain(
-      "main package.json version is 2026.6.9-beta.1, expected shipped version 2026.6.8 or a later stable OpenClaw CalVer.",
+      },
+      changelogError,
     );
   });
 });

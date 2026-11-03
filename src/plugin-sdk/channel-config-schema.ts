@@ -47,6 +47,7 @@ export {
   ChannelSendReadReceiptsSchema,
   ChannelStreamingProgressSchema,
   ChannelStreamingPreviewSchema,
+  ChannelThreadBindingsSchema,
   UnifiedStreamingModeSchema,
 } from "../config/zod-schema.channel-messaging-common.js";
 export { ChannelImplicitMentionsSchema } from "../config/zod-schema.implicit-mentions.js";

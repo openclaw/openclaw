@@ -12,6 +12,7 @@ import {
   isQaPosixProcessGroupAlive,
   type QaLinuxProcessGroupInspector,
 } from "./posix-process-group.js";
+import { boundProcessGroupDiagnostics } from "./posix-process-stat.js";
 import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
 const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -159,7 +160,7 @@ export function createQaGatewayChildLogAccess(output: {
 
 function formatQaGatewayChildFailure(failure: QaChildFailure) {
   return failure.source === "process"
-    ? `gateway failed to spawn: ${formatErrorMessage(failure.error)}`
+    ? `gateway child process failed: ${formatErrorMessage(failure.error)}`
     : `gateway child ${failure.source} stream failed: ${formatErrorMessage(failure.error)}`;
 }
 
@@ -181,19 +182,30 @@ export function throwQaGatewayChildFailure(
 export function monitorQaGatewayChildFailure(
   child: ChildProcess,
   output: { push(source: QaGatewayChildLogSource, chunk: Buffer): void },
+  shouldReportExit?: () => boolean,
 ) {
   let childFailure: QaChildFailure | null = null;
-  monitorQaChildFailure(child, (failure) => {
+  const report = (failure: QaChildFailure) => {
+    if (childFailure) {
+      return;
+    }
     childFailure = failure;
-    const description =
-      failure.source === "process"
-        ? `gateway child process error: ${formatErrorMessage(failure.error)}`
-        : formatQaGatewayChildFailure(failure);
-    output.push("internal", Buffer.from(`[qa-lab] ${description}\n`));
+    output.push("internal", Buffer.from(`[qa-lab] ${formatQaGatewayChildFailure(failure)}\n`));
     if (failure.source !== "process" && !hasQaGatewayChildExited(child)) {
       // A broken parent-side pipe means QA can no longer observe the Gateway.
       // Stop the detached process tree so the existing lifecycle reports the failure.
       signalQaGatewayChildProcessTree(child, "SIGTERM");
+    }
+  };
+  monitorQaChildFailure(child, report);
+  child.once("exit", (exitCode, signal) => {
+    if (shouldReportExit?.() !== false) {
+      report({
+        source: "process",
+        error: new Error(
+          `gateway child exited unexpectedly (exitCode=${exitCode}, signal=${signal})`,
+        ),
+      });
     }
   });
   return () => childFailure;
@@ -205,13 +217,6 @@ export function formatQaGatewayProcessBoundaryStartupFailure(error: unknown, log
     -QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS,
   );
   return `${formatErrorMessage(error)}${formatQaGatewayLogsForError(logTail)}`;
-}
-
-function boundQaGatewayProcessTreeDiagnostics(details: string) {
-  if (details.length <= 2_048) {
-    return details;
-  }
-  return `${sliceUtf16Safe(details, 0, 2_045)}...`;
 }
 
 function isQaGatewayChildProcessTreeAlive(
@@ -270,13 +275,6 @@ type QaGatewayChildStopOptions = {
   inspectLinuxProcessGroup?: QaLinuxProcessGroupInspector;
 };
 
-function resolveQaGatewayChildStopTimeouts(opts?: QaGatewayChildStopOptions) {
-  return {
-    gracefulTimeoutMs: opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
-    forceTimeoutMs: opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
-  };
-}
-
 function formatQaGatewayProcessTreeDiagnostics(
   child: ChildProcess,
   inspectLinuxProcessGroupFn: QaLinuxProcessGroupInspector,
@@ -288,7 +286,7 @@ function formatQaGatewayProcessTreeDiagnostics(
   const inspection = inspectLinuxProcessGroupFn(child.pid);
   const processGroupDetails =
     inspection?.diagnostics ?? `pgid=${child.pid} members=unknown (/proc unavailable)`;
-  return boundQaGatewayProcessTreeDiagnostics(
+  return boundProcessGroupDiagnostics(
     `${processGroupDetails} childExitRecorded=${childExitRecorded}`,
   );
 }
@@ -301,17 +299,20 @@ export async function stopQaGatewayChildProcessTree(
   if (!isQaGatewayChildProcessTreeAlive(child, inspectLinuxProcessGroupFn)) {
     return;
   }
-  const timeouts = resolveQaGatewayChildStopTimeouts(opts);
   signalQaGatewayChildProcessTree(child, "SIGTERM");
   if (
-    await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs, inspectLinuxProcessGroupFn)
+    await waitForQaGatewayChildExit(
+      child,
+      opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+      inspectLinuxProcessGroupFn,
+    )
   ) {
     return;
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
   const stopped = await waitForQaGatewayChildExit(
     child,
-    timeouts.forceTimeoutMs,
+    opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
     inspectLinuxProcessGroupFn,
   );
   if (!stopped) {

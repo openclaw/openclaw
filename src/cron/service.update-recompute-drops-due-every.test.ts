@@ -1,228 +1,98 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
-import { CronService } from "./service.js";
-import {
-  createCronStoreHarness,
-  createFinishedBarrier,
-  createNoopLogger,
-  installCronTestHooks,
-} from "./service.test-harness.js";
+import { expect, it } from "vitest";
+import * as clocks from "../test-utils/gateway-scheduler-clock.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
+import type { CronService } from "./service.js";
+import * as serviceTest from "./service.test-harness.js";
+import { onTimer } from "./service/timer.test-support.js";
+import type { CronJob, CronSchedule } from "./types.js";
 
-const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness();
-installCronTestHooks({ logger: noopLogger, fakeTimers: false });
+const { logger, makeStorePath } = serviceTest.setupCronServiceSuite({ fakeTimers: false });
+const base = Date.parse("2025-12-13T00:00:00.000Z");
 
-function createCronFixture(
-  storePath: string,
-  clock: ReturnType<typeof createGatewaySchedulerClock>,
+async function withScheduledJob(
+  schedule: CronSchedule,
+  exercise: (fixture: {
+    cron: CronService;
+    job: CronJob;
+    clock: ReturnType<typeof clocks.createGatewaySchedulerClock>;
+  }) => Promise<void>,
 ) {
-  const finished = createFinishedBarrier();
-  const schedulerTurns: Promise<unknown>[] = [];
-  const cron = new CronService({
-    scheduler: createTestGatewayScheduler(clock.clock),
-    storePath,
-    cronEnabled: true,
-    log: noopLogger,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+  const { storePath } = await makeStorePath();
+  const clock = clocks.createGatewaySchedulerClock(base);
+  const finished = serviceTest.createFinishedBarrier();
+  const turns: Promise<unknown>[] = [];
+  const joinTurns = async () => {
+    const failures: unknown[] = [];
+    for (const turn of turns) {
+      await turn.catch((error: unknown) => failures.push(error));
+    }
+    expect(failures, "Cron fixture scheduler failed").toEqual([]);
+  };
+  const { cron, state } = serviceTest.createCronServiceWithStateForTest({
+    ...cronTestDeps({ storePath }),
+    scheduler: clocks.createTestGatewayScheduler(clock.clock),
+    nowMs: () => clock.clock.now(),
+    log: logger,
     onEvent: finished.onEvent,
     runSchedulerOwned: (run) => {
       const turn = run();
-      schedulerTurns.push(turn);
+      turns.push(turn);
       return turn;
     },
   });
-  return {
-    cron,
-    finished,
-    joinSchedulerTurns: async () => {
-      const failures: unknown[] = [];
-      // The finished event precedes post-run maintenance and timer re-arming.
-      for (const turn of schedulerTurns) {
-        try {
-          await turn;
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      if (failures.length > 0) {
-        throw new AggregateError(failures, "Cron fixture scheduler failed");
-      }
-    },
-  };
+  try {
+    await cron.start();
+    let job = await cron.add(cronTestInput({ schedule }));
+    if (schedule.kind === "every") {
+      expect(job.schedule).toMatchObject({ anchorMs: base });
+      expect(job.state.nextRunAtMs).toBe(base + schedule.everyMs);
+      const firstRun = finished.waitForOk(job.id);
+      await clock.advanceTo(job.state.nextRunAtMs! + 5);
+      await onTimer(state);
+      await firstRun;
+      // Finished precedes maintenance and timer re-arming.
+      await joinTurns();
+      job = cron.getJob(job.id)!;
+      expect(job.state.nextRunAtMs).toBe(job.state.lastRunAtMs! + schedule.everyMs);
+    }
+    await exercise({ cron, job, clock });
+  } finally {
+    cron.stop();
+    await joinTurns();
+  }
 }
 
-describe("update() must not drop a due every-job's pending run", () => {
-  it("preserves a due every-job nextRunAtMs on an idempotent schedule re-save", async () => {
-    const store = await makeStorePath();
-    const base = Date.parse("2025-12-13T00:00:00.000Z");
-    const clock = createGatewaySchedulerClock(base);
-
-    const { cron, finished, joinSchedulerTurns } = createCronFixture(store.storePath, clock);
-
-    try {
-      await cron.start();
-
-      const job = await cron.add({
-        name: "every 10s",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 10_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "tick" },
+const every = { kind: "every", everyMs: 10_000 } as const;
+it.each<[CronSchedule, number?, number?]>([
+  [every],
+  [{ kind: "cron", expr: "0 9 * * *" }],
+  [every, 3_600_000],
+  [every, 3_600_000, 7_200_000],
+])("re-saves %j with interval %s and future offset %s", async (schedule, everyMs, futureOffset) => {
+  await withScheduledJob(schedule, async ({ cron, job, clock }) => {
+    const changing = everyMs !== undefined;
+    const dueSlot = job.state.nextRunAtMs!;
+    const editTime = changing ? job.state.lastRunAtMs! + 3_000 : dueSlot + 50;
+    const anchorMs = futureOffset === undefined ? undefined : editTime + futureOffset;
+    clock.setTime(editTime);
+    const updatedSchedule: CronSchedule = changing
+      ? { kind: "every", everyMs, ...(anchorMs === undefined ? {} : { anchorMs }) }
+      : schedule;
+    await cron.update(job.id, { schedule: updatedSchedule });
+    const current = (await cron.list({ includeDisabled: true })).find(({ id }) => id === job.id)!;
+    expect([current.state.lastRunAtMs, current.state.nextRunAtMs]).toEqual([
+      job.state.lastRunAtMs,
+      changing ? (anchorMs ?? editTime + everyMs) : dueSlot,
+    ]);
+    if (updatedSchedule.kind === "every") {
+      expect(current.schedule).toMatchObject({
+        kind: "every",
+        everyMs: updatedSchedule.everyMs,
+        anchorMs: changing ? (anchorMs ?? editTime) : base,
       });
-      const jobId = job.id;
-      expect(job.state.nextRunAtMs).toBe(base + 10_000);
-
-      // Fire once so the job carries lastRunAtMs and a real next due slot.
-      const firstRun = finished.waitForOk(jobId);
-      await clock.advanceTo(base + 10_000 + 5);
-      await firstRun;
-      await joinSchedulerTurns();
-
-      let current = (await cron.list({ includeDisabled: true })).find((j) => j.id === jobId)!;
-      const lastRunAtMs = current.state.lastRunAtMs!;
-      const dueSlot = current.state.nextRunAtMs!;
-      expect(dueSlot).toBe(lastRunAtMs + 10_000);
-
-      // Advance past the next slot so it is now due, before the timer services it.
-      clock.setTime(dueSlot + 50);
-      const nowDue = dueSlot + 50;
-
-      // User edits the job and the control UI resubmits the unchanged schedule
-      // (a normal idempotent re-save, e.g. while changing the message). This must
-      // not advance the already-due slot.
-      await cron.update(jobId, { schedule: { kind: "every", everyMs: 10_000 } });
-
-      current = (await cron.list({ includeDisabled: true })).find((j) => j.id === jobId)!;
-      expect(current.state.lastRunAtMs).toBe(lastRunAtMs);
-      expect(current.state.nextRunAtMs).toBe(dueSlot);
-      expect(current.state.nextRunAtMs).toBeLessThanOrEqual(nowDue);
-      // The cadence anchor must not re-phase to "now" on an idempotent re-save.
-      expect(current.schedule).toMatchObject({ kind: "every", anchorMs: base });
-    } finally {
-      cron.stop();
-      await joinSchedulerTurns();
     }
-  });
-
-  it.each([
-    { name: "before its first run", previousEveryMs: 10_000, nextEveryMs: 3_600_000 },
-    {
-      name: "after a completed run when the interval increases",
-      previousEveryMs: 10_000,
-      nextEveryMs: 3_600_000,
-      completedRun: true,
-    },
-    {
-      name: "after a completed run when the interval decreases",
-      previousEveryMs: 60_000,
-      nextEveryMs: 10_000,
-      completedRun: true,
-    },
-    {
-      name: "at an explicit future anchor after a completed run",
-      previousEveryMs: 10_000,
-      nextEveryMs: 3_600_000,
-      completedRun: true,
-      futureAnchorOffsetMs: 7_200_000,
-    },
-  ])(
-    "re-anchors an every-job $name",
-    async ({ previousEveryMs, nextEveryMs, completedRun, futureAnchorOffsetMs }) => {
-      const store = await makeStorePath();
-      const base = Date.parse("2025-12-13T00:00:00.000Z");
-      const clock = createGatewaySchedulerClock(base);
-
-      const { cron, finished, joinSchedulerTurns } = createCronFixture(store.storePath, clock);
-
-      try {
-        await cron.start();
-
-        const job = await cron.add({
-          name: "every 10s",
-          enabled: true,
-          schedule: { kind: "every", everyMs: previousEveryMs },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "tick" },
-        });
-        const jobId = job.id;
-        expect(job.schedule).toMatchObject({ kind: "every", anchorMs: base });
-
-        let editTime = base + 3_000;
-        if (completedRun) {
-          const firstRun = finished.waitForOk(jobId);
-          await clock.advanceTo(base + previousEveryMs + 5);
-          await firstRun;
-          await joinSchedulerTurns();
-          const completedJob = (await cron.list({ includeDisabled: true })).find(
-            (candidate) => candidate.id === jobId,
-          )!;
-          editTime = completedJob.state.lastRunAtMs! + 3_000;
-        }
-
-        clock.setTime(editTime);
-        const futureAnchorMs =
-          futureAnchorOffsetMs === undefined ? undefined : editTime + futureAnchorOffsetMs;
-        await cron.update(jobId, {
-          schedule: {
-            kind: "every",
-            everyMs: nextEveryMs,
-            ...(futureAnchorMs === undefined ? {} : { anchorMs: futureAnchorMs }),
-          },
-        });
-
-        const current = (await cron.list({ includeDisabled: true })).find((j) => j.id === jobId)!;
-        expect(current.schedule).toMatchObject({
-          kind: "every",
-          everyMs: nextEveryMs,
-          anchorMs: futureAnchorMs ?? editTime,
-        });
-        expect(current.state.nextRunAtMs).toBe(futureAnchorMs ?? editTime + nextEveryMs);
-      } finally {
-        cron.stop();
-        await joinSchedulerTurns();
-      }
-    },
-  );
-
-  it("preserves a due cron-job nextRunAtMs on an idempotent schedule re-save", async () => {
-    const store = await makeStorePath();
-    const clock = createGatewaySchedulerClock(Date.parse("2025-12-13T08:59:00.000Z"));
-
-    const { cron, joinSchedulerTurns } = createCronFixture(store.storePath, clock);
-
-    try {
-      await cron.start();
-
-      const job = await cron.add({
-        name: "daily 9am",
-        enabled: true,
-        schedule: { kind: "cron", expr: "0 9 * * *" },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "report" },
-      });
-      const jobId = job.id;
-      const dueSlot = job.state.nextRunAtMs!;
-
-      // Advance past the 09:00 slot so it is now due, before the timer fires it.
-      clock.setTime(dueSlot + 50);
-      const nowDue = dueSlot + 50;
-
-      await cron.update(jobId, { schedule: { kind: "cron", expr: "0 9 * * *" } });
-
-      const current = (await cron.list({ includeDisabled: true })).find((j) => j.id === jobId)!;
-      expect(current.state.nextRunAtMs).toBe(dueSlot);
-      expect(current.state.nextRunAtMs).toBeLessThanOrEqual(nowDue);
-    } finally {
-      cron.stop();
-      await joinSchedulerTurns();
+    if (!changing) {
+      expect(current.state.nextRunAtMs).toBeLessThanOrEqual(clock.clock.now());
     }
   });
 });

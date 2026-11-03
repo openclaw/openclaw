@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { registerUsersCli } from "./users-cli.js";
 
 const callGatewayFromCli = vi.hoisted(() => vi.fn());
@@ -15,75 +15,70 @@ function createProgram(response: unknown) {
   callGatewayFromCli.mockResolvedValue(response);
   const program = new Command().exitOverride();
   registerUsersCli(program);
-  return { output, program };
+  return {
+    output,
+    run: (...args: string[]) => program.parseAsync(["users", ...args], { from: "user" }),
+  };
 }
 
-describe("registerUsersCli", () => {
-  it("reports the authoritative linked profile and uses the admin gateway method", async () => {
-    const { output, program } = createProgram({
+it.each([
+  [
+    ["link-email", "Ada@example.com", "--to", "p-1"],
+    {
       profile: {
         id: "p-1\nshadow",
         displayName: "Ada\tadmin\u001b[2J",
         emails: ["ada@example.com\nnext@example.com"],
       },
-    });
-    await program.parseAsync([
-      "node",
-      "openclaw",
-      "users",
-      "link-email",
-      "Ada@example.com",
-      "--to",
-      "p-1",
-    ]);
+    },
+    "users.linkEmail",
+    expect.objectContaining({ to: "p-1" }),
+    { email: "Ada@example.com", targetProfileId: "p-1" },
+    "operator.admin",
+    "p-1\\nshadow\tAda\\tadmin\tada@example.com\\nnext@example.com\n",
+  ],
+  [
+    ["list"],
+    { profiles: [] },
+    "users.list",
+    expect.any(Object),
+    {},
+    "operator.read",
+    "No user profiles found.\n",
+  ],
+  [
+    ["merge", "p-retired\nforged", "--into", "p-survivor"],
+    { profile: { id: "p-survivor" } },
+    "users.merge",
+    expect.objectContaining({ into: "p-survivor" }),
+    { sourceProfileId: "p-retired\nforged", targetProfileId: "p-survivor" },
+    "operator.admin",
+    "Survivor: p-survivor\nRetired profile: p-retired\\nforged\n" +
+      "History keeps its original attribution; logins, links, and accounts follow the survivor.\n",
+  ],
+] as const)(
+  "routes %j with scoped authority and sanitized output",
+  async (args, response, method, options, params, scope, text) => {
+    const { output, run } = createProgram(response);
+    await run(...args);
+    expect(callGatewayFromCli).toHaveBeenCalledWith(method, options, params, { scopes: [scope] });
+    expect(output).toHaveBeenCalledWith(text);
+  },
+);
 
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "users.linkEmail",
-      expect.objectContaining({ to: "p-1" }),
-      { email: "Ada@example.com", targetProfileId: "p-1" },
-      { scopes: ["operator.admin"] },
-    );
-    expect(output).toHaveBeenCalledWith(
-      "p-1\\nshadow\tAda\\tadmin\tada@example.com\\nnext@example.com\n",
-    );
-  });
-
-  it("reports an empty user profile list", async () => {
-    const { output, program } = createProgram({ profiles: [] });
-
-    await program.parseAsync(["node", "openclaw", "users", "list"]);
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "users.list",
-      expect.any(Object),
-      {},
-      { scopes: ["operator.read"] },
-    );
-    expect(output).toHaveBeenCalledWith("No user profiles found.\n");
-  });
-
-  it("preserves the empty profile list JSON response", async () => {
-    const { output, program } = createProgram({ profiles: [] });
-
-    await program.parseAsync(["node", "openclaw", "users", "list", "--json"]);
-
-    expect(output).toHaveBeenCalledWith('{\n  "profiles": []\n}\n');
-  });
-
-  it("prints the link result as JSON when requested", async () => {
-    const { output, program } = createProgram({ profile: { id: "p-1" } });
-
-    await program.parseAsync([
-      "node",
-      "openclaw",
-      "users",
-      "link-email",
-      "Ada@example.com",
-      "--to",
-      "p-1",
-      "--json",
-    ]);
-
-    expect(output).toHaveBeenCalledWith('{\n  "profile": {\n    "id": "p-1"\n  }\n}\n');
-  });
+it.each([
+  {
+    command: "link-email",
+    args: ["Ada@example.com", "--to", "p-1"],
+    result: { profile: { id: "p-1" } },
+  },
+  {
+    command: "merge",
+    args: ["p-retired", "--into", "p-survivor"],
+    result: { profile: { id: "p-survivor", emails: [] }, movedAliasKinds: ["channel"] },
+  },
+])("prints the complete $command result as JSON", async ({ command, args, result }) => {
+  const { output, run } = createProgram(result);
+  await run(command, ...args, "--json");
+  expect(output.mock.calls).toEqual([[`${JSON.stringify(result, null, 2)}\n`]]);
 });

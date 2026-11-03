@@ -19,42 +19,14 @@ export type TempHomeEnv = {
   restore: () => Promise<void>;
 };
 
-// Reuse prefix roots to keep temp-home-heavy suites fast without sharing per-test homes.
-const prefixRoots = new Map<string, string>();
-const pendingPrefixRoots = new Map<string, Promise<string>>();
-let nextHomeIndex = 0;
-
-async function ensurePrefixRoot(prefix: string): Promise<string> {
-  const cached = prefixRoots.get(prefix);
-  if (cached) {
-    return cached;
-  }
-  const pending = pendingPrefixRoots.get(prefix);
-  if (pending) {
-    return await pending;
-  }
-  const create = fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  pendingPrefixRoots.set(prefix, create);
-  try {
-    const root = await create;
-    prefixRoots.set(prefix, root);
-    return root;
-  } finally {
-    pendingPrefixRoots.delete(prefix);
-  }
-}
-
 /** Creates a temporary OpenClaw home and process env override for stateful tests. */
 export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
   const { cleanupSessionStateForTest } = await import("./session-state-cleanup.js");
-  const prefixRoot = await ensurePrefixRoot(prefix);
-  const home = path.join(prefixRoot, `home-${String(nextHomeIndex)}`);
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   const stateDir = path.join(home, ".openclaw");
-  nextHomeIndex += 1;
   const snapshot = captureEnv([...HOME_ENV_KEYS]);
   try {
-    await fs.rm(home, { recursive: true, force: true });
-    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+    await fs.mkdir(stateDir, { mode: 0o700 });
     setTestEnvValue("HOME", home);
     setTestEnvValue("USERPROFILE", home);
     deleteTestEnvValue("OPENCLAW_HOME");

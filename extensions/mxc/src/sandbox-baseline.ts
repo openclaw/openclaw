@@ -1,40 +1,4 @@
-/**
- * Deterministic MXC sandbox baseline policy helpers.
- *
- * These helpers only include policy surfaces the Windows ProcessContainer path
- * currently enforces: workspace/read-only/read-write paths and process timeout.
- */
-
 import { win32 } from "node:path";
-
-const BASELINE_TIMEOUT_SECONDS = 300;
-
-type BaselineFilesystemPolicy = {
-  restrictToProjectDir: boolean;
-  additionalReadonlyPaths: readonly string[];
-  additionalReadwritePaths: readonly string[];
-};
-
-type BaselineFilesystemPolicyInput = {
-  restrictToProjectDir?: boolean;
-  additionalReadonlyPaths?: readonly string[];
-  additionalReadwritePaths?: readonly string[];
-};
-
-export type SandboxBaselinePolicy = {
-  filesystem: BaselineFilesystemPolicy;
-  process: {
-    timeoutSeconds: number;
-    timeoutSecondsConfigured: boolean;
-  };
-};
-
-export type SandboxBaselinePolicyInput = {
-  filesystem?: BaselineFilesystemPolicyInput;
-  process?: {
-    timeoutSeconds?: number;
-  };
-};
 
 type BaselineTempEnv = {
   TEMP?: string;
@@ -51,42 +15,8 @@ type BaselineReadonlyEnv = {
 
 export type BaselineHostEnv = BaselineTempEnv & BaselineReadonlyEnv;
 
-export const DEFAULT_SANDBOX_BASELINE: SandboxBaselinePolicy = {
-  filesystem: {
-    restrictToProjectDir: true,
-    additionalReadonlyPaths: [],
-    additionalReadwritePaths: [],
-  },
-  process: {
-    timeoutSeconds: BASELINE_TIMEOUT_SECONDS,
-    timeoutSecondsConfigured: false,
-  },
-};
-
 function firstNonBlankEnv(...values: Array<string | undefined>): string | undefined {
   return values.find((value) => value?.trim());
-}
-
-export function resolveSandboxBaseline(
-  input: SandboxBaselinePolicyInput = {},
-): SandboxBaselinePolicy {
-  const timeoutSecondsConfigured = input.process?.timeoutSeconds !== undefined;
-  const timeoutSeconds = input.process?.timeoutSeconds ?? BASELINE_TIMEOUT_SECONDS;
-  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 1) {
-    throw new RangeError("Sandbox baseline timeoutSeconds must be at least 1.");
-  }
-
-  return {
-    filesystem: {
-      restrictToProjectDir: input.filesystem?.restrictToProjectDir ?? true,
-      additionalReadonlyPaths: [...(input.filesystem?.additionalReadonlyPaths ?? [])],
-      additionalReadwritePaths: [...(input.filesystem?.additionalReadwritePaths ?? [])],
-    },
-    process: {
-      timeoutSeconds,
-      timeoutSecondsConfigured,
-    },
-  };
 }
 
 export function resolveSandboxTempDir(env: BaselineTempEnv = {}): string {

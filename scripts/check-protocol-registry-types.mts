@@ -2,7 +2,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isTypeAliasDeclaration } from "typescript/unstable/ast";
+import { isTypeAliasDeclaration } from "typescript/ast";
+import { serverFS } from "typescript/fs";
 import {
   collectNativeTypeScriptDiagnostics,
   formatNativeTypeScriptDiagnostics,
@@ -53,9 +54,15 @@ for (const exactOptionalPropertyTypes of [true, false]) {
     cwd: packageRoot,
     configFileName,
     fs: {
+      directoryExists: serverFS.useOS,
+      getAccessibleEntries: serverFS.useOS,
+      realpath: serverFS.useOS,
+      stat: serverFS.useOS,
+      writeFile: serverFS.useOS,
+      removeFile: serverFS.useOS,
       fileExists(fileName) {
         const resolved = path.resolve(fileName);
-        return resolved === fixturePath || resolved === configFileName ? true : undefined;
+        return resolved === fixturePath || resolved === configFileName ? true : serverFS.useOS;
       },
       readFile(fileName) {
         const resolved = path.resolve(fileName);
@@ -63,7 +70,7 @@ for (const exactOptionalPropertyTypes of [true, false]) {
           ? fixture
           : resolved === configFileName
             ? config
-            : undefined;
+            : serverFS.useOS;
       },
     },
   });
@@ -113,9 +120,12 @@ for (const exactOptionalPropertyTypes of [true, false]) {
     }
     fixture = `${lines.join("\n")}\n`;
     // These consumer assignments are checked in a fresh snapshot and never executed or emitted.
-    const proofSnapshot = session.api.updateSnapshot({ fileChanges: { changed: [fixturePath] } });
+    const proofSnapshot = session.snapshot.update({
+      fileNotifications: { changed: [fixturePath] },
+      ensurePrograms: true,
+    });
     try {
-      const proof = proofSnapshot.getProject(configFileName);
+      const proof = proofSnapshot.getConfiguredProject(configFileName);
       if (!proof) {
         throw new Error("Public ProtocolSchemas proof project was not resolved");
       }

@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
@@ -7,29 +8,27 @@ const log = createSubsystemLogger("gateway/presence");
 
 /** One Gateway owns fixed publication windows; authoritative reads never wait for them. */
 export function createPresencePublisher(params: {
+  scheduler: GatewayScheduler;
   broadcast: GatewayBroadcastFn;
   incrementPresenceVersion: () => number;
   getHealthVersion: () => number;
   prepare: () => Promise<void> | undefined;
 }) {
-  let pending: ReturnType<typeof setTimeout> | undefined;
-  let flushing = false;
+  const scheduler = params.scheduler.scope();
+  let pending = false;
   let version = 0;
-  let stopped = false;
   const schedule = () => {
-    if (!stopped && !pending && !flushing) {
-      pending = setTimeout(() => void flush(), 50);
-      pending.unref();
+    if (!scheduler.signal.aborted && !pending) {
+      pending = true;
+      scheduler.schedule({ id: "presence/publication", delayMs: 200, run: flush });
     }
   };
   const flush = async () => {
-    pending = undefined;
-    flushing = true;
     let publishedVersion = version;
     try {
       for (let preparation = params.prepare(); preparation; preparation = params.prepare()) {
         await preparation;
-        if (stopped) {
+        if (scheduler.signal.aborted) {
           return;
         }
       }
@@ -45,7 +44,7 @@ export function createPresencePublisher(params: {
     } catch (error) {
       log.warn(`Presence publication failed: ${formatErrorMessage(error)}`);
     } finally {
-      flushing = false;
+      pending = false;
       if (version !== publishedVersion) {
         schedule();
       }
@@ -53,15 +52,11 @@ export function createPresencePublisher(params: {
   };
   return {
     publish: () => {
-      if (!stopped) {
+      if (!scheduler.signal.aborted) {
         version = params.incrementPresenceVersion();
         schedule();
       }
     },
-    stop: () => {
-      stopped = true;
-      clearTimeout(pending);
-      pending = undefined;
-    },
+    stop: scheduler.beginClose,
   };
 }

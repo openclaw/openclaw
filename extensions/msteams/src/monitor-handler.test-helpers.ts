@@ -1,254 +1,202 @@
-// Msteams helper module supports monitor handler helpers behavior.
-import path from "node:path";
 import {
   buildChannelInboundEventContext,
-  runChannelInboundEvent,
-  type ChannelInboundEventRunnerParams,
-  type ChannelInboundTurnPlan,
+  type runPreparedInboundReply,
+  type PreparedInboundReply,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createPluginRuntimeMock,
   createTestInboundDebounceFlush,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawStateDatabaseAsync,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker, useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, aroundAll, beforeEach, vi } from "vitest";
+import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
-import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-type RuntimeRoutePeer = { peer: { kind: string; id: string } };
+type RuntimeRoutePeer = { accountId?: string | null; peer: { kind: string; id: string } };
+type Channel = PluginRuntime["channel"];
 
 type MSTeamsTestRuntimeOptions = {
   enqueueSystemEvent?: ReturnType<typeof vi.fn>;
   readAllowFromStore?: ReturnType<typeof vi.fn>;
   upsertPairingRequest?: ReturnType<typeof vi.fn>;
+  recordInboundSession?: ReturnType<typeof vi.fn>;
   resolveAgentRoute?: (params: RuntimeRoutePeer) => unknown;
-  hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
-  isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
-  shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
-  shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
-  createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
-  resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
+  hasControlCommand?: Channel["text"]["hasControlCommand"];
+  createInboundDebouncer?: Channel["debounce"]["createInboundDebouncer"];
+  resolveInboundDebounceMs?: Channel["debounce"]["resolveInboundDebounceMs"];
   resolveTextChunkLimit?: () => number;
+  resolveStorePath?: () => string | undefined;
+  runPrepared?: typeof runPreparedInboundReply;
 };
 
-const testHome = process.env.OPENCLAW_TEST_HOME;
-if (!testHome) {
-  throw new Error("MSTeams fixtures require the shared isolated test home.");
-}
-// Keep lock identity stable through metadata work and teardown, outside per-turn state.
-aroundAll((runSuite) =>
-  withStateDatabaseCoordinatorRuntimeDirectory(
-    path.join(testHome, ".runtime", "msteams-coordinators"),
-    runSuite,
-  ),
+const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+  async (params: Parameters<Channel["reply"]["dispatchReplyWithBufferedBlockDispatcher"]>[0]) => {
+    await params.dispatcherOptions.onSettled?.();
+    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+  },
 );
-afterAll(async () => {
-  // Vitest unwinds this hook before shared setup removes the home. Agent leases
-  // can reopen shared state, so release them before closing the shared owner.
-  await closeOpenClawAgentDatabasesAsync(testHome);
-  await closeOpenClawStateDatabaseAsync();
-});
-useIsolatedStateGuard();
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(async () => {
-    // Metadata writes can retain maintenance workers beyond the recording promise.
-    await Promise.all([...tempDirs.dirs].map((dir) => closeOpenClawAgentDatabasesAsync(dir)));
-    cleanup();
-  });
-});
-const dispatchReplyFromConfig =
-  vi.fn<NonNullable<ChannelInboundTurnPlan["dispatchReplyFromConfig"]>>();
-const onFinalize =
-  vi.fn<
-    (
-      result: Parameters<
-        NonNullable<ChannelInboundEventRunnerParams<unknown>["adapter"]["onFinalize"]>
-      >[0],
-    ) => void
-  >();
-
-beforeEach(() => {
-  onFinalize.mockReset();
-  dispatchReplyFromConfig.mockReset().mockResolvedValue({
-    queuedFinal: false,
-    counts: { tool: 0, block: 0, final: 0 },
-  });
-});
 
 export function getMSTeamsTestRuntimeState() {
-  return { dispatchReplyFromConfig, onFinalize };
+  return { dispatchReplyWithBufferedBlockDispatcher };
 }
 
-export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {}) {
-  let storePath: string | undefined;
-  const resolveStorePath = () => {
-    if (!storePath) {
-      storePath = path.join(
-        tempDirs.make("msteams-turn-", process.env.OPENCLAW_TEST_HOME),
-        "sessions.json",
-      );
-    }
-    return storePath;
+function createImmediateDebouncer<T>(params: {
+  onFlush: (
+    entries: T[],
+    flush: typeof createTestInboundDebounceFlush,
+  ) => { completion: Promise<void> };
+}) {
+  return {
+    enqueue: async (entry: T) => {
+      await params.onFlush([entry], createTestInboundDebounceFlush).completion;
+    },
+    flushKey: async () => {},
+    cancelKey: () => false,
+    drain: async () => {},
   };
-  const run = async (params: ChannelInboundEventRunnerParams<unknown>) => {
-    const metadataTasks: Promise<unknown>[] = [];
-    try {
-      return await runChannelInboundEvent({
-        ...params,
-        adapter: {
-          ...params.adapter,
-          onFinalize: (result) => {
-            // Observe core completion before the fixture joins detached metadata writes.
-            onFinalize(result);
-            return params.adapter.onFinalize?.(result);
-          },
-          resolveTurn: async (...args) => {
-            const turn = await params.adapter.resolveTurn(...args);
-            if (!("route" in turn) || !("delivery" in turn)) {
-              throw new Error("expected routed MSTeams channel turn plan");
-            }
-            return {
-              ...turn,
-              cfg: { ...turn.cfg, session: { ...turn.cfg.session, store: resolveStorePath() } },
-              dispatchReplyFromConfig,
-              record: {
-                ...turn.record,
-                trackSessionMetaTask: (task: Promise<unknown>) => {
-                  metadataTasks.push(task);
-                  turn.record?.trackSessionMetaTask?.(task);
-                },
-              },
-            };
-          },
-        },
-      });
-    } finally {
-      // The recorder detaches metadata writes; join them before assertions or fixture cleanup.
-      await Promise.all(metadataTasks);
+}
+
+export function installMSTeamsTestRuntime({
+  recordInboundSession = vi.fn(async () => undefined),
+  resolveStorePath = () => "/tmp/msteams-sessions.json",
+  enqueueSystemEvent = vi.fn(),
+  readAllowFromStore = vi.fn(async () => []),
+  upsertPairingRequest = vi.fn(async () => null),
+  hasControlCommand = () => false,
+  resolveInboundDebounceMs = () => 0,
+  createInboundDebouncer,
+  resolveAgentRoute = ({ peer }: RuntimeRoutePeer) => ({
+    sessionKey: `msteams:${peer.kind}:${peer.id}`,
+    agentId: "default",
+    accountId: "default",
+  }),
+  resolveTextChunkLimit,
+  runPrepared: customRunPrepared,
+}: MSTeamsTestRuntimeOptions = {}): void {
+  const runPrepared = vi.fn(async (turn: PreparedInboundReply<unknown>) => {
+    await turn.recordInboundSession({
+      storePath: turn.storePath,
+      sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+      ctx: turn.ctxPayload,
+      groupResolution: turn.record?.groupResolution,
+      createIfMissing: turn.record?.createIfMissing,
+      updateLastRoute: turn.record?.updateLastRoute,
+      onRecordError: turn.record?.onRecordError ?? (() => undefined),
+    });
+    const dispatchResult = await turn.runDispatch();
+    return {
+      admission: { kind: "dispatch" as const },
+      dispatched: true,
+      ctxPayload: turn.ctxPayload,
+      routeSessionKey: turn.routeSessionKey,
+      dispatchResult,
+    };
+  });
+  const run = vi.fn(async (params: Parameters<Channel["inbound"]["run"]>[0]) => {
+    const input = await params.adapter.ingest(params.raw);
+    // This fixture serves the already-admitted message adapter, not the generic ingress pipeline.
+    if (!input || params.adapter.classify || params.adapter.preflight) {
+      throw new Error("expected the MSTeams message adapter without ingress hooks");
     }
-  };
+    const turn = await params.adapter.resolveTurn(
+      input,
+      { kind: "message", canStartAgentTurn: true },
+      {},
+    );
+    if (!("route" in turn) || !("delivery" in turn)) {
+      throw new Error("expected assembled MSTeams channel turn plan");
+    }
+    const preparedTurn = {
+      channel: turn.channel,
+      accountId: turn.accountId,
+      routeSessionKey: turn.route.sessionKey,
+      storePath: resolveStorePath(),
+      ctxPayload: turn.ctxPayload,
+      recordInboundSession,
+      afterRecord: turn.afterRecord,
+      record: turn.record,
+      history: turn.history,
+      admission: turn.admission,
+      botLoopProtection: turn.botLoopProtection,
+      runDispatch: async () =>
+        await dispatchReplyWithBufferedBlockDispatcher({
+          ctx: turn.ctxPayload,
+          cfg: turn.cfg,
+          dispatcherOptions: {
+            ...turn.dispatcherOptions,
+            deliver: turn.delivery.deliver,
+            onError: turn.delivery.onError,
+          },
+          toolsAllow: turn.toolsAllow,
+          replyOptions: turn.replyOptions,
+          replyResolver: turn.replyResolver,
+        }),
+    } as PreparedInboundReply<unknown>;
+    return await (customRunPrepared ?? runPrepared)(preparedTurn);
+  });
   setMSTeamsRuntime({
     logging: { shouldLogVerbose: () => false },
-    system: { enqueueSystemEvent: options.enqueueSystemEvent ?? vi.fn() },
+    system: { enqueueSystemEvent },
     channel: {
       debounce: {
-        resolveInboundDebounceMs:
-          options.resolveInboundDebounceMs ??
-          ((() => 0) as PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"]),
-        createInboundDebouncer:
-          options.createInboundDebouncer ??
-          (<T>(params: {
-            onFlush: (
-              entries: T[],
-              createFlush: typeof createTestInboundDebounceFlush,
-            ) => { completion: Promise<void> };
-          }) => ({
-            enqueue: async (entry: T) => {
-              await params.onFlush([entry], createTestInboundDebounceFlush).completion;
-            },
-            flushKey: async () => {},
-            cancelKey: () => false,
-            drain: async () => {},
-          })),
+        resolveInboundDebounceMs,
+        createInboundDebouncer: createInboundDebouncer ?? createImmediateDebouncer,
       },
-      pairing: {
-        readAllowFromStore: options.readAllowFromStore ?? vi.fn(async () => []),
-        upsertPairingRequest: options.upsertPairingRequest ?? vi.fn(async () => null),
-      },
+      pairing: { readAllowFromStore, upsertPairingRequest },
       commands: {
-        isControlCommandMessage:
-          options.isControlCommandMessage ?? options.hasControlCommand ?? (() => false),
-        shouldComputeCommandAuthorized:
-          options.shouldComputeCommandAuthorized ?? options.hasControlCommand ?? (() => false),
-        shouldHandleTextCommands: options.shouldHandleTextCommands ?? (() => true),
+        isControlCommandMessage: hasControlCommand,
+        shouldComputeCommandAuthorized: hasControlCommand,
+        shouldHandleTextCommands: () => true,
       },
       text: {
-        hasControlCommand: options.hasControlCommand ?? (() => false),
+        hasControlCommand,
         resolveChunkMode: () => "length",
         resolveMarkdownTableMode: () => "code",
-        ...(options.resolveTextChunkLimit
-          ? { resolveTextChunkLimit: options.resolveTextChunkLimit }
-          : {}),
+        ...(resolveTextChunkLimit ? { resolveTextChunkLimit } : {}),
       },
-      routing: {
-        resolveAgentRoute:
-          options.resolveAgentRoute ??
-          (({ peer }: RuntimeRoutePeer) => ({
-            sessionKey: `agent:main:msteams:${peer.kind}:${peer.id}`,
-            agentId: "main",
-            accountId: "default",
-          })),
-      },
+      routing: { resolveAgentRoute },
       reply: {
+        dispatchReplyWithBufferedBlockDispatcher,
         formatAgentEnvelope: ({ body }: { body: string }) => body,
         finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ctx,
         resolveHumanDelayConfig: () => undefined,
       },
+      session: { recordInboundSession, resolveStorePath },
       inbound: {
         ingress: createPluginRuntimeMock().channel.inbound.ingress,
         buildContext: buildChannelInboundEventContext,
-        run: run as unknown as PluginRuntime["channel"]["inbound"]["run"],
+        run: run as unknown as Channel["inbound"]["run"],
       },
     },
   } as unknown as PluginRuntime);
-  return { resolveStorePath };
 }
 
 export function createMSTeamsMessageHandlerDeps(params?: {
   cfg?: OpenClawConfig;
   runtime?: RuntimeEnv;
 }): MSTeamsMessageHandlerDeps {
-  const app = {
-    tokenProvider: {
-      getAppToken: async (scope: string) => ({
-        toString: () =>
-          scope === "https://graph.microsoft.com/.default" ? "graph-token" : "bot-token",
-      }),
-    },
-    api: {},
-    graph: {},
-    send: async () => ({ id: "sent" }),
-    initialize: async () => {},
-    on: () => {},
-  } as unknown as MSTeamsApp;
-  const conversationStore: MSTeamsConversationStore = {
-    upsert: async () => {},
-    get: async () => null,
-    list: async () => [],
-    remove: async () => false,
-    findPreferredDmByUserId: async () => null,
-  };
-  const pollStore: MSTeamsPollStore = {
-    createPoll: async () => {},
-    getPoll: async () => null,
-    recordVote: async () => null,
-  };
-
   return {
     cfg: params?.cfg ?? {},
     runtime: (params?.runtime ?? { error: vi.fn() }) as RuntimeEnv,
+    accountId: "default",
     appId: "test-app-id",
-    app,
-    tokenProvider: {
-      getAccessToken: async () => "token",
-    },
+    app: {} as MSTeamsApp,
+    tokenProvider: { getAccessToken: async () => "token" },
     textLimit: 4000,
     mediaMaxBytes: 8 * 1024 * 1024,
-    conversationStore,
-    pollStore,
-    log: {
-      info: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
+    conversationStore: {
+      upsert: async () => {},
+      get: async () => null,
+      list: async () => [],
+      remove: async () => false,
+      findPreferredDmByUserId: async () => null,
     },
+    pollStore: {
+      createPoll: async () => {},
+      getPoll: async () => null,
+      recordVote: async () => null,
+    },
+    log: { info: vi.fn(), error: vi.fn(), debug: vi.fn() },
   };
 }

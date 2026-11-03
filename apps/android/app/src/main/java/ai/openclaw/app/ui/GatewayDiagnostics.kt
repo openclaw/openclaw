@@ -6,11 +6,8 @@ import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.i18n.nativeString
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
-import android.widget.Toast
 
 /** App version label shared by diagnostics and gateway-facing Android metadata. */
 internal fun openClawAndroidVersionLabel(): String {
@@ -30,61 +27,20 @@ internal fun gatewayStatusLabel(
 ): String {
   val status = statusText.trim().lowercase()
   return when {
-    status == "connected (node offline)" -> {
-      nativeString("Connected (node offline)")
-    }
-
-    status == "connected (operator offline)" -> {
-      nativeString("Connected (operator offline)")
-    }
-
-    isConnected -> {
-      nativeString("Ready")
-    }
-
-    status == "offline" -> {
-      nativeString("Offline")
-    }
-
-    gatewayConnectionProblem?.isNetworkFailure == true && gatewayConnectionProblem.reason == "transport-cleanup" -> {
-      nativeString("Stopping previous connection")
-    }
-
-    gatewayConnectionProblem?.isNetworkFailure == true -> {
-      nativeString("Cannot reach gateway")
-    }
-
-    status.contains("connecting") || status.contains("reconnecting") -> {
-      nativeString("Connecting...")
-    }
-
-    status.contains("pair") -> {
-      nativeString("Pairing needed")
-    }
-
-    status.contains("auth") || status.contains("device identity") -> {
-      gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
-    }
-
-    status.contains("fingerprint verification timed out") -> {
-      nativeString("TLS timed out")
-    }
-
-    status.contains("no tls endpoint") -> {
-      nativeString("No TLS endpoint")
-    }
-
-    status.contains("certificate") || status.contains("tls") -> {
-      nativeString("Certificate review needed")
-    }
-
-    status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> {
-      nativeString("Cannot reach gateway")
-    }
-
-    else -> {
-      nativeString("Not connected")
-    }
+    status == "connected (node offline)" -> nativeString("Connected (node offline)")
+    status == "connected (operator offline)" -> nativeString("Connected (operator offline)")
+    isConnected -> nativeString("Ready")
+    status == "offline" -> nativeString("Offline")
+    gatewayConnectionProblem?.isNetworkFailure == true && gatewayConnectionProblem.reason == "transport-cleanup" -> nativeString("Stopping previous connection")
+    gatewayConnectionProblem?.isNetworkFailure == true -> nativeString("Cannot reach gateway")
+    status.contains("connecting") -> nativeString("Connecting...")
+    status.contains("pair") -> nativeString("Pairing needed")
+    status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
+    status.contains("fingerprint verification timed out") -> nativeString("TLS timed out")
+    status.contains("no tls endpoint") -> nativeString("No TLS endpoint")
+    status.contains("certificate") || status.contains("tls") -> nativeString("Certificate review needed")
+    status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> nativeString("Cannot reach gateway")
+    else -> nativeString("Not connected")
   }
 }
 
@@ -110,7 +66,7 @@ internal fun gatewayStatusLooksLikePairing(statusText: String): Boolean {
 /** Maps structured gateway auth failures to the compact labels used by status surfaces. */
 internal fun gatewayAuthRecoveryLabel(problem: GatewayConnectionProblem?): String? =
   when (problem?.code) {
-    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> nativeString("Setup code expired")
+    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> nativeString("Setup code no longer valid")
     "AUTH_TOKEN_MISSING" -> nativeString("Gateway token needed")
     "AUTH_TOKEN_NOT_CONFIGURED" -> nativeString("Gateway token not configured")
     "AUTH_PASSWORD_MISSING" -> nativeString("Gateway password needed")
@@ -124,19 +80,8 @@ internal fun gatewayAuthRecoveryLabel(problem: GatewayConnectionProblem?): Strin
 
 /** Returns the exact host command for one node's approval state when available. */
 internal fun gatewayNodeApprovalCommand(approval: GatewayNodeCapabilityApproval): String? {
-  val requestId =
-    when (approval) {
-      is GatewayNodeCapabilityApproval.PendingApproval -> approval.requestId
-
-      is GatewayNodeCapabilityApproval.PendingReapproval -> approval.requestId
-
-      GatewayNodeCapabilityApproval.Unapproved -> null
-
-      GatewayNodeCapabilityApproval.Loading,
-      GatewayNodeCapabilityApproval.Unsupported,
-      GatewayNodeCapabilityApproval.Approved,
-      -> return null
-    }
+  if (!nodeCapabilityApprovalNeedsUserAction(approval)) return null
+  val requestId = approvalRequestId(approval)
   return normalizeGatewayApprovalRequestId(requestId)?.let { "openclaw nodes approve $it" } ?: "openclaw nodes status"
 }
 
@@ -192,8 +137,6 @@ internal fun copyGatewayDiagnosticsReport(
   gatewayAddress: String,
   statusText: String,
 ) {
-  val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
   val report = buildGatewayDiagnosticsReport(screen = screen, gatewayAddress = gatewayAddress, statusText = statusText)
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw gateway diagnostics", report))
-  Toast.makeText(context, nativeString("Copied gateway diagnostics"), Toast.LENGTH_SHORT).show()
+  context.copyTextWithConfirmation("OpenClaw gateway diagnostics", report, nativeString("Copied gateway diagnostics"))
 }

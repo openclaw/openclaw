@@ -1,7 +1,9 @@
+import { createPrivateKey, sign } from "node:crypto";
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
-import { sha256 } from "@noble/hashes/sha2.js";
-import { canonicalBytes } from "./canonical.js";
-import { base64url, fromBase64url, hex } from "./encoding.js";
+import { canonicalBytes, sha256Hex } from "./canonical.js";
+import { base64url, fromBase64url } from "./encoding.js";
+
+const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 
 export interface SigningKeyPair {
   publicKey: string;
@@ -50,14 +52,23 @@ export function signDeviceRequest(
   ) {
     throw new Error("invalid device request signature input");
   }
-  return base64url(ed25519.sign(canonicalBytes(input), fromBase64url(signingSecretKey)));
+  const secret = fromBase64url(signingSecretKey);
+  if (secret.length !== 32) {
+    throw new Error("Ed25519 secret key must contain 32 bytes");
+  }
+  const key = createPrivateKey({
+    key: Buffer.concat([ED25519_PKCS8_PREFIX, secret]),
+    format: "der",
+    type: "pkcs8",
+  });
+  return sign(null, canonicalBytes(input), key).toString("base64url");
 }
 
 export function fingerprint(ed25519PublicKey: string, x25519PublicKey?: string): string {
   const material = x25519PublicKey
     ? canonicalBytes({ ed25519: ed25519PublicKey, x25519: x25519PublicKey })
     : fromBase64url(ed25519PublicKey);
-  return hex(sha256(material))
+  return sha256Hex(material)
     .match(/.{1,4}/g)!
     .join(" ");
 }

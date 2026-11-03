@@ -1,4 +1,3 @@
-/** Default timeout for iMessage probe/RPC operations (10 seconds). */
 export const DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS = 10_000;
 
 // imsg waits up to 150s for a private-bridge send, then auto transport can fall

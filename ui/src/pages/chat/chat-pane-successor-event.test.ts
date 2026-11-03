@@ -52,14 +52,19 @@ it.each(["branch-switch", "rewind"] as const)(
     } satisfies ChatHistoryResult;
     const replacementList = createDeferred<ReturnType<typeof sessionsResult>>();
     const successorHistory = createDeferred<ChatHistoryResult>();
+    const historyRequested = createDeferred();
     const admitted = createDeferred();
     let changed = false;
     const readList = vi.fn(() =>
       changed ? replacementList.promise : sessionsResult([previous], 1),
     );
-    const readHistory = vi.fn<GatewayRequestHandler>(() =>
-      changed ? successorHistory.promise : initial,
-    );
+    const readHistory = vi.fn<GatewayRequestHandler>(() => {
+      if (!changed) {
+        return initial;
+      }
+      historyRequested.resolve();
+      return successorHistory.promise;
+    });
     const { sessions, mount, emitGatewayEvent } = createMountedPanes(
       [previous],
       "main",
@@ -103,6 +108,7 @@ it.each(["branch-switch", "rewind"] as const)(
       expect(selectedChatSessionRow(pane.state)).toMatchObject(successor);
       expect(pane.state.chatMessages).toBe(displayed);
       expect(pane.state.currentSessionId).toBe(previous.sessionId);
+      await historyRequested.promise;
       expect(readHistory).toHaveBeenCalledOnce();
       const historyLoad = getChatHistoryLoadState(pane.state);
       expect(historyLoad.phase).toBe("in-flight");
@@ -158,15 +164,20 @@ it.each([false, true])(
       // Transcript custody can advance before the corresponding row metadata arrives.
     };
     const newerHistory = createDeferred<ChatHistoryResult>();
+    const historyRequested = createDeferred();
     const authoritative: ChatHistoryResult = {
       messages: [{ ...persisted, content: "Authoritative newer transcript" }],
       sessionId: newer.sessionId,
       sessionInfo: newer,
     };
     let newerAdmitted = false;
-    const readHistory = vi.fn<GatewayRequestHandler>(() =>
-      newerAdmitted ? newerHistory.promise : history,
-    );
+    const readHistory = vi.fn<GatewayRequestHandler>(() => {
+      if (!newerAdmitted) {
+        return history;
+      }
+      historyRequested.resolve();
+      return newerHistory.promise;
+    });
     let loading: Promise<unknown> | undefined;
     onTestFinished(async () => {
       newerHistory.resolve(authoritative);
@@ -234,6 +245,7 @@ it.each([false, true])(
     if (reentrant) {
       expect(pane.state.chatMessages).toBe(messagesBefore);
       expect(pane.state.chatMessages).toEqual([persisted]);
+      await historyRequested.promise;
       const historyLoad = getChatHistoryLoadState(pane.state);
       if (historyLoad.phase === "in-flight") {
         loading = historyLoad.promise;

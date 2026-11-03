@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module implements message actions behavior.
 import {
   jsonResult,
   readStringParam,

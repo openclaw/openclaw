@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import {
@@ -5,21 +6,21 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { canonicalizeWebhookRouteKey } from "openclaw/plugin-sdk/webhook-ingress";
+import { vi } from "vitest";
+import * as ingressFactory from "../telegram-ingress-drain-factory.js";
 
 type StartWebhook = typeof import("../webhook.js").startTelegramWebhook;
 type StartWebhookOptions = Omit<Parameters<StartWebhook>[0], "token" | "abortSignal">;
+type Ingress = ReturnType<typeof ingressFactory.createTelegramTransportIngressMonitor>;
+type WebhookContext = { server: Server; port: number; ingress: Ingress; stop: () => Promise<void> };
 
 export function getServerPort(server: Server): number {
   const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("no addr");
-  }
+  assert(address && typeof address !== "string", "no addr");
   return address.port;
 }
 
-export function webhookUrl(port: number, path: string): string {
-  return `http://127.0.0.1:${port}${path}`;
-}
+export const webhookUrl = (port: number, path: string) => `http://127.0.0.1:${port}${path}`;
 
 export function createTelegramWebhookTestGateway(options: {
   token: string;
@@ -36,16 +37,12 @@ export function createTelegramWebhookTestGateway(options: {
     if (route) {
       const requestTask = Promise.resolve(route.handler(req, res)).then(
         () => undefined,
-        () => {
-          res.writeHead(500);
-          res.end();
-        },
+        () => void res.writeHead(500).end(),
       );
       pendingRequests.add(requestTask);
       void requestTask.finally(() => pendingRequests.delete(requestTask));
     } else {
-      res.writeHead(404);
-      res.end();
+      res.writeHead(404).end();
     }
   });
   const startWebhook = async (params: Parameters<StartWebhook>[0]) => ({
@@ -69,9 +66,7 @@ export function createTelegramWebhookTestGateway(options: {
       production = (await import("../webhook.js")).startTelegramWebhook;
     },
     async close() {
-      const closed = once(server, "close");
-      server.close();
-      await closed;
+      await once(server.close(), "close");
     },
     resetRegistry() {
       registry = createEmptyPluginRegistry();
@@ -80,8 +75,9 @@ export function createTelegramWebhookTestGateway(options: {
     startWebhook,
     withWebhook: async <T>(
       params: StartWebhookOptions,
-      run: (ctx: { server: Server; port: number }) => Promise<T>,
+      run: (ctx: WebhookContext) => Promise<T>,
     ): Promise<T> => {
+      using createIngress = vi.spyOn(ingressFactory, "createTelegramTransportIngressMonitor");
       const abort = new AbortController();
       const started = await startWebhook({
         token: options.token,
@@ -90,7 +86,9 @@ export function createTelegramWebhookTestGateway(options: {
         ...params,
       });
       try {
-        return await run({ server, port: getServerPort(server) });
+        const result = createIngress.mock.results.at(-1);
+        assert(result?.type === "return", "Expected the started webhook's ingress monitor");
+        return await run({ ...started, port: getServerPort(server), ingress: result.value });
       } finally {
         await started.stop();
         abort.abort();

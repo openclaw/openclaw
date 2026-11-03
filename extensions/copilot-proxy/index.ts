@@ -1,10 +1,5 @@
-// Copilot Proxy plugin entrypoint registers its OpenClaw integration.
-import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  definePluginEntry,
-  type ProviderAuthContext,
-  type ProviderAuthResult,
-} from "./runtime-api.js";
+import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { definePluginEntry } from "./runtime-api.js";
 
 const DEFAULT_BASE_URL = "http://localhost:3000/v1";
 const DEFAULT_API_KEY = "n/a";
@@ -23,14 +18,8 @@ function normalizeBaseUrl(value: string): string {
   if (!trimmed) {
     return DEFAULT_BASE_URL;
   }
-  let normalized = trimmed;
-  while (normalized.endsWith("/")) {
-    normalized = normalized.slice(0, -1);
-  }
-  if (!normalized.endsWith("/v1")) {
-    normalized = `${normalized}/v1`;
-  }
-  return normalized;
+  const normalized = trimmed.replace(/\/+$/, "");
+  return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
 }
 
 function validateBaseUrl(value: string): string | undefined {
@@ -39,21 +28,7 @@ function validateBaseUrl(value: string): string | undefined {
 }
 
 function parseModelIds(input: string): string[] {
-  const parsed = normalizeStringEntries(input.split(/[\n,]/));
-  return uniqueStrings(parsed);
-}
-
-function buildModelDefinition(modelId: string) {
-  return {
-    id: modelId,
-    name: modelId,
-    api: "openai-completions" as const,
-    reasoning: false,
-    input: ["text", "image"] as Array<"text" | "image">,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
-  };
+  return normalizeUniqueStringEntries(input.split(/[\n,]/));
 }
 
 export default definePluginEntry({
@@ -71,10 +46,11 @@ export default definePluginEntry({
           label: "Local proxy",
           hint: "Configure base URL + models for the Copilot Proxy server",
           kind: "custom",
-          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
+          run: async (ctx) => {
             const baseUrlInput = await ctx.prompter.text({
               message: "Copilot Proxy base URL",
-              initialValue: DEFAULT_BASE_URL,
+              // Prefilling the default makes typed input append to it; blank input keeps it.
+              placeholder: DEFAULT_BASE_URL,
               validate: validateBaseUrl,
             });
 
@@ -109,7 +85,16 @@ export default definePluginEntry({
                       apiKey: DEFAULT_API_KEY,
                       api: "openai-completions",
                       authHeader: false,
-                      models: modelIds.map((modelId) => buildModelDefinition(modelId)),
+                      models: modelIds.map((modelId) => ({
+                        id: modelId,
+                        name: modelId,
+                        api: "openai-completions",
+                        reasoning: false,
+                        input: ["text", "image"],
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        contextWindow: DEFAULT_CONTEXT_WINDOW,
+                        maxTokens: DEFAULT_MAX_TOKENS,
+                      })),
                     },
                   },
                 },

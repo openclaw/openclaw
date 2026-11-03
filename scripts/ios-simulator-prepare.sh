@@ -22,6 +22,8 @@ fi
 simulator_id="$1"
 # Disable only Spotlight search and Family/Screen Time, retaining app capabilities.
 readonly kept_categories="widgets,siri,icloud,store,pim,web,health,photos,apps,messaging,connectivity,telemetry,other"
+# Finish the initial cold boot before starting SimSlim's reconfiguration deadline.
+xcrun simctl bootstatus "$simulator_id" -b
 "$simslim_binary" on "$simulator_id" --except "$kept_categories"
 xcrun simctl bootstatus "$simulator_id" -b
 "$simslim_binary" verify "$simulator_id" --except "$kept_categories"

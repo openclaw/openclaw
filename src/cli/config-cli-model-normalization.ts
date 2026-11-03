@@ -1,13 +1,91 @@
+import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeSubmittedConfigModelRefs } from "../config/model-input-normalization.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
+import { hasInstalledPluginIndexWorkspaceScopeMismatch } from "../plugins/installed-plugin-index.js";
+import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import {
+  isPluginMetadataSnapshotCompatible,
+  resolvePluginMetadataSnapshotAsync,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import type { PathSegment } from "./config-cli-path.js";
 
-export function normalizeConfigMutationModelRefs(cfg: OpenClawConfig): OpenClawConfig {
-  const pluginMetadata = loadPluginMetadataSnapshot({ config: cfg, env: process.env });
-  return normalizeSubmittedConfigModelRefs(cfg, pluginMetadata.owners.modelIdNormalizationPolicies);
+export function shouldNormalizeConfigMutationProviderCatalogs(params: {
+  before: OpenClawConfig;
+  after: OpenClawConfig;
+  touchedPaths: readonly (readonly PathSegment[])[];
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const catalogPath = ["models", "providers"];
+  if (
+    params.touchedPaths.some((path) =>
+      catalogPath
+        .slice(0, Math.min(path.length, catalogPath.length))
+        .every((part, index) => path[index] === part),
+    ) ||
+    !isDeepStrictEqual(params.before.models?.providers, params.after.models?.providers)
+  ) {
+    return true;
+  }
+  if (!params.before.models?.providers && !params.after.models?.providers) {
+    return false;
+  }
+  // Plugin roots and activation can change catalog policies without changing IDs.
+  return (
+    resolvePluginControlPlaneFingerprint({ config: params.before, env: params.env }) !==
+    resolvePluginControlPlaneFingerprint({ config: params.after, env: params.env })
+  );
+}
+
+export async function normalizeConfigMutationModelRefs(
+  cfg: OpenClawConfig,
+  options: {
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
+    env?: NodeJS.ProcessEnv;
+    normalizeProviderCatalogs?: boolean;
+  } = {},
+): Promise<OpenClawConfig> {
+  const needsCatalogPolicy =
+    options.normalizeProviderCatalogs !== false &&
+    Object.values(cfg.models?.providers ?? {}).some(
+      (provider) =>
+        Array.isArray(provider?.models) &&
+        provider.models.some((model) => typeof model?.id === "string" && model.id.trim()),
+    );
+  if (!needsCatalogPolicy) {
+    return normalizeSubmittedConfigModelRefs(cfg, undefined, options);
+  }
+  return withArtifactPreservingStateReads(async () => {
+    const env = options.env ?? process.env;
+    const candidate = options.pluginMetadataSnapshot;
+    // Preserve global normalization policies; config reads can include workspace plugins.
+    const prepared =
+      candidate && !hasInstalledPluginIndexWorkspaceScopeMismatch(candidate.index, undefined)
+        ? candidate
+        : undefined;
+    if (prepared) {
+      const activateDiscovery = await prepareBundledDiscoveryMode(env);
+      activateDiscovery();
+    }
+    const pluginMetadata =
+      prepared &&
+      isPluginMetadataSnapshotCompatible({
+        snapshot: prepared,
+        config: cfg,
+        env,
+      })
+        ? prepared
+        : await resolvePluginMetadataSnapshotAsync({ config: cfg, env });
+    return normalizeSubmittedConfigModelRefs(
+      cfg,
+      pluginMetadata.owners.modelIdNormalizationPolicies,
+      options,
+    );
+  });
 }
 
 export function normalizeConfigMutationExplicitSetPath(path: PathSegment[]): PathSegment[] {

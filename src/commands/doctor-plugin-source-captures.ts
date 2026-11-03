@@ -25,6 +25,9 @@ export async function noteLegacyPluginSourceCaptures(
       throw new Error("Doctor does not hold Gateway maintenance; captures were preserved.");
     }
     maintenance.assertAdmission();
+  };
+  const assertLegacyUnowned = () => {
+    assertCurrent();
     const census = inspectOtherOpenClawProcesses();
     if ("error" in census) {
       throw new Error(census.error);
@@ -34,7 +37,7 @@ export async function noteLegacyPluginSourceCaptures(
         `Other OpenClaw processes are still running (PIDs: ${census.pids.join(", ")}).`,
       );
     }
-    maintenance.assertAdmission();
+    assertCurrent();
   };
   if (report.roots.length > 0) {
     lines.push(
@@ -43,7 +46,7 @@ export async function noteLegacyPluginSourceCaptures(
       "They will be reclaimed at the next maintenance.",
     );
     if (shouldRepair) {
-      const result = await pruneLegacyPluginSourceCaptures(report, assertCurrent);
+      const result = await pruneLegacyPluginSourceCaptures(report, assertLegacyUnowned);
       if (result.removed.length > 0) {
         lines.push(
           `Removed ${result.removed.length} legacy plugin capture root(s), ${formatBytes(result.removed.reduce((bytes, root) => bytes + root.bytes, 0))}.`,

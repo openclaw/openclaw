@@ -19,7 +19,7 @@ export function findMatrixQaUnexpectedWorkingEvents(params: {
     if (event.eventId === params.previewEventId || event.eventId === params.finalEventId) {
       return false;
     }
-    return event.replacesEventId !== params.previewEventId;
+    return params.previewEventId === undefined || event.replacesEventId !== params.previewEventId;
   });
 }
 

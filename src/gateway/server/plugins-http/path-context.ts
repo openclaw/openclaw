@@ -1,14 +1,10 @@
-// Plugin HTTP path context canonicalizes request paths for route matching and protected-route auth checks.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { prefixMatchPath } from "../../../plugins/http-path.js";
+import { prefixMatchPath } from "../../../plugins/http-path-prefix.js";
 import {
   PROTECTED_PLUGIN_ROUTE_PREFIXES,
   canonicalizePathForSecurity,
 } from "../../security-path.js";
 
-/**
- * Canonical path context for plugin HTTP route auth and matching.
- */
 export type PluginRoutePathContext = {
   pathname: string;
   canonicalPath: string;

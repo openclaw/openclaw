@@ -79,7 +79,7 @@ export function buildCrabboxGateCommand(plan, bootstrapSha256) {
       ? "true"
       : `${CRABBOX_GATE_TEST_ENV} node --import ./scripts/tsx.mjs scripts/test-projects.mts ${validated.targets
           .map(shellQuote)
-          .join(" ")} -- --reporter=dot`;
+          .join(" ")} -- --reporter=dot --coverage.enabled=false`;
   return [
     "set -euo pipefail",
     "umask 022",

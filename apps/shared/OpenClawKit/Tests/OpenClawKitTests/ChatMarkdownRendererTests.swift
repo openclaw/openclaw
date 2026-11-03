@@ -3,6 +3,84 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatMarkdownRendererTests {
+    @Test(arguments: [false, true]) @MainActor
+    func `paragraph before a list retains its break in stored and streaming messages`(isComplete: Bool) throws {
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: """
+            I read the file. It contains the workspace instructions.
+
+            Key points:
+            - Keep answers short.
+            - Prefer **plain words**.
+
+            ```mermaid
+            graph TD
+              A[Read file] --> B{Useful?}
+              B -- yes --> C[Summarize]
+              B -- no --> D[Ask]
+            ```
+            """,
+            isComplete: isComplete,
+            preparesReveal: !isComplete)
+        guard case let .prose(prose) = try #require(snapshot.blocks.first),
+              case let .code(code) = try #require(snapshot.blocks.last)
+        else {
+            Issue.record("expected prose before the diagram")
+            return
+        }
+        let intro = "I read the file. It contains the workspace instructions.\n\nKey points:"
+        #expect(String(prose.attributed.characters).hasPrefix(intro))
+        #expect(code.language == "mermaid")
+        #expect(code.isComplete)
+        if isComplete {
+            #expect(snapshot.blocks.count == 3)
+            guard case let .list(list) = snapshot.blocks[1] else {
+                Issue.record("expected a separate list")
+                return
+            }
+            #expect(list.items.count == 2)
+        } else {
+            #expect(prose.plainText.hasPrefix(intro))
+            #expect((String(prose.prefix.characters) + prose.tail.map { String($0.attributed.characters) }.joined())
+                == prose.plainText)
+        }
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func `paragraph separation preserves inline styles links and soft breaks`(preparesReveal: Bool) throws {
+        let prose = ChatMarkdownProse(
+            markdown: "First **bold** [docs][d].\nNext line.\n\nSecond *paragraph*.\n\n[d]: https://example.com",
+            isComplete: true,
+            preparesReveal: preparesReveal)
+        #expect(String(prose.attributed.characters) == "First bold docs.\nNext line.\n\nSecond paragraph.")
+        let bold = try #require(prose.attributed.range(of: "bold"))
+        #expect(prose.attributed[bold].inlinePresentationIntent?.contains(.stronglyEmphasized) == true)
+        let docs = try #require(prose.attributed.range(of: "docs"))
+        #expect(prose.attributed[docs].link == URL(string: "https://example.com"))
+        let paragraph = try #require(prose.attributed.range(of: "paragraph"))
+        #expect(prose.attributed[paragraph].inlinePresentationIntent?.contains(.emphasized) == true)
+    }
+
+    @Test @MainActor func `structural transitions retain prose paragraphs on both sides`() throws {
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: "First.\n\nSecond.\n- Item\n\nAfter list.\n\n```text\nCode\n```\n\n# Heading\n\nLast.",
+            isComplete: true)
+        try #require(snapshot.blocks.count == 6)
+        guard case let .prose(before) = snapshot.blocks[0],
+              case .list = snapshot.blocks[1],
+              case let .prose(afterList) = snapshot.blocks[2],
+              case .code = snapshot.blocks[3],
+              case .heading = snapshot.blocks[4],
+              case let .prose(afterHeading) = snapshot.blocks[5]
+        else {
+            Issue.record("expected prose, list, prose, code, heading, prose")
+            return
+        }
+        #expect(String(before.attributed.characters) == "First.\n\nSecond.")
+        #expect(String(afterList.attributed.characters) == "After list.")
+        #expect(String(afterHeading.attributed.characters) == "Last.")
+    }
+
     @Test @MainActor func `streaming reveal prepares only the last prose before a trailing heading`() throws {
         let snapshot = ChatMarkdownRenderSnapshot(
             text: """

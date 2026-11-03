@@ -32,7 +32,7 @@ extension CanvasWindowController {
         // Agent-driven presents must not steal focus: order front without app
         // activation or key status. becomesKeyOnlyIfNeeded gives the panel key
         // when the user clicks into it; user entry points own app activation.
-        window.orderFrontRegardless()
+        AppActivation.shared.orderFrontRegardless(window: window)
         VoiceWakeOverlayController.shared.bringToFrontIfVisible()
         self.setCanvasVisible(true)
     }
@@ -84,14 +84,9 @@ extension CanvasWindowController {
 
     func setPanelFrame(_ frame: NSRect, on screen: NSScreen?) {
         guard let panel = self.window else { return }
-        guard let s = screen ?? panel.screen ?? NSScreen.main ?? NSScreen.screens.first else {
-            panel.setFrame(frame, display: false)
-            self.persistFrame()
-            return
-        }
-
-        let constrained = Self.constrainFrame(frame, toVisibleFrame: s.visibleFrame)
-        panel.setFrame(constrained, display: false)
+        let screen = screen ?? panel.screen ?? NSScreen.main ?? NSScreen.screens.first
+        let constrained = screen.map { Self.constrainFrame(frame, toVisibleFrame: $0.visibleFrame) }
+        panel.setFrame(constrained ?? frame, display: false)
         self.persistFrame()
     }
 

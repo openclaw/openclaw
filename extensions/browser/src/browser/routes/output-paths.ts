@@ -1,10 +1,5 @@
 import { pathScope } from "openclaw/plugin-sdk/security-runtime";
-/**
- * Browser route output-path helpers.
- *
- * Validates writable output paths against a route-specific root before any
- * screenshot, trace, or download route writes to disk.
- */
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureOutputDirectory } from "../output-directories.js";
 import type { BrowserResponse } from "./types.js";
 
@@ -20,13 +15,13 @@ export async function resolveWritableOutputPathOrRespond(params: {
   if (params.ensureRootDir) {
     await ensureOutputDirectory(params.rootDir);
   }
-  const pathResult = await pathScope(params.rootDir, { label: params.scopeLabel }).writable(
-    params.requestedPath,
-    { defaultName: params.defaultFileName },
-  );
-  if (!pathResult.ok) {
-    params.res.status(400).json({ error: pathResult.error });
+  // defaultName preserves literal whitespace while sharing all writable checks.
+  const result = await pathScope(params.rootDir, { label: params.scopeLabel }).writable("", {
+    defaultName: readNonBlankString(params.requestedPath) ?? params.defaultFileName,
+  });
+  if (!result.ok) {
+    params.res.status(400).json({ error: result.error });
     return null;
   }
-  return pathResult.path;
+  return result.path;
 }

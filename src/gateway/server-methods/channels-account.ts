@@ -1,7 +1,6 @@
-// Account selection, logout, and runtime lookup for channel lifecycle and status RPCs.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -71,7 +70,6 @@ export type ChannelAccountParams = {
   plugin: ChannelPlugin;
 };
 
-/** Log out one channel account through its owning channel plugin. */
 export async function logoutChannelAccount(
   params: ChannelAccountParams & {
     methodRegistry: GatewayMethodRegistry | undefined;

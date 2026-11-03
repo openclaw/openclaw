@@ -1,10 +1,14 @@
 import {
-  BlockStreamingCoalesceSchema,
+  ChannelBotLoopProtectionSchema,
   ChannelImplicitMentionsSchema,
+  ChannelPreviewStreamingConfigSchema,
+  ChannelStreamingPreviewSchema,
+  ChannelStreamingProgressSchema,
   ContextVisibilityModeSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  buildChannelAllowBotsSchema,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
@@ -14,6 +18,8 @@ import { z } from "zod";
 
 const MattermostGroupSchema = buildGroupEntrySchema({
   requireMentionInBotThreads: z.boolean().optional(),
+  allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+  botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
 }).omit({
   tools: true,
   toolsBySender: true,
@@ -71,38 +77,10 @@ const MattermostNetworkSchema = z
   .strict()
   .optional();
 
-const MattermostStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
-const MattermostStreamingProgressSchema = z
-  .object({
-    label: z.union([z.string(), z.literal(false)]).optional(),
-    labels: z.array(z.string()).optional(),
-    maxLines: z.number().int().positive().optional(),
-    maxLineChars: z.number().int().positive().optional(),
-    toolProgress: z.boolean().optional(),
-    commandText: z.enum(["raw", "status"]).optional(),
-  })
-  .strict();
-const MattermostStreamingPreviewSchema = z
-  .object({
-    toolProgress: z.boolean().optional(),
-    commandText: z.enum(["raw", "status"]).optional(),
-  })
-  .strict();
-const MattermostStreamingBlockSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    coalesce: BlockStreamingCoalesceSchema.optional(),
-  })
-  .strict();
-const MattermostStreamingSchema = z
-  .object({
-    mode: MattermostStreamingModeSchema.optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    preview: MattermostStreamingPreviewSchema.optional(),
-    progress: MattermostStreamingProgressSchema.optional(),
-    block: MattermostStreamingBlockSchema.optional(),
-  })
-  .strict();
+const MattermostStreamingSchema = ChannelPreviewStreamingConfigSchema.extend({
+  preview: ChannelStreamingPreviewSchema.omit({ chunk: true }).optional(),
+  progress: ChannelStreamingProgressSchema.omit({ commentary: true, narration: true }).optional(),
+});
 
 const MattermostReplyToModeSchema = z.enum(["off", "first", "all", "batched"]);
 const MattermostReplyToModeByChatTypeSchema = z
@@ -130,6 +108,8 @@ export const MattermostAccountSchemaBase = z
     oncharPrefixes: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
     requireMentionInBotThreads: z.boolean().optional(),
+    allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     implicitMentions: ChannelImplicitMentionsSchema.optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -157,7 +137,6 @@ export const MattermostAccountSchemaBase = z
     groups: z.record(z.string(), MattermostGroupSchema.optional()).optional(),
     /** Network policy overrides for self-hosted Mattermost on trusted private/internal hosts. */
     network: MattermostNetworkSchema,
-    /** Retry configuration for DM channel creation */
     dmChannelRetry: DmChannelRetrySchema,
   })
   .strict();

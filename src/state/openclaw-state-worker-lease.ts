@@ -1,5 +1,9 @@
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteWorkerError, isSqliteWorkerStoreAvailable } from "../infra/sqlite-worker-store.js";
+import { getPluginSharedStateResourceHost } from "../plugins/plugin-shared-state-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { captureOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
 import { getOpenClawStateDatabaseTerminalFailureAsync } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { hydrateOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
@@ -20,10 +24,12 @@ export function retainOpenClawStateWorkerLease(
   context: OpenClawStateWorkerContext,
   owner: {
     open(context: OpenClawStateWorkerContext): Promise<Store | undefined>;
-    retainOperation(store: Store): () => void | Promise<void>;
+    retainOperation(store: Store, onNativeLost?: () => void): () => void | Promise<void>;
   },
   finalize?: (scope: DomainScope) => Promise<void>,
 ): OpenClawStateWorkerLease {
+  const host = getPluginSharedStateResourceHost();
+  host?.assertSharedStateAdmission();
   const maintenance = context.maintenanceScope;
   context.admission.assertCurrent();
   maintenance?.assertAdmission();
@@ -47,12 +53,13 @@ export function retainOpenClawStateWorkerLease(
   let acquisitionReady = false;
   void ready.promise.catch(() => undefined);
 
+  const assertResourceCurrent = () => resource?.assertCurrent();
   const assertInvocation = (invocation: Invocation) => {
     if (invocation.phase === "closed" || invalidated) {
       throw new SqliteWorkerError("Shared-state worker operation is closed", "closed");
     }
     context.admission.assertCurrent();
-    maintenance?.assertOwnerCurrent();
+    assertResourceCurrent();
   };
   const assertCommandAdmission = (invocation: Invocation) => {
     assertInvocation(invocation);
@@ -82,14 +89,7 @@ export function retainOpenClawStateWorkerLease(
       } catch (error) {
         errors.push(error);
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Shared-state worker lease retirement failed", {
-          cause: errors[0],
-        });
-      }
+      throwSqliteLifecycleErrors(errors, "Shared-state worker lease retirement failed");
     })();
     void retirement.catch(() => undefined);
     return retirement;
@@ -116,7 +116,7 @@ export function retainOpenClawStateWorkerLease(
       const run = async () => {
         // Prepared input transfers its credits at enqueue in this same turn.
         if (!acquisitionReady) {
-          await ready.promise;
+          await racePromiseWithAbortSignal(ready.promise, options?.signal);
         }
         assertInvocation(invocation);
         if (!scope) {
@@ -124,7 +124,8 @@ export function retainOpenClawStateWorkerLease(
         }
         return scope.execute(command, options);
       };
-      const result = run().catch(async (error: unknown) => {
+      const operation = resource ? resource.run(run) : run();
+      const result = operation.catch(async (error: unknown) => {
         // A finalizer may already be draining this command. It owns retirement
         // then; awaiting its close here would make the command wait on itself.
         if (store && !sealed && !isSqliteWorkerStoreAvailable(store)) {
@@ -188,6 +189,8 @@ export function retainOpenClawStateWorkerLease(
     );
     return completion.promise;
   };
+  const runWithAdmission = async <T>(operation: (scope: DomainScope) => Promise<T>): Promise<T> =>
+    host ? host.trackSharedStateWork(() => runOperation(operation)) : runOperation(operation);
   const release = () => {
     if (invalidated) {
       return retireNative();
@@ -222,14 +225,7 @@ export function retainOpenClawStateWorkerLease(
       } catch (error) {
         errors.push(error);
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Shared-state worker lease cleanup failed", {
-          cause: errors[0],
-        });
-      }
+      throwSqliteLifecycleErrors(errors, "Shared-state worker lease cleanup failed");
     })();
     void closing.catch(() => undefined);
     return closing;
@@ -237,12 +233,15 @@ export function retainOpenClawStateWorkerLease(
   const lease: OpenClawStateWorkerLease = {
     ready: ready.promise,
     execute: (command, options) =>
-      runOperation((operationScope) => operationScope.execute(command, options)),
-    runOperation,
+      runWithAdmission((operationScope) => operationScope.execute(command, options)),
+    runOperation: runWithAdmission,
     release,
     retire,
   };
   maintenance?.own(lease, "shared-resources", release);
+  const resource = maintenance
+    ? captureOpenClawDatabaseMaintenanceResource(lease, maintenance)
+    : undefined;
   const acquire = async () => {
     try {
       const failure = await getOpenClawStateDatabaseTerminalFailureAsync(context);
@@ -255,7 +254,10 @@ export function retainOpenClawStateWorkerLease(
       if (!store) {
         throw new Error("Canonical shared-state worker did not open its database");
       }
-      releaseOperation = owner.retainOperation(store);
+      releaseOperation = owner.retainOperation(store, () => {
+        // An idle logical lease must release its hold even when it has no command to reject.
+        void retire();
+      });
       // The client scope retains native custody as a resource, never as pending
       // maintenance work that must finish before the resource phase can begin.
       retained = runWithOpenClawStateWorkerStore(
@@ -266,7 +268,7 @@ export function retainOpenClawStateWorkerLease(
           admitted.resolve();
           await released.promise;
         },
-        () => maintenance?.assertOwnerCurrent(),
+        assertResourceCurrent,
       );
       void retained.catch(admitted.reject);
       await admitted.promise;
@@ -293,7 +295,8 @@ export function retainOpenClawStateWorkerLease(
       throw failure;
     }
   };
-  const acquisition = runWithCapturedWorkerContext(context, acquire);
+  const acquireInContext = () => runWithCapturedWorkerContext(context, acquire);
+  const acquisition = host ? host.trackSharedStateWork(acquireInContext) : acquireInContext();
   void acquisition.then(() => {
     acquisitionReady = true;
     ready.resolve();

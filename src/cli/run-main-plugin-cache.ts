@@ -16,7 +16,9 @@ export async function withCliPluginInvocation<T>(
       async release() {
         // Gateway publication transfers the same inventory to process custody.
         if (cache.kind === "operation") {
-          const result = await retirePluginCache(cache);
+          // One-shot commands close shared state immediately after this owner releases.
+          // Join timed-out plugin tails so native admission publication cannot outlive it.
+          const result = await retirePluginCache(cache, undefined, { waitForSettlement: true });
           if (result.failures.length > 0) {
             throw new AggregateError(
               result.failures.map((failure) => failure.error),
@@ -27,15 +29,12 @@ export async function withCliPluginInvocation<T>(
       },
     });
     const invoke = () => withPluginCache(cache, () => run(cleanup));
-    const resources = cleanup?.pluginResources;
-    if (!resources) {
+    if (!cleanup?.pluginResources) {
       return invoke();
     }
-    const { GatewayScheduler } = await import("../infra/gateway-scheduler.js");
-    const scheduler = new GatewayScheduler();
-    resources.adopt({ release: () => scheduler.stop() });
+    const resources = cleanup.pluginResources;
     return pluginSourceCaptureMaintenance.run(
-      { scheduler, run: (operation) => resources.run(operation) },
+      { scheduler: cleanup.scheduler, run: (operation) => resources.run(operation) },
       invoke,
     );
   });

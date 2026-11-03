@@ -1,11 +1,5 @@
-/**
- * Shared auth-profile constants.
- * Defines store versions, built-in CLI profile ids, lock budgets, refresh
- * timing, and logging used by auth profile runtime modules.
- */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
-/** Current persisted auth profile store schema version. */
 export const AUTH_STORE_VERSION = 1;
 
 export {
@@ -32,7 +26,6 @@ export const OAUTH_REFRESH_CALL_TIMEOUT_MS = 120_000;
 /** Freshness window for syncing external CLI auth into auth profiles. */
 export const EXTERNAL_CLI_SYNC_TTL_MS = 15 * 60 * 1000;
 
-/** Auth profile subsystem logger. */
 export const authProfilesLog = createSubsystemLogger("agents/auth-profiles");
 
 /** Post-commit diagnostics cannot replace an acknowledged durable result. */

@@ -17,17 +17,21 @@ export function reclaimSessionArchivePublicationInTransaction(
   >,
   callbacks: SqliteSessionReclamationCallbacks,
 ): SqliteSessionReclamationResult {
-  return runOpenClawAgentWriteTransaction((database) => {
-    callbacks.beforeMutation?.();
-    if (plan.kind === "archive-publish-prepare") {
-      const value = prepareSessionTranscriptArchivePublishPlans(database, plan);
-      if (value.length > 0) {
-        callbacks.onCommit?.(database);
+  return runOpenClawAgentWriteTransaction(
+    (database) => {
+      callbacks.beforeMutation?.();
+      if (plan.kind === "archive-publish-prepare") {
+        const value = prepareSessionTranscriptArchivePublishPlans(database, plan);
+        if (value.length > 0) {
+          callbacks.onCommit?.(database);
+        }
+        return { kind: plan.kind, value };
       }
-      return { kind: plan.kind, value };
-    }
-    recordSessionTranscriptArchivePublishResults(database, plan.results, plan.nowMs);
-    callbacks.onCommit?.(database);
-    return { kind: plan.kind, value: true };
-  }, plan.databaseOptions);
+      recordSessionTranscriptArchivePublishResults(database, plan.results, plan.nowMs);
+      callbacks.onCommit?.(database);
+      return { kind: plan.kind, value: true };
+    },
+    plan.databaseOptions,
+    { operationLabel: `session.${plan.kind}` },
+  );
 }

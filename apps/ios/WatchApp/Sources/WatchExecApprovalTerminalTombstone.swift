@@ -9,13 +9,8 @@ struct ExecApprovalTerminalTombstone: Equatable {
 }
 
 extension ExecApprovalTerminalTombstone: Codable {
-    private enum CodingKeys: String, CodingKey {
-        case approvalId
-        case gatewayStableID
-        case outcome
+    private enum LegacyCodingKeys: String, CodingKey {
         case outcomeText
-        case outcomeIsAuthoritative
-        case recordedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -24,27 +19,13 @@ extension ExecApprovalTerminalTombstone: Codable {
         self.gatewayStableID = try container.decode(String.self, forKey: .gatewayStableID)
         self.outcome = try container.decodeIfPresent(
             WatchExecApprovalOutcome.self,
-            forKey: .outcome) ?? Self.decodeLegacyOutcome(
-            container.decodeIfPresent(String.self, forKey: .outcomeText))
+            forKey: .outcome) ?? decoder.container(keyedBy: LegacyCodingKeys.self)
+            .decodeIfPresent(String.self, forKey: .outcomeText)
+            .flatMap(WatchExecApprovalOutcome.decodeLegacyLocalizedText)
+            ?? WatchExecApprovalOutcome(code: .unavailable)
         self.outcomeIsAuthoritative = try container.decodeIfPresent(
             Bool.self,
             forKey: .outcomeIsAuthoritative)
         self.recordedAt = try container.decode(Date.self, forKey: .recordedAt)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(self.approvalId, forKey: .approvalId)
-        try container.encode(self.gatewayStableID, forKey: .gatewayStableID)
-        try container.encode(self.outcome, forKey: .outcome)
-        try container.encodeIfPresent(
-            self.outcomeIsAuthoritative,
-            forKey: .outcomeIsAuthoritative)
-        try container.encode(self.recordedAt, forKey: .recordedAt)
-    }
-
-    private static func decodeLegacyOutcome(_ text: String?) -> WatchExecApprovalOutcome {
-        text.flatMap(WatchExecApprovalOutcome.decodeLegacyLocalizedText)
-            ?? WatchExecApprovalOutcome(code: .unavailable)
     }
 }

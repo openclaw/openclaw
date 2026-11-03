@@ -17,22 +17,23 @@ export type ChannelIngressPressureHealth = {
   oldestReceivedAt: number;
 };
 
-type ChannelIngressReadOperations = {
-  "channelIngress.accounts": { input: { channelId: string }; output: string[] };
-  "channelIngress.failedHealth": { input: undefined; output: ChannelIngressFailedHealth[] };
-  "channelIngress.pressureHealth": {
-    input: { now: number };
-    output: ChannelIngressPressureHealth[];
-  };
+export type ChannelIngressPressureSnapshot = {
+  pressure: ChannelIngressPressureHealth[];
+  nextClaimExpiryAtMs: number | null;
 };
 
-export type ChannelIngressReadCommand = {
-  [Kind in keyof ChannelIngressReadOperations]: {
-    type: Kind;
-  } & (ChannelIngressReadOperations[Kind]["input"] extends undefined
-    ? { input?: undefined }
-    : { input: ChannelIngressReadOperations[Kind]["input"] });
-}[keyof ChannelIngressReadOperations];
+export type ChannelIngressHealthErrors = { failed?: string; pressure?: string };
+
+export type ChannelIngressHealthSnapshot = {
+  failed?: ChannelIngressFailedHealth[];
+  pressure?: ChannelIngressPressureSnapshot;
+  errors: ChannelIngressHealthErrors;
+};
+
+export type ChannelIngressReadCommand =
+  | { type: "channelIngress.accounts"; input: { channelId: string } }
+  | { type: "channelIngress.failedHealth"; input?: undefined }
+  | { type: "channelIngress.health"; input: { now: number; failed: boolean; pressure: boolean } };
 
 export function isChannelIngressReadCommand(value: unknown): value is ChannelIngressReadCommand {
   if (!isRecord(value)) {
@@ -45,17 +46,19 @@ export function isChannelIngressReadCommand(value: unknown): value is ChannelIng
     return isRecord(value.input) && typeof value.input.channelId === "string";
   }
   return (
-    value.type === "channelIngress.pressureHealth" &&
+    value.type === "channelIngress.health" &&
     isRecord(value.input) &&
-    typeof value.input.now === "number"
+    typeof value.input.now === "number" &&
+    typeof value.input.failed === "boolean" &&
+    typeof value.input.pressure === "boolean"
   );
 }
 
 export type ChannelIngressReadReply = {
-  [Kind in keyof ChannelIngressReadOperations]: {
-    ok: true;
-    type: Kind;
-    sourceAdmitted: true;
-    result: ChannelIngressReadOperations[Kind]["output"];
-  };
-}[keyof ChannelIngressReadOperations];
+  ok: true;
+  sourceAdmitted: true;
+} & (
+  | { type: "channelIngress.accounts"; result: string[] }
+  | { type: "channelIngress.failedHealth"; result: ChannelIngressFailedHealth[] }
+  | { type: "channelIngress.health"; result: ChannelIngressHealthSnapshot }
+);

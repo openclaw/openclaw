@@ -22,24 +22,11 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
 import type { MatrixExtraContentFields } from "./matrix/send/types.js";
+import { matrixPresentationCapabilities } from "./presentation-capabilities.js";
 
 const MATRIX_OPENCLAW_PRESENTATION_KEY = "com.openclaw.presentation" as const;
 const MATRIX_OPENCLAW_PRESENTATION_TYPE = "message.presentation" as const;
 const MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT = "---";
-
-const MATRIX_PRESENTATION_CAPABILITIES = {
-  supported: true,
-  buttons: true,
-  selects: true,
-  context: true,
-  divider: true,
-  limits: {
-    text: {
-      markdownDialect: "markdown",
-      supportsEdit: true,
-    },
-  },
-} satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
 type MatrixChannelData = {
   extraContent?: MatrixExtraContentFields;
@@ -102,7 +89,7 @@ function renderMatrixPresentationPayload(params: {
 export function prepareMatrixReplyPayload(payload: ReplyPayload): Promise<ReplyPayload> {
   return renderPresentationForDelivery(
     {
-      presentationCapabilities: MATRIX_PRESENTATION_CAPABILITIES,
+      presentationCapabilities: matrixPresentationCapabilities,
       renderPresentation: (prepared) =>
         renderMatrixPresentationPayload({ payload: prepared, presentation: prepared.presentation }),
     },
@@ -170,7 +157,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  presentationCapabilities: MATRIX_PRESENTATION_CAPABILITIES,
+  presentationCapabilities: matrixPresentationCapabilities,
   renderPresentation: renderMatrixPresentationPayload,
   sendPayload: async ({
     cfg,
@@ -203,68 +190,55 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     });
     const urls = resolveSendableOutboundReplyParts(payload).mediaUrls;
     const payloadText = resolveMatrixPayloadText(payload);
-    if (urls.length > 0) {
-      const sentResults: Awaited<ReturnType<typeof sendMessageMatrix>>[] = [];
-      const lastResult = await sendPayloadMediaSequence({
-        text: payloadText,
-        mediaUrls: urls,
-        send: async ({ text, mediaUrl, index, isFirst }) =>
-          await send(to, text, {
-            cfg,
-            mediaUrl,
-            mediaAccess,
-            mediaLocalRoots,
-            mediaReadFile,
-            replyToId: resolveReplyToId(),
-            threadId: resolvedThreadId,
-            accountId: accountId ?? undefined,
-            audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
-            deliveryQueueId,
-            deliveryPartIndex: index,
-            deliveryPartCount: urls.length,
-            signal,
-            assertDirectAdapterHandoff,
-            onPlatformSendDispatch,
-            extraContent: isFirst ? resolveMatrixExtraContent(payload) : undefined,
-            onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
-          }),
-        onResult: (result) => {
-          sentResults.push(result);
-        },
-      });
-      if (lastResult !== undefined) {
-        // One payload owns one receipt; keep every attachment and its original reply metadata.
-        const receipt = createMessageReceiptFromOutboundResults({ results: sentResults });
-        receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
-        return attachChannelToResult(
-          "matrix",
-          toMatrixOutboundResult({
-            ...lastResult,
-            primaryMessageId: receipt.primaryPlatformMessageId,
-            receipt,
-            content: sentResults.map((result) => result.content).join("\n"),
-          }),
-        );
-      }
-    }
-    const result = await send(to, payloadText, {
+    const sendOptions = {
       cfg,
       mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
-      replyToId: resolveReplyToId(),
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
-      audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
       deliveryQueueId,
-      deliveryPartIndex: 0,
-      deliveryPartCount: 1,
       signal,
       assertDirectAdapterHandoff,
       onPlatformSendDispatch,
-      extraContent: resolveMatrixExtraContent(payload),
+      audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
-    });
+    };
+    const sendPart = (text: string, index: number, mediaUrl?: string) =>
+      send(to, text, {
+        ...sendOptions,
+        mediaUrl,
+        replyToId: resolveReplyToId(),
+        deliveryPartIndex: index,
+        deliveryPartCount: urls.length || 1,
+        extraContent: index === 0 ? resolveMatrixExtraContent(payload) : undefined,
+      });
+    if (urls.length > 0) {
+      const sentResults: Awaited<ReturnType<typeof sendMessageMatrix>>[] = [];
+      await sendPayloadMediaSequence({
+        text: payloadText,
+        mediaUrls: urls,
+        send: ({ text, mediaUrl, index }) => sendPart(text, index, mediaUrl),
+        onResult: (result) => {
+          sentResults.push(result);
+        },
+      });
+      // URLs are already normalized; a successful sequence always has a last result.
+      const lastResult = sentResults.at(-1)!;
+      // One payload owns one receipt; keep every attachment and its original reply metadata.
+      const receipt = createMessageReceiptFromOutboundResults({ results: sentResults });
+      receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+      return attachChannelToResult(
+        "matrix",
+        toMatrixOutboundResult({
+          ...lastResult,
+          primaryMessageId: receipt.primaryPlatformMessageId,
+          receipt,
+          content: sentResults.map((result) => result.content).join("\n"),
+        }),
+      );
+    }
+    const result = await sendPart(payloadText, 0);
     return attachChannelToResult("matrix", toMatrixOutboundResult(result));
   },
   sendText: (ctx) => sendMatrixOutbound(ctx),

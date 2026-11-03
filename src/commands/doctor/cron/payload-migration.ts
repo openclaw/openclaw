@@ -28,8 +28,14 @@ const LEGACY_DELIVERY_HINT_FIELDS = [
 
 export function normalizePayloadKind(payload: UnknownRecord) {
   const raw = normalizeOptionalLowercaseString(payload.kind) ?? "";
-  const kind =
-    raw === "agentturn" ? "agentTurn" : raw === "systemevent" ? "systemEvent" : undefined;
+  let kind = raw === "agentturn" ? "agentTurn" : raw === "systemevent" ? "systemEvent" : undefined;
+  if (!payload.kind) {
+    kind = normalizeOptionalString(payload.message)
+      ? "agentTurn"
+      : normalizeOptionalString(payload.text)
+        ? "systemEvent"
+        : undefined;
+  }
   if (!kind || payload.kind === kind) {
     return false;
   }
@@ -38,40 +44,28 @@ export function normalizePayloadKind(payload: UnknownRecord) {
 }
 
 export function inferPayloadIfMissing(raw: UnknownRecord) {
-  const message = normalizeOptionalString(raw.message) ?? "";
-  const text = normalizeOptionalString(raw.text) ?? "";
-  const command = normalizeOptionalString(raw.command) ?? "";
-  if (message) {
-    raw.payload = { kind: "agentTurn", message };
-    return true;
+  const message = normalizeOptionalString(raw.message);
+  const text = normalizeOptionalString(raw.text) ?? normalizeOptionalString(raw.command);
+  if (!message && !text) {
+    return false;
   }
-  if (text) {
-    raw.payload = { kind: "systemEvent", text };
-    return true;
-  }
-  if (command) {
-    raw.payload = { kind: "systemEvent", text: command };
-    return true;
-  }
-  return false;
+  raw.payload = message ? { kind: "agentTurn", message } : { kind: "systemEvent", text };
+  return true;
 }
 
 export function copyTopLevelAgentTurnFields(raw: UnknownRecord, payload: UnknownRecord) {
   let mutated = false;
 
-  const copyTrimmedString = (field: "model" | "thinking") => {
-    const existing = normalizeOptionalString(payload[field]);
-    if (existing) {
-      return;
+  for (const field of ["model", "thinking"] as const) {
+    if (normalizeOptionalString(payload[field])) {
+      continue;
     }
     const value = normalizeOptionalString(raw[field]);
     if (value) {
       payload[field] = value;
       mutated = true;
     }
-  };
-  copyTrimmedString("model");
-  copyTrimmedString("thinking");
+  }
 
   if (
     typeof payload.timeoutSeconds !== "number" &&
@@ -82,28 +76,17 @@ export function copyTopLevelAgentTurnFields(raw: UnknownRecord, payload: Unknown
     mutated = true;
   }
 
-  if (
-    typeof payload.allowUnsafeExternalContent !== "boolean" &&
-    typeof raw.allowUnsafeExternalContent === "boolean"
-  ) {
-    payload.allowUnsafeExternalContent = raw.allowUnsafeExternalContent;
-    mutated = true;
-  }
-
-  if (typeof payload.deliver !== "boolean" && typeof raw.deliver === "boolean") {
-    payload.deliver = raw.deliver;
-    mutated = true;
-  }
-  const channel = normalizeOptionalString(raw.channel);
-  if (typeof payload.channel !== "string" && channel) {
-    payload.channel = channel;
-    mutated = true;
-  }
-  const to = normalizeOptionalString(raw.to);
-  if (typeof payload.to !== "string" && to) {
-    payload.to = to;
-    mutated = true;
-  }
+  const copyField = (field: string, type: "boolean" | "string") => {
+    const value = type === "string" ? normalizeOptionalString(raw[field]) : raw[field];
+    if (typeof payload[field] !== type && typeof value === type) {
+      payload[field] = value;
+      mutated = true;
+    }
+  };
+  copyField("allowUnsafeExternalContent", "boolean");
+  copyField("deliver", "boolean");
+  copyField("channel", "string");
+  copyField("to", "string");
   const rawThreadId = normalizeOptionalString(raw.threadId);
   if (
     !("threadId" in payload) &&
@@ -112,18 +95,8 @@ export function copyTopLevelAgentTurnFields(raw: UnknownRecord, payload: Unknown
     payload.threadId = rawThreadId ?? raw.threadId;
     mutated = true;
   }
-  if (
-    typeof payload.bestEffortDeliver !== "boolean" &&
-    typeof raw.bestEffortDeliver === "boolean"
-  ) {
-    payload.bestEffortDeliver = raw.bestEffortDeliver;
-    mutated = true;
-  }
-  const provider = normalizeOptionalString(raw.provider);
-  if (typeof payload.provider !== "string" && provider) {
-    payload.provider = provider;
-    mutated = true;
-  }
+  copyField("bestEffortDeliver", "boolean");
+  copyField("provider", "string");
 
   return mutated;
 }
@@ -189,36 +162,27 @@ export function collectLegacyOpenAICodexCronModelRoutes(
   return [...routes.values()];
 }
 
-function readPositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
-}
-
 function migrateLegacyOpenAICodexModelRefs(
   payload: UnknownRecord,
   shouldMigrate: (modelRef: string, legacyModelRef: string) => boolean,
 ): boolean {
   let mutated = false;
+  const migrateRef = (value: unknown) => {
+    const route = readLegacyOpenAICodexCronModelRoute(value);
+    return route && shouldMigrate(route.canonicalModelRef, route.legacyModelRef)
+      ? route.canonicalModelRef
+      : undefined;
+  };
 
-  const model = readLegacyOpenAICodexCronModelRoute(payload.model);
-  if (
-    model &&
-    shouldMigrate(model.canonicalModelRef, model.legacyModelRef) &&
-    payload.model !== model.canonicalModelRef
-  ) {
-    payload.model = model.canonicalModelRef;
+  const model = migrateRef(payload.model);
+  if (model !== undefined && payload.model !== model) {
+    payload.model = model;
     mutated = true;
   }
 
   const fallbacks = payload.fallbacks;
   if (Array.isArray(fallbacks)) {
-    const next = fallbacks.map((fallback) => {
-      const route = readLegacyOpenAICodexCronModelRoute(fallback);
-      return route && shouldMigrate(route.canonicalModelRef, route.legacyModelRef)
-        ? route.canonicalModelRef
-        : fallback;
-    });
+    const next = fallbacks.map((fallback) => migrateRef(fallback) ?? fallback);
     if (next.some((fallback, index) => fallback !== fallbacks[index])) {
       payload.fallbacks = next;
       mutated = true;
@@ -228,7 +192,6 @@ function migrateLegacyOpenAICodexModelRefs(
   return mutated;
 }
 
-/** Normalize legacy cron payload channel/provider and model reference fields in place. */
 export function migrateLegacyCronPayload(
   payload: UnknownRecord,
   options: {
@@ -286,7 +249,11 @@ export function migrateLegacyAgentTurnCommandPayload(payload: UnknownRecord): bo
     return false;
   }
 
-  const timeoutSeconds = readPositiveInteger(payload.timeoutSeconds) ?? parsed.timeoutSeconds;
+  const timeout = payload.timeoutSeconds;
+  const timeoutSeconds =
+    typeof timeout === "number" && Number.isFinite(timeout) && timeout > 0
+      ? Math.floor(timeout)
+      : parsed.timeoutSeconds;
   const deliveryHints: UnknownRecord = {};
   for (const key of LEGACY_DELIVERY_HINT_FIELDS) {
     if (key in payload) {

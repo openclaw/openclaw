@@ -1,4 +1,3 @@
-// Zalo plugin module implements approval auth behavior.
 import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { resolveZaloAccount } from "./accounts.js";
 

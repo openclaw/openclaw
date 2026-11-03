@@ -2,19 +2,56 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
-type KoffiModule = typeof import("koffi");
+type IdentityModule = typeof import("@openclaw/proc-safe/identity");
 
-function loadedNativeFile(require: NodeJS.Require, koffi: KoffiModule): string {
-  // Koffi's public indirect loader exposes the selected addon as default. Follow
-  // that successful load so source builds retain the vendor's selection order.
-  const loaded = Object.values(require.cache).filter(
-    (module) =>
-      module?.loaded && module.filename.endsWith(".node") && module.exports === koffi.default,
-  );
-  if (loaded.length !== 1) {
+function packageMetadata(
+  root: string,
+  name: string,
+): { version: string; optionalDependencies?: Record<string, string> } {
+  // SAFETY: Package metadata is checked before using its version or dependency pin.
+  const metadata = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as {
+    name?: unknown;
+    version?: unknown;
+    optionalDependencies?: Record<string, string>;
+  };
+  if (metadata.name !== name || typeof metadata.version !== "string" || !metadata.version) {
+    throw new Error("Managed handoff FreeBSD native runtime has invalid package metadata");
+  }
+  return { version: metadata.version, optionalDependencies: metadata.optionalDependencies };
+}
+
+function loadedNativeFile(require: NodeJS.Require, root: string): string {
+  const file = path.join(root, "proc-safe-native.node");
+  if (!fs.lstatSync(file).isFile()) {
+    throw new Error("Managed handoff FreeBSD native runtime requires regular package files");
+  }
+  const expected = fs.realpathSync(file);
+  const loaded = require.cache[expected];
+  if (!loaded?.loaded || loaded.filename !== expected) {
     throw new Error("Managed handoff could not identify the loaded FreeBSD native runtime");
   }
-  return fs.realpathSync(loaded[0]!.filename);
+  return expected;
+}
+
+function runtimeFiles(root: string, relative = "dist"): string[] {
+  const directory = path.join(root, relative);
+  if (!fs.lstatSync(directory).isDirectory()) {
+    throw new Error("Managed handoff FreeBSD native runtime requires regular package directories");
+  }
+  return fs
+    .readdirSync(directory)
+    .toSorted()
+    .flatMap((name) => {
+      const child = path.join(relative, name);
+      const entry = fs.lstatSync(path.join(root, child));
+      if (entry.isDirectory()) {
+        return runtimeFiles(root, child);
+      }
+      if (!entry.isFile()) {
+        throw new Error("Managed handoff FreeBSD native runtime requires regular package files");
+      }
+      return name.endsWith(".js") ? [child] : [];
+    });
 }
 
 /** Keep the native dependency alive through package replacement and triage re-exec. */
@@ -25,72 +62,75 @@ export function stageFreeBsdManagedHandoffNativeRuntime(directory: string): stri
   if (process.arch !== "x64" && process.arch !== "arm64") {
     throw new Error("Managed handoff requires a supported FreeBSD native architecture");
   }
-  // Koffi adds external search roots for Electron. A sealed handoff may load
-  // only its own staged package, including when the original install is gone.
   // SAFETY: This adds only an optional unknown field; every defined value is rejected.
   if ((process as NodeJS.Process & { resourcesPath?: unknown }).resourcesPath !== undefined) {
     throw new Error("Managed handoff cannot use an external FreeBSD native resource path");
   }
 
   const require = createRequire(import.meta.url);
-  const entry = fs.realpathSync(require.resolve("koffi/indirect"));
-  const sourceRoot = path.dirname(entry);
-  const sourceRequire = createRequire(entry);
-  // SAFETY: The public Koffi entry supplies this API; version and loaded ownership are checked below.
-  const koffi = sourceRequire(entry) as KoffiModule;
-  // SAFETY: These fields remain unknown until the name and version checks below.
-  const metadata = JSON.parse(fs.readFileSync(path.join(sourceRoot, "package.json"), "utf8")) as {
-    name?: unknown;
-    version?: unknown;
-  };
-  if (
-    metadata.name !== "koffi" ||
-    typeof metadata.version !== "string" ||
-    !metadata.version ||
-    koffi.version !== metadata.version
-  ) {
-    throw new Error("Managed handoff FreeBSD native runtime version does not match its package");
+  const sourceRoot = path.dirname(require.resolve("@openclaw/proc-safe/package.json"));
+  const entry = require.resolve("@openclaw/proc-safe/identity");
+  if (entry !== path.join(sourceRoot, "dist", "identity.js") || fs.realpathSync(entry) !== entry) {
+    throw new Error("Managed handoff FreeBSD identity entry has an unexpected package path");
   }
-
-  const nativeFile = loadedNativeFile(sourceRequire, koffi);
-  const triplet = `freebsd_${process.arch}`;
-  const nativeRelative = path.join("build", "koffi", triplet, "koffi.node");
-  if (nativeFile !== path.join(sourceRoot, nativeRelative)) {
-    const optionalRoot = path.dirname(
-      fs.realpathSync(sourceRequire.resolve(`@koromix/koffi-freebsd-${process.arch}`)),
-    );
-    if (nativeFile !== path.join(optionalRoot, triplet, "koffi.node")) {
-      throw new Error("Managed handoff FreeBSD native runtime has an unexpected package path");
+  const relativeFiles = ["package.json", "LICENSE", ...runtimeFiles(sourceRoot)];
+  for (const relative of relativeFiles) {
+    if (!fs.lstatSync(path.join(sourceRoot, relative)).isFile()) {
+      throw new Error("Managed handoff FreeBSD native runtime requires regular package files");
     }
   }
+  const sourceRequire = createRequire(entry);
+  const platformName = `@openclaw/proc-safe-freebsd-${process.arch}`;
+  const nativeFile = sourceRequire.resolve(platformName);
+  const nativeRoot = path.dirname(sourceRequire.resolve(`${platformName}/package.json`));
+  if (
+    nativeFile !== path.join(nativeRoot, "proc-safe-native.node") ||
+    !fs.lstatSync(nativeFile).isFile()
+  ) {
+    throw new Error("Managed handoff FreeBSD native runtime has an unexpected package path");
+  }
+  const metadata = packageMetadata(sourceRoot, "@openclaw/proc-safe");
+  const nativeMetadata = packageMetadata(nativeRoot, platformName);
+  if (metadata.optionalDependencies?.[platformName] !== nativeMetadata.version) {
+    throw new Error("Managed handoff FreeBSD native runtime version does not match its package");
+  }
+  // SAFETY: The public subpath supplies this API; its self observation loads the selected addon.
+  const identity = sourceRequire(entry) as IdentityModule;
+  const observed = identity.readProcessIdentity(process.pid);
+  if (observed?.startTimeSinceBootMicros === undefined) {
+    throw new Error("Managed handoff could not read its FreeBSD process identity");
+  }
+  loadedNativeFile(sourceRequire, nativeRoot);
 
-  // Copy regular bytes into one canonical build layout. No alternate addon or
-  // source symlink may send the private loader back to the mutable installation.
+  const privateModules = path.resolve(directory, "runtime", "node_modules");
   const files = [
-    ...["package.json", "indirect.cjs", "src/koffi/indirect.cjs", "LICENSE.txt"].map(
-      (relative) => ({ source: path.join(sourceRoot, relative), relative }),
-    ),
-    { source: nativeFile, relative: nativeRelative },
+    ...relativeFiles.map((relative) => ({
+      source: path.join(sourceRoot, relative),
+      destination: path.join(privateModules, "@openclaw", "proc-safe", relative),
+    })),
+    ...["package.json", "proc-safe-native.node"].map((relative) => ({
+      source: path.join(nativeRoot, relative),
+      destination: path.join(privateModules, platformName, relative),
+    })),
   ];
-  const privateRoot = path.resolve(directory, "runtime", "node_modules", "koffi");
-  const staged = files.map(({ source, relative }) => {
+  const staged = files.map(({ source, destination }) => {
     if (!fs.lstatSync(source).isFile()) {
       throw new Error("Managed handoff FreeBSD native runtime requires regular package files");
     }
-    const destination = path.join(privateRoot, relative);
     fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
     fs.writeFileSync(destination, fs.readFileSync(source), { mode: 0o600, flag: "wx" });
     return destination;
   });
 
-  const privateEntry = path.join(privateRoot, "indirect.cjs");
+  const privateEntry = path.join(privateModules, "@openclaw", "proc-safe", "dist", "identity.js");
   const privateRequire = createRequire(privateEntry);
-  // SAFETY: This copies the public loader; its version and private native path are checked below.
-  const privateKoffi = privateRequire(privateEntry) as KoffiModule;
+  // SAFETY: This is the copied public entry, resolved only inside the private package tree.
+  const privateIdentity = privateRequire(privateEntry) as IdentityModule;
   if (
-    privateKoffi.version !== metadata.version ||
-    loadedNativeFile(privateRequire, privateKoffi) !==
-      fs.realpathSync(path.join(privateRoot, nativeRelative))
+    privateIdentity.readProcessIdentity(process.pid)?.startTimeSinceBootMicros !==
+      observed.startTimeSinceBootMicros ||
+    loadedNativeFile(privateRequire, path.join(privateModules, platformName)) !==
+      fs.realpathSync(path.join(privateModules, platformName, "proc-safe-native.node"))
   ) {
     throw new Error("Managed handoff did not load its private FreeBSD native runtime");
   }

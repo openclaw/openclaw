@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Guard } from "typebox/guard";
-import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/primitives.js";
+import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/session-limits.js";
 import { hasTerminalControl } from "../../packages/terminal-core/src/safe-text.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 
@@ -27,14 +27,10 @@ function validateGatewayUrl(gatewayUrl: string): void {
   ) {
     invalidResumeHandoff();
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(gatewayUrl);
-  } catch {
-    invalidResumeHandoff();
-  }
+  const parsed = URL.parse(gatewayUrl);
   const authority = gatewayUrl.slice(gatewayUrl.indexOf("://") + 3).split("/", 1)[0] ?? "";
   if (
+    !parsed ||
     (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") ||
     gatewayUrl.includes("?") ||
     gatewayUrl.includes("#") ||

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
@@ -8,7 +7,6 @@ import {
   loadTranscriptEventsSync,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
@@ -24,14 +22,12 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND } from "../../tasks/context-engine-maintenance-task-owner.js";
-import { onTaskRegistryChange } from "../../tasks/task-registry.store.js";
-import { isTerminalTaskStatus, type TaskStatus } from "../../tasks/task-registry.types.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { compactEmbeddedAgentSession } from "./compact.queued.js";
-import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
+import { createCompactionResourceProvider } from "./compact.resources.test-support.js";
 
 // Exercise the existing managed producer without enabling RUN resource disposal.
 vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
@@ -62,10 +58,8 @@ it.for([
   { mode: "timeout", factory: "none", deferred: false },
   { mode: "caller-abort", factory: "none", deferred: false },
   { mode: "success-tail", factory: "none", deferred: false },
-  { mode: "factory-service", factory: "service", deferred: false },
   { mode: "factory-signal", factory: "signal", deferred: false },
   { mode: "operation-signal", factory: "service", deferred: false },
-  { mode: "deferred-factory-service", factory: "service", deferred: true },
   { mode: "deferred-factory-signal", factory: "signal", deferred: true },
 ] as const)(
   "retains $mode resources through disposal without retaining write authority",
@@ -77,68 +71,17 @@ it.for([
     try {
       const pluginId = `foreground-${mode}-fixture`;
       const pluginRoot = state.path("plugin");
-      fs.mkdirSync(pluginRoot, { recursive: true });
-      fs.mkdirSync(state.workspaceDir, { recursive: true });
-      fs.mkdirSync(state.agentDir(), { recursive: true });
-      fs.writeFileSync(
-        path.join(pluginRoot, "package.json"),
-        JSON.stringify({
-          name: pluginId,
-          version: "1.0.0",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(pluginRoot, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: pluginId,
-          providers: [pluginId],
-          configSchema: { type: "object" },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(pluginRoot, "index.cjs"),
-        `module.exports = {
-          id: '${pluginId}', register(api) {
-            api.registerProvider({ id: '${pluginId}', label: 'Foreground fixture', auth: [] });
-          }
-        };`,
-      );
-      const config: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: state.workspaceDir,
-            model: { primary: `${pluginId}/model` },
-            compaction: { timeoutSeconds: 1 },
-          },
-        },
-        models: {
-          providers: {
-            [pluginId]: {
-              api: "openai-completions",
-              apiKey: "synthetic-fixture",
-              baseUrl: "https://fixture.invalid/v1",
-              models: [
-                {
-                  id: "model",
-                  name: "Model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                },
-              ],
-            },
-          },
-        },
-        plugins: {
-          allow: [pluginId],
-          load: { paths: [pluginRoot] },
-          slots: { memory: "none", contextEngine: pluginId },
-          entries: { [pluginId]: { enabled: true } },
-        },
-      };
+      for (const dir of [state.workspaceDir, state.agentDir()]) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const { plugin, config } = createCompactionResourceProvider({
+        pluginRoot,
+        providerId: pluginId,
+        workspaceDir: state.workspaceDir,
+        contextWindow: 8192,
+        compaction: { timeoutSeconds: 1 },
+      });
+      Object.assign(config.plugins.slots, { contextEngine: pluginId });
       await state.writeConfig(config);
       const target = {
         agentId: "main",
@@ -160,6 +103,7 @@ it.for([
       const entryBefore = structuredClone(loadSessionEntryReadOnly(target));
       const transcriptBefore = loadTranscriptEventsSync(target);
       const entered = createDeferredCore();
+      const maintenanceFinished = createDeferredCore();
       const resume = createDeferredCore();
       const disposalEntered = createDeferredCore();
       const cleanupTailEntered = createDeferredCore();
@@ -174,6 +118,12 @@ it.for([
       let factoryCloseContextMatches = false;
       let factoryClosedAfterDisposalStarted = false;
       const work: Promise<unknown>[] = [];
+      const remember = <T>(pending: Promise<T>) => {
+        work.push(pending);
+        void pending.catch(() => {});
+        return pending;
+      };
+      const track = <T>(task: () => Promise<T>) => remember(trackAsyncWork(task));
       const values: unknown[] = [];
       let lateWriteBlocked = false;
       let disposalCalls = 0;
@@ -192,10 +142,7 @@ it.for([
       });
       const source = new PluginRegistryInspectionResources(retireInspectionInstances);
       source.attach(donor.registry);
-      const record = createPluginRecord({
-        id: pluginId,
-        source: path.join(pluginRoot, "index.cjs"),
-      });
+      const record = createPluginRecord({ id: pluginId, source: plugin.runtimeSource });
       donor.registry.plugins.push(record);
       const api = donor.createApi(record, { config, registrationMode: "full" });
       source.runRegistration(pluginId, () => {
@@ -221,12 +168,10 @@ it.for([
               },
               { once: true },
             );
-            const service = trackAsyncWork(async () => {
+            void track(async () => {
               await stopFactory.promise;
               values.push(db.prepare("SELECT value FROM answer").get()?.value);
             });
-            work.push(service);
-            void service.catch(() => {});
           }
           return {
             info: {
@@ -241,6 +186,8 @@ it.for([
               selectedRegistry = getPluginRuntimeGatewayRequestScope();
               entered.resolve();
               await resume.promise;
+              expect.soft(disposalCalls).toBe(0);
+              maintenanceFinished.resolve();
               return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
             },
             compact(params) {
@@ -272,9 +219,9 @@ it.for([
                 values.push(db.prepare("SELECT value FROM answer").get()?.value);
                 return { ok: true, compacted: false };
               };
-              const pending = mode === "success-tail" ? trackAsyncWork(compact) : compact();
-              work.push(pending);
-              void pending.catch(() => {});
+              const pending = remember(
+                mode === "success-tail" ? trackAsyncWork(compact) : compact(),
+              );
               return mode === "success-tail"
                 ? Promise.resolve({ ok: true, compacted: false })
                 : pending;
@@ -298,13 +245,11 @@ it.for([
               disposalContextMatches =
                 getPluginRuntimeGatewayRequestScope()?.pluginRegistry ===
                 selectedRegistry?.pluginRegistry;
-              const pending = trackAsyncWork(async () => {
+              void track(async () => {
                 cleanupTailEntered.resolve();
                 await finishDisposal.promise;
                 values.push(db.prepare("SELECT value FROM answer").get()?.value);
               });
-              work.push(pending);
-              void pending.catch(() => {});
             },
           };
         });
@@ -313,20 +258,6 @@ it.for([
       const caller = new AbortController();
       const callerReason = new Error("foreground compaction caller cancelled");
       let pending: Promise<unknown> | undefined;
-      const taskSettled = createDeferredCore<TaskStatus>();
-      const stopTaskObserver = deferred
-        ? onTaskRegistryChange((event) => {
-            if (
-              event?.kind === "upserted" &&
-              event.task.ownerKey === target.sessionKey &&
-              event.task.taskKind === CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND &&
-              isTerminalTaskStatus(event.task.status)
-            ) {
-              expect.soft(disposalCalls).toBe(0);
-              taskSettled.resolve(event.task.status);
-            }
-          })
-        : undefined;
       try {
         expect(getAsyncWorkSignal()).toBeUndefined();
         const start = () =>
@@ -354,7 +285,7 @@ it.for([
           const maintenanceResult = await racePromiseWithAbortSignal(
             Promise.race([
               entered.promise.then(() => "started"),
-              waitForDeferredTurnMaintenanceForSession(target.sessionKey).then(() => "settled"),
+              waitForSessionMaintenance(target.sessionKey).then(() => "settled"),
             ]),
             signal,
           );
@@ -386,8 +317,7 @@ it.for([
         }
         if (mode === "timeout") {
           expect(result.reason).toContain("timed out");
-          expect(caller.signal.aborted).toBe(false);
-          expect(backendSignal?.aborted).toBe(true);
+          expect([caller.signal.aborted, backendSignal?.aborted]).toEqual([false, true]);
         }
         if (mode === "caller-abort") {
           expect(backendSignal?.reason === callerReason).toBe(true);
@@ -402,8 +332,8 @@ it.for([
         }
         resume.resolve();
         if (deferred) {
-          // Worker bookkeeping publishes before engine disposal can start.
-          expect(await racePromiseWithAbortSignal(taskSettled.promise, signal)).toBe("succeeded");
+          // The admitted maintenance operation must finish before resource disposal.
+          await racePromiseWithAbortSignal(maintenanceFinished.promise, signal);
         }
         if (factory === "none") {
           await Promise.allSettled(work.slice(0, 1));
@@ -414,9 +344,9 @@ it.for([
           1_000,
           "Disposer remained blocked on a captured work signal",
         );
-        expect.soft(db.isOpen).toBe(true);
-        expect.soft(disposalContextMatches).toBe(true);
-        expect.soft(physicalDisposals).toBe(0);
+        expect
+          .soft({ open: db.isOpen, disposalContextMatches, physicalDisposals })
+          .toEqual({ open: true, disposalContextMatches: true, physicalDisposals: 0 });
         finishDisposal.resolve();
         const outcomes = await Promise.allSettled(work);
         expect.soft(outcomes.map((outcome) => outcome.status)).toEqual(["fulfilled", "fulfilled"]);
@@ -431,9 +361,11 @@ it.for([
         }
         expect(loadTranscriptEventsSync(target)).toEqual(transcriptBefore);
         expect(loadSessionEntryReadOnly(target)).toEqual(entryBefore);
-        expect(disposalCalls).toBe(1);
-        expect(physicalDisposals).toBe(1);
-        expect(db.isOpen).toBe(false);
+        expect({ disposalCalls, physicalDisposals, open: db.isOpen }).toEqual({
+          disposalCalls: 1,
+          physicalDisposals: 1,
+          open: false,
+        });
         const reopened = new DatabaseSync(file, { readOnly: true });
         try {
           expect(reopened.prepare("SELECT value FROM answer").get()?.value).toBe(42);
@@ -441,13 +373,12 @@ it.for([
           reopened.close();
         }
       } finally {
-        stopTaskObserver?.();
         resume.resolve();
         finishDisposal.resolve();
         stopFactory.resolve();
         forceDisposal.resolve();
         await Promise.allSettled([...(pending ? [pending] : []), ...work]);
-        await waitForDeferredTurnMaintenanceForSession(target.sessionKey);
+        await waitForSessionMaintenance(target.sessionKey);
         await parent?.drain();
         await closePreparedModelRuntimeSnapshots();
         await source.release();

@@ -1,7 +1,7 @@
 // Web tool runtime-context tests cover late-bound config snapshots and
 // plugin-owner lookups for search/fetch provider selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveWebFetchToolRuntimeContext } from "./web-tool-runtime-context.js";
+import { resolveWebToolRuntimeContext } from "./web-tool-runtime-context.js";
 
 const mocks = vi.hoisted(() => ({
   getActiveRuntimeWebToolsMetadataFromState: vi.fn(),
@@ -44,7 +44,8 @@ describe("web tool runtime context", () => {
   it("keeps runtime providers disabled for bundled fetch owners", async () => {
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue("firecrawl");
 
-    const resolved = resolveWebFetchToolRuntimeContext({
+    const resolved = resolveWebToolRuntimeContext({
+      kind: "fetch",
       config: { tools: { web: { fetch: { provider: "firecrawl" } } } },
     });
 
@@ -59,7 +60,8 @@ describe("web tool runtime context", () => {
   });
 
   it("keeps runtime provider discovery enabled when no provider is selected", () => {
-    const resolved = resolveWebFetchToolRuntimeContext({
+    const resolved = resolveWebToolRuntimeContext({
+      kind: "fetch",
       config: {},
     });
 

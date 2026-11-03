@@ -1,4 +1,3 @@
-// Tool send helpers normalize model tool-send requests before provider dispatch.
 import { readStringValue } from "../../packages/normalization-core/src/string-coerce.js";
 
 export type { ChannelToolSend } from "../channels/plugins/types.public.js";

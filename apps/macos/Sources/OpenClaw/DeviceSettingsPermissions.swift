@@ -7,6 +7,8 @@ extension DeviceSettingsPermission {
         .camera, .speechRecognition, .location,
     ]
 
+    static let macOSAdditionalPermissions: [Self] = [.eventPosting]
+
     var capability: Capability? {
         switch self {
         case .notifications: .notifications
@@ -16,19 +18,8 @@ extension DeviceSettingsPermission {
         case .camera: .camera
         case .speechRecognition: .speechRecognition
         case .location: .location
+        case .eventPosting: .eventPosting
         case .contacts, .calendars, .reminders, .photos: nil
-        }
-    }
-}
-
-extension DeviceSettingsPermissionStatus {
-    init(_ status: CapabilityAuthorizationStatus?) {
-        switch status {
-        case .granted: self = .granted
-        // Binary macOS checks cannot distinguish a denial from an unrequested grant.
-        // Keep them requestable using the vocabulary understood by shipped Gateway UIs.
-        case .notGranted: self = .notDetermined
-        case .unknown, nil: self = .unavailable
         }
     }
 }

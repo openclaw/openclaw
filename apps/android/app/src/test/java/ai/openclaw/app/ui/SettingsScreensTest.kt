@@ -22,13 +22,12 @@ import java.util.Locale
 
 class SettingsScreensTest {
   @Test
-  fun locationModes_hideAlwaysFromPlayAndMapThirdPartySelection() {
-    assertEquals(listOf("Off", "While Using"), locationModeLabels(backgroundLocationAvailable = false))
+  fun locationModes_hideAlwaysFromPlayAndIncludeItForThirdParty() {
+    assertEquals(listOf(LocationMode.Off, LocationMode.WhileUsing), locationModeOptions(backgroundLocationAvailable = false))
     assertEquals(
-      listOf("Off", "While Using", "Always"),
-      locationModeLabels(backgroundLocationAvailable = true),
+      listOf(LocationMode.Off, LocationMode.WhileUsing, LocationMode.Always),
+      locationModeOptions(backgroundLocationAvailable = true),
     )
-    assertEquals(LocationMode.Always, locationModeForLabel("Always"))
   }
 
   @Test
@@ -101,7 +100,7 @@ class SettingsScreensTest {
   @Test
   fun gatewayStatusLabelReportsWhichAuthRecoveryAppliesInsteadOfGenericLabel() {
     assertEquals(
-      "Setup code expired",
+      "Setup code no longer valid",
       gatewayStatusLabel(
         "Gateway error: unauthorized: bootstrap token invalid or expired",
         isConnected = false,

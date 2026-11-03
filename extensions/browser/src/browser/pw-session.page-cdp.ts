@@ -10,12 +10,13 @@ type MarkBackendDomRef = { ref: string; backendDOMNodeId: number };
 /** Attribute used to mark DOM nodes that correspond to generated browser refs. */
 export const BROWSER_REF_MARKER_ATTRIBUTE = "data-openclaw-browser-ref";
 
-async function withPlaywrightPageCdpSession<T>(
-  page: Page,
-  fn: (session: CDPSession) => Promise<T>,
-  timeoutMs?: number,
-  frame?: Frame,
-): Promise<T> {
+/** Run a function with a CDP send helper scoped to one Playwright page. */
+export async function withPageScopedCdpClient<T>(opts: {
+  page: Page;
+  frame?: Frame;
+  fn: (send: CDPSession["send"]) => Promise<T>;
+  timeoutMs?: number;
+}): Promise<T> {
   let session: CDPSession | undefined;
   let released = false;
   let detach: Promise<void> | undefined;
@@ -26,10 +27,10 @@ async function withPlaywrightPageCdpSession<T>(
     return detach;
   };
   const operation = (async () => {
-    let ownerFrame = frame;
+    let ownerFrame = opts.frame;
     for (;;) {
       try {
-        session = await page.context().newCDPSession(ownerFrame ?? page);
+        session = await opts.page.context().newCDPSession(ownerFrame ?? opts.page);
         break;
       } catch (error) {
         // Same-process frames share the ancestor's CDP target; OOP frames own one.
@@ -47,34 +48,19 @@ async function withPlaywrightPageCdpSession<T>(
       if (released) {
         throw new Error("Page CDP operation has already expired.");
       }
-      return await fn(session);
+      return await opts.fn(session.send.bind(session));
     } finally {
       await releaseSession();
     }
   })();
   try {
-    return await withTimeout(operation, timeoutMs ?? 0, "Page CDP operation");
+    return await withTimeout(operation, opts.timeoutMs ?? 0, "Page CDP operation");
   } finally {
     // Release a timed-out command now; a late attach releases itself before
     // running any work. A stuck detach must not extend the operation's deadline.
     released = true;
     void releaseSession();
   }
-}
-
-/** Run a function with a CDP send helper scoped to one Playwright page. */
-export async function withPageScopedCdpClient<T>(opts: {
-  page: Page;
-  frame?: Frame;
-  fn: (send: CDPSession["send"]) => Promise<T>;
-  timeoutMs?: number;
-}): Promise<T> {
-  return await withPlaywrightPageCdpSession(
-    opts.page,
-    async (session) => await opts.fn(session.send.bind(session)),
-    opts.timeoutMs,
-    opts.frame,
-  );
 }
 
 /** Bind the already-resolved selector element to its native DOM identity, including shadow roots. */
@@ -113,24 +99,16 @@ export async function withCdpSnapshotRoot<T>(opts: {
   }
 }
 
-/** Read the browser-owned loader identity for a Playwright page's main frame. */
-export async function readMainFrameDocumentIdentityForPage(
-  page: Page,
-  timeoutMs?: number,
-): Promise<string | undefined> {
-  return (await readDocumentIdentitiesForPage(page, timeoutMs)).mainFrame;
-}
-
 /** Read committed document identities through one bounded page session. */
 export async function readDocumentIdentitiesForPage(
   page: Page,
   timeoutMs?: number,
 ): Promise<CdpDocumentIdentities> {
-  return await withPlaywrightPageCdpSession(
+  return await withPageScopedCdpClient({
     page,
-    async (session) => await readCdpDocumentIdentities(session.send.bind(session)),
-    resolveTimerTimeoutMs(timeoutMs, 5_000),
-  );
+    fn: readCdpDocumentIdentities,
+    timeoutMs: resolveTimerTimeoutMs(timeoutMs, 5_000),
+  });
 }
 
 /** Mark backend DOM node ids on the page with browser ref attributes. */

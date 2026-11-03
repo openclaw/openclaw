@@ -1,7 +1,9 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { BROWSER_ACT_KIND_FACTS, isActKind } from "../act-kinds.js";
 import { resolveExistingSessionActTimeouts } from "../act-policy.js";
+import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
   clickChromeMcpElement,
   clickChromeMcpCoords,
@@ -16,22 +18,20 @@ import {
   type ChromeMcpOperationOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
-import { BROWSER_ACT_ERROR_CODES } from "../errors.js";
+import { BROWSER_ACT_ERROR_CODES, type BrowserActErrorCode } from "../errors.js";
 import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
-import { browserEvaluateDisabledMessage, jsonActError } from "./agent.act.errors.js";
 import {
   assertExistingSessionPostInteractionNavigationAllowed,
   createExistingSessionDeadline,
   waitForExistingSessionCondition,
-  type ExistingSessionOperation,
 } from "./agent.act.existing-session.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
-import { isActKind } from "./agent.act.shared.js";
+import { createTabRouteRegistrar } from "./agent.prepared.js";
 import {
   browserNavigationPolicyForProfile,
   readBody,
@@ -47,19 +47,26 @@ import {
 } from "./agent.snapshot-target.js";
 import { EXISTING_SESSION_LIMITS, admitExistingSessionAction } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
-import type { BrowserRouteRegistrar } from "./types.js";
+import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toStringOrEmpty } from "./utils.js";
 
-const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
-  "batch",
-  "click",
-  "drag",
-  "hover",
-  "scrollIntoView",
-  "select",
-  "type",
-  "wait",
-]);
+function jsonActError(
+  res: BrowserResponse,
+  status: number,
+  code: BrowserActErrorCode,
+  message: string,
+) {
+  res.status(status).json({ error: message, code });
+}
+
+function browserEvaluateDisabledMessage(action: "wait" | "evaluate"): string {
+  return [
+    action === "wait"
+      ? "wait --fn is disabled by config (browser.evaluateEnabled=false)."
+      : "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+    "Docs: /tools/browser/configuration#configuration",
+  ].join("\n");
+}
 
 export function registerBrowserAgentActRoutes(
   app: BrowserRouteRegistrar,
@@ -83,7 +90,7 @@ export function registerBrowserAgentActRoutes(
       );
     }
     const targetId = normalizeOptionalString(body.targetId);
-    if (Object.hasOwn(body, "selector") && !SELECTOR_ALLOWED_KINDS.has(kind)) {
+    if (Object.hasOwn(body, "selector") && !BROWSER_ACT_KIND_FACTS[kind].selector) {
       return jsonActError(
         res,
         400,
@@ -216,7 +223,7 @@ export function registerBrowserAgentActRoutes(
                   admission.error,
                 );
               }
-              const existingSessionTarget: ExistingSessionOperation = {
+              const existingSessionTarget: ChromeMcpTargetOperation = {
                 profileName,
                 profile: profileCtx.profile,
                 targetId: tab.targetId,
@@ -232,7 +239,7 @@ export function registerBrowserAgentActRoutes(
                   : new Set<string>();
               const runGuardedAction = async <T>(
                 execute: (
-                  target: ExistingSessionOperation,
+                  target: ChromeMcpTargetOperation,
                   checkDeadline: () => void,
                 ) => Promise<T>,
               ): Promise<T> => {
@@ -423,30 +430,26 @@ export function registerBrowserAgentActRoutes(
             if (action.kind === "close" || result.aborted?.reason === "closed") {
               clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
             }
-            switch (action.kind) {
-              case "batch":
-                return await jsonOk(
-                  {
-                    results: result.results ?? [],
-                    ...(result.aborted ? { aborted: result.aborted } : {}),
-                    ...(downloads ? { downloads } : {}),
-                  },
-                  {
-                    ...resultTargetOptions,
-                    resolveCurrentTarget: result.aborted?.reason !== "closed",
-                  },
-                );
-              case "evaluate":
-                return await jsonOk(
-                  { result: result.result, ...(downloads ? { downloads } : {}) },
-                  resultTargetOptions,
-                );
-              case "resize":
-              case "close":
-                return await jsonOk(downloads ? { downloads } : undefined);
-              default:
-                return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
+            if (action.kind === "batch") {
+              return await jsonOk(
+                {
+                  results: result.results ?? [],
+                  ...(result.aborted ? { aborted: result.aborted } : {}),
+                  ...(downloads ? { downloads } : {}),
+                },
+                {
+                  ...resultTargetOptions,
+                  resolveCurrentTarget: result.aborted?.reason !== "closed",
+                },
+              );
             }
+            return await jsonOk(
+              {
+                ...(action.kind === "evaluate" ? { result: result.result } : {}),
+                ...(downloads ? { downloads } : {}),
+              },
+              action.kind === "resize" || action.kind === "close" ? undefined : resultTargetOptions,
+            );
           } catch (error) {
             verificationDeadline?.throwIfAborted();
             requestDeadline?.throwIfAborted();
@@ -465,88 +468,66 @@ export function registerBrowserAgentActRoutes(
   registerBrowserAgentActHookRoutes(app, ctx);
   registerBrowserAgentActDownloadRoutes(app, ctx);
 
-  app.post("/response/body", async (req, res) => {
-    const body = readBody(req);
-    const targetId = normalizeOptionalString(body.targetId);
+  const register = createTabRouteRegistrar(app, ctx);
+  register("/response/body", (body, res) => {
     const url = toStringOrEmpty(body.url);
-    let timeoutMs: number | undefined;
-    let maxChars: number | undefined;
-    try {
-      timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
-      maxChars = readRoutePositiveInteger(body.maxChars, "maxChars");
-    } catch (err) {
-      return jsonError(res, 400, formatErrorMessage(err));
-    }
+    const timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+    const maxChars = readRoutePositiveInteger(body.maxChars, "maxChars");
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
 
-    await withRouteTabContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      enforceCurrentUrlAllowed: true,
-      run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
-        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          return jsonError(res, 501, EXISTING_SESSION_LIMITS.responseBody);
-        }
-        const pw = await requirePwAi(res, "response body");
-        if (!pw) {
-          return;
-        }
-        const result = await pw.responseBodyViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          signal,
-          url,
-          timeoutMs: timeoutMs ?? undefined,
-          maxChars: maxChars ?? undefined,
-        });
-        signal.throwIfAborted();
-        const currentUrl = await resolveTabUrl(tab.url);
-        res.json({
-          ok: true,
-          targetId: tab.targetId,
-          ...(currentUrl ? { url: currentUrl } : {}),
-          response: result,
-        });
-      },
-    });
+    return async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
+      if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+        return jsonError(res, 501, EXISTING_SESSION_LIMITS.responseBody);
+      }
+      const pw = await requirePwAi(res, "response body");
+      if (!pw) {
+        return;
+      }
+      const result = await pw.responseBodyViaPlaywright({
+        cdpUrl,
+        targetId: tab.targetId,
+        signal,
+        url,
+        timeoutMs,
+        maxChars,
+      });
+      signal.throwIfAborted();
+      const currentUrl = await resolveTabUrl(tab.url);
+      res.json({
+        ok: true,
+        targetId: tab.targetId,
+        ...(currentUrl ? { url: currentUrl } : {}),
+        response: result,
+      });
+    };
   });
 
-  app.post("/highlight", async (req, res) => {
-    const body = readBody(req);
-    const targetId = normalizeOptionalString(body.targetId);
+  register("/highlight", (body, res) => {
     const ref = toStringOrEmpty(body.ref);
     if (!ref) {
       return jsonError(res, 400, "ref is required");
     }
 
-    await withRouteTabContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      enforceCurrentUrlAllowed: true,
-      run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
-        const jsonOk = async () => {
-          const currentUrl = await resolveTabUrl(tab.url);
-          return res.json({
-            ok: true,
-            targetId: tab.targetId,
-            ...(currentUrl ? { url: currentUrl } : {}),
-          });
-        };
-        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          await evaluateChromeMcpScript({
-            profileName: profileCtx.profile.name,
-            profile: profileCtx.profile,
-            targetId: tab.targetId,
-            args: [ref],
-            timeoutMs: ctx.state().resolved.actionTimeoutMs,
-            signal,
-            fn: `(el) => {
+    return async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
+      const jsonOk = async () => {
+        const currentUrl = await resolveTabUrl(tab.url);
+        return res.json({
+          ok: true,
+          targetId: tab.targetId,
+          ...(currentUrl ? { url: currentUrl } : {}),
+        });
+      };
+      if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+        await evaluateChromeMcpScript({
+          profileName: profileCtx.profile.name,
+          profile: profileCtx.profile,
+          targetId: tab.targetId,
+          args: [ref],
+          timeoutMs: ctx.state().resolved.actionTimeoutMs,
+          signal,
+          fn: `(el) => {
               if (!(el instanceof Element)) {
                 return false;
               }
@@ -561,20 +542,19 @@ export function registerBrowserAgentActRoutes(
               }, 2000);
               return true;
             }`,
-          });
-          return await jsonOk();
-        }
-        const pw = await requirePwAi(res, "highlight");
-        if (!pw) {
-          return;
-        }
-        await pw.highlightViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          ref,
         });
-        await jsonOk();
-      },
-    });
+        return await jsonOk();
+      }
+      const pw = await requirePwAi(res, "highlight");
+      if (!pw) {
+        return;
+      }
+      await pw.highlightViaPlaywright({
+        cdpUrl,
+        targetId: tab.targetId,
+        ref,
+      });
+      await jsonOk();
+    };
   });
 }

@@ -247,8 +247,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
         this.flushInboundReorderWindow(state, true);
       }
     } catch (error) {
-      this.audioClock.stop();
-      this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+      this.fail(error);
     } finally {
       this.discardingInboundAudio = false;
       // The streaming filter also retains pre-clear PCM. Do not carry that tail
@@ -270,7 +269,9 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     this.pendingResampledAudio = Buffer.alloc(0);
     this.inboundResampler.flush();
     this.outboundResampler.flush();
-    this.resetInboundRtpState();
+    this.clearInboundFlushTimer(this.inboundRtpState);
+    this.inboundRtpState.nextSequence = undefined;
+    this.inboundRtpState.pendingPackets.clear();
     this.state.encoder.free();
     this.state.decoder.free();
     void this.state.peer.close().catch(() => undefined);
@@ -287,6 +288,11 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   private reportMediaError(error: unknown): void {
     const report = this.state.callbacks.onMediaError ?? this.state.callbacks.onError;
     report(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+  }
+
+  private fail(error: unknown): void {
+    this.audioClock.stop();
+    this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
   }
 
   private handleInboundRtp(packet: WeriftRtpPacket): void {
@@ -329,15 +335,8 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       this.flushInboundReorderWindow(state);
       this.scheduleInboundFlush(state);
     } catch (error) {
-      this.audioClock.stop();
-      this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+      this.fail(error);
     }
-  }
-
-  private resetInboundRtpState(): void {
-    this.clearInboundFlushTimer(this.inboundRtpState);
-    this.inboundRtpState.nextSequence = undefined;
-    this.inboundRtpState.pendingPackets.clear();
   }
 
   private flushInboundReorderWindow(state: InboundRtpState, force = false): void {
@@ -364,7 +363,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     const concealCount = Math.min(nearest.distance, INBOUND_REORDER_DEPTH);
     for (let index = 0; index < concealCount; index += 1) {
       state.nextSequence = ((state.nextSequence ?? 0) + 1) & 0xffff;
-      this.decodeInboundPacketLoss();
+      this.emitInboundPcm(this.state.decoder.decodePacketLoss(OPUS_FRAME_SAMPLES));
     }
     if (nearest.distance > INBOUND_REORDER_DEPTH) {
       state.nextSequence = nearest.sequenceNumber;
@@ -406,8 +405,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       try {
         this.flushInboundReorderWindow(state, true);
       } catch (error) {
-        this.audioClock.stop();
-        this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+        this.fail(error);
       }
     }, INBOUND_REORDER_DEPTH * OPENAI_QUICKSILVER_AUDIO_FRAME_DURATION_MS);
     state.flushTimer.unref?.();
@@ -442,10 +440,6 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       decoded = this.state.decoder.decodePacketLoss(OPUS_FRAME_SAMPLES);
     }
     this.emitInboundPcm(decoded);
-  }
-
-  private decodeInboundPacketLoss(): void {
-    this.emitInboundPcm(this.state.decoder.decodePacketLoss(OPUS_FRAME_SAMPLES));
   }
 
   private emitInboundPcm(decoded: Int16Array): void {
@@ -504,10 +498,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
           // A successful send restores usability. Another failure without one
           // means the transport cannot sustain packet-level recovery.
           if (this.outboundPacketFailed) {
-            this.audioClock.stop();
-            this.state.callbacks.onError(
-              toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"),
-            );
+            this.fail(error);
             return;
           }
           this.outboundPacketFailed = true;
@@ -515,8 +506,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
         },
       );
     } catch (error) {
-      this.audioClock.stop();
-      this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+      this.fail(error);
     }
   }
 

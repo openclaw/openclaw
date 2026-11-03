@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -16,7 +15,7 @@ import {
   resolveDefaultWhatsAppAccountId,
 } from "./account-ids.js";
 import type { WhatsAppAccountConfig } from "./account-types.js";
-import { hasWebCredsRegularFileSync, hasWebCredsSync } from "./creds-files.js";
+import { collectWhatsAppAuthDirs, hasWebCredsSync } from "./creds-files.js";
 
 export { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
 
@@ -51,26 +50,14 @@ export const DEFAULT_WHATSAPP_MEDIA_MAX_MB = 50;
 export function listWhatsAppAuthDirs(cfg: OpenClawConfig): string[] {
   const oauthDir = resolveOAuthDir();
   const whatsappDir = path.join(oauthDir, "whatsapp");
-  const authDirs = new Set<string>([oauthDir, path.join(whatsappDir, DEFAULT_ACCOUNT_ID)]);
+  const authDirs = new Set<string>([path.join(whatsappDir, DEFAULT_ACCOUNT_ID)]);
 
   const accountIds = listConfiguredAccountIds(cfg);
   for (const accountId of accountIds) {
     authDirs.add(resolveWhatsAppAuthDir({ cfg, accountId }).authDir);
   }
 
-  try {
-    const entries = fs.readdirSync(whatsappDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      authDirs.add(path.join(whatsappDir, entry.name));
-    }
-  } catch {
-    // ignore missing dirs
-  }
-
-  return Array.from(authDirs);
+  return collectWhatsAppAuthDirs(whatsappDir, authDirs);
 }
 
 export function hasAnyWhatsAppAuth(cfg: OpenClawConfig): boolean {
@@ -92,16 +79,7 @@ export function resolveWhatsAppAuthDir(params: { cfg: OpenClawConfig; accountId:
     return { authDir: resolveUserPath(configured), isLegacy: false };
   }
 
-  const defaultDir = resolveDefaultAuthDir(accountId);
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    // Legacy Baileys creds lived in the same directory as OAuth tokens.
-    const legacyDir = resolveOAuthDir();
-    if (hasWebCredsRegularFileSync(legacyDir) && !hasWebCredsRegularFileSync(defaultDir)) {
-      return { authDir: legacyDir, isLegacy: true };
-    }
-  }
-
-  return { authDir: defaultDir, isLegacy: false };
+  return { authDir: resolveDefaultAuthDir(accountId), isLegacy: false };
 }
 
 export function resolveWhatsAppAccount(params: {
@@ -149,7 +127,7 @@ export function resolveWhatsAppMediaMaxBytes(
   account: Pick<ResolvedWhatsAppAccount, "mediaMaxMb">,
 ): number {
   const mediaMaxMb =
-    typeof account.mediaMaxMb === "number" && account.mediaMaxMb > 0
+    account.mediaMaxMb !== undefined && account.mediaMaxMb > 0
       ? account.mediaMaxMb
       : DEFAULT_WHATSAPP_MEDIA_MAX_MB;
   return Math.floor(mediaMaxMb * 1024 * 1024);

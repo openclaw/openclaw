@@ -16,13 +16,7 @@ function mergeObjectArraysById(target: unknown[], patch: unknown[]): unknown[] |
     return undefined;
   }
   const merged: unknown[] = target.map((entry) => structuredClone(entry));
-  const indexById = new Map<string, number>();
-  for (const [index, entry] of merged.entries()) {
-    if (!isObjectWithStringId(entry)) {
-      return undefined;
-    }
-    indexById.set(entry.id, index);
-  }
+  const indexById = new Map(target.map((entry, index) => [entry.id, index]));
   for (const patchEntry of patch) {
     if (!isObjectWithStringId(patchEntry)) {
       merged.push(structuredClone(patchEntry));

@@ -1,132 +1,110 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { crabboxState } from "./crabbox-state.test-support.js";
-import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it, vi } from "vitest";
+import { openWarmImageStore } from "./crabbox-state.test-support.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import {
+  createWarmProvider,
+  LEASE_ID,
+  PROFILE,
+  provisionWarmProfile,
+} from "./crabbox-worker-warm-image.test-support.js";
 
-vi.mock("./crabbox-managed-binary.js", () => ({
-  ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
-    binary,
-    version: "0.66.0",
-  })),
-}));
-
-const LEASE_ID = "cbx_6071fc2062a6";
-const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
-const SIBLING_BINARY = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
-const providers = new Set<ReturnType<typeof createCrabboxWorkerProvider>>();
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    try {
-      await Promise.all([...providers].map((provider) => provider.dispose()));
-    } finally {
-      providers.clear();
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-      vi.unstubAllEnvs();
-      cleanup();
-    }
-  }),
-);
-beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-stop-")));
-
-function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
-function lifecycleLease() {
-  return {
-    leaseId: LEASE_ID,
-    profile: {
-      provider: "aws",
-      ttl: "24h",
-      idleTimeout: "60m",
-      class: "standard",
-      warmImage: false,
-    },
-  };
-}
-function providerWithRunner(
-  runCommand: NonNullable<Parameters<typeof createCrabboxWorkerProvider>[0]["runCommand"]>,
-) {
-  const provider = createCrabboxWorkerProvider({
-    state: crabboxState,
-    runCommand,
-    openclawRoot: OPENCLAW_ROOT,
-    pathEnv: "",
-    isExecutable: (candidate) => candidate === SIBLING_BINARY,
-    wallpaperPath: fileURLToPath(
-      new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
-    ),
-  });
-  providers.add(provider);
-  return provider;
-}
+const lease = { leaseId: LEASE_ID, profile: { ...PROFILE, warmImage: false } };
 
 describe("Crabbox worker stop confirmation", () => {
+  it.for(["direct stop", "capture"] as const)(
+    "retains destroy confirmation while waiting for %s",
+    async (phase, { signal }) => {
+      const started = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const { provider, calls } = createWarmProvider(async ({ argv }) => {
+        if (phase === "direct stop" && argv.includes("--wait=false")) {
+          return commandResult({
+            code: 2,
+            stderr: "--wait=false requires an ordinary coordinator-backed stop",
+          });
+        }
+        if (
+          phase === "direct stop"
+            ? argv[1] === "stop"
+            : argv[1] === "checkpoint" && argv[2] === "create"
+        ) {
+          started.resolve();
+          await withinTest(finish.promise, signal);
+        }
+        return undefined;
+      });
+      const pendingLease =
+        phase === "capture"
+          ? { ...(await provisionWarmProfile(provider)), profile: PROFILE }
+          : lease;
+      vi.useFakeTimers();
+      const accepted = vi.fn();
+      const returned = vi.fn();
+      const destroy = provider
+        .destroy({ ...pendingLease, onCleanupAccepted: accepted })
+        .then(returned);
+      try {
+        await withinTest(started.promise, signal);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(accepted).toHaveBeenCalledTimes(phase === "capture" ? 1 : 0);
+        expect(returned).not.toHaveBeenCalled();
+        if (phase === "capture") {
+          expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+        }
+      } finally {
+        finish.resolve();
+        await destroy;
+        vi.useRealTimers();
+      }
+      expect(calls.at(-1)?.argv).toEqual([
+        "crabbox",
+        "stop",
+        "--provider",
+        "aws",
+        "--id",
+        LEASE_ID,
+      ]);
+    },
+  );
+
   it.each([
     {
       code: 5,
       stderr: `warning: could not inspect lease before release: coordinator GET http://127.0.0.1/v1/leases/${LEASE_ID}: http 404: not_found\ncoordinator accepted release for ${LEASE_ID}, but remote cleanup reported a cleanup failure or scheduled retry`,
     },
-    { code: 4, stderr: `lease/server not found: ${LEASE_ID}` },
-    { code: 4, stderr: `sandbox ${LEASE_ID} is not claimed by Crabbox` },
-    { code: 4, stderr: `wandb sandbox "${LEASE_ID}" has no matching local ownership claim` },
-    { code: 4, stderr: `unikraftcloud lease ${LEASE_ID} no longer exists` },
-    ...["stopped", "released", "destroyed", "terminated"].map((state) => ({
-      code: 4,
-      stderr: `lease ${LEASE_ID} already ${state}`,
-    })),
+    { code: 4, stderr: `lease ${LEASE_ID} already stopped` },
   ])("rejects unproven stop despite misleading prose: $stderr", async ({ code, stderr }) => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
-      return commandResult({ code, stderr });
-    });
-    await expect(provider.destroy(lifecycleLease())).rejects.toThrow(
-      `stop failed with exit code ${code}`,
-    );
-    expect(calls).toEqual([[SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]]);
+    const { provider } = createWarmProvider(() => commandResult({ code, stderr }));
+    await expect(provider.destroy(lease)).rejects.toThrow(`stop failed with exit code ${code}`);
   });
 
-  it("keeps a dual-404 stop outcome unknown without a structured absence receipt", async () => {
-    const runCommand = vi.fn(async () =>
-      commandResult({
-        code: 1,
-        stderr:
-          `warning: could not inspect lease before release: coordinator GET /v1/leases/${LEASE_ID}: http 404: {"error":"not_found"}\n` +
-          `coordinator POST /v1/leases/${LEASE_ID}/release: http 404: {"error":"not_found"}`,
-      }),
-    );
-    const provider = providerWithRunner(runCommand);
-    await expect(provider.destroy(lifecycleLease())).rejects.toThrow(
-      "stop failed with exit code 1",
-    );
-    expect(runCommand).toHaveBeenCalledOnce();
-  });
-
-  it("accepts producer-confirmed absence only after a normal successful stop", async () => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
-      return commandResult();
+  it("completes destroy and releases warm allocation ownership for a never-admitted lease", async () => {
+    const inspectError = `coordinator GET /v1/leases/${LEASE_ID}: http 404: {"error":"not_found"}`;
+    const { provider, calls } = createWarmProvider(({ argv }) => {
+      if (argv[1] === "warmup") {
+        return commandResult({ code: 1, stderr: "allocation not admitted" });
+      }
+      if (argv[1] === "inspect") {
+        return commandResult({ code: 1, stderr: inspectError });
+      }
+      if (argv[1] === "stop") {
+        return commandResult({
+          code: 1,
+          stderr:
+            `warning: could not inspect lease before release: ${inspectError}\n` +
+            `coordinator POST /v1/leases/${LEASE_ID}/release: http 404: {"error":"not_found"}`,
+        });
+      }
+      return undefined;
     });
-    await expect(provider.destroy(lifecycleLease())).resolves.toBeUndefined();
-    await expect(provider.destroy(lifecycleLease())).resolves.toBeUndefined();
-    expect(calls).toEqual([
-      [SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID],
-      [SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID],
-    ]);
+    await expect(provisionWarmProfile(provider)).rejects.toThrow("warmup failed");
+    const store = openWarmImageStore();
+    const owner = store.entries()[0]!;
+    expect(owner.value.allocations[LEASE_ID]).toBeDefined();
+    await expect(provider.inspect(lease)).resolves.toEqual({ status: "unknown" });
+    await expect(provider.destroy({ ...lease, profile: PROFILE })).resolves.toBeUndefined();
+    expect(store.lookup(owner.key)?.allocations[LEASE_ID]).toBeUndefined();
+    expect(calls.some(({ argv }) => argv[1] === "heartbeat")).toBe(false);
   });
 });

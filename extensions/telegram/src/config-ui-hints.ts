@@ -51,7 +51,7 @@ export const telegramChannelConfigUiHints = {
     nativeCommands: true,
     streaming: {
       "": 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "progress"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
-      mode: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "progress").',
+      mode: 'Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "progress").',
       chunkMode:
         'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
       "block.enabled":
@@ -148,10 +148,10 @@ export const telegramChannelConfigUiHints = {
   },
   "threadBindings.spawnSessions": {
     label: "Telegram Thread-Bound Session Spawn",
-    help: "Allow sessions_spawn(thread=true) and ACP thread spawns to auto-bind Telegram current conversations when supported.",
+    help: "Allow /acp spawn --thread to bind Telegram topics when supported. Agent sessions_spawn(thread=true) never binds a Telegram conversation; it needs a channel that opens a separate thread.",
   },
   "threadBindings.defaultSpawnContext": {
     label: "Telegram Thread Spawn Context",
-    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
+    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork". Telegram cannot host agent-spawned thread sessions, so this has no effect for Telegram requests.',
   },
 } satisfies Record<string, ChannelConfigUiHint>;

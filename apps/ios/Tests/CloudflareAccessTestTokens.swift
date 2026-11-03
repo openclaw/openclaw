@@ -1,20 +1,21 @@
 import Foundation
 import Security
-import Testing
 @testable import OpenClaw
 
 /// Runtime signing exercises the platform verifier without storing a private signing key in fixtures.
 struct CloudflareAccessTestTokens {
+    private enum FixtureError: Error { case missingValue, invalidDER }
+
     let key: SecKey
     let jwks: Data
 
     init() throws {
-        self.key = try #require(SecKeyCreateRandomKey([
+        self.key = try Self.unwrap(SecKeyCreateRandomKey([
             kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
             kSecAttrKeySizeInBits as String: 2048,
         ] as CFDictionary, nil))
-        let publicKey = try #require(SecKeyCopyPublicKey(self.key))
-        let der = try #require(SecKeyCopyExternalRepresentation(publicKey, nil)) as Data
+        let publicKey = try Self.unwrap(SecKeyCopyPublicKey(self.key))
+        let der = try Self.unwrap(SecKeyCopyExternalRepresentation(publicKey, nil)) as Data
         var outer = Array(der)[...]
         var sequence = try Self.readDER(&outer, tag: 0x30)[...]
         var modulus = try Self.readDER(&sequence, tag: 0x02)
@@ -28,8 +29,8 @@ struct CloudflareAccessTestTokens {
 
     static func application() throws -> CloudflareAccessApplication {
         try CloudflareAccessApplication(
-            origin: CloudflareAccessOrigin(#require(URL(string: "https://gateway.example.test:8443"))),
-            issuer: #require(URL(string: "https://example.cloudflareaccess.com")),
+            origin: CloudflareAccessOrigin(self.unwrap(URL(string: "https://gateway.example.test:8443"))),
+            issuer: self.unwrap(URL(string: "https://example.cloudflareaccess.com")),
             audience: "test-audience")
     }
 
@@ -37,7 +38,7 @@ struct CloudflareAccessTestTokens {
         let header = try JSONSerialization.data(withJSONObject: ["alg": algorithm, "kid": "test-key"])
         let payload = try JSONSerialization.data(withJSONObject: claims)
         let message = "\(Self.encode(header)).\(Self.encode(payload))"
-        let signature = try #require(SecKeyCreateSignature(
+        let signature = try Self.unwrap(SecKeyCreateSignature(
             self.key, .rsaSignatureMessagePKCS1v15SHA256, Data(message.utf8) as CFData, nil)) as Data
         return "\(message).\(Self.encode(signature))"
     }
@@ -53,6 +54,11 @@ struct CloudflareAccessTestTokens {
         return CloudflareAccessSession(application: application, subject: subject, token: token, expiresAt: expires)
     }
 
+    private static func unwrap<Value>(_ value: Value?) throws -> Value {
+        guard let value else { throw FixtureError.missingValue }
+        return value
+    }
+
     private static func encode(_ data: Data) -> String {
         data.base64EncodedString().replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
@@ -60,18 +66,18 @@ struct CloudflareAccessTestTokens {
 
     private static func readDER(_ bytes: inout ArraySlice<UInt8>, tag: UInt8) throws -> [UInt8] {
         let actualTag = bytes.popFirst()
-        #expect(actualTag == tag)
+        guard actualTag == tag else { throw FixtureError.invalidDER }
         let lengthByte = bytes.popFirst()
-        let first = try #require(lengthByte)
+        let first = try Self.unwrap(lengthByte)
         var length = Int(first)
         if first >= 128 {
             length = 0
             for _ in 0..<(first & 0x7F) {
                 let next = bytes.popFirst()
-                length = try length * 256 + Int(#require(next))
+                length = try length * 256 + Int(Self.unwrap(next))
             }
         }
-        #expect(bytes.count >= length)
+        guard bytes.count >= length else { throw FixtureError.invalidDER }
         let value = Array(bytes.prefix(length))
         bytes = bytes.dropFirst(length)
         return value

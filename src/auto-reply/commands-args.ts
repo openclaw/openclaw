@@ -1,8 +1,4 @@
-/** Argument serializers for command definitions that expose structured values. */
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import type { CommandArgValues } from "./commands-registry.types.js";
 
 type CommandArgsFormatter = (values: CommandArgValues) => string | undefined;
@@ -11,25 +7,23 @@ function normalizeArgValue(value: unknown): string | undefined {
   if (value == null) {
     return undefined;
   }
-  let text: string;
   if (typeof value === "string") {
-    text = normalizeOptionalString(value) ?? "";
-  } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    text = normalizeOptionalString(String(value)) ?? "";
-  } else if (typeof value === "symbol" || typeof value === "function") {
-    text = normalizeOptionalString(value.toString()) ?? "";
-  } else {
-    // Objects and arrays are rare but preserve structured test values losslessly enough for text.
-    text = JSON.stringify(value);
+    return normalizeOptionalString(value);
   }
-  return text ? text : undefined;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return normalizeOptionalString(String(value));
+  }
+  if (typeof value === "symbol" || typeof value === "function") {
+    return normalizeOptionalString(value.toString());
+  }
+  return JSON.stringify(value) || undefined;
 }
 
 function formatActionArgs(
   values: CommandArgValues,
   pathActions: readonly string[] = ["show", "get"],
 ): string | undefined {
-  const action = normalizeOptionalLowercaseString(normalizeArgValue(values.action));
+  const action = normalizeArgValue(values.action)?.toLowerCase();
   const path = normalizeArgValue(values.path);
   const value = normalizeArgValue(values.value);
   if (!action) {
@@ -58,7 +52,6 @@ function formatNamedArgs(
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
-/** Command-specific serializers used when rebuilding slash-command text from parsed args. */
 export const COMMAND_ARG_FORMATTERS: Record<string, CommandArgsFormatter> = {
   config: formatActionArgs,
   mcp: formatActionArgs,

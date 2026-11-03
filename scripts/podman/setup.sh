@@ -90,61 +90,7 @@ seed_local_control_ui_origins() {
   fi
   dir="$(dirname "$file")"
   tmp="$(mktemp "$dir/.config.tmp.XXXXXX")"
-  if ! python3 - "$file" "$port" "$tmp" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-port = sys.argv[2]
-tmp = sys.argv[3]
-try:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-except json.JSONDecodeError as exc:
-    print(
-        f"Warning: unable to seed gateway.controlUi.allowedOrigins in {path}: existing config is not strict JSON ({exc}). Leaving file unchanged.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-if not isinstance(data, dict):
-    raise SystemExit(f"{path}: expected top-level object")
-gateway = data.setdefault("gateway", {})
-if not isinstance(gateway, dict):
-    raise SystemExit(f"{path}: expected gateway object")
-gateway.setdefault("mode", "local")
-control_ui = gateway.setdefault("controlUi", {})
-if not isinstance(control_ui, dict):
-    raise SystemExit(f"{path}: expected gateway.controlUi object")
-allowed = control_ui.get("allowedOrigins")
-public_origin = gateway.get("publicOrigin")
-inherits_public_origin = "allowedOrigins" not in control_ui and isinstance(public_origin, str) and public_origin.strip()
-managed_localhosts = {"127.0.0.1", "localhost"}
-desired = [
-    f"http://127.0.0.1:{port}",
-    f"http://localhost:{port}",
-]
-if not isinstance(allowed, list):
-    allowed = []
-cleaned = []
-for origin in allowed:
-    if not isinstance(origin, str):
-        continue
-    normalized = origin.strip()
-    if not normalized:
-        continue
-    if normalized.startswith("http://"):
-        host_port = normalized[len("http://") :]
-        host = host_port.split(":", 1)[0]
-        if host in managed_localhosts:
-            continue
-    cleaned.append(normalized)
-if not inherits_public_origin:
-    control_ui["allowedOrigins"] = cleaned + desired
-with open(tmp, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
-PY
-  then
+  if ! write_local_control_ui_origins "$file" "$port" "$tmp" seed; then
     rm -f "$tmp"
     return 0
   fi

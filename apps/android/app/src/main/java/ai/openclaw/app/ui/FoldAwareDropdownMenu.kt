@@ -63,6 +63,7 @@ internal data class FoldAwareMenuItem(
   val icon: ImageVector? = null,
   val enabled: Boolean = true,
   val interactionSource: MutableInteractionSource? = null,
+  val iconContent: (@Composable () -> Unit)? = null,
 )
 
 /** Activity-hosted, non-nested menu. The surrounding Box is its stationary anchor. */
@@ -149,7 +150,7 @@ private fun MenuBody(
             text = {
               Text(item.label, onTextLayout = { opening.textLayouts[item.id] = it })
             },
-            leadingIcon = item.icon?.let { icon -> { Icon(icon, contentDescription = null) } },
+            leadingIcon = item.iconContent ?: item.icon?.let { icon -> { Icon(icon, contentDescription = null) } },
             enabled = item.enabled,
             interactionSource = item.interactionSource,
             onClick = { owner.accept(opening, item.id) },
@@ -241,7 +242,6 @@ private class MenuOpening(
   val items: List<Triple<String, String, ImageVector?>>,
 ) : PopupPositionProvider {
   var terminal = false
-  var notified = false
   var bounds: IntRect? = null
   var rowLayout: MenuRows? = null
   val textLayouts = mutableMapOf<String, TextLayoutResult>()
@@ -409,8 +409,7 @@ private class AnchoredMenuOwner {
   }
 
   private fun close(current: MenuOpening) {
-    if (opening !== current || current.notified) return
-    current.notified = true
+    if (opening !== current) return
     opening = null
     if (expanded) dismiss()
   }

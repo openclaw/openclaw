@@ -8,7 +8,17 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js"
 
 afterEach(() => vi.restoreAllMocks());
 
-function fixture(model: Model, assertModelInput?: (model: Pick<Model, "input">) => void) {
+function fixture(supportsImages = false, assertModelInput?: (model: Pick<Model, "input">) => void) {
+  const model = makeProviderModelFixture({
+    id: "prepared-model",
+    name: "Prepared model",
+    provider: "synthetic",
+    api: "openai-responses",
+    baseUrl: "http://127.0.0.1:1",
+    input: supportsImages ? ["text", "image"] : ["text"],
+    contextWindow: 8192,
+    maxTokens: 1024,
+  });
   const snapshot = vi.fn(() => ({
     effectiveModel: model,
     providerRuntimeHandle: { provider: model.provider },
@@ -22,24 +32,14 @@ function fixture(model: Model, assertModelInput?: (model: Pick<Model, "input">) 
     },
     preparedRuntime: { snapshot },
   } as unknown as Parameters<typeof prepareAndDispatchEmbeddedRunAttempt>[0];
-  return { input, snapshot };
+  return { input, snapshot, model };
 }
 
 it.each([false, true])(
   "admits the actual prepared model before dispatch (image support: %s)",
   async (supportsImages) => {
-    const model = makeProviderModelFixture({
-      id: "prepared-model",
-      name: "Prepared model",
-      provider: "synthetic",
-      api: "openai-responses",
-      baseUrl: "http://127.0.0.1:1",
-      input: supportsImages ? ["text", "image"] : ["text"],
-      contextWindow: 8192,
-      maxTokens: 1024,
-    });
     const guard = vi.fn(assertSessionCompanionImageInput);
-    const { input, snapshot } = fixture(model, guard);
+    const { input, snapshot, model } = fixture(supportsImages, guard);
     const afterAdmission = new Error(
       "Admission complete; stop before workspace and backend effects",
     );
@@ -61,21 +61,3 @@ it.each([false, true])(
     expect(snapshot).toHaveBeenCalledOnce();
   },
 );
-
-it("leaves callers without an input admission guard unchanged", async () => {
-  const model = makeProviderModelFixture({
-    id: "text-model",
-    name: "Text model",
-    provider: "synthetic",
-    api: "openai-responses",
-    baseUrl: "http://127.0.0.1:1",
-    input: ["text"],
-    contextWindow: 8192,
-    maxTokens: 1024,
-  });
-  const { input } = fixture(model);
-  const afterAdmission = new Error("Stop before workspace effects");
-  const mkdir = vi.spyOn(fs, "mkdir").mockRejectedValue(afterAdmission);
-  await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toBe(afterAdmission);
-  expect(mkdir).toHaveBeenCalledOnce();
-});

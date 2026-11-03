@@ -1,13 +1,15 @@
-// Formats detailed subagent run information for the info action.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { sanitizeRunStatusText } from "../../../agents/run-status-text.js";
+import { subagentRuns } from "../../../agents/subagents/registry/subagent-registry-memory.js";
+import { createSubagentSessionListReadView } from "../../../agents/subagents/registry/subagent-registry-state.js";
+import {
+  isSameSubagentRun,
+  isSameSubagentRunOwner,
+} from "../../../agents/subagents/registry/subagent-run-generation.js";
 import { resolveSubagentDisplayStatus } from "../../../agents/subagents/registry/subagent-session-metrics.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { withSubagentSessionEntry } from "../../../agents/subagents/registry/subagent-session-reconciliation.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
-import { parseAgentSessionKey } from "../../../routing/session-key.js";
-import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
-import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
@@ -24,22 +26,10 @@ function formatTimestampWithAge(valueMs?: number) {
   return `${timestamp} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
 }
 
-function loadSubagentSessionEntry(params: SubagentsCommandContext["params"], childKey: string) {
-  const parsed = parseAgentSessionKey(childKey);
-  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
-    agentId: parsed?.agentId,
-  });
-  return {
-    entry: loadSessionEntryReadOnly({
-      storePath,
-      sessionKey: childKey,
-      clone: false,
-    }),
-  };
-}
-
-export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): CommandHandlerResult {
-  const { params, requesterKey, readContext, restTokens } = ctx;
+export async function handleSubagentsInfoAction(
+  ctx: SubagentsCommandContext,
+): Promise<CommandHandlerResult> {
+  const { params, readContext, restTokens } = ctx;
   const target = restTokens[0];
   if (!target) {
     return commandReply("ℹ️ Usage: /subagents info <id|#>");
@@ -51,58 +41,76 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
   }
 
   const run = targetResolution.entry;
-  const { entry: sessionEntry } = loadSubagentSessionEntry(params, run.childSessionKey);
-  const runtime =
-    run.execution.startedAt && Number.isFinite(run.execution.startedAt)
-      ? (formatDurationCompact((run.execution.endedAt ?? Date.now()) - run.execution.startedAt) ??
-        "n/a")
-      : "n/a";
-  const outcomeError = sanitizeTaskStatusText(run.execution.outcome?.error, { errorContext: true });
-  const outcome = run.execution.outcome
-    ? `${run.execution.outcome.status}${outcomeError ? ` (${outcomeError})` : ""}`
-    : "n/a";
-  const linkedTask = findTaskByRunIdForOwner({
-    runId: run.runId,
-    callerOwnerKey: requesterKey,
-    callerAgentId: params.agentId,
-    config: params.cfg,
-  });
-  const taskText = sanitizeTaskStatusText(run.task) || "n/a";
-  const progressText = sanitizeTaskStatusText(linkedTask?.progressSummary);
-  const taskSummaryText = sanitizeTaskStatusText(linkedTask?.terminalSummary, {
-    errorContext: true,
-  });
-  const taskErrorText = sanitizeTaskStatusText(linkedTask?.error, { errorContext: true });
+  const registry = createSubagentSessionListReadView({ env: process.env });
+  const selectedRunIds = new Set([run.runId]);
+  const resident = subagentRuns.get(run.runId);
+  const assertCurrent = () => {
+    const current = registry.runs(selectedRunIds).get(run.runId);
+    if (
+      !isSameSubagentRun(current, run) ||
+      current?.controllerSessionKey !== run.controllerSessionKey ||
+      current?.controllerStorePath !== run.controllerStorePath ||
+      (resident && !isSameSubagentRunOwner(subagentRuns.get(run.runId), resident))
+    ) {
+      throw new Error("The selected subagent run changed while reading its info");
+    }
+  };
+  return withSubagentSessionEntry(
+    {
+      childSessionKey: run.childSessionKey,
+      childAgentId: run.childAgentId,
+      cfg: params.cfg,
+      assertCurrent,
+    },
+    (sessionEntry) => {
+      const runtime =
+        run.execution.startedAt && Number.isFinite(run.execution.startedAt)
+          ? (formatDurationCompact(
+              (run.execution.endedAt ?? Date.now()) - run.execution.startedAt,
+            ) ?? "n/a")
+          : "n/a";
+      const outcomeError = sanitizeRunStatusText(run.execution.outcome?.error, {
+        errorContext: true,
+      });
+      const outcome = run.execution.outcome
+        ? `${run.execution.outcome.status}${outcomeError ? ` (${outcomeError})` : ""}`
+        : "n/a";
+      const taskText = sanitizeRunStatusText(run.task) || "n/a";
+      const progressText = sanitizeRunStatusText(run.completion?.resultText);
+      const taskSummaryText = sanitizeRunStatusText(
+        run.delivery?.lastError ?? run.delivery?.discardedPayloadSummary?.lastError,
+        { errorContext: true },
+      );
 
-  const lines = [
-    "ℹ️ Subagent info",
-    `Status: ${resolveSubagentDisplayStatus(run, readContext.list.pendingDescendants.get(run.childSessionKey) ?? 0)}`,
-    `Label: ${formatRunLabel(run)}`,
-    `Task: ${taskText}`,
-    `Run: ${run.runId}`,
-    linkedTask ? `TaskId: ${linkedTask.taskId}` : undefined,
-    linkedTask ? `TaskStatus: ${linkedTask.status}` : undefined,
-    `Session: ${run.childSessionKey}`,
-    `SessionId: ${sessionEntry?.sessionId ?? "n/a"}`,
-    `Runtime: ${runtime}`,
-    `Created: ${formatTimestampWithAge(run.createdAt)}`,
-    `Started: ${formatTimestampWithAge(run.execution.startedAt)}`,
-    `Ended: ${formatTimestampWithAge(run.execution.endedAt)}`,
-    `Cleanup: ${run.cleanup}`,
-    run.archiveAtMs ? `Archive: ${formatTimestampWithAge(run.archiveAtMs)}` : undefined,
-    run.cleanupHandled ? "Cleanup handled: yes" : undefined,
-    `Outcome: ${outcome}`,
-    progressText ? `Progress: ${progressText}` : undefined,
-    taskSummaryText ? `Task summary: ${taskSummaryText}` : undefined,
-    taskErrorText ? `Task error: ${taskErrorText}` : undefined,
-    linkedTask || run.delivery
-      ? `Delivery: ${linkedTask?.deliveryStatus ?? run.delivery?.status}`
-      : undefined,
-    run.delivery?.discardReason ? `Delivery disposition: ${run.delivery.discardReason}` : undefined,
-    run.delivery?.discardedAt
-      ? `Delivery retired: ${formatTimestampWithAge(run.delivery.discardedAt)}`
-      : undefined,
-  ].filter(Boolean);
+      const lines = [
+        "ℹ️ Subagent info",
+        `Status: ${resolveSubagentDisplayStatus(run, readContext.list.pendingDescendants.get(run.childSessionKey) ?? 0)}`,
+        `Label: ${formatRunLabel(run)}`,
+        `Task: ${taskText}`,
+        `Run: ${run.runId}`,
+        `Session: ${run.childSessionKey}`,
+        `SessionId: ${sessionEntry?.sessionId ?? "n/a"}`,
+        `Runtime: ${runtime}`,
+        `Created: ${formatTimestampWithAge(run.createdAt)}`,
+        `Started: ${formatTimestampWithAge(run.execution.startedAt)}`,
+        `Ended: ${formatTimestampWithAge(run.execution.endedAt)}`,
+        `Cleanup: ${run.cleanup}`,
+        run.archiveAtMs ? `Archive: ${formatTimestampWithAge(run.archiveAtMs)}` : undefined,
+        run.cleanupHandled ? "Cleanup handled: yes" : undefined,
+        `Outcome: ${outcome}`,
+        progressText ? `Progress: ${progressText}` : undefined,
+        taskSummaryText ? `Task summary: ${taskSummaryText}` : undefined,
+        outcomeError ? `Task error: ${outcomeError}` : undefined,
+        run.delivery ? `Delivery: ${run.delivery.status}` : undefined,
+        run.delivery?.discardReason
+          ? `Delivery disposition: ${run.delivery.discardReason}`
+          : undefined,
+        run.delivery?.discardedAt
+          ? `Delivery retired: ${formatTimestampWithAge(run.delivery.discardedAt)}`
+          : undefined,
+      ].filter(Boolean);
 
-  return commandReply(lines.join("\n"));
+      return commandReply(lines.join("\n"));
+    },
+  );
 }

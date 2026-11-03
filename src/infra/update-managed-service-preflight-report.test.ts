@@ -6,7 +6,10 @@ import type { UpdateRunResult } from "./update-runner-types.js";
 
 it.each([
   ["inside-gateway-service", "independent terminal outside the service"],
-  ["service-membership-unverified", "restoring native process inspection"],
+  [
+    "service-membership-unverified",
+    "openclaw gateway stop && openclaw update --yes && openclaw gateway start",
+  ],
   ["inside-gateway-process-tree", "a terminal outside the Gateway process tree"],
   ["service-not-offline", "Stop it through its service owner"],
   ["service-definition-not-writable", "writable service definition"],

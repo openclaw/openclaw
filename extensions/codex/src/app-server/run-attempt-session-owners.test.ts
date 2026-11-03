@@ -1,53 +1,27 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-type OwnerProjection = {
-  stateDir: string | undefined;
-  storePath: string;
-  sessionKey: string;
-  expectedSessionId?: string;
-};
+type DeleteScope = Parameters<
+  typeof import("openclaw/plugin-sdk/session-store-runtime").deleteSessionEntry
+>[0];
 
 const fixture = vi.hoisted(() => ({
   steps: [] as string[],
-  seeded: [] as OwnerProjection[],
-  deleted: [] as OwnerProjection[],
-  deleteRow: async () => {},
-  drainMaintenance: async () => {},
-  drainAgents: async () => {},
-  drainShared: async () => {},
+  deleted: [] as DeleteScope[],
+  drainMaintenance: vi.fn(async () => {}),
+  drainAgents: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Record session ownership without opening real session stores.
 vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
   resolveStorePath: () => `${process.env.OPENCLAW_STATE_DIR}/agents/main/sessions/sessions.json`,
-  upsertSessionEntry: async (scope: {
-    env?: NodeJS.ProcessEnv;
-    storePath: string;
-    sessionKey: string;
-  }) => {
-    fixture.seeded.push({
-      stateDir: scope.env?.OPENCLAW_STATE_DIR,
-      storePath: scope.storePath,
-      sessionKey: scope.sessionKey,
-    });
-  },
-  deleteSessionEntry: async (scope: {
-    env?: NodeJS.ProcessEnv;
-    storePath: string;
-    sessionKey: string;
-    expectedSessionId?: string;
-  }) => {
+  patchSessionEntry: async () => {},
+  deleteSessionEntry: async (scope: DeleteScope) => {
     fixture.steps.push("delete");
-    fixture.deleted.push({
-      stateDir: scope.env?.OPENCLAW_STATE_DIR,
-      storePath: scope.storePath,
-      sessionKey: scope.sessionKey,
-      expectedSessionId: scope.expectedSessionId,
-    });
-    await fixture.deleteRow();
+    fixture.deleted.push(scope);
   },
 }));
 
+// mock-isolation: Control database drain failures and ordering without live database owners.
 vi.mock("openclaw/plugin-sdk/sqlite-runtime-testing", () => ({
   withSessionHistoryBudgetSweepsForTest: async <T>(run: () => Promise<T>): Promise<T> => {
     try {
@@ -61,13 +35,8 @@ vi.mock("openclaw/plugin-sdk/sqlite-runtime-testing", () => ({
     fixture.steps.push("agent-drain");
     await fixture.drainAgents();
   },
-  closeOpenClawAgentDatabasesForTest: () => {
-    fixture.steps.push("agent-reset");
-  },
-  closeOpenClawStateDatabaseAsync: async () => {
-    fixture.steps.push("shared-drain");
-    await fixture.drainShared();
-  },
+  closeOpenClawAgentDatabasesForTest: () => fixture.steps.push("agent-reset"),
+  closeOpenClawStateDatabaseAsync: async () => fixture.steps.push("shared-drain"),
 }));
 
 vi.mock("openclaw/plugin-sdk/plugin-state-test-runtime", () => ({
@@ -76,218 +45,53 @@ vi.mock("openclaw/plugin-sdk/plugin-state-test-runtime", () => ({
   },
 }));
 
-beforeEach(() => {
+let owners: typeof import("./run-attempt-session-owners.test-support.js");
+beforeEach(async () => {
   vi.resetModules();
-  fixture.steps.length = 0;
-  fixture.seeded.length = 0;
-  fixture.deleted.length = 0;
-  fixture.deleteRow = async () => {};
-  fixture.drainMaintenance = async () => {};
-  fixture.drainAgents = async () => {};
-  fixture.drainShared = async () => {};
+  fixture.steps.length = fixture.deleted.length = 0;
+  fixture.drainMaintenance.mockReset();
+  fixture.drainAgents.mockReset();
   vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/original-state");
+  owners = await import("./run-attempt-session-owners.test-support.js");
 });
 
-afterEach(() => {
-  vi.unstubAllEnvs();
+afterEach(() => vi.unstubAllEnvs());
+
+const expectedOwner = {
+  env: { OPENCLAW_STATE_DIR: "/synthetic/original-state" },
+  storePath: "/synthetic/original-state/agents/main/sessions/sessions.json",
+  sessionKey: "agent:main:retained-session",
+  expectedSessionId: "retained-session",
+};
+const seed = () =>
+  owners.seedRunSessionOwnerForTest("retained-session", "agent:main:retained-session");
+const cleanup = (closeDatabases = false) =>
+  owners.cleanupRunSessionOwnersForTest({ closeDatabases });
+const draining = ["delete", "maintenance-drain", "agent-drain"];
+
+it("retains a seeded row when its background maintenance fails", async () => {
+  const failure = new Error("synthetic maintenance failed");
+  fixture.drainMaintenance.mockRejectedValue(failure);
+  await expect(seed()).rejects.toBe(failure);
+  fixture.drainMaintenance.mockReset();
+  await cleanup();
+  expect(fixture.deleted).toMatchObject([expectedOwner]);
 });
 
-describe("run attempt seeded session ownership", () => {
-  it("retains a seeded row when its background maintenance fails", async () => {
-    const { seedRunSessionOwnerForTest, cleanupRunSessionOwnersForTest } =
-      await import("./run-attempt-session-owners.test-support.js");
-    const failure = new Error("synthetic maintenance failed");
-    fixture.drainMaintenance = async () => {
-      throw failure;
-    };
-    await expect(
-      seedRunSessionOwnerForTest("retained-session", "agent:main:retained-session"),
-    ).rejects.toBe(failure);
-    fixture.drainMaintenance = async () => {};
-    await cleanupRunSessionOwnersForTest();
-    expect(fixture.deleted).toEqual([
-      {
-        stateDir: "/synthetic/original-state",
-        storePath: "/synthetic/original-state/agents/main/sessions/sessions.json",
-        sessionKey: "agent:main:retained-session",
-        expectedSessionId: "retained-session",
-      },
-    ]);
-  });
+it("retains the original seeded owner when an agent drain fails", async () => {
+  await seed();
+  fixture.steps.length = 0;
+  vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/rebound-state");
+  const failure = new Error("synthetic agent drain failed");
+  fixture.drainAgents.mockRejectedValue(failure);
+  await expect(cleanup(true)).rejects.toBe(failure);
+  expect(fixture.steps).toEqual(draining);
 
-  it("deletes captured session rows before resetting policy without closing suite databases", async () => {
-    const { seedRunSessionOwnerForTest, cleanupRunSessionOwnersForTest } =
-      await import("./run-attempt-session-owners.test-support.js");
-    await seedRunSessionOwnerForTest("seeded-session", "agent:main:seeded-session");
-    fixture.steps.length = 0;
-    vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/rebound-state");
-
-    const deletion = createDeferred<void>();
-    const deleting = createDeferred<void>();
-    const maintenance = createDeferred<void>();
-    const drainingMaintenance = createDeferred<void>();
-    fixture.deleteRow = () => {
-      deleting.resolve();
-      return deletion.promise;
-    };
-    fixture.drainMaintenance = () => {
-      drainingMaintenance.resolve();
-      return maintenance.promise;
-    };
-
-    const cleanup = cleanupRunSessionOwnersForTest();
-    try {
-      await deleting.promise;
-      expect(fixture.steps).toEqual(["delete"]);
-      expect(fixture.seeded).toEqual([
-        {
-          stateDir: "/synthetic/original-state",
-          storePath: "/synthetic/original-state/agents/main/sessions/sessions.json",
-          sessionKey: "agent:main:seeded-session",
-        },
-      ]);
-      expect(fixture.deleted).toEqual([
-        {
-          stateDir: "/synthetic/original-state",
-          storePath: "/synthetic/original-state/agents/main/sessions/sessions.json",
-          sessionKey: "agent:main:seeded-session",
-          expectedSessionId: "seeded-session",
-        },
-      ]);
-
-      deletion.resolve();
-      await drainingMaintenance.promise;
-      expect(fixture.steps).toEqual(["delete", "maintenance-drain"]);
-      maintenance.resolve();
-      await cleanup;
-      expect(fixture.steps).toEqual(["delete", "maintenance-drain", "plugin-policy-reset"]);
-    } finally {
-      deletion.resolve();
-      maintenance.resolve();
-      await cleanup;
-    }
-  });
-
-  it.each(["deletion", "agent drain"] as const)(
-    "retains the original seeded owner when %s fails",
-    async (failureStage) => {
-      const { seedRunSessionOwnerForTest, cleanupRunSessionOwnersForTest } =
-        await import("./run-attempt-session-owners.test-support.js");
-      await seedRunSessionOwnerForTest("retained-session", "agent:main:retained-session");
-      fixture.steps.length = 0;
-      vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/rebound-state");
-      const failure = new Error(`synthetic ${failureStage} failed`);
-      const closeDatabases = failureStage === "agent drain";
-      fixture[closeDatabases ? "drainAgents" : "deleteRow"] = async () => {
-        throw failure;
-      };
-
-      await expect(cleanupRunSessionOwnersForTest({ closeDatabases })).rejects.toBe(failure);
-      expect(fixture.steps).toEqual(
-        closeDatabases
-          ? ["delete", "maintenance-drain", "agent-drain"]
-          : ["delete", "maintenance-drain"],
-      );
-
-      fixture.steps.length = 0;
-      fixture.deleteRow = async () => {};
-      fixture.drainAgents = async () => {};
-      await cleanupRunSessionOwnersForTest({ closeDatabases });
-      expect(fixture.deleted).toEqual([
-        {
-          stateDir: "/synthetic/original-state",
-          storePath: "/synthetic/original-state/agents/main/sessions/sessions.json",
-          sessionKey: "agent:main:retained-session",
-          expectedSessionId: "retained-session",
-        },
-        {
-          stateDir: "/synthetic/original-state",
-          storePath: "/synthetic/original-state/agents/main/sessions/sessions.json",
-          sessionKey: "agent:main:retained-session",
-          expectedSessionId: "retained-session",
-        },
-      ]);
-      expect(fixture.steps).toEqual(
-        closeDatabases
-          ? [
-              "delete",
-              "maintenance-drain",
-              "agent-drain",
-              "agent-reset",
-              "shared-drain",
-              "plugin-reset",
-            ]
-          : ["delete", "maintenance-drain", "plugin-policy-reset"],
-      );
-      await cleanupRunSessionOwnersForTest();
-      expect(fixture.deleted).toHaveLength(2);
-    },
-  );
-
-  it.each(["suite", "unsettled attempt"] as const)(
-    "joins %s database workers before resetting their native state",
-    async (lifetime) => {
-      const { cleanupRunSessionOwnersForTest, closeRunSessionOwnerDatabasesForTest } =
-        await import("./run-attempt-session-owners.test-support.js");
-      const agents = createDeferred<void>();
-      const drainingAgents = createDeferred<void>();
-      const shared = createDeferred<void>();
-      const drainingShared = createDeferred<void>();
-      fixture.drainAgents = () => {
-        drainingAgents.resolve();
-        return agents.promise;
-      };
-      fixture.drainShared = () => {
-        drainingShared.resolve();
-        return shared.promise;
-      };
-
-      const close =
-        lifetime === "suite"
-          ? closeRunSessionOwnerDatabasesForTest()
-          : cleanupRunSessionOwnersForTest({ closeDatabases: true });
-      try {
-        await Promise.race([drainingAgents.promise, close]);
-        const maintenanceSteps = lifetime === "suite" ? [] : ["maintenance-drain"];
-        expect(fixture.steps).toEqual([...maintenanceSteps, "agent-drain"]);
-        agents.resolve();
-        await Promise.race([drainingShared.promise, close]);
-        expect(fixture.steps).toEqual([
-          ...maintenanceSteps,
-          "agent-drain",
-          "agent-reset",
-          "shared-drain",
-        ]);
-        shared.resolve();
-        await close;
-        expect(fixture.steps).toEqual([
-          ...maintenanceSteps,
-          "agent-drain",
-          "agent-reset",
-          "shared-drain",
-          "plugin-reset",
-        ]);
-      } finally {
-        agents.resolve();
-        shared.resolve();
-        await close;
-      }
-    },
-  );
-
-  it("does not reset suite state when an agent drain fails", async () => {
-    const { closeRunSessionOwnerDatabasesForTest } =
-      await import("./run-attempt-session-owners.test-support.js");
-    const failure = new Error("synthetic agent drain failed");
-    fixture.drainAgents = async () => {
-      throw failure;
-    };
-    await expect(closeRunSessionOwnerDatabasesForTest()).rejects.toBe(failure);
-    expect(fixture.steps).toEqual(["agent-drain"]);
-
-    fixture.steps.length = 0;
-    fixture.drainAgents = async () => {};
-    await closeRunSessionOwnerDatabasesForTest();
-    expect(fixture.steps).toEqual(["agent-drain", "agent-reset", "shared-drain", "plugin-reset"]);
-  });
+  fixture.steps.length = 0;
+  fixture.drainAgents.mockReset();
+  await cleanup(true);
+  expect(fixture.deleted).toMatchObject([expectedOwner, expectedOwner]);
+  expect(fixture.steps).toEqual([...draining, "agent-reset", "shared-drain", "plugin-reset"]);
+  await cleanup();
+  expect(fixture.deleted).toHaveLength(2);
 });

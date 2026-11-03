@@ -4,10 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mts";
-import {
-  assertPluginInventoryCoverage,
-  resolvePluginSurface,
-} from "./lib/plugin-inventory-doc.mts";
+import { resolvePluginSurface } from "./lib/plugin-inventory-doc.mts";
 import {
   collectPluginSourceEntries,
   exportPluginInventory,
@@ -22,7 +19,6 @@ const DOC_PATH = "docs/plugins/plugin-inventory.md";
 const REFERENCE_INDEX_PATH = "docs/plugins/reference.md";
 const REFERENCE_DIR = "docs/plugins/reference";
 const ROOT = process.cwd();
-const EXTENSIONS_DIR = path.join(ROOT, "extensions");
 
 const PROVIDER_DOC_ALIASES = new Map([
   ["amazon-bedrock", "/providers/bedrock"],
@@ -32,6 +28,7 @@ const PROVIDER_DOC_ALIASES = new Map([
 ]);
 const PLUGIN_DOC_ALIASES = new Map([
   ["acpx", "/tools/acp-agents-setup"],
+  ["agent-guidance", "/plugins/agent-guidance"],
   ["brave", "/tools/brave-search"],
   ["browser", "/tools/browser"],
   ["codex", "/plugins/codex-harness"],
@@ -81,9 +78,8 @@ const RELATED_DOC_PRODUCT_IDS = new Set([
 
 type DocLink = { label: string; href: string };
 
-function createPluginRecord(entry: PluginSourceEntry, excludedDirs: Set<string>) {
+function createPluginRecord(entry: PluginSourceEntry, status: PluginStatus) {
   const { id, manifest, packageJson } = entry;
-  const status = resolvePluginStatus(entry, excludedDirs);
   return {
     description: resolveDescription(entry),
     docs: resolveDocs(entry),
@@ -149,6 +145,9 @@ function pluginReferenceLabel(record: PluginRecord) {
 }
 
 function humanizeId(value: string) {
+  if (value === "slack-huddles") {
+    return "Slack huddles";
+  }
   if (value === "teams-meetings") {
     return "Microsoft Teams meetings";
   }
@@ -268,6 +267,7 @@ function resolveDescription({ manifest, packageJson }: PluginSourceEntry) {
     realtimeTranscriptionProviders: "Adds realtime transcription provider support.",
     realtimeVoiceProviders: "Adds realtime voice provider support.",
     speechProviders: "Adds text-to-speech provider support.",
+    storageProviders: "Adds storage location transport support.",
     tools: "Adds agent-callable tools.",
     videoGenerationProviders: "Adds video generation provider support.",
     webContentExtractors: "Adds readable web content extraction.",
@@ -344,23 +344,13 @@ function resolveDocs({ dirName, manifest, packageJson }: PluginSourceEntry) {
     if (typeof candidate !== "string") {
       continue;
     }
-    if (fileExists(`docs/channels/${candidate}.md`)) {
-      pushUniqueDocLink(links, {
-        href: `/channels/${candidate}`,
-        label: relatedDocLabel(candidate),
-      });
-    }
-    if (fileExists(`docs/providers/${candidate}.md`)) {
-      pushUniqueDocLink(links, {
-        href: `/providers/${candidate}`,
-        label: relatedDocLabel(candidate),
-      });
-    }
-    if (fileExists(`docs/plugins/${candidate}.md`)) {
-      pushUniqueDocLink(links, {
-        href: `/plugins/${candidate}`,
-        label: relatedDocLabel(candidate),
-      });
+    for (const section of ["channels", "providers", "plugins"]) {
+      if (fileExists(`docs/${section}/${candidate}.md`)) {
+        pushUniqueDocLink(links, {
+          href: `/${section}/${candidate}`,
+          label: relatedDocLabel(candidate),
+        });
+      }
     }
   }
 
@@ -385,10 +375,12 @@ function resolveInstallRoute(packageJson: PluginPackageJson, status: PluginStatu
   const install = packageJson.openclaw?.install;
   const release = packageJson.openclaw?.release;
   const clawhubSpec =
-    typeof install?.clawhubSpec === "string" ? `: \`${install.clawhubSpec}\`` : "";
+    typeof install?.clawhubSpec === "string"
+      ? `: \`${install.clawhubSpec.replace(/^clawhub:/, "")}\``
+      : "";
   const npmSpec =
     typeof install?.npmSpec === "string" && install.npmSpec !== packageJson.name
-      ? `: \`${install.npmSpec}\``
+      ? `: \`npm:${install.npmSpec}\``
       : "";
   if (release?.publishToClawHub === true && release?.publishToNpm === true) {
     if (install?.defaultChoice === "clawhub") {
@@ -548,21 +540,6 @@ pnpm plugins:inventory:gen
 `;
 }
 
-function enumerateTopLevelPluginManifests() {
-  return fs
-    .readdirSync(EXTENSIONS_DIR)
-    .toSorted((left, right) => left.localeCompare(right))
-    .flatMap((dirName) => {
-      const manifestPath = path.join(EXTENSIONS_DIR, dirName, "openclaw.plugin.json");
-      if (!fs.existsSync(manifestPath)) {
-        return [];
-      }
-      const manifest = readJsonPath(manifestPath) as PluginManifest;
-      const id = typeof manifest.id === "string" && manifest.id ? manifest.id : dirName;
-      return [{ dirName, id }];
-    });
-}
-
 type ExternalPluginDocsInventorySeedEntry = {
   openclaw?: {
     channel?: NonNullable<PluginPackageJson["openclaw"]>["channel"];
@@ -614,58 +591,27 @@ function collectPluginRecords() {
   const rootPackageJson = readJsonPath(path.join(ROOT, "package.json")) as { files?: unknown[] };
   const excludedDirs = collectExcludedPackagedExtensionDirs(rootPackageJson);
   const sourceEntries = collectPluginSourceEntries(ROOT);
-  assertPluginInventoryCoverage(sourceEntries, enumerateTopLevelPluginManifests());
-  const records = sourceEntries.map((entry) => createPluginRecord(entry, excludedDirs));
+  const records = sourceEntries.map((entry) =>
+    createPluginRecord(entry, resolvePluginStatus(entry, excludedDirs)),
+  );
 
   const sourceIds = new Set(sourceEntries.map((entry) => entry.id));
-  for (const {
-    dirName,
-    id,
-    manifest,
-    packageJson,
-  } of collectExternalPluginDocsInventoryEntries()) {
-    if (sourceIds.has(id)) {
-      continue;
+  for (const entry of collectExternalPluginDocsInventoryEntries()) {
+    if (!sourceIds.has(entry.id)) {
+      records.push(createPluginRecord(entry, "external"));
     }
-    records.push({
-      description: resolveDescription({ dirName, id, manifest, packageJson }),
-      docs: resolveDocs({ dirName, id, manifest, packageJson }),
-      id,
-      installRoute: resolveInstallRoute(packageJson, "external"),
-      name: humanizeId(id),
-      packageName: packageJson.name ?? "-",
-      status: "external",
-      surface: resolvePluginSurface(manifest),
-    });
   }
   return records.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-function writeGeneratedDocs(records: PluginRecord[]) {
-  fs.mkdirSync(path.join(ROOT, REFERENCE_DIR), { recursive: true });
+function* referencePages(records: PluginRecord[]) {
   for (const record of records.filter(hasGeneratedReferencePage)) {
     const relativePath = path.join(REFERENCE_DIR, `${record.id}.md`);
-    const manualSections = readManualReferenceSections(relativePath);
-    fs.writeFileSync(
-      path.join(ROOT, relativePath),
-      renderReferencePage(record, manualSections),
-      "utf8",
-    );
+    yield [
+      relativePath,
+      renderReferencePage(record, readManualReferenceSections(relativePath)),
+    ] as const;
   }
-  fs.writeFileSync(path.join(ROOT, REFERENCE_INDEX_PATH), renderReferenceIndex(records), "utf8");
-}
-
-function readGeneratedDocs(records: PluginRecord[]) {
-  return [
-    [REFERENCE_INDEX_PATH, renderReferenceIndex(records)] satisfies [string, string],
-    ...records.filter(hasGeneratedReferencePage).map((record) => {
-      const relativePath = path.join(REFERENCE_DIR, `${record.id}.md`);
-      return [
-        relativePath,
-        renderReferencePage(record, readManualReferenceSections(relativePath)),
-      ] satisfies [string, string];
-    }),
-  ];
 }
 
 function renderDocument(records: PluginRecord[]) {
@@ -680,7 +626,7 @@ summary: "Generated inventory of OpenClaw plugins shipped in core, published ext
 read_when:
   - You are deciding whether a plugin ships in the core npm package or installs separately
   - You are updating bundled plugin package metadata or release automation
-  - You need the canonical internal vs external plugin list
+  - You need the current internal vs external plugin list
 title: "Plugin inventory"
 ---
 
@@ -715,7 +661,9 @@ openclaw plugins install @openclaw/discord
 openclaw plugins inspect discord --runtime --json
 \`\`\`
 
-Ordinary bare package specs install from npm. Use \`clawhub:@openclaw/discord\`
+Package specs, including \`@openclaw/*\`, install from ClawHub by default. Only
+bare plugin ids without a version or tag retain bundled and official catalog
+shortcuts. Use \`clawhub:@openclaw/discord\`
 or \`npm:@openclaw/discord\` when you need an explicit source. After install,
 follow the plugin's setup doc, such as [Discord](/channels/discord), to add
 credentials and channel config. See
@@ -781,7 +729,11 @@ function main(argv = process.argv.slice(2)) {
   const docPath = path.join(ROOT, DOC_PATH);
   if (write) {
     fs.writeFileSync(docPath, next, "utf8");
-    writeGeneratedDocs(records);
+    fs.mkdirSync(path.join(ROOT, REFERENCE_DIR), { recursive: true });
+    for (const [relativePath, content] of referencePages(records)) {
+      fs.writeFileSync(path.join(ROOT, relativePath), content, "utf8");
+    }
+    fs.writeFileSync(path.join(ROOT, REFERENCE_INDEX_PATH), renderReferenceIndex(records), "utf8");
     return;
   }
 
@@ -789,7 +741,10 @@ function main(argv = process.argv.slice(2)) {
   if (current !== next) {
     throw new Error(`${DOC_PATH} is stale. Run \`pnpm plugins:inventory:gen\`.`);
   }
-  for (const [relativePath, expected] of readGeneratedDocs(records)) {
+  for (const [relativePath, expected] of [
+    [REFERENCE_INDEX_PATH, renderReferenceIndex(records)] as const,
+    ...referencePages(records),
+  ]) {
     const fullPath = path.join(ROOT, relativePath);
     const actual = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, "utf8") : "";
     if (actual !== expected) {

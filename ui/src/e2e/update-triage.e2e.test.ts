@@ -8,6 +8,7 @@ import {
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { QUICK_ACTIONS_QUESTION } from "../test-helpers/custodian-quick-actions.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -38,6 +39,7 @@ const SCHEDULE = {
 } as const;
 const DIAGNOSTIC_REPLY =
   "I will inspect disk space and the recorded install failure before proposing a repair.";
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 async function recordUpdateTraffic(page: Page): Promise<MockGatewayRequest[]> {
   const traffic: MockGatewayRequest[] = [];
@@ -73,16 +75,18 @@ suite.define(() => {
   it.each(["manual", "automatic", "missing triage module"])(
     "requires a button press to diagnose a pre-ledger %s failure without retrying the update",
     async (source) => {
-      const artifactDir = createControlUiE2eArtifactDir(
-        `update-triage-${source.replaceAll(" ", "-")}`,
-      );
+      const artifactDir = captureUiProof
+        ? createControlUiE2eArtifactDir(`update-triage-${source.replaceAll(" ", "-")}`)
+        : undefined;
       await suite.withPage(
         {
           colorScheme: "dark",
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 1_000, width: 1_400 },
-          recordVideo: { dir: artifactDir, size: { height: 1_000, width: 1_400 } },
+          recordVideo: artifactDir
+            ? { dir: artifactDir, size: { height: 1_000, width: 1_400 } }
+            : undefined,
         },
         async ({ page }) => {
           const errors: string[] = [];
@@ -90,8 +94,9 @@ suite.define(() => {
           const traffic = await recordUpdateTraffic(page);
           if (source === "missing triage module") {
             // A replaced installation can retire the current document's lazy chunks.
-            await page.route(/\/update-triage\.runtime(?:-[\w-]+\.js|\.ts)(?:\?|$)/, (route) =>
-              route.abort("failed"),
+            await page.route(
+              controlUiE2eBuiltModuleRequest("ui/src/app/update-triage.runtime.ts"),
+              (route) => route.abort("failed"),
             );
           }
           const config = { update: { channel: "stable", auto: { enabled: true } } };
@@ -137,7 +142,7 @@ suite.define(() => {
           const updateRuns = () => traffic.filter(({ method }) => method === "update.run");
           expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
           await gateway.waitForRequest("update.status");
-          await page.getByRole("button", { name: "Update now", exact: true }).waitFor();
+          await page.getByRole("button", { name: "Update Gateway…", exact: true }).waitFor();
           if (source === "automatic") {
             const now = Date.now();
             await gateway.emitGatewayEvent("update.available", {
@@ -154,17 +159,19 @@ suite.define(() => {
             });
             await page.getByText("Applying update…", { exact: true }).waitFor();
           } else {
-            await page.getByRole("button", { name: "Update now", exact: true }).click();
+            await page.getByRole("button", { name: "Update Gateway…", exact: true }).click();
             await page
               .locator("openclaw-modal-dialog")
               .getByRole("button", { name: "Update and restart", exact: true })
               .click();
             await gateway.waitForRequest("update.run");
           }
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "01-before-failure.png"),
-          });
+          if (artifactDir) {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(artifactDir, "01-before-failure.png"),
+            });
+          }
           await gateway.setMethodResponse("update.status", {
             sentinel: FAILURE,
             schedule: SCHEDULE,
@@ -182,7 +189,10 @@ suite.define(() => {
             const dialog = page.locator("openclaw-modal-dialog");
             await dialog.getByRole("button", { name: "Retry update", exact: true }).waitFor();
             expect(await dialog.textContent()).toContain("ENOSPC");
-            await dialog.getByRole("button", { name: "Close", exact: true }).click();
+            await dialog
+              .locator("openclaw-modal-actions")
+              .getByRole("button", { name: "Close", exact: true })
+              .click();
           }
           const diagnose = page.getByRole("button", { name: "Diagnose update", exact: true });
           await diagnose.waitFor();
@@ -190,10 +200,12 @@ suite.define(() => {
           expect(await page.locator(".custodian__alert-card").count()).toBe(0);
           expect(questions()).toHaveLength(0);
           expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "02-failure-awaiting-action.png"),
-          });
+          if (artifactDir) {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(artifactDir, "02-failure-awaiting-action.png"),
+            });
+          }
           const replacementDocument =
             source === "missing triage module" ? page.waitForEvent("domcontentloaded") : null;
           await diagnose.click();
@@ -223,10 +235,12 @@ suite.define(() => {
             await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).waitFor();
             expect(await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).count()).toBe(1);
           }
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "03-triage-outcome.png"),
-          });
+          if (artifactDir) {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(artifactDir, "03-triage-outcome.png"),
+            });
+          }
           await expect.poll(updateRuns).toHaveLength(source === "automatic" ? 0 : 1);
           if (source !== "missing triage module") {
             // Loading the same retained failure never repeats the user's action.
@@ -243,10 +257,12 @@ suite.define(() => {
             expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
             expect(questions()).toHaveLength(1);
             expect(updateRuns()).toHaveLength(source === "automatic" ? 0 : 1);
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, "04-reloaded-without-replay.png"),
-            });
+            if (artifactDir) {
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(artifactDir, "04-reloaded-without-replay.png"),
+              });
+            }
           }
           expect(errors).toEqual([]);
         },
@@ -257,11 +273,15 @@ suite.define(() => {
   it.each(["denied", "full"] as const)(
     "diagnoses only on demand even when session storage is %s",
     async (storageFailure) => {
-      const artifactDir = createControlUiE2eArtifactDir(`update-triage-storage-${storageFailure}`);
+      const artifactDir = captureUiProof
+        ? createControlUiE2eArtifactDir(`update-triage-storage-${storageFailure}`)
+        : undefined;
       await suite.withPage(
         {
           viewport: { height: 1_000, width: 1_400 },
-          recordVideo: { dir: artifactDir, size: { height: 1_000, width: 1_400 } },
+          recordVideo: artifactDir
+            ? { dir: artifactDir, size: { height: 1_000, width: 1_400 } }
+            : undefined,
         },
         async ({ page }) => {
           const errors: string[] = [];
@@ -350,10 +370,12 @@ suite.define(() => {
               message: expect.stringContaining("ENOSPC"),
             });
             expect(traffic.filter(({ method }) => method === "update.run")).toHaveLength(0);
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, `0${load + 1}-failure-guidance.png`),
-            });
+            if (artifactDir) {
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(artifactDir, `0${load + 1}-failure-guidance.png`),
+              });
+            }
           }
           expect(errors).toEqual([]);
         },

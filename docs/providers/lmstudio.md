@@ -45,6 +45,9 @@ daemon. For install and product docs, see [lmstudio.ai](https://lmstudio.ai/).
 
     Choose `LM Studio`, then pick a model at the `Default model` prompt.
 
+    The server URL prompt also accepts host shorthand such as `localhost:1234`.
+    Invalid URLs stay in the prompt so you can correct them before model discovery.
+
     On a fresh guided setup, OpenClaw first queries `/api/v1/models` on the
     default or configured LM Studio host. An existing LLM is offered automatically
     only when LM Studio reports tool training and at least 16K of effective
@@ -69,6 +72,17 @@ command below and looking at the `key` field:
 ```bash
 curl http://localhost:1234/api/v1/models
 ```
+
+After installing another model in LM Studio, refresh OpenClaw's model list:
+
+```bash
+openclaw models list --provider lmstudio --refresh
+```
+
+In the default merge mode, refresh adds discovered models while preserving your
+configured rows and their authored metadata, including names and context limits.
+An empty configured `models` array also supports discovery on an unauthenticated
+server. `models.mode: "replace"` keeps only explicitly configured models.
 
 ## Non-interactive onboarding
 
@@ -97,27 +111,52 @@ servers; omit it for unauthenticated servers and OpenClaw stores a local non-sec
 This writes `models.providers.lmstudio` and sets the default model to `lmstudio/<custom-model-id>`.
 Providing an API key also writes the `lmstudio:default` auth profile.
 
+Add `--json` for a machine-readable result. Connection, HTTP, and model-selection
+failures return a JSON error with the same recovery guidance as human output and
+exit nonzero without applying the proposed provider configuration.
+
 Interactive setup can additionally prompt for a preferred load context length and applies it across
 the discovered models it saves to config.
 
 ## Configuration
 
-### Streaming usage compatibility
+<a id="thinking-compatibility" />
 
-LM Studio doesn't always emit an OpenAI-shaped `usage` object on streamed responses. OpenClaw
-recovers token counts from llama.cpp-style `timings.prompt_n` / `timings.predicted_n` metadata
-instead. Any OpenAI-compatible endpoint resolved as a local endpoint (loopback host) gets this same
-fallback, which covers other local backends such as vLLM, SGLang, llama.cpp, LocalAI, Jan, TabbyAPI,
-and text-generation-webui.
+### Chat transport and thinking
 
-### Thinking compatibility
+OpenClaw uses LM Studio's [Anthropic-compatible Messages API](https://lmstudio.ai/docs/developer/anthropic-compat/messages)
+for chat, including models saved with `api: "openai-completions"`. The shared Messages transport
+handles streaming text, thinking, images, tool calls, conversation replay, and token usage.
+Your server must provide `/v1/messages`. Embeddings continue to use the existing embeddings endpoint.
 
-When LM Studio's `/api/v1/models` discovery reports model-specific reasoning options, OpenClaw
-exposes matching `reasoning_effort` values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) in
-model compat metadata. Some LM Studio builds advertise a binary UI option (`allowed_options: ["off",
-"on"]`) while rejecting those literal values on `/v1/chat/completions`; OpenClaw normalizes that
-binary shape to the six-level scale before sending requests, including for older saved config that
-still has `off`/`on` reasoning maps.
+Thinking `off` sends `thinking: { type: "disabled" }`. Enabled thinking levels send
+`thinking: { type: "enabled" }`; LM Studio controls the reasoning budget, so levels such as
+`medium` and `xhigh` do not set distinct budgets. This avoids sending graded
+`reasoning_effort` values to binary-thinking models, which can produce an unsupported-setting
+warning on Chat Completions. Explicit `thinkingLevelMap` and `reasoningEffortMap` entries still
+determine enabled/disabled intent, including in existing saved model configurations.
+When no thinking level is requested, LM Studio keeps its own default.
+
+Requests with `responseFormat` (or the `response_format` model parameter, including
+`extra_body.response_format`) use
+[Chat Completions structured output](https://lmstudio.ai/docs/developer/openai-compat/structured-output)
+instead: Messages does not enforce a response schema. Routing happens before the request is sent.
+This path preserves saved reasoning settings and translates binary `off`/`on` wire values to
+`none`/`high`, which Chat Completions accepts. The endpoint may still warn about enabled graded
+effort on a binary model. Explicit API choices other than
+`openai-completions` and `anthropic-messages` retain their selected transport.
+
+<a id="streaming-usage-compatibility" />
+
+Both chat paths remove unsupported `pattern` constraints from tool schemas before sending them.
+Chat Completions requests include streaming usage; OpenClaw also recovers token counts from llama.cpp-style
+`timings.prompt_n` / `timings.predicted_n` metadata when necessary.
+
+<a id="gemma-4-tool-call-recovery" />
+
+For Gemma 4 models on the Chat Completions path, OpenClaw can recover complete standalone
+`<|tool_call>call:...<tool_call|>` batches returned as text. Native tool calls remain authoritative;
+truncated, cancelled, or incomplete textual calls are never executed.
 
 ### Explicit configuration
 
@@ -148,15 +187,25 @@ still has `off`/`on` reasoning maps.
 
 ### Model instances and context
 
+Native discovery and preload support the same credentials as inference, including
+store-backed SecretRefs and explicit `Authorization` headers. You do not need to
+copy a store-backed API key into an auth profile to enable preload.
+
 With preload enabled, OpenClaw routes chat requests to a loaded instance with
 enough context for the selected model budget. A newly loaded instance is addressed by the
 identifier returned by LM Studio. Your configured model reference and conversation model identity
-keep the canonical model key.
+keep the configured model key.
+
+Model loads use the configured provider `timeoutSeconds` (or the request timeout override),
+with a two-minute default matching embedding loads. Increase `models.providers.lmstudio.timeoutSeconds`
+for slow cold loads. If a load fails while every known loaded instance is too small, OpenClaw
+reports the model and requested context instead of sending the prompt to a smaller instance.
+Wait for loading to finish in LM Studio and retry, or lower the model's `contextTokens`.
 
 With preload enabled, embedding requests also check that their model is loaded and route to the
 instance prepared for the configured context length. This avoids truncating input through a smaller
 loaded instance and lets memory embeddings recover after model eviction even when LM Studio JIT
-loading is disabled. Embedding model and cache identity keep the canonical model key.
+loading is disabled. Embedding model and cache identity keep the configured model key.
 
 ### Disabling preload
 
@@ -208,6 +257,15 @@ require `models.providers.<id>.request.allowPrivateNetwork: true`; set it to `fa
 the default trust.
 
 ## Troubleshooting
+
+### Context overflow
+
+When LM Studio rejects a prompt because it exceeds the loaded context, OpenClaw attempts
+[compaction and retry](/concepts/compaction), including for older servers that report
+`Trying to keep the first N tokens` and `the model is loaded with context length of only M tokens, which is not enough`.
+If a single message is too large, shorten it or load the model with a larger context; compacting
+earlier history cannot shrink that message. Server-side truncation without an overflow error
+does not trigger this recovery.
 
 ### Model discovery failures
 

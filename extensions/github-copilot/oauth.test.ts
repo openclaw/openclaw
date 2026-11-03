@@ -79,9 +79,21 @@ describe("github-copilot session OAuth adapter", () => {
       expect(runDeviceFlow).not.toHaveBeenCalled();
     },
   );
-  it("keeps whitespace-only persisted enterprise metadata invalid when formatting a key", () => {
-    expect(() =>
-      formatGithubCopilotApiKey({ type: "oauth", refresh: "fixture", enterpriseUrl: "  " }),
-    ).toThrow("Unsupported GitHub Enterprise domain");
-  });
+  it.each([undefined, ""])(
+    "treats absent or empty persisted metadata as public (%j)",
+    (enterpriseUrl) => {
+      expect(formatGithubCopilotApiKey({ type: "oauth", refresh: "fixture", enterpriseUrl })).toBe(
+        "fixture",
+      );
+    },
+  );
+
+  it.each(["  ", "\t\n"])(
+    "keeps whitespace-only persisted enterprise metadata invalid (%j)",
+    (enterpriseUrl) => {
+      expect(() =>
+        formatGithubCopilotApiKey({ type: "oauth", refresh: "fixture", enterpriseUrl }),
+      ).toThrow("Unsupported GitHub Enterprise domain");
+    },
+  );
 });

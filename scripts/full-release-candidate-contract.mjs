@@ -10,7 +10,13 @@ import {
   parseUpgradeSurvivorScenarios,
 } from "./lib/upgrade-survivor-policy.mjs";
 
-const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v2";
+// Retained evidence must keep its producer schema so its immutable request and
+// manifest digests remain reproducible. Fresh candidate requests stay v3-only.
+const RETAINED_FULL_RELEASE_CANDIDATE_REQUEST_SCHEMAS = new Set([
+  "openclaw.full-release-candidate-request/v1",
+  "openclaw.full-release-candidate-request/v2",
+]);
+const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v3";
 const FULL_RELEASE_CANDIDATE_MANIFEST_SCHEMA = "openclaw.full-release-candidate/v2";
 const FULL_RELEASE_CANDIDATE_BINDING_SCHEMA = "openclaw.full-release-candidate-binding/v2";
 const FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX = "full-release-candidate-v2-";
@@ -135,6 +141,11 @@ export function buildFullReleaseCandidateRequest(input) {
   );
   const effectiveBaselines =
     explicitBaselines.length > 0 ? explicitBaselines : defaultBaseline ? [defaultBaseline] : [];
+  if (!defaultBaseline || !effectiveBaselines.includes(defaultBaseline)) {
+    fail(
+      "full release candidate request upgradeSurvivorBaseline must be included in upgradeSurvivorBaselines",
+    );
+  }
   const effectiveScenarios = parseUpgradeSurvivorScenarios(
     typeof input.upgradeSurvivorScenarios === "string" ? input.upgradeSurvivorScenarios : undefined,
   );
@@ -145,6 +156,7 @@ export function buildFullReleaseCandidateRequest(input) {
     toolingSha: input.toolingSha,
     releaseProfile: input.releaseProfile,
     releaseSoak: input.releaseSoak,
+    upgradeBaseline: defaultBaseline,
     upgradeSurvivorBaselines: effectiveBaselines.toSorted(compareAscii),
     upgradeSurvivorScenarios: effectiveScenarios.toSorted(compareAscii),
     allowFrozenTargetScenarioOmissions: input.allowFrozenTargetScenarioOmissions,
@@ -161,18 +173,31 @@ export function buildFullReleaseCandidateRequest(input) {
 
 export function validateFullReleaseCandidateRequest(value) {
   const request = validateRecordedFullReleaseCandidateRequest(value);
+  if (request.schema !== FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA) {
+    fail("full release candidate request schema is invalid");
+  }
   parseUpgradeSurvivorScenarios(request.upgradeSurvivorScenarios.join(" "));
   return request;
 }
 
 export function validateRecordedFullReleaseCandidateRequest(value) {
+  if (!isRecord(value)) {
+    fail("full release candidate request must be an object");
+  }
+  const schema = value.schema;
+  if (
+    !RETAINED_FULL_RELEASE_CANDIDATE_REQUEST_SCHEMAS.has(schema) &&
+    schema !== FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA
+  ) {
+    fail("full release candidate request schema is invalid");
+  }
   exactKeys(
     value,
     [
       "allowFrozenTargetScenarioOmissions",
       "allowUnreleasedChangelog",
       "contractVersions",
-      "packagePublished",
+      ...(schema !== "openclaw.full-release-candidate-request/v1" ? ["packagePublished"] : []),
       "releaseProfile",
       "releaseSoak",
       "repository",
@@ -180,6 +205,7 @@ export function validateRecordedFullReleaseCandidateRequest(value) {
       "sharedImagePolicy",
       "targetSha",
       "toolingSha",
+      ...(schema === FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA ? ["upgradeBaseline"] : []),
       "upgradeSurvivorBaselines",
       "upgradeSurvivorScenarios",
     ],
@@ -230,6 +256,19 @@ export function validateRecordedFullReleaseCandidateRequest(value) {
       fail("full release candidate request upgradeSurvivorBaselines are not normalized");
     }
   }
+  const upgradeBaseline =
+    schema === FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA
+      ? ascii(value.upgradeBaseline, "full release candidate request upgradeBaseline")
+      : undefined;
+  if (
+    upgradeBaseline !== undefined &&
+    (normalizeUpgradeSurvivorBaselineSpec(upgradeBaseline) !== upgradeBaseline ||
+      !baselines.includes(upgradeBaseline))
+  ) {
+    fail(
+      "full release candidate request upgradeBaseline must be normalized and included in upgradeSurvivorBaselines",
+    );
+  }
   const scenarios = stringArray(
     value.upgradeSurvivorScenarios,
     "full release candidate request upgradeSurvivorScenarios",
@@ -244,20 +283,22 @@ export function validateRecordedFullReleaseCandidateRequest(value) {
   ) {
     fail("full release candidate request upgradeSurvivorScenarios are not normalized");
   }
-  if (value.schema !== FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA) {
-    fail("full release candidate request schema is invalid");
-  }
   return {
-    schema: value.schema,
+    schema,
     repository: repository(value.repository, "full release candidate request repository"),
     targetSha: sha(value.targetSha, "full release candidate request targetSha"),
     toolingSha: sha(value.toolingSha, "full release candidate request toolingSha"),
     releaseProfile,
     releaseSoak: boolean(value.releaseSoak, "full release candidate request releaseSoak"),
-    packagePublished: boolean(
-      value.packagePublished,
-      "full release candidate request packagePublished",
-    ),
+    ...(schema !== "openclaw.full-release-candidate-request/v1"
+      ? {
+          packagePublished: boolean(
+            value.packagePublished,
+            "full release candidate request packagePublished",
+          ),
+        }
+      : {}),
+    ...(schema === FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA ? { upgradeBaseline } : {}),
     upgradeSurvivorBaselines: baselines,
     upgradeSurvivorScenarios: scenarios,
     allowFrozenTargetScenarioOmissions: boolean(
@@ -414,6 +455,17 @@ function validateCandidateJobIdentity(value, label, request) {
   return identity;
 }
 
+function validatePreparation(value, label) {
+  exactKeys(value, ["planSha256", "requiredPrepublishPluginPackages"], label);
+  return {
+    planSha256: sha256(value.planSha256, `${label} planSha256`),
+    requiredPrepublishPluginPackages: sortedUniquePackages(
+      value.requiredPrepublishPluginPackages,
+      `${label} requiredPrepublishPluginPackages`,
+    ),
+  };
+}
+
 function validateFullReleaseCandidateManifest(value) {
   exactKeys(
     value,
@@ -448,21 +500,7 @@ function validateFullReleaseCandidateManifest(value) {
     "full release candidate publisher",
     request,
   );
-  exactKeys(
-    value.preparation,
-    ["planSha256", "requiredPrepublishPluginPackages"],
-    "full release candidate preparation",
-  );
-  const preparation = {
-    planSha256: sha256(
-      value.preparation.planSha256,
-      "full release candidate preparation planSha256",
-    ),
-    requiredPrepublishPluginPackages: sortedUniquePackages(
-      value.preparation.requiredPrepublishPluginPackages,
-      "full release candidate preparation requiredPrepublishPluginPackages",
-    ),
-  };
+  const preparation = validatePreparation(value.preparation, "full release candidate preparation");
   const packageValue = validatePackage(value.package, request);
   const manifest = {
     schema: value.schema,
@@ -520,17 +558,10 @@ export function buildFullReleaseCandidateBinding({ artifact, manifest }) {
     fail("full release candidate evidence artifact does not match its manifest");
   }
   return validateFullReleaseCandidateBinding({
+    ...validatedManifest,
     schema: FULL_RELEASE_CANDIDATE_BINDING_SCHEMA,
-    request: validatedManifest.request,
-    requestSha256: validatedManifest.requestSha256,
-    producer: validatedManifest.producer,
-    publisher: validatedManifest.publisher,
     evidenceArtifact,
     manifestSha256: fullReleaseCandidateManifestSha256(validatedManifest),
-    preparation: validatedManifest.preparation,
-    package: validatedManifest.package,
-    prepublishPluginRegistry: validatedManifest.prepublishPluginRegistry,
-    sharedImage: validatedManifest.sharedImage,
   });
 }
 
@@ -581,21 +612,10 @@ export function validateFullReleaseCandidateBinding(value) {
   ) {
     fail("full release candidate binding evidence artifact is invalid");
   }
-  exactKeys(
+  const preparation = validatePreparation(
     value.preparation,
-    ["planSha256", "requiredPrepublishPluginPackages"],
     "full release candidate binding preparation",
   );
-  const preparation = {
-    planSha256: sha256(
-      value.preparation.planSha256,
-      "full release candidate binding preparation planSha256",
-    ),
-    requiredPrepublishPluginPackages: sortedUniquePackages(
-      value.preparation.requiredPrepublishPluginPackages,
-      "full release candidate binding preparation requiredPrepublishPluginPackages",
-    ),
-  };
   const packageValue = validatePackage(value.package, request);
   const prepublishPluginRegistry = validateRegistry(
     value.prepublishPluginRegistry,
@@ -650,13 +670,13 @@ function option(args, name) {
 }
 
 function readJson(path, label) {
-  let value;
   try {
-    value = JSON.parse(readFileSync(path, "utf8"));
+    return JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
-    fail(`${label} is invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    return fail(
+      `${label} is invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-  return value;
 }
 
 function runCli() {

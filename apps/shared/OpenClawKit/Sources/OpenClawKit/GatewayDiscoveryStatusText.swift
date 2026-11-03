@@ -23,23 +23,11 @@ public enum GatewayDiscoveryStatusText {
             return "\(String(localized: "Waiting")): \(err)"
         }
 
-        if states.contains(where: {
-            if case .ready = $0 {
-                true
-            } else {
-                false
-            }
-        }) {
+        for case .ready in states {
             return String(localized: "Searching…")
         }
 
-        if states.contains(where: {
-            if case .setup = $0 {
-                true
-            } else {
-                false
-            }
-        }) {
+        for case .setup in states {
             return String(localized: "Setup")
         }
 

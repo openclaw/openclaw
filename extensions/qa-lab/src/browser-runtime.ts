@@ -21,72 +21,10 @@ type QaBrowserRequestParams = {
   timeoutMs?: number;
 };
 
-type QaBrowserOpenTabParams = {
-  url: string;
-  profile?: string;
-  timeoutMs?: number;
-};
-
-type QaBrowserSnapshotParams = {
-  profile?: string;
-  targetId?: string;
-  format?: "ai" | "aria";
-  limit?: number;
-  interactive?: boolean;
-  compact?: boolean;
-  depth?: number;
-  selector?: string;
-  frame?: string;
-  labels?: boolean;
-  mode?: "efficient";
-  maxChars?: number;
-  timeoutMs?: number;
-};
-
-type QaBrowserActRequest = {
-  kind: string;
-  targetId?: string;
-  ref?: string;
-  doubleClick?: boolean;
-  button?: string;
-  modifiers?: string[];
-  text?: string;
-  submit?: boolean;
-  slowly?: boolean;
-  key?: string;
-  delayMs?: number;
-  startRef?: string;
-  endRef?: string;
-  values?: string[];
-  fields?: Array<Record<string, unknown>>;
-  width?: number;
-  height?: number;
-  timeMs?: number;
-  selector?: string;
-  url?: string;
-  loadState?: string;
-  textGone?: string;
-  timeoutMs?: number;
-  fn?: string;
-};
-
-type QaBrowserActParams = {
-  profile?: string;
-  request: QaBrowserActRequest;
-  timeoutMs?: number;
-};
-
 type QaBrowserStatus = {
   enabled?: boolean;
   running?: boolean;
   cdpReady?: boolean;
-};
-
-type QaBrowserReadyParams = {
-  profile?: string;
-  timeoutMs?: number;
-  intervalMs?: number;
-  sleepImpl?: (ms: number) => Promise<unknown>;
 };
 
 function normalizeBrowserQuery(
@@ -124,7 +62,11 @@ export async function callQaBrowserRequest<T = unknown>(
 
 export async function qaBrowserOpenTab<T = unknown>(
   env: QaBrowserEnv,
-  params: QaBrowserOpenTabParams,
+  params: {
+    url: string;
+    profile?: string;
+    timeoutMs?: number;
+  },
 ): Promise<T> {
   return await callQaBrowserRequest<T>(env, {
     method: "POST",
@@ -137,7 +79,21 @@ export async function qaBrowserOpenTab<T = unknown>(
 
 export async function qaBrowserSnapshot<T = unknown>(
   env: QaBrowserEnv,
-  params: QaBrowserSnapshotParams = {},
+  params: {
+    profile?: string;
+    targetId?: string;
+    format?: "ai" | "aria";
+    limit?: number;
+    interactive?: boolean;
+    compact?: boolean;
+    depth?: number;
+    selector?: string;
+    frame?: string;
+    labels?: boolean;
+    mode?: "efficient";
+    maxChars?: number;
+    timeoutMs?: number;
+  } = {},
 ): Promise<T> {
   return await callQaBrowserRequest<T>(env, {
     method: "GET",
@@ -162,7 +118,36 @@ export async function qaBrowserSnapshot<T = unknown>(
 
 export async function qaBrowserAct<T = unknown>(
   env: QaBrowserEnv,
-  params: QaBrowserActParams,
+  params: {
+    profile?: string;
+    request: {
+      kind: string;
+      targetId?: string;
+      ref?: string;
+      doubleClick?: boolean;
+      button?: string;
+      modifiers?: string[];
+      text?: string;
+      submit?: boolean;
+      slowly?: boolean;
+      key?: string;
+      delayMs?: number;
+      startRef?: string;
+      endRef?: string;
+      values?: string[];
+      fields?: Array<Record<string, unknown>>;
+      width?: number;
+      height?: number;
+      timeMs?: number;
+      selector?: string;
+      url?: string;
+      loadState?: string;
+      textGone?: string;
+      timeoutMs?: number;
+      fn?: string;
+    };
+    timeoutMs?: number;
+  },
 ): Promise<T> {
   return await callQaBrowserRequest<T>(env, {
     method: "POST",
@@ -179,7 +164,12 @@ function isQaBrowserReady(status: QaBrowserStatus | null | undefined) {
 
 export async function waitForQaBrowserReady<T extends QaBrowserStatus = QaBrowserStatus>(
   env: QaBrowserEnv,
-  params: QaBrowserReadyParams = {},
+  params: {
+    profile?: string;
+    timeoutMs?: number;
+    intervalMs?: number;
+    sleepImpl?: (ms: number) => Promise<unknown>;
+  } = {},
 ): Promise<T> {
   const timeoutMs = resolvePositiveTimerTimeoutMs(params.timeoutMs, 20_000);
   const intervalMs = resolvePositiveTimerTimeoutMs(params.intervalMs, 250);

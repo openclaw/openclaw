@@ -1,39 +1,35 @@
-/**
- * Browser client response types.
- *
- * Shared by the browser control client, CLI, and Browser agent tool.
- */
 import type { lookup as dnsLookupCb } from "node:dns";
 import type { BrowserEngineDescriptor, BrowserEngineId } from "./engines/types.js";
 import type { ManagedBrowserHeadlessSource } from "./profile.types.js";
 
 type BrowserCdpLookup = typeof dnsLookupCb;
 
-/** Browser transport backing the selected profile. */
 export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
+
+export type ProfileStatus = {
+  name: string;
+  transport?: BrowserTransport;
+  cdpPort: number | null;
+  cdpUrl: string | null;
+  color: string;
+  driver: "openclaw" | "existing-session" | "extension";
+  running: boolean;
+  tabCount: number;
+  isDefault: boolean;
+  isRemote: boolean;
+  missingFromConfig?: boolean;
+  reconcileReason?: string | null;
+};
 
 export type BrowserGraphicsAcceleration = "hardware" | "software" | "unknown";
 
-export type BrowserGraphicsDevice = {
+type BrowserGraphicsDevice = {
   vendorId: number;
   deviceId: number;
   vendor: string;
   device: string;
   driverVendor: string;
   driverVersion: string;
-};
-
-export type BrowserVideoDecodeCapability = {
-  profile: string;
-  minResolution: { width: number; height: number };
-  maxResolution: { width: number; height: number };
-};
-
-export type BrowserVideoEncodeCapability = {
-  profile: string;
-  maxResolution: { width: number; height: number };
-  maxFramerateNumerator: number;
-  maxFramerateDenominator: number;
 };
 
 export type BrowserGraphicsDiagnostics =
@@ -49,8 +45,17 @@ export type BrowserGraphicsDiagnostics =
       featureStatus: Record<string, string>;
       disabledFeatures: Array<{ feature: string; status: string }>;
       driverBugWorkarounds: string[];
-      videoDecoding: BrowserVideoDecodeCapability[];
-      videoEncoding: BrowserVideoEncodeCapability[];
+      videoDecoding: {
+        profile: string;
+        minResolution: { width: number; height: number };
+        maxResolution: { width: number; height: number };
+      }[];
+      videoEncoding: {
+        profile: string;
+        maxResolution: { width: number; height: number };
+        maxFramerateNumerator: number;
+        maxFramerateDenominator: number;
+      }[];
     }
   | {
       status: "unavailable";
@@ -76,7 +81,6 @@ export type BrowserTabOwnership =
         | "browser-identity-lookup-failed";
     };
 
-/** Browser status response returned by the control server. */
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
@@ -138,7 +142,6 @@ export type BrowserTab = {
   type?: string;
 };
 
-/** Availability and page enumeration returned by the tab-list boundary. */
 export type BrowserTabsResult =
   | { running: true; tabs: BrowserTab[] }
   | { running: false; tabs: [] };

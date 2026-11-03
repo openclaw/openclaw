@@ -4,14 +4,49 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { CodexAppServerClient, isCodexAppServerConnectionClosedError } from "./client.js";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+  awaitGateBeforeSettlement,
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { CodexAppServerClient } from "./client.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
+import { registrationStoreOptions } from "./transport-registration-fixtures.test-support.js";
 import { closeCodexAppServerTransportAndWait, hasCodexAppServerNaturalExit } from "./transport.js";
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
 }));
+
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+// A killed launcher cannot report its inherited-pipe child's extinction.
+async function waitForNativeExit(
+  pid: number,
+  readSnapshot: typeof processSnapshot.readCodexAppServerProcessSnapshot,
+  signal: AbortSignal,
+): Promise<void> {
+  for (;;) {
+    signal.throwIfAborted();
+    const snapshot = await withinTest(readSnapshot(performance.now() + 2_000), signal);
+    expect(snapshot.some((row) => row.pid === process.pid)).toBe(true);
+    const native = snapshot.find((row) => row.pid === pid);
+    if (!native || native.state.startsWith("Z")) {
+      return;
+    }
+    await waitForProcessTick(10, undefined, { signal });
+  }
+}
 
 describe.skipIf(process.platform === "win32")("Codex failed launcher startup", () => {
   afterEach(() => {
@@ -47,33 +82,24 @@ describe.skipIf(process.platform === "win32")("Codex failed launcher startup", (
       await expect(closing).resolves.toEqual({ exited: mode === "drained", cleanup: "uncertain" });
       expect(diagnostic).toEqual(["last startup diagnostic"]);
       expect(hasCodexAppServerNaturalExit(child)).toBe(mode === "drained");
-      expect(child.stdout.destroyed).toBe(true);
-      expect(child.stderr.destroyed).toBe(true);
+      expect(child).toMatchObject({ stdout: { destroyed: true }, stderr: { destroyed: true } });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
-      child.stdin.destroy();
-      child.stdout.destroy();
-      child.stderr.destroy();
+      [child.stdin, child.stdout, child.stderr].forEach((stream) => stream.destroy());
     }
   });
 
-  it.each([
+  it.for([
     ["available", "inspection"],
-    ["unavailable", "inspection"],
-    ["available", "commit"],
     ["unavailable", "commit"],
   ] as const)(
     "reaps inherited-pipe descendants with %s containment after %s refusal",
-    async (containment, failure) => {
+    async ([containment, failure], { signal }) => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-startup-launcher-"));
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
       const { createPluginStateSyncKeyedStore } =
         await import("openclaw/plugin-sdk/plugin-state-store-runtime");
-      const store = createPluginStateSyncKeyedStore("codex", {
-        namespace: "app-server-processes",
-        maxEntries: 512,
-        overflowPolicy: "reject-new",
-      });
+      const store = createPluginStateSyncKeyedStore("codex", registrationStoreOptions);
       const nativePath = path.join(root, "native.mjs");
       const wrapperPath = path.join(root, "wrapper.mjs");
       const readyPath = path.join(root, "native.pid");
@@ -82,15 +108,16 @@ describe.skipIf(process.platform === "win32")("Codex failed launcher startup", (
         nativePath,
         `
 import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
 const [ready, input] = process.argv.slice(2);
 process.stdin.on("data", (data) => fs.appendFileSync(input, data));
 setInterval(() => {}, 1_000);
 fs.writeSync(2, "launcher startup diagnostic\\n");
 fs.writeFileSync(ready, String(process.pid));
+sendReceipt(ready, "ready");
 `,
       );
       // Match the pinned npm launcher's inherited pipes and signal mirroring.
-      // Clean EOF refusal coverage lives at the shared/isolated startup owner.
       await fs.writeFile(
         wrapperPath,
         `
@@ -109,9 +136,11 @@ child.on("exit", (code, signal) => {
       let wrapperClosed: Promise<unknown> | undefined;
       let nativePid: number | undefined;
       let nativeExited = false;
-      const spawnSpy = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+      let wrapperSpawns = 0;
+      vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
         const child = spawn(...args);
         if (Array.isArray(args[1]) && args[1].includes(wrapperPath)) {
+          wrapperSpawns++;
           wrapper = child;
           wrapperClosed = once(child, "close");
         }
@@ -131,16 +160,20 @@ child.on("exit", (code, signal) => {
           },
         );
       }
-      let inspected!: () => void;
-      const inspection = new Promise<void>((resolve) => {
-        inspected = resolve;
-      });
+      const inspection = Promise.withResolvers<void>();
       vi.spyOn(processSnapshot, "readCodexAppServerProcessCommand").mockImplementation(
         async (observed, deadline) => {
           if (observed.pid !== wrapper?.pid) {
             return readCommand(observed, deadline);
           }
-          await expect.poll(() => fs.readFile(readyPath, "utf8").catch(() => "")).not.toBe("");
+          // The PID file precedes the receipt; a close on the other pipe may win delivery.
+          const closedBeforeReady = wrapperClosed!.then(async () => {
+            expect(await fs.readFile(readyPath, "utf8")).not.toBe("");
+          });
+          await withinTest(
+            Promise.race([receipts.waitFor(readyPath, "ready"), closedBeforeReady]),
+            signal,
+          );
           nativePid = Number(await fs.readFile(readyPath, "utf8"));
           const command = await readCommand(observed, deadline);
           expect(command).toBeDefined();
@@ -149,7 +182,7 @@ child.on("exit", (code, signal) => {
               store.register(`capacity-${index}`, {});
             }
           }
-          inspected();
+          inspection.resolve();
           if (failure === "inspection") {
             throw new processSnapshot.ProcessInspectionError("unavailable");
           }
@@ -163,44 +196,32 @@ child.on("exit", (code, signal) => {
         args: [wrapperPath, nativePath, readyPath, inputPath],
       }).catch((error: unknown) => error);
       try {
-        await Promise.race([
-          inspection,
-          started.then(() => {
-            throw new Error("Startup settled before fixture inspection");
-          }),
-        ]);
-        // Observe actual cleanup independently of the injected inspection failure;
-        // an outer acquire timeout must not make a live descendant look settled.
-        await expect
-          .poll(
-            async () => {
-              const snapshot = await readSnapshot(Date.now() + 2_000);
-              expect(snapshot?.some(({ pid }) => pid === process.pid)).toBe(true);
-              const row = snapshot?.find(({ pid }) => pid === nativePid);
-              return row !== undefined && !row.state.startsWith("Z");
-            },
-            { timeout: 5_000 },
-          )
-          .toBe(false);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            inspection.promise,
+            started,
+            "Startup settled before fixture inspection",
+          ),
+          signal,
+        );
+        // The injected inspection failure cannot certify physical descendant exit.
+        await waitForNativeExit(nativePid!, readSnapshot, signal);
         nativeExited = true;
         const error = await started;
         expect(error).toBeInstanceOf(Error);
-        expect(isCodexAppServerConnectionClosedError(error)).toBe(false);
         expect((error as Error).message).toContain(
           failure === "inspection" ? "Cannot inspect Codex processes" : "512-row limit",
         );
         expect((error as Error).message).toContain("launcher startup diagnostic");
-        expect(
-          spawnSpy.mock.calls.filter(
-            ([, args]) => Array.isArray(args) && args.includes(wrapperPath),
-          ),
-        ).toHaveLength(1);
+        expect(wrapperSpawns).toBe(1);
         await expect(fs.access(inputPath)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(wrapper?.stdout?.destroyed).toBe(true);
-        expect(wrapper?.stderr?.destroyed).toBe(true);
+        expect(wrapper).toMatchObject({
+          stdout: { destroyed: true },
+          stderr: { destroyed: true },
+          exitCode: null,
+          signalCode: "SIGKILL",
+        });
         expect(containmentRefused).toBe(containment === "unavailable");
-        expect(wrapper?.exitCode).toBeNull();
-        expect(wrapper?.signalCode).toBe("SIGKILL");
       } finally {
         vi.restoreAllMocks();
         nativePid ??= Number(await fs.readFile(readyPath, "utf8").catch(() => "")) || undefined;

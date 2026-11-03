@@ -26,7 +26,7 @@ private final class GatewayMenuPendingProbe {
 }
 
 @MainActor
-@Suite(.timeLimit(.minutes(1)))
+@Suite(.testWaitLimit)
 struct GatewayMenuStatusStoreTests {
     @Test func `probes run concurrently and publish each target without waiting for siblings`() async {
         let primaryStarted = AsyncTestGate()

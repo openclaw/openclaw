@@ -22,6 +22,7 @@ import {
   listResolvedDirectoryUserEntriesFromAllowFrom,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
@@ -29,6 +30,7 @@ import { shouldSuppressGoogleChatManualExecApprovalFollowupPayload } from "./app
 import { formatGoogleChatAllowFromEntry } from "./channel-base.js";
 import {
   formatGoogleChatTextChunks,
+  formatGoogleChatMediaText,
   GOOGLE_CHAT_FORMAT_PROFILE,
   sanitizeGoogleChatText,
 } from "./format.js";
@@ -44,18 +46,6 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "googleChatChannelRuntime",
 );
-
-type GoogleChatTextSendContext = Pick<
-  ChannelMessageSendTextContext,
-  | "cfg"
-  | "to"
-  | "text"
-  | "accountId"
-  | "replyToId"
-  | "threadId"
-  | "assertDirectAdapterHandoff"
-  | "onPlatformSendDispatch"
->;
 
 const collectGoogleChatGroupPolicyWarnings =
   createAllowlistProviderOpenWarningCollector<ResolvedGoogleChatAccount>({
@@ -189,10 +179,16 @@ export const googlechatOutboundAdapter = {
     chunkerMode: "markdown" as const,
     textChunkLimit: GOOGLE_CHAT_FORMAT_PROFILE.chunk.limit,
     sanitizeText: ({ text }: { text: string }) => sanitizeGoogleChatText(text),
-    normalizePayload: ({ payload }: { payload: ReplyPayload }) =>
-      shouldSuppressGoogleChatManualExecApprovalFollowupPayload(payload) ? null : payload,
+    normalizePayload: ({ payload }: { payload: ReplyPayload }) => {
+      if (shouldSuppressGoogleChatManualExecApprovalFollowupPayload(payload)) {
+        return null;
+      }
+      const reply = resolveSendableOutboundReplyParts(payload);
+      const { mediaUrl: _mediaUrl, mediaUrls: _mediaUrls, ...rest } = payload;
+      return { ...rest, text: formatGoogleChatMediaText(reply.text, reply.mediaUrls) };
+    },
     resolveTarget: ({ to }: { to?: string }) => {
-      const normalized = normalizeGoogleChatTarget(normalizeOptionalString(to));
+      const normalized = normalizeGoogleChatTarget(to);
       return normalized
         ? { ok: true as const, to: normalized }
         : {
@@ -212,7 +208,7 @@ export const googlechatOutboundAdapter = {
       threadId,
       assertDirectAdapterHandoff,
       onPlatformSendDispatch,
-    }: GoogleChatTextSendContext) => {
+    }: Omit<ChannelMessageSendTextContext, "onDeliveryResult">) => {
       const account = resolveGoogleChatAccount({
         cfg,
         accountId,
@@ -262,6 +258,7 @@ export const googlechatMessageAdapter = defineChannelMessageAdapter({
   durableFinal: {
     capabilities: {
       text: true,
+      media: true,
       thread: true,
       messageSendingHooks: true,
     },

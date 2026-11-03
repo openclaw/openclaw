@@ -2,42 +2,11 @@ import type { SessionToolOverrides } from "./patch.ts";
 
 type BooleanOverrideGroup = "mcpServers" | "skills";
 
-function copyDynamicKeyRecord<T>(
-  values: Record<string, T> | undefined,
-  copyValue: (value: T) => T = (value) => value,
-): Record<string, T> {
-  return Object.fromEntries(
-    Object.entries(values ?? {}).map(([name, value]) => [name, copyValue(value)]),
-  );
-}
-
 export function readOwnEntry<T>(
   values: Readonly<Record<string, T>> | null | undefined,
   name: string,
 ): T | undefined {
   return values != null && Object.hasOwn(values, name) ? values[name] : undefined;
-}
-
-function setOwnValue<T>(values: Record<string, T>, name: string, value: T): void {
-  Object.defineProperty(values, name, {
-    configurable: true,
-    enumerable: true,
-    value,
-    writable: true,
-  });
-}
-
-function copyOverrides(overrides: SessionToolOverrides | null | undefined): SessionToolOverrides {
-  return {
-    ...(overrides?.mcpServers ? { mcpServers: copyDynamicKeyRecord(overrides.mcpServers) } : {}),
-    ...(overrides?.mcpToolsDeny
-      ? {
-          mcpToolsDeny: copyDynamicKeyRecord(overrides.mcpToolsDeny, (tools) => [...tools]),
-        }
-      : {}),
-    ...(overrides?.skills ? { skills: copyDynamicKeyRecord(overrides.skills) } : {}),
-    ...(overrides?.webSearch !== undefined ? { webSearch: overrides.webSearch } : {}),
-  };
 }
 
 export function resolveToolOverrideState(baseEnabled: boolean, override: boolean | undefined) {
@@ -53,10 +22,7 @@ export function resolveWebSearchToolOverrideState(
   baseEnabled: boolean,
   override: boolean | undefined,
 ) {
-  if (!baseEnabled) {
-    return false;
-  }
-  return override ?? baseEnabled;
+  return baseEnabled && (override ?? baseEnabled);
 }
 
 export function nextBooleanToolOverrides(
@@ -66,12 +32,10 @@ export function nextBooleanToolOverrides(
   nextEnabled: boolean,
   baseEnabled: boolean,
 ): SessionToolOverrides {
-  const next = copyOverrides(current);
-  const values = (Object.hasOwn(next, group) ? next[group] : undefined) ?? {};
+  const next = { ...current };
+  const values = { ...(Object.hasOwn(next, group) ? next[group] : undefined), [name]: nextEnabled };
   if (nextEnabled === baseEnabled) {
     delete values[name];
-  } else {
-    setOwnValue(values, name, nextEnabled);
   }
   if (Object.keys(values).length === 0) {
     delete next[group];
@@ -86,7 +50,7 @@ export function nextWebSearchToolOverrides(
   nextEnabled: boolean,
   baseEnabled = true,
 ): SessionToolOverrides {
-  const next = copyOverrides(current);
+  const next = { ...current };
   // Clear stale enablement without discarding an explicit session suppression.
   if (!baseEnabled) {
     if (next.webSearch === true) {
@@ -108,7 +72,7 @@ export function nextMcpToolsDenyOverrides(
   rawToolName: string,
   denied: boolean,
 ): SessionToolOverrides {
-  const next = copyOverrides(current);
+  const next = { ...current };
   const currentDeny = Object.hasOwn(next, "mcpToolsDeny") ? next.mcpToolsDeny : undefined;
   const deniedTools = new Set(readOwnEntry(currentDeny, server) ?? []);
   if (denied) {
@@ -116,10 +80,8 @@ export function nextMcpToolsDenyOverrides(
   } else {
     deniedTools.delete(rawToolName);
   }
-  const mcpToolsDeny = currentDeny ?? {};
-  if (deniedTools.size > 0) {
-    setOwnValue(mcpToolsDeny, server, [...deniedTools].toSorted());
-  } else {
+  const mcpToolsDeny = { ...currentDeny, [server]: [...deniedTools].toSorted() };
+  if (deniedTools.size === 0) {
     delete mcpToolsDeny[server];
   }
   if (Object.keys(mcpToolsDeny).length === 0) {

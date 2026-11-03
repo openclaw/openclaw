@@ -1,91 +1,80 @@
-import type { saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 
-const saveResponseMediaMock = vi.hoisted(() => vi.fn<typeof saveResponseMedia>());
+const saveResponseMediaMock = vi.hoisted(() =>
+  vi.fn(async (response: Response, options: { maxBytes?: number }) => {
+    if (!response.ok) {
+      const statusText = response.statusText ? ` ${response.statusText}` : "";
+      throw new Error(`HTTP ${response.status}${statusText}`);
+    }
+    const contentLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && options.maxBytes && contentLength > options.maxBytes) {
+      throw new Error(`content length ${contentLength} exceeds maxBytes ${options.maxBytes}`);
+    }
+    return {
+      id: "saved",
+      path: "/tmp/saved.png",
+      size: 42,
+      contentType: response.headers.get("content-type") ?? "image/png",
+    };
+  }),
+);
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => ({
   saveResponseMedia: saveResponseMediaMock,
 }));
 
-const REMOTE_URL = "https://graph.microsoft.com/v1.0/shares/abc/driveItem/content";
+import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
+
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const MEDIA_URL = "https://graph.microsoft.com/v1.0/shares/abc/driveItem/content";
+
+function download(
+  fetchImpl: Parameters<typeof downloadAndStoreMSTeamsRemoteMedia>[0]["fetchImpl"],
+) {
+  return downloadAndStoreMSTeamsRemoteMedia({
+    url: MEDIA_URL,
+    filePathHint: "file.png",
+    maxBytes: 1024,
+    fetchImpl,
+  });
+}
 
 describe("downloadAndStoreMSTeamsRemoteMedia", () => {
   beforeEach(() => {
-    saveResponseMediaMock.mockReset().mockResolvedValue({
-      id: "stored",
-      path: "/tmp/stored.png",
-      size: 42,
-      contentType: "image/png",
-    });
+    saveResponseMediaMock.mockClear();
   });
 
-  it.each([false, true])(
-    "passes the guarded response and storage options through (preserveFilenames=%s)",
-    async (preserveFilenames) => {
-      const response = new Response("bytes", { headers: { "content-type": "text/plain" } });
-      const fetchImpl = vi.fn(async () => response);
-
-      const result = await downloadAndStoreMSTeamsRemoteMedia({
-        url: REMOTE_URL,
-        filePathHint: "report.pdf",
-        maxBytes: 1024,
-        contentTypeHint: "application/pdf",
-        preserveFilenames,
-        fetchImpl,
-      });
-
-      expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(REMOTE_URL, { redirect: "follow" });
-      expect(saveResponseMediaMock).toHaveBeenCalledExactlyOnceWith(response, {
-        sourceUrl: REMOTE_URL,
-        filePathHint: "report.pdf",
-        maxBytes: 1024,
-        fallbackContentType: "application/pdf",
-        originalFilename: preserveFilenames ? "report.pdf" : undefined,
-      });
-      expect(saveResponseMediaMock.mock.calls[0]?.[0]).toBe(response);
-      expect(result).toEqual({ path: "/tmp/stored.png", contentType: "image/png", kind: "image" });
-    },
-  );
-
-  it("preserves the caller's explicit kind over the saved content type", async () => {
-    const result = await downloadAndStoreMSTeamsRemoteMedia({
-      url: REMOTE_URL,
-      filePathHint: "file.png",
-      maxBytes: 1024,
-      kind: "document",
-      fetchImpl: async () => new Response("bytes"),
-    });
-
-    expect(result).toEqual({ path: "/tmp/stored.png", contentType: "image/png", kind: "document" });
+  // Regression #63396: use the caller's guarded fetch, which owns SSRF enforcement.
+  it("downloads through the supplied guarded fetchImpl", async () => {
+    const fetchImpl = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(PNG_BYTES, { status: 200, headers: { "content-type": "image/png" } }),
+    );
+    const result = await download(fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(MEDIA_URL);
+    expect(result.path).toBe("/tmp/saved.png");
   });
 
-  it.each([false, true])(
-    "preserves storage errors and cancels the unread response (cancel rejects=%s)",
-    async (cancelRejects) => {
-      const cancel = vi.fn(async () => {
-        if (cancelRejects) {
-          throw new Error("cancel failed");
-        }
-      });
-      const response = new Response(new ReadableStream<Uint8Array>({ cancel }));
-      const error = new Error("storage failed");
-      saveResponseMediaMock.mockImplementationOnce(async (received) => {
-        expect(received).toBe(response);
-        expect(received.bodyUsed).toBe(false);
-        throw error;
-      });
+  it("surfaces HTTP errors as exceptions (no silent drop)", async () => {
+    await expect(download(async () => new Response("nope", { status: 403 }))).rejects.toThrow(
+      /HTTP 403/,
+    );
+  });
 
-      await expect(
-        downloadAndStoreMSTeamsRemoteMedia({
-          url: REMOTE_URL,
-          filePathHint: "file.png",
-          maxBytes: 1024,
-          fetchImpl: async () => response,
-        }),
-      ).rejects.toBe(error);
+  it("rejects a response whose Content-Length exceeds maxBytes", async () => {
+    await expect(
+      download(async () => new Response(PNG_BYTES, { headers: { "content-length": "999999" } })),
+    ).rejects.toThrow(/exceeds maxBytes/);
+  });
 
-      expect(cancel).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("cancels a guarded response when storage fails before reading the body", async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel });
+    saveResponseMediaMock.mockRejectedValueOnce(new Error("mkdir failed"));
+    await expect(download(async () => new Response(body, { status: 200 }))).rejects.toThrow(
+      "mkdir failed",
+    );
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
 });

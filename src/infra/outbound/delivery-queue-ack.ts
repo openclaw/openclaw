@@ -35,7 +35,7 @@ export async function retireUnsentDelivery(
     try {
       await releaseSpoolArtifacts(retired.spoolPaths, stateDir);
     } finally {
-      cancelDeliveryQueueMediaRetention(retired.retention, stateDir, context);
+      await cancelDeliveryQueueMediaRetention(retired.retention, stateDir, context);
     }
   };
 }
@@ -93,7 +93,7 @@ export async function failPendingDelivery(
       expectedPlatformSendAttemptId: params.expectedPlatformSendAttemptId,
       retainSpoolArtifacts: params.retainSpoolArtifacts,
       stateDir,
-      prepared: prepared ? structuredClone(prepared) : undefined,
+      prepared,
     },
   });
   if (result.status === "failed") {
