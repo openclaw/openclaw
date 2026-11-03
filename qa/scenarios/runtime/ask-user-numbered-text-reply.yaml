@@ -1,0 +1,125 @@
+title: Ask user numbered text reply
+
+scenario:
+  id: gateway-ask-user-numbered-text-reply
+  surface: gateway
+  coverage:
+    primary:
+      - agent-runtime.tool-ask-user
+    secondary:
+      - gateway.chat-apis
+  objective: Verify a plain-text chat reply can answer a multi-question ask_user prompt with numbered lines, and that a reply naming one question keeps the prompt open.
+  successCriteria:
+    - The model calls ask_user once with three questions and the run stays blocked.
+    - A one-line reply "1. Production" is rejected as incomplete and the question stays pending.
+    - Numbered lines for all three questions resolve the question with the declared option values.
+    - The waiting run resumes and the model receives those values in the ask_user result.
+  docsRefs:
+    - docs/tools/ask-user.md
+    - docs/gateway/protocol.md
+  codeRefs:
+    - src/agents/harness/user-input-bridge.ts
+    - src/auto-reply/reply/agent-runner-question-input.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-tooling.ts
+  execution:
+    kind: flow
+    summary: Ask three structured questions over chat.send, reject a one-line numbered reply, then resolve them with one numbered line per question.
+    config:
+      requiredProviderMode: mock-openai
+      promptNeedle: Where should this deploy?
+      incompleteReply: "1. Production"
+      incompleteNotice: "question 'checks' requires an answer"
+      completeReply: "1. Production\n2. E2E\n3. Urgent"
+      expectedAnswers:
+        deploy_target: [Production]
+        checks: [E2E]
+        release_note: [Urgent]
+      expectedToolOutputLines:
+        - "Deploy: Production"
+        - "Checks: E2E"
+        - "Note: Urgent"
+      prompt: >-
+        Structured question QA check. Call ask_user exactly once with these three questions:
+        deploy_target asks "Where should this deploy?" with Staging (Recommended) first and Production second;
+        checks asks "Which checks should run?" with Unit (Recommended), E2E, and Lint and allows multiple selections;
+        release_note asks "Which release note label should be used?" with Routine (Recommended) and Urgent.
+        Use a 60 second timeout. After the tool returns, read its actual answers and reply on one line
+        using this format: `ASK-USER-ROUNDTRIP-OK | deploy=<deploy_target> | checks=<checks comma-separated without spaces or Recommended suffixes> | note=<release_note>`.
+        Never invent or predict the answers.
+        QA routing marker: tool search qa check target=ask_user.
+
+flow:
+  steps:
+    - name: rejects one numbered line, then binds one numbered line per question
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode && Boolean(env.mock)"
+            message: this proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:ask-user-numbered:${randomUUID().slice(0, 8)}`"
+        - set: started
+          value:
+            expr: "await env.gateway.call('chat.send', { sessionKey, message: config.prompt, deliver: false, idempotencyKey: randomUUID() }, { timeoutMs: liveTurnTimeoutMs(env, 30000) })"
+        - assert:
+            expr: "started?.status === 'started' && typeof started?.runId === 'string'"
+            message:
+              expr: "`chat.send did not start the run: ${JSON.stringify(started)}`"
+        - call: waitForCondition
+          saveAs: pendingQuestion
+          args:
+            - lambda:
+                async: true
+                expr: "(await env.gateway.call('question.list', {})).questions.find((question) => question.status === 'pending' && question.sessionKey === sessionKey && question.questions.some((entry) => entry.question === config.promptNeedle))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+        - assert:
+            expr: "pendingQuestion.questions.map((question) => question.questionId).join(',') === Object.keys(config.expectedAnswers).join(',')"
+            message:
+              expr: "`ask_user question shape drifted: ${JSON.stringify(pendingQuestion.questions)}`"
+        - set: incompleteSend
+          value:
+            expr: "await env.gateway.call('chat.send', { sessionKey, message: config.incompleteReply, deliver: false, idempotencyKey: randomUUID() }, { timeoutMs: liveTurnTimeoutMs(env, 30000) })"
+        - call: waitForCondition
+          saveAs: incompleteNotice
+          args:
+            - lambda:
+                async: true
+                expr: "((await env.gateway.call('chat.history', { sessionKey, limit: 100, maxChars: 131072 })).messages ?? []).find((message) => typeof message?.content === 'string' && message.content.includes(config.incompleteNotice))"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - 100
+        - set: openQuestion
+          value:
+            expr: "await env.gateway.call('question.get', { id: pendingQuestion.id })"
+        - assert:
+            expr: "openQuestion.question.status === 'pending'"
+            message:
+              expr: "`an incomplete reply must keep the question open: ${JSON.stringify({ incompleteSend, question: openQuestion.question })}`"
+        - set: completeSend
+          value:
+            expr: "await env.gateway.call('chat.send', { sessionKey, message: config.completeReply, deliver: false, idempotencyKey: randomUUID() }, { timeoutMs: liveTurnTimeoutMs(env, 30000) })"
+        - set: waited
+          value:
+            expr: "await env.gateway.call('agent.wait', { runId: started.runId, timeoutMs: liveTurnTimeoutMs(env, 45000) }, { timeoutMs: liveTurnTimeoutMs(env, 50000) })"
+        - set: terminalQuestion
+          value:
+            expr: "await env.gateway.call('question.get', { id: pendingQuestion.id })"
+        - assert:
+            expr: "terminalQuestion.question.status === 'answered' && Object.entries(config.expectedAnswers).every(([id, values]) => JSON.stringify(terminalQuestion.question.answers?.answers?.[id]) === JSON.stringify(values))"
+            message:
+              expr: "`numbered lines did not bind each question: ${JSON.stringify({ completeSend, waited, question: terminalQuestion.question })}`"
+        - set: resumedRequest
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.toolOutput ?? '').includes('Deploy:'))"
+        - assert:
+            expr: "waited?.status === 'ok' && config.expectedToolOutputLines.every((line) => String(resumedRequest?.toolOutput ?? '').includes(line))"
+            message:
+              expr: "`the resumed run did not receive the declared answers: ${JSON.stringify({ waited: waited?.status, toolOutput: String(resumedRequest?.toolOutput ?? '').slice(0, 600) })}`"
+      detailsExpr: "JSON.stringify({ incompleteNotice: incompleteNotice.content, answers: terminalQuestion.question.answers, waited: waited?.status })"
