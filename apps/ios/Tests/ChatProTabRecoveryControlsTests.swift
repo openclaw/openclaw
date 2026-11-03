@@ -161,6 +161,14 @@ final class ChatProTabRecoveryControlsTests: XCTestCase {
         XCTAssertTrue(
             chatActions.isEnabled,
             "Chat actions carries the in-product Gateway settings route and must stay tappable.")
+        self.attachRenderedEvidence(
+            named: "recovery-toolbar-reachable-while-retrying",
+            window: window,
+            states: [
+                ("sidebar-toggle", sidebarToggle.isEnabled),
+                ("gateway-status-button", statusButton.isEnabled),
+                ("chat-actions", chatActions.isEnabled),
+            ])
 
         // An unhealthy gateway routes the status button to Gateway settings: that is the
         // recovery the reporter could not reach. Activate it whatever UIKit view backs the
@@ -172,6 +180,10 @@ final class ChatProTabRecoveryControlsTests: XCTestCase {
         XCTAssertTrue(
             probe.openedSettings,
             "Tapping the unhealthy status button must open Gateway settings during reconnect.")
+        self.attachRenderedEvidence(
+            named: "recovery-gateway-settings-route-executed",
+            window: window,
+            states: [("opened-settings", probe.openedSettings)])
 
         // The chat surface keeps its lock: the composer belongs to the captured owner
         // until the pending handoff settles. Required rather than optional, so the
@@ -189,6 +201,14 @@ final class ChatProTabRecoveryControlsTests: XCTestCase {
             "A composer waiting for the pending gateway owner must not accept selection either.")
         XCTAssertTrue(composer.accessibilityTraits.contains(.notEnabled))
         XCTAssertFalse(composer.isFirstResponder)
+        self.attachRenderedEvidence(
+            named: "recovery-composer-locked",
+            window: window,
+            states: [
+                ("composer-editable", composer.isEditable),
+                ("composer-selectable", composer.isSelectable),
+                ("composer-not-enabled-trait", composer.accessibilityTraits.contains(.notEnabled)),
+            ])
     }
 
     func testChatMutationLockCoversEveryPendingGatewayOwner() {
@@ -228,6 +248,27 @@ final class ChatProTabRecoveryControlsTests: XCTestCase {
             isAttachmentOwnerPinned: true,
             capturedOwnerID: "owner-a",
             currentOwnerID: "owner-b"))
+    }
+
+    /// Rendered evidence for the recovery path: the screen exactly as the assertions saw it, plus
+    /// the interactivity each control published. Kept in the result bundle so an Apple lane run
+    /// carries the media and the diagnostics instead of only a pass/fail line.
+    private func attachRenderedEvidence(named name: String, window: UIWindow, states: [(String, Bool)]) {
+        let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
+        let screenshot = XCTAttachment(image: renderer.image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        })
+        screenshot.name = "\(name)-screen"
+        screenshot.lifetime = .keepAlways
+        self.add(screenshot)
+
+        let diagnostics = states
+            .map { entry in "\(entry.0): \(entry.1 ? "enabled" : "disabled")" }
+            .joined(separator: "\n")
+        let controlStates = XCTAttachment(string: "\(name)\n\(diagnostics)")
+        controlStates.name = "\(name)-control-states"
+        controlStates.lifetime = .keepAlways
+        self.add(controlStates)
     }
 
     /// The composer applies its interactivity on a deferred main-queue turn, so the walk retries
