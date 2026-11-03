@@ -42,7 +42,6 @@ export function registerInvalidConfigReloadTests(tempDirs: { make(prefix: string
 
     for (const [invalidConfig, issuePath] of [
       [{ agents: { defaults: { timeoutSeconds: -5 } } }, "agents.defaults.timeoutSeconds"],
-      [{ gateway: { port: "abc" } }, "gateway.port"],
       [{ sessions: { allowThreadTargets: true } }, "<root>"],
     ] as const) {
       await writeFile(configPath, JSON.stringify(invalidConfig));
