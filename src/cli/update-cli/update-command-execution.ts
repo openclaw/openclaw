@@ -109,9 +109,7 @@ export async function executeMutableUpdate(
     assertExecutionCurrent();
   };
   const mode: UpdateRunResult["mode"] =
-    params.updateInstallKind === "git"
-      ? "git"
-      : (params.packageInstallTarget?.manager ?? "unknown");
+    params.updateInstallKind === "git" ? "git" : params.packageInstallTarget.manager;
   if (opts.recovery) {
     throw new UpdatePreMutationError(
       "update-recovery-pending",
