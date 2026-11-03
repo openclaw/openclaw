@@ -16,6 +16,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
+import { describeChatQueueAttachmentLabels } from "../chat-queue-attachment-labels.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
@@ -322,6 +323,11 @@ function ChatQueueItem(rowProps: {
   const canEdit = () => editable() && !edit()?.editingId;
   const text = () =>
     item().text ||
+    (item().attachments?.some((attachment) => attachment.selectionAnnotation)
+      ? describeChatQueueAttachmentLabels(
+          item().attachments?.flatMap(({ fileName }) => (fileName ? [fileName] : [])) ?? [],
+        )
+      : "") ||
     (item().attachments?.length
       ? t("chat.queue.imageCount", { count: String(item().attachments?.length ?? 0) })
       : "");

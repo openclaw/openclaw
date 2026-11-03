@@ -105,3 +105,37 @@ describe("queued message action menu", () => {
     });
   });
 });
+
+it.each([1, 2])("shows an annotation count for %i local comments", (count) => {
+  mountSolid(
+    () => (
+      <ChatQueue
+        queue={[
+          {
+            id: "annotations",
+            text: "",
+            createdAt: 1,
+            attachments: Array.from({ length: count }, (_, id) => ({
+              id: String(id),
+              fileName: "selection-comment.txt",
+              mimeType: "text/plain",
+              selectionAnnotation: {
+                text: "Selected passage",
+                comment: "Clarify this",
+                sessionKey: "agent:main:main",
+                start: 0,
+                end: 16,
+              },
+            })),
+          },
+        ]}
+        onQueueRemove={vi.fn()}
+      />
+    ),
+    { container },
+  );
+  flush();
+  expect(container.querySelector(".chat-queue__text")?.textContent).toBe(
+    count === 1 ? "1 annotation" : "2 annotations",
+  );
+});

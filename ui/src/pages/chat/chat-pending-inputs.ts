@@ -12,12 +12,13 @@ import type {
 import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueDisplayItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
+import { extractText, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import type { ChatPendingInputView, PendingInputRequest } from "./chat-pending-inputs.types.ts";
+import { describeChatQueueAttachmentLabels } from "./chat-queue-attachment-labels.ts";
 import {
   readDeliveredQueuedChatSendForRun,
   removeDeliveredQueuedChatSendForRun,
@@ -75,8 +76,11 @@ function describePendingInputMessage(message: unknown): string {
   );
   const imageCount = normalized.content.filter((part) => part.type === "image").length;
   return (
-    extractText(message) ||
-    attachmentLabels.join(", ") ||
+    extractText(message)?.trim() ||
+    describeChatQueueAttachmentLabels(attachmentLabels) ||
+    describeChatQueueAttachmentLabels(
+      readTranscriptMediaEntries(message).flatMap(({ fileName }) => (fileName ? [fileName] : [])),
+    ) ||
     (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : "")
   );
 }
