@@ -45,14 +45,32 @@ function makeCapture({
         saveAs,
         cancel,
       }),
+    close: () => page.emit("close"),
     expectReleased: () => {
       expect(state.downloadWaiterDepth).toBe(0);
       expect(page.listenerCount("download")).toBe(0);
+      expect(page.listenerCount("close")).toBe(0);
     },
   };
 }
 
 describe("Playwright download capture cancellation", () => {
+  it("rejects a pending download when its page closes", async () => {
+    const f = makeCapture({ mode: "explicit" });
+    try {
+      f.close();
+      await Promise.resolve();
+      await expect(pendingOr(f.outcome)).resolves.toMatchObject({
+        message: "Page closed before download started.",
+      });
+      expect(f.saveAs).not.toHaveBeenCalled();
+      expect(f.cancel).not.toHaveBeenCalled();
+      f.expectReleased();
+    } finally {
+      f.capture.cancel();
+    }
+  });
+
   it("awaits cancellation when owned download admission rejects", async () => {
     const rejection = new Error("download destination blocked by policy");
     const cancelGate = Promise.withResolvers<void>();
@@ -151,6 +169,7 @@ describe("Playwright download capture cancellation", () => {
           expect(beforeSave).toHaveBeenCalledOnce();
         }
         const partialPath = await withinTest(started.promise, signal);
+        f.close();
         if (stage === "saving") {
           await expect(fs.readFile(partialPath, "utf8")).resolves.toBe("download contents");
         }
