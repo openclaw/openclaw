@@ -10,6 +10,17 @@ title: "Keenable search"
 It returns titles, URLs, and long snippets, with optional site and date filters and
 `pro` or `realtime` search modes.
 
+Keenable also documents this setup on their site:
+[OpenClaw integration](https://docs.keenable.ai/integrations/openclaw). That page
+should stay in sync with this guide (official package
+[`@openclaw/keenable-plugin`](https://www.npmjs.com/package/@openclaw/keenable-plugin),
+not the legacy third-party `@keenable/openclaw-search` package).
+
+On OpenClaw, Keenable is a first-class managed provider in the same category as
+[Exa](/tools/exa-search), [Firecrawl](/tools/firecrawl), and
+[Parallel](/tools/parallel-search): install an `@openclaw/*-plugin`, set
+`tools.web.search.provider`, and optionally add an API key.
+
 ## Install plugin
 
 ```bash
@@ -124,4 +135,13 @@ Maximum snippet length in characters (180-10000).
 ## Related
 
 - [Web search overview](/tools/web)
+- [Keenable OpenClaw integration](https://docs.keenable.ai/integrations/openclaw) (Keenable docs)
 - [Keenable API docs](https://docs.keenable.ai/)
+- [Search API reference](https://docs.keenable.ai/api-reference/search)
+
+## Keenable docs maintenance
+
+Canonical Mintlify source for Keenable’s integration page lives at
+`extensions/keenable/integrations-docs-openclaw.md` in the OpenClaw repository.
+Update that file when install paths or config change, then mirror the content to
+`docs.keenable.ai/integrations/openclaw`.

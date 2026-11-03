@@ -10,3 +10,6 @@ openclaw gateway restart
 ```
 
 See <https://docs.openclaw.ai/tools/keenable-search> for setup and configuration.
+
+Keenable’s integration page: <https://docs.keenable.ai/integrations/openclaw>.
+Mintlify source to keep that page current: `./integrations-docs-openclaw.md`.
