@@ -8,6 +8,7 @@ import type {
   EmbeddedAgentRunMeta,
   EmbeddedAgentRunPayload,
 } from "../../agents/embedded-agent-runner/result.types.js";
+import type { ReplyExpectation } from "../../agents/reply-completion.types.js";
 import type { ResolvedToolPromptFinalizer } from "../../agents/resolved-tool-prompt.types.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -117,6 +118,8 @@ export type SessionEventOptions = {
   deliver?: boolean;
   /** Host-owned: runtime error payloads stay in the transcript, out of chat delivery. */
   suppressErrorDelivery?: true;
+  /** Host-authored requiredness; for example, cron failure repair permits NO_REPLY silence. */
+  replyExpectation?: ReplyExpectation;
   /** Host producer remains live through admission, execution and delivery. */
   assertCurrent?: () => void;
 };

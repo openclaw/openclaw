@@ -7,6 +7,7 @@ import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-a
 import type {
   ReplyDeliveryFactsObserver,
   ReplyDeliveryObserver,
+  ReplyExpectation,
 } from "../../agents/reply-completion.js";
 import type { SessionEntryCreationCommit } from "../../config/sessions/session-entry-creation.types.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -52,6 +53,8 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Host-authored requiredness; for example, cron failure repair permits NO_REPLY silence. */
+  replyExpectation?: ReplyExpectation;
   /** Dispatch-owned command requester binding; never part of the public plugin API. */
   withCommandNativeSubagents?: <T>(
     binding: {

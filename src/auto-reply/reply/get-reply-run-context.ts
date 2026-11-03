@@ -222,6 +222,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     ctx: promptSessionCtx,
     cfg,
     scheduledAutomation: opts?.scheduledAutomation !== undefined,
+    replyExpectation: opts?.replyExpectation,
   });
   const replyOperationRunState = resolveReplyOperationRunState(opts);
   const setReplyCompletion = (evidence: Parameters<typeof resolveReplyCompletion>[1]) => {
