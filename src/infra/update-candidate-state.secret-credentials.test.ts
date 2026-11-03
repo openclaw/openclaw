@@ -100,9 +100,10 @@ describe("snapshot secret provider credentials", () => {
     expect(await fs.readFile(aliased, "utf8")).toBe("ops_belongs_to_the_plugin_tool");
   });
 
-  it("does not abort the snapshot when an owned credential directory exceeds the scan limit", async () => {
-    // A configured plugin integration whose directory holds unrelated bulk must not turn a
-    // working serving installation into a blocked update (issue #192066 review).
+  it("keeps the required credential when an owned directory holds unrelated bulk", async () => {
+    // A configured plugin integration whose directory also holds unrelated bulk must neither
+    // lose the resolver prerequisite nor turn a working installation into a blocked update
+    // (issue #192066 review).
     await writeCredential(path.join("credentials", "onepassword", "service-account-token"), "tok");
     for (let index = 0; index < 200; index += 1) {
       await writeCredential(
@@ -120,19 +121,48 @@ describe("snapshot secret provider credentials", () => {
         },
       },
     });
-    // The over-limit directory is skipped rather than fatal; the serving bytes are untouched.
-    expect(
-      await fs.lstat(path.join(target, "credentials", "onepassword")).then(
-        () => true,
-        () => false,
-      ),
-    ).toBe(false);
+    // The prerequisite the resolver reads survives the unrelated bulk below it.
+    const copied = path.join(target, "credentials", "onepassword", "service-account-token");
+    expect(await fs.readFile(copied, "utf8")).toBe("tok");
+    expect((await fs.stat(copied)).mode & 0o777).toBe(0o600);
     expect(
       await fs.readFile(
         path.join(source, "credentials", "onepassword", "service-account-token"),
         "utf8",
       ),
     ).toBe("tok");
+  });
+
+  it("does not copy a credential directory named only by integrationId", async () => {
+    // integrationId is a key inside the plugin's manifest, not a credential owner: an unused
+    // provider declaring another owner's integration id must not widen the copy
+    // (issue #192066 review).
+    const token = "ops_example_service_account_token";
+    await writeCredential(path.join("credentials", "onepassword", "service-account-token"), token);
+    const unrelated = await writeCredential(
+      path.join("credentials", "slack", "oauth.json"),
+      '{"token":"xoxb-unrelated"}',
+    );
+    await snapshot({
+      secrets: {
+        providers: {
+          unused: {
+            source: "exec",
+            pluginIntegration: { pluginId: "onepassword", integrationId: "slack" },
+          },
+        },
+      },
+    });
+    expect(
+      await fs.readFile(path.join(target, "credentials", "onepassword", "service-account-token")),
+    ).toEqual(Buffer.from(token));
+    expect(
+      await fs.lstat(path.join(target, "credentials", "slack")).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+    expect(await fs.readFile(unrelated, "utf8")).toBe('{"token":"xoxb-unrelated"}');
   });
 
   it("refuses to follow a credential symlink out of the source state directory", async () => {
