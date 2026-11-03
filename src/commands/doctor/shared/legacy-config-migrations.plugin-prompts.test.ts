@@ -50,6 +50,13 @@ it.each([
   expect(() => migrate(hooks)).toThrow(/Cannot migrate plugins.entries.example.with.dots.hooks/);
 });
 
+it.each([
+  { allowPromptModification: "no", allowConversationAccess: true },
+  { allowPromptModification: false, allowConversationAccess: "yes" },
+])("rejects invalid current-format hook booleans: %j", (hooks) => {
+  expect(PluginEntrySchema.safeParse({ hooks }).success).toBe(false);
+});
+
 it("leaves an unset grant and other hook settings alone", () => {
   const { raw, next, hooks, changes } = migrate({ allowConversationAccess: false });
   expect(next).toEqual(raw);

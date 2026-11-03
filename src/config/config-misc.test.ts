@@ -100,12 +100,12 @@ const schemaCases: Array<[string, unknown, boolean]> = [
   ["gateway.controlUi.embedSandbox", "yolo", false],
   [
     "plugins.entries.voice-call.hooks",
-    { allowPromptModification: "no", allowConversationAccess: true },
+    { allowPromptInjection: "no", allowConversationAccess: true },
     false,
   ],
   [
     "plugins.entries.voice-call.hooks",
-    { allowPromptModification: false, allowConversationAccess: "yes" },
+    { allowPromptInjection: false, allowConversationAccess: "yes" },
     false,
   ],
   ["plugins.entries.voice-call.subagent", { allowModelOverride: "yes", allowedModels: [1] }, false],
