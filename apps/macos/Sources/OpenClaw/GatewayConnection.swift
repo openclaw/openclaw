@@ -10,6 +10,16 @@ import OSLog
 
 private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category: "gateway.connection")
 
+private enum GatewayPersonalIdentityError: LocalizedError {
+    case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .unavailable(message): message
+        }
+    }
+}
+
 /// Owns one Gateway websocket shared by its callers. The primary app runtime
 /// uses `.shared`; saved-profile windows use independent connections.
 actor GatewayConnection: Observable {
@@ -1035,7 +1045,7 @@ extension GatewayConnection {
                 url: config.url,
                 gatewayFingerprint: binding.tlsFingerprint)
             else {
-                throw Self.failure(1, "Personal Gateway identity requires local WSS so the attested Gateway certificate is pinned before local credentials are sent")
+                throw GatewayPersonalIdentityError.unavailable("Personal Gateway identity requires local WSS so the attested Gateway certificate is pinned before local credentials are sent")
             }
             personalIdentityTLSRoute = localTLSRoute
             personalIdentity = .use(
@@ -1156,7 +1166,7 @@ extension GatewayConnection {
               sourceURL.user == nil,
               sourceURL.password == nil
         else {
-            throw Self.failure(1, "Personal Gateway identity is unavailable: this Primary Gateway has no verified local Tailscale Serve route")
+            throw GatewayPersonalIdentityError.unavailable("Personal Gateway identity is unavailable: this Primary Gateway has no verified local Tailscale Serve route")
         }
         try Task.checkCancellation()
 
@@ -1169,7 +1179,7 @@ extension GatewayConnection {
               let sessionBox = self.sessionProvider(tlsRoute),
               let tlsMetadata = sessionBox.session as? GatewayTLSRouteMetadataProviding
         else {
-            throw Self.failure(1, "Personal Gateway identity requires the normal trusted WSS connection")
+            throw GatewayPersonalIdentityError.unavailable("Personal Gateway identity requires the normal trusted WSS connection")
         }
 
         struct BindingWire: Sendable {
@@ -1235,7 +1245,7 @@ extension GatewayConnection {
               Self.isSHA256Fingerprint(binding.tlsFingerprint),
               tlsMetadata.effectiveTLSFingerprintSHA256 != nil
         else {
-            throw Self.failure(1, "Personal Gateway identity could not verify the binding over the trusted Serve connection")
+            throw GatewayPersonalIdentityError.unavailable("Personal Gateway identity could not verify the binding over the trusted Serve connection")
         }
         return PrimaryPersonalIdentityBinding(
             bindingId: binding.bindingId,
