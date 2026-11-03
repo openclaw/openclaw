@@ -564,11 +564,11 @@ function* assembleOpenClawCodingTools(
   // goes through the same policy pipeline as a top-level turn.
   // Host-bound ring-zero tools carry their own authority checks. Agent policy
   // must not deadlock setup, but the tools still receive schema/hook wrappers.
-  const completeTurnTools = (filtered: AnyAgentTool[]) =>
+  const completeTurnTools = (...filter: Parameters<typeof messageInvocationPolicy.filter>) =>
     applyGatewayToolPolicy(
       applySwarmCollectorToolContract(
         applyDelegationCapability(
-          mergeAgentRingZeroTools(ringZeroTools, filtered),
+          mergeAgentRingZeroTools(ringZeroTools, messageInvocationPolicy.filter(...filter)),
           options?.delegationCapability,
         ),
         {
@@ -585,10 +585,8 @@ function* assembleOpenClawCodingTools(
     callableTools,
     exportedTools,
   } = turnAuthority.resolveTurnToolSurface({
-    turnTools: completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter)),
-    sessionTools: narrowedBy
-      ? completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, undefined, "session"))
-      : undefined,
+    turnTools: completeTurnTools(capabilityProfile, onPolicyFilter),
+    sessionTools: narrowedBy && completeTurnTools(capabilityProfile, undefined, "session"),
     narrowedBy,
     ownerOnlyDenied: new Set(ownerOnlyCoreToolDenylist),
     hostSystemTurn: turnAuthority.isHostSystemTurn(options ?? {}),
