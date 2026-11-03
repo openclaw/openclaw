@@ -72,7 +72,7 @@ import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-genera
 import { prepareSessionCreatorProfile } from "./session-creator.js";
 import { createProfileSessionEntryFilter } from "./session-sharing-read.js";
 
-const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
+const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read.no-credential-enrollment";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 
 export { getBearerToken, getHeader } from "./http-header-value.js";

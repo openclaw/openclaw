@@ -1,7 +1,10 @@
 import { StatementSync } from "node:sqlite";
 import { expect } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { preparePersonalProfileAction } from "./personal-profile-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -41,4 +44,15 @@ export async function expectReceiptBackedPersonalGitHubAuthority(options: {
   } finally {
     reads.restore();
   }
+}
+
+export function revokePersonalGitHubRole(config: OpenClawConfig, profileId: string) {
+  config.gateway = {
+    roles: {
+      definitions: { blocked: { scopes: [], agents: [], sessions: { others: "none" } } },
+      default: "blocked",
+    },
+  };
+  setUserProfileRole(profileId, "blocked");
+  invalidateOperatorRolePolicy(profileId);
 }

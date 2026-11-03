@@ -116,7 +116,11 @@ describe("portal gateway methods", () => {
     const list = async (scope: string) =>
       (await harness(service, [scope]).invoke("portal.list", {})).mock.calls[0]?.[1];
     expect(await list("operator.read")).toEqual({ portals: [publicPortal] });
+    expect(await list("operator.read.no-credential-enrollment")).toEqual({
+      portals: [publicPortal],
+    });
     expect(await list("operator.write")).toEqual({ portals: [portal] });
+    expect(await list("operator.write.no-credential-enrollment")).toEqual({ portals: [portal] });
     expect(await list("operator.admin")).toEqual({ portals: [portal] });
   });
 

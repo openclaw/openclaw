@@ -89,22 +89,25 @@ describe("trusted plugin approval requests", () => {
       await expect(f.trusted()).resolves.toEqual(accepted);
     }));
 
-  it("lets a write-only tool caller request review without allowing it to resolve review", () =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
-      await expect(f.trusted()).resolves.toEqual(accepted);
-      const client = f.request.mock.calls[0]?.[0].client;
-      expect(client?.connect.scopes).toEqual(["operator.write"]);
-      expect(client?.internal?.pluginApprovalRequestOwnerId).toBe("lobster");
-      expect(client?.internal?.approvalRuntime).not.toBe(true);
-      await expect(
-        f.trusted("lobster", "bundled", "plugin.approval.resolve", {
-          id: "plugin:test",
-          decision: "allow-once",
-        }),
-      ).rejects.toThrow(missingScope);
-      expect(f.resolve).not.toHaveBeenCalled();
-    }));
+  it.each(["operator.write", "operator.write.no-credential-enrollment"])(
+    "lets a %s tool caller request review without reviewer grants",
+    (scope) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const f = fixture([scope]);
+        await expect(f.trusted()).resolves.toEqual(accepted);
+        const client = f.request.mock.calls[0]?.[0].client;
+        expect(client?.connect.scopes).toEqual([scope]);
+        expect(client?.internal?.pluginApprovalRequestOwnerId).toBe("lobster");
+        expect(client?.internal?.approvalRuntime).not.toBe(true);
+        await expect(
+          f.trusted("lobster", "bundled", "plugin.approval.resolve", {
+            id: "plugin:test",
+            decision: "allow-once",
+          }),
+        ).rejects.toThrow(missingScope);
+        expect(f.resolve).not.toHaveBeenCalled();
+      }),
+  );
 
   it("accepts a live signed hook owner without granting reviewer scope", () =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {

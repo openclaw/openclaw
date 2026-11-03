@@ -22,6 +22,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import type { StatusSummary } from "../status/summary.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import {
@@ -207,9 +208,9 @@ export function resolveProbeAuthSummary(params: {
     capability = "pairing_pending";
   } else if (scopes.includes(ADMIN_SCOPE)) {
     capability = "admin_capable";
-  } else if (scopes.includes(WRITE_SCOPE)) {
+  } else if (operatorScopeSatisfied(WRITE_SCOPE, scopes)) {
     capability = "write_capable";
-  } else if (scopes.includes(READ_SCOPE) || params.verifiedRead === true) {
+  } else if (operatorScopeSatisfied(READ_SCOPE, scopes) || params.verifiedRead === true) {
     capability = "read_only";
   } else if (params.connectLatencyMs != null && params.authMetadataPresent === true) {
     capability = "connected_no_operator_scope";

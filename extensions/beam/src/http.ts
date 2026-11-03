@@ -34,7 +34,11 @@ function currentRequestClient(req: IncomingMessage): BeamRequestClient {
 }
 
 function canPublish(scopes: readonly string[]): boolean {
-  return scopes.includes("operator.write") || scopes.includes("operator.admin");
+  return (
+    scopes.includes("operator.write") ||
+    scopes.includes("operator.write.no-credential-enrollment") ||
+    scopes.includes("operator.admin")
+  );
 }
 
 export function createBeamRequestHandler(params: {

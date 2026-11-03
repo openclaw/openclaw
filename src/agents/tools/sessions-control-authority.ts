@@ -6,6 +6,7 @@ import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { intersectOperatorScopes } from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { ToolAuthorizationError } from "./common.js";
@@ -96,7 +97,10 @@ export async function prepareSessionControlTarget(params: {
           client: createSyntheticPluginRuntimeClient({
             operatorRoleActor: { kind: "operator", profileId: source.authority.profileId },
             operatorRunAuthority: source.authority,
-            scopes: [source.allows("operator.admin") ? "operator.admin" : "operator.write"],
+            scopes: intersectOperatorScopes(
+              [source.allows("operator.admin") ? "operator.admin" : "operator.write"],
+              source.scopes,
+            ),
           }),
         },
         currentFacts,

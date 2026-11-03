@@ -18,9 +18,12 @@ export function relayCaller(
   }
   const scopes = client.connect.scopes ?? [];
   const canAdmin = scopes.includes("operator.admin");
-  const canWrite = canAdmin || scopes.includes("operator.write");
+  const legacyWrite = canAdmin || scopes.includes("operator.write");
+  const canWrite = legacyWrite || scopes.includes("operator.write.no-credential-enrollment");
+  // Ordinary write capability must not turn a restricted grant into legacy
+  // read/write authority, which also permits credential enrollment.
   const ceiling = [
-    ...new Set([...scopes, ...(canWrite ? ["operator.read", "operator.write"] : [])]),
+    ...new Set([...scopes, ...(legacyWrite ? ["operator.read", "operator.write"] : [])]),
   ];
   if (config.gateway?.roles || config.gateway?.auth?.mode === "trusted-proxy") {
     const profile = client.authenticatedUserProfile;
@@ -69,7 +72,13 @@ export function consentAuthority(caller: RelayCaller, value: unknown): RelayGran
     );
   }
   const ceiling =
-    value ?? ["operator.read", "operator.write"].filter((scope) => caller.ceiling.includes(scope));
+    value ??
+    [
+      "operator.read",
+      "operator.write",
+      "operator.read.no-credential-enrollment",
+      "operator.write.no-credential-enrollment",
+    ].filter((scope) => caller.ceiling.includes(scope));
   if (
     !Array.isArray(ceiling) ||
     ceiling.length === 0 ||

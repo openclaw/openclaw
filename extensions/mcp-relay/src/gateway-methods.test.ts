@@ -278,6 +278,28 @@ describe("MCP relay Gateway consent and grant ownership", () => {
     });
   });
 
+  it("lets restricted writers pair without granting legacy enrollment authority", () => {
+    const writer = relayCaller(
+      caller(["operator.write.no-credential-enrollment"], "person-alice"),
+      TEAM,
+    );
+    expect(writer.canPair).toBe(true);
+    expect(consentAuthority(writer, undefined).ceiling).toEqual([
+      "operator.write.no-credential-enrollment",
+    ]);
+    for (const scope of ["operator.read", "operator.write", "operator.admin"]) {
+      expect(() => consentAuthority(writer, [scope])).toThrow(
+        "permitted by your current Gateway role",
+      );
+    }
+    const reader = relayCaller(
+      caller(["operator.read.no-credential-enrollment"], "person-alice"),
+      TEAM,
+    );
+    expect(reader.ceiling).toEqual(["operator.read.no-credential-enrollment"]);
+    expect(reader.canPair).toBe(false);
+  });
+
   it("lists and revokes only the caller's grants while admins can manage other people", async () => {
     const h = await harness();
     await h.addGrant("gr_alice", { kind: "person", profileId: "person-alice" });

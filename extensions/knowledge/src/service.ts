@@ -488,7 +488,10 @@ export function createKnowledgeService(
             (context.source === "session-action" &&
               Boolean(
                 context.action.client?.scopes.some(
-                  (s: string) => s === "operator.write" || s === "operator.admin",
+                  (s: string) =>
+                    s === "operator.write" ||
+                    s === "operator.write.no-credential-enrollment" ||
+                    s === "operator.admin",
                 ),
               )));
         return {
@@ -573,7 +576,12 @@ export function createKnowledgeService(
       !policy.operatorRead ||
       !context.action.client?.connId ||
       !context.action.client.scopes.some(
-        (s) => s === "operator.read" || s === "operator.write" || s === "operator.admin",
+        (s) =>
+          s === "operator.read" ||
+          s === "operator.write" ||
+          s === "operator.read.no-credential-enrollment" ||
+          s === "operator.write.no-credential-enrollment" ||
+          s === "operator.admin",
       )
     ) {
       throw new Error("Maintenance status is available to authorized operators only.");

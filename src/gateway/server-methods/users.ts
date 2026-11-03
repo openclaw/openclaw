@@ -37,6 +37,7 @@ import { resolveSystemGitHubIdentityStatus } from "../../agents/github-tool-iden
 import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
+import { resolvePersonalCredentialEnrollmentScope } from "../../shared/gateway-method-policy.js";
 import { UserChannelIdentityConflictError } from "../../state/user-channel-identities.js";
 import {
   changeCanonicalUserChannelIdentity,
@@ -155,7 +156,12 @@ function connectHandler<P extends { profileId?: string }>(
     action: ModelAccountConnectAction,
     params: P,
   ) => unknown,
-  requiredScope: "operator.read" | "operator.write" | "operator.admin" = "operator.write",
+  requiredScope:
+    | "operator.read"
+    | "operator.write"
+    | "operator.admin"
+    | "operator.read.no-credential-enrollment"
+    | "operator.write.no-credential-enrollment" = "operator.write",
 ): GatewayRequestHandler {
   return defineValidatedGatewayHandler(
     method,
@@ -164,7 +170,7 @@ function connectHandler<P extends { profileId?: string }>(
       const action = await prepareUserModelAccountAction(
         options,
         options.params.profileId,
-        requiredScope,
+        resolvePersonalCredentialEnrollmentScope(method) ?? requiredScope,
       );
       const service = options.context.modelAccountConnectService;
       if (!service) {
@@ -222,7 +228,7 @@ function identityMutationHandler(
 }
 
 async function runPersonalGitHub(
-  options: Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal" | "respond">,
+  options: Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal" | "respond" | "req">,
   fallbackError: string,
   run: (
     action: PersonalGitHubAction,
@@ -236,7 +242,15 @@ async function runPersonalGitHub(
       errorShape(ErrorCodes.FORBIDDEN, error instanceof Error ? error.message : fallbackError),
     );
   try {
-    const action = await preparePersonalProfileAction(options);
+    const method = options.req.method;
+    const scope =
+      resolvePersonalCredentialEnrollmentScope(method) ??
+      (method === "users.github.status" ||
+      method === "users.github.authorize.cancel" ||
+      method === "users.github.disconnect"
+        ? "operator.read.no-credential-enrollment"
+        : "operator.read");
+    const action = await preparePersonalProfileAction(options, scope);
     const service = options.context.githubOAuthService?.personal;
     if (!service) {
       throw new Error("GitHub connections are unavailable; retry after Gateway startup.");
@@ -254,7 +268,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     "users.listAuthLinks",
     validateUsersListAuthLinksParams,
     (service, action) => service.listLinksAsync(action),
-    "operator.read",
+    "operator.read.no-credential-enrollment",
   ),
   "users.linkAuthProfile": connectHandler(
     "users.linkAuthProfile",
@@ -267,17 +281,19 @@ export const usersHandlers: GatewayRequestHandlers = {
     "users.unlinkAuthProfile",
     validateUsersUnlinkAuthProfileParams,
     (service, action, params) => service.unlinkAsync(action, params.provider),
+    "operator.write.no-credential-enrollment",
   ),
   "users.listModelAccounts": connectHandler(
     "users.listModelAccounts",
     validateUsersListModelAccountsParams,
     (service, action, params) => service.listAsync(action, params.cursor),
-    "operator.read",
+    "operator.read.no-credential-enrollment",
   ),
   "users.selectModelAccount": connectHandler(
     "users.selectModelAccount",
     validateUsersSelectModelAccountParams,
     (service, action, params) => service.selectAsync(action, params.authProfileId),
+    "operator.write.no-credential-enrollment",
   ),
   "users.authConnect.start": connectHandler(
     "users.authConnect.start",
@@ -294,16 +310,19 @@ export const usersHandlers: GatewayRequestHandlers = {
     "users.authConnect.status",
     validateUsersAuthConnectStatusParams,
     (service, action, params) => service.statusAsync(action, params.connectId),
+    "operator.write.no-credential-enrollment",
   ),
   "users.authConnect.cancel": connectHandler(
     "users.authConnect.cancel",
     validateUsersAuthConnectCancelParams,
     (service, action, params) => service.cancelAsync(action, params.connectId),
+    "operator.write.no-credential-enrollment",
   ),
   "users.authConnect.catalog": connectHandler(
     "users.authConnect.catalog",
     validateUsersAuthConnectCatalogParams,
     (service, action) => service.catalog(action),
+    "operator.write.no-credential-enrollment",
   ),
   "users.linkChannelIdentity": identityMutationHandler(
     "users.linkChannelIdentity",

@@ -18,13 +18,15 @@ const enModelAccounts = {
       noPerson: "Not identified",
       personalDescription:
         "Sign-in saves an account for this person on this Gateway. System and agent credentials are unchanged.",
+      enrollmentUnavailable:
+        "This connection cannot add credentials. You can still use saved accounts or clear a new-chat default. To add an account, ask your administrator for credential enrollment access and reconnect.",
       signInUnavailable: "Sign-in not ready",
       connectionSettings: "Connection settings",
       unavailable: {
         identity:
           "Use the identity-enabled Gateway address supplied by your administrator, through Tailscale Serve or a trusted proxy. A shared token or device pairing alone does not identify a person.",
         write:
-          "Personal account sign-in requires operator.write access. Ask your administrator for access, then reconnect to the Gateway.",
+          "Managing personal model accounts requires write access. Ask your administrator for access, then reconnect to the Gateway.",
         profile:
           "Wait for your identity profile to load. If it does not appear, use Refresh or Set identity above to retry.",
       },

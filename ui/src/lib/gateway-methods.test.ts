@@ -61,6 +61,45 @@ function snapshot(params: {
 
 describe("canCallGatewayMethod", () => {
   it.each([
+    ["operator.read.no-credential-enrollment", false],
+    ["operator.write.no-credential-enrollment", true],
+  ])("keeps ordinary operations available with %s, without enrollment", (scope, canWrite) => {
+    const enrollment = [
+      ["users.authConnect.start", "operator.write"],
+      ["users.authConnect.answer", "operator.write"],
+      ["users.github.authorize.start", "operator.read"],
+      ["users.github.authorize.poll", "operator.read"],
+    ] as const;
+    const ordinary = [
+      ["users.github.status", "operator.read", true],
+      ["users.github.disconnect", "operator.read", true],
+      ["users.authConnect.catalog", "operator.write", canWrite],
+      ["users.authConnect.status", "operator.write", canWrite],
+      ["users.authConnect.cancel", "operator.write", canWrite],
+      ["users.selectModelAccount", "operator.write", canWrite],
+      ["users.unlinkAuthProfile", "operator.write", canWrite],
+    ] as const;
+    const current = snapshot({
+      methods: [...enrollment, ...ordinary].map(([method]) => method),
+      scopes: [scope],
+    });
+    for (const [method, required] of enrollment) {
+      expect(canCallGatewayMethod(current, method, required), method).toBe(false);
+      expect(canPresentGatewayMethod(current, method, required), method).toBe(false);
+    }
+    for (const [method, required, allowed] of ordinary) {
+      expect(canCallGatewayMethod(current, method, required), method).toBe(allowed);
+    }
+    const enrolled = snapshot({
+      methods: enrollment.map(([method]) => method),
+      scopes: [scope, "operator.write"],
+    });
+    for (const [method, required] of enrollment) {
+      expect(canCallGatewayMethod(enrolled, method, required), method).toBe(true);
+    }
+  });
+
+  it.each([
     ["models.list", "operator.read", true],
     ["chat.metadata", "operator.read", true],
     ["chat.startup", "operator.read", true],

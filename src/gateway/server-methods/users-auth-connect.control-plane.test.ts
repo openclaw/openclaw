@@ -14,6 +14,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   modelAccountLinksCurrent,
   credential,
+  exchange,
   runAuth,
   broadcast,
   service,
@@ -34,6 +35,34 @@ import {
 setupModelAccountConnectTest();
 
 describe("users model-account control plane", () => {
+  it.each(["start", "answer"] as const)(
+    "denies enrollment-restricted %s before provider work",
+    async (action) => {
+      const flow = action === "answer" ? await startFlow() : undefined;
+      const current = flow ? await status(flow) : undefined;
+      runAuth.mockClear();
+      self.connect.scopes = ["operator.write.no-credential-enrollment"];
+      const response = flow
+        ? await flowRpc("answer", flow, {
+            stepId: current.step.id,
+            value: "synthetic-code",
+          })
+        : await rpc("users.authConnect.start", {
+            profileId: "profile-1",
+            provider: "openai",
+            method: "oauth",
+          });
+      expect(response).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "FORBIDDEN" }),
+      );
+      expect(runAuth).not.toHaveBeenCalled();
+      expect(exchange).not.toHaveBeenCalled();
+      expect(writes).toEqual([]);
+    },
+  );
+
   it("lists account pages for their owner or an identified administrator", async () => {
     const accounts = [
       {

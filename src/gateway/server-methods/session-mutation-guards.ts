@@ -8,7 +8,7 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { isGatewayWorkerApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
-import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
+import { resolveMissingOperatorScope } from "../../shared/operator-scope-compat.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import { isGatewayAuthPolicyCurrent } from "../auth-policy.js";
 import {
@@ -377,7 +377,7 @@ export function captureGatewayRequestOperatorGuard(options: GatewayRequestOption
     const currentActor = resolveGatewayOperatorRoleActor(client);
     if (
       (client?.connect?.role ?? "operator") !== role ||
-      scopes.some((scope) => !operatorScopeSatisfied(scope, client?.connect?.scopes ?? [])) ||
+      resolveMissingOperatorScope(scopes, client?.connect?.scopes ?? []) !== null ||
       client?.authenticatedUserProfile?.profileId !== profileId ||
       client?.authenticatedUserId !== userId ||
       (canonicalProfileId !== undefined &&

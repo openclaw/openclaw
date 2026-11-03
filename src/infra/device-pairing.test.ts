@@ -482,6 +482,25 @@ describe("device pairing tokens", () => {
     },
   );
 
+  test.each(["operator.read", "operator.write"])(
+    "cannot mint or rotate an enrollment-capable %s token from a bounded approval",
+    async (scope) => {
+      const boundedScope = `${scope}.no-credential-enrollment`;
+      await pairDevice([boundedScope]);
+      const before = await getPairedDevice("device-1", baseDir);
+      expect(before?.approvedScopes).toEqual([boundedScope]);
+      expect(before?.tokens?.operator?.scopes).toEqual([boundedScope]);
+      const params = { deviceId: "device-1", role: "operator", scopes: [scope] };
+
+      await expect(ensureDeviceToken(params)).resolves.toBeNull();
+      await expect(rotateDeviceToken({ ...params, baseDir })).resolves.toEqual({
+        ok: false,
+        reason: "scope-outside-approved-baseline",
+      });
+      expect(await getPairedDevice("device-1", baseDir)).toEqual(before);
+    },
+  );
+
   test("revokes effective roles only when the caller holds the token scopes", async () => {
     await pairDevice(["operator.admin"]);
     const before = await getPairedDevice("device-1", baseDir);

@@ -38,8 +38,18 @@ export type GrantLookup = (sessionKey: string) => GrantAccess | undefined;
  * (host readiness checks may not) and whether a session reads the private
  * partition: the owner's own audience, or a conversation the owner granted it to. */
 export type MemoryPrincipal = Principal & { healthOnly: boolean; sessionPrivate: boolean };
-const OPERATOR_READ = new Set(["operator.read", "operator.write", "operator.admin"]),
-  OPERATOR_WRITE = new Set(["operator.write", "operator.admin"]);
+const OPERATOR_READ = new Set([
+    "operator.read",
+    "operator.write",
+    "operator.read.no-credential-enrollment",
+    "operator.write.no-credential-enrollment",
+    "operator.admin",
+  ]),
+  OPERATOR_WRITE = new Set([
+    "operator.write",
+    "operator.write.no-credential-enrollment",
+    "operator.admin",
+  ]);
 
 /** Resolve a feature invocation to a principal. No payload field participates:
  * tools use the host-minted memory audience and the owner's grants;

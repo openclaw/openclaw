@@ -16,7 +16,7 @@ import {
   type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
 import { resolveGatewayClientPlatformIdentity } from "../../../shared/gateway-client-platform.js";
-import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../../../shared/operator-scope-compat.js";
 
 export function resolvePairedAccessScopes(
   device: Pick<PairedDevice, "approvedScopes" | "scopes"> | null | undefined,
@@ -110,11 +110,13 @@ export function isControlUiOperatorBootstrapProfile(params: {
   ) {
     return false;
   }
-  return roleScopesAllow({
-    role: "operator",
-    requestedScopes,
-    allowedScopes: profile.scopes,
-  });
+  return (
+    resolveMissingRequestedScope({
+      role: "operator",
+      requestedScopes,
+      allowedScopes: profile.scopes,
+    }) === null
+  );
 }
 
 export function isMobileNodeBootstrapConnect(params: {
@@ -150,7 +152,7 @@ export function pairedDeviceAllowsBootstrapProfile(
     roles.every(
       (role) =>
         hasEffectivePairedDeviceRole(device, role) &&
-        roleScopesAllow({
+        resolveMissingRequestedScope({
           role,
           requestedScopes: resolveBootstrapProfileScopesForRole(
             role,
@@ -158,7 +160,7 @@ export function pairedDeviceAllowsBootstrapProfile(
             params.profile.purpose,
           ),
           allowedScopes: resolvePairedAccessScopes(device),
-        }),
+        }) === null,
     ),
   );
 }

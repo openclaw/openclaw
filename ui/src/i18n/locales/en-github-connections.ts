@@ -11,6 +11,8 @@ const enGitHubConnections = {
     personalUse: "Publishing",
     personalDescription: "Your account for explicitly selected Publish PR actions.",
     systemUse: "Agent commands, dashboards, publishing",
+    enrollmentUnavailable:
+      "This connection cannot connect or replace personal credentials. You can still verify or disconnect My GitHub. To connect an account, ask your administrator for credential enrollment access and reconnect.",
     systemDescription:
       "Default account for agent commands, authenticated dashboards, and publishing.",
     unboundDescription:

@@ -5,7 +5,7 @@ import { getPairedDevice, getPendingDevicePairing } from "../infra/device-pairin
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 
 const TERMINAL_GRACE_MS = 15_000;
 const DURABLE_RECONCILE_INTERVAL_MS = 250;
@@ -223,11 +223,11 @@ export class ScopeUpgradeCoordinator {
       return { status: "rejected", requestId: entry.requestId };
     }
     if (
-      !roleScopesAllow({
+      resolveMissingRequestedScope({
         role: "operator",
         requestedScopes: entry.requestedScopes,
         allowedScopes: token.scopes,
-      })
+      }) !== null
     ) {
       return { status: "insufficient-scopes", requestId: entry.requestId };
     }

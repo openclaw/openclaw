@@ -272,7 +272,7 @@ function preparePersonalGitHubAction(options: Request, signal?: AbortSignal): Pe
     if (current.merged_into) {
       throw new Error("My GitHub requires a verified durable user profile; sign in and try again.");
     }
-    currentGitHubClient(options, "operator.read", {
+    currentGitHubClient(options, "operator.read.no-credential-enrollment", {
       profileId: current.id,
       role: current.role ?? null,
       githubLogin: current.githubLogin,
@@ -315,7 +315,7 @@ async function bindPersonalGitHubSessionAction(
       throw new Error("GitHub publication session was not found.");
     }
     const { authorization, error } = await resolveSessionMutationAuthorizationAsync({
-      client: currentGitHubClient(options, "operator.write", action.owner),
+      client: currentGitHubClient(options, "operator.write.no-credential-enrollment", action.owner),
       method: "sessions.github.publish",
       requestParams: { sessionKey: initial.canonicalKey, agentId: initial.agentId },
       context: options.context,
@@ -327,7 +327,7 @@ async function bindPersonalGitHubSessionAction(
     }
     const assertCurrent = () => {
       action.assertCurrent();
-      currentGitHubClient(options, "operator.write", action.owner);
+      currentGitHubClient(options, "operator.write.no-credential-enrollment", action.owner);
       const current = prepared.readCurrent();
       if (current.entry?.archivedAt !== undefined) {
         throw new GitHubPublicationSessionChangedError();
@@ -361,7 +361,10 @@ export async function preparePersonalGitHubSessionActionV2(
   options: Request & Parameters<typeof prepareGitHubPublicationRequesterV2>[0],
   target: SessionMutationTarget,
 ): Promise<{ action: PersonalGitHubSessionActionV2; release: () => void }> {
-  const personal = await preparePersonalProfileAction(options, "operator.write");
+  const personal = await preparePersonalProfileAction(
+    options,
+    "operator.write.no-credential-enrollment",
+  );
   const bound = await bindPersonalGitHubSessionAction(options, personal, target);
   const { action } = bound;
   try {

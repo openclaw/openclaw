@@ -224,9 +224,14 @@ describe("Talk client agent consult admission", () => {
     },
   );
 
-  it.each(["runOwnedArgs", "runPrompt"] as const)(
-    "steers and claims the registered owner through %s",
-    async (entrypoint) =>
+  it.each([
+    ["runOwnedArgs", "operator.admin"],
+    ["runPrompt", "operator.admin"],
+    ["runOwnedArgs", "operator.write"],
+    ["runOwnedArgs", "operator.write.no-credential-enrollment"],
+  ] as const)(
+    "steers and claims the registered owner through %s with %s",
+    async (entrypoint, callerScope) =>
       withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const scope = {
           agentId: "researcher",
@@ -254,7 +259,7 @@ describe("Talk client agent consult admission", () => {
         const project = vi.fn((_overlay: ReplyToolAuthorityOverlay) => "authority");
         const client = sharingPolicyClient({
           deviceId: "caller-device",
-          scopes: ["operator.admin"],
+          scopes: [callerScope],
         });
         const authority = resolveTalkAgentConsultAuthority(client.connect.scopes, client);
         const handle = createEmbeddedRunHandle({ runId: "run-talk" });
@@ -319,7 +324,7 @@ describe("Talk client agent consult admission", () => {
           );
           expect(project).toHaveBeenCalledOnce();
           expect(mocks.consultRealtimeVoiceAgent.mock.calls[0]?.[0]).toMatchObject({
-            senderIsOwner: true,
+            senderIsOwner: callerScope === "operator.admin",
             toolsAllow: undefined,
           });
           expect(loadSessionEntry(scope)?.lastInteractionAt).toBe(

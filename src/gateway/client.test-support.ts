@@ -27,3 +27,34 @@ export function createAuthFailureMessage(): string {
   failureUrl.password = "pass";
   return `Authorization: Bearer sk-testsecret1234567890abcd ${failureUrl.href}`; // pragma: allowlist secret
 }
+
+export const deviceAuthScopeCases = [
+  {
+    label: "bounded stored scopes",
+    storedScopes: ["operator.write.no-credential-enrollment"],
+    requestedScopes: undefined,
+    deviceToken: undefined,
+    expectedScopes: ["operator.write.no-credential-enrollment"],
+  },
+  {
+    label: "stored scopes",
+    storedScopes: ["operator.read", "operator.write"],
+    requestedScopes: undefined,
+    deviceToken: undefined,
+    expectedScopes: ["operator.read", "operator.write"],
+  },
+  {
+    label: "requested scopes",
+    storedScopes: ["operator.write"],
+    requestedScopes: ["operator.admin"],
+    deviceToken: undefined,
+    expectedScopes: ["operator.admin"],
+  },
+  {
+    label: "explicit device token",
+    storedScopes: ["operator.admin", "operator.read"],
+    requestedScopes: ["operator.pairing"],
+    deviceToken: "explicit-device-token",
+    expectedScopes: ["operator.pairing"],
+  },
+];

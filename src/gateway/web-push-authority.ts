@@ -10,7 +10,11 @@ import {
   resolveEffectiveWebPushPreferences,
 } from "../infra/push-web-preferences.js";
 import { withBoundWebPushSubscriptions, type BoundWebPushSubscription } from "../infra/push-web.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  resolveMissingRequestedScope,
+  roleScopesAllow,
+} from "../shared/operator-scope-compat.js";
 import { getUserPreferenceValues } from "../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
@@ -66,11 +70,11 @@ export function listCurrentWebPushTargets(
       !operatorToken ||
       operatorToken.revokedAtMs ||
       !approvedScopes ||
-      !roleScopesAllow({
+      resolveMissingRequestedScope({
         role: OPERATOR_ROLE,
         requestedScopes: operatorToken.scopes,
         allowedScopes: approvedScopes,
-      })
+      }) !== null
     ) {
       return [];
     }
@@ -111,10 +115,18 @@ export function listCurrentWebPushTargets(
     const visibilityScopes = rolePolicy
       ? (requestedVisibilityScopes ?? []).filter((scope) => scopesAllowed([scope]))
       : [];
+    // Action compatibility does not authorize emitting a broader synthetic grant.
+    const tokenScopes = intersectOperatorScopes(
+      [...new Set([...requiredScopes, ...visibilityScopes])],
+      operatorToken.scopes,
+    );
+    const scopes = rolePolicy
+      ? intersectOperatorScopes(tokenScopes, rolePolicy.scopes)
+      : tokenScopes;
     return [
       {
         subscription,
-        scopes: [...new Set([...requiredScopes, ...visibilityScopes])],
+        scopes,
         userProfileId,
         profile,
         preferences: resolveEffectiveWebPushPreferences({

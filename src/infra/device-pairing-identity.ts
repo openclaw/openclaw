@@ -1,6 +1,6 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import type {
   NodePairingGeneration,
   NodePairingState,
@@ -108,16 +108,16 @@ function resolvePairedDeviceTokenIdentity(
     // The whole token must remain approved, not just this request's scopes.
     if (
       approvedScopes === null ||
-      !roleScopesAllow({
+      resolveMissingRequestedScope({
         role: normalizedRole,
         requestedScopes: token.scopes,
         allowedScopes: approvedScopes,
-      }) ||
-      !roleScopesAllow({
+      }) !== null ||
+      resolveMissingRequestedScope({
         role: normalizedRole,
         requestedScopes: scopes,
         allowedScopes: token.scopes,
-      })
+      }) !== null
     ) {
       return null;
     }

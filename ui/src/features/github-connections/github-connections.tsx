@@ -13,6 +13,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerGitHubConnectionsEnglish } from "../../i18n/locales/en-github-connections.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { projectGateway, projectAgentSelection } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
@@ -37,6 +38,9 @@ function access(snapshot: ApplicationGatewaySnapshot) {
   return {
     profileId,
     canRead,
+    canEnroll: canCallGatewayMethod(snapshot, "users.github.authorize.start", "operator.read", {
+      requireAdvertisement: false,
+    }),
     canAdmin: canRead && hasOperatorAdminAccess(snapshot.hello?.auth ?? null),
   };
 }
@@ -77,7 +81,7 @@ export function GitHubConnections() {
       ...common,
       target: observedProfileId ? { kind: "personal", profileId: observedProfileId } : null,
       statusReadable: canRead && observedProfileId !== null,
-      authorizable: canRead && observedProfileId !== null,
+      authorizable: access(snapshot).canEnroll && observedProfileId !== null,
       configurable: false,
     });
     const agentId = context.settingsAgentSelection.state.selectedId;
@@ -171,6 +175,7 @@ export function GitHubConnections() {
       profileId: observedProfileId,
       canRead,
       canAdmin,
+      canEnroll: personalState.authorizable,
       systemIdentity: systemState.status?.selected.identity ?? personalState.system,
       effective: systemState.status?.effective ?? null,
       locked:
@@ -201,7 +206,9 @@ export function GitHubConnections() {
     if (
       view().locked ||
       (next === "personal"
-        ? !currentAccess.profileId || !currentAccess.canRead
+        ? !currentAccess.profileId ||
+          !currentAccess.canRead ||
+          (!currentAccess.canEnroll && !view().connected)
         : !currentAccess.canAdmin)
     ) {
       return;
@@ -331,15 +338,24 @@ export function GitHubConnections() {
                   />
                 ),
                 view().account?.account?.login,
-                view().profileId ? t("githubConnections.personalUse") : undefined,
+                view().profileId
+                  ? t(
+                      view().canEnroll
+                        ? "githubConnections.personalUse"
+                        : "githubConnections.enrollmentUnavailable",
+                    )
+                  : undefined,
               )}
               control={
                 view().profileId && view().canRead ? (
                   <button
                     class="btn btn--sm"
-                    disabled={view().locked}
+                    disabled={view().locked || (!view().connected && !view().canEnroll)}
+                    title={
+                      !view().canEnroll ? t("githubConnections.enrollmentUnavailable") : undefined
+                    }
                     aria-label={t(
-                      !view().account
+                      !view().account || (view().connected && !view().canEnroll)
                         ? "githubConnections.manage"
                         : view().connected
                           ? "githubConnections.changeMine"
@@ -349,7 +365,7 @@ export function GitHubConnections() {
                   >
                     {/* An unknown status can't promise either "connect" or "change". */}
                     {t(
-                      !view().account
+                      !view().account || (view().connected && !view().canEnroll)
                         ? "githubConnections.manageShort"
                         : view().connected
                           ? "githubConnections.changeShort"

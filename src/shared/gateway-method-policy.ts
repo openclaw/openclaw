@@ -38,3 +38,19 @@ export function normalizePluginGatewayMethodScope<TScope extends string>(
     coercedToReservedAdmin: true,
   };
 }
+
+/** Personal credential acquisition retains the legacy enrollment-bearing grant. */
+export function resolvePersonalCredentialEnrollmentScope(
+  method: string,
+): "operator.read" | "operator.write" | undefined {
+  switch (method) {
+    case "users.authConnect.start":
+    case "users.authConnect.answer":
+      return "operator.write";
+    case "users.github.authorize.start":
+    case "users.github.authorize.poll":
+      return "operator.read";
+    default:
+      return undefined;
+  }
+}

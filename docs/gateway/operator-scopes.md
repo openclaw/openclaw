@@ -72,6 +72,18 @@ or bypass tool and approval policies. Scheduled operator continuations retain th
 creator's actual scopes and revalidate their source authority; they do not become
 admin runs.
 
+### Ordinary access without personal credential enrollment
+
+`operator.write.no-credential-enrollment` grants ordinary read/write operations, including the existing Talk and session capabilities, without allowing personal provider API-key, token, or OAuth enrollment. `operator.read.no-credential-enrollment` grants ordinary reads without personal GitHub publication OAuth enrollment. Legacy `operator.read`, `operator.write`, and `operator.admin` behavior is unchanged; legacy read still permits connecting a personal GitHub account.
+
+Scopes are additive grants, not deny rules: adding legacy `operator.read` restores personal GitHub enrollment, while legacy `operator.write` or `operator.admin` restores all personal credential enrollment. To constrain a device that already holds broader grants, apply a restricted operator-role scope ceiling as well; do not merely add a restricted scope alongside its legacy grants.
+
+These additive scopes can be used in existing operator-role and identity scope lists. They do not add a configuration option or change saved credentials. The write variant can select and use saved model accounts, inspect or cancel sign-in operations, and unlink existing selections. Both variants retain personal GitHub status, cancellation and disconnect, verified GitHub sign-in identity, and co-author credit. Existing administrator, session ownership, private Knowledge, and cross-person requirements still apply.
+
+The Gateway refuses `users.authConnect.start` and `users.authConnect.answer` without current legacy write permission, and `users.github.authorize.start` and `users.github.authorize.poll` without current legacy read permission. Pending enrollment rechecks that authority before external requests and credential persistence. Grant issuance, device token rotation, cookies and plugin forwarding preserve the narrower grants; ordinary action compatibility never grants legacy enrollment authority.
+
+This is an API guardrail within the trusted Gateway operator domain, not isolation from unrestricted host commands, plugins or direct access to credential stores.
+
 Personal profile editing is a narrowly self-scoped exception to read-only
 behavior: `operator.read` or `operator.sessions.read` (including their implied
 write/admin scopes) allows an authenticated person to change their own display
@@ -80,10 +92,11 @@ are restricted to that person's profile. Editing someone else's profile,
 assigning roles, linking identity aliases, and merging profiles still require
 `operator.admin`. These edits do not grant general write access.
 
-Personal GitHub connection management is a narrowly self-scoped exception to
-read-only behavior: `users.github.*` requires `operator.read` plus the exact
-authenticated durable profile. That person can connect, poll, cancel,
-reconnect, or disconnect only their own account. These methods do not expose
+Personal GitHub enrollment is a narrowly self-scoped exception to read-only
+behavior: connecting, reconnecting, and polling authorization require legacy
+`operator.read` plus the exact authenticated durable profile. Status,
+cancellation, and disconnect also accept the restricted read/write scopes.
+These operations apply only to that person’s own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
 and per-agent GitHub changes remain `operator.admin`.
 

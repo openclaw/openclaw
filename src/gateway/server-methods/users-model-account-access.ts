@@ -1,7 +1,10 @@
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import {
+  resolveMissingRequestedScope,
+  roleScopesAllow,
+} from "../../shared/operator-scope-compat.js";
 import {
   prepareUserProfileRoleAuthority,
   prepareUserProfileRolePolicyAuthority,
@@ -25,7 +28,12 @@ import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-type PersonalModelSelectionScope = "operator.read" | "operator.write" | typeof SESSION_READ_SCOPE;
+type PersonalModelSelectionScope =
+  | "operator.read"
+  | "operator.write"
+  | "operator.read.no-credential-enrollment"
+  | "operator.write.no-credential-enrollment"
+  | typeof SESSION_READ_SCOPE;
 
 /** Capture human authority once; every later privileged use rechecks this exact connection. */
 export async function prepareUserModelAccountAction(
@@ -112,8 +120,13 @@ export async function prepareUserModelAccountAction(
     );
     const grants = [client?.connect.scopes ?? [], ...(role ? [role.scopes] : [])];
     if (
-      !grants.every((allowedScopes) =>
-        roleScopesAllow({ role: "operator", requestedScopes: [scope], allowedScopes }),
+      !grants.every(
+        (allowedScopes) =>
+          resolveMissingRequestedScope({
+            role: "operator",
+            requestedScopes: [scope],
+            allowedScopes,
+          }) === null,
       )
     ) {
       throw new ModelAccountConnectAuthorityError();
@@ -129,7 +142,13 @@ export async function preparePersonalModelAccountSelection(
   authProfileId: string,
   requiredScope: PersonalModelSelectionScope = "operator.write",
 ): Promise<UserModelAccountSelection> {
-  const action = await prepareUserModelAccountAction(options, undefined, requiredScope);
+  const selectionScope =
+    requiredScope === "operator.read"
+      ? "operator.read.no-credential-enrollment"
+      : requiredScope === "operator.write"
+        ? "operator.write.no-credential-enrollment"
+        : requiredScope;
+  const action = await prepareUserModelAccountAction(options, undefined, selectionScope);
   const account = await prepareUserModelAccountAuthority({
     profileId: action.owner,
     authProfileId,
@@ -172,7 +191,9 @@ export async function prepareSessionModelAccountAccess(
   const { client } = options;
   const requestAuthority = readGatewayRequestMutationAuthority(options);
   const requiredScope =
-    requestAuthority.sessionScope === SESSION_WRITE_SCOPE ? SESSION_WRITE_SCOPE : WRITE_SCOPE;
+    requestAuthority.sessionScope === SESSION_WRITE_SCOPE
+      ? SESSION_WRITE_SCOPE
+      : "operator.write.no-credential-enrollment";
   const creation = client?.internal?.sessionCreation;
   if (creation?.via === "operator" && creation.requesterSessionKey) {
     // Ordinary tool creation may use the admitted person's saved default. This

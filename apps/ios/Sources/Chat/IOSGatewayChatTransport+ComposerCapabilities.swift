@@ -23,8 +23,10 @@ extension IOSGatewayChatTransport {
         async let settingsSupportRequest = self.sessionSettingsSupport(ifCurrentRoute: route)
         let scopes = await operatorScopes ?? []
         let canAdmin = scopes.contains("operator.admin")
-        let canWrite = canAdmin || scopes.contains("operator.write")
-        let canRead = canWrite || scopes.contains("operator.read")
+        let canWrite = canAdmin || scopes.contains("operator.write") ||
+            scopes.contains("operator.write.no-credential-enrollment")
+        let canRead = canWrite || scopes.contains("operator.read") ||
+            scopes.contains("operator.read.no-credential-enrollment")
         let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
         let targetAgentID = Self.composerAgentID(for: target)
 

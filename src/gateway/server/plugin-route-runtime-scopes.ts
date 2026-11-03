@@ -1,6 +1,9 @@
 // Plugin route runtime scopes map authenticated HTTP callers to operator scopes exposed inside plugin handlers.
 import type { IncomingMessage } from "node:http";
-import { intersectOperatorScopes, roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  operatorScopeSatisfied,
+} from "../../shared/operator-scope-compat.js";
 import { applyHttpOperatorRoleScopeCeiling } from "../http-auth-user-profile.js";
 import {
   getHeader,
@@ -28,13 +31,9 @@ export function resolvePluginRouteRuntimeOperatorScopes(
     );
     return surface === "trusted-operator"
       ? deviceScopes
-      : [WRITE_SCOPE].filter((scope) =>
-          roleScopesAllow({
-            role: "operator",
-            requestedScopes: [scope],
-            allowedScopes: deviceScopes,
-          }),
-        );
+      : operatorScopeSatisfied(WRITE_SCOPE, deviceScopes)
+        ? intersectOperatorScopes([WRITE_SCOPE], deviceScopes)
+        : [];
   }
   const useTrustedScopes =
     surface === "trusted-operator"
