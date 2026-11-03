@@ -184,11 +184,10 @@ export async function recoverWithEarnedCodexReset(params: {
    */
   isResettableBlocked: (profileId: string) => Promise<boolean>;
   /**
-   * Shared-state claim must atomically enforce the rolling cap and prevent
-   * uncertain spends across every account in this candidate chain.
-   * A crash retry MUST return the same durable idempotency key.
+   * The shared-state claim atomically enforces the rolling spend cap and
+   * unresolved-attempt fence across all accounts. Crash retries must return
+   * the original idempotency key; only the ledger may mint a new key.
    */
-  /** Atomically owns a durable attempt for this profile or refuses the claim. */
   claim: (profileId: string, maxPer24Hours: number) => Promise<CodexResetClaim>;
   /**
    * Optional bounded shared-result waiter supplied by the durable owner. A
