@@ -14,9 +14,8 @@ import {
   hasOperatorReadAccess,
 } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { readPresenceEntries } from "../../app/user-profile.ts";
-import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
+import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -707,17 +706,15 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   );
   return (
     <openclaw-devices-page>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <h1 class="page-title">{titleForRoute("devices", t)}</h1>
-            <div class="page-subtitle">
-              {subtitleForRoute("devices", t)}{" "}
-              <LearnMoreLink url={"https://docs.openclaw.ai/nodes"} />
-            </div>
-          </div>
-        </section>
-      </ShellLayoutBoundary>
+      <SettingsPageHeader
+        title={titleForRoute("devices", t)}
+        subtitle={
+          <>
+            {subtitleForRoute("devices", t)}{" "}
+            <LearnMoreLink url={"https://docs.openclaw.ai/nodes"} />
+          </>
+        }
+      />
       <SettingsWorkspace>
         <DevicesView
           {...view()}

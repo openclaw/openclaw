@@ -194,6 +194,7 @@ export function ApplicationShell(props: {
             prop:navDrawerOpen={view().navDrawerOpen}
             prop:gatewayStatus={view().mobileGatewayStatus}
             prop:floating={view().floatingHeader}
+            prop:onBack={view().floatingBack}
             prop:pageTitle={view().pageTitle}
             prop:registerPageActions={props.host.shellLayout.registerHeaderActions}
             prop:newSessionAction={() => (
