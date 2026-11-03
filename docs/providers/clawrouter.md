@@ -471,6 +471,22 @@ cover catalog lookup, generation, and result downloads. Prompt, image-count, and
 explicit size bounds come from that model’s current catalog generation limits;
 unknown limits do not authorize generation.
 
+## Explicit Google continuation
+
+For a qualified native Google stream, a completed `CONTINUATION` response can
+return an opaque `providerReplay` receipt. Typed transport callers can pass it as
+`GoogleContinuationOptions.googleContinuation` on a separate call with the
+original input and generation settings. The client checks the model, endpoint,
+session, profile and dispatched credential before sending the token. It does not
+start a continuation automatically or retry with an upstream key.
+
+The receipt is available only after the complete HTTP body, including when an
+SSE `DONE` marker arrives earlier. Interrupted, malformed or canceled responses
+do not supply replay evidence. The router must independently verify the original
+principal and grant and admit and settle each hop. This client support does not
+activate an unavailable model or supply a tariff. Direct Google behavior is
+unchanged.
+
 ## Quotas and usage
 
 ClawRouter's `/v1/usage` response feeds the normal OpenClaw provider-usage

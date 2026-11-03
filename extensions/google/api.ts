@@ -1,4 +1,5 @@
 export { parseGeminiAuth } from "./gemini-auth.js";
+export type { GoogleContinuationOptions } from "./transport-stream-types.js";
 export { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./onboard.js";
 export { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
 export {

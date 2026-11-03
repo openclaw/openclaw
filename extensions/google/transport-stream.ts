@@ -6,10 +6,7 @@ import {
   type Context,
   type Model,
   type ModelRequestHeaders,
-  type ProviderCallStreamOptions,
   type ProviderContext,
-  type ProviderModel,
-  type SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { executeWithApiKeyRotation } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -57,51 +54,20 @@ import {
   isGoogleGemini3ProModel,
   isGoogleGemini3ThinkingLevelModel,
   resolveGoogleGemini3ThinkingLevel,
-  type GoogleThinkingLevel,
 } from "./thinking-api.js";
 import { collectGoogleTransportApiKeys } from "./transport-api-keys.js";
+import { prepareGoogleContinuation } from "./transport-continuation.js";
 import { hasGoogleFirstResponseActivity, parseGoogleSseChunks } from "./transport-stream-sse.js";
+import type {
+  CanonicalGoogleTransportApi,
+  GoogleGenerateContentRequest,
+  GoogleSseAttempt,
+  GoogleTransportApi,
+  GoogleTransportModel,
+  GoogleTransportOptions,
+} from "./transport-stream-types.js";
 import { isGoogleVertexCredentialsMarker } from "./vertex-adc-config.js";
 import { resolveGoogleVertexAuthorizedUserHeaders } from "./vertex-adc.js";
-
-type CanonicalGoogleTransportApi = "google-generative-ai" | "google-vertex";
-type GoogleTransportApi = CanonicalGoogleTransportApi | "openclaw-google-generative-ai-transport";
-
-type GoogleTransportModel = ProviderModel<GoogleTransportApi> & {
-  headers?: ModelRequestHeaders;
-  provider: string;
-};
-
-type GoogleTransportOptions = SimpleStreamOptions &
-  ProviderCallStreamOptions & {
-    cachedContent?: string;
-    topP?: number;
-    toolChoice?:
-      | "auto"
-      | "none"
-      | "any"
-      | "required"
-      | {
-          type: "function";
-          function: {
-            name: string;
-          };
-        };
-    thinking?: {
-      enabled: boolean;
-      budgetTokens?: number;
-      level?: GoogleThinkingLevel;
-    };
-  };
-
-type GoogleGenerateContentRequest = {
-  cachedContent?: string;
-  contents: Array<Record<string, unknown>>;
-  generationConfig?: Record<string, unknown>;
-  systemInstruction?: Record<string, unknown>;
-  tools?: Array<Record<string, unknown>>;
-  toolConfig?: Record<string, unknown>;
-};
 
 const GOOGLE_NATIVE_VIDEO_MIME: ReadonlySet<string> = new Set([
   "video/mp4",
@@ -414,13 +380,6 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
   };
 }
 
-type GoogleSseAttempt =
-  | {
-      type: "ready";
-      chunks: AsyncGenerator<GoogleSseChunk>;
-    }
-  | { type: "timeout" };
-
 async function openGoogleSseAttempt(params: {
   guardedFetch: ReturnType<typeof buildGuardedModelFetch>;
   url: string;
@@ -432,6 +391,7 @@ async function openGoogleSseAttempt(params: {
   errorPrefix: string;
   model: GoogleTransportModel;
   options: GoogleTransportOptions | undefined;
+  requireEof?: boolean;
 }): Promise<GoogleSseAttempt> {
   const attemptSignal =
     params.firstResponseTimeoutMs > 0
@@ -457,7 +417,15 @@ async function openGoogleSseAttempt(params: {
       attemptSignal?.clearDeadline();
       throw await createProviderHttpError(response, params.errorPrefix);
     }
-    const chunks = parseGoogleSseChunks(response, signal);
+    if (
+      params.requireEof &&
+      response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !==
+        "text/event-stream"
+    ) {
+      await response.body?.cancel();
+      throw new Error("Google continuation requires the native SSE response format");
+    }
+    const chunks = parseGoogleSseChunks(response, signal, params.requireEof);
     const prefetched: GoogleSseChunk[] = [];
     for (;;) {
       // Opening owns first-frame errors, including when no retry timer is active.
@@ -550,6 +518,14 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           requestUrl = `${baseUrl}/${resolveGoogleModelPath(model.id)}:streamGenerateContent?alt=sse`;
         }
         const fetchImpl = (options as { fetch?: typeof fetch } | undefined)?.fetch;
+        const routedContinuation =
+          kind === "google-generative-ai" &&
+          model.provider === "clawrouter" &&
+          new URL(requestUrl).pathname.includes("/v1/native/google-gemini/");
+        if (options?.googleContinuation && !routedContinuation) {
+          throw new Error("Google continuation requires the original ClawRouter native route");
+        }
+        let continuation: ReturnType<typeof prepareGoogleContinuation> | undefined;
         const openSse = async (apiKeyForRequest: string | undefined) => {
           const optionHeaders = options?.headers;
           let requestHeaders: ModelRequestHeaders;
@@ -594,15 +570,32 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
               accept: "text/event-stream",
             };
           }
-          const request = params;
+          let request = params;
+          const headers = omitNullRequestHeaders(requestHeaders) ?? {};
+          if (routedContinuation) {
+            if ("continuationToken" in request || "continuation_token" in request) {
+              throw new Error("Google continuation requires a completed response receipt");
+            }
+            continuation = prepareGoogleContinuation({
+              model: canonicalModel,
+              url: requestUrl,
+              headers,
+              options,
+              requestBody: serializeGoogleRequest(request, trustedVideoSlots),
+            });
+            if (continuation.token) {
+              request = { ...request, continuationToken: continuation.token };
+            }
+          }
           const requestContext = {
             model,
             options,
             guardedFetch,
             url: requestUrl,
-            headers: omitNullRequestHeaders(requestHeaders) ?? {},
+            headers,
             request,
             videoSlots: trustedVideoSlots,
+            requireEof: routedContinuation,
           };
           const errorPrefix =
             kind === "google-vertex"
@@ -653,7 +646,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
               })
             : await openSse(apiKey);
         await consumeGoogleGenerateContentStream({
-          chunks: sse.chunks,
+          chunks: continuation ? continuation.observe(sse.chunks, output) : sse.chunks,
           model: canonicalModel,
           output,
           tools: providerContext.tools,
@@ -667,6 +660,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           resolveStopReason: mapStopReasonString,
         });
       } catch (error) {
+        delete output.providerReplay;
         failTransportStream({ stream, output, signal: options?.signal, error });
       }
     })();
