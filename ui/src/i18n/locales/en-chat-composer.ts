@@ -201,6 +201,9 @@ const catalog = {
         "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
+      resume: "Resume",
+      clearPaused: "Clear",
+      clearPausedQueue: "Clear paused messages",
       removeQueuedMessage: "Remove queued message",
       reorderQueuedMessage: "Reorder queued message with the arrow keys",
       reorderUnavailable: "This message holds its place and cannot be reordered",
@@ -211,6 +214,7 @@ const catalog = {
         applyingSettings: "Applying chat settings",
         blockedByReview:
           "Queue paused. Review or discard the earlier held message in the conversation.",
+        pausedByStop: "Queue paused because you stopped the run",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         editing: "Editing",

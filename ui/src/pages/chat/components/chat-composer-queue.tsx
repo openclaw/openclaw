@@ -32,6 +32,9 @@ type ChatQueueProps = {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
+  queuePaused?: boolean;
+  onQueueResume?: () => void;
+  onQueueClear?: () => void;
   queuedEdit?: ChatComposerProps["queuedEdit"];
   onQueueRemove: (id: string) => void;
 };
@@ -173,9 +176,11 @@ export function renderChatQueueSolid(props: ChatQueueProps) {
     const head = props.queue.find((item) => item.sendState !== "failed" || item.localCommandName);
     return head?.sendState === "held" && isQueuedSendInlineState(head)
       ? { label: t("chat.queue.states.blockedByReview"), tone: "warn" }
-      : visibleQueue().some((item) => item.sendState === "waiting-model") && !props.offline
-        ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
-        : null;
+      : props.queuePaused
+        ? { label: t("chat.queue.states.pausedByStop"), tone: "paused" }
+        : visibleQueue().some((item) => item.sendState === "waiting-model") && !props.offline
+          ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
+          : null;
   });
   let scrollRegion: HTMLDivElement | undefined;
   onSettled(() => () => {
@@ -192,7 +197,36 @@ export function renderChatQueueSolid(props: ChatQueueProps) {
               class="chat-queue__global-state"
               data-chat-queue-global-state={globalState()!.tone}
             >
-              {globalState()!.label}
+              {globalState()!.tone === "paused" ? (
+                <>
+                  <Icon name="pause" />
+                  <span class="chat-queue__global-state-label">{globalState()!.label}</span>
+                  <span class="chat-queue__global-state-actions">
+                    {props.onQueueClear ? (
+                      <button
+                        class="chat-queue__global-action"
+                        type="button"
+                        aria-label={t("chat.queue.clearPausedQueue")}
+                        onClick={() => props.onQueueClear?.()}
+                      >
+                        {t("chat.queue.clearPaused")}
+                      </button>
+                    ) : null}
+                    {props.onQueueResume ? (
+                      <button
+                        class="chat-queue__global-action chat-queue__global-action--primary"
+                        type="button"
+                        onClick={() => props.onQueueResume?.()}
+                      >
+                        <Icon name="play" />
+                        <span>{t("chat.queue.resume")}</span>
+                      </button>
+                    ) : null}
+                  </span>
+                </>
+              ) : (
+                globalState()!.label
+              )}
             </div>
           ) : null}
           <div
