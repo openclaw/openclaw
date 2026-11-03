@@ -42,6 +42,67 @@ function expectList(list: Element | null | undefined, label: string) {
 }
 
 describe("AppSidebar project session activity", () => {
+  it("merges Windows projects and clears equivalent saved collapse aliases on expansion", async () => {
+    const unrelated = "catalog-project:claude:gateway:local:C:\\Work\\Notes";
+    localStorage.setItem(
+      collapsedKey,
+      JSON.stringify([
+        "catalog-project:codex:gateway:local:C:\\Work\\Notes",
+        "catalog-project:codex:gateway:local:project:c:/WORK/notes/",
+        "catalog-project:codex:gateway:local:C:/Work/Notes/.CLAUDE/WORKTREES/absent/src",
+        unrelated,
+      ]),
+    );
+    const rows = [
+      { threadId: "windows-one", cwd: "C:\\Work\\Notes" },
+      { threadId: "windows-two", cwd: "c:/work/notes/" },
+      { threadId: "windows-three", cwd: "C:/WORK/Notes/.CLAUDE/WORKTREES/fix/src" },
+    ];
+    const { sidebar, setCatalog } = await mountCatalog(rows);
+    const headers = () =>
+      sidebar.querySelectorAll<HTMLButtonElement>("[data-session-catalog-project]");
+    expect(headers()).toHaveLength(1);
+    expect(headers().item(0).ariaExpanded).toBe("false");
+    headers().item(0).click();
+    await sidebar.updateComplete;
+    expect(headers().item(0).ariaExpanded).toBe("true");
+    expect(collapsed()).toEqual([unrelated]);
+    for (const row of rows) {
+      expect(sidebar.querySelector(`[data-session-key*="${row.threadId}"]`)).not.toBeNull();
+    }
+    headers().item(0).click();
+    await sidebar.updateComplete;
+    const saved = collapsed();
+    expect(saved).toHaveLength(2);
+    await setCatalog(rows.toReversed());
+    expect(headers()).toHaveLength(1);
+    expect(headers().item(0).ariaExpanded).toBe("false");
+    expect(collapsed()).toEqual(saved);
+  });
+
+  it("keeps absolute and drive-relative collapse preferences independent across remount", async () => {
+    const legacyRoot = "catalog-project:codex:gateway:local:C:";
+    localStorage.setItem(collapsedKey, JSON.stringify([legacyRoot]));
+    const rows = [
+      { threadId: "root", cwd: "C:\\" },
+      { threadId: "relative", cwd: "C:" },
+    ];
+    const { sidebar, group } = await mountCatalog(rows);
+    const absolute = group("project:c:/");
+    const relative = group("project:drive-relative:c:");
+    expect(absolute?.ariaExpanded).toBe("false");
+    expect(relative?.ariaExpanded).toBe("true");
+    relative?.click();
+    await sidebar.updateComplete;
+    absolute?.click();
+    await sidebar.updateComplete;
+    expect(collapsed()).toEqual(["catalog-project:codex:gateway:local:project:drive-relative:c:"]);
+    sidebar.remove();
+    const restored = await mountCatalog(rows.toReversed());
+    expect(restored.group("project:c:/")?.ariaExpanded).toBe("true");
+    expect(restored.group("project:drive-relative:c:")?.ariaExpanded).toBe("false");
+  });
+
   it("preserves collapsed project sections stored by earlier versions", async () => {
     localStorage.setItem(
       collapsedKey,

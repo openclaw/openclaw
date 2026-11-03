@@ -144,7 +144,7 @@ export interface SessionListHost {
     catalogMenu?: CatalogSessionMenuRequest,
   ): void;
   showMoreChildren(sessionKey: string): void;
-  toggleSection(sectionId: string): void;
+  toggleSection(sectionId: string, aliases?: readonly string[]): void;
   expandedAgentId(): string;
   readNewSessionAccess(): SessionMethodAccess;
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
