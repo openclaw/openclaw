@@ -838,6 +838,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-runtime.catalog-owner.test.ts",
   "src/agents/prepared-model-runtime.catalog-publication.test.ts",
   "src/agents/prepared-model-runtime.gateway-leases.test.ts",
+  "src/agents/prepared-model-runtime.auth-read-contention.test.ts",
   "src/agents/prepared-model-runtime.inbound-registry.test.ts",
   "src/agents/prepared-model-runtime.native-picker-failures.test.ts",
   "src/agents/prepared-model-runtime.native-renewal.test.ts",

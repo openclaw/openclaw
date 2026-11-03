@@ -1,11 +1,22 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { DatabaseSync } from "node:sqlite";
 import { text as readText } from "node:stream/consumers";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  noteRuntimeAuthProfileStorePersistedMutation,
+  clearRuntimeAuthProfileStoreSnapshotCore,
+} from "../../agents/auth-profiles/runtime-snapshots.js";
+import { writeAuthProfileJsonCell } from "../../agents/auth-profiles/sqlite-json.js";
+import * as authRows from "../../agents/auth-profiles/sqlite-read.js";
+import { AuthProfileStoreUnreadableError } from "../../agents/auth-profiles/store-unreadable-error.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { registerPreparedModelRuntimePublicationListener } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as databaseIdentity from "../../state/openclaw-agent-db-identity.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as retainedSessionReads from "../session-utils-read-lifetime.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
@@ -21,6 +32,7 @@ async function withDispatchLifecycle(
   signal: AbortSignal,
   run: (fixture: {
     client: Awaited<ReturnType<typeof startGatewayWithClient>>["client"];
+    state: Awaited<ReturnType<typeof createOpenClawTestState>>;
     requests: DispatchRequest[];
     discoveryAccounts: (string | undefined)[];
     advertised: Map<string, string[]>;
@@ -29,8 +41,14 @@ async function withDispatchLifecycle(
     saveAccount: (key: string) => Promise<void>;
     restart: () => Promise<void>;
     list: (refresh?: boolean, view?: "all" | "default") => Promise<ModelsListResult>;
-    send: (model: string, name: string) => Promise<{ status: string; error?: string }>;
+    send: (
+      model: string,
+      name: string,
+      agentId?: string,
+      existing?: boolean,
+    ) => Promise<{ status: string; error?: string }>;
   }) => Promise<void>,
+  agentId = "main",
 ) {
   const state = await createOpenClawTestState({
     label: "models-dispatch-lifecycle",
@@ -117,10 +135,18 @@ async function withDispatchLifecycle(
   });
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
   const saveAccount = async (key: string) => {
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: { "opencode:default": { type: "api_key", provider: "opencode", key } },
-    });
+    await state.writeAuthProfiles(
+      {
+        version: 1,
+        profiles: {
+          "opencode:default":
+            agentId === "main"
+              ? { type: "api_key", provider: "opencode", key }
+              : { type: "token", provider: "opencode", token: key },
+        },
+      },
+      agentId,
+    );
   };
   try {
     endpoint.listen(0, "127.0.0.1");
@@ -175,8 +201,23 @@ async function withDispatchLifecycle(
       models: {
         providers: {
           opencode: {
-            baseUrl: "",
-            models: [],
+            baseUrl: agentId === "main" ? "" : baseUrl,
+            ...(agentId === "main" ? {} : { api: "openai-completions", auth: "token" }),
+            models:
+              agentId === "main"
+                ? []
+                : [
+                    {
+                      id: "account-a-only",
+                      name: "Stable authorization fixture",
+                      reasoning: false,
+                      input: ["text"],
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      contextWindow: 32768,
+                      maxTokens: 1536,
+                      compat: { maxTokensField: "max_tokens" },
+                    },
+                  ],
             request: {
               allowPrivateNetwork: true,
               headers: { "X-Dispatch-Request": "initial-transport" },
@@ -185,12 +226,21 @@ async function withDispatchLifecycle(
         },
       },
       agents: {
+        ownership: "explicit",
         defaults: {
           skipBootstrap: true,
           heartbeat: { every: "0m" },
           modelPolicy: { allow: ["opencode/*"] },
         },
-        entries: { main: { workspace: state.workspaceDir } },
+        entries: {
+          main: { workspace: state.workspaceDir },
+          ...(agentId === "main"
+            ? {}
+            : {
+                [agentId]: { workspace: state.path("worker-workspace") },
+                other: { workspace: state.path("other-workspace") },
+              }),
+        },
       },
       tools: { profile: "minimal" },
       plugins: {
@@ -217,12 +267,13 @@ async function withDispatchLifecycle(
     let active = await start();
     const readModels = (refresh = false, view: "all" | "default" = "all") =>
       active.client.request<ModelsListResult>("models.list", {
-        agentId: "main",
+        agentId,
         provider: "opencode",
         view,
         refresh,
       });
     await run({
+      state,
       get client() {
         return active.client;
       },
@@ -259,13 +310,15 @@ async function withDispatchLifecycle(
               ready: (result) => !result.pendingProviders?.length,
             })
           : readModels(false, view),
-      send: async (model, name) => {
-        const session = await active.client.request<{ key: string }>("sessions.create", {
-          agentId: "main",
-          key: `agent:main:${name}`,
-          label: name,
-          model: `opencode/${model}`,
-        });
+      send: async (model, name, selectedAgentId = agentId, existing = false) => {
+        const session = existing
+          ? { key: `agent:${selectedAgentId}:${name}` }
+          : await active.client.request<{ key: string }>("sessions.create", {
+              agentId: selectedAgentId,
+              key: `agent:${selectedAgentId}:${name}`,
+              label: name,
+              model: `opencode/${model}`,
+            });
         const started = await active.client.request<{ runId: string; status: string }>(
           "chat.send",
           {
@@ -573,4 +626,120 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
       body: { model: "account-b-only", max_tokens: 1536 },
     });
   });
+}, 180_000);
+
+it("recovers a failed credential publication through dispatch without crossing agent authority", async ({
+  signal,
+}) => {
+  await withDispatchLifecycle(
+    signal,
+    async (fixture) => {
+      fixture.advertised.set("account-b-key", ["account-a-only"]);
+      fixture.advertised.set("other-agent-key", ["account-a-only"]);
+      await fixture.state.writeAuthProfiles(
+        {
+          version: 1,
+          profiles: {
+            "opencode:other": { type: "token", provider: "opencode", token: "other-agent-key" },
+          },
+        },
+        "other",
+      );
+      await fixture.list(true);
+      // A real completed turn leaves a run owner beside the configured owner.
+      await expect(fixture.send("account-a-only", "r11-before")).resolves.toMatchObject({
+        status: "ok",
+      });
+      expect(fixture.requests).toHaveLength(1);
+      expect(fixture.requests[0]?.authorization).toBe("Bearer account-a-key");
+      for (const name of ["r11-a", "r11-b", "r11-revoked"]) {
+        await fixture.client.request("sessions.create", {
+          agentId: "worker",
+          key: `agent:worker:${name}`,
+          label: name,
+          model: "opencode/account-a-only",
+        });
+      }
+      const db = openOpenClawAgentDatabase({ agentId: "worker" });
+      const dbPath = db.path;
+      const workerDir = fixture.state.agentDir("worker");
+      const failRead = async (profiles: AuthProfileStore["profiles"]) => {
+        const failed = createDeferred<Error>();
+        const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
+          if (event.phase === "failed") {
+            failed.resolve(event.error);
+          }
+        });
+        // Inject only the read outcome; discovery, current credentials, provider I/O and delivery stay real.
+        const prepare = authRows.prepareAgentAuthProfileRowsRead;
+        const fault = vi
+          .spyOn(authRows, "prepareAgentAuthProfileRowsRead")
+          .mockImplementation((options) => {
+            const reader = prepare(options);
+            if (options.agentId !== "worker") {
+              return reader;
+            }
+            return {
+              ...reader,
+              read: async () => {
+                reader.assertCurrent();
+                return {
+                  store: { status: "unreadable" as const },
+                  state: { status: "unreadable" as const },
+                  cacheable: false,
+                };
+              },
+            };
+          });
+        try {
+          clearRuntimeAuthProfileStoreSnapshotCore(workerDir);
+          noteRuntimeAuthProfileStorePersistedMutation(workerDir, {
+            credentialsChanged: true,
+            stateChanged: true,
+            profileIds: ["opencode:default"],
+          });
+          expect(await withinTest(failed.promise, signal)).toBeInstanceOf(
+            AuthProfileStoreUnreadableError,
+          );
+          await expect(
+            fixture.send("account-a-only", "r11-other-" + fixture.requests.length, "other"),
+          ).resolves.toMatchObject({ status: "ok" });
+          expect(fixture.requests.at(-1)?.authorization).toBe("Bearer other-agent-key");
+          using writer = new DatabaseSync(dbPath);
+          writeAuthProfileJsonCell(writer, "store", "agent", { version: 1, profiles });
+        } finally {
+          fault.mockRestore();
+          unsubscribe();
+        }
+      };
+      await failRead({
+        "opencode:default": { type: "token", provider: "opencode", token: "account-b-key" },
+      });
+      const results = await Promise.all([
+        fixture.send("account-a-only", "r11-a", "worker", true),
+        fixture.send("account-a-only", "r11-b", "worker", true),
+      ]);
+      expect(results.map(({ status, error }) => ({ status, error }))).toEqual([
+        { status: "ok", error: undefined },
+        { status: "ok", error: undefined },
+      ]);
+      expect(fixture.requests).toHaveLength(4);
+      expect(fixture.requests.slice(-2).map((r) => r.authorization)).toEqual([
+        "Bearer account-b-key",
+        "Bearer account-b-key",
+      ]);
+      await failRead({});
+      const beforeRevoked = fixture.requests.length;
+      const revoked = await fixture.send("account-a-only", "r11-revoked", "worker", true);
+      expect(revoked.status).toBe("error");
+      expect(fixture.requests).toHaveLength(beforeRevoked);
+      const wrongAgent = await fixture.send("account-a-only", "r11-no-authority", "main");
+      expect(wrongAgent.status).toBe("error");
+      expect(fixture.requests).toHaveLength(beforeRevoked);
+      expect(
+        fixture.requests.filter((r) => r.authorization === "Bearer account-a-key"),
+      ).toHaveLength(1);
+    },
+    "worker",
+  );
 }, 180_000);

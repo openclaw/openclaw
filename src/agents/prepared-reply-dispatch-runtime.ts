@@ -60,9 +60,10 @@ type PreparedReplyDispatchPublicationHost = Readonly<{
   isGatewayLifecycleActive: () => boolean;
   getConfiguredOwner: (agentId: string) => PreparedModelRuntimeOwner | undefined;
   getPendingReplacement: () => Promise<void> | undefined;
+  retryFailedAuthRead: (owner: PreparedModelRuntimeOwner) => boolean;
 }>;
 
-/** Reads one immutable configured Gateway dispatch generation without activating an owner. */
+/** Reads a current configured dispatch generation and may request its authorized auth-read retry. */
 export class PreparedReplyDispatchPublicationOwner {
   #publication = EMPTY_REPLY_DISPATCH_PUBLICATION;
 
@@ -119,6 +120,7 @@ export class PreparedReplyDispatchPublicationOwner {
     agentId: string;
     abortSignal?: AbortSignal;
   }): Promise<PreparedReplyDispatchRuntime | undefined> => {
+    let requestedAuthRetry = false;
     for (;;) {
       if (abortSignal?.aborted) {
         throw createAbortError("Prepared reply dispatch admission aborted", {
@@ -142,6 +144,14 @@ export class PreparedReplyDispatchPublicationOwner {
       }
       const runtime = this.#publication.find((candidate) => candidate.agentId === agentId);
       if (!runtime) {
+        if (
+          !requestedAuthRetry &&
+          pendingOwner?.needsRefresh &&
+          this.host.retryFailedAuthRead(pendingOwner)
+        ) {
+          requestedAuthRetry = true;
+          continue;
+        }
         throw new PreparedModelRuntimeOwnerNotPublishedError(
           `prepared reply dispatch runtime owner was not published for ${agentId}`,
         );
