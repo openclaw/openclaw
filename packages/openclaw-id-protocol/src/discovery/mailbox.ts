@@ -19,7 +19,6 @@ export const MAILBOX_NOTICE_EVENTS = [
   "kit_used",
   "redemption_pending",
   "redemption_resolved",
-  "rotation_conflict",
   "seq_conflict",
 ] as const;
 /** One of {@link MAILBOX_NOTICE_EVENTS}. */
@@ -31,7 +30,7 @@ export const MAILBOX_NOTICE_REF_MAX_LENGTH = 128;
 /** Message payloads. Every security-relevant payload is a signed statement the reader verifies. */
 export type MailboxPayload =
   | { kind: "invite_redemption"; redemption: SignedStatement<"InviteRedemption"> }
-  /** R-signed statements: kit enrollment (add_owner_device, re-certifications), rotation. */
+  /** R-signed statements: kit enrollment (add_owner_device) and other root changes. */
   | { kind: "root_statement"; statements: SignedStatement[] }
   | { kind: "revocation"; revocation: SignedStatement<"Revocation"> }
   /** SAS enrollment messages; `data` per step is defined in docs/discovery.md. */

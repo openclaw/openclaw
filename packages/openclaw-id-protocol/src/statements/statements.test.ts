@@ -13,7 +13,6 @@ import {
   verifyInviteRedemptionSignature,
   verifyMembershipSnapshot,
   verifyOwnerStatement,
-  verifyRootRotation,
   type TrustAnchor,
   type VerifyOptions,
 } from "./verify.js";
@@ -31,20 +30,18 @@ async function verify(
   anchor: TrustAnchor,
 ): Promise<string> {
   const result =
-    verifier === "rotation"
-      ? await verifyRootRotation(statement as SignedStatement<"RootRotation">, anchor)
-      : verifier === "snapshot"
-        ? await verifyMembershipSnapshot(
-            statement as SignedStatement<"MembershipSnapshot">,
-            binding.body,
-          )
-        : verifier === "redemption"
-          ? await verifyInviteRedemptionSignature(statement as SignedStatement<"InviteRedemption">)
-          : await verifyOwnerStatement(
-              statement as SignedStatement<"OwnerDeviceCert">,
-              anchor,
-              options,
-            );
+    verifier === "snapshot"
+      ? await verifyMembershipSnapshot(
+          statement as SignedStatement<"MembershipSnapshot">,
+          binding.body,
+        )
+      : verifier === "redemption"
+        ? await verifyInviteRedemptionSignature(statement as SignedStatement<"InviteRedemption">)
+        : await verifyOwnerStatement(
+            statement as SignedStatement<"OwnerDeviceCert">,
+            anchor,
+            options,
+          );
   return result.ok ? "ok" : result.code;
 }
 
@@ -141,6 +138,18 @@ describe("parseStatement", () => {
     expect(parseStatement({ ...cert, chain: [] })).toMatchObject({
       ok: false,
       detail: expect.stringContaining("unknown field"),
+    });
+  });
+
+  it("accepts only root epoch 1 and no RootRotation statement type", () => {
+    expect(parseStatement({ ...cert, body: { ...cert.body, root_epoch: 2 } })).toMatchObject({
+      ok: false,
+      code: "malformed",
+      detail: expect.stringContaining("root_epoch"),
+    });
+    expect(parseStatement({ ...cert, type: "RootRotation" })).toMatchObject({
+      ok: false,
+      code: "malformed",
     });
   });
 

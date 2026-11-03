@@ -1,12 +1,7 @@
 // Spec section 11 acceptance tests 3, 4, 8, 9, 11 and 12 (Gateway membership authority side).
 import { describe, expect, it } from "vitest";
 import fixture from "../../fixtures/v1-draft/statements.json" with { type: "json" };
-import {
-  registerInvite,
-  repinRoot,
-  submitRedemption,
-  submitStatement,
-} from "../authority/apply.js";
+import { registerInvite, submitRedemption, submitStatement } from "../authority/apply.js";
 import {
   activeOwnerDevices,
   isAdmitted,
@@ -16,6 +11,7 @@ import {
 import { fingerprint, formatEd25519PublicKey, type IrohEndpointKey } from "../keys.js";
 import { decodeKit, deriveRootSigner, encodeKit } from "../kit.js";
 import { signStatement } from "../statements/envelope.js";
+import { verifyBindingForPin } from "../statements/pin.js";
 import type { SignedStatement } from "../statements/types.js";
 import { verifyOwnerStatement } from "../statements/verify.js";
 import { acceptanceTitle } from "../testing/acceptance.js";
@@ -25,6 +21,7 @@ import {
   certBody,
   signChange,
   worldKey,
+  WORLD_HOST,
   WORLD_KIT_SECRET,
   WORLD_NOW,
 } from "../testing/world.js";
@@ -195,56 +192,64 @@ describe(acceptanceTitle(8), () => {
 });
 
 describe(acceptanceTitle(9), () => {
-  it("freezes on a second rotation out of the same epoch until the local operator re-pins", async () => {
+  it("keeps the pinned root: rotations, other epochs and other roots are refused", async () => {
     const world = await buildWorld();
-    const [rootA, rootB] = await Promise.all([worldKey("root-a"), worldKey("root-b")]);
-    const rotation = async (to: typeof rootA) =>
-      signStatement(
-        "RootRotation",
-        {
-          old_root_fp: await fingerprint(world.rootPub),
-          new_root_pub: to.pub,
-          new_epoch: 2,
-          issued_at: WORLD_NOW - 5,
-        },
-        world.root,
-      );
-    // Only the local operator rotates the root; the conflict below may arrive from anywhere.
-    const first = await submitStatement(world.state, await rotation(rootA), {
-      channel: "local_operator",
-      now: WORLD_NOW,
-    });
-    expect(first).toMatchObject({
-      ok: true,
-      state: { anchor: { root_pub: rootA.pub, root_epoch: 2 } },
-    });
-    const conflict = await submitStatement(first.state, await rotation(rootB), mailbox);
-    expect(conflict).toMatchObject({
-      ok: false,
-      code: "conflicting_rotation",
-      state: { frozen: true },
-      persist: true,
-    });
-    expect(conflict.events).toContainEqual({
-      type: "notify_owners",
-      event: "rotation_conflict",
-      ref: "2",
-    });
-    const recert = await signStatement("OwnerDeviceCert", certBody(world.device1, 2), rootA.signer);
-    const blocked = await submitStatement(
-      conflict.state,
-      await signChange(conflict.state, rootA.signer, { op: "add_owner_device", cert: recert }),
-      mailbox,
+    const rootA = await worldKey("root-a");
+    // RootRotation is not a statement type, whoever signs it.
+    const rotation = await signStatement(
+      "MembershipChange",
+      {
+        claw_id: world.state.claw_id,
+        seq: 99,
+        target: { op: "remove", account_id: "x" },
+        issued_at: WORLD_NOW,
+      },
+      world.root,
     );
-    expect(blocked).toMatchObject({ ok: false, code: "frozen" });
-    expect(repinRoot(conflict.state, rootA.pub, "tunnel")).toMatchObject({
+    const asRotation = { ...rotation, type: "RootRotation" };
+    await expect(submitStatement(world.state, asRotation, mailbox)).resolves.toMatchObject({
       ok: false,
-      code: "not_local_operator",
+      code: "malformed",
     });
-    expect(repinRoot(conflict.state, rootA.pub, "local_operator")).toMatchObject({
-      ok: true,
-      state: { frozen: false, anchor: { root_epoch: 3 } },
-    });
+    // root_epoch is the constant 1: anything else is malformed, even signed by R.
+    const otherEpoch = await signStatement(
+      "OwnerDeviceCert",
+      { ...certBody(world.device1), root_epoch: 2 },
+      world.root,
+    );
+    await expect(
+      submitStatement(
+        world.state,
+        await signChange(world.state, world.root, { op: "add_owner_device", cert: otherEpoch }),
+        { channel: "local_operator", now: WORLD_NOW },
+      ),
+    ).resolves.toMatchObject({ ok: false, code: "malformed" });
+    // Another root is just another key: it is not R and not an owner device.
+    const recert = await signStatement("OwnerDeviceCert", certBody(world.device1), rootA.signer);
+    await expect(
+      submitStatement(
+        world.state,
+        await signChange(world.state, rootA.signer, { op: "add_owner_device", cert: recert }),
+        { channel: "local_operator", now: WORLD_NOW },
+      ),
+    ).resolves.toMatchObject({ ok: false, code: "not_an_owner" });
+    // A client pinned to R refuses a binding from any other root.
+    const binding = await signStatement(
+      "ServerBinding",
+      { ...world.binding.body, binding_seq: 2 },
+      rootA.signer,
+    );
+    const pin = {
+      claw_id: world.state.claw_id,
+      root_fp: await fingerprint(world.rootPub),
+      binding_seq: 1,
+    };
+    await expect(
+      verifyBindingForPin({ root_pub: rootA.pub, binding }, pin, {
+        now: WORLD_NOW,
+        host: WORLD_HOST,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "root_mismatch" });
   });
 });
 

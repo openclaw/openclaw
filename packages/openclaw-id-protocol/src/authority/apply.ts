@@ -2,7 +2,6 @@
 import { hexToBytes } from "../bytes.js";
 import { inviteSecretHash, verifyInviteRedemption, type AssertedIdentity } from "../invites.js";
 import { fingerprint, type IrohEndpointKey, type KeyFingerprint } from "../keys.js";
-import { hasValidSignature } from "../statements/envelope.js";
 import {
   MAX_MEMBER_PEER_KEYS,
   MAX_MEMBERS,
@@ -14,21 +13,13 @@ import {
   type UnixSeconds,
 } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
-import {
-  verifyOwnerStatement,
-  verifyRootRotation,
-  type Authority,
-  type VerifyOptions,
-} from "../statements/verify.js";
+import { verifyOwnerStatement, type Authority, type VerifyOptions } from "../statements/verify.js";
 import { approvalDescendants, withoutMemberPeerKeys, withoutOwnerDevices } from "./allowlist.js";
 import {
   certificateWindowError,
-  nextRootEpoch,
-  ownerDevicePeerKeys,
   ownerLookup,
   proofKeyHex,
   refuse,
-  refuseWithTransition,
   type AuthorityEvent,
   type AuthorityResult,
   type AuthorityState,
@@ -59,7 +50,7 @@ function mailboxAllows(statement: SignedStatement, authority: Authority): boolea
 }
 
 /**
- * Applies a signed statement (MembershipChange, Revocation or RootRotation). InviteCaps use
+ * Applies a signed statement (MembershipChange or Revocation). InviteCaps use
  * `registerInvite` and redemptions use `submitRedemption`.
  */
 export async function submitStatement(
@@ -73,9 +64,6 @@ export async function submitStatement(
   }
   const statement = parsed.statement;
   switch (statement.type) {
-    case "RootRotation":
-      // SAFETY: parseStatement validated the body against the schema for `statement.type`.
-      return applyRootRotation(state, statement as SignedStatement<"RootRotation">, context);
     case "MembershipChange":
     case "Revocation":
       return applyOwnerStatement(
@@ -93,7 +81,7 @@ export async function submitStatement(
   }
 }
 
-// Shared gate for owner-signed writes: verify, then channel and freeze rules, then dispatch.
+// Shared gate for owner-signed writes: verify, then channel rules, then dispatch.
 async function applyOwnerStatement(
   state: AuthorityState,
   statement: SignedStatement<"MembershipChange" | "Revocation">,
@@ -112,13 +100,6 @@ async function applyOwnerStatement(
       state,
       "not_direct",
       "device-signed changes must reach the Gateway directly, not through Discovery",
-    );
-  }
-  if (state.frozen && verified.authority.kind === "root" && context.channel !== "local_operator") {
-    return refuse(
-      state,
-      "frozen",
-      "remote root changes are frozen until the local operator resolves conflicting rotations",
     );
   }
   if (statement.type === "Revocation") {
@@ -410,97 +391,6 @@ async function addOwnerDevice(
   return applied({ ...state, owner_devices: { ...state.owner_devices, [fp]: record } }, events);
 }
 
-/**
- * Root rotation (spec section 8). Rotating the root is owner-key regeneration, so it
- * is accepted only from the local operator on direct loopback, even with a valid
- * signature from the current root. A second, different rotation out of an epoch that
- * already rotated, from any channel, still freezes remote root changes and alerts the
- * owners until the local operator resolves it.
- */
-async function applyRootRotation(
-  state: AuthorityState,
-  rotation: SignedStatement<"RootRotation">,
-  context: WriteContext,
-): Promise<AuthorityResult> {
-  const epoch = rotation.body.new_epoch;
-  if (epoch <= state.anchor.root_epoch) {
-    const previousRoot = state.root_history[epoch - 1];
-    if (state.rotation_seen[epoch] === rotation.sig) {
-      return applied(state);
-    }
-    if (previousRoot === rotation.signer && (await hasValidSignature(rotation))) {
-      // The rotation is refused, but the freeze and the owner alert must take effect.
-      return refuseWithTransition(
-        { ...state, frozen: true },
-        "conflicting_rotation",
-        `a different rotation into epoch ${epoch} was already accepted`,
-        [{ type: "notify_owners", event: "rotation_conflict", ref: String(epoch) }],
-      );
-    }
-    return refuse(state, "wrong_epoch", "rotation is not from the current epoch");
-  }
-  if (state.frozen && context.channel !== "local_operator") {
-    return refuse(state, "frozen", "remote root changes are frozen");
-  }
-  if (context.channel !== "local_operator") {
-    return refuse(
-      state,
-      "not_local_operator",
-      "owner-key regeneration needs direct loopback on the running Gateway",
-    );
-  }
-  const verified = await verifyRootRotation(rotation, state.anchor);
-  if (!verified.ok) {
-    return refuse(state, verified.code, verified.detail);
-  }
-  // Every owner certificate is from the old epoch now: end those devices' sessions and tokens.
-  const ended = ownerDevicePeerKeys(state);
-  return applied(
-    {
-      ...state,
-      anchor: verified.anchor,
-      root_history: { ...state.root_history, [epoch]: verified.anchor.root_pub },
-      rotation_seen: { ...state.rotation_seen, [epoch]: rotation.sig },
-    },
-    [
-      { type: "disconnect", peer_keys: ended },
-      { type: "invalidate_tokens", peer_keys: ended },
-      { type: "publish_snapshot" },
-    ],
-  );
-}
-
-/**
- * Local-operator ceremony (spec section 8.3): pins a new root R' for this claw, clears a
- * freeze, and starts a new epoch, ending every earlier owner device's sessions and tokens.
- * Refused for anything but direct loopback.
- */
-export function repinRoot(
-  state: AuthorityState,
-  rootPub: SignedStatement["signer"],
-  channel: Channel,
-): AuthorityResult {
-  if (channel !== "local_operator") {
-    return refuse(state, "not_local_operator", "root ceremonies need direct loopback");
-  }
-  const epoch = nextRootEpoch(state);
-  // The new epoch makes every owner certificate inactive: end those devices' sessions and tokens.
-  const ended = ownerDevicePeerKeys(state);
-  return applied(
-    {
-      ...state,
-      frozen: false,
-      anchor: { root_pub: rootPub, root_epoch: epoch },
-      root_history: { ...state.root_history, [epoch]: rootPub },
-    },
-    [
-      { type: "disconnect", peer_keys: ended },
-      { type: "invalidate_tokens", peer_keys: ended },
-      { type: "publish_snapshot" },
-    ],
-  );
-}
-
 /** Registers an InviteCap with its proof key. Owner devices do this directly at the Gateway. */
 export async function registerInvite(
   state: AuthorityState,
@@ -522,9 +412,6 @@ export async function registerInvite(
   );
   if (!verified.ok) {
     return refuse(state, verified.code, verified.detail);
-  }
-  if (state.frozen && verified.authority.kind === "root" && context.channel !== "local_operator") {
-    return refuse(state, "frozen", "remote root changes are frozen");
   }
   const cap = parsed.statement.body;
   if (cap.claw_id !== state.claw_id) {

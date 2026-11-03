@@ -14,6 +14,7 @@ import { deriveRootSigner } from "../kit.js";
 import { signStatement } from "../statements/envelope.js";
 import {
   OWNER_CAPABILITIES,
+  ROOT_EPOCH,
   type MembershipTarget,
   type OwnerCapability,
   type SignedStatement,
@@ -47,11 +48,7 @@ export async function worldKey(name: string): Promise<WorldKey> {
 }
 
 /** An owner device certificate body for `key`. */
-export function certBody(
-  key: WorldKey,
-  epoch = 1,
-  caps: OwnerCapability[] = [...OWNER_CAPABILITIES],
-) {
+export function certBody(key: WorldKey, caps: OwnerCapability[] = [...OWNER_CAPABILITIES]) {
   return {
     device_pub: key.pub,
     peer_keys: [key.peer],
@@ -60,7 +57,7 @@ export function certBody(
     caps,
     issued_at: WORLD_NOW - 60,
     expires_at: null,
-    root_epoch: epoch,
+    root_epoch: ROOT_EPOCH,
   };
 }
 
@@ -124,7 +121,7 @@ export async function buildWorld() {
       k_srv: server!.peer,
       k_gw: gateway!.pub,
       binding_seq: 1,
-      root_epoch: 1,
+      root_epoch: ROOT_EPOCH,
       issued_at: WORLD_NOW - 60,
     },
     root,

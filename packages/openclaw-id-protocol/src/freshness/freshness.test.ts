@@ -61,7 +61,6 @@ async function world() {
   const pin: ClawPin = {
     claw_id,
     root_fp: await fingerprint(root_pub),
-    root_epoch: 1,
     binding_seq: 4,
   };
   return { root_pub, claw_id, oldSrv, newSrv, binding, snapshot, pin };
@@ -78,7 +77,7 @@ async function gate(
     policy = "enforce",
   }: { stored?: FreshnessState | null; policy?: FreshnessPolicy } = {},
 ) {
-  const pinEvidence = { root_pub: w.root_pub, rotations: [], binding };
+  const pinEvidence = { root_pub: w.root_pub, binding };
   const first = await verifyBindingForPin(pinEvidence, w.pin, { host: HOST, now });
   if (!first.ok) {
     return { ok: false, code: first.code, state: stored };

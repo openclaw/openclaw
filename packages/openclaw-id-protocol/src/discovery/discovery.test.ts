@@ -28,7 +28,6 @@ const descriptor: ClawDescriptor = {
   transport: "iroh",
   relay_url: "https://relay.example.test/",
   root_pub: vectors.kit.root_pub,
-  rotations: [],
   binding,
   published_at: vectors.now,
 };
@@ -42,7 +41,6 @@ describe("ClawDescriptor", () => {
     const pin = {
       claw_id: null,
       root_fp: vectors.kit.root_fp as `fp:${string}`,
-      root_epoch: 0,
       binding_seq: 0,
     };
     const result = await verifyBindingForPin(descriptorEvidence(descriptor), pin, {

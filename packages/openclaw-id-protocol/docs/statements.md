@@ -78,9 +78,13 @@ additive change. v1-draft accepts only `ed25519`.
 | InviteCap          | claw_id, invite_id, role, audience {kind, value}, label, created_at, expires_at, single_use, secret_hash | current owner device (or R)              | `invite`                                                       |
 | MembershipChange   | claw_id, seq, target (by op), issued_at                                                                  | current owner device (or R)              | `manage_members`; `approve_device` for `add_owner_device`      |
 | Revocation         | target_fp, target_kind (`owner_device` \| `peer_key`), reason, root_epoch, issued_at                     | R or any current owner device            | none                                                           |
-| RootRotation       | old_root_fp, new_root_pub, new_epoch (= old + 1), issued_at                                              | the old R only; local operator only      | n/a                                                            |
 | MembershipSnapshot | claw_id, seq, binding_seq, owner_devices[{device_pub, caps}], owner_peer_keys, members[], issued_at      | K_gw of the verified binding             | n/a (a mirror of current state, never an authority)            |
 | InviteRedemption   | claw_id, invite_id, account_id, device_pub, peer_key, proof, requested_at                                | the invitee's own D_I (self-signed)      | n/a                                                            |
+
+`root_epoch` is the constant 1 (`ROOT_EPOCH`); any other value is `malformed`. A claw's root
+never changes in this version, so there is no RootRotation statement: owner reset is out of
+scope (OCF-319). The field stays so that statements signed before epochs were removed still
+verify.
 
 Capabilities: `approve_device`, `bind`, `invite`, `manage_members`. R holds all of them.
 (`bind` stays a certificate capability, but bindings are signed by R alone: clients that pin
@@ -103,30 +107,28 @@ captured change from being replayed later; a concurrent writer gets a conflict a
 
 ## Verification
 
-`verifyOwnerStatement(statement, anchor, { now, owners })`, where anchor = {R public key,
-current root_epoch} and `owners(devicePub)` returns the capabilities of a device the claw
-currently lists as an active owner device (undefined otherwise):
+`verifyOwnerStatement(statement, anchor, { now, owners })`, where anchor = {R public key}
+and `owners(devicePub)` returns the capabilities of a device the claw currently lists as an
+active owner device (undefined otherwise):
 
 1. The envelope signature verifies under `signer`.
-2. A body `root_epoch` equals the anchor epoch.
-3. `signer == R` -> authority `root`.
-4. A ServerBinding not signed by R -> `wrong_signer`.
-5. `owners(signer)` is undefined (no lookup, a stranger, or a removed device) -> `not_an_owner`.
-6. The signer holds the capability the type needs -> else `missing_capability`; an
+2. `signer == R` -> authority `root`.
+3. A ServerBinding not signed by R -> `wrong_signer`.
+4. `owners(signer)` is undefined (no lookup, a stranger, or a removed device) -> `not_an_owner`.
+5. The signer holds the capability the type needs -> else `missing_capability`; an
    OwnerDeviceCert grants no caps the signer lacks -> else `caps_escalation`.
 
-Only the Gateway can run steps 5 and 6. Clients and Discovery verify R's signatures only.
+Only the Gateway can run steps 4 and 5. Clients and Discovery verify R's signatures only.
 
 **Root supremacy**: authority `root` overrides `owner_device` (for example, two devices
 removing each other: the kit decides).
 
-Other verifiers: `verifyRootRotation` (signed by the current R, old_root_fp matches,
-new_epoch = epoch + 1), `verifyMembershipSnapshot` (signed by the binding's K_gw, same
-claw), `verifyInviteRedemptionSignature` (self-signed by device_pub).
+Other verifiers: `verifyMembershipSnapshot` (signed by the binding's K_gw, same claw),
+`verifyInviteRedemptionSignature` (self-signed by device_pub).
 
 Failure codes (stable; callers match codes, never detail text): `malformed`,
-`bad_signature`, `wrong_signer`, `not_an_owner`, `wrong_epoch`, `missing_capability`,
-`caps_escalation`, `not_yet_valid`, `root_mismatch`, `conflicting_rotation`, `wrong_claw`, `host_mismatch`,
+`bad_signature`, `wrong_signer`, `not_an_owner`, `missing_capability`, `caps_escalation`,
+`not_yet_valid`, `root_mismatch`, `wrong_claw`, `host_mismatch`,
 `rollback`, `bad_proof`, `expired`, `audience_mismatch`. The Gateway adds `limit_reached`
 for the caps below.
 
@@ -171,26 +173,25 @@ browser cannot revoke itself from the Control UI.
 
 ## Pins and rollback (spec section 5, step 3)
 
-A client stores per origin `ClawPin = { claw_id, root_fp, root_epoch, binding_seq }`. A pin
-from an invite link (`r=<fp(R)>`) or a kit starts as `{ claw_id: null, root_epoch: 0
-(unknown), binding_seq: 0 }`.
+A client stores per origin `ClawPin = { claw_id, root_fp, binding_seq }`. A pin from an
+invite link (`r=<fp(R)>`) or a kit starts as `{ claw_id: null, binding_seq: 0 }`. The pinned
+root never changes.
 
 `verifyBindingForPin(evidence, pin, { host, now })` runs before any socket opens.
-Evidence is untrusted Discovery output: `{ root_pub, rotations[], binding }`.
+Evidence is untrusted Discovery output: `{ root_pub, binding }`.
 
-1. Follow RootRotations from the pinned root fingerprint, each verified by the previous root.
-   Two different rotations out of the same epoch -> `conflicting_rotation` (fail closed).
-2. fp(root_pub) must equal the fingerprint reached -> else `root_mismatch`.
-3. The binding is signed by that root in that epoch -> else `wrong_signer` / `wrong_epoch`.
-4. claw_id matches the pin (if known) -> else `wrong_claw`; `binding.hostname ==
+1. fp(root_pub) must equal the pinned fingerprint -> else `root_mismatch`. A new root is
+   never accepted, whatever signs it.
+2. The binding is signed by that root -> else `wrong_signer`.
+3. claw_id matches the pin (if known) -> else `wrong_claw`; `binding.hostname ==
    location.host` -> else `host_mismatch`.
-5. `binding_seq >= pin.binding_seq` and the epoch does not go back -> else `rollback`.
+4. `binding_seq >= pin.binding_seq` -> else `rollback`.
 
 On success the caller stores the returned pin and dials only `binding.k_srv`.
 
 ### Freshness (freshness/v1)
 
-A ServerBinding never expires and step 5 accepts an equal binding_seq, so the pin alone does not
+A ServerBinding never expires and step 4 accepts an equal binding_seq, so the pin alone does not
 stop a replayed older binding. Right after `verifyBindingForPin` succeeds and before any socket
 opens, the client runs `assessFreshness({ snapshot }, { binding, stored, now, policy })` with
 Discovery's snapshot (`getSnapshot`, untrusted):
@@ -225,7 +226,7 @@ disagree. It contains: the kit (text, root seed, R, fp, display fp), named keys,
 the vector claw's current owner devices (`owners`, the allowlist device signatures are checked
 against), valid statements with their signing input in hex, invalid statements with the expected
 error code (and anchor when not the default), and pin checks (fresh pin, rollback,
-substitution, host mismatch, rotation, conflicting rotations).
+substitution, host mismatch, a new root).
 
 Regenerate after an intentional change:
 

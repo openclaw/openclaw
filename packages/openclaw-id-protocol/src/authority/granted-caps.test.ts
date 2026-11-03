@@ -24,7 +24,7 @@ async function grant(
   device: Key,
   caps: OwnerCapability[],
 ) {
-  const cert = await signStatement("OwnerDeviceCert", certBody(device, 1, caps), approver);
+  const cert = await signStatement("OwnerDeviceCert", certBody(device, caps), approver);
   return submitStatement(
     state,
     await signChange(state, approver, { op: "add_owner_device", cert }),

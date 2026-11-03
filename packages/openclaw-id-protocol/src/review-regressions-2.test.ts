@@ -1,9 +1,8 @@
 // Regressions for the second ClawSweeper review of the protocol package (openclaw/openclaw#191469):
-// schema lookups use own properties only, re-adding an owner device with new peer keys tears
-// down the old ones, and repinning the root ends the earlier owner devices' sessions.
+// schema lookups use own properties only, and re-adding an owner device with new peer keys tears
+// down the old ones.
 import { describe, expect, it } from "vitest";
-import { repinRoot, submitStatement } from "./authority/apply.js";
-import { ownerDevicePeerKeys } from "./authority/state.js";
+import { submitStatement } from "./authority/apply.js";
 import { signStatement } from "./statements/envelope.js";
 import { parseStatement } from "./statements/validate.js";
 import { buildWorld, certBody, signChange, worldKey, WORLD_NOW } from "./testing/world.js";
@@ -84,18 +83,5 @@ describe("ClawSweeper review regressions, round 2", () => {
       tunnel,
     );
     expect(same.ok && same.events).toEqual([{ type: "publish_snapshot" }]);
-  });
-
-  it("repinning the root ends every earlier owner device's sessions and tokens", async () => {
-    const world = await buildWorld();
-    const ended = ownerDevicePeerKeys(world.state);
-    expect(ended).toHaveLength(2);
-    const newRoot = await worldKey("root-2");
-    const result = repinRoot(world.state, newRoot.pub, "local_operator");
-    expect(result.ok && result.events).toEqual([
-      { type: "disconnect", peer_keys: ended },
-      { type: "invalidate_tokens", peer_keys: ended },
-      { type: "publish_snapshot" },
-    ]);
   });
 });

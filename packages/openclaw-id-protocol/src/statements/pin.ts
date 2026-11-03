@@ -4,30 +4,26 @@ import type { ServerBindingBody, SignedStatement } from "./types.js";
 import {
   failure,
   verifyOwnerStatement,
-  verifyRootRotation,
   type TrustAnchor,
   type VerifyFailure,
   type VerifyOptions,
 } from "./verify.js";
 
 /**
- * What a client stores per origin: {fp(R), claw_id, highest binding_seq seen, root_epoch}.
- * A fresh pin from an invite link or kit has `claw_id: null`, `binding_seq: 0` and
- * `root_epoch: 0` (unknown).
+ * What a client stores per origin: {fp(R), claw_id, highest binding_seq seen}. A claw's
+ * root never changes, so the pinned fingerprint is final. A fresh pin from an invite link
+ * or kit has `claw_id: null` and `binding_seq: 0`.
  */
 export type ClawPin = {
   claw_id: string | null;
   root_fp: KeyFingerprint;
-  root_epoch: number;
   binding_seq: number;
 };
 
 /** Untrusted binding material, as served by Discovery in a descriptor. */
 export type BindingEvidence = {
-  /** Current root public key (checked against the pinned fingerprint, possibly via rotations). */
+  /** The claw's root public key (checked against the pinned fingerprint). */
   root_pub: Ed25519PublicKey;
-  /** Root rotations, oldest first. Only those after the pinned epoch matter. */
-  rotations: SignedStatement<"RootRotation">[];
   binding: SignedStatement<"ServerBinding">;
 };
 
@@ -36,51 +32,10 @@ export type BindingCheck =
   | { ok: true; binding: ServerBindingBody; anchor: TrustAnchor; pin: ClawPin }
   | VerifyFailure;
 
-// Follows rotations from the pinned root to the newest one. Two different rotations out
-// of the same epoch are a conflict (spec section 8.3) and fail closed.
-async function followRotations(
-  pin: ClawPin,
-  rotations: SignedStatement<"RootRotation">[],
-): Promise<
-  { ok: true; fp: KeyFingerprint; epoch: number; root_pub: Ed25519PublicKey | null } | VerifyFailure
-> {
-  const seen = new Map<string, string>();
-  for (const rotation of rotations) {
-    const key = `${rotation.body.old_root_fp}/${rotation.body.new_epoch}`;
-    const previous = seen.get(key);
-    if (previous !== undefined && previous !== rotation.sig) {
-      return failure("conflicting_rotation", `two rotations out of ${key}`);
-    }
-    seen.set(key, rotation.sig);
-  }
-  let fp = pin.root_fp;
-  let epoch = pin.root_epoch;
-  let rootPub: Ed25519PublicKey | null = null;
-  for (;;) {
-    const next = rotations.find(
-      (rotation) =>
-        rotation.body.old_root_fp === fp && (epoch === 0 || rotation.body.new_epoch === epoch + 1),
-    );
-    if (!next) {
-      return { ok: true, fp, epoch, root_pub: rootPub };
-    }
-    const step = await verifyRootRotation(next, {
-      root_pub: next.signer,
-      root_epoch: next.body.new_epoch - 1,
-    });
-    if (!step.ok) {
-      return step;
-    }
-    fp = await fingerprint(step.anchor.root_pub);
-    epoch = step.anchor.root_epoch;
-    rootPub = step.anchor.root_pub;
-  }
-}
-
 /**
  * Verifies Discovery-served binding evidence against a pin before any socket opens:
- * the binding is signed by the pinned R (through verified rotations), root_epoch and
- * binding_seq do not go backwards, the hostname is this origin's host and the claw id
+ * the root is the pinned root (it never changes), the binding is signed by it,
+ * binding_seq does not go backwards, the hostname is this origin's host and the claw id
  * matches. A replaced server key is retired by a higher binding_seq. Returns the pin to
  * store afterwards.
  */
@@ -89,23 +44,15 @@ export async function verifyBindingForPin(
   pin: ClawPin,
   context: Omit<VerifyOptions, "owners"> & { host: string },
 ): Promise<BindingCheck> {
-  const walked = await followRotations(pin, evidence.rotations);
-  if (!walked.ok) {
-    return walked;
-  }
-  if ((await fingerprint(evidence.root_pub)) !== walked.fp) {
+  if ((await fingerprint(evidence.root_pub)) !== pin.root_fp) {
     return failure("root_mismatch", "descriptor root is not the pinned root");
   }
-  const binding = evidence.binding.body;
-  const epoch = walked.epoch === 0 ? binding.root_epoch : walked.epoch;
-  if (epoch < pin.root_epoch) {
-    return failure("rollback", "root epoch went backwards");
-  }
-  const anchor: TrustAnchor = { root_pub: evidence.root_pub, root_epoch: epoch };
+  const anchor: TrustAnchor = { root_pub: evidence.root_pub };
   const verified = await verifyOwnerStatement(evidence.binding, anchor, context);
   if (!verified.ok) {
     return verified;
   }
+  const binding = evidence.binding.body;
   if (pin.claw_id !== null && binding.claw_id !== pin.claw_id) {
     return failure("wrong_claw", "binding is for another claw");
   }
@@ -119,11 +66,6 @@ export async function verifyBindingForPin(
     ok: true,
     binding,
     anchor,
-    pin: {
-      claw_id: binding.claw_id,
-      root_fp: walked.fp,
-      root_epoch: epoch,
-      binding_seq: binding.binding_seq,
-    },
+    pin: { claw_id: binding.claw_id, root_fp: pin.root_fp, binding_seq: binding.binding_seq },
   };
 }
