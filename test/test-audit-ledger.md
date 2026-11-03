@@ -159,18 +159,24 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 Pinned main 282810431bc0: repair the existing invalid human-mention metadata
 matrix in `human-mentions.test.ts`. Vitest `it.each` spreads every array row,
-so all six current callbacks receive a record and exit at the array-shape guard.
-Pass each array intact and make the eleven-recipient capacity row independently
-valid, with ten accepted recipients as its boundary control. All six physical
-declarations/fourteen authored cases and every existing assertion remain.
-Production stays unchanged; exact justified test-line growth will be allocated.
+so all six original callbacks receive a record and exit at the array-shape guard.
+`it.for` now passes each array intact; the eleven-recipient capacity fixture has
+valid nonoverlapping spans, with ten accepted recipients as its positive boundary.
+All six physical declarations/fourteen authored cases and existing assertions
+remain. Production and the shared test-line scalar stay unchanged.
+
+Official untouched baseline and the clean candidate pass all14 without skips.
+Each actual reader fault removes only the end bound or recipient-count limit:
+original14 pass; each repaired run fails only its intended existing rejection
+row, with13 other passes. Exact owner/test bytes restore before clean proof.
+Vitest abbreviates long array diagnostics; the stored capacity row and exact
+rejection-assertion frame qualify that result without replaying the fault.
 
 The reader, determining persistence/render callers, runner binding and causal
-history are source-qualified. Official untouched baseline, actual end-bound and
-capacity owner-fault controls, clean candidate and published proof are pending.
-No removal scan applies. Focused checks, normal hooks, fresh review and exact-head
-CI remain pending. This is local metadata-reader proof; no visual, browser,
-Gateway or model verdict is claimed.
+history are source-qualified. No removal scan applies. Nine justified fixture
+lines get a separate allocation; focused checks, normal hooks, fresh review and
+published proof are recorded separately. This is local metadata-reader proof;
+no visual, browser, Gateway or model verdict is claimed.
 
 ## Completed source review
 
