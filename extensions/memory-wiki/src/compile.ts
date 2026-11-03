@@ -462,14 +462,14 @@ async function readPageSummaries(rootDir: string, signal?: AbortSignal) {
       // still yields between pages so background recovery cannot starve Gateway ticks.
       await yieldToEventLoop();
       signal?.throwIfAborted();
-      const cached = previous?.get(relativePath);
-      const reusable = cached?.digest.equals(digest);
-      const result: ReturnType<typeof scanPageSummary> = reusable
+      const candidate = previous?.get(relativePath);
+      const cached = candidate?.digest.equals(digest) ? candidate : undefined;
+      const result: ReturnType<typeof scanPageSummary> = cached
         ? JSON.parse(cached.summary)
         : scanPageSummary({ absolutePath, relativePath, raw: bytes.toString("utf8") });
       // Serialization detaches substrings from large source pages and keeps
       // mutable compile results separate from the retained cache.
-      const summary = reusable ? cached.summary : JSON.stringify(result);
+      const summary = cached?.summary ?? JSON.stringify(result);
       cachedBytes += Buffer.byteLength(summary);
       if (cachedBytes <= 16 * 1024 * 1024) {
         next.set(relativePath, { digest, summary });
