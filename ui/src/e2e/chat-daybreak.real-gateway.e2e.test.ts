@@ -30,6 +30,11 @@ let owner: OpenClawTestInstance;
 let client: Awaited<ReturnType<typeof connectChatGateway>>;
 const call = <T = unknown>(method: string, params: Record<string, unknown>) =>
   client.request<T>(method, params);
+const runCli = async (args: string[]) => {
+  const result = await owner.cli(args);
+  expect(result.code, result.stderr).toBe(0);
+  return result.stdout;
+};
 let dir: string;
 let programs: string[] | undefined = ["standard", "daybreak_blue", "daybreak_red"];
 let reasoningEfforts = ["medium"];
@@ -219,6 +224,7 @@ globalThis.__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__ = { ...undici, fetch: globalThi
         agents: {
           defaults: {
             model: "openai/gpt-6.1-sol",
+            utilityModel: "daybreak-utility/metadata",
             models: {
               "openai/gpt-6.1-sol": {
                 agentRuntime: { id: "openclaw" },
@@ -238,6 +244,13 @@ globalThis.__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__ = { ...undici, fetch: globalThi
         models: {
           catalogRefresh: { enabled: false },
           providers: {
+            // Utility recovery must not consume a chat receipt or its held response.
+            "daybreak-utility": {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-responses",
+              apiKey: "sk-synthetic-utility-fixture",
+              models: [{ id: "metadata", name: "Fixture utility" }],
+            },
             openai: {
               baseUrl: "https://api.openai.com/v1",
               api: "openai-responses",
@@ -308,11 +321,6 @@ globalThis.__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__ = { ...undici, fetch: globalThi
 
 suite.define(() => {
   it("discovers configured-key programs in the UI and submits the selected access", async () => {
-    const runCli = async (args: string[]) => {
-      const result = await owner.cli(args);
-      expect(result.code, result.stderr).toBe(0);
-      return result.stdout;
-    };
     const key = "agent:main:platform-discovery";
     await call("sessions.create", { key, agentId: "main", label: "Platform discovery" });
     const inferenceCount = inferenceRequests;
@@ -461,11 +469,6 @@ suite.define(() => {
       key: donor,
       model: "openai/gpt-6.1-sol@openai:platform-fixture",
     });
-    const runCli = async (args: string[]) => {
-      const result = await owner.cli(args);
-      expect(result.code, result.stderr).toBe(0);
-      return result.stdout;
-    };
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       await pairControlUiPage(page, runCli);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, control));
@@ -547,11 +550,6 @@ suite.define(() => {
       replacePaths: ["models.providers.openai.models"],
       response: "summary",
     });
-    const runCli = async (args: string[]) => {
-      const result = await owner.cli(args);
-      expect(result.code, result.stderr).toBe(0);
-      return result.stdout;
-    };
     const name = "desktop";
     const key = "agent:main:daybreak-" + name;
     programs = ["standard", "daybreak_blue", "daybreak_red"];
