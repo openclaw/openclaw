@@ -9,6 +9,11 @@ import Synchronization
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 
 public actor GatewayChannelActor {
+    static func matchesExpectedGateway(server: [String: AnyCodable], expectedGatewayId: String?) -> Bool {
+        guard let expectedGatewayId else { return true }
+        return server["bootId"]?.stringValue == expectedGatewayId
+    }
+
     nonisolated static func resolveRequestTimeoutMs(_ timeoutMs: Double?, defaultMs: Double) -> Double? {
         timeoutMs == 0 ? nil : (timeoutMs ?? defaultMs)
     }
@@ -576,7 +581,6 @@ public actor GatewayChannelActor {
             "role": ProtoAnyCodable(role),
             "scopes": ProtoAnyCodable(scopes),
         ]
-        options.applyOptionalConnectParams(to: &params)
         self.applyConnectAuth(
             selectedAuth,
             deviceId: identity?.deviceId,
@@ -587,6 +591,10 @@ public actor GatewayChannelActor {
         let signedAtMs = connectChallenge.issuedAtMs
         let connectNonce = connectChallenge.nonce
         try self.requireCurrentConnection(connectionGeneration)
+        let signedPersonalIdentity = options.personalIdentity?.signed(at: signedAtMs)
+        options.applyOptionalConnectParams(
+            to: &params,
+            signedPersonalIdentity: signedPersonalIdentity)
         if let identity {
             let deviceAuthFields = GatewayDeviceAuthPayload.Fields(
                 deviceId: identity.deviceId,
@@ -595,7 +603,10 @@ public actor GatewayChannelActor {
                 scopes: scopes,
                 signedAtMs: signedAtMs,
                 token: selectedAuth.signatureToken,
-                nonce: connectNonce)
+                nonce: connectNonce,
+                personalIdentity: signedPersonalIdentity,
+                platform: platform,
+                deviceFamily: InstanceIdentity.deviceFamily)
             let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(fields: deviceAuthFields)
             if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
                 payload: payload,
@@ -941,6 +952,9 @@ extension GatewayChannelActor {
         }
         let payloadData = try self.encoder.encode(payload)
         let ok = try decoder.decode(HelloOk.self, from: payloadData)
+        if !Self.matchesExpectedGateway(server: ok.server, expectedGatewayId: options.expectedGatewayId) {
+            throw Self.failure(1, "connected Gateway did not match the authenticated identity binding")
+        }
         if let tick = ok.policy["tickIntervalMs"]?.doubleValue {
             self.tickIntervalMs = tick
         }

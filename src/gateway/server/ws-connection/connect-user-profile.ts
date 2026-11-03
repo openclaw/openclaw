@@ -1,5 +1,9 @@
 import { resolveHostAccountName } from "../../../infra/host-account-name.js";
+import { resolveAuthenticatedPairedDeviceIdentity } from "../../../infra/device-pairing-identity.js";
+import { loadPairedDevicePairingStoreRecordReadOnly } from "../../../infra/device-pairing-store-readonly.js";
+import { readTailscaleWhoisIdentity } from "../../../infra/tailscale.js";
 import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
+import { resolveCanonicalTailscaleProfileId } from "../../../state/user-profile-reads.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
@@ -13,6 +17,11 @@ import {
   type prepareGatewayLocalUserIngress,
 } from "../../local-user-ingress.js";
 import { hasGatewayOperatorAccessPolicies } from "../../operator-access-policy.js";
+import {
+  captureGatewayPersonalIdentityBinding,
+  resolveGatewayPersonalIdentityBinding,
+  type PersonalIdentityBindingResult,
+} from "../../personal-identity-binding.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "../../server-constants.js";
 import { formatForLog } from "../../ws-log.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -184,25 +193,112 @@ async function resolveAuthenticatedProfile(
 
 /** Role and access policies need verified identity before admission; attribution alone may defer it. */
 export async function resolveGatewayConnectProfileAdmission(params: {
-  context: Pick<
-    GatewayConnectPhaseContext,
-    "configSnapshot" | "recordAttachTiming" | "setConnectPhase"
-  > &
-    Parameters<typeof rejectUnavailableProfileConnect>[0] & {
-      handler: Pick<GatewayConnectPhaseContext["handler"], "connId" | "logWsControl">;
-    };
-  state: Pick<DeviceAuthorizedGatewayConnect, "authResult" | "role" | "authMethod">;
+  context: GatewayConnectPhaseContext;
+  state: Pick<
+    DeviceAuthorizedGatewayConnect,
+    | "authResult"
+    | "role"
+    | "authMethod"
+    | "device"
+    | "devicePublicKey"
+    | "deviceAuthPayloadVersion"
+    | "deviceToken"
+    | "scopes"
+  >;
   ownerProfileExpected: boolean;
   authenticatedUserId: string | undefined;
   resolveAuthenticatedGitHubIdentity: ReturnType<typeof createAuthenticatedGitHubIdentitySync>;
   assertCurrent?: () => void;
-}): Promise<{ ok: true; prepared?: PreparedConnectProfile } | { ok: false }> {
+}): Promise<
+  | {
+      ok: true;
+      prepared?: PreparedConnectProfile;
+      personalIdentityBinding?: PersonalIdentityBindingResult & { bindingId: string };
+    }
+  | { ok: false }
+> {
   const { context, state, ownerProfileExpected, authenticatedUserId } = params;
   const profileRequired =
     Boolean(context.configSnapshot.gateway?.roles) ||
     hasGatewayOperatorAccessPolicies(context.configSnapshot);
+  const personalIntent = context.connectParams.personalIdentity;
+  let personalProfileId: string | undefined;
+  let personalIdentityBinding:
+    | (PersonalIdentityBindingResult & { bindingId: string })
+    | undefined;
+  if (personalIntent && context.isLocalClient) {
+    if (personalIntent.phase !== "use") {
+      await rejectUnavailableProfileConnect(context, new Error("Personal identity bind must use Tailscale Serve"));
+      return { ok: false };
+    }
+    const pairing = state.device?.id
+      ? await loadPairedDevicePairingStoreRecordReadOnly(state.device.id)
+      : null;
+    const pairingIdentity =
+      state.role === "operator" &&
+      pairing &&
+      state.devicePublicKey &&
+      state.deviceAuthPayloadVersion === "v4"
+        ? resolveAuthenticatedPairedDeviceIdentity(pairing, {
+            role: state.role,
+            publicKey: state.devicePublicKey,
+            scopes: context.connectParams.scopes ?? [],
+          })
+        : null;
+    const localAuthMethodAllowed =
+      state.authMethod === "device-token" ||
+      state.authMethod === "token" ||
+      state.authMethod === "password";
+    const binding = pairingIdentity && localAuthMethodAllowed
+      ? await resolveGatewayPersonalIdentityBinding({
+          gateway: context.handler.clients,
+          intent: personalIntent,
+          device: pairingIdentity,
+          gatewayId: context.handler.bootId,
+          isDirectLocal:
+            context.handler.ingressAttribution.kind === "direct-local" && context.isLocalClient,
+          isDeviceCurrent: async (identity) => {
+            const current = await loadPairedDevicePairingStoreRecordReadOnly(identity.deviceId);
+            const resolved = current
+              ? resolveAuthenticatedPairedDeviceIdentity(current, {
+                  role: state.role,
+                  publicKey: state.devicePublicKey!,
+                  scopes: context.connectParams.scopes ?? [],
+                })
+              : null;
+            return resolved?.key === identity.key;
+          },
+          isProfileCurrent: async (profileId, tailscaleLogin) => {
+            const authority = await prepareUserProfileRoleAuthority(profileId);
+            return (
+              authority?.profileId === profileId &&
+              authority.isCurrent() &&
+              (await resolveCanonicalTailscaleProfileId(tailscaleLogin)) === profileId
+            );
+          },
+          readCurrentTailscaleLogin: async (sourceClientIp) =>
+            (await readTailscaleWhoisIdentity(sourceClientIp, undefined, {
+              cacheTtlMs: 0,
+              errorTtlMs: 0,
+            }))?.login,
+        })
+      : undefined;
+    if (!binding) {
+      await rejectUnavailableProfileConnect(
+        context,
+        new Error("Personal Tailscale identity binding is unavailable or no longer current"),
+      );
+      return { ok: false };
+    }
+    personalProfileId = binding.profileId;
+    personalIdentityBinding = {
+      ...binding,
+      bindingId: personalIntent.bindingId,
+    };
+  }
   if (
     !ownerProfileExpected &&
+    !personalIntent &&
     (!authenticatedUserId || (params.resolveAuthenticatedGitHubIdentity && !profileRequired))
   ) {
     return { ok: true };
@@ -212,40 +308,143 @@ export async function resolveGatewayConnectProfileAdmission(params: {
     const options = { assertCurrent: params.assertCurrent };
     const ensureStartedAt = performance.now();
     context.setConnectPhase?.("profile-ensure");
-    const profile = ownerProfileExpected
-      ? await ensureCanonicalGatewayOwnerProfile(resolveHostAccountName, options)
-      : params.resolveAuthenticatedGitHubIdentity
-        ? await params.resolveAuthenticatedGitHubIdentity()
-        : state.authResult.tailscaleIdentity
-          ? await ensureCanonicalUserProfileForTailscaleIdentity(
-              state.authResult.tailscaleIdentity,
-              options,
-            )
-          : await ensureCanonicalUserProfileForEmail(authenticatedUserId!, options);
-    params.assertCurrent?.();
-    params.context.recordAttachTiming?.("profileEnsureMs", ensureStartedAt);
-    context.setConnectPhase?.("profile-authority");
-    const prepared = await resolveAuthenticatedProfile(
-      "profileId" in profile ? profile.profileId : profile.id,
-      profile.updatedAt,
-      params.assertCurrent,
-      context.recordAttachTiming,
-    );
+    if (personalProfileId) {
+      context.setConnectPhase?.("profile-authority");
+    }
+    const prepared = personalProfileId
+      ? await resolveAuthenticatedProfile(
+          personalProfileId,
+          Date.now(),
+          params.assertCurrent,
+          context.recordAttachTiming,
+        )
+      : await (async () => {
+          const profile = ownerProfileExpected
+            ? await ensureCanonicalGatewayOwnerProfile(resolveHostAccountName, options)
+            : params.resolveAuthenticatedGitHubIdentity
+              ? await params.resolveAuthenticatedGitHubIdentity()
+              : state.authResult.tailscaleIdentity
+                ? await ensureCanonicalUserProfileForTailscaleIdentity(
+                    state.authResult.tailscaleIdentity,
+                    options,
+                  )
+                : await ensureCanonicalUserProfileForEmail(authenticatedUserId!, options);
+          params.assertCurrent?.();
+          context.recordAttachTiming?.("profileEnsureMs", ensureStartedAt);
+          context.setConnectPhase?.("profile-authority");
+          return await resolveAuthenticatedProfile(
+            "profileId" in profile ? profile.profileId : profile.id,
+            profile.updatedAt,
+            params.assertCurrent,
+            context.recordAttachTiming,
+          );
+        })();
     params.assertCurrent?.();
     if (!prepared.authority.isCurrent()) {
       throw new Error("Gateway profile changed during acquisition");
     }
-    return { ok: true, prepared };
+    if (personalIntent && !personalProfileId) {
+      const ingress = context.handler.ingressAttribution;
+      if (personalIntent.phase !== "bind") {
+        await rejectUnavailableProfileConnect(
+          context,
+          new Error("Personal identity use intent requires a current local binding"),
+        );
+        return { ok: false };
+      }
+      const device = state.device;
+      const pairing = device?.id
+        ? await loadPairedDevicePairingStoreRecordReadOnly(device.id)
+        : null;
+      const pairingIdentity =
+        state.role === "operator" &&
+        state.authMethod === "tailscale" &&
+        ingress.kind === "tailscale-serve" &&
+        state.deviceAuthPayloadVersion === "v4" &&
+        device &&
+        state.devicePublicKey &&
+        state.role === "operator" &&
+        pairing
+          ? resolveAuthenticatedPairedDeviceIdentity(pairing, {
+              role: state.role,
+              publicKey: state.devicePublicKey,
+              scopes: context.connectParams.scopes ?? [],
+            })
+          : null;
+      const providerIdentity =
+        ingress.kind === "tailscale-serve" && pairingIdentity
+          ? await readTailscaleWhoisIdentity(ingress.clientIp, undefined, {
+              cacheTtlMs: 0,
+              errorTtlMs: 0,
+            })
+          : null;
+      const providerProfileId = providerIdentity?.login
+        ? await resolveCanonicalTailscaleProfileId(providerIdentity.login)
+        : undefined;
+      params.assertCurrent?.();
+      const canonicalProfileId = prepared.profile.profileId;
+      const sourceBound = Boolean(
+        personalIntent.mode === "personal-identity" &&
+          personalIntent.provider === "tailscale" &&
+          state.authMethod === "tailscale" &&
+          ingress.kind === "tailscale-serve" &&
+          context.handler.buildRequestContext().gatewayTlsFingerprint &&
+          providerIdentity?.login &&
+          providerProfileId === canonicalProfileId &&
+          state.authResult.tailscaleIdentity?.login.toLowerCase() ===
+            providerIdentity.login.toLowerCase() &&
+          pairingIdentity &&
+          captureGatewayPersonalIdentityBinding(
+            context.handler.clients,
+            {
+              ingress: ingress.kind,
+              authMethod: state.authMethod,
+              tailscaleLogin: providerIdentity.login,
+              sourceClientIp: ingress.clientIp,
+              canonicalProfileId,
+              device: pairingIdentity,
+              gatewayId: context.handler.bootId,
+              signedAtMs: context.connectParams.device?.signedAt ?? -1,
+              verifiedAtMs: Date.now(),
+            },
+            personalIntent,
+          ),
+      );
+      if (!sourceBound) {
+        await rejectUnavailableProfileConnect(
+          context,
+          new Error("A verified Tailscale Serve identity and local TLS trust could not bind this paired device"),
+        );
+        return { ok: false };
+      }
+      if (!pairingIdentity || !providerIdentity?.login) {
+        await rejectUnavailableProfileConnect(
+          context,
+          new Error("Personal identity binding proof was incomplete"),
+        );
+        return { ok: false };
+      }
+      personalIdentityBinding = {
+        bindingId: personalIntent.bindingId,
+        profileId: canonicalProfileId,
+        device: pairingIdentity,
+        tailscaleLogin: providerIdentity.login.toLowerCase(),
+        sourceClientIp: ingress.clientIp,
+        gatewayId: context.handler.bootId,
+      };
+    }
+    return { ok: true, prepared, personalIdentityBinding };
   } catch (error) {
     context.handler.logWsControl.warn(
       `user profile resolution failed conn=${context.handler.connId} user=${formatForLog(authenticatedUserId)}: ${formatForLog(error)}`,
     );
     if (
-      !ownerProfileExpected &&
-      profileRequired &&
-      state.role === "operator" &&
-      state.authMethod !== "token" &&
-      state.authMethod !== "password"
+      personalIntent ||
+      (!ownerProfileExpected &&
+        profileRequired &&
+        state.role === "operator" &&
+        state.authMethod !== "token" &&
+        state.authMethod !== "password")
     ) {
       await rejectUnavailableProfileConnect(context, error);
       return { ok: false };

@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   buildDeviceAuthPayload,
+  buildDeviceAuthPayloadV4,
   buildDeviceAuthPayloadV3,
 } from "../../../../packages/gateway-client/src/device-auth.js";
 import {
@@ -23,6 +24,7 @@ import type { AuthProvidedKind } from "./auth-messages.js";
 
 const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
 const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
+export const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 type PairingLocalityKind =
   | "direct_local"
   | "cli_container_local"
@@ -213,7 +215,7 @@ export function resolveDeviceSignaturePayloadVersion(params: {
   scopes: string[];
   signedAtMs: number;
   nonce: string;
-}): "v3" | "v2" | null {
+}): "v4" | "v3" | "v2" | null {
   const basePayload = {
     deviceId: params.device.id,
     clientId: params.connectParams.client.id,
@@ -228,6 +230,21 @@ export function resolveDeviceSignaturePayloadVersion(params: {
       null,
     nonce: params.nonce,
   };
+  if (params.connectParams.personalIdentity) {
+    const intentAgeMs = Date.now() - params.connectParams.personalIdentity.issuedAtMs;
+    if (Math.abs(intentAgeMs) > DEVICE_SIGNATURE_SKEW_MS) {
+      return null;
+    }
+    const payloadV4 = buildDeviceAuthPayloadV4({
+      ...basePayload,
+      platform: params.connectParams.client.platform,
+      deviceFamily: params.connectParams.client.deviceFamily,
+      personalIdentity: params.connectParams.personalIdentity,
+    });
+    return verifyDeviceSignature(params.device.publicKey, payloadV4, params.device.signature)
+      ? "v4"
+      : null;
+  }
   const payloadV3 = buildDeviceAuthPayloadV3({
     ...basePayload,
     platform: params.connectParams.client.platform,

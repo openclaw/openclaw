@@ -21,6 +21,28 @@ type DeviceAuthPayloadV3Params = DeviceAuthPayloadParams & {
   deviceFamily?: string | null;
 };
 
+export type PersonalIdentityConnectIntent =
+  | {
+      mode: "personal-identity";
+      provider: "tailscale";
+      phase: "bind";
+      bindingId: string;
+      issuedAtMs: number;
+    }
+  | {
+      mode: "personal-identity";
+      provider: "tailscale";
+      phase: "use";
+      bindingId: string;
+      profileId: string;
+      gatewayId: string;
+      issuedAtMs: number;
+    };
+
+type DeviceAuthPayloadV4Params = DeviceAuthPayloadV3Params & {
+  personalIdentity: PersonalIdentityConnectIntent;
+};
+
 export function buildDeviceAuthPayload(params: DeviceAuthPayloadParams): string {
   const scopes = params.scopes.join(",");
   const token = params.token ?? "";
@@ -57,4 +79,34 @@ export function buildDeviceAuthPayloadV3(params: DeviceAuthPayloadV3Params): str
     platform,
     deviceFamily,
   ].join("|");
+}
+
+export function buildDeviceAuthPayloadV4(params: DeviceAuthPayloadV4Params): string {
+  const scopes = params.scopes;
+  const intent = params.personalIdentity;
+  return JSON.stringify([
+    "openclaw-device-auth",
+    "v4",
+    params.deviceId,
+    params.clientId,
+    params.clientMode,
+    params.role,
+    scopes,
+    String(params.signedAtMs),
+    params.token ?? "",
+    params.nonce,
+    normalizeDeviceMetadataForAuth(params.platform),
+    normalizeDeviceMetadataForAuth(params.deviceFamily),
+    intent.phase === "bind"
+      ? [intent.mode, intent.provider, intent.phase, intent.bindingId, String(intent.issuedAtMs)]
+      : [
+          intent.mode,
+          intent.provider,
+          intent.phase,
+          intent.bindingId,
+          intent.profileId,
+          intent.gatewayId,
+          String(intent.issuedAtMs),
+        ],
+  ]);
 }

@@ -16,6 +16,9 @@ import {
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
+import { resolveAuthenticatedPairedDeviceIdentity } from "../../../infra/device-pairing-identity.js";
+import { loadPairedDevicePairingStoreRecordReadOnly } from "../../../infra/device-pairing-store-readonly.js";
+import { readTailscaleWhoisIdentity } from "../../../infra/tailscale.js";
 import {
   createChildDiagnosticTraceContext,
   parseDiagnosticTraceparent,
@@ -33,6 +36,8 @@ import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { errorShapeFromError } from "../../error-shape.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import { hasCurrentRemoteControlUiIngress } from "../../ingress-attribution.js";
+import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
+import { resolveCanonicalTailscaleProfileId } from "../../../state/user-profile-reads.js";
 import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   hasCurrentGatewayOperatorAccess,
@@ -49,6 +54,7 @@ import {
   onGatewayPolicyClientInvalidated,
   registerGatewayPolicyResponse,
 } from "../ws-policy-close.js";
+import { isGatewayPersonalIdentityBindingCurrent } from "../../personal-identity-binding.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 import { createGatewayRpcDiagnostics } from "./request-diagnostics.js";
@@ -150,6 +156,64 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     };
     if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
+    }
+    const personalIdentityBinding = client.internal?.personalIdentityBinding;
+    if (personalIdentityBinding) {
+      const paired = await loadPairedDevicePairingStoreRecordReadOnly(
+        personalIdentityBinding.device.deviceId,
+      );
+      const device = paired
+        ? resolveAuthenticatedPairedDeviceIdentity(paired, {
+            role: "operator",
+            publicKey: client.connect.device?.publicKey ?? "",
+            scopes: client.connect.scopes ?? [],
+          })
+        : null;
+      const current = device
+        ? await isGatewayPersonalIdentityBindingCurrent({
+            gateway: clients,
+            bindingId: personalIdentityBinding.bindingId,
+            device,
+            gatewayId: client.internal.personalIdentityBinding.gatewayId,
+            isDeviceCurrent: async (identity) => {
+              const currentPairing = await loadPairedDevicePairingStoreRecordReadOnly(
+                identity.deviceId,
+              );
+              const currentIdentity = currentPairing
+                ? resolveAuthenticatedPairedDeviceIdentity(currentPairing, {
+                    role: "operator",
+                    publicKey: client.connect.device?.publicKey ?? "",
+                    scopes: client.connect.scopes ?? [],
+                  })
+                : null;
+              return currentIdentity?.key === identity.key;
+            },
+            isProfileCurrent: async (profileId, tailscaleLogin) => {
+              const authority = await prepareUserProfileRoleAuthority(profileId);
+              return (
+                authority?.profileId === profileId &&
+                authority.isCurrent() &&
+                (await resolveCanonicalTailscaleProfileId(tailscaleLogin)) === profileId
+              );
+            },
+            readCurrentTailscaleLogin: async (sourceClientIp) =>
+              (await readTailscaleWhoisIdentity(sourceClientIp, undefined, {
+                cacheTtlMs: 0,
+                errorTtlMs: 0,
+              }))?.login,
+          })
+        : false;
+      if (!current) {
+        const message = "personal identity binding is no longer current";
+        setCloseCause("personal-identity-binding-invalidated", { method: req.method });
+        invalidateGatewayPolicyClient(client, {
+          reason: "personal-identity-binding-invalidated",
+          code: 4001,
+          message,
+          close: () => close(4001, message),
+        });
+        return;
+      }
     }
     const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers, {
       clientKind: client.connect.client.id,

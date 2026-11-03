@@ -66,6 +66,7 @@ actor GatewayEndpointStore {
         let localHost: String
         let scheme: String
         let bindMode: String?
+        let personalIdentityEnabled: Bool
         let remoteTransport: AppState.RemoteTransport
         let directRemoteURL: URL?
         let remoteTLSFingerprint: String?
@@ -640,6 +641,7 @@ actor GatewayEndpointStore {
                 endpoint.config.token != source.token ||
                 endpoint.config.password != source.password ||
                 !GatewayTLSRoute.hasSameConnectionIdentity(endpoint.tls, tls) ||
+                endpoint.enablesPrimaryPersonalIdentity != (mode == .local && source.personalIdentityEnabled) ||
                 endpoint.deviceAuthGatewayID != source.deviceAuthGatewayID ||
                 endpoint.routeAuthority != routeAuthority
         } ?? false
@@ -651,6 +653,7 @@ actor GatewayEndpointStore {
         let endpoint = GatewayConnection.EndpointSnapshot(
             config: (url, source.token, source.password),
             tls: tls,
+            enablesPrimaryPersonalIdentity: mode == .local && source.personalIdentityEnabled,
             routeAuthority: routeAuthority,
             deviceAuthGatewayID: source.deviceAuthGatewayID,
             revision: self.routeRevision)
@@ -674,7 +677,7 @@ extension GatewayEndpointStore.SourceSnapshot {
         else { return false }
         if self.mode == .local {
             return self.localHost == other.localHost && self.localPort == other.localPort &&
-                self.scheme == other.scheme
+                self.scheme == other.scheme && self.personalIdentityEnabled == other.personalIdentityEnabled
         }
         guard self.remoteTransport == other.remoteTransport,
               self.remoteTLSFingerprint == other.remoteTLSFingerprint
@@ -843,6 +846,7 @@ extension GatewayEndpointStore {
                 tailscaleIP: tailscaleIP),
             scheme: localConfig?.url.scheme ?? self.resolveGatewayScheme(root: root, env: env),
             bindMode: bindMode,
+            personalIdentityEnabled: AppDefaults.standard.bool(forKey: "gateway.primary.personalIdentityEnabled"),
             remoteTransport: remoteResolution.transport,
             directRemoteURL: remoteResolution.directURL,
             remoteTLSFingerprint: isRemote ? GatewayRemoteConfig.resolveTLSFingerprint(root: root) : nil,

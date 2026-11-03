@@ -8,6 +8,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import { captureNodeWakeLifecycle, releaseNodeWakeLifecycle } from "../node-wake-state.js";
 import { getNodeWakeStateSnapshot, seedNodeWakeState } from "../node-wake-state.test-support.js";
+import {
+  captureGatewayPersonalIdentityBinding,
+  resolveGatewayPersonalIdentityBinding,
+} from "../personal-identity-binding.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
 import { registerGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { bindDeviceWorkerReconciliation } from "../worker-environments/device-provider.js";
 import {
@@ -47,6 +52,82 @@ function nodeRemovalOptions(
 }
 
 beforeEach(resetDeviceHandlerTestState);
+
+it.each(["device.token.rotate", "device.token.revoke", "device.pair.remove"] as const)(
+  "retires the personal identity binding after a successful %s mutation",
+  async (method) => {
+    const device = { deviceId: "device-1", key: "pair-generation-1" };
+    const nowMs = Date.now();
+    const clients = new GatewayClientRegistry();
+    expect(
+      captureGatewayPersonalIdentityBinding(
+        clients,
+        {
+          ingress: "tailscale-serve",
+          authMethod: "tailscale",
+          tailscaleLogin: "vitor@example.com",
+          sourceClientIp: "100.64.0.10",
+          canonicalProfileId: "profile-1",
+          device,
+          gatewayId: "gateway-boot-1",
+          signedAtMs: nowMs,
+          verifiedAtMs: nowMs,
+        },
+        {
+          mode: "personal-identity",
+          provider: "tailscale",
+          phase: "bind",
+          bindingId: "binding-1",
+          issuedAtMs: nowMs,
+        },
+        nowMs,
+      ),
+    ).toBe(true);
+
+    if (method === "device.token.rotate") {
+      mockRotateOperatorTokenSuccess();
+    } else if (method === "device.token.revoke") {
+      tokens.revokeDeviceToken.mockResolvedValue({
+        ok: true,
+        entry: { role: "operator", revokedAtMs: nowMs },
+      });
+    } else {
+      pairing.removePairedDevice.mockResolvedValue({ deviceId: device.deviceId });
+    }
+
+    const opts = createOptions(
+      method,
+      method === "device.pair.remove"
+        ? { deviceId: device.deviceId }
+        : { deviceId: device.deviceId, role: "operator" },
+      createDeviceClient(["operator.admin"], "admin-device"),
+    );
+    Object.assign(opts.context, { clients });
+    await invokeDevice(opts);
+
+    await expect(
+      resolveGatewayPersonalIdentityBinding({
+        gateway: clients,
+        intent: {
+          mode: "personal-identity",
+          provider: "tailscale",
+          phase: "use",
+          bindingId: "binding-1",
+          profileId: "profile-1",
+          gatewayId: "gateway-boot-1",
+          issuedAtMs: nowMs,
+        },
+        device,
+        gatewayId: "gateway-boot-1",
+        isDirectLocal: true,
+        isDeviceCurrent: () => true,
+        isProfileCurrent: () => true,
+        readCurrentTailscaleLogin: async () => "vitor@example.com",
+        nowMs,
+      }),
+    ).resolves.toBeUndefined();
+  },
+);
 
 it.each(
   ["rotate", "revoke"].flatMap((operation) =>

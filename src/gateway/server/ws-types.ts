@@ -87,6 +87,14 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     authenticatedOperator?: true;
     /** Exact accepted/issued operator token; null attests a tokenless ingress. */
     operatorDeviceTokenIdentity?: Readonly<PairedDeviceTokenIdentity> | null;
+    personalIdentityBinding?: Readonly<{
+      mode: "personal-identity";
+      provider: "tailscale";
+      bindingId: string;
+      profileId: string;
+      gatewayId: string;
+      device: Readonly<PairedDeviceTokenIdentity>;
+    }>;
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
     /** Authenticated Control UI operator ingress; never accepted from wire params. */

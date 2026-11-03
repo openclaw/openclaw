@@ -39,6 +39,18 @@ export function resolveAuthenticatedDeviceTokenIdentity(
   return identity ? Object.freeze(identity) : null;
 }
 
+/** Pin the active pairing generation after the caller verified this device's signature. */
+export function resolveAuthenticatedPairedDeviceIdentity(
+  device: PairedDevice | null,
+  authenticated: { role: string; publicKey: string; scopes: readonly string[] },
+): PairedDeviceTokenIdentity | null {
+  if (!device || device.publicKey !== authenticated.publicKey) {
+    return null;
+  }
+  const identity = resolvePairedDeviceTokenIdentity(device, authenticated.role, authenticated.scopes);
+  return identity ? Object.freeze(identity) : null;
+}
+
 function listActiveTokenRoles(
   tokens: Record<string, DeviceAuthToken> | undefined,
 ): string[] | undefined {

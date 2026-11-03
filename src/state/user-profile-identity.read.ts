@@ -1,13 +1,18 @@
 import path from "node:path";
 import { toUSVString } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
-import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { normalizeProfileEmail } from "./user-profile-email.kernel.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
+import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
 import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
 import {
   matchUserProfileReference,
@@ -192,6 +197,47 @@ export function selectUserProfileIdentityInDatabase(
       ),
     }
   );
+}
+
+/** Resolve only an already persisted Tailscale identity; this never creates or relinks a profile. */
+export function selectCanonicalTailscaleProfileIdInDatabase(
+  db: EngineConnection,
+  login: string,
+): string | undefined {
+  if (!tableExists(db, "user_profiles") || !tableExists(db, "user_profile_identities")) {
+    return undefined;
+  }
+  const identity = classifyTailscaleLogin(login);
+  if (identity.kind === "invalid") {
+    return undefined;
+  }
+  let profileId: string | undefined;
+  if (identity.kind === "email") {
+    if (!tableExists(db, "user_profile_emails")) {
+      return undefined;
+    }
+    const alias = executeSqliteQueryTakeFirstSync(
+      db,
+      userProfilesDb(db)
+        .selectFrom("user_profile_emails")
+        .select("profile_id")
+        .where("email", "=", normalizeProfileEmail(identity.email)),
+    );
+    profileId = alias?.profile_id;
+  } else {
+    const linked = executeSqliteQueryTakeFirstSync(
+      db,
+      userProfilesDb(db)
+        .selectFrom("user_profile_identities")
+        .select("profile_id")
+        .where("provider", "=", identity.provider)
+        .where("subject", "=", identity.subject),
+    );
+    profileId = linked?.profile_id;
+  }
+  return profileId
+    ? selectResolvedUserProfileMetadataById(db, profileId)?.id
+    : undefined;
 }
 
 /** Read display rows and their one-hop aliases without creating profile storage. */

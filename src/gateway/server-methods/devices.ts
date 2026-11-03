@@ -30,6 +30,7 @@ import {
   rejectDevicePairing,
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
+import { revokeGatewayPersonalIdentityBindingsForDevice } from "../personal-identity-binding.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
 import type {
   DevicePairingList,
@@ -148,6 +149,9 @@ function createDeviceTokenHandler(operation: "rotate" | "revoke"): GatewayReques
       if (entry.role === "node") {
         invalidateNodeWakeState(normalizedDeviceId);
       }
+      if (entry.role === "operator") {
+        revokeGatewayPersonalIdentityBindingsForDevice(context.clients, normalizedDeviceId);
+      }
       // Claim after the awaited commit, while the caller is still current. Fence
       // pipelined frames even if the claim fails; close after the synchronous reply.
       try {
@@ -182,6 +186,9 @@ function createDeviceTokenHandler(operation: "rotate" | "revoke"): GatewayReques
       return;
     }
     context.logGateway.info(`device token revoked device=${normalizedDeviceId} role=${entry.role}`);
+    if (entry.role === "operator") {
+      revokeGatewayPersonalIdentityBindingsForDevice(context.clients, normalizedDeviceId);
+    }
     emitDeviceTokenLifecycleSecurityEvent({
       action: "device.token.revoked",
       severity: "high",
@@ -504,6 +511,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
           respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId"));
           return;
         }
+        revokeGatewayPersonalIdentityBindingsForDevice(context.clients, removed.deviceId);
         clearRemovedNodeRuntimeState({ nodeId: removed.deviceId, context });
         // Removal can retire its requester. Keep only its final reply, without
         // letting a failed claim or worker reconciliation skip client teardown.

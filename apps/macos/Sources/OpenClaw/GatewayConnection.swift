@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import Observation
 import OpenClawChatUI
+import OpenClawDiscovery
 import OpenClawKit
 import OpenClawProtocol
 import OSLog
@@ -53,6 +54,7 @@ actor GatewayConnection: Observable {
     struct EndpointSnapshot {
         let config: Config
         let tls: GatewayTLSRoute?
+        let enablesPrimaryPersonalIdentity: Bool
         let routeAuthority: UInt64?
         let deviceAuthGatewayID: String?
         let revision: UInt64?
@@ -61,6 +63,7 @@ actor GatewayConnection: Observable {
         init(
             config: Config,
             tls: GatewayTLSRoute? = nil,
+            enablesPrimaryPersonalIdentity: Bool = false,
             routeAuthority: UInt64?,
             deviceAuthGatewayID: String? = nil,
             revision: UInt64? = nil,
@@ -68,6 +71,7 @@ actor GatewayConnection: Observable {
         {
             self.config = config
             self.tls = tls
+            self.enablesPrimaryPersonalIdentity = enablesPrimaryPersonalIdentity
             self.routeAuthority = routeAuthority
             self.deviceAuthGatewayID = deviceAuthGatewayID
             self.revision = revision
@@ -232,6 +236,7 @@ actor GatewayConnection: Observable {
                 self.endpoint.config.token == endpoint.config.token &&
                 self.endpoint.config.password == endpoint.config.password &&
                 self.endpoint.browserSession == endpoint.browserSession &&
+                self.endpoint.enablesPrimaryPersonalIdentity == endpoint.enablesPrimaryPersonalIdentity &&
                 GatewayTLSRoute.hasSameConnectionIdentity(self.endpoint.tls, endpoint.tls) &&
                 self.endpoint.deviceAuthGatewayID == endpoint.deviceAuthGatewayID &&
                 self.endpoint.routeAuthority == endpoint.routeAuthority &&
@@ -1021,8 +1026,30 @@ extension GatewayConnection {
             }
             throw CancellationError()
         }
+        let personalIdentity: GatewayPersonalIdentityIntent?
+        let expectedGatewayId: String?
+        let personalIdentityTLSRoute: GatewayTLSRoute?
+        if endpoint.enablesPrimaryPersonalIdentity {
+            let binding = try await self.bindPrimaryPersonalIdentity(endpoint: endpoint)
+            guard let localTLSRoute = Self.primaryPersonalIdentityTLSRoute(
+                url: config.url,
+                gatewayFingerprint: binding.tlsFingerprint)
+            else {
+                throw Self.failure(1, "Personal Gateway identity requires local WSS so the attested Gateway certificate is pinned before local credentials are sent")
+            }
+            personalIdentityTLSRoute = localTLSRoute
+            personalIdentity = .use(
+                bindingId: binding.bindingId,
+                profileId: binding.profileId,
+                gatewayId: binding.gatewayId)
+            expectedGatewayId = binding.gatewayId
+        } else {
+            personalIdentity = nil
+            expectedGatewayId = nil
+            personalIdentityTLSRoute = nil
+        }
         let activationBindingKey = self.activationBindingKeyProvider()
-        let sessionBox = self.sessionProvider(browserSession == nil ? endpoint.tls : nil) ?? browserSession.map { _ in
+        let sessionBox = self.sessionProvider(browserSession == nil ? (personalIdentityTLSRoute ?? endpoint.tls) : nil) ?? browserSession.map { _ in
             WebSocketSessionBox(session: GatewayTLSPinningSession(
                 params: GatewayTLSParams(
                     required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
@@ -1058,7 +1085,9 @@ extension GatewayConnection {
                 clientDisplayName: InstanceIdentity.displayName,
                 includeDeviceIdentity: self.includeDeviceIdentity,
                 allowStoredDeviceAuth: browserSession == nil && endpoint.deviceAuthGatewayID != nil,
-                deviceAuthGatewayID: browserSession == nil ? endpoint.deviceAuthGatewayID : nil),
+                deviceAuthGatewayID: browserSession == nil ? endpoint.deviceAuthGatewayID : nil,
+                personalIdentity: personalIdentity,
+                expectedGatewayId: expectedGatewayId),
             disconnectHandler: { [weak self] reason, socketGeneration in
                 await self?.handleDisconnect(
                     routeGeneration: configuredRouteGeneration,
@@ -1086,6 +1115,133 @@ extension GatewayConnection {
             }
         }
         return client
+    }
+
+    private struct PrimaryPersonalIdentityBinding: Sendable {
+        let bindingId: String
+        let profileId: String
+        let gatewayId: String
+        let tlsFingerprint: String
+    }
+
+    private static func isSHA256Fingerprint(_ value: String) -> Bool {
+        let bytes = value.split(separator: ":")
+        return bytes.count == 32 && bytes.allSatisfy { $0.count == 2 && $0.allSatisfy(\.isHexDigit) }
+    }
+
+    static func primaryPersonalIdentityTLSRoute(
+        url: URL,
+        gatewayFingerprint: String) -> GatewayTLSRoute?
+    {
+        guard url.scheme?.lowercased() == "wss",
+              url.host.map(LoopbackHost.isLoopbackHost) == true,
+              Self.isSHA256Fingerprint(gatewayFingerprint)
+        else { return nil }
+        return GatewayTLSRoute(
+            params: GatewayTLSParams(
+                required: true,
+                expectedFingerprint: gatewayFingerprint.lowercased(),
+                allowTOFU: false,
+                storeKey: GatewayTLSRoute.storeKey(for: url)),
+            allowsTrustedPinReplacement: false)
+    }
+
+    private func bindPrimaryPersonalIdentity(
+        endpoint: EndpointSnapshot) async throws -> PrimaryPersonalIdentityBinding
+    {
+        guard endpoint.config.url.host.map(LoopbackHost.isLoopbackHost) == true,
+              let sourceURL = await TailscaleServeGatewayDiscovery.discoverLocalGatewayServeURL(),
+              sourceURL.scheme == "wss",
+              sourceURL.host?.hasSuffix(".ts.net") == true,
+              sourceURL.user == nil,
+              sourceURL.password == nil
+        else {
+            throw Self.failure(1, "Personal Gateway identity is unavailable: this Primary Gateway has no verified local Tailscale Serve route")
+        }
+        try Task.checkCancellation()
+
+        let tlsRoute = GatewayTLSRoute.resolve(
+            url: sourceURL,
+            connectionMode: .remote,
+            configuredFingerprint: nil)
+        guard let tlsRoute,
+              tlsRoute.params.required,
+              let sessionBox = self.sessionProvider(tlsRoute),
+              let tlsMetadata = sessionBox.session as? GatewayTLSRouteMetadataProviding
+        else {
+            throw Self.failure(1, "Personal Gateway identity requires the normal trusted WSS connection")
+        }
+
+        struct BindingWire: Sendable {
+            let bindingId: String
+            let profileId: String
+            let gatewayId: String
+            let tlsFingerprint: String
+        }
+        let captured = LockIsolated<BindingWire?>(nil)
+        let bindingId = UUID().uuidString.lowercased()
+        let channel = GatewayChannelActor(
+            url: sourceURL,
+            token: nil,
+            password: nil,
+            session: sessionBox,
+            connectSnapshotAdmissionHandler: { hello, _ in
+                guard let encoded = try? JSONEncoder().encode(hello),
+                      let object = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any],
+                      let server = object["server"] as? [String: Any],
+                      let sourceGatewayId = server["bootId"] as? String,
+                      let binding = object["personalIdentityBinding"] as? [String: Any],
+                      binding["mode"] as? String == "personal-identity",
+                      binding["provider"] as? String == "tailscale",
+                      binding["bindingId"] as? String == bindingId,
+                      let profileId = binding["profileId"] as? String,
+                      !profileId.isEmpty,
+                      let gatewayId = binding["gatewayId"] as? String,
+                      !gatewayId.isEmpty,
+                      sourceGatewayId == gatewayId,
+                      let tlsFingerprint = binding["tlsFingerprint"] as? String
+                else { return }
+                captured.withValue {
+                    $0 = BindingWire(
+                        bindingId: bindingId,
+                        profileId: profileId,
+                        gatewayId: gatewayId,
+                        tlsFingerprint: tlsFingerprint.lowercased())
+                }
+            },
+            connectOptions: GatewayConnectOptions(
+                role: "operator",
+                scopes: GatewayChannelActor.defaultOperatorConnectScopes,
+                caps: Self.operatorClientCaps,
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-macos",
+                clientMode: "ui",
+                clientDisplayName: InstanceIdentity.displayName,
+                includeDeviceIdentity: true,
+                allowStoredDeviceAuth: false,
+                personalIdentity: .bind(bindingId: bindingId)))
+
+        do {
+            try await channel.connect()
+        } catch {
+            await channel.shutdown()
+            throw error
+        }
+        await channel.shutdown()
+        try Task.checkCancellation()
+
+        guard let binding = captured.value,
+              Self.isSHA256Fingerprint(binding.tlsFingerprint),
+              tlsMetadata.effectiveTLSFingerprintSHA256 != nil
+        else {
+            throw Self.failure(1, "Personal Gateway identity could not verify the binding over the trusted Serve connection")
+        }
+        return PrimaryPersonalIdentityBinding(
+            bindingId: binding.bindingId,
+            profileId: binding.profileId,
+            gatewayId: binding.gatewayId,
+            tlsFingerprint: binding.tlsFingerprint)
     }
 
     private func expireBrowserSession(routeGeneration: UInt64) async {

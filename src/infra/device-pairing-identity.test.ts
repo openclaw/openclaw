@@ -6,6 +6,7 @@ import {
   listEffectivePairedDeviceRoles,
   resolveNodePairingState,
   resolveAuthenticatedDeviceTokenIdentity,
+  resolveAuthenticatedPairedDeviceIdentity,
 } from "./device-pairing-identity.js";
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
 
@@ -63,6 +64,24 @@ test("captures only the device key and token actually accepted at handshake", ()
   ).toBeNull();
   device.tokens!.operator!.token = "replacement-token";
   expect(resolveAuthenticatedDeviceTokenIdentity(device, authenticated)).toBeNull();
+});
+
+test("resolves the active paired generation only for the authenticated device key", () => {
+  const device = createPairedOperator();
+  expect(
+    resolveAuthenticatedPairedDeviceIdentity(device, {
+      role: "operator",
+      publicKey: device.publicKey,
+      scopes: ["operator.admin"],
+    }),
+  ).toMatchObject({ deviceId: device.deviceId });
+  expect(
+    resolveAuthenticatedPairedDeviceIdentity(device, {
+      role: "operator",
+      publicKey: "another-device-key",
+      scopes: ["operator.admin"],
+    }),
+  ).toBeNull();
 });
 
 test("keeps original operator scopes without exporting bearer credentials or unrelated approval changes", () => {

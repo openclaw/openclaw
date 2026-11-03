@@ -214,6 +214,7 @@ export async function attachAuthenticatedGatewayConnect(
   // Only an owner-bound ingress grant receives the shared owner role bypass.
   const operatorOwner =
     role === "operator" &&
+    !connectParams.personalIdentity &&
     (authMethod === "token" ||
       authMethod === "password" ||
       remoteIngressPrincipal?.operatorRoleActor.kind === "system");
@@ -366,6 +367,9 @@ export async function attachAuthenticatedGatewayConnect(
     ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
     ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
     ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
+    ...(profileAdmission.personalIdentityBinding
+      ? { personalIdentityBinding: profileAdmission.personalIdentityBinding }
+      : {}),
     ...(trustedAgentRuntimeIdentity ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity } : {}),
     ...(remoteIngressPrincipal
       ? {
