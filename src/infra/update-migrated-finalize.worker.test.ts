@@ -122,8 +122,7 @@ vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
   createWindowsTaskAutoStartGuard: vi.fn(),
   maybeStopManagedServiceBeforeMutableUpdate: fixture.stopService,
 }));
-// mock-isolation: This suite tests executable routing; real custody and storage are
-// covered by update-command-predecessor-capture.test.ts.
+// mock-isolation: Routing fixtures isolate custody; predecessor-capture tests cover real storage.
 vi.mock("../commands/doctor-maintenance-foreground.js", () => ({
   acquireDoctorGatewayMaintenanceOwner: async () => ({
     assertCurrent() {},
@@ -157,6 +156,7 @@ vi.mock("./postgres-sync/pool.js", () => ({
 vi.mock("./update-finalization-budget.js", () => ({
   resolveUpdateFinalizationTimeoutMs: fixture.budget,
 }));
+// mock-isolation: Routing fixtures must not capture or write real update state.
 vi.mock("./update-doctor-result.js", () => ({
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV: "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
   createUpdateDoctorDatabaseWriteCapture: vi.fn(),
