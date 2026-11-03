@@ -41,6 +41,7 @@ type TelegramInlineButton = {
   callback_data?: string;
   url?: string;
   web_app?: { url: string };
+  disabled?: Record<string, never>;
   style?: TelegramButtonStyle;
 };
 
@@ -114,6 +115,10 @@ function toTelegramInlineButton(
   const action = resolveMessagePresentationButtonAction(button);
   if (!action) {
     return recordDroppedControl(button, options, "invalid_action");
+  }
+  // Bot API disabled buttons stay visible but never produce a callback or launch.
+  if (button.disabled === true) {
+    return { text: button.label, disabled: {}, style };
   }
   if (action.type === "url") {
     return { text: button.label, url: action.url, style };

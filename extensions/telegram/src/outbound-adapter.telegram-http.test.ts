@@ -660,6 +660,32 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       });
     });
 
+    it("keeps disabled presentation buttons visible and inert on action send, edit, and payload send", async () => {
+      const presentation = buttonPresentation(
+        { label: "Deploy", value: "env|prod", disabled: false },
+        { label: "✓ Staging", value: "env|staging", disabled: true },
+      );
+      await send({ message: "Choose", presentation });
+      await action("edit", { chatId: "123", messageId: 1, presentation });
+      await sendPayload({ text: "Choose", presentation });
+      expect(
+        requests.map(({ method, fields }) => ({
+          method,
+          reply_markup: fields.reply_markup,
+          labelInText: String(fields.text ?? "").includes("Staging"),
+        })),
+      ).toEqual(
+        ["sendMessage", "editMessageReplyMarkup", "sendMessage"].map((method) => ({
+          method,
+          reply_markup: replyMarkup(
+            { text: "Deploy", callback_data: "env|prod" },
+            { text: "✓ Staging", disabled: {} },
+          ),
+          labelInText: false,
+        })),
+      );
+    });
+
     it("uploads all action attachment aliases instead of echoing their paths", async () => {
       const firstBytes = await fs.readFile(photoPath);
       const secondBytes = Buffer.concat([firstBytes, Buffer.from("second-attachment")]);

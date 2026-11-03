@@ -41,7 +41,7 @@ const TELEGRAM_PRESENTATION_CAPABILITIES = {
       maxActions: 100,
       maxActionsPerRow: 3,
       supportsStyles: false,
-      supportsDisabled: false,
+      supportsDisabled: true,
     },
     selects: {
       maxOptions: 100,
@@ -227,7 +227,7 @@ export function canonicalizeTelegramPresentationPayload(
       presentation: { blocks: nativeControlBlocks },
       capabilities: {
         limits: {
-          actions: { maxLabelLength: 64 },
+          actions: { maxLabelLength: 64, supportsDisabled: true },
           selects: { maxLabelLength: 64 },
         },
       },

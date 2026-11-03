@@ -134,6 +134,8 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     Mini App buttons only work in private chats between a user and the bot.
 
+    Buttons with `disabled: true` render as Telegram disabled buttons: the label stays visible, but tapping it does nothing and no callback reaches the agent.
+
     Callback action values not claimed by a registered plugin interactive handler are passed to the agent as text: `callback_data: <value>`.
 
     Agent messages created from button clicks use the time OpenClaw received the click, not the original card's send time. Queued or replayed clicks retain that receipt time.
