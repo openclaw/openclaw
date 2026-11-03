@@ -135,7 +135,7 @@ auth store.
 If there is no Codex login, the offered ChatGPT sign-in stays isolated in an
 OpenClaw-owned agent home. These are the two Codex modes: **Reuse** shares your
 existing login and sessions; **Separate** uses an OpenClaw login and agent home.
-To switch from reuse to separate, choose **Use a separate login** on the setup
+To switch from reuse to separate, choose **Sign in separately** on the setup
 card and follow the inline ChatGPT sign-in. You can also open **Model Setup**
 and sign in with ChatGPT or enter an OpenAI API key. Completing that sign-in
 selects the isolated home automatically.

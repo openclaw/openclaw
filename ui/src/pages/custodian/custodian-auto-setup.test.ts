@@ -222,7 +222,7 @@ it.each(["needs-sign-in", "configured"] as const)("refreshes sign-in from %s", a
   } else {
     text(page).toContain("Using your existing Codex login · sessions shared with Codex");
   }
-  await click(page, shared ? "Use a separate login" : "Sign in with ChatGPT");
+  await click(page, shared ? "Sign in separately" : "Sign in with ChatGPT");
   expectRpc(request, "auth.start", expect.objectContaining({ authChoice }));
   text(page).toContain("Finish signing in?");
   await click(page, "Yes", () => autoCalls === 2 && setup.ready && !setup.result?.selected?.shared);
@@ -230,7 +230,7 @@ it.each(["needs-sign-in", "configured"] as const)("refreshes sign-in from %s", a
   text(page).toContain("Using ChatGPT");
   text(page).toContain(reply.reply);
   text(page).not.toContain("sessions shared with Codex");
-  text(page).not.toContain("Use a separate login");
+  text(page).not.toContain("Sign in separately");
 });
 
 it.each(["cancelled", ""])("explains a sign-in the Gateway cancelled (%j)", async (error) => {
