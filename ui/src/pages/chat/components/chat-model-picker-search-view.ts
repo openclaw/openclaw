@@ -189,16 +189,6 @@ export function createChatModelSearchView(
   return view;
 }
 
-export function handleModelOptionMouseEnter(event: MouseEvent): void {
-  const state = chatModelSearchState(event.currentTarget);
-  if (event.currentTarget instanceof HTMLButtonElement) {
-    const key = event.currentTarget.dataset.chatModelKey;
-    if (key) {
-      state?.view?.highlight(key);
-    }
-  }
-}
-
 export function updateModelSearch(input: HTMLInputElement): void {
   const state = chatModelSearchState(input);
   if (state) {

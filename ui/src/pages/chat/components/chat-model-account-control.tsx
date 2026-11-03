@@ -3,7 +3,6 @@ import { createMemo, For, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
-import { handleModelOptionMouseEnter } from "./chat-model-picker-search-view.ts";
 import { ChatModelSearchContext } from "./chat-model-picker-search.ts";
 import type { ModelPickerRowRenderer } from "./chat-model-picker-window.tsx";
 
@@ -85,7 +84,6 @@ export function ChatModelAccountSectionView(
                     disabled={
                       props.disabled || Boolean(option().disabled && option().value !== "more")
                     }
-                    onMouseEnter={handleModelOptionMouseEnter}
                     onClick={(event) => props.onSelect(option().value, event)}
                   >
                     <span class="chat-controls__model-option-provider" aria-hidden="true">
