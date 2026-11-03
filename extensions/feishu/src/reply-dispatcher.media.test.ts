@@ -38,6 +38,7 @@ it.each(["off", "partial"] as const)(
     }));
     uploadImage.mockResolvedValue({ code: 0, data: { image_key: "img_chart" } });
     vi.spyOn(getFeishuRuntime().media, "loadWebMedia").mockResolvedValue({
+      kind: "image",
       buffer: Buffer.from(
         "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de",
         "hex",
