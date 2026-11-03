@@ -8,6 +8,15 @@
   min-width: 0;
 }
 
+/* Refresh stays beside the subtitle, which wraps first on narrow columns. */
+.content-header--settings:has(> .page-header-actions .profile-refresh) {
+  flex-wrap: nowrap;
+}
+
+.page-header-actions:has(.profile-refresh) {
+  flex-shrink: 0;
+}
+
 /* An account's identity under its title: an address, an id or a handle. */
 .identity-account {
   min-width: 0;

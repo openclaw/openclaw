@@ -612,7 +612,8 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   flex-shrink: 0;
 }
 
-.btn.primary {
+/* The accent means "do this next": a primary that can't be pressed paints like any disabled button. */
+.btn.primary:where(:not(:disabled, [aria-disabled="true"])) {
   border-color: transparent;
   background: var(--primary);
   color: var(--primary-foreground);
@@ -1255,7 +1256,8 @@ select.settings-select:not([multiple]) {
   border-color: var(--danger);
 }
 
-:root[data-theme-mode="light"] .btn:where(:not(.primary, .danger)) {
+:root[data-theme-mode="light"]
+  .btn:where(:not(.danger, .primary:not(:disabled, [aria-disabled="true"]))) {
   background: var(--bg);
   border-color: var(--input);
 }
