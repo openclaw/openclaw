@@ -30,6 +30,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
+import { evictLinuxFilePageCache } from "../lib/linux-page-cache.ts";
 
 const { values } = parseArgs({
   options: {
@@ -263,16 +264,7 @@ if (values.flow === "repeat") {
       if (!existsSync(filename)) {
         continue;
       }
-      const result = spawnSync(
-        "python3",
-        [
-          "-c",
-          "import os,sys; f=os.open(sys.argv[1],os.O_RDONLY); os.fsync(f); os.posix_fadvise(f,0,0,os.POSIX_FADV_DONTNEED); os.close(f)",
-          filename,
-        ],
-        { encoding: "utf8" },
-      );
-      assert.equal(result.status, 0, result.stderr);
+      evictLinuxFilePageCache(filename);
     }
   }
   const inspector = new Session();

@@ -9,7 +9,12 @@ import {
 } from "../../scripts/control-ui-locale-artifacts.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "../../scripts/lib/control-ui-i18n-config.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { readWorkflow, runGit, type WorkflowStep } from "./ci-workflow.test-support.js";
+import {
+  acceptsWorkflowPaths,
+  readWorkflow,
+  runGit,
+  type WorkflowStep,
+} from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const locales = CONTROL_UI_LOCALE_ENTRIES.map((entry) => entry.locale);
@@ -240,6 +245,12 @@ it("refuses producer fallbacks and a checkout outside the bound source", async (
 
 it("uses only same-run transport and the unchanged terminal publisher", () => {
   expect(workflow.permissions).toEqual({ contents: "read" });
+  for (const sourcePath of [
+    "extensions/beam/src/http.ts",
+    "extensions/example/browser/styles.css",
+  ]) {
+    expect(acceptsWorkflowPaths(workflow.on.push.paths, [sourcePath]), sourcePath).toBe(true);
+  }
   const finalize: WorkflowStep[] = workflow.jobs.finalize.steps;
   expect(finalize.find((step) => step.uses?.startsWith("actions/checkout@"))?.with?.ref).toBe(
     "${{ github.event.repository.default_branch }}",

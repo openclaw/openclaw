@@ -13,6 +13,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { hasErrnoCode } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
+import { registerProcessExitCleanup } from "./process-exit-cleanup.js";
 import {
   captureSqliteDatabaseAdmissions,
   retireSqliteDatabaseAdmissionForPath,
@@ -210,7 +211,7 @@ export function registerSnapshotTempDirectory(
 function registerSnapshotCleanup(): void {
   if (!cleanupState.exitHandlerInstalled) {
     cleanupState.exitHandlerInstalled = true;
-    process.once("exit", () => {
+    registerProcessExitCleanup(() => {
       for (const stop of activeSnapshotWork.values()) {
         stop();
       }

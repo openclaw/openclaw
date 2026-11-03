@@ -22,6 +22,7 @@ export const SUGGEST_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for ope
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
 export const SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY =
   "Save, improve, archive, and restore your learned skills.";
+export const SKILL_LIBRARY_TOOL_DISPLAY_SUMMARY = "Author skills in the personal library";
 
 export function describeAgentsListTool(sessionsSpawnAvailable: boolean): string {
   return sessionsSpawnAvailable

@@ -114,9 +114,7 @@ function mcpFixture(sessionId: string) {
 }
 
 function expectOutcome(promise: Promise<unknown>, expected: unknown, rejected: boolean) {
-  return rejected
-    ? expect(promise).rejects.toBe(expected)
-    : expect(promise).resolves.toBe(expected);
+  return expect(promise)[rejected ? "rejects" : "resolves"].toBe(expected);
 }
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -418,6 +416,7 @@ it.each(["Done", ""])("captures only the final CLI result %j after narration", (
   const output = transformCliResultText({ text, textParts, rawFinalText });
   const result = testRunResult({ output });
   expect(result.meta.finalAssistantRawText).toBe(text);
+  expect(result.meta.finalAssistantVisibleText).toBe(rawFinalText || undefined);
   expect(resolveDiagnosticModelResponse(result)).toBe(rawFinalText || undefined);
 });
 
