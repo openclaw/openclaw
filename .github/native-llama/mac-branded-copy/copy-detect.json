@@ -1,0 +1,25 @@
+{
+  "candidates": [],
+  "manualProviders": [],
+  "authOptions": [],
+  "prepareOptions": [
+    {
+      "id": "llama-app",
+      "brandId": "llama-app",
+      "label": "Llama app",
+      "hint": "Use models from the separate Llama app (llama.app).",
+      "website": "https://llama.app/"
+    },
+    {
+      "id": "ollama",
+      "brandId": "ollama",
+      "label": "Ollama",
+      "hint": "Use local models in Ollama or connect your Ollama Cloud account.",
+      "actionLabel": "Set up",
+      "website": "https://ollama.com/download",
+      "icon": "https://cdn.simpleicons.org/ollama"
+    }
+  ],
+  "workspace": "/synthetic-workspace",
+  "setupComplete": false
+}

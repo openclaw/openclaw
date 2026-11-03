@@ -1,0 +1,141 @@
+// Private capture overlay only. Product and mounted regression source stay unchanged.
+extension LlamaNativeCaptureTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_MAC_COPY_ROOT"] != nil))
+    func nativeBrandedCopyPageCapture() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        let root = URL(fileURLWithPath: try #require(environment["OPENCLAW_MAC_COPY_ROOT"]))
+        let stage = try #require(environment["OPENCLAW_MAC_COPY_STAGE"])
+        try #require(stage == "before" || stage == "after")
+        let output = root.appendingPathComponent("pngs/\(stage)")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let fixture = try Data(contentsOf: root.appendingPathComponent("copy-detect.json"))
+        let recorder = AISetupRequestRecorder()
+        let session = makeAISetupRequestSession(recorder: recorder, handler: { task, request in
+            try #require(request.method == "openclaw.setup.detect", "Branded capture permits detection only")
+            let response = try JSONSerialization.data(withJSONObject: [
+                "type": "res", "id": request.id, "ok": true,
+                "payload": try JSONSerialization.jsonObject(with: fixture),
+            ])
+            task.emitReceiveSuccess(.data(response))
+        }, receiveHook: { task, receiveIndex in
+            if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: task.snapshotConnectRequestID() ?? "connect",
+                methods: ["openclaw.setup.prepare.start"], capabilities: []))
+        })
+        let gateway = makeAISetupGateway(url: try #require(URL(string: "ws://branded-capture.invalid")), session: session)
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "NativeBrandedCapture"))
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        state.isPaused = true
+        let view = makeAISetupView(state: state, gateway: gateway, defaults: defaults, routeIdentityProvider: { "local" })
+        let model = view.aiSetup
+        do {
+            await model.detectConnections(intent: .inspectOnly)
+            try #require(model.detectError == nil && model.prepareOptions.map(\.id) == ["llama-app", "ollama"])
+            let app = try #require(model.prepareOptions.first)
+            let ollama = try #require(model.prepareOptions.last)
+            try #require(app.brandId == "llama-app" && app.label == "Llama app" && app.actionLabel == nil)
+            try #require(ollama.brandId == "ollama" && ollama.label == "Ollama" && ollama.actionLabel == "Set up")
+            let appHint = try #require(app.hint)
+            let ollamaHint = try #require(ollama.hint)
+            let intro = stage == "after"
+                ? "Choose an option below to connect or set up local AI."
+                : "Connect a local model service, or prepare a model on this Gateway."
+            let fallback = stage == "after" ? "Set up" : "Connect / Set up"
+            try await Self.capture(view.aiSetupPage(contentHeight: 1000),
+                width: view.pageWidth, height: 1000, output: output.appendingPathComponent("onboarding.png"),
+                required: ["Connect your AI", "Set up a local model", intro, app.label, appHint,
+                    fallback, ollama.label, ollamaHint, "Set up"],
+                requiredActions: ["\(app.label), \(appHint), \(fallback)",
+                    "\(ollama.label), \(ollamaHint), Set up"])
+            // Independent references use decoded bundled NSImages directly, not a
+            // second resolver/fallback path. No additional PNGs are exported.
+            var brands: [String: Any] = [:]
+            for brand in ["llama-app", "ollama"] {
+                let url = try #require(OnboardingProviderIcon.resourceURL(for: brand))
+                let productionImage = try #require(OnboardingProviderIcon.image(for: brand))
+                try #require(productionImage.isTemplate && url.pathExtension == "svg")
+                let assetData = try Data(contentsOf: url)
+                let image = try #require(NSImage(data: assetData))
+                image.isTemplate = true
+                try #require(image.size.width > 0 && image.size.height > 0)
+                let mask = try Self.brandedReferenceMask(Image(nsImage: image)
+                    .renderingMode(.template).resizable().scaledToFit()
+                    .frame(width: 18, height: 18).foregroundStyle(.primary))
+                brands[brand] = ["resource": url.lastPathComponent,
+                    "assetSha256": SHA256.hash(data: assetData).map { String(format: "%02x", $0) }.joined(),
+                    "decodedNativeImage": true, "isTemplate": image.isTemplate,
+                    "imageSize": ["width": Double(image.size.width), "height": Double(image.size.height)],
+                    "mask": mask]
+            }
+            let appURL = try #require(OnboardingProviderIcon.resourceURL(for: "llama-app"))
+            try #require(OnboardingProviderIcon.resourceURL(for: "llama-cpp") != appURL)
+            let arrow = try Self.brandedReferenceMask(Image(systemName: "arrow.down.circle")
+                .font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
+                .frame(width: 18, height: 18))
+            let proof: [String: Any] = ["brands": brands, "fallback": arrow,
+                "appearance": "light", "mode": "native decoded template reference masks",
+                "llamaCppBorrowsAppMark": false]
+            try JSONSerialization.data(withJSONObject: proof, options: [.prettyPrinted, .sortedKeys])
+                .write(to: output.appendingPathComponent("brand-proof.json"))
+            let requests = await recorder.snapshot()
+            try #require(requests.methods == ["openclaw.setup.detect"])
+            try #require(!model.connected && model.selectedKind == nil)
+            let receipt: [String: Any] = [
+                "boundary": "real native onboarding with representative branded read-only wire choices",
+                "stage": stage, "requests": requests.methods, "locale": "en_US", "appearance": "light",
+                "intro": intro, "fallbackAction": fallback, "suppliedAction": "Set up",
+                "activated": false, "inferenceAttempted": false, "selectedKind": NSNull(),
+                "fixtureSha256": try #require(environment["OPENCLAW_MAC_COPY_FIXTURE_SHA256"]),
+                "sourceTree": try #require(environment["OPENCLAW_MAC_COPY_SOURCE_TREE"]),
+                "executedMountedRegression": false,
+            ]
+            try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys])
+                .write(to: output.appendingPathComponent("receipt.json"))
+            model.resetForGatewayChange()
+            await gateway.shutdown()
+        } catch {
+            model.resetForGatewayChange()
+            await gateway.shutdown()
+            throw error
+        }
+    }
+
+    private static func brandedReferenceMask(_ content: some View) throws -> [String: Any] {
+        _ = AppKitTestSupport.application
+        let hosting = NSHostingView(rootView: content.frame(width: 32, height: 32)
+            .background(Color.white).environment(\.locale, Locale(identifier: "en_US"))
+            .environment(\.colorScheme, .light))
+        hosting.appearance = NSAppearance(named: .aqua)
+        hosting.frame = NSRect(x: 0, y: 0, width: 32, height: 32)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        window.orderFront(nil)
+        hosting.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        try #require(hosting.bounds.size == NSSize(width: 32, height: 32))
+        let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        try #require(bitmap.pixelsWide == Int(32 * window.backingScaleFactor))
+        try #require(bitmap.pixelsHigh == bitmap.pixelsWide)
+        var rows: [String] = []
+        var darkPixels = 0
+        for y in 0..<bitmap.pixelsHigh {
+            var row = ""
+            for x in 0..<bitmap.pixelsWide {
+                let color = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                let dark = color.alphaComponent > 0.5 &&
+                    color.redComponent * 255 < 180 && color.greenComponent * 255 < 180 && color.blueComponent * 255 < 180
+                row += dark ? "1" : "0"
+                if dark { darkPixels += 1 }
+            }
+            rows.append(row)
+        }
+        try #require(darkPixels >= 10 && darkPixels < bitmap.pixelsWide * bitmap.pixelsHigh / 2)
+        return ["width": bitmap.pixelsWide, "height": bitmap.pixelsHigh,
+            "pointSize": 32, "darkThreshold": 180, "darkPixels": darkPixels, "rows": rows]
+    }
+}

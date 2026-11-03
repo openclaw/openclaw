@@ -6,7 +6,7 @@ run-name: Native Llama ${{ inputs.platform }} - ${{ inputs.dispatch_id }}
       platform:
         description: Native screenshot producer to run
         type: choice
-        options: [mac, windows-w4, service, windows-ollama-fixtures, mac-copy, stock-shared]
+        options: [mac, windows-w4, service, windows-ollama-fixtures, mac-copy, mac-branded-copy, stock-shared]
         default: mac
         required: true
       qualification:
@@ -371,5 +371,71 @@ jobs:
           name: windows-stock-ownerclass-d38
           path: .artifacts/stock-ownerclass/
           include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  # Parent review/merge only; no workflow has been edited.
+  # Add mac-branded-copy to the manual platform choice list before dispatch.
+  mac-native-branded-copy:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/roboclaw/local-ai-native-followups-20261102' && inputs.platform == 'mac-branded-copy'
+    permissions:
+      contents: read
+    runs-on: macos-26
+    timeout-minutes: 150
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+      LLAMA_GITHUB_HOSTED_ACK: task-owned-secretless-github-hosted
+    steps:
+      - name: Checkout reviewed manual proof payload
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/native-llama/mac-branded-copy
+      - name: Admit sealed payload
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cd .github/native-llama/mac-branded-copy
+          echo '7c32a4a8bcf066e3bd32b03de1313a73cf1b7fa1a9afe975673cc69e1b1f4fb7  INPUT-SHA256SUMS' | /usr/bin/shasum -a 256 -c -
+          /usr/bin/shasum -a 256 -c INPUT-SHA256SUMS
+      - name: Checkout ADC Before
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: adcfa7ca4a204860ff67b5e1db4f45bd7d5c8a17
+          path: .source-before
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Checkout reviewed exact plain-copy After
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: 3a1836ac152b88245b8019dd080b5e6b2e5b3c39
+          path: .source-after
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Install source CI pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Install source packageManager pinned pnpm
+        uses: ./.source-before/.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: 24.22.1
+          package-manager-file: .source-before/package.json
+          lockfile-path: .source-before/pnpm-lock.yaml
+          cache-mode: off
+      - name: Capture branded page only; reuse qualified mounted regression
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          /bin/bash .github/native-llama/mac-branded-copy/run-mac-ci.sh \
+            "$GITHUB_WORKSPACE/.source-before" \
+            "$GITHUB_WORKSPACE/.source-after" \
+            "$GITHUB_WORKSPACE/.artifacts/native-llama/mac-branded-copy"
+      - name: Preserve completed or honestly failed proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-mac-branded-copy
+          path: .artifacts/native-llama/mac-branded-copy/
           if-no-files-found: error
           retention-days: 7
