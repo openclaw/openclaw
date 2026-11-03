@@ -34,6 +34,18 @@ existing `openclaw/plugin-sdk/realtime-voice` host import for these helpers,
 including worker entries, to preserve supported hosts. The source facade has a
 JavaScript-only host export; its declarations are excluded from the package.
 
+## Native prerecorded audio transport
+
+`transcribeDeepgramPrerecordedAudio` from `openclaw/plugin-sdk/media-understanding`
+is the shared native file transport used by the direct Deepgram and ClawRouter
+providers. Pass `{ request, requestConfig, model }`: the resolved HTTP config owns
+the credential, base URL and network policy, while the caller qualifies the model
+and supported query options. The helper sends unchanged raw audio to `/listen`,
+preserves repeated query values, and returns the best transcript from each channel
+in provider order, including repeated speech. It does not discover credentials,
+grant models, estimate charges, or select a Flux/WebSocket transport. Resolve those
+policies before dispatch; retain the request's cancellation and deadline.
+
 ## Media and generation namespaces
 
 <AccordionGroup>

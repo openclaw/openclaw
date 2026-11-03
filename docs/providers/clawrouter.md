@@ -517,7 +517,31 @@ cancellation, deadline, proxy, and network policy cover discovery and upload.
 An uploaded request is not automatically retried after an HTTP or transport
 failure. Request-dependent affordability still needs the Worker's current grant
 and billing decision; unknown duration or pricing never becomes a free request.
-Raw Deepgram and JSON OpenRouter transcription need separate native consumers.
+JSON OpenRouter transcription needs a separate native consumer.
+
+### Native Deepgram files
+
+Select `deepgram/nova-3` in the same audio model configuration to use a qualified
+native `deepgram.prerecorded` offer at `/v1/native/deepgram/v1/listen`. Both its
+request and response format must be `deepgram.prerecorded`; multipart, Flux,
+callback, remote-URL and unknown-format offers are not substituted. Activation
+requires the deployment's bounded raw-upload dispatch and catalog declaration.
+
+The consumer sends unchanged audio bytes with their native audio MIME (or
+`application/octet-stream`), `model=nova-3` in the query, and only the resolved
+ClawRouter Bearer key. It never uses a direct Deepgram Token key. The upload cap
+is 25,000,000 bytes; this memory bound does not establish billable duration.
+Native repeated options such as `keyterm` retain their order. Set supported query
+options under the audio entry's `providerOptions.clawrouter`; select the model in
+`model`, not by overriding the query. Prompt hints fail explicitly; use `keyterm`
+when appropriate. Query options outside the synchronous file contract, repeated
+scalar values, and invalid or oversized input are rejected before discovery.
+
+The same SDK implementation serves the direct native provider and the proxy
+consumer. It retains independent channels in provider order, including repeated
+speech, and rejects malformed tracks. Direct Deepgram auth and Flux behavior
+remain separate. Catalog grants, cancellation and network policy still apply;
+unknown duration, channel usage or tariffs do not authorize free inference.
 
 ## Native Gradium speech
 
