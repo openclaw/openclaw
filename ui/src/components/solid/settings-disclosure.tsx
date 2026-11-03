@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { Icon } from "./icon.tsx";
+import { SettingsRow } from "./settings-ui.tsx";
 
 /**
  * One disclosure for settings: a row that opens to more rows in the same group.
@@ -57,5 +58,53 @@ export function SettingsDisclosure(props: {
         props.children
       )}
     </details>
+  );
+}
+
+/**
+ * A row whose details belong to it, such as an account and its connection facts. The chevron
+ * sits after the row's action and opens indented rows under it, so the details need no row
+ * of their own.
+ */
+export function SettingsDetailsRow(props: {
+  title: JSX.Element;
+  description?: JSX.Element;
+  control?: JSX.Element;
+  /** Names the chevron for assistive tech and its tooltip, for example "Connection details". */
+  detailsLabel: string;
+  /** False hides the chevron while there is nothing to show. */
+  hasDetails?: boolean;
+  children?: JSX.Element;
+}) {
+  const [open, setOpen] = createSignal(false, { ownedWrite: true });
+  const available = () => props.hasDetails !== false;
+  return (
+    <>
+      <SettingsRow
+        title={props.title}
+        description={props.description}
+        control={
+          <>
+            {props.control}
+            <Show when={available()}>
+              <openclaw-tooltip prop:content={props.detailsLabel}>
+                <button
+                  type="button"
+                  class="btn btn--icon btn--ghost settings-details-toggle"
+                  aria-label={props.detailsLabel}
+                  aria-expanded={open() ? "true" : "false"}
+                  onClick={() => setOpen(!open())}
+                >
+                  <Icon name="chevronRight" />
+                </button>
+              </openclaw-tooltip>
+            </Show>
+          </>
+        }
+      />
+      <Show when={available() && open()}>
+        <div class="settings-subrows">{props.children}</div>
+      </Show>
+    </>
   );
 }

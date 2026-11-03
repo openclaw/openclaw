@@ -3,7 +3,10 @@ import { createMemo, Errored, isPending, latest, Loading, Match, Show, Switch } 
 import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
+import {
+  SettingsDetailsRow,
+  SettingsDisclosure,
+} from "../../components/solid/settings-disclosure.tsx";
 import {
   SettingsRow,
   SettingsSecretInput,
@@ -94,11 +97,12 @@ export function GitHubHealth(props: {
   );
 }
 
+/** Connection facts for one GitHub account, opened from that account's row. */
 export function GitHubDetails(props: { identity: GitHubIdentityFacts | null }) {
   return (
     <Show when={props.identity}>
       {(identity) => (
-        <SettingsDisclosure quiet title={t("githubConnections.details")}>
+        <>
           <SettingsRow
             title={t("agentTools.githubEffectiveAuthor")}
             control={
@@ -139,7 +143,7 @@ export function GitHubDetails(props: { identity: GitHubIdentityFacts | null }) {
               }
             />
           </Show>
-        </SettingsDisclosure>
+        </>
       )}
     </Show>
   );
@@ -508,7 +512,9 @@ export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () =>
           </Show>
         }
       >
-        <SettingsRow
+        <SettingsDetailsRow
+          detailsLabel={t("githubConnections.details")}
+          hasDetails={identity() !== null}
           title={
             identity()?.account ? `@${identity()!.account!.login}` : t("agentTools.githubNoAccount")
           }
@@ -525,7 +531,9 @@ export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () =>
               </button>
             </>
           }
-        />
+        >
+          <GitHubDetails identity={identity()} />
+        </SettingsDetailsRow>
         <GitHubConnectionError error={view().error} completion={view().completion} />
         <Show when={view().configurable}>
           <SettingsDisclosure quiet title={t("githubConnections.advancedOverride")}>
@@ -555,7 +563,6 @@ export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () =>
             </Show>
           </SettingsDisclosure>
         </Show>
-        <GitHubDetails identity={identity()} />
       </SettingsSection>
     </openclaw-github-identity>
   );
