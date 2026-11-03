@@ -1037,6 +1037,7 @@ extension GatewayEndpointStore {
         for config: GatewayConnection.Config,
         mode: AppState.ConnectionMode,
         localBasePath: String? = nil,
+        remoteBasePath: String? = nil,
         authToken: String? = nil) throws -> URL
     {
         guard var components = URLComponents(url: config.url, resolvingAgainstBaseURL: false) else {
@@ -1060,7 +1061,8 @@ extension GatewayEndpointStore {
             let fallbackPath = localBasePath ?? self.localControlUiBasePath()
             components.path = self.normalizeDashboardPath(fallbackPath)
         } else {
-            components.path = "/"
+            // Tunnels and bare host:port URLs carry no mount; the connected Gateway advertises it.
+            components.path = self.normalizeDashboardPath(remoteBasePath)
         }
 
         let tokenCandidate = authToken ?? config.token
