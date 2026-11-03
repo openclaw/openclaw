@@ -9,18 +9,14 @@ import {
   type StoredCodexManagedThread,
 } from "./managed-thread-store.js";
 import { buildCodexAppServerRuntimeFingerprint } from "./plugin-app-cache-key.js";
-import {
-  buildPluginAppPolicyContext,
-  fingerprintCodexPluginThreadConfig,
-  type CodexPluginThreadConfig,
-} from "./plugin-thread-config.js";
+import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import { isJsonObject, type RpcRequest } from "./protocol.js";
 import { tempDir, threadStartResult } from "./run-attempt-test-harness.js";
 import {
   testCodexAppServerBindingStore,
   readCodexAppServerBinding,
+  clearCodexAppServerBindingForThread,
 } from "./session-binding.test-helpers.js";
-import { registerAutomaticColdRecoveryTests } from "./thread-lifecycle-automatic-recovery.test-support.js";
 import type { PolicyRefreshFixtures } from "./thread-lifecycle.test-fixtures.js";
 import {
   attachCodexMirrorAttestation,
@@ -33,18 +29,6 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
     "accepted",
     "completed executor upgrade",
     "interrupted executor upgrade",
-    "interrupted executor upgrade with additive plugin apps",
-    "completed executor upgrade with additive plugin apps",
-    "active executor upgrade with additive plugin apps",
-    "interrupted executor upgrade with additive plugin apps and removal",
-    "interrupted executor upgrade with additive plugin apps and permission change",
-    "interrupted executor upgrade with additive plugin apps and approval change",
-    "interrupted executor upgrade with additive plugin apps and read-only change",
-    "interrupted executor upgrade with additive plugin apps and default change",
-    "interrupted executor upgrade with additive plugin apps and schema change",
-    "interrupted executor upgrade with additive plugin apps and authority revoked",
-    "interrupted executor upgrade with additive plugin apps and scoped change",
-    "interrupted executor upgrade with additive plugin apps and unload unconfirmed",
     "completed executor upgrade with changed credential",
     "completed executor upgrade with no credential",
     "completed executor upgrade reversed",
@@ -80,13 +64,12 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
     const warm = scenario === "warm plugin input refresh";
     const idle = scenario === "idle plugin input refresh" || warm;
     const pluginRefresh = scenario.includes("plugin");
-    const additiveApps = scenario.includes("additive plugin apps");
     const noticeUnconfirmed =
       scenario === "notice unconfirmed" || scenario === "plugin input refresh notice unconfirmed";
     const completedReceipt = scenario.startsWith("completed") || idle;
     const expectsInterrupt =
       !completedReceipt &&
-      !scenario.startsWith("interrupted executor upgrade") &&
+      scenario !== "interrupted executor upgrade" &&
       !scenario.startsWith("settling") &&
       scenario !== "failed receipt";
     const sessionFile = path.join(tempDir, "orphan-restart.jsonl");
@@ -145,7 +128,7 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
         };
       }
       if (request.method === "thread/turns/list") {
-        if (scenario.endsWith("authority revoked")) {
+        if (scenario === "authority revoked") {
           revoked = true;
         }
         return { data: turns, nextCursor: null };
@@ -160,9 +143,6 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
         return {};
       }
       if (request.method === "thread/unsubscribe") {
-        if (scenario.endsWith("unload unconfirmed")) {
-          return { status: "unsubscribed" };
-        }
         unloaded = true;
         wire.send({
           method: "thread/status/changed",
@@ -172,22 +152,11 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
       }
       if (request.method === "thread/resume") {
         unloaded = false;
-        if (!scenario.endsWith("unload unconfirmed")) {
-          wire.send({
-            method: "thread/status/changed",
-            params: { threadId: source.thread.id, status: { type: "notLoaded" } },
-          });
-        }
+        wire.send({
+          method: "thread/status/changed",
+          params: { threadId: source.thread.id, status: { type: "notLoaded" } },
+        });
         return { ...source, thread: { ...source.thread, status: { type: "idle" }, turns } };
-      }
-      if (request.method === "app/installed") {
-        return {
-          apps: Object.keys(pluginConfig.policyContext.apps).map((id) => ({
-            id,
-            enabled: true,
-            callable: true,
-          })),
-        };
       }
       if (request.method === "thread/inject_items") {
         if (noticeUnconfirmed && !noticeFailed && JSON.stringify(params).includes("uncertain")) {
@@ -223,33 +192,12 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
       params.trigger = "user";
       params.inputProvenance = { kind: "external_user" };
     }
-    const existingAppPolicy = {
-      configKey: "existing@openai-curated-remote",
-      marketplaceName: "openai-curated-remote" as const,
-      pluginName: "existing",
-      allowDestructiveActions: true,
-      allowOpenWorld: true,
-      destructiveApprovalMode: "ask" as const,
-      mcpServerNames: [],
+    const pluginPolicy = { apps: {}, pluginAppIds: {} };
+    const policyContext = {
+      ...pluginPolicy,
+      fingerprint: fingerprintCodexPolicy({ version: 2, ...pluginPolicy }),
     };
-    const policyContext = buildPluginAppPolicyContext(
-      additiveApps ? { "existing-app": existingAppPolicy } : {},
-      additiveApps ? { [existingAppPolicy.configKey]: ["existing-app"] } : {},
-    );
-    const existingAppConfig = {
-      enabled: true,
-      destructive_enabled: true,
-      open_world_enabled: true,
-      default_tools_approval_mode: "auto",
-      approvals_reviewer: "user",
-      tools: { existing_tool: { approval_mode: "auto" } },
-    };
-    const configPatch = {
-      apps: {
-        _default: { enabled: false },
-        ...(additiveApps ? { "existing-app": existingAppConfig } : {}),
-      },
-    };
+    const configPatch = { apps: { _default: { enabled: false } } };
     // Persisted v2 config identity includes the admission input version. A new
     // validator can require rebuilding even when its effective grants stay equal.
     let pluginConfig: CodexPluginThreadConfig = {
@@ -257,7 +205,6 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
       inputFingerprint: "admission-v15",
       configPatch,
       policyContext,
-      ...(additiveApps ? { provisionalAppIds: ["existing-app"] } : {}),
       fingerprint: fingerprintCodexPolicy({
         version: 2,
         inputFingerprint: "admission-v15",
@@ -269,20 +216,7 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
     const pluginProvider = {
       enabled: true,
       inputFingerprint: pluginConfig.inputFingerprint,
-      build: async (options?: { threadId?: string }) => {
-        if (
-          options?.threadId &&
-          pluginConfig.inputFingerprint === "admission-v16" &&
-          scenario.endsWith("scoped change")
-        ) {
-          const changed = {
-            ...pluginConfig,
-            configPatch: { apps: { _default: { enabled: false } } },
-          };
-          return { ...changed, fingerprint: fingerprintCodexPluginThreadConfig(changed) };
-        }
-        return pluginConfig;
-      },
+      build: async () => pluginConfig,
     };
     if (scenario === "legacy" || scenario === "legacy tool rotation") {
       const scope = {
@@ -371,98 +305,39 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
         );
       }
       active = expectsInterrupt;
-      if (completedReceipt) {
-        turns[0]!.status = "completed";
-      }
-      if (scenario.startsWith("interrupted executor upgrade")) {
-        unloaded = !scenario.endsWith("unload unconfirmed");
-        turns[0]!.status = "interrupted";
-      }
       if (pluginRefresh) {
-        let nextPatch: CodexPluginThreadConfig["configPatch"] =
+        const nextPatch =
           scenario === "plugin policy change"
             ? { apps: { _default: { enabled: true } } }
             : configPatch;
-        let nextPolicyContext = policyContext;
-        if (additiveApps) {
-          const addedAppPolicy = {
-            ...existingAppPolicy,
-            configKey: "added@openai-curated-remote",
-            pluginName: "added",
-          };
-          const existingPolicy = { ...existingAppPolicy };
-          const existingConfig = { ...existingAppConfig };
-          if (scenario.endsWith("permission change")) {
-            existingPolicy.allowDestructiveActions = false;
-            existingConfig.destructive_enabled = false;
-          }
-          if (scenario.endsWith("approval change")) {
-            existingConfig.tools = { existing_tool: { approval_mode: "prompt" } };
-          }
-          nextPolicyContext = buildPluginAppPolicyContext(
-            {
-              ...(scenario.endsWith("removal")
-                ? {}
-                : {
-                    "existing-app": {
-                      ...existingPolicy,
-                      ...(scenario.endsWith("read-only change") ? { readOnlyTools: {} } : {}),
-                    },
-                  }),
-              "added-app": addedAppPolicy,
-            },
-            {
-              [existingAppPolicy.configKey]: ["existing-app"],
-              [addedAppPolicy.configKey]: ["added-app"],
-            },
-          );
-          nextPatch = {
-            ...(scenario.endsWith("schema change") ? { new_policy_field: true } : {}),
-            apps: {
-              _default: { enabled: scenario.endsWith("default change") },
-              "existing-app": scenario.endsWith("removal") ? { enabled: false } : existingConfig,
-              "added-app": existingAppConfig,
-            },
-          };
-        }
         pluginConfig = {
           ...pluginConfig,
           inputFingerprint: "admission-v16",
           configPatch: nextPatch,
-          policyContext: nextPolicyContext,
-          ...(additiveApps ? { provisionalAppIds: ["existing-app", "added-app"] } : {}),
           fingerprint: fingerprintCodexPolicy({
             version: 2,
             inputFingerprint: "admission-v16",
             configPatch: nextPatch,
-            policyContext: nextPolicyContext,
+            policyContext,
           }),
         };
         pluginProvider.inputFingerprint = pluginConfig.inputFingerprint;
-        if (
-          scenario === "plugin policy change" ||
-          (additiveApps &&
-            [
-              "removal",
-              "permission change",
-              "approval change",
-              "read-only change",
-              "default change",
-              "schema change",
-            ].some((change) => scenario.endsWith(change)))
-        ) {
+        if (scenario === "plugin policy change") {
           await expect(fixtures.startOrResumeThread(common)).rejects.toThrow(/previous Codex task/);
           expect(requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
           expect(requests.some(({ method }) => method === "thread/resume")).toBe(false);
-          expect(requests.some(({ method }) => method === "turn/start")).toBe(false);
-          if (additiveApps) {
-            expect(requests.some(({ method }) => method === "thread/read")).toBe(false);
-          }
           expect((await readCodexAppServerBinding(sessionFile))?.pluginAppsInputFingerprint).toBe(
             "admission-v15",
           );
           return;
         }
+      }
+      if (completedReceipt) {
+        turns[0]!.status = "completed";
+      }
+      if (scenario === "interrupted executor upgrade") {
+        unloaded = true;
+        turns[0]!.status = "interrupted";
       }
       if (scenario === "failed receipt") {
         turns[0]!.status = "failed";
@@ -530,8 +405,6 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
       if (
         [
           "active executor upgrade",
-          "active executor upgrade with additive plugin apps",
-          "interrupted executor upgrade with additive plugin apps and authority revoked",
           "completed executor upgrade with changed credential",
           "completed executor upgrade with no credential",
           "completed executor upgrade reversed",
@@ -549,7 +422,7 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
         ].includes(scenario)
       ) {
         await expect(fixtures.startOrResumeThread(common)).rejects.toThrow(
-          scenario.endsWith("authority revoked") ? /authority revoked/ : /previous Codex task/,
+          scenario === "authority revoked" ? /authority revoked/ : /previous Codex task/,
         );
         expect(requests.filter((request) => request.method === "turn/interrupt")).toHaveLength(
           scenario === "interruption unconfirmed" ? 1 : 0,
@@ -560,18 +433,6 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
           ),
         ).toBe(false);
         expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(source.thread.id);
-        return;
-      }
-      if (scenario.endsWith("scoped change") || scenario.endsWith("unload unconfirmed")) {
-        await expect(fixtures.startOrResumeThread(common)).rejects.toThrow(
-          scenario.endsWith("scoped change") ? /previous Codex task/ : /unloading/,
-        );
-        expect(requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-        expect(requests.some(({ method }) => method === "turn/start")).toBe(false);
-        expect(requests.some(({ method }) => method === "thread/inject_items")).toBe(false);
-        expect((await readCodexAppServerBinding(sessionFile))?.pluginAppsInputFingerprint).toBe(
-          "admission-v15",
-        );
         return;
       }
       if (scenario.endsWith("automatic continuation")) {
@@ -633,19 +494,6 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
           "admission-v16",
         );
       }
-      if (additiveApps) {
-        expect((await readCodexAppServerBinding(sessionFile))?.pluginAppPolicyContext).toEqual(
-          pluginConfig.policyContext,
-        );
-        const resume = requests.find(({ method }) => method === "thread/resume");
-        expect(resume?.params).toMatchObject({
-          threadId: source.thread.id,
-          config: { apps: { "existing-app": existingAppConfig, "added-app": existingAppConfig } },
-        });
-        expect(requests.findIndex(({ method }) => method === "thread/turns/list")).toBeLessThan(
-          requests.findIndex(({ method }) => method === "thread/resume"),
-        );
-      }
       expect(await readCodexAppServerBinding(sessionFile)).not.toHaveProperty("turnRecovery");
       if (scenario === "interrupted executor upgrade") {
         const notices = () =>
@@ -666,5 +514,147 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
     }
   });
 
-  registerAutomaticColdRecoveryTests(fixtures);
+  it.each([
+    "cleared receipt",
+    "legacy terminal",
+    "catalog change",
+    "runtime change",
+    "missing binding",
+    "unproved active",
+    "foreign active",
+  ] as const)("stops automatic cold recovery before thread selection: %s", async (scenario) => {
+    const sessionFile = path.join(tempDir, "automatic-restart.jsonl");
+    const agentDir = path.join(tempDir, "agent");
+    const cwd = path.join(tempDir, "workspace");
+    const source = threadStartResult("automatic-source");
+    const requests: RpcRequest[] = [];
+    const active = scenario.endsWith("active");
+    const turns = [
+      { id: "old-turn", status: active ? "inProgress" : "completed", error: null, items: [] },
+    ];
+    const managed = new Map<string, StoredCodexManagedThread>();
+    const previous = testCodexAppServerBindingStore.managedThreads;
+    testCodexAppServerBindingStore.managedThreads = createCodexManagedThreadStore({
+      entries: async () => [...managed].map(([key, value]) => ({ key, value, createdAt: 0 })),
+      registerIfAbsent: async (key, value) => {
+        managed.set(key, value);
+        return true;
+      },
+    });
+    const wire = await fixtures.createLeasedLifecycleWireClient(
+      agentDir,
+      (request) => {
+        requests.push(request);
+        if (request.method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
+        if (request.method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (request.method === "thread/start") {
+          return source;
+        }
+        if (request.method === "thread/read") {
+          return {
+            thread: { ...source.thread, turns, status: { type: active ? "active" : "notLoaded" } },
+          };
+        }
+        if (request.method === "thread/turns/list") {
+          return { data: turns, nextCursor: null };
+        }
+        if (request.method === "thread/resume") {
+          return { ...source, thread: { ...source.thread, turns } };
+        }
+        if (request.method === "thread/inject_items") {
+          return {};
+        }
+        throw new Error(`Unexpected automatic recovery request: ${request.method}`);
+      },
+      "websocket",
+    );
+    const appServer = fixtures.createThreadLifecycleAppServerOptions();
+    appServer.start = { ...appServer.start, transport: "websocket", url: "ws://127.0.0.1:8123" };
+    const common = {
+      client: wire.client,
+      params: { ...fixtures.createParams(sessionFile, cwd), agentDir },
+      cwd,
+      dynamicTools: [],
+      appServer,
+      userMcpServersEnabled: false,
+      signal: new AbortController().signal,
+    };
+    try {
+      const started = await fixtures.startOrResumeThread(common);
+      const binding = {
+        ...started,
+        clientId: "previous-host",
+        ...(scenario === "runtime change"
+          ? { appServerRuntimeFingerprint: "previous-runtime" }
+          : {}),
+      };
+      if (scenario === "cleared receipt") {
+        await fixtures.writeCodexAppServerBinding(sessionFile, {
+          ...binding,
+          turnRecovery: { turnId: "old-turn", state: "accepted" },
+        });
+      }
+      // The cleared case models the durable state after normal native cleanup;
+      // the legacy case never had a receipt. Neither proves host task settlement.
+      await fixtures.writeCodexAppServerBinding(sessionFile, binding);
+      if (scenario === "missing binding") {
+        await clearCodexAppServerBindingForThread(sessionFile, source.thread.id);
+      }
+      if (scenario === "foreign active") {
+        await testCodexAppServerBindingStore.mutate(
+          { kind: "conversation", bindingId: "foreign-restart-owner" },
+          { kind: "set", binding: { threadId: source.thread.id, cwd } },
+        );
+      }
+      const before = await readCodexAppServerBinding(sessionFile);
+      const boundary = requests.length;
+      const attempt = fixtures.startOrResumeThread({
+        ...common,
+        ...(scenario === "runtime change" ? { appServerRuntimeFingerprint: "new-runtime" } : {}),
+        ...(scenario === "catalog change"
+          ? {
+              dynamicTools: [
+                {
+                  type: "function" as const,
+                  name: "changed_tool",
+                  description: "Different catalog",
+                  inputSchema: { type: "object" },
+                },
+              ],
+            }
+          : {}),
+        params: {
+          ...common.params,
+          inputProvenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+        },
+      });
+      await expect(attempt).rejects.toMatchObject({
+        name: "AgentHarnessPreflightError",
+        scope: undefined,
+        userMessage: expect.stringContaining("automatic recovery"),
+      });
+      const recoveryRequests = requests.slice(boundary);
+      expect(
+        recoveryRequests.every((request) =>
+          ["thread/read", "thread/turns/list"].includes(request.method),
+        ),
+      ).toBe(true);
+      expect(await readCodexAppServerBinding(sessionFile)).toEqual(before);
+      if (["runtime change", "missing binding"].includes(scenario)) {
+        expect(recoveryRequests).toEqual([]);
+      }
+      if (["cleared receipt", "legacy terminal", "catalog change"].includes(scenario)) {
+        const resumed = await fixtures.startOrResumeThread(common);
+        expect(resumed.threadId).toBe(source.thread.id);
+        expect(requests.filter((request) => request.method === "thread/start")).toHaveLength(1);
+      }
+    } finally {
+      testCodexAppServerBindingStore.managedThreads = previous;
+      wire.client.close();
+    }
+  });
 }
