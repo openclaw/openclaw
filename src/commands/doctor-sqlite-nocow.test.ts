@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { registerAgentDatabaseReaderCloser } from "../infra/agent-database-readers.js";
 import { createClientCredentialMigrationFixture } from "../infra/client-credential-migration.test-support.js";
 import { runClientCredentialOperation } from "../infra/client-credential-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -206,6 +207,50 @@ it.skipIf(process.platform !== "linux")(
             paths.every((pathname, index) => fs.statSync(pathname).ino !== originals[index]),
           ).toBe(true);
         } finally {
+          await maintenance?.release();
+        }
+      },
+    );
+  },
+);
+
+it.skipIf(process.platform !== "linux")(
+  "closes readers retained by other isolates before checking for open store files",
+  async () => {
+    await withOpenClawTestState(
+      { scenario: "external-service", label: "doctor-nocow-retained-reader" },
+      async () => {
+        await useNativeTools(
+          (command) => !["lsattr", "getfacl", "setfacl", "mv"].includes(command),
+        );
+        const maintenance = await beginDoctorMaintenance({
+          options: { repair: true, nonInteractive: true, workspaceSuggestions: false },
+          root: null,
+          runtime: { log() {}, error() {}, exit() {} },
+        });
+        // Stands in for a worker pool's cached reader, which only the shared reader close releases.
+        let retained: DatabaseSync | undefined;
+        let agentPath = "";
+        const unregister = registerAgentDatabaseReaderCloser((candidates) => {
+          if (candidates.some((candidate) => candidate.path === agentPath)) {
+            retained?.close();
+            retained = undefined;
+          }
+        });
+        try {
+          agentPath = await maintenance!.run(
+            async () => openOpenClawAgentDatabase({ agentId: "main" }).path,
+          );
+          retained = new DatabaseSync(agentPath, { readOnly: true });
+          retained.prepare("SELECT count(*) FROM sqlite_master").get();
+          const original = fs.statSync(agentPath).ino;
+          await maintenance!.repairSqliteNoCow([agentPath]);
+          expect(maintenance!.warnings).toEqual([]);
+          expect(retained).toBeUndefined();
+          expect(fs.statSync(agentPath).ino).not.toBe(original);
+        } finally {
+          unregister();
+          retained?.close();
           await maintenance?.release();
         }
       },

@@ -318,10 +318,13 @@ export async function createDoctorMaintenanceState(options: {
         return { changes: [], warnings: [] };
       }
       const { repairDoctorSqliteNoCow } = await import("./doctor-sqlite-nocow.js");
+      const { closeAgentDatabaseReaders } = await import("../state/openclaw-agent-db-readers.js");
       const stateDir = resolveStateDir(selectedEnv);
       const databasePath = resolveOpenClawStateSqlitePath(selectedEnv);
       assertOwnerCurrent();
       await closeResources(stateDir);
+      // Worker pools (memory search) retain idle readers that fuser reports as Doctor's own PID.
+      await closeAgentDatabaseReaders(paths);
       try {
         return await owner!.run(async () => {
           // Agent admission writes through shared state; retain that owner after drainage.
