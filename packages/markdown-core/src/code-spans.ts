@@ -72,14 +72,18 @@ export function buildCodeSpanIndex(
   while (i < text.length) {
     const fence = fenceSpans[fenceIndex];
     if (fence && i >= fence.start) {
-      if (runLength > 0) classifyRun(i + carriedTicks);
+      if (runLength > 0) {
+        classifyRun(i + carriedTicks);
+      }
       i = fence.end;
       fenceIndex += 1;
       continue;
     }
 
     if (text[i] !== "`") {
-      if (runLength > 0) classifyRun(i + carriedTicks);
+      if (runLength > 0) {
+        classifyRun(i + carriedTicks);
+      }
       i += 1;
       continue;
     }
@@ -100,7 +104,9 @@ export function buildCodeSpanIndex(
   // to be complete once a character follows it, so hand the next scan the state from before it.
   if (runLength > 0) {
     pendingRun = { ticks: runLength, open, requiredTicks: ticks };
-    if (text.length > 0) classifyRun(text.length + carriedTicks);
+    if (text.length > 0) {
+      classifyRun(text.length + carriedTicks);
+    }
   }
 
   if (open) {

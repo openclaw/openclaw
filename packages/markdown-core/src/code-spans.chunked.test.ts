@@ -27,9 +27,12 @@ function expectChunkInvariant(text: string, cuts: readonly number[]) {
   expect(inlineState.open).toBe(oneShot.inlineState.open);
 }
 
-const seeded = (seed: number) => () => {
-  seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
-  return seed / 2_147_483_648;
+const seeded = (seed: number) => {
+  let state = seed;
+  return () => {
+    state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+    return state / 2_147_483_648;
+  };
 };
 
 describe("buildCodeSpanIndex chunk invariance", () => {
@@ -84,14 +87,18 @@ describe("buildCodeSpanIndex chunk invariance", () => {
       }
       // Up to three leading spaces then three backticks is a fence opener, which the fence
       // scanner owns; this suite covers inline runs.
-      if (/^ {0,3}```/.test(text)) continue;
+      if (/^ {0,3}```/.test(text)) {
+        continue;
+      }
       const cuts = new Set<number>();
       for (let i = 1; i < text.length; i += 1) {
-        if (next() < 0.5) cuts.add(i);
+        if (next() < 0.5) {
+          cuts.add(i);
+        }
       }
       expectChunkInvariant(
         text,
-        [...cuts].sort((a, b) => a - b),
+        [...cuts].toSorted((a, b) => a - b),
       );
       cases += 1;
     }
