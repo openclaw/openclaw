@@ -22,6 +22,7 @@ import type { ToolsCatalogResult } from "../../api/types.ts";
 import {
   SettingsSection,
   SettingsRow,
+  SettingsSegmented,
   SettingsToggle,
   SettingsLoadingSkeleton,
 } from "../../components/solid/settings-ui.tsx";
@@ -36,8 +37,7 @@ import {
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
-import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
-import { AgentPanelAction, renderAgentPanelFacts } from "./panel-ui.tsx";
+import { AgentPanelAction, renderAgentPanelFacts, type AgentConfigState } from "./panel-ui.tsx";
 import {
   buildToolPresentation,
   renderToolMetaBadges,
@@ -53,7 +53,7 @@ import {
 registerSettingsEnglish();
 
 export function AgentTools(
-  params: AgentConfigActions &
+  params: AgentConfigState &
     AgentsPageView["tools"] &
     Pick<AgentsPageView, "readData"> & {
       agentId: string;
@@ -277,7 +277,6 @@ export function AgentTools(
                   />
                 )}
               </For>
-              <AgentConfigButtons {...params} />
             </>
           }
         >
@@ -296,33 +295,24 @@ export function AgentTools(
                 {(preview) => <ToolListed preview={preview} />}
               </EffectiveBoundary>,
             ],
-            [
-              "agentTools.status",
-              t(
-                params.configSaving
-                  ? "agentTools.statusSaving"
-                  : params.configDirty
-                    ? "agentTools.statusUnsaved"
-                    : "agentTools.statusSaved",
-              ),
-            ],
           ])}
           <SettingsRow
             title={t("agentTools.quickPresets")}
-            stacked
+            stackedOnNarrow
             control={
               <div class="agent-tools-buttons">
-                <For each={profileOptions()} keyed={(option) => option.id}>
-                  {(option) => (
-                    <button
-                      class={["btn btn--sm", { active: profile() === option().id }]}
-                      disabled={!editable() || props.pending}
-                      onClick={() => params.onProfileChange(params.agentId, option().id, true)}
-                    >
-                      {option().label}
-                    </button>
-                  )}
-                </For>
+                <SettingsSegmented
+                  mode="buttons"
+                  ariaLabel={t("agentTools.quickPresets")}
+                  value={profile()}
+                  options={profileOptions().map((option) => ({
+                    value: option.id,
+                    label: option.label,
+                  }))}
+                  disabled={!editable() || props.pending}
+                  onChange={(id) => params.onProfileChange(params.agentId, id, true)}
+                  onReselect={(id) => params.onProfileChange(params.agentId, id, true)}
+                />
                 <AgentPanelAction
                   label={t("agentTools.inherit")}
                   disabled={!editable() || (props.pending ?? false)}

@@ -50,7 +50,6 @@ async function expectQuery(advanced: Locator, section: Locator) {
   await expect
     .poll(() => advanced.evaluate((element) => (element as HTMLDetailsElement).open))
     .toBe(true);
-  await section.locator("summary").filter({ hasText: "Query" }).click();
   expect(await section.getByRole("spinbutton").inputValue()).toBe("6");
 }
 

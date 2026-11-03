@@ -9,6 +9,10 @@ import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  BUNDLED_PLUGIN_DEV_RELOAD_ENV,
+  formatBundledPluginDevReloadWarning,
+} from "../plugins/bundled-plugin-dev-reload.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import type { PluginLifecycleReason } from "../plugins/lifecycle.js";
@@ -982,6 +986,26 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       expect(repeatedBundled.runtime.restartRequired).toBe(true);
       expect(await probe("bundled-probe", { starts: 4, stops: 3 })).toMatchObject({ helper: "A" });
       expect(await probe("sibling")).toEqual(sibling);
+
+      // The operator opt-in recaptures the edited bundled code for explicit reload targets.
+      vi.stubEnv(BUNDLED_PLUGIN_DEV_RELOAD_ENV, "1");
+      try {
+        const devReload = await reload(changedSettings, ["bundled-probe"]);
+        expect(devReload.runtime.restartRequired).toBeUndefined();
+        expect(devReload.runtime.warnings).toContain(
+          formatBundledPluginDevReloadWarning("bundled-probe"),
+        );
+        const devBundled = await probe("bundled-probe");
+        expect(devBundled.helper).toBe("B");
+        expect(devBundled.instance).not.toBe(originalBundled.instance);
+        fs.writeFileSync(path.join(bundledDir, "dist", "helper.cjs"), 'module.exports = "C";');
+        const repeatedDevReload = await reload(changedSettings, ["bundled-probe"]);
+        expect(repeatedDevReload.runtime.restartRequired).toBeUndefined();
+        expect(await probe("bundled-probe")).toMatchObject({ helper: "C" });
+        expect(await probe("sibling")).toEqual(sibling);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     }
   });
 }

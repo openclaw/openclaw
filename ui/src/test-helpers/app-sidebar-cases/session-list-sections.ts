@@ -79,9 +79,7 @@ describe("AppSidebar session section visibility", () => {
     expect(threads).toBeNull();
 
     const toolbar = sidebar.querySelector(".sidebar-session-toolbar");
-    expect(toolbar?.querySelector(".sidebar-recent-sessions__label-text")?.textContent).toBe(
-      "Sessions",
-    );
+    expect(toolbar?.querySelector(".sidebar-panel-header__title")?.textContent).toBe("Sessions");
     const filter = toolbar?.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     expect(filter).not.toBeNull();
     expect(filter?.getAttribute("aria-label")).toBe("Filter & sort · Active");

@@ -296,6 +296,10 @@ openclaw browser snapshot
 openclaw browser snapshot --urls
 ```
 
+Page-text extraction through the browser API counts its character budget in UTF-16
+code units. If a limit falls inside a surrogate pair, extraction omits the whole
+pair rather than returning a broken character; the result remains truncated.
+
 Screenshot:
 
 ```bash
@@ -360,6 +364,9 @@ the existing timeout and cancellation still apply.
 Explicit download paths and `trace stop --out` preserve filename whitespace where the filesystem supports it. Quote these paths, for example `openclaw browser download <ref> " report.pdf "`. Output paths must stay inside their managed download or trace directory.
 
 If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.
+
+If a page closes before its next download starts, the pending download wait rejects
+immediately. Accepted downloads keep their existing save and cancellation behavior.
 
 When an action opens a modal dialog, text output reports the block and pending dialog IDs. The JSON response returns `blockedByDialog` with `browserState.dialogs.pending`. Pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 
