@@ -19,11 +19,10 @@ export function normalizeBoardSessionViews(value: unknown): BoardSessionViews {
     return {};
   }
   const normalized: BoardSessionViews = {};
-  for (const [sessionKey, rawView] of Object.entries(value)) {
-    if (!sessionKey.trim() || !isRecord(rawView)) {
+  for (const [sessionKey, view] of Object.entries(value)) {
+    if (!sessionKey.trim() || !isRecord(view)) {
       continue;
     }
-    const view = rawView;
     const activeTabId = typeof view.activeTabId === "string" ? view.activeTabId.trim() : "";
     const reopenDockByTab: Record<string, BoardVisibleChatDock> = {};
     if (isRecord(view.reopenDockByTab)) {

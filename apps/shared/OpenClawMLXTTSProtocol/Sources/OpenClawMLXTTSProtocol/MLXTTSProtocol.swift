@@ -54,17 +54,6 @@ public struct MLXTTSSynthesizeRequest: Codable, Equatable, Sendable {
     public let referenceText: String?
     public let stream: Bool
 
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case text
-        case modelRepo
-        case language
-        case voice
-        case referenceAudioPath
-        case referenceText
-        case stream
-    }
-
     public init(
         id: String,
         text: String,
@@ -95,18 +84,6 @@ public struct MLXTTSSynthesizeRequest: Codable, Equatable, Sendable {
         self.referenceAudioPath = try container.decodeIfPresent(String.self, forKey: .referenceAudioPath)
         self.referenceText = try container.decodeIfPresent(String.self, forKey: .referenceText)
         self.stream = try container.decodeIfPresent(Bool.self, forKey: .stream) ?? false
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(self.id, forKey: .id)
-        try container.encode(self.text, forKey: .text)
-        try container.encode(self.modelRepo, forKey: .modelRepo)
-        try container.encodeIfPresent(self.language, forKey: .language)
-        try container.encodeIfPresent(self.voice, forKey: .voice)
-        try container.encodeIfPresent(self.referenceAudioPath, forKey: .referenceAudioPath)
-        try container.encodeIfPresent(self.referenceText, forKey: .referenceText)
-        try container.encode(self.stream, forKey: .stream)
     }
 }
 
@@ -273,9 +250,6 @@ public enum MLXTTSFrameCodec {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let payload = try encoder.encode(value)
-        guard !payload.isEmpty else {
-            throw MLXTTSFrameError.emptyFrame
-        }
         guard payload.count <= self.maximumPayloadSize else {
             throw MLXTTSFrameError.frameTooLarge(payload.count)
         }

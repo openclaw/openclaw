@@ -1,10 +1,5 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
-import type {
-  SessionCapability,
-  SessionConnectionOwner,
-  SessionState,
-} from "./session-capability.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 import { areUiSessionKeysEquivalent } from "./session-key.ts";
 import {
   pendingRowIdentity,
@@ -12,6 +7,7 @@ import {
   type PendingRowHost,
 } from "./session-pending-rows.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
+import type { SessionConnectionOwner, SessionState } from "./session-types.ts";
 
 export type SessionRowLocalPatchHost = Pick<PendingRowHost, "snapshot"> &
   Pick<ReturnType<typeof createSessionRosterObservations>, "copyRow" | "stageManagedResults"> & {
@@ -20,10 +16,13 @@ export type SessionRowLocalPatchHost = Pick<PendingRowHost, "snapshot"> &
     publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
   };
 
-export function createSessionRowLocalPatch(
-  host: SessionRowLocalPatchHost,
-): SessionCapability["patchRowLocal"] {
-  return (key, patch, target) => {
+export function createSessionRowLocalPatch(host: SessionRowLocalPatchHost) {
+  // Local previews update the primary snapshot; explicit targets also update held incarnations.
+  return (
+    key: string,
+    patch: Partial<GatewaySessionRow>,
+    target?: { agentId: string; sessionId: string },
+  ): void => {
     const scope = host.connection.capture();
     const normalizedKey = key.trim();
     if (
@@ -47,20 +46,15 @@ export function createSessionRowLocalPatch(
       return matches ? host.copyRow(row, patch) : row;
     };
     const state = host.readState();
-    const result = projectSessionResultRows(
-      state.result,
-      state.result?.sessions.map((row) => project(row, state.agentId)) ?? [],
-    );
+    const result = mapSessionResultRows(state.result, (row) => project(row, state.agentId));
     // Unscoped callers retain their primary-only contract. A captured target can
     // update its held descriptor without borrowing primary membership or ownership.
     const staged = target
       ? host.stageManagedResults(
           scope,
           (entry) =>
-            projectSessionResultRows(
-              entry.snapshot.result,
-              entry.snapshot.result?.sessions.map((row) => project(row, entry.snapshot.agentId)) ??
-                [],
+            mapSessionResultRows(entry.snapshot.result, (row) =>
+              project(row, entry.snapshot.agentId),
             ),
           (entry) => ({ row: entry.row ? project(entry.row, entry.target.agentId) : null }),
         )

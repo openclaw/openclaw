@@ -35,7 +35,7 @@ export async function listenGatewayHttpServer(params: {
   } = params;
   const maxRetries = retryEaddrinuse ? EADDRINUSE_MAX_RETRIES : 0;
 
-  for (const attempt of Array.from({ length: maxRetries + 1 }, (_, index) => index)) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       await new Promise<void>((resolve, reject) => {
         const onError = (err: NodeJS.ErrnoException) => {
@@ -48,9 +48,15 @@ export async function listenGatewayHttpServer(params: {
         };
         httpServer.once("error", onError);
         httpServer.once("listening", onListening);
-        httpServer.listen(port, bindHost);
+        try {
+          httpServer.listen(port, bindHost);
+        } catch (error) {
+          httpServer.off("error", onError);
+          httpServer.off("listening", onListening);
+          throw error;
+        }
       });
-      return; // bound successfully
+      return;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "EADDRINUSE" && attempt < maxRetries) {

@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeAgentId } from "../../routing/session-key.js";
 
 const INTERNAL_SESSION_EFFECTS_SEGMENT = "internal-session-effects";
@@ -6,7 +6,7 @@ const INTERNAL_SESSION_EFFECTS_REST_PREFIX = `${INTERNAL_SESSION_EFFECTS_SEGMENT
 
 function normalizeInternalRunId(runId: string): string {
   const readable = runId.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 48) || "run";
-  const digest = crypto.createHash("sha256").update(runId).digest("hex").slice(0, 16);
+  const digest = sha256Hex(runId).slice(0, 16);
   return `${readable}-${digest}`;
 }
 
@@ -38,4 +38,16 @@ export function isInternalSessionEffectsKey(sessionKey: string): boolean {
   }
   const agentEnd = sessionKey.indexOf(":", 6);
   return agentEnd >= 0 && sessionKey.startsWith(INTERNAL_SESSION_EFFECTS_REST_PREFIX, agentEnd + 1);
+}
+
+/**
+ * The stable part of an internal-effects key: its per-run suffix is dropped, so every hidden run
+ * of one agent shows the same session identity. Undefined for other keys.
+ */
+export function internalSessionEffectsBaseKey(sessionKey: string): string | undefined {
+  if (!isInternalSessionEffectsKey(sessionKey)) {
+    return undefined;
+  }
+  const agentEnd = sessionKey.indexOf(":", 6);
+  return sessionKey.slice(0, agentEnd + 1 + INTERNAL_SESSION_EFFECTS_SEGMENT.length);
 }

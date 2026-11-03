@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
-import { nextcloudTalkGatewayAdapter } from "./gateway.js";
+import { nextcloudTalkPlugin } from "./channel.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -26,7 +26,11 @@ async function logout(cfg: OpenClawConfig & CoreConfig, accountId: string) {
   const original = structuredClone(cfg);
   const runtime = createPluginRuntimeMock();
   setNextcloudTalkRuntime(runtime);
-  const result = await nextcloudTalkGatewayAdapter.logoutAccount!({
+  const logoutAccount = nextcloudTalkPlugin.gateway?.logoutAccount;
+  if (!logoutAccount) {
+    throw new Error("Nextcloud Talk logoutAccount unavailable");
+  }
+  const result = await logoutAccount({
     cfg,
     accountId,
     account: resolveNextcloudTalkAccount({ cfg, accountId }),

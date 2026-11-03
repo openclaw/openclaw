@@ -10,7 +10,7 @@
   "types": "./dist/index.d.mts",
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "exports": {
     ".": {
@@ -42,6 +42,11 @@
       "types": "./dist/model-catalog-types.d.mts",
       "import": "./dist/model-catalog-types.mjs",
       "default": "./dist/model-catalog-types.mjs"
+    },
+    "./model-inference-capabilities": {
+      "types": "./dist/model-inference-capabilities.d.mts",
+      "import": "./dist/model-inference-capabilities.mjs",
+      "default": "./dist/model-inference-capabilities.mjs"
     },
     "./provider-id": {
       "types": "./dist/provider-id.d.mts",

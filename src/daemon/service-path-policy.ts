@@ -1,11 +1,10 @@
-/** Classifies service PATH entries that should not be frozen into daemons. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
 
-// Service PATH policy keeps managed services away from user shell package-manager paths.
 export function normalizeServicePathEntry(entry: string, platform: NodeJS.Platform): string {
   const pathModule = platform === "win32" ? path.win32 : path.posix;
   const normalized = pathModule.normalize(entry).replaceAll("\\", "/");
@@ -24,7 +23,6 @@ export function isNonMinimalServicePathEntry(entry: string, platform: NodeJS.Pla
   // should be replaced by stable system/runtime paths.
   return (
     matchesVersionManagerPath(normalized, "service-path") ||
-    normalized.includes("/.local/share/pnpm/") ||
     normalized.includes("/pnpm/") ||
     normalized.endsWith("/pnpm")
   );
@@ -53,24 +51,6 @@ export function mergeServicePath(
     candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
   const isUnsafeProcPath = (candidate: string) =>
     candidate === `${path.sep}proc` || candidate.startsWith(`${path.sep}proc${path.sep}`);
-  const realpathExistingPath = (candidate: string): string | undefined => {
-    const parts: string[] = [];
-    let current = candidate;
-    while (current && current !== path.dirname(current)) {
-      try {
-        const realCurrent = path.normalize(fs.realpathSync.native(current));
-        return path.normalize(path.join(realCurrent, ...parts.toReversed()));
-      } catch {
-        parts.push(path.basename(current));
-        current = path.dirname(current);
-      }
-    }
-    try {
-      return path.normalize(path.join(fs.realpathSync.native(current), ...parts.toReversed()));
-    } catch {
-      return undefined;
-    }
-  };
   const normalizePreservedPathSegment = (segment: string): string | undefined => {
     if (!path.isAbsolute(segment)) {
       return undefined;
@@ -83,26 +63,24 @@ export function mergeServicePath(
     if (isSameOrChildPath(normalized, cwd)) {
       return undefined;
     }
+    const realSegment = resolveIdentityPathViaExistingAncestorSync(normalized);
     try {
-      const realSegment = realpathExistingPath(normalized);
       const realCwd = path.normalize(fs.realpathSync.native(cwd));
-      if (realSegment && isSameOrChildPath(realSegment, realCwd)) {
+      if (isSameOrChildPath(realSegment, realCwd)) {
         return undefined;
       }
     } catch {
-      // Legacy PATH entries may no longer exist; keep filtering best-effort.
+      // Unavailable cwd identity leaves the lexical check in force.
     }
-    return normalized;
-  };
-  const shouldPreserveNormalizedPathSegment = (segment: string) => {
-    if (isNonMinimalServicePathEntry(segment, platform)) {
-      return false;
+    if (isNonMinimalServicePathEntry(normalized, platform)) {
+      return undefined;
     }
-    const resolved = path.resolve(segment);
-    const realResolved = realpathExistingPath(resolved) ?? resolved;
-    return ![...normalizedTmpDirs, ...realTmpDirs].some(
-      (tmpRoot) => isSameOrChildPath(resolved, tmpRoot) || isSameOrChildPath(realResolved, tmpRoot),
-    );
+    return [...normalizedTmpDirs, ...realTmpDirs].some(
+      (tmpRoot) =>
+        isSameOrChildPath(normalized, tmpRoot) || isSameOrChildPath(realSegment, tmpRoot),
+    )
+      ? undefined
+      : normalized;
   };
   const addPath = (value: string | undefined, options?: { preserve?: boolean }) => {
     if (typeof value !== "string" || value.trim().length === 0) {
@@ -111,9 +89,6 @@ export function mergeServicePath(
     for (const segment of value.split(path.delimiter)) {
       const trimmed = segment.trim();
       const candidate = options?.preserve ? normalizePreservedPathSegment(trimmed) : trimmed;
-      if (options?.preserve && (!candidate || !shouldPreserveNormalizedPathSegment(candidate))) {
-        continue;
-      }
       if (!candidate || seen.has(candidate)) {
         continue;
       }

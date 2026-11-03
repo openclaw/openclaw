@@ -21,11 +21,8 @@ export function safeAttachmentHref(value: string): string | undefined {
   if (href.startsWith("/") && !href.startsWith("//") && !href.startsWith("/\\")) {
     return href;
   }
-  try {
-    return SAFE_ATTACHMENT_PROTOCOLS.has(new URL(href).protocol.toLowerCase()) ? href : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(href);
+  return url && SAFE_ATTACHMENT_PROTOCOLS.has(url.protocol) ? href : undefined;
 }
 
 /** Keeps normalized base64 media usable without admitting scriptable data URL types. */

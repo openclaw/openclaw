@@ -9,15 +9,11 @@ pub(crate) type BeginSleepCycleHook = Arc<dyn Fn() -> bool + Send + Sync>;
 pub(crate) type EndSleepCycleHook = Arc<dyn Fn() + Send + Sync>;
 
 struct SleepCycleGuard {
-    abandon: Option<(Arc<GatewaySleepCycleController>, u64)>,
     end: EndSleepCycleHook,
 }
 
 impl Drop for SleepCycleGuard {
     fn drop(&mut self) {
-        if let Some((controller, generation)) = &self.abandon {
-            controller.abandon(*generation);
-        }
         (self.end)();
     }
 }
@@ -69,28 +65,18 @@ async fn run_listener_on_connection(
         if sleeping {
             if cycle.is_none() && begin_sleep_cycle() {
                 cycle = Some(SleepCycleGuard {
-                    abandon: None,
                     end: Arc::clone(&end_sleep_cycle),
                 });
             }
-            let (generation, preparation) = controller.will_sleep();
-            if let Some(cycle) = cycle.as_mut() {
-                cycle.abandon = generation.map(|generation| (Arc::clone(&controller), generation));
-            }
-            preparation.await;
+            controller.will_sleep().await;
             // Releasing the delay inhibitor lets logind continue into sleep.
             inhibitor.take();
         } else {
-            let cycle = cycle.take().map(|mut cycle| {
-                // Real wake transfers recovery authority before the task can poll.
-                // Later listener loss must not abandon this already-observed wake.
-                cycle.abandon = None;
-                cycle
-            });
+            let cycle = cycle.take();
             let recovery = controller.did_wake();
             // Spawn wake recovery before touching logind again: a slow or hung
             // Inhibit call must not delay reconnect/resume. Spawning also keeps
-            // the signal loop consuming so a new sleep cycle can abort retries.
+            // the signal loop consuming while recovery runs.
             tauri::async_runtime::spawn(async move {
                 // Keep this cycle's depth until recovery ends, including cancellation.
                 let _cycle = cycle;

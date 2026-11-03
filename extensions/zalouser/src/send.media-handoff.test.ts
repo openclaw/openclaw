@@ -14,9 +14,8 @@ vi.mock("./session-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-state.js")>()),
   clearStoredZaloCredentials: vi.fn(),
   loadStoredZaloCredentials: vi.fn(),
-  loadStoredZaloCredentialsAsync: vi.fn(),
   refreshStoredZaloCredentials: vi.fn(),
-  saveStoredZaloCredentials: vi.fn(),
+  saveStoredZaloCredentials: vi.fn(async () => {}),
 }));
 
 const mediaUrl = "https://media.example.com/document.txt";
@@ -143,16 +142,40 @@ afterEach(async () => {
 });
 
 describe("Zalouser guarded media handoff", () => {
-  it("downloads through the pinned runtime dispatcher and delivers with the SDK", async () => {
+  it.each([false, true])("downloads through the guarded dispatcher (proxy=%s)", async (proxy) => {
+    const proxyUrl = "http://proxy.example.com:8080";
+    if (proxy) {
+      vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+      vi.stubEnv("OPENCLAW_PROXY_CA_FILE", "/__openclaw_zalouser_test__/absent-ca.pem");
+      vi.stubEnv("HTTPS_PROXY", proxyUrl);
+    }
     const result = await harness.send("message.media", { text: "", mediaUrl });
     expect(result.messageId).toBe("message-1");
     expect(runtimeDownloads).toEqual([
       {
         url: mediaUrl,
-        dispatcher: expect.any(FixtureAgent),
-        addresses: [{ address: publicAddress, family: 4 }],
+        dispatcher: expect.any(proxy ? FixtureEnvHttpProxyAgent : FixtureAgent),
+        addresses: proxy ? [] : [{ address: publicAddress, family: 4 }],
       },
     ]);
+    if (proxy) {
+      const proxies = FixtureAgent.instances.filter((agent) => agent instanceof FixtureProxyAgent);
+      expect(
+        proxies.map(({ options, dispatched, closed }) => ({
+          uri: options.uri,
+          dispatched,
+          closed,
+        })),
+      ).toEqual([
+        {
+          uri: proxyUrl,
+          dispatched: [
+            { origin: "https://media.example.com", path: "/document.txt", method: "GET" },
+          ],
+          closed: true,
+        },
+      ]);
+    }
     expect(runtimeDownloads[0]?.dispatcher.closed).toBe(true);
     expect(ambientDownloads).toEqual([]);
     expect(harness.requests.map(({ path }) => path)).toEqual([
@@ -177,33 +200,5 @@ describe("Zalouser guarded media handoff", () => {
     expect(runtimeDownloads).toEqual([]);
     expect(ambientDownloads).toEqual([]);
     expect(harness.requests).toEqual([]);
-  });
-
-  it("preserves the existing managed proxy route through the runtime dispatcher", async () => {
-    const proxyUrl = "http://proxy.example.com:8080";
-    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", "/__openclaw_zalouser_test__/absent-ca.pem");
-    vi.stubEnv("HTTPS_PROXY", proxyUrl);
-    const result = await harness.send("message.media", { text: "", mediaUrl });
-    expect(result.messageId).toBe("message-1");
-    expect(runtimeDownloads).toEqual([
-      { url: mediaUrl, dispatcher: expect.any(FixtureEnvHttpProxyAgent), addresses: [] },
-    ]);
-    const proxies = FixtureAgent.instances.filter((agent) => agent instanceof FixtureProxyAgent);
-    expect(
-      proxies.map(({ options, dispatched, closed }) => ({ uri: options.uri, dispatched, closed })),
-    ).toEqual([
-      {
-        uri: proxyUrl,
-        dispatched: [{ origin: "https://media.example.com", path: "/document.txt", method: "GET" }],
-        closed: true,
-      },
-    ]);
-    expect(runtimeDownloads[0]?.dispatcher.closed).toBe(true);
-    expect(ambientDownloads).toEqual([]);
-    expect(harness.requests.map(({ path }) => path)).toEqual([
-      "/api/message/asyncfile/upload",
-      "/api/message/asyncfile/msg",
-    ]);
   });
 });

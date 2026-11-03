@@ -1,4 +1,5 @@
 //! Dashboard-only transport for the shared native browser contract.
+use crate::gateway_windows::matches_route as matches_dashboard;
 use crate::native_browser::NativeBrowserState;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -9,7 +10,7 @@ use tauri_plugin_opener::OpenerExt;
 
 #[derive(Clone)]
 pub(crate) struct DashboardDocument {
-    url: Url,
+    pub(crate) url: Url,
     token: String,
     pub(crate) generation: u64,
     ready: bool,
@@ -27,23 +28,6 @@ struct BridgeState {
 pub struct NativeBrowserBridgeState {
     inner: Mutex<BridgeState>,
     lifecycle: tokio::sync::Mutex<()>,
-}
-
-fn matches_dashboard(candidate: &Url, dashboard: &Url) -> bool {
-    if !matches!(candidate.scheme(), "http" | "https")
-        || candidate.origin() != dashboard.origin()
-        || !candidate.username().is_empty()
-        || candidate.password().is_some()
-    {
-        return false;
-    }
-    let base = dashboard.path().trim_end_matches('/');
-    base.is_empty()
-        || candidate.path() == base
-        || candidate
-            .path()
-            .strip_prefix(base)
-            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 impl NativeBrowserBridgeState {
@@ -217,11 +201,25 @@ fn initialization_script(document: &DashboardDocument) -> String {
     const request = deviceSettingsRequests.then(async () => {{
       await ready;
       const result = await invoke("native_device_settings_request", {{ message, token }});
-      return message.type === "chrome-extension-setup" ? result : acceptDeviceSettings(result);
+      return message.type === "chrome-extension-setup" || message.type === "open" ? result : acceptDeviceSettings(result);
     }});
     deviceSettingsRequests = request.catch(() => {{}});
     return request;
   }} }}, configurable: true }});
+  const openSetupPanel = panel => handlers.openclawDeviceSettings.postMessage({{ type: "open", panel }})
+    .catch(error => window.dispatchEvent(new CustomEvent("openclaw:gateway-notice", {{
+      detail: {{ message: `Desktop setup action failed: ${{String(error)}}` }},
+    }})));
+  Object.defineProperty(window, "__OPENCLAW_NATIVE_SETUP__", {{ value: {{
+    get currentGateway() {{
+      const snapshot = window.__OPENCLAW_NATIVE_GATEWAYS__;
+      const gateway = snapshot?.gateways.find(entry => entry.id === snapshot.currentId);
+      return gateway && {{ name: gateway.kind === "local" ? "This computer" : gateway.name, kind: gateway.kind }};
+    }},
+    openAiSetup: () => openSetupPanel("ai-setup"),
+    openGateways: () => openSetupPanel("gateways"),
+    reviewPermissions: () => openSetupPanel("permissions"),
+  }}, configurable: true }});
   Object.defineProperty(window, "__OPENCLAW_NATIVE_BROWSER_TOKEN__", {{ value: token, configurable: true }});
 "#
         ),
@@ -238,29 +236,27 @@ pub fn dashboard_is_current(app: &AppHandle, webview: &Webview) -> bool {
 }
 
 fn dashboard_source_matches(app: &AppHandle, source: &Url) -> bool {
-    let Some(state) = app.try_state::<NativeBrowserBridgeState>() else {
-        return false;
-    };
-    let Ok(inner) = state.inner.lock() else {
-        return false;
-    };
-    inner
-        .document
-        .as_ref()
-        .is_some_and(|document| document.ready && matches_dashboard(source, &document.url))
+    current_document_matches(app, |document| matches_dashboard(source, &document.url))
 }
 
 // Native callbacks can already hold the runtime's webview registry borrow. Their
 // authority check must use the document lifecycle without reentering URL dispatch.
 // Page-load callbacks invalidate this generation before a new document is ready.
 pub fn generation_is_current(app: &AppHandle, generation: u64) -> bool {
+    current_document_matches(app, |document| document.generation == generation)
+}
+
+fn current_document_matches(
+    app: &AppHandle,
+    matches: impl FnOnce(&DashboardDocument) -> bool,
+) -> bool {
     app.try_state::<NativeBrowserBridgeState>()
         .is_some_and(|state| {
             state.inner.lock().is_ok_and(|inner| {
                 inner
                     .document
                     .as_ref()
-                    .is_some_and(|document| document.ready && document.generation == generation)
+                    .is_some_and(|document| document.ready && matches(document))
             })
         })
 }
@@ -272,16 +268,8 @@ pub fn request_is_current(app: &AppHandle, generation: u64) -> bool {
     let Ok(url) = webview.url() else {
         return false;
     };
-    let Some(state) = app.try_state::<NativeBrowserBridgeState>() else {
-        return false;
-    };
-    let Ok(inner) = state.inner.lock() else {
-        return false;
-    };
-    inner.document.as_ref().is_some_and(|document| {
-        document.ready
-            && document.generation == generation
-            && matches_dashboard(&url, &document.url)
+    current_document_matches(app, |document| {
+        document.generation == generation && matches_dashboard(&url, &document.url)
     })
 }
 
@@ -505,26 +493,6 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_authority_requires_exact_origin_and_path_boundary() {
-        let dashboard = Url::parse("https://gateway.example/openclaw/").unwrap();
-        for (candidate, expected) in [
-            ("https://gateway.example/openclaw", true),
-            ("https://gateway.example/openclaw/chat", true),
-            ("https://gateway.example/openclaw-other", false),
-            ("https://gateway.example:444/openclaw", false),
-            ("http://gateway.example/openclaw", false),
-            ("https://other.example/openclaw", false),
-            ("https://user@gateway.example/openclaw", false),
-        ] {
-            assert_eq!(
-                matches_dashboard(&Url::parse(candidate).unwrap(), &dashboard),
-                expected,
-                "{candidate}"
-            );
-        }
-    }
-
-    #[test]
     fn device_settings_preserve_newer_events_and_fifo_edits_after_a_rejection() {
         let document = DashboardDocument {
             url: Url::parse("https://gateway.example/openclaw/").unwrap(),
@@ -614,6 +582,15 @@ const snapshot = (revision, state, enabled) => ({
   assert.equal(calls.length, 6, 'settings remain ordered after setup');
   calls[5].resolve(snapshot(7, 'running', true));
   assert.equal((await afterSetup).revision, 7);
+
+  const panel = window.webkit.messageHandlers.openclawDeviceSettings.postMessage({
+    type: 'open', panel: 'gateways',
+  });
+  await flush();
+  assert.equal(calls[6].args.message.panel, 'gateways');
+  calls[6].resolve(null);
+  assert.equal(await panel, null);
+  assert.equal(window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__.revision, 7);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 "#;
         let output = std::process::Command::new("node")
@@ -642,10 +619,15 @@ const script = process.argv[1];
 async function check(url, topFrame, allowed) {
   const events = new Map();
   const calls = [];
+  const notices = [];
   const window = {
     addEventListener(name, listener) { events.set(name, listener); },
+    dispatchEvent(event) { notices.push(event); },
     __TAURI_INTERNALS__: { invoke(command, args) {
       calls.push([command, args]);
+      if (args.message.type === 'open' && args.message.panel === 'permissions') {
+        return Promise.reject('The desktop settings document changed.');
+      }
       if (args.message.type === 'chrome-extension-setup') {
         if (args.message.action === 'invalid') return Promise.reject('Invalid Chrome setup action.');
         return Promise.resolve({action: args.message.action, phase: 'blocked', reason: 'fixture', target: {kind: 'local-host'}});
@@ -654,13 +636,28 @@ async function check(url, topFrame, allowed) {
     } },
   };
   window.top = topFrame ? window : {};
-  vm.runInNewContext(script, {window, location: new URL(url), Promise});
+  vm.runInNewContext(script, {
+    window, location: new URL(url), Promise,
+    CustomEvent: class { constructor(type, {detail}) { this.type = type; this.detail = detail; } },
+  });
   const bridge = window.webkit?.messageHandlers?.openclawBrowser;
   assert.equal(Boolean(bridge), allowed);
   assert.equal(Boolean(window.webkit?.messageHandlers?.openclawDeviceSettings), allowed);
+  assert.equal(Boolean(window.__OPENCLAW_NATIVE_SETUP__), allowed);
   assert.equal(calls.length, 0, 'loading must not inspect or install');
   if (!allowed) return;
   const setup = window.webkit.messageHandlers.openclawDeviceSettings;
+  const native = window.__OPENCLAW_NATIVE_SETUP__;
+  window.__OPENCLAW_NATIVE_GATEWAYS__ = {
+    currentId: 'primary', gateways: [{id: 'primary', name: 'Primary Gateway', kind: 'local'}],
+  };
+  assert.equal(native.currentGateway.name, 'This computer');
+  assert.equal(native.currentGateway.kind, 'local');
+  window.__OPENCLAW_NATIVE_GATEWAYS__ = {
+    currentId: 'studio', gateways: [{id: 'studio', name: 'Studio Gateway', kind: 'remote'}],
+  };
+  assert.equal(native.currentGateway.name, 'Studio Gateway');
+  assert.equal(native.currentGateway.kind, 'remote');
   const inspect = setup.postMessage({type: 'chrome-extension-setup', action: 'inspect'});
   const reply = bridge.postMessage({type: 'open', tabId: 'fixture-tab', url: 'https://example.com', sessionKey: 'chat'});
   await Promise.resolve();
@@ -681,6 +678,13 @@ async function check(url, topFrame, allowed) {
   await assert.rejects(setup.postMessage({type: 'chrome-extension-setup', action: 'invalid'}), error => error === 'Invalid Chrome setup action.');
   await window.webkit.messageHandlers.openclawLink.postMessage({type: 'open-link', url: 'https://example.com', target: 'external'});
   assert.equal(calls.at(-1)[1].message.target, 'external');
+  for (const [action, panel] of [['openAiSetup', 'ai-setup'], ['openGateways', 'gateways'], ['reviewPermissions', 'permissions']]) {
+    await native[action]();
+    assert.equal(calls.at(-1)[0], 'native_device_settings_request');
+    assert.equal(calls.at(-1)[1].message.panel, panel);
+  }
+  assert.equal(notices.at(-1).type, 'openclaw:gateway-notice');
+  assert.match(notices.at(-1).detail.message, /The desktop settings document changed/);
 }
 async function checkNativeRegistryLifetime() {
   // WebKit's native registry getter weakly caches its JavaScript wrapper.

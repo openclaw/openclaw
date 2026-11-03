@@ -28,6 +28,7 @@ import {
   type PluginRegistryIdNormalizerOptions,
 } from "./plugin-registry-id-normalizer.js";
 import {
+  canReusePluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata,
   type LoadPluginRegistryParams,
   type PluginRegistrySnapshot,
@@ -75,17 +76,6 @@ type ResolveManifestContractOwnerPluginIdParams = ManifestContractLookupParams &
   origin?: PluginOrigin;
 };
 
-function normalizeContributionId(value: string): string {
-  return value.trim();
-}
-
-function listManifestContractValues(
-  plugin: PluginManifestRecord,
-  contract: PluginManifestContractListKey,
-): readonly string[] {
-  return plugin.contracts?.[contract] ?? [];
-}
-
 function loadManifestContractRecords(
   params: ManifestContractLookupParams & {
     onlyPluginIds?: readonly string[];
@@ -93,19 +83,7 @@ function loadManifestContractRecords(
 ): readonly PluginManifestRecord[] {
   let records = params.manifestRecords;
   if (!records) {
-    const requiresExplicitRegistry =
-      params.index !== undefined ||
-      params.preferPersisted === false ||
-      params.allowCurrent === false ||
-      params.stateDir !== undefined ||
-      params.filePath !== undefined ||
-      params.pluginIndexFilePath !== undefined ||
-      params.installRecords !== undefined ||
-      params.candidates !== undefined ||
-      params.diagnostics !== undefined ||
-      params.discovery !== undefined ||
-      params.now !== undefined;
-    if (requiresExplicitRegistry) {
+    if (!canReusePluginRegistrySnapshot(params)) {
       return loadPluginManifestRegistryForPluginRegistry({
         ...params,
         pluginIds: params.onlyPluginIds,
@@ -242,7 +220,7 @@ export function resolveManifestContractPluginIds(
     .filter(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
-        listManifestContractValues(plugin, params.contract).length > 0,
+        (plugin.contracts?.[params.contract]?.length ?? 0) > 0,
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
@@ -251,15 +229,15 @@ export function resolveManifestContractPluginIds(
 export function resolveManifestContractOwnerPluginId(
   params: ResolveManifestContractOwnerPluginIdParams,
 ): string | undefined {
-  const normalizedValue = normalizeContributionId(params.value ?? "").toLowerCase();
+  const normalizedValue = (params.value ?? "").trim().toLowerCase();
   if (!normalizedValue) {
     return undefined;
   }
   return loadManifestContractRecords(params).find(
     (plugin) =>
       (!params.origin || plugin.origin === params.origin) &&
-      listManifestContractValues(plugin, params.contract).some(
-        (candidate) => normalizeContributionId(candidate).toLowerCase() === normalizedValue,
+      plugin.contracts?.[params.contract]?.some(
+        (candidate) => candidate.trim().toLowerCase() === normalizedValue,
       ),
   )?.id;
 }

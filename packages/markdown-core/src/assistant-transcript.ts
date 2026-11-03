@@ -84,20 +84,20 @@ function visibleTokenProjection(
   }
   if (token.type === "image") {
     return token.children && token.children.length > 0
-      ? visibleTokensProjection(token.children, options)
+      ? combineVisibleTokenProjections(
+          token.children.map((child) => visibleTokenProjection(child, options)),
+        )
       : { text: token.content, excludedRanges: [] };
   }
   return null;
 }
 
-function visibleTokensProjection(
-  tokens: readonly Token[],
-  options: AssistantTranscriptRoleMarkdownOptions,
+function combineVisibleTokenProjections(
+  projections: readonly (VisibleTokenProjection | null)[],
 ): VisibleTokenProjection {
   let text = "";
   const excludedRanges: VisibleTokenProjection["excludedRanges"] = [];
-  for (const token of tokens) {
-    const projection = visibleTokenProjection(token, options);
+  for (const projection of projections) {
     if (!projection) {
       continue;
     }
@@ -130,133 +130,66 @@ function cloneToken(
   return copyHtmlTags(source, token, start, end);
 }
 
-function annotatedToken(
-  TokenType: StateCore["Token"],
-  source: Token,
+function sliceRoleHeaderSpans(
+  spans: readonly AssistantTranscriptRoleHeaderSpan[],
+  spanStartIndex: number,
   start: number,
   end: number,
-  span: AssistantTranscriptRoleHeaderSpan,
-): Token {
-  const token = cloneToken(TokenType, source, start, end, ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE);
-  token.meta = {
-    ...(source.meta && typeof source.meta === "object" ? source.meta : {}),
-    assistantTranscriptRoleHeader: {
-      kind: span.kind,
-      role: span.role,
-    },
-  } satisfies AssistantTranscriptRoleTokenMeta;
-  return token;
-}
-
-function splitVisibleToken(params: {
-  TokenType: StateCore["Token"];
-  token: Token;
-  visibleStart: number;
-  spanStartIndex: number;
-  spans: readonly AssistantTranscriptRoleHeaderSpan[];
-}): Token[] {
-  const { token, visibleStart } = params;
-  const visibleEnd = visibleStart + token.content.length;
-  const firstSpan = params.spans[params.spanStartIndex];
-  if (!firstSpan || firstSpan.start >= visibleEnd) {
-    return [token];
-  }
-
-  const result: Token[] = [];
-  let localCursor = 0;
-  for (let spanIndex = params.spanStartIndex; spanIndex < params.spans.length; spanIndex += 1) {
-    const span = params.spans[spanIndex];
-    if (!span || span.start >= visibleEnd) {
+): AssistantTranscriptRoleHeaderSpan[] {
+  const sliced: AssistantTranscriptRoleHeaderSpan[] = [];
+  for (let index = spanStartIndex; index < spans.length; index += 1) {
+    const span = spans[index];
+    if (!span || span.start >= end) {
       break;
     }
-    if (span.end <= visibleStart) {
-      continue;
+    if (span.end > start) {
+      sliced.push({
+        ...span,
+        start: Math.max(span.start, start) - start,
+        end: Math.min(span.end, end) - start,
+      });
     }
-    const overlapStart = Math.max(span.start, visibleStart) - visibleStart;
-    const overlapEnd = Math.min(span.end, visibleEnd) - visibleStart;
-    if (overlapStart > localCursor) {
-      result.push(cloneToken(params.TokenType, token, localCursor, overlapStart));
-    }
-    if (overlapEnd > overlapStart) {
-      result.push(annotatedToken(params.TokenType, token, overlapStart, overlapEnd, span));
-    }
-    localCursor = overlapEnd;
   }
-  if (localCursor < token.content.length) {
-    result.push(cloneToken(params.TokenType, token, localCursor, token.content.length));
-  }
-  return result;
+  return sliced;
 }
 
-function annotateInlineChildren(
+function splitVisibleToken(
   TokenType: StateCore["Token"],
-  children: Token[],
-  preserveLinks: boolean,
-  options: AssistantTranscriptRoleMarkdownOptions,
+  token: Token,
+  spans: readonly AssistantTranscriptRoleHeaderSpan[],
 ): Token[] {
-  const projection = visibleTokensProjection(children, options);
-  const spans = findAssistantTranscriptRoleHeaderSpans(projection.text, projection.excludedRanges);
   if (spans.length === 0) {
-    return children;
+    return [token];
   }
-
   const result: Token[] = [];
-  let visibleCursor = 0;
-  let spanCursor = 0;
-  for (const token of children) {
-    const tokenProjection = visibleTokenProjection(token, options);
-    if (!tokenProjection) {
-      result.push(token);
-      continue;
+  let localCursor = 0;
+  for (const span of spans) {
+    if (span.start > localCursor) {
+      result.push(cloneToken(TokenType, token, localCursor, span.start));
     }
-    const content = tokenProjection.text;
-    for (;;) {
-      const span = spans[spanCursor];
-      if (!span || span.end > visibleCursor) {
-        break;
-      }
-      spanCursor += 1;
-    }
-    if (token.type === "text" || token.type === "html_inline") {
-      result.push(
-        ...splitVisibleToken({
-          TokenType,
-          token,
-          visibleStart: visibleCursor,
-          spanStartIndex: spanCursor,
-          spans,
-        }),
+    if (span.end > span.start) {
+      const roleToken = cloneToken(
+        TokenType,
+        token,
+        span.start,
+        span.end,
+        ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE,
       );
-    } else if (token.type === "image") {
-      const visibleEnd = visibleCursor + content.length;
-      const imageSpans: AssistantTranscriptRoleHeaderSpan[] = [];
-      for (let spanIndex = spanCursor; spanIndex < spans.length; spanIndex += 1) {
-        const span = spans[spanIndex];
-        if (!span || span.start >= visibleEnd) {
-          break;
-        }
-        if (span.end <= visibleCursor) {
-          continue;
-        }
-        imageSpans.push({
-          ...span,
-          start: Math.max(span.start, visibleCursor) - visibleCursor,
-          end: Math.min(span.end, visibleEnd) - visibleCursor,
-        });
-      }
-      if (imageSpans.length > 0) {
-        token.meta = {
-          ...(token.meta && typeof token.meta === "object" ? token.meta : {}),
-          assistantTranscriptRoleImage: { text: content, spans: imageSpans },
-        } satisfies AssistantTranscriptRoleImageMeta;
-      }
-      result.push(token);
-    } else {
-      result.push(token);
+      roleToken.meta = {
+        ...(token.meta && typeof token.meta === "object" ? token.meta : {}),
+        assistantTranscriptRoleHeader: {
+          kind: span.kind,
+          role: span.role,
+        },
+      } satisfies AssistantTranscriptRoleTokenMeta;
+      result.push(roleToken);
     }
-    visibleCursor += content.length;
+    localCursor = span.end;
   }
-  return preserveLinks ? result : removeLinksContainingAssistantTranscriptRoles(result);
+  if (localCursor < token.content.length) {
+    result.push(cloneToken(TokenType, token, localCursor, token.content.length));
+  }
+  return result;
 }
 
 function removeLinksContainingAssistantTranscriptRoles(tokens: Token[]): Token[] {
@@ -305,17 +238,6 @@ function removeLinksContainingAssistantTranscriptRoles(tokens: Token[]): Token[]
   return result;
 }
 
-function annotateHtmlBlock(TokenType: StateCore["Token"], token: Token): Token[] {
-  const spans = findAssistantTranscriptRoleHeaderSpans(
-    token.content,
-    findRawCodeContainerRanges(token.content),
-  );
-  if (spans.length === 0) {
-    return [token];
-  }
-  return splitVisibleToken({ TokenType, token, visibleStart: 0, spanStartIndex: 0, spans });
-}
-
 /** Adds semantic transcript-role tokens to assistant-authored Markdown only. */
 export function markdownItAssistantTranscriptRoles(
   md: MarkdownIt,
@@ -329,17 +251,72 @@ export function markdownItAssistantTranscriptRoles(
     const preserveLinks = state.env?.assistantTranscriptRolePreserveLinks === true;
     for (const token of state.tokens) {
       if (token.type === "inline" && token.children) {
-        token.children = annotateInlineChildren(
-          state.Token,
-          token.children,
-          preserveLinks,
-          options,
+        const TokenType = state.Token;
+        const children = token.children;
+        const tokenProjections = children.map((child) => visibleTokenProjection(child, options));
+        const projection = combineVisibleTokenProjections(tokenProjections);
+        const spans = findAssistantTranscriptRoleHeaderSpans(
+          projection.text,
+          projection.excludedRanges,
         );
+        if (spans.length === 0) {
+          token.children = children;
+          tokens.push(token);
+          continue;
+        }
+
+        const result: Token[] = [];
+        let visibleCursor = 0;
+        let spanCursor = 0;
+        for (const [index, child] of children.entries()) {
+          const tokenProjection = tokenProjections[index];
+          if (!tokenProjection) {
+            result.push(child);
+            continue;
+          }
+          const content = tokenProjection.text;
+          for (;;) {
+            const span = spans[spanCursor];
+            if (!span || span.end > visibleCursor) {
+              break;
+            }
+            spanCursor += 1;
+          }
+          const tokenEnd = visibleCursor + content.length;
+          if (child.type === "text" || child.type === "html_inline") {
+            result.push(
+              ...splitVisibleToken(
+                TokenType,
+                child,
+                sliceRoleHeaderSpans(spans, spanCursor, visibleCursor, tokenEnd),
+              ),
+            );
+          } else if (child.type === "image") {
+            const imageSpans = sliceRoleHeaderSpans(spans, spanCursor, visibleCursor, tokenEnd);
+            if (imageSpans.length > 0) {
+              child.meta = {
+                ...(child.meta && typeof child.meta === "object" ? child.meta : {}),
+                assistantTranscriptRoleImage: { text: content, spans: imageSpans },
+              } satisfies AssistantTranscriptRoleImageMeta;
+            }
+            result.push(child);
+          } else {
+            result.push(child);
+          }
+          visibleCursor += content.length;
+        }
+        token.children = preserveLinks
+          ? result
+          : removeLinksContainingAssistantTranscriptRoles(result);
         tokens.push(token);
         continue;
       }
       if (token.type === "html_block") {
-        tokens.push(...annotateHtmlBlock(state.Token, token));
+        const spans = findAssistantTranscriptRoleHeaderSpans(
+          token.content,
+          findRawCodeContainerRanges(token.content),
+        );
+        tokens.push(...splitVisibleToken(state.Token, token, spans));
         continue;
       }
       tokens.push(token);

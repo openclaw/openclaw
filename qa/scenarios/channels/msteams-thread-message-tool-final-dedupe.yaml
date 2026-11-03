@@ -34,7 +34,7 @@ scenario:
     - docs/channels/msteams.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
-    - extensions/msteams/src/monitor-handler/inbound-dispatch.ts
+    - extensions/msteams/src/monitor-handler/message-handler.ts
     - extensions/msteams/src/channel.ts
     - extensions/msteams/src/action-threading.ts
     - extensions/msteams/src/outbound.ts

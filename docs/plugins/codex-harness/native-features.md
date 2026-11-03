@@ -54,8 +54,10 @@ for agent-scoped connections and simply does not hand it to the native home. Use
 `openclaw models auth list --provider openai` to inspect stored profiles and
 `openclaw models auth logout <profileId> --yes` to remove one you no longer want.
 
-Owner turns gain the `codex_threads` tool: list, search, read, fork, rename,
-archive, and restore native threads. Fork a thread to continue it in
+The session retains the `codex_threads` declaration across owner and completion
+turns; only owner-authorized calls can list, search, read, fork, rename, archive,
+or restore native threads. Native plugin discovery and supervision tools keep
+the same declaration and execution boundary. Fork a thread to continue it in
 OpenClaw; the fork attaches to the current OpenClaw session and remains readable
 by ID from other native Codex clients. It appears in native thread lists after
 its first user turn. Archiving requires explicit
@@ -94,7 +96,7 @@ standalone managed installation and its daemon is not running, start it with:
 codex app-server daemon start
 ```
 
-That command is idempotent and reports the control socket in its JSON response.
+That command is safe to repeat and reports the control socket in its JSON response.
 For other installations, use the existing local App Server's Unix socket;
 do not start another App Server against a thread already owned by a different
 process.
@@ -195,8 +197,8 @@ The same `codex` plugin can list non-archived Codex sessions from the Gateway
 computer and opted-in paired nodes. A stored or idle Gateway-local session can
 create a model-locked Chat that mirrors its bounded persisted user and assistant
 history. Its private binding uses the supervision connection for the native
-snapshot, canonical branch, and later turns while ordinary Codex sessions remain
-agent-scoped. The first canonical start uses exactly the model and provider that
+snapshot, primary branch, and later turns while ordinary Codex sessions remain
+agent-scoped. The first primary-thread start uses exactly the model and provider that
 Codex returns for the snapshot fork. Later resumes leave selection to Codex's
 native configuration; the outer OpenClaw model and fallback chain never replace
 it. Stored and idle local rows can be archived after explicit no-other-runner
@@ -274,3 +276,43 @@ Short version: OpenClaw does not vendor the desktop-control app or execute
 desktop actions itself. It prepares Codex app-server, verifies that the
 `computer-use` MCP server is available, and then lets Codex own the native
 MCP tool calls during Codex-mode turns.
+
+## Rich MCP forms
+
+OpenClaw accepts Codex's `openaiForm` elicitation variant for the
+`openai/elicitation/create` extension and retains the legacy
+`openai/form` variant. Ordinary MCP form and URL requests keep their own
+protocol semantics; opening a URL is not confirmation that the step is complete.
+
+Codex applies its native approval policy before forwarding a form. For manual
+Apps in OpenClaw-created threads, use a prompting permission mode such as Guarded
+or Workspace when a tool requires interactive input. Full access maps to the
+native `never` approval policy, which can decline these forms before OpenClaw
+receives them. OpenClaw does not open a second MCP connection to bypass that policy.
+
+The Control UI displays option descriptions and base64 image thumbnails,
+including a fallback tile when only some choices have an image. HTTPS thumbnails
+use an explicit external-image link, not an automatic private-network browser fetch. String suggestions
+allow custom answers. String arrays accept suggested choices and one custom entry
+per line, with the same string, pattern, length, uniqueness, and cardinality
+constraints applied to every submitted value. Unsafe or unsupported patterns are
+refused instead of evaluated without a bound.
+
+Explicit resource selection returns the supplied URI, not its display title.
+Both single-resource and multi-resource fields accept the deprecated
+`type: "file"` alias. Defaults must refer to supplied resources and appear as
+initial selections; clearing an optional default does not silently restore it.
+Resource previews and uploads require a capability bound to the pending form and
+its originating MCP runtime. With that capability, explicit selection chooses
+supplied resources, implicit selection removes resources from the submitted set,
+and file/directory upload controls return only host-admitted URIs. Preview actions
+read the linked MCP resource or open the originating server's MCP App tool.
+Web MCP App surfaces that do not support uploads must not advertise that capability.
+A form requiring an unavailable operation is refused in full, with an explanation;
+it is never partially displayed or replaced with an unscoped URI text box.
+
+Rich forms are bounded to 12 fields, 64 choices per field, and 16 custom array
+entries. Ordinary questions retain their four-option limit. Choices and semantic inputs are not truncated. Invalid, unsupported, or
+over-limit fields refuse the entire form before any question is published.
+Answers retain the originating request's turn correlation, cancellation, and
+live execution authority.

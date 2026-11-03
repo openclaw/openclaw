@@ -15,7 +15,7 @@ projection. Part of the [Plugin hooks](/plugins/hooks) guide.
 
 Use `security.installPolicy` for operator-owned allow/warn/block decisions. That
 policy runs from OpenClaw config, covers CLI install and update paths, and
-fails closed when enabled but unavailable.
+blocks installation when enabled but unavailable.
 
 `before_install` is a plugin-runtime lifecycle hook. It can run after
 `security.installPolicy` in a process where plugin hooks have already been
@@ -29,7 +29,7 @@ is an empty `ok` result. Return additional findings or
 `{ block: true, blockReason }` to stop the install in that process.
 
 `block: true` is terminal. `block: false` is treated as no decision. Handler
-failures block the install fail-closed.
+failures block the install.
 
 ## Gateway lifecycle
 
@@ -81,6 +81,20 @@ of `not-requested` | `delivered` | `not-delivered` | `unknown`. Removed events
 are post-commit: they fire only after durable deletion succeeds and still carry
 the deleted job snapshot so external schedulers can reconcile state.
 
+A failed `finished` event can include `agentTerminal`, a version 1 snapshot of
+content-free observations from the agent attempt selected by the native result
+owner. Its bounded fields describe agent success, terminal message role, final
+text state, error source, assistant stop reason, and observed media. The boolean
+observations use the strings `"true"`, `"false"`, and `"unknown"`. These are
+symptoms, not root-cause or permission classifications. Consumers must preserve
+unknown values and tolerate an absent snapshot, including on older hosts and
+harnesses that do not supply these observations.
+
+The snapshot is omitted after recovery, on successful or skipped runs, and when
+cancellation or another failure replaces the agent outcome. Never borrow it
+from an earlier callback, attempt, or cached reply. It is transient hook metadata;
+it does not add message content or change persisted run-history schemas.
+
 A `scheduled` event is post-commit: it fires only after a successful durable
 write changes an existing job's effective `nextRunAtMs`, excluding that job's
 explicit `added`, `updated`, or `removed` lifecycle event. The top-level
@@ -93,7 +107,7 @@ Keep OpenClaw as the source of truth for due checks and execution.
 ### Safe external cron projection
 
 Project a complete wake snapshot instead of forwarding cron event deltas. The
-external adapter's `replaceAll` operation must be atomic and idempotent, and it
+external adapter's `replaceAll` operation must be atomic and safe to repeat, and it
 must resolve only after the host has durably accepted the snapshot. It must
 also honor the supplied abort signal: if the signal aborts before durable
 acceptance, the adapter must not accept that snapshot.

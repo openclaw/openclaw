@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     steps:
-      - name: Exercise failed-job rerun
+      - name: Exercise targeted job rerun
         env:
           CORRELATION: ${{ inputs.correlation }}
           OPERATION: ${{ inputs.operation }}

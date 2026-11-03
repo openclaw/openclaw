@@ -1,10 +1,33 @@
-// Codex tests cover plugin app cache key plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildCodexAppServerConnectionFingerprint,
+  buildCodexAppServerConnectionFingerprint as connectionFingerprint,
   buildCodexAppServerRuntimeFingerprint,
-  buildCodexPluginAppCacheKey,
+  buildCodexPluginAppCacheKey as appCacheKey,
 } from "./plugin-app-cache-key.js";
+
+function remoteStart() {
+  return {
+    transport: "websocket" as const,
+    command: "codex",
+    args: [],
+    url: "wss://codex-app-server.example.internal/ws",
+    authToken: "secret-token",
+    headers: {},
+  };
+}
+
+function stdioStart(command = "codex") {
+  return { transport: "stdio" as const, command, args: ["app-server"], headers: {} };
+}
+
+const runtimeIdentity = { serverVersion: "0.20.0", codexHome: "/home/oai/.codex" };
+
+function runtimeFingerprint(remoteWorkspaceRoot?: string) {
+  return buildCodexAppServerRuntimeFingerprint({
+    appServer: { start: remoteStart(), connectionClass: "remote", remoteWorkspaceRoot },
+    runtimeIdentity,
+  });
+}
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -13,34 +36,20 @@ afterEach(() => {
 describe("resolveCodexPluginAppCacheEndpoint", () => {
   it("keys plugin app inventory by initialized remote runtime identity", () => {
     const base = {
-      appServer: {
-        start: {
-          transport: "websocket" as const,
-          command: "codex",
-          args: [],
-          url: "wss://codex-app-server.example.internal/ws",
-          authToken: "secret-token",
-          headers: {},
-        },
-      },
+      appServer: { start: remoteStart() },
       authProfileId: "profile-1",
-    };
-
-    const first = buildCodexPluginAppCacheKey({
-      ...base,
       runtimeIdentity: {
-        serverVersion: "0.20.0",
-        codexHome: "/home/oai/.codex",
+        ...runtimeIdentity,
         platformFamily: "unix",
         platformOs: "linux",
       },
-    });
-    const second = buildCodexPluginAppCacheKey({
+    };
+    const first = appCacheKey(base);
+    const second = appCacheKey({
       ...base,
       runtimeIdentity: {
-        serverVersion: "0.20.0",
+        ...base.runtimeIdentity,
         codexHome: "/Users/kevinlin/.codex",
-        platformFamily: "unix",
         platformOs: "macos",
       },
     });
@@ -53,25 +62,17 @@ describe("resolveCodexPluginAppCacheEndpoint", () => {
   it("separates plugin inventory across managed desktop generations", () => {
     const base = {
       appServer: {
-        start: {
-          transport: "stdio" as const,
-          command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-          args: ["app-server"],
-          headers: {},
-        },
+        start: stdioStart("/Applications/ChatGPT.app/Contents/Resources/codex"),
       },
       agentDir: "/tmp/openclaw-agent",
-      runtimeIdentity: {
-        serverVersion: "0.20.0",
-        codexHome: "/tmp/openclaw-agent/codex-home",
-      },
+      runtimeIdentity: { ...runtimeIdentity, codexHome: "/tmp/openclaw-agent/codex-home" },
     };
 
-    const generationX = buildCodexPluginAppCacheKey({
+    const generationX = appCacheKey({
       ...base,
       desktopGenerationFingerprint: "desktop-x",
     });
-    const generationY = buildCodexPluginAppCacheKey({
+    const generationY = appCacheKey({
       ...base,
       desktopGenerationFingerprint: "desktop-y",
     });
@@ -80,41 +81,8 @@ describe("resolveCodexPluginAppCacheEndpoint", () => {
   });
 
   it("fingerprints the remote app-server runtime used by thread bindings", () => {
-    const first = buildCodexAppServerRuntimeFingerprint({
-      appServer: {
-        start: {
-          transport: "websocket",
-          command: "codex",
-          args: [],
-          url: "wss://codex-app-server.example.internal/ws",
-          authToken: "secret-token",
-          headers: {},
-        },
-        connectionClass: "remote",
-        remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
-      },
-      runtimeIdentity: {
-        serverVersion: "0.20.0",
-        codexHome: "/home/oai/.codex",
-      },
-    });
-    const second = buildCodexAppServerRuntimeFingerprint({
-      appServer: {
-        start: {
-          transport: "websocket",
-          command: "codex",
-          args: [],
-          url: "wss://codex-app-server.example.internal/ws",
-          authToken: "secret-token",
-          headers: {},
-        },
-        connectionClass: "remote",
-      },
-      runtimeIdentity: {
-        serverVersion: "0.20.0",
-        codexHome: "/home/oai/.codex",
-      },
-    });
+    const first = runtimeFingerprint("/home/oai/openclaw-workspaces");
+    const second = runtimeFingerprint();
 
     expect(first).not.toEqual(second);
     expect(first).not.toContain("secret-token");
@@ -124,18 +92,15 @@ describe("resolveCodexPluginAppCacheEndpoint", () => {
   it("fingerprints the effective user Codex home for supervised connections", () => {
     const appServer = {
       start: {
-        transport: "stdio" as const,
+        ...stdioStart(),
         homeScope: "user" as const,
-        command: "codex",
-        args: ["app-server"],
-        headers: {},
       },
       connectionClass: "local-loopback" as const,
     };
     vi.stubEnv("CODEX_HOME", "/tmp/codex-home-one");
-    const first = buildCodexAppServerConnectionFingerprint(appServer);
+    const first = connectionFingerprint(appServer);
     vi.stubEnv("CODEX_HOME", "/tmp/codex-home-two");
-    const second = buildCodexAppServerConnectionFingerprint(appServer);
+    const second = connectionFingerprint(appServer);
 
     expect(first).not.toEqual(second);
   });

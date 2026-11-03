@@ -2,8 +2,7 @@ import { selectSupportedReasoningEffort } from "openclaw/plugin-sdk/agent-harnes
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 const CODEX_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
-type CodexEnabledReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
-type CodexReasoningEffort = CodexEnabledReasoningEffort | "none" | "ultra";
+type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number] | "none" | "ultra";
 
 const LEGACY_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
 const LEGACY_PRO_MODEL_ID_RE = /^gpt-5\.[45]-pro$/u;

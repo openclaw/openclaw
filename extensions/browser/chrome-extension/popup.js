@@ -5,11 +5,6 @@ const tabAction = document.getElementById("tabAction");
 const settings = document.getElementById("settings");
 const errorLine = document.getElementById("error");
 
-async function activeTab() {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  return tab ?? null;
-}
-
 function unpairedLabel(nativeBootstrap) {
   if (nativeBootstrap?.disabled) {
     return "Automatic setup disabled";
@@ -27,13 +22,11 @@ async function refresh() {
     return;
   }
   pairedDetails.classList.toggle("hidden", !status.paired);
-  if (status.retiredCopilotCustodyBlocked === true) {
-    statusLine.textContent = "Automation paused; open Settings";
-    tabAction.classList.add("hidden");
-    return;
-  }
-  if (!status.paired) {
-    statusLine.textContent = unpairedLabel(status.nativeBootstrap);
+  const custodyBlocked = status.retiredCopilotCustodyBlocked === true;
+  if (custodyBlocked || !status.paired) {
+    statusLine.textContent = custodyBlocked
+      ? "Automation paused; open Settings"
+      : unpairedLabel(status.nativeBootstrap);
     tabAction.classList.add("hidden");
     return;
   }
@@ -44,7 +37,7 @@ async function refresh() {
         ? "Connecting…"
         : "OpenClaw relay unavailable";
   accessMode.textContent = status.accessMode === "selected" ? "Selected tabs" : "All tabs";
-  const tab = await activeTab();
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (tab?.id === undefined) {
     tabAction.classList.add("hidden");
     return;

@@ -1,4 +1,3 @@
-// Diagnostics Prometheus plugin module implements service behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   isDiagnosticsEnabled,
@@ -13,24 +12,26 @@ import type {
   DiagnosticEventPayload,
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginService,
+  OpenClawPluginServiceContext,
 } from "../api.js";
 import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.js";
+import { seconds, type LabelSet } from "./prometheus-format.js";
 import {
-  escapeHelp,
-  formatLabelEntry,
-  formatLabels,
-  formatPrometheusNumber,
-  seconds,
-  sortedLabels,
-  type LabelSet,
-} from "./prometheus-format.js";
-import {
+  AGENT_DURATION_BUCKETS_SECONDS,
   createPrometheusMetricStore,
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
-import { recordGatewayRpcEvent } from "./service-gateway-rpc.js";
+import {
+  createGatewayWsMetricsRecorder,
+  recordGatewayWsConnections,
+} from "./service-gateway-ws.js";
+import { recordMemorySample } from "./service-memory.js";
+import { recordModelUsage } from "./service-model-usage.js";
+import { recordOperationTimingEvent, reserveMainGcHistograms } from "./service-operation-timing.js";
+import { recordSessionRetention } from "./service-retention.js";
+import { recordSessionDiagnosticEvent } from "./service-sessions.js";
+import { createWorkerRequestMetricsRecorder } from "./service-worker.js";
 
-const TOKEN_BUCKETS = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576];
 const BYTE_BUCKETS = [
   1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864, 268435456, 1073741824,
   4294967296, 17179869184,
@@ -47,195 +48,6 @@ function safeErrorMessage(err: unknown): string {
   );
 }
 
-function shouldRecordDiagnosticEvent(metadata: DiagnosticEventMetadata): boolean {
-  return metadata.trusted || isInternalDiagnosticEventMetadata(metadata);
-}
-
-function renderPrometheusMetrics(store: PrometheusMetricStore): string {
-  const snapshot = store.snapshot();
-  const lines: string[] = [];
-  const emitted = new Set<string>();
-
-  const emitHeader = (name: string, type: "counter" | "gauge" | "histogram", help: string) => {
-    if (emitted.has(name)) {
-      return;
-    }
-    emitted.add(name);
-    lines.push(`# HELP ${name} ${escapeHelp(help)}`);
-    lines.push(`# TYPE ${name} ${type}`);
-  };
-
-  for (const [type, entries] of [
-    ["counter", snapshot.counters],
-    ["gauge", snapshot.gauges],
-  ] as const) {
-    entries.sort(([left], [right]) => left.localeCompare(right));
-    for (const [key, sample] of entries) {
-      const name = key.split("|", 1)[0] ?? "";
-      emitHeader(name, type, sample.help);
-      lines.push(`${name}${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.value)}`);
-    }
-  }
-
-  snapshot.histograms.sort(([left], [right]) => left.localeCompare(right));
-  for (const [key, sample] of snapshot.histograms) {
-    const name = key.split("|", 1)[0] ?? "";
-    emitHeader(name, "histogram", sample.help);
-    const labels = formatLabels(sample.labels);
-    const bucketLabels = sortedLabels({ ...sample.labels, le: "" });
-    const boundIndex = bucketLabels.findIndex(([labelKey]) => labelKey === "le");
-    const bucketFragments = bucketLabels.map(formatLabelEntry);
-    // Only the bound changes between buckets; reuse sorted, escaped labels within this scrape.
-    for (let index = 0; index < sample.buckets.length; index += 1) {
-      const bucket = sample.buckets[index];
-      if (bucket === undefined) {
-        continue;
-      }
-      bucketFragments[boundIndex] = `le="${String(bucket)}"`;
-      lines.push(
-        `${name}_bucket{${bucketFragments.join(",")}} ${formatPrometheusNumber(sample.counts[index] ?? 0)}`,
-      );
-    }
-    bucketFragments[boundIndex] = 'le="+Inf"';
-    lines.push(
-      `${name}_bucket{${bucketFragments.join(",")}} ${formatPrometheusNumber(sample.count)}`,
-    );
-    lines.push(`${name}_sum${labels} ${formatPrometheusNumber(sample.sum)}`);
-    lines.push(`${name}_count${labels} ${formatPrometheusNumber(sample.count)}`);
-  }
-
-  lines.push("");
-  return lines.join("\n");
-}
-
-function runLabels(evt: {
-  blockedBy?: string;
-  channel?: string;
-  model?: string;
-  outcome?: string;
-  provider?: string;
-  trigger?: string;
-}): LabelSet {
-  return {
-    ...(evt.blockedBy ? { blocked_by: normalizeDiagnosticValue(evt.blockedBy) } : {}),
-    channel: normalizeDiagnosticValue(evt.channel),
-    model: normalizeDiagnosticValue(evt.model),
-    outcome: normalizeDiagnosticValue(evt.outcome, "unknown"),
-    provider: normalizeDiagnosticValue(evt.provider),
-    trigger: normalizeDiagnosticValue(evt.trigger),
-  };
-}
-
-function modelCallLabels(evt: {
-  api?: string;
-  errorCategory?: string;
-  model?: string;
-  observationUnit?: "request" | "turn";
-  provider?: string;
-  transport?: string;
-  type: string;
-}): LabelSet {
-  return {
-    api: normalizeDiagnosticValue(evt.api),
-    error_category:
-      evt.type === "model.call.error"
-        ? normalizeDiagnosticValue(evt.errorCategory, "other")
-        : "none",
-    model: normalizeDiagnosticValue(evt.model),
-    observation_unit: evt.observationUnit === "turn" ? "turn" : "request",
-    outcome: evt.type === "model.call.error" ? "error" : "completed",
-    provider: normalizeDiagnosticValue(evt.provider),
-    transport: normalizeDiagnosticValue(evt.transport),
-  };
-}
-
-function modelFailoverLabels(
-  evt: Extract<DiagnosticEventPayload, { type: "model.failover" }>,
-): LabelSet {
-  return {
-    from_model: normalizeDiagnosticValue(evt.fromModel),
-    from_provider: normalizeDiagnosticValue(evt.fromProvider),
-    lane: normalizeDiagnosticLane(evt.lane),
-    reason: normalizeDiagnosticValue(evt.reason, "other"),
-    suspended: evt.suspended === undefined ? "unknown" : String(evt.suspended),
-    to_model: normalizeDiagnosticValue(evt.toModel),
-    to_provider: normalizeDiagnosticValue(evt.toProvider),
-  };
-}
-
-function toolExecutionLabels(evt: {
-  errorCategory?: string;
-  paramsSummary?: { kind: string };
-  toolName: string;
-  toolOwner?: string;
-  toolSource?: string;
-  type: string;
-}): LabelSet {
-  return {
-    error_category:
-      evt.type === "tool.execution.error"
-        ? normalizeDiagnosticValue(evt.errorCategory, "other")
-        : "none",
-    outcome: evt.type === "tool.execution.error" ? "error" : "completed",
-    params_kind: normalizeDiagnosticValue(evt.paramsSummary?.kind),
-    tool: normalizeDiagnosticValue(evt.toolName, "tool"),
-    tool_owner: normalizeDiagnosticValue(evt.toolOwner, "none"),
-    tool_source: normalizeDiagnosticValue(evt.toolSource, "core"),
-  };
-}
-
-function toolExecutionBlockedLabels(
-  evt: Extract<DiagnosticEventPayload, { type: "tool.execution.blocked" }>,
-): LabelSet {
-  return {
-    denied_reason: normalizeDiagnosticValue(evt.deniedReason, "other"),
-    params_kind: normalizeDiagnosticValue(evt.paramsSummary?.kind),
-    tool: normalizeDiagnosticValue(evt.toolName, "tool"),
-    tool_owner: normalizeDiagnosticValue(evt.toolOwner, "none"),
-    tool_source: normalizeDiagnosticValue(evt.toolSource, "core"),
-  };
-}
-
-function skillLabels(evt: {
-  activation: string;
-  agentId?: string;
-  skillName: string;
-  skillSource?: string;
-}): LabelSet {
-  return {
-    activation: normalizeDiagnosticValue(evt.activation, "unknown"),
-    agent: normalizeDiagnosticValue(evt.agentId),
-    skill: normalizeDiagnosticValue(evt.skillName, "skill"),
-    source: normalizeDiagnosticValue(evt.skillSource),
-  };
-}
-
-function harnessLabels(evt: {
-  channel?: string;
-  errorCategory?: string;
-  harnessId: string;
-  model?: string;
-  outcome?: string;
-  phase?: string;
-  pluginId?: string;
-  provider?: string;
-  type: string;
-}): LabelSet {
-  return {
-    channel: normalizeDiagnosticValue(evt.channel),
-    error_category:
-      evt.type === "harness.run.error"
-        ? normalizeDiagnosticValue(evt.errorCategory, "other")
-        : "none",
-    harness: normalizeDiagnosticValue(evt.harnessId),
-    model: normalizeDiagnosticValue(evt.model),
-    outcome: evt.type === "harness.run.error" ? "error" : normalizeDiagnosticValue(evt.outcome),
-    phase: evt.type === "harness.run.error" ? normalizeDiagnosticValue(evt.phase) : "none",
-    plugin: normalizeDiagnosticValue(evt.pluginId),
-    provider: normalizeDiagnosticValue(evt.provider),
-  };
-}
-
 function webhookLabels(
   evt: Extract<
     DiagnosticEventPayload,
@@ -248,236 +60,186 @@ function webhookLabels(
   };
 }
 
-function sessionStuckLabels(
-  evt: Extract<DiagnosticEventPayload, { type: "session.stuck" }>,
-): LabelSet {
-  return {
-    reason: normalizeDiagnosticValue(evt.reason, "none"),
-    state: evt.state,
-  };
-}
-
-function sessionRecoveryLabels(
-  evt: Extract<
-    DiagnosticEventPayload,
-    { type: "session.recovery.requested" | "session.recovery.completed" }
-  >,
-): LabelSet {
-  return {
-    action:
-      evt.type === "session.recovery.completed"
-        ? normalizeDiagnosticValue(evt.action, "unknown")
-        : evt.allowActiveAbort
-          ? "abort"
-          : "recover",
-    active_work_kind: normalizeDiagnosticValue(evt.activeWorkKind, "none"),
-    state: evt.state,
-    status: evt.type === "session.recovery.completed" ? evt.status : "requested",
-  };
-}
-
-function livenessLabels(
-  evt: Extract<DiagnosticEventPayload, { type: "diagnostic.liveness.warning" }>,
-): LabelSet {
-  return {
-    reason: normalizeDiagnosticValue(evt.reasons.join(":"), "unknown"),
-  };
-}
-
-function payloadLargeLabels(
-  evt: Extract<DiagnosticEventPayload, { type: "payload.large" }>,
-): LabelSet {
-  return {
-    action: evt.action,
-    channel: normalizeDiagnosticValue(evt.channel, "none"),
-    plugin: normalizeDiagnosticValue(evt.pluginId, "none"),
-    reason: normalizeDiagnosticValue(evt.reason, "none"),
-    surface: normalizeDiagnosticValue(evt.surface, "unknown"),
-  };
-}
-
-function talkLabels(evt: Extract<DiagnosticEventPayload, { type: "talk.event" }>): LabelSet {
-  return {
-    brain: normalizeDiagnosticValue(evt.brain),
-    event_type: normalizeDiagnosticValue(evt.talkEventType),
-    mode: normalizeDiagnosticValue(evt.mode),
-    provider: normalizeDiagnosticValue(evt.provider),
-    transport: normalizeDiagnosticValue(evt.transport),
-  };
-}
-
-function recordModelUsage(
-  store: PrometheusMetricStore,
-  evt: Extract<DiagnosticEventPayload, { type: "model.usage" }>,
-) {
-  const labels = {
-    agent: normalizeDiagnosticValue(evt.agentId),
-    channel: normalizeDiagnosticValue(evt.channel),
-    model: normalizeDiagnosticValue(evt.model),
-    provider: normalizeDiagnosticValue(evt.provider),
-  };
-  const usage = evt.usage;
-  const recordTokens = (tokenType: string, value: number | undefined) => {
-    const amount = numericValue(value);
-    if (amount === undefined || amount === 0) {
-      return;
-    }
-    store.counter(
-      "openclaw_model_tokens_total",
-      "Model tokens reported by diagnostic usage events.",
-      {
-        ...labels,
-        token_type: tokenType,
-      },
-      amount,
-    );
-    if (tokenType === "input" || tokenType === "output") {
-      store.histogram(
-        "openclaw_gen_ai_client_token_usage",
-        "GenAI token usage distribution for input and output tokens.",
-        {
-          model: labels.model,
-          provider: labels.provider,
-          token_type: tokenType,
-        },
-        amount,
-        TOKEN_BUCKETS,
-      );
-    }
-  };
-
-  recordTokens("input", usage.input);
-  recordTokens("output", usage.output);
-  recordTokens("cache_read", usage.cacheRead);
-  recordTokens("cache_write", usage.cacheWrite);
-  recordTokens("prompt", usage.promptTokens);
-  recordTokens("total", usage.total);
-
-  store.counter(
-    "openclaw_model_cost_usd_total",
-    "Estimated model cost in USD reported by diagnostic usage events.",
-    labels,
-    numericValue(evt.costUsd) ?? 0,
-  );
-  store.histogram(
-    "openclaw_model_usage_duration_seconds",
-    "Model usage event duration in seconds.",
-    labels,
-    seconds(evt.durationMs),
-  );
-}
-
 function recordDiagnosticEvent(
   store: PrometheusMetricStore,
   evt: DiagnosticEventPayload,
   metadata: DiagnosticEventMetadata,
 ): void {
-  if (!shouldRecordDiagnosticEvent(metadata)) {
+  if (!metadata.trusted && !isInternalDiagnosticEventMetadata(metadata)) {
     return;
   }
 
   switch (evt.type) {
+    case "gateway.ws.connections":
+      if (metadata.trusted) {
+        recordGatewayWsConnections(store, evt.operators);
+      }
+      return;
+    case "sessions.list.retention":
+    case "sessions.event.retention":
+    case "sessions.event.rows.reset":
+      if (metadata.trusted) {
+        recordSessionRetention(store, evt);
+      }
+      return;
     case "diagnostic.phase.completed":
+    case "secret.egress":
+    case "tool.catalog":
     case "gateway.rpc":
-      recordGatewayRpcEvent(store, evt, metadata);
-      return;
+    case "sessions.list.baseline.retired":
+    case "gateway.http.cancelled":
     case "diagnostic.gc":
-      store.histogram(
-        "openclaw_gc_duration_seconds",
-        "Elapsed garbage collection duration in seconds for the hosting JavaScript isolate.",
-        {},
-        seconds(evt.durationMs),
-      );
-      return;
     case "gateway.event_loop.sample":
-      store.histogram(
-        "openclaw_gateway_event_loop_delay_max_seconds",
-        "Maximum event-loop delay per completed Gateway observation window in seconds.",
-        {},
-        seconds(evt.delayMaxMs),
-      );
-      store.counter(
-        "openclaw_gateway_event_loop_observed_seconds_total",
-        "Elapsed seconds covered by completed Gateway event-loop observation windows.",
-        {},
-        evt.intervalMs / 1000,
-      );
+    case "gateway.main_thread.stall":
+      recordOperationTimingEvent(store, evt, metadata);
       return;
     case "model.usage":
       recordModelUsage(store, evt);
       return;
-    case "run.completed":
+    case "run.completed": {
+      const labels = {
+        ...(evt.blockedBy ? { blocked_by: normalizeDiagnosticValue(evt.blockedBy) } : {}),
+        channel: normalizeDiagnosticValue(evt.channel),
+        model: normalizeDiagnosticValue(evt.model),
+        outcome: normalizeDiagnosticValue(evt.outcome, "unknown"),
+        provider: normalizeDiagnosticValue(evt.provider),
+        trigger: normalizeDiagnosticValue(evt.trigger),
+      };
       store.histogram(
         "openclaw_run_duration_seconds",
         "Agent run duration in seconds.",
-        runLabels(evt),
+        labels,
         seconds(evt.durationMs),
+        AGENT_DURATION_BUCKETS_SECONDS,
       );
-      store.counter(
-        "openclaw_run_completed_total",
-        "Agent runs completed by outcome.",
-        runLabels(evt),
-      );
+      store.counter("openclaw_run_completed_total", "Agent runs completed by outcome.", labels);
       return;
+    }
     case "model.call.completed":
-    case "model.call.error":
+    case "model.call.error": {
+      const labels = {
+        api: normalizeDiagnosticValue(evt.api),
+        error_category:
+          evt.type === "model.call.error"
+            ? normalizeDiagnosticValue(evt.errorCategory, "other")
+            : "none",
+        model: normalizeDiagnosticValue(evt.model),
+        observation_unit: evt.observationUnit === "turn" ? "turn" : "request",
+        outcome: evt.type === "model.call.error" ? "error" : "completed",
+        provider: normalizeDiagnosticValue(evt.provider),
+        transport: normalizeDiagnosticValue(evt.transport),
+      };
       store.histogram(
         "openclaw_model_call_duration_seconds",
         "Model request or synthetic agent-turn duration in seconds.",
-        modelCallLabels(evt),
+        labels,
         seconds(evt.durationMs),
+        AGENT_DURATION_BUCKETS_SECONDS,
       );
       store.counter(
         "openclaw_model_call_total",
         "Model requests or synthetic agent turns completed by outcome.",
-        modelCallLabels(evt),
+        labels,
       );
       return;
-    case "model.failover":
+    }
+    case "model.failover": {
+      const labels = {
+        from_model: normalizeDiagnosticValue(evt.fromModel),
+        from_provider: normalizeDiagnosticValue(evt.fromProvider),
+        lane: normalizeDiagnosticLane(evt.lane),
+        reason: normalizeDiagnosticValue(evt.reason, "other"),
+        suspended: evt.suspended === undefined ? "unknown" : String(evt.suspended),
+        to_model: normalizeDiagnosticValue(evt.toModel),
+        to_provider: normalizeDiagnosticValue(evt.toProvider),
+      };
       store.counter(
         "openclaw_model_failover_total",
         "Model failovers by source, destination, lane, and reason.",
-        modelFailoverLabels(evt),
+        labels,
       );
       return;
+    }
     case "tool.execution.completed":
-    case "tool.execution.error":
+    case "tool.execution.error": {
+      const labels = {
+        error_category:
+          evt.type === "tool.execution.error"
+            ? normalizeDiagnosticValue(evt.errorCategory, "other")
+            : "none",
+        outcome: evt.type === "tool.execution.error" ? "error" : "completed",
+        params_kind: normalizeDiagnosticValue(evt.paramsSummary?.kind),
+        tool: normalizeDiagnosticValue(evt.toolName, "tool"),
+        tool_owner: normalizeDiagnosticValue(evt.toolOwner, "none"),
+        tool_source: normalizeDiagnosticValue(evt.toolSource, "core"),
+      };
       store.histogram(
         "openclaw_tool_execution_duration_seconds",
         "Tool execution duration in seconds.",
-        toolExecutionLabels(evt),
+        labels,
         seconds(evt.durationMs),
       );
       store.counter(
         "openclaw_tool_execution_total",
         "Tool executions completed by outcome.",
-        toolExecutionLabels(evt),
+        labels,
       );
       return;
-    case "tool.execution.blocked":
+    }
+    case "tool.execution.blocked": {
+      const labels = {
+        denied_reason: normalizeDiagnosticValue(evt.deniedReason, "other"),
+        params_kind: normalizeDiagnosticValue(evt.paramsSummary?.kind),
+        tool: normalizeDiagnosticValue(evt.toolName, "tool"),
+        tool_owner: normalizeDiagnosticValue(evt.toolOwner, "none"),
+        tool_source: normalizeDiagnosticValue(evt.toolSource, "core"),
+      };
       store.counter(
         "openclaw_tool_execution_blocked_total",
         "Tool executions blocked by policy or sandbox diagnostics.",
-        toolExecutionBlockedLabels(evt),
+        labels,
       );
       return;
-    case "skill.used":
-      store.counter("openclaw_skill_used_total", "Skills used by agent runs.", skillLabels(evt));
+    }
+    case "skill.used": {
+      const labels = {
+        activation: normalizeDiagnosticValue(evt.activation, "unknown"),
+        agent: normalizeDiagnosticValue(evt.agentId),
+        skill: normalizeDiagnosticValue(evt.skillName, "skill"),
+        source: normalizeDiagnosticValue(evt.skillSource),
+      };
+      store.counter("openclaw_skill_used_total", "Skills used by agent runs.", labels);
       return;
+    }
     case "harness.run.completed":
-    case "harness.run.error":
+    case "harness.run.error": {
+      const labels = {
+        channel: normalizeDiagnosticValue(evt.channel),
+        error_category:
+          evt.type === "harness.run.error"
+            ? normalizeDiagnosticValue(evt.errorCategory, "other")
+            : "none",
+        harness: normalizeDiagnosticValue(evt.harnessId),
+        model: normalizeDiagnosticValue(evt.model),
+        outcome: evt.type === "harness.run.error" ? "error" : normalizeDiagnosticValue(evt.outcome),
+        phase: evt.type === "harness.run.error" ? normalizeDiagnosticValue(evt.phase) : "none",
+        plugin: normalizeDiagnosticValue(evt.pluginId),
+        provider: normalizeDiagnosticValue(evt.provider),
+      };
       store.histogram(
         "openclaw_harness_run_duration_seconds",
         "Agent harness run duration in seconds.",
-        harnessLabels(evt),
+        labels,
         seconds(evt.durationMs),
+        AGENT_DURATION_BUCKETS_SECONDS,
       );
       store.counter(
         "openclaw_harness_run_total",
         "Agent harness runs completed by outcome.",
-        harnessLabels(evt),
+        labels,
       );
       return;
+    }
     case "message.processed": {
       const labels = {
         channel: normalizeDiagnosticValue(evt.channel),
@@ -562,6 +324,7 @@ function recordDiagnosticEvent(
         "Inbound message dispatch duration in seconds.",
         labels,
         seconds(evt.durationMs),
+        AGENT_DURATION_BUCKETS_SECONDS,
       );
       return;
     }
@@ -589,148 +352,75 @@ function recordDiagnosticEvent(
       );
       return;
     }
-    case "talk.event":
-      store.counter("openclaw_talk_event_total", "Talk events emitted by type.", talkLabels(evt));
+    case "talk.event": {
+      const labels = {
+        brain: normalizeDiagnosticValue(evt.brain),
+        event_type: normalizeDiagnosticValue(evt.talkEventType),
+        mode: normalizeDiagnosticValue(evt.mode),
+        provider: normalizeDiagnosticValue(evt.provider),
+        transport: normalizeDiagnosticValue(evt.transport),
+      };
+      store.counter("openclaw_talk_event_total", "Talk events emitted by type.", labels);
       store.histogram(
         "openclaw_talk_event_duration_seconds",
         "Talk event duration in seconds when reported.",
-        talkLabels(evt),
+        labels,
         seconds(evt.durationMs),
       );
       store.histogram(
         "openclaw_talk_audio_bytes",
         "Talk audio frame byte lengths.",
-        talkLabels(evt),
+        labels,
         numericValue(evt.byteLength),
         BYTE_BUCKETS,
       );
       return;
+    }
     case "session.recovery.requested":
     case "session.recovery.completed":
-      store.counter(
-        "openclaw_session_recovery_total",
-        "Session recovery observations by status and action.",
-        sessionRecoveryLabels(evt),
-      );
-      store.histogram(
-        "openclaw_session_recovery_age_seconds",
-        "Age of sessions selected for recovery in seconds.",
-        sessionRecoveryLabels(evt),
-        seconds(evt.ageMs),
-      );
+      recordSessionDiagnosticEvent(store, evt);
       return;
     case "queue.lane.enqueue":
-    case "queue.lane.dequeue":
+    case "queue.lane.dequeue": {
+      const labels = { lane: normalizeDiagnosticLane(evt.lane) };
       store.gauge(
         "openclaw_queue_lane_size",
         "Current diagnostic queue lane size.",
-        {
-          lane: normalizeDiagnosticLane(evt.lane),
-        },
+        labels,
         numericValue(evt.queueSize),
       );
       if (evt.type === "queue.lane.dequeue") {
         store.histogram(
           "openclaw_queue_lane_wait_seconds",
           "Queue lane wait time in seconds.",
-          { lane: normalizeDiagnosticLane(evt.lane) },
+          labels,
           seconds(evt.waitMs),
         );
       }
       return;
+    }
     case "session.state":
-      store.counter("openclaw_session_state_total", "Session state observations.", {
-        reason: normalizeDiagnosticValue(evt.reason, "none"),
-        state: evt.state,
-      });
-      if (evt.queueDepth !== undefined) {
-        store.gauge(
-          "openclaw_session_queue_depth",
-          "Latest observed session queue depth.",
-          {
-            state: evt.state,
-          },
-          numericValue(evt.queueDepth),
-        );
-      }
-      return;
     case "session.stuck":
-      store.counter(
-        "openclaw_session_stuck_total",
-        "Stale session bookkeeping observations with no active work.",
-        sessionStuckLabels(evt),
-      );
-      store.histogram(
-        "openclaw_session_stuck_age_seconds",
-        "Age of stale session bookkeeping observations in seconds.",
-        sessionStuckLabels(evt),
-        seconds(evt.ageMs),
-      );
-      return;
     case "session.turn.created":
-      store.counter("openclaw_session_turn_created_total", "Agent session turns created.", {
-        agent: normalizeDiagnosticValue(evt.agentId),
-        channel: normalizeDiagnosticValue(evt.channel),
-        trigger: evt.trigger,
-      });
+      recordSessionDiagnosticEvent(store, evt);
       return;
     case "diagnostic.child_process.spawn":
+      // Git owners and SQLite session transports carry bounded operation labels.
       store.counter(
         "openclaw_child_process_spawn_total",
         "Successful child launches through the shared spawn and exec owners.",
-        { family: normalizeDiagnosticValue(evt.family) },
+        {
+          family: normalizeDiagnosticValue(evt.family),
+          operation: normalizeDiagnosticValue(
+            evt.operation ?? (evt.family === "git" ? "unknown" : "none"),
+          ),
+        },
         numericValue(evt.count) ?? 0,
       );
       return;
-    case "diagnostic.memory.sample": {
-      for (const [kind, field] of [
-        ["rss", "rssBytes"],
-        ["heap_total", "heapTotalBytes"],
-        ["heap_used", "heapUsedBytes"],
-        ["external", "externalBytes"],
-        ["array_buffers", "arrayBuffersBytes"],
-        ["worker_heap_total", "workerHeapTotalBytes"],
-        ["worker_heap_used", "workerHeapUsedBytes"],
-      ] as const) {
-        store.gauge(
-          "openclaw_memory_bytes",
-          "Latest process memory usage by memory kind.",
-          { kind },
-          numericValue(evt.memory[field]),
-        );
-      }
-      for (const [name, field] of [
-        ["openclaw_worker_count", "workerCount"],
-        ["openclaw_worker_heap_sampled_count", "workerHeapSampledCount"],
-      ] as const) {
-        store.gauge(name, "Worker isolate counts.", {}, numericValue(evt.memory[field]));
-      }
-      // The resource owner supplies bounded script names and retires stale/exit samples.
-      const workerHeaps = new Map<string, number>();
-      for (const worker of evt.memory.workerHeaps ?? []) {
-        const heapUsed = numericValue(worker.heapUsed);
-        if (heapUsed !== undefined) {
-          workerHeaps.set(worker.script, (workerHeaps.get(worker.script) ?? 0) + heapUsed);
-        }
-      }
-      store.clearGauges("openclaw_worker_heap_used_bytes");
-      for (const [script, heapUsed] of workerHeaps) {
-        store.gauge(
-          "openclaw_worker_heap_used_bytes",
-          "Latest live Worker heap usage by bounded script basename.",
-          { script },
-          heapUsed,
-        );
-      }
-      store.histogram(
-        "openclaw_memory_rss_bytes",
-        "RSS memory sample distribution in bytes.",
-        {},
-        numericValue(evt.memory.rssBytes),
-        BYTE_BUCKETS,
-      );
+    case "diagnostic.memory.sample":
+      recordMemorySample(store, evt.memory, BYTE_BUCKETS);
       return;
-    }
     case "diagnostic.memory.pressure":
       store.counter(
         "openclaw_memory_pressure_total",
@@ -741,11 +431,14 @@ function recordDiagnosticEvent(
         },
       );
       return;
-    case "diagnostic.liveness.warning":
+    case "diagnostic.liveness.warning": {
+      const labels = {
+        reason: normalizeDiagnosticValue(evt.reasons.join(":"), "unknown"),
+      };
       store.counter(
         "openclaw_liveness_warning_total",
         "Diagnostic liveness warning events.",
-        livenessLabels(evt),
+        labels,
       );
       for (const state of ["active", "waiting", "queued"] as const) {
         store.gauge(
@@ -758,30 +451,31 @@ function recordDiagnosticEvent(
       store.histogram(
         "openclaw_liveness_event_loop_delay_p99_seconds",
         "P99 event-loop delay reported by diagnostic liveness warnings in seconds.",
-        livenessLabels(evt),
+        labels,
         seconds(evt.eventLoopDelayP99Ms),
       );
       store.histogram(
         "openclaw_liveness_event_loop_delay_max_seconds",
         "Maximum event-loop delay reported by diagnostic liveness warnings in seconds.",
-        livenessLabels(evt),
+        labels,
         seconds(evt.eventLoopDelayMaxMs),
       );
       store.histogram(
         "openclaw_liveness_event_loop_utilization_ratio",
         "Event-loop utilization reported by diagnostic liveness warnings.",
-        livenessLabels(evt),
+        labels,
         numericValue(evt.eventLoopUtilization),
         RATIO_BUCKETS,
       );
       store.histogram(
         "openclaw_liveness_cpu_core_ratio",
         "Whole-process CPU usage in core equivalents, including worker and native threads; can exceed 1.",
-        livenessLabels(evt),
+        labels,
         numericValue(evt.cpuCoreRatio),
         RATIO_BUCKETS,
       );
       return;
+    }
     case "diagnostic.async_queue.dropped":
       for (const [dropClass, field] of [
         ["total", "droppedEvents"],
@@ -816,19 +510,27 @@ function recordDiagnosticEvent(
         status: evt.status,
       });
       return;
-    case "payload.large":
+    case "payload.large": {
+      const labels = {
+        action: evt.action,
+        channel: normalizeDiagnosticValue(evt.channel, "none"),
+        plugin: normalizeDiagnosticValue(evt.pluginId, "none"),
+        reason: normalizeDiagnosticValue(evt.reason, "none"),
+        surface: normalizeDiagnosticValue(evt.surface, "unknown"),
+      };
       store.counter(
         "openclaw_payload_large_total",
         "Oversized payload diagnostics by surface and action.",
-        payloadLargeLabels(evt),
+        labels,
       );
       store.histogram(
         "openclaw_payload_large_bytes",
         "Oversized payload byte sizes by surface and action.",
-        payloadLargeLabels(evt),
+        labels,
         numericValue(evt.bytes),
         BYTE_BUCKETS,
       );
+    }
     default:
   }
 }
@@ -868,16 +570,18 @@ function createMetricsHandler(store: PrometheusMetricStore): OpenClawPluginHttpR
       return true;
     }
 
-    const body = renderPrometheusMetrics(store);
+    const body = store.render();
     res.statusCode = 200;
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
-    res.setHeader("Content-Length", String(Buffer.byteLength(body)));
-    if (req.method === "HEAD") {
-      res.end();
-      return true;
-    }
-    res.end(body);
+    res.setHeader("Content-Length", String(body.length));
+    res.flushHeaders();
+    res.end(req.method === "HEAD" ? undefined : body, (error?: Error | null) => {
+      // Only the completed response owns this backing store; prefixes stay in the metric store.
+      if (!error) {
+        body.buffer.transfer(0);
+      }
+    });
     return true;
   };
 }
@@ -889,26 +593,31 @@ type PrometheusExporterHealthUpdate = {
   reason?: "configured";
 };
 type TrustedExporterDiagnosticsBridge = {
-  emit: (event: {
-    type: "telemetry.exporter";
-    exporter: "diagnostics-prometheus";
-    signal: "metrics";
-    status: "started" | "dropped";
-    reason?: "configured";
-  }) => void;
+  emit: NonNullable<OpenClawPluginServiceContext["internalDiagnostics"]>["emit"];
   reportExporterHealth?: (update: PrometheusExporterHealthUpdate) => void;
 };
 
 export function createDiagnosticsPrometheusExporter() {
-  const store = createPrometheusMetricStore();
-  let unsubscribe: (() => void) | undefined;
+  let logger: OpenClawPluginServiceContext["logger"] | undefined;
+  const store = createPrometheusMetricStore((family) => {
+    logger?.warn(
+      `diagnostics-prometheus: series budget reached for ${family}; new label sets are being dropped. See openclaw_prometheus_family_series_dropped_total.`,
+    );
+  });
+  let subscriptions: Array<(() => void) | undefined> = [];
   let internalDiagnostics: TrustedExporterDiagnosticsBridge | undefined;
-  const reportExporterHealth = (update: PrometheusExporterHealthUpdate) => {
+  const reportExporterStatus = (update: PrometheusExporterHealthUpdate) => {
     try {
       internalDiagnostics?.reportExporterHealth?.(update);
     } catch {
       // Exporter health must never affect the exporter lifecycle.
     }
+    const { transport: _transport, ...event } = update;
+    internalDiagnostics?.emit({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-prometheus",
+      ...event,
+    });
   };
 
   const service = {
@@ -919,6 +628,8 @@ export function createDiagnosticsPrometheusExporter() {
         ctx.logger.error("diagnostics-prometheus: internal diagnostics capability unavailable");
         return;
       }
+      logger = ctx.logger;
+      reserveMainGcHistograms(store);
       const identity = isDiagnosticsEnabled(ctx.config)
         ? ctx.internalDiagnostics?.getRuntimeIdentity?.()
         : undefined;
@@ -934,59 +645,78 @@ export function createDiagnosticsPrometheusExporter() {
           1,
         );
       }
-      unsubscribe = subscribe(
-        (event, metadata) => {
-          try {
-            recordDiagnosticEvent(store, event, metadata);
-          } catch (err) {
-            ctx.logger.error(
-              `diagnostics-prometheus: event handler failed (${event.type}): ${safeErrorMessage(err)}`,
+      subscriptions = [
+        ctx.internalDiagnostics?.onGatewayWorkMetrics?.((snapshot) => {
+          if (!snapshot) {
+            store.clearGauges("openclaw_sessions_active");
+            store.clearGauges("openclaw_gateway_active_work");
+            return;
+          }
+          for (const state of ["running", "queued"] as const) {
+            store.gauge(
+              "openclaw_sessions_active",
+              "Current active sessions in the Gateway session roster by run state.",
+              { state },
+              snapshot.sessions[state],
             );
           }
-        },
-        // Metrics do not consume logs; avoid enabling their diagnostic copy/formatting path.
-        { exclude: ["log.record"] },
-        { includePrivateData: false },
-      );
-      internalDiagnostics = ctx.internalDiagnostics as unknown as TrustedExporterDiagnosticsBridge;
-      reportExporterHealth({
+          for (const kind of ["agentRuns", "chatRuns", "queuedTurns"] as const) {
+            store.gauge(
+              "openclaw_gateway_active_work",
+              "Current Gateway work by owner; categories may overlap.",
+              { kind },
+              snapshot.work[kind],
+            );
+          }
+        }),
+        ctx.internalDiagnostics?.onGatewayWsMetrics?.(createGatewayWsMetricsRecorder(store)),
+        ctx.internalDiagnostics?.onWorkerRequestMetrics?.(
+          createWorkerRequestMetricsRecorder(store),
+        ),
+        subscribe(
+          (event, metadata) => {
+            try {
+              recordDiagnosticEvent(store, event, metadata);
+            } catch (err) {
+              ctx.logger.error(
+                `diagnostics-prometheus: event handler failed (${event.type}): ${safeErrorMessage(err)}`,
+              );
+            }
+          },
+          // Metrics do not consume logs; avoid enabling their diagnostic copy/formatting path.
+          {
+            exclude: ["log.record", "worker.request", "gateway.ws.event"],
+            includePromptStats: false,
+          },
+          { includePrivateData: false },
+        ),
+      ];
+      internalDiagnostics = ctx.internalDiagnostics;
+      reportExporterStatus({
         signal: "metrics",
         transport: "prometheus-scrape",
-        status: "started",
-        reason: "configured",
-      });
-      internalDiagnostics.emit({
-        type: "telemetry.exporter",
-        exporter: "diagnostics-prometheus",
-        signal: "metrics",
         status: "started",
         reason: "configured",
       });
     },
     stop() {
-      unsubscribe?.();
-      unsubscribe = undefined;
-      reportExporterHealth({
+      for (const unsubscribe of subscriptions) {
+        unsubscribe?.();
+      }
+      subscriptions = [];
+      reportExporterStatus({
         signal: "metrics",
         transport: "prometheus-scrape",
         status: "dropped",
       });
-      internalDiagnostics?.emit({
-        type: "telemetry.exporter",
-        exporter: "diagnostics-prometheus",
-        signal: "metrics",
-        status: "dropped",
-      });
       internalDiagnostics = undefined;
       store.reset();
+      logger = undefined;
     },
   } satisfies OpenClawPluginService;
 
   return {
     handler: createMetricsHandler(store),
-    render: () => renderPrometheusMetrics(store),
     service,
   };
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

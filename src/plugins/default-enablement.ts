@@ -1,3 +1,5 @@
+export const DEFAULT_PLUGINS_ENABLED = true;
+
 /** Manifest fields that control default plugin enablement. */
 type PluginDefaultEnablement = {
   enabledByDefault?: boolean;

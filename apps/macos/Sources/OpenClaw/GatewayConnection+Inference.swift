@@ -35,10 +35,8 @@ extension GatewayConnection {
         let primary = agent?.model?["primary"]?.value as? String
         // This preflight resumes setup receipts; verification owns readiness and
         // the utility-versus-primary dashboard handoff.
-        let primaryModel = primary?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let utilityModel = agent?.utilitymodel?.trimmingCharacters(in: .whitespacesAndNewlines)
         return ConfiguredInferenceModels(
-            primaryModel: primaryModel?.isEmpty == false ? primaryModel : nil,
-            utilityModel: utilityModel?.isEmpty == false ? utilityModel : nil)
+            primaryModel: primary?.nonEmpty,
+            utilityModel: agent?.utilitymodel?.nonEmpty)
     }
 }
