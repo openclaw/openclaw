@@ -3127,10 +3127,14 @@ function pluginPrereleaseTimeoutFloor(
 }
 
 function runBash(script: string, options: Omit<SpawnSyncOptionsWithStringEncoding, "encoding">) {
-  return spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
-    ...options,
-    encoding: "utf8",
-  });
+  return spawnSync(
+    process.platform === "darwin" ? "/bin/bash" : "bash",
+    ["--noprofile", "--norc", "-c", script],
+    {
+      ...options,
+      encoding: "utf8",
+    },
+  );
 }
 
 function runFullReleaseInputValidation(releaseProfile: string, skipTelegram: string) {
@@ -14978,6 +14982,51 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(workflowStep(windows, "Upload Windows dispatch evidence").if).toBe("${{ always() }}");
     expect(workflowStep(child, "Record Windows promotion outcome").if).toBe("${{ always() }}");
     expect(workflowStep(child, "Upload Windows promotion evidence").if).toBe("${{ always() }}");
+  });
+
+  it("retains the successful Windows validation artifact when only the writer is retried", () => {
+    const validation = workflowJob(
+      WINDOWS_NODE_RELEASE_WORKFLOW,
+      "validate_signed_windows_installers",
+    );
+    const writer = workflowJob(WINDOWS_NODE_RELEASE_WORKFLOW, "promote_signed_windows_installers");
+    expect(workflowStep(validation, "Retain verified Windows assets").id).toBe("verified_assets");
+    expect(validation.outputs).toMatchObject({
+      artifact_id: "${{ steps.verified_assets.outputs.artifact-id }}",
+    });
+    expect(workflowStep(writer, "Download verified Windows assets").with).toMatchObject({
+      "artifact-ids": "${{ needs.validate_signed_windows_installers.outputs.artifact_id }}",
+      "merge-multiple": true,
+      path: "dist",
+    });
+  });
+
+  it("records Windows validation failure when the writer is skipped", () => {
+    const root = tempDirs.make("windows-validation-outcome-");
+    const record = workflowStep(
+      workflowJob(WINDOWS_NODE_RELEASE_WORKFLOW, "record_outcome"),
+      "Record Windows promotion outcome",
+    );
+    const result = runBash(record.run ?? "", {
+      env: {
+        ...process.env,
+        RUNNER_TEMP: root,
+        GITHUB_STEP_SUMMARY: join(root, "summary"),
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        GITHUB_RUN_ID: "456",
+        VALIDATION_OUTCOME: "failure",
+        PROMOTION_OUTCOME: "skipped",
+        RELEASE_TAG: "v2026.9.1",
+        WINDOWS_NODE_TAG: "v0.6.3",
+        WINDOWS_NODE_INSTALLER_DIGESTS: "{}",
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(root, "windows-promotion.json"), "utf8"))).toMatchObject({
+      outcome: "failure",
+      validationOutcome: "failure",
+      promotionOutcome: "skipped",
+    });
   });
 
   it.each([

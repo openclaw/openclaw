@@ -1,2 +1,2 @@
-# Original Windows approval, per-upload live authority, and installer-byte regressions.
-316
+# Windows approval, per-upload authority, byte integrity, retry handoff, and evidence regressions.
+372

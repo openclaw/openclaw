@@ -121,7 +121,7 @@ function verifyAuthority(path, approval) {
   );
   requireValue(
     target.tagName === release.releaseTag &&
-      target.isPrerelease === (release.npmDistTag === "beta"),
+      target.isPrerelease === release.releaseTag.includes("-beta."),
     "Windows target release does not match the approved release channel.",
   );
   const tagRef = `refs/tags/${release.releaseTag}`;

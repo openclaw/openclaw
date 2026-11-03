@@ -14,6 +14,7 @@ const NAMES = ["OpenClawCompanion-Setup-arm64.exe", "OpenClawCompanion-Setup-x64
 
 export const windowsPromotionCases = [
   ["completed parent", "", 3],
+  ["final tag on npm beta", "npm-beta", 3],
   ["active parent", "active", 3],
   ["failed parent", "failed", 0],
   ["explicit failed-parent recovery", "recovery", 3],
@@ -109,7 +110,7 @@ export function runWindowsPromotionCase([label, scenario, expectedUploads]) {
       toolingSha: SHA,
       releaseTag: TAG,
       targetSha: target,
-      npmDistTag: "latest",
+      npmDistTag: scenario === "npm-beta" ? "beta" : "latest",
       environment: "npm-release",
       approvalJob: "Publish plugins, then OpenClaw",
       approver: "release-maintainer",
