@@ -591,8 +591,9 @@ describe("ClawRouter native Gradium speech", () => {
   it("returns native voice-note bytes but denies unqualified proxy telephony", async () => {
     await withFixture(async (fixture) => {
       const cfg = selectGradium(fixture);
-      expect(await fixture.tts({ cfg, target: "voice-note" })).toMatchObject({
-        success: true,
+      expect(
+        await speech(cfg).synthesize({ ...fixture.request(), cfg, target: "voice-note" }),
+      ).toMatchObject({
         outputFormat: "opus",
         voiceCompatible: true,
         audioBuffer: GRADIUM_OPUS,
