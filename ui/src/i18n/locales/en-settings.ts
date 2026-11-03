@@ -705,7 +705,6 @@ const enSettings = {
     offline: "Connect to the Gateway to configure search.",
     readOnly: "An administrator can change search settings and credentials.",
     setup: "Provider setup",
-    setupProvider: "Configure provider",
     setupHint:
       "Configure a provider for OpenClaw web search. External harnesses may also supply their own search tools.",
     configured: "Configured",
@@ -738,8 +737,6 @@ const enSettings = {
     failure: "Search failed",
     duration: "{ms} ms",
     cached: "Cached result",
-    result: "Answer",
-    sources: "Sources",
     noResults: "The provider returned no results for this query.",
     pluginSettings: "All provider settings",
     pluginSettingsHint: "Open the plugin’s complete configuration and access controls.",
