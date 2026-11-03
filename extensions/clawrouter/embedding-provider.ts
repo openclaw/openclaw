@@ -91,7 +91,9 @@ export const clawrouterEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
       const expiresAt = Date.now() + 30_000;
       const timeoutMs = () => {
         const remaining = expiresAt - Date.now();
-        if (remaining <= 0) throw new Error("ClawRouter embedding deadline exceeded");
+        if (remaining <= 0) {
+          throw new Error("ClawRouter embedding deadline exceeded");
+        }
         return remaining;
       };
       const signal = AbortSignal.any([
@@ -184,8 +186,9 @@ export const clawrouterEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
             },
           );
           try {
-            if (!response.ok)
+            if (!response.ok) {
               throw new Error(`ClawRouter embeddings failed (HTTP ${response.status})`);
+            }
             const payload = await readProviderJsonObjectResponse(
               response,
               "clawrouter.native-embeddings",

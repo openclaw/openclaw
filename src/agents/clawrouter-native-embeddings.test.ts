@@ -240,8 +240,9 @@ describe("actual ClawRouter native memory embeddings", () => {
         expect(wires.every((wire) => wire.auth === "Bearer synthetic-router-key")).toBe(true);
         expect(wires[0]?.path).toBe(route().replaceAll("${model}", encodeURIComponent(model)));
         const first = wires[0]!.body;
-        if (format === "voyage.embeddings")
+        if (format === "voyage.embeddings") {
           expect(first).toMatchObject({ input_type: "query", output_dimension: dimensions });
+        }
         if (model.includes("cohere") || id === "cohere") {
           expect(first).toMatchObject({
             input_type: "search_query",
@@ -249,14 +250,17 @@ describe("actual ClawRouter native memory embeddings", () => {
           });
           expect(wires.at(-1)?.body).toMatchObject({ input_type: "search_document" });
         }
-        if (model.includes("marengo-2-7"))
+        if (model.includes("marengo-2-7")) {
           expect(first).toEqual({ inputType: "text", inputText: "query" });
-        if (model.includes("marengo-3-0"))
+        }
+        if (model.includes("marengo-3-0")) {
           expect(first).toEqual({ inputType: "text", text: { inputText: "query" } });
-        if (model === "gemini-embedding-2")
+        }
+        if (model === "gemini-embedding-2") {
           expect(first).toMatchObject({
             requests: [{ content: { parts: [{ text: "task: search result | query: query" }] } }],
           });
+        }
         const measured = id !== "aws-bedrock" || model.includes("titan");
         expect(onUsage).toHaveBeenCalledWith(
           measured ? { promptTokens: 7, totalTokens: 7 } : undefined,
@@ -280,7 +284,7 @@ describe("actual ClawRouter native memory embeddings", () => {
           },
         },
         "main",
-      )?.multimodal.enabled,
+      )?.multimodal?.enabled,
     ).toBe(true);
     routeKind = "manifest";
     const { provider } = await create(options());

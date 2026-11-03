@@ -46,7 +46,9 @@ export function embeddingRole(
 
 function textInputs(inputs: EmbeddingInput[]): string[] {
   return inputs.map((input) => {
-    if (typeof input === "string") return input;
+    if (typeof input === "string") {
+      return input;
+    }
     if (input.parts?.some((part) => part.type !== "text")) {
       throw new Error("This ClawRouter embedding offer accepts text-only inputs");
     }
@@ -132,8 +134,9 @@ export function prepareNativeEmbeddingRequests(
     const batch = offer.requestFormat === "google.batch_embed_contents";
     const items = inputs.map((input) => {
       if (typeof input !== "string" && input.parts) {
-        if (!input.parts.length || input.parts.length > 100)
+        if (!input.parts.length || input.parts.length > 100) {
           throw new Error("Invalid Google embedding parts");
+        }
         for (const part of input.parts) {
           if (
             part.type === "inline-data" &&
@@ -176,18 +179,25 @@ export function prepareNativeEmbeddingRequests(
       });
     }
   } else {
-    if (options.taskType) throw new Error("This native embedding format does not support taskType");
+    if (options.taskType) {
+      throw new Error("This native embedding format does not support taskType");
+    }
     const texts = textInputs(inputs);
-    if (texts.some((text) => !text.trim()))
+    if (texts.some((text) => !text.trim())) {
       throw new Error("Native embedding inputs must be nonempty");
+    }
     const directCohere = offer.requestFormat === "cohere.embed";
-    if (directCohere && upstream !== "embed-v4.0")
+    if (directCohere && upstream !== "embed-v4.0") {
       throw new Error("Unknown Cohere embedding model");
+    }
     const spec = resolveBedrockEmbeddingSpec(directCohere ? "cohere.embed-v4:0" : upstream);
-    if (!spec) throw new Error("Unknown Bedrock embedding family");
+    if (!spec) {
+      throw new Error("Unknown Bedrock embedding family");
+    }
     const dimensions = options.dimensions ?? spec.dims;
-    if (!(spec.validDims ?? [spec.dims]).includes(dimensions))
+    if (!(spec.validDims ?? [spec.dims]).includes(dimensions)) {
       throw new Error("Invalid native embedding dimensions");
+    }
     const cohere = spec.family === "cohere-v3" || spec.family === "cohere-v4";
     for (let i = 0; i < texts.length; i += cohere ? 96 : 1) {
       const group = texts.slice(i, i + (cohere ? 96 : 1));
@@ -202,14 +212,20 @@ export function prepareNativeEmbeddingRequests(
           : asOptionalRecord(
               JSON.parse(buildBedrockEmbeddingBody(spec.family, group[0] ?? "", dimensions)),
             );
-      if (!body) throw new Error("Invalid native embedding body");
-      if (directCohere) Object.assign(body, { model: upstream, truncate: "END" });
+      if (!body) {
+        throw new Error("Invalid native embedding body");
+      }
+      if (directCohere) {
+        Object.assign(body, { model: upstream, truncate: "END" });
+      }
       requests.push({
         offer,
         body,
         maxResponseBytes: 8 * 1024 * 1024,
         read: (payload) => {
-          if (payload.error !== undefined) throw new Error("Native embedding returned an error");
+          if (payload.error !== undefined) {
+            throw new Error("Native embedding returned an error");
+          }
           if (
             spec.family === "nova" &&
             (!Array.isArray(payload.embeddings) || payload.embeddings.length !== 1)
@@ -243,8 +259,9 @@ export function prepareNativeEmbeddingRequests(
     const limit = request.offer.requestFormat.startsWith("google.")
       ? 20 * 1024 * 1024
       : 2 * 1024 * 1024;
-    if (encode(request.body).byteLength > limit)
+    if (encode(request.body).byteLength > limit) {
       throw new Error("Native embedding request exceeds its byte limit");
+    }
   }
   return requests;
 }
