@@ -41,7 +41,7 @@ it.each(["allowed", "revoked"] as const)(
       mounted.container.querySelector<HTMLButtonElement>(".custodian__alert-action")!.click();
       const confirm = await dialog.waitFor(() => {
         const button = document.body.querySelector<HTMLButtonElement>(
-          "openclaw-modal-dialog .exec-approval-actions .btn.danger",
+          "openclaw-modal-dialog openclaw-modal-actions .btn.danger",
         );
         expect(button?.textContent).toContain("Update Mac app and restart");
         return button!;

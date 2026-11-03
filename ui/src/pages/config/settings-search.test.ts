@@ -80,7 +80,7 @@ it("keeps target metadata cold and loads Settings English when search opens", as
         uiHints: {},
         identityAvailable: true,
       }),
-      { routeId: "profile", hash: "#settings-profile-identity" },
+      { routeId: "profile", hash: "#settings-profile-attribution" },
     );
     expectBlocks(find("collapse task progress"), { routeId: "appearance", label: "Chat" });
     expect(en.configView).toBe(configView);
