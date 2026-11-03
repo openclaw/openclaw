@@ -640,6 +640,18 @@ it("skips a permanent Chrome refusal but retries that tab on the next enumeratio
   await dispatch(cdp, 2, "Target.getTargets");
   expect(response(client, 2)).toMatchObject(targetInfos("target-1", "target-2"));
 });
+it("skips a tab Chrome refuses to attach to and still lists the other tabs", async () => {
+  const { bridge } = readyBridge(
+    (message) =>
+      message.type === "attach" && message.tabId === 2
+        ? { type: "error", seq: message.seq, message: "Cannot attach to this target." }
+        : replyFor(message),
+    [...defaultTabs(), tab(2, "https://example.com/refused", "Refused")],
+  );
+  const { client, cdp } = connectClient(bridge);
+  await dispatch(cdp, 1, "Target.getTargets");
+  expect(response(client, 1)).toMatchObject(targetInfos("target-1"));
+});
 it.each(["attach", "createTab"])(
   "waits for %s and native detach before closing",
   async (operation) => {
