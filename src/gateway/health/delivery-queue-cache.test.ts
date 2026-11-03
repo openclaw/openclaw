@@ -1,7 +1,15 @@
 import { afterEach, expect, it as baseIt, vi } from "vitest";
+import { refuseContinuationReturnDelivery } from "../../auto-reply/continuation/return-refusal.js";
 import { INGRESS_CLAIM_LEASE_MS } from "../../channels/message/ingress-claim-owner.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
+import { formatDeliveryQueueHealthLine } from "../../commands/health-format.js";
+import { healthSummary } from "../../commands/health.test-fixtures.js";
+import {
+  captureDeliveryQueueStateContext,
+  inspectDeliveryQueueReceipt,
+} from "../../infra/delivery-queue-sqlite.js";
 import { seedDeliveryQueueEntry } from "../../infra/delivery-queue-sqlite.test-support.js";
+import { enqueueSessionDelivery } from "../../infra/session-delivery-queue-storage.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
@@ -38,6 +46,45 @@ it("keeps ingress health cached across outbound changes", async ({ stateDir }) =
   });
   expect(reads).toHaveBeenCalledTimes(1);
 });
+
+it.for([
+  ["only a refused return's receipt", true, false],
+  ["only a genuine dead letter", false, true],
+  ["a receipt beside a genuine dead letter", true, true],
+] as const)(
+  "warns about genuine dead letters, never a refused return's receipt: %s",
+  async ([, refused, deadLetter], { stateDir }) => {
+    const context = captureDeliveryQueueStateContext(stateDir);
+    const payload = { kind: "systemEvent" as const, sessionKey: "agent:main:main", text: "return" };
+    let receiptId: string | undefined;
+    if (refused) {
+      receiptId = await enqueueSessionDelivery(payload, context.workerContext);
+      await refuseContinuationReturnDelivery(receiptId, context.workerContext);
+    }
+    // The genuine dead letter fails an hour after the receipt, so `oldest` names its source.
+    const failedAt = Date.now() + 3_600_000;
+    if (deadLetter) {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(failedAt);
+      const entry = { id: "dead-letter", enqueuedAt: 1_000, retryCount: 5 };
+      seedDeliveryQueueEntry({ queueName: "session", entry, status: "failed", stateDir });
+      clock.mockRestore();
+    }
+    const health = await readHealth();
+    expect(health?.failed ?? []).toEqual(
+      deadLetter ? [{ queueName: "session", count: 1, oldestFailedAt: failedAt }] : [],
+    );
+    const summary = healthSummary({ deliveryQueues: health });
+    expect(formatDeliveryQueueHealthLine(summary, failedAt + 3_600_000)).toBe(
+      deadLetter
+        ? "Delivery queue: warning (dead-lettered entries — session: 1; oldest 1h ago)"
+        : null,
+    );
+    if (receiptId) {
+      const receipt = await inspectDeliveryQueueReceipt("session", receiptId, false, context);
+      expect(receipt.status).toBe("failed");
+    }
+  },
+);
 
 it("refreshes expired claims after sleep and restart", async ({ stateDir }) => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
