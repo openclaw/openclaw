@@ -7,6 +7,7 @@ import {
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { withReplyDispatcher } from "../auto-reply/dispatch-dispatcher.js";
 import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
@@ -119,7 +120,6 @@ function createPluginReloadHandler(
   getPluginRegistry: Parameters<
     typeof createGatewayReloadHandlers
   >[0]["getPluginRegistry"] = createEmptyPluginRegistry,
-  onDiagnosticLog?: (level: "warn" | "error", message: string) => void,
 ) {
   type ReloadParams = Parameters<typeof createGatewayReloadHandlers>[0];
   let reloadState: ReturnType<ReloadParams["getState"]> = {
@@ -134,11 +134,7 @@ function createPluginReloadHandler(
       stopStreamWatchers: vi.fn(async () => {}),
     },
   };
-  const logger = {
-    info: vi.fn(),
-    warn: vi.fn((message: string) => onDiagnosticLog?.("warn", message)),
-    error: vi.fn((message: string) => onDiagnosticLog?.("error", message)),
-  };
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return createGatewayReloadHandlers({
     scheduler: createTestGatewayScheduler(),
     deps: {} as never,
@@ -740,33 +736,35 @@ it.each(["success", "activation failure"] as const)(
     const deliver = vi.fn(async (_payload: ReplyPayload) => undefined);
     const dispatch = async (messageId: string) => {
       const dispatcher = createReplyDispatcher({ deliver });
-      const result = await dispatchLowLevelChannelReplyFromConfig({
-        cfg: retained,
-        ctx: finalizeInboundContext({
-          Body: "hello",
-          From: "synthetic-user",
-          To: "synthetic-bot",
-          AgentId: "default",
-          SessionKey: "agent:default:main",
-          MessageSid: messageId,
-          Provider: "synthetic-channel",
-          Surface: "synthetic-channel",
-          ChatType: "direct",
-          InboundAccessAuthorized: true,
-        }),
+      const result = await withReplyDispatcher({
         dispatcher,
-        replyResolver: async (_ctx, _opts, configOverride) => {
-          const runtime = getPreparedReplyDispatchRuntime();
-          const owner = await loadCatalog(
-            ownerInput(runtime?.config ?? configOverride ?? retained),
-          );
-          return {
-            text: `memory enabled: ${owner.config.hooks?.internal?.entries?.["session-memory"]?.enabled}`,
-          };
-        },
+        run: () =>
+          dispatchLowLevelChannelReplyFromConfig({
+            cfg: retained,
+            ctx: finalizeInboundContext({
+              Body: "hello",
+              From: "synthetic-user",
+              To: "synthetic-bot",
+              AgentId: "default",
+              SessionKey: "agent:default:main",
+              MessageSid: messageId,
+              Provider: "synthetic-channel",
+              Surface: "synthetic-channel",
+              ChatType: "direct",
+              InboundAccessAuthorized: true,
+            }),
+            dispatcher,
+            replyResolver: async (_ctx, _opts, configOverride) => {
+              const runtime = getPreparedReplyDispatchRuntime();
+              const owner = await loadCatalog(
+                ownerInput(runtime?.config ?? configOverride ?? retained),
+              );
+              return {
+                text: `memory enabled: ${owner.config.hooks?.internal?.entries?.["session-memory"]?.enabled}`,
+              };
+            },
+          }),
       });
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
       expect(result.queuedFinal).toBe(true);
     };
     const plan = pluginPlan("reply-reload");
@@ -811,38 +809,6 @@ it.for(["config write", "plugins.reload"] as const)(
   "recovers failed reply publication after %s without waiting on its own lifecycle lease",
   async (entrypoint, { signal }) => {
     const events: string[] = [];
-    const coordinatorLogs: Array<{ level: "warn" | "error"; message: string }> = [];
-    let phase = "fixture setup";
-    let restartPhase = "not requested";
-    let cleanupPhase = "not started";
-    const recordPhase = (scope: "body" | "restart" | "cleanup", next: string) => {
-      if (scope === "body") {
-        phase = next;
-      } else if (scope === "restart") {
-        restartPhase = next;
-      } else {
-        cleanupPhase = next;
-      }
-      console.error(`plugin recovery phase ${entrypoint}: ${scope} ${next}`);
-    };
-    let diagnosticCount = 0;
-    const reportDiagnostic = (reason: string) => {
-      if (diagnosticCount++ >= 3) {
-        return;
-      }
-      console.error(
-        "plugin recovery phase diagnostic",
-        JSON.stringify({
-          entrypoint,
-          reason,
-          phase,
-          restartPhase,
-          cleanupPhase,
-          events,
-          coordinatorLogs,
-        }),
-      );
-    };
     const restart = createDeferred();
     const cleanups: Array<() => Promise<void>> = [];
     const initialConfig: OpenClawConfig = {
@@ -858,7 +824,6 @@ it.for(["config write", "plugins.reload"] as const)(
     let reloadParams: Parameters<PluginReload>[0] | undefined;
     let failure: unknown;
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-    recordPhase("body", "recovery fixture: before");
     const plugins = await createPluginReloadRecoveryFixture(
       { cleanups, logMocks: logger },
       {
@@ -876,7 +841,6 @@ it.for(["config write", "plugins.reload"] as const)(
         assertInvokerOwned: () => reloadParams?.assertInvokerOwned?.(),
       },
     );
-    recordPhase("body", "recovery fixture: after");
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
       () => plugins.registryOwner.registry,
     );
@@ -895,10 +859,6 @@ it.for(["config write", "plugins.reload"] as const)(
       },
       emitRestart,
       () => plugins.registryOwner.registry,
-      (level, message) => {
-        coordinatorLogs.push({ level, message });
-        coordinatorLogs.splice(0, coordinatorLogs.length - 16);
-      },
     );
     const configOwner = createReloaderHarness(async () => makeSnapshot({ config: diskConfig }), {
       initialConfig,
@@ -909,18 +869,12 @@ it.for(["config write", "plugins.reload"] as const)(
             isCurrent: ownership.isCurrent,
             checkpoint: ownership.checkpoint,
             assertInvokerOwned: ownership.assertInvokerOwned,
-            prepareRestartRuntimeConfig: async () => {
-              recordPhase("restart", "lifecycle lease: before");
-              const preparedConfig = await ownership.withRestartPreparation(async (current) => {
-                recordPhase("restart", "ownership checkpoint: before");
+            prepareRestartRuntimeConfig: () =>
+              ownership.withRestartPreparation(async (current) => {
                 await current.checkpoint();
-                recordPhase("restart", "ownership checkpoint: after");
                 events.push("restart prepared");
                 return nextConfig;
-              });
-              recordPhase("restart", "lifecycle lease: after");
-              return preparedConfig;
-            },
+              }),
             publish: async (commit) => {
               await commit();
               ownership.markRuntimeCommitted(nextConfig, plan);
@@ -935,22 +889,13 @@ it.for(["config write", "plugins.reload"] as const)(
         }
       },
     });
-    const onAbort = () => reportDiagnostic("test signal aborted");
-    signal.addEventListener("abort", onAbort, { once: true });
     try {
-      recordPhase("body", "initial publication: before");
       await publish(initialConfig);
-      recordPhase("body", "initial publication: after");
-      recordPhase("body", "initial reply dispatch: before");
       await expect(loadDispatch({ agentId: "default" })).resolves.toMatchObject({
         config: initialConfig,
       });
-      recordPhase("body", "initial reply dispatch: after");
-      recordPhase("body", "config reloader readiness: before");
       await configOwner.reloader.ready;
-      recordPhase("body", "config reloader readiness: after");
       if (entrypoint === "plugins.reload") {
-        recordPhase("body", "explicit lifecycle operation: before");
         await expect(
           withinTest(
             withPluginLifecycleLeaseAsync({}, () =>
@@ -963,7 +908,6 @@ it.for(["config write", "plugins.reload"] as const)(
             signal,
           ),
         ).rejects.toBeInstanceOf(PluginRuntimeApplicationError);
-        recordPhase("body", "explicit lifecycle operation: after");
       } else {
         diskConfig = {
           plugins: { ...initialConfig.plugins, entries: { first: { config: { revision: 1 } } } },
@@ -972,9 +916,7 @@ it.for(["config write", "plugins.reload"] as const)(
         configOwner.emitWrite(
           attachRuntimeConfigWriteApplication(makeWrite(diskConfig, "changed"), applied),
         );
-        recordPhase("body", "config write application: before");
         await expect(withinTest(applied.result, signal)).resolves.toBe("failed");
-        recordPhase("body", "config write application: after");
       }
       expect(String(failure)).toContain(
         "Plugin runtime rollback could not republish the model runtime",
@@ -984,39 +926,19 @@ it.for(["config write", "plugins.reload"] as const)(
       expect(handler.hasOutstandingGatewayRestart() || emitRestart.mock.calls.length === 1).toBe(
         true,
       );
-      recordPhase("body", "restart emission: before");
       await withinTest(restart.promise, signal);
-      recordPhase("body", "restart emission: after");
       expect(events).toEqual(["operation failed", "restart prepared", "restart emitted"]);
       expect(emitRestart).toHaveBeenCalledOnce();
       expect(configOwner.onConfigApplied).not.toHaveBeenCalled();
-    } catch (error) {
-      reportDiagnostic("body failed");
-      throw error;
     } finally {
-      try {
-        recordPhase("cleanup", "stop restart retries: before");
-        handler.stopRestartRetries();
-        recordPhase("cleanup", "stop restart retries: after");
-        // The simulated emitter has no run loop to retire its signal fence.
-        resetGatewayRestartStateForInProcessRestart();
-        recordPhase("cleanup", "close config reloaders: before");
-        await closeTestConfigReloaders();
-        recordPhase("cleanup", "close config reloaders: after");
-        configOwner.watcher.restore();
-        recordPhase("cleanup", "reset prepared model runtime: before");
-        await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
-        recordPhase("cleanup", "reset prepared model runtime: after");
-        for (const [index, cleanup] of cleanups.toReversed().entries()) {
-          recordPhase("cleanup", `plugin fixture ${index}: before`);
-          await cleanup();
-          recordPhase("cleanup", `plugin fixture ${index}: after`);
-        }
-      } catch (error) {
-        reportDiagnostic("cleanup failed");
-        throw error;
-      } finally {
-        signal.removeEventListener("abort", onAbort);
+      handler.stopRestartRetries();
+      // The simulated emitter has no run loop to retire its signal fence.
+      resetGatewayRestartStateForInProcessRestart();
+      await closeTestConfigReloaders();
+      configOwner.watcher.restore();
+      await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
+      for (const cleanup of cleanups.toReversed()) {
+        await cleanup();
       }
     }
   },
