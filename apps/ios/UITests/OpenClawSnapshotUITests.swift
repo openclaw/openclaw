@@ -252,8 +252,12 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     func testLocalDeviceSettingsWorkWithoutDashboard() throws {
-        self.launchApp(for: Self.settingsFallbackTarget, appearance: "dark")
+        self.launchApp(for: Self.settingsFallbackTarget, appearance: "dark", screenshotMode: false)
         let app = try XCTUnwrap(self.app)
+        let onboardingClose = app.buttons["Close"]
+        if onboardingClose.waitForExistence(timeout: 3) {
+            onboardingClose.tap()
+        }
         let localSettings = app.buttons["settings-device-row"]
         XCTAssertTrue(localSettings.waitForExistence(timeout: 8))
         self.attachScreenshot(named: "local-settings-fallback")
@@ -263,23 +267,27 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(appearance.waitForExistence(timeout: 5))
         appearance.tap()
         app.buttons["Light"].tap()
-        self.waitForValue("Light", of: appearance, timeout: 5)
+        XCTAssertTrue(app.buttons.matching(identifier: "LocalDeviceSettings.Appearance")
+            .matching(NSPredicate(format: "label == %@", "Appearance, Light"))
+            .firstMatch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.webViews.firstMatch.exists)
         XCTAssertFalse(app.secureTextFields.firstMatch.exists)
         self.attachScreenshot(named: "local-settings-appearance")
 
         let keepAwake = app.switches["LocalDeviceSettings.capabilities.keepAwakeEnabled"]
         let original = try XCTUnwrap(keepAwake.value as? String)
-        keepAwake.tap()
+        keepAwake.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         self.waitForValue(original == "1" ? "0" : "1", of: keepAwake, timeout: 5)
-        keepAwake.tap()
+        keepAwake.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         self.waitForValue(original, of: keepAwake, timeout: 5)
 
         // Navigate away and back: read from the shared preference owner, not a temporary editor value.
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(localSettings.waitForExistence(timeout: 5))
         localSettings.tap()
-        self.waitForValue("Light", of: appearance, timeout: 5)
+        XCTAssertTrue(app.buttons.matching(identifier: "LocalDeviceSettings.Appearance")
+            .matching(NSPredicate(format: "label == %@", "Appearance, Light"))
+            .firstMatch.waitForExistence(timeout: 5))
         let systemSettings = app.buttons["Open iOS Settings"]
         for _ in 0..<8 where !systemSettings.isHittable {
             app.swipeUp()

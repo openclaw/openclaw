@@ -21,7 +21,9 @@ struct LocalDeviceSettingsScreen: View {
 
     private var snapshot: DeviceSettingsSnapshot {
         IOSDeviceSettingsSnapshotProducer(appModel: self.appModel, appearanceModel: self.appearanceModel)
-            .snapshot(notificationStatus: self.notificationStatus, locationServicesEnabled: self.locationServicesEnabled)
+            .snapshot(
+                notificationStatus: self.notificationStatus,
+                locationServicesEnabled: self.locationServicesEnabled)
     }
 
     var body: some View {
@@ -60,7 +62,8 @@ struct LocalDeviceSettingsScreen: View {
         Section {
             Picker(selection: Binding(
                 get: { snapshot.app?.appearance?.rawValue ?? "system" },
-                set: { self.perform(.set(.appearance, .string($0))) })) {
+                set: { self.perform(.set(.appearance, .string($0))) }))
+            {
                 Text("System").font(OpenClawType.body).tag("system")
                 Text("Light").font(OpenClawType.body).tag("light")
                 Text("Dark").font(OpenClawType.body).tag("dark")
@@ -83,7 +86,10 @@ struct LocalDeviceSettingsScreen: View {
             self.toggle("Camera access", key: .cameraEnabled, value: snapshot.capabilities?.cameraEnabled)
             self.toggle("Keep screen awake", key: .keepAwakeEnabled, value: snapshot.capabilities?.keepAwakeEnabled)
             if snapshot.capabilities?.healthSummaryAvailable == true {
-                self.toggle("Health summaries", key: .healthSummaryEnabled, value: snapshot.capabilities?.healthSummaryEnabled)
+                self.toggle(
+                    "Health summaries",
+                    key: .healthSummaryEnabled,
+                    value: snapshot.capabilities?.healthSummaryEnabled)
             }
         } header: {
             Text("Device").font(OpenClawType.captionSemiBold)
@@ -95,12 +101,19 @@ struct LocalDeviceSettingsScreen: View {
             self.toggle("Voice Wake", key: .wakeEnabled, value: snapshot.voice.wakeEnabled)
             self.toggle("Talk", key: .talkEnabled, value: snapshot.voice.talkEnabled)
             self.toggle("Show Talk control", key: .talkButtonEnabled, value: snapshot.voice.talkButtonEnabled)
-            self.toggle("Background listening", key: .talkBackgroundEnabled, value: snapshot.voice.talkBackgroundEnabled)
+            self.toggle(
+                "Background listening",
+                key: .talkBackgroundEnabled,
+                value: snapshot.voice.talkBackgroundEnabled)
             self.toggle("Speakerphone", key: .speakerphoneEnabled, value: snapshot.voice.speakerphoneEnabled)
         } header: {
             Text("Voice & Talk").font(OpenClawType.captionSemiBold)
         } footer: {
-            Text("Voice requires a supported device and microphone access. Provider, voice, and speech language remain configured on the Gateway.")
+            Text(
+                """
+                Voice requires a supported device and microphone access. \
+                Provider, voice, and speech language remain configured on the Gateway.
+                """)
                 .font(OpenClawType.footnote)
         }
         .disabled(!snapshot.voice.supported)
@@ -110,7 +123,8 @@ struct LocalDeviceSettingsScreen: View {
         Section {
             Picker(selection: Binding(
                 get: { snapshot.permissions.location.mode.rawValue },
-                set: { self.perform(.set(.locationMode, .string($0))) })) {
+                set: { self.perform(.set(.locationMode, .string($0))) }))
+            {
                 Text("Off").font(OpenClawType.body).tag("off")
                 Text("While using").font(OpenClawType.body).tag("whileUsing")
                 Text("Always").font(OpenClawType.body).tag("always")
@@ -119,7 +133,8 @@ struct LocalDeviceSettingsScreen: View {
             }
             SettingsDetailRow(
                 "Precise Location",
-                value: .verbatim(snapshot.permissions.location.precise ? String(localized: "On") : String(localized: "Off")))
+                value: .verbatim(snapshot.permissions.location
+                    .precise ? String(localized: "On") : String(localized: "Off")))
             ForEach(snapshot.permissions.entries, id: \.id) { entry in
                 HStack {
                     VStack(alignment: .leading) {
@@ -156,7 +171,8 @@ struct LocalDeviceSettingsScreen: View {
     private func toggle(_ title: LocalizedStringKey, key: DeviceSettingKey, value: Bool?) -> some View {
         Toggle(isOn: Binding(
             get: { value ?? false },
-            set: { self.perform(.set(key, .boolean($0))) })) {
+            set: { self.perform(.set(key, .boolean($0))) }))
+        {
             Text(title).font(OpenClawType.body)
         }
         .accessibilityIdentifier("LocalDeviceSettings." + key.rawValue)
@@ -178,12 +194,19 @@ struct LocalDeviceSettingsScreen: View {
                 switch request {
                 case let .set(key, value):
                     registrationChanged = try await IOSDeviceSettingsActions.set(
-                        key, value: value, appModel: self.appModel, appearanceModel: self.appearanceModel,
-                        confirm: confirm, isCurrent: isCurrent)
+                        key,
+                        value: value,
+                        appModel: self.appModel,
+                        appearanceModel: self.appearanceModel,
+                        confirm: confirm,
+                        isCurrent: isCurrent)
                 case let .requestPermission(permission):
                     let changed = try await IOSDeviceSettingsActions.requestPermission(
-                        permission, appModel: self.appModel, permissions: self.permissions,
-                        confirm: confirm, isCurrent: isCurrent)
+                        permission,
+                        appModel: self.appModel,
+                        permissions: self.permissions,
+                        confirm: confirm,
+                        isCurrent: isCurrent)
                     registrationChanged = changed && !Task.isCancelled && isCurrent()
                 case .openSystemSettings:
                     guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
@@ -243,6 +266,9 @@ struct LocalDeviceSettingsScreen: View {
 private struct LocalDeviceSettingsConsentAnchor: UIViewRepresentable {
     let view: UIView
 
-    func makeUIView(context: Context) -> UIView { self.view }
+    func makeUIView(context: Context) -> UIView {
+        self.view
+    }
+
     func updateUIView(_ uiView: UIView, context: Context) {}
 }

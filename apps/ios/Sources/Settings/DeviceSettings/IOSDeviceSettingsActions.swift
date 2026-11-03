@@ -5,7 +5,7 @@ import UserNotifications
 
 @MainActor
 enum IOSDeviceSettingsActions {
-    // Native controls and the WebKit adapter share effects and consent; callers supply live authority.
+    /// Native controls and the WebKit adapter share effects and consent; callers supply live authority.
     static func set(
         _ key: DeviceSettingKey,
         value: DeviceSettingValue,
