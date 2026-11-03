@@ -168,6 +168,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[openai](/plugins/reference/openai)** (`@openclaw/openai-provider`) - included in OpenClaw. Adds OpenAI model provider support to OpenClaw.
 
+- **[openclaw-id-access](/plugins/reference/openclaw-id-access)** (`@openclaw/openclaw-id-access`) - included in OpenClaw. Invite people to this claw, approve their requests, and see and remove members.
+
 - **[opencode-go](/plugins/reference/opencode-go)** (`@openclaw/opencode-go-provider`) - included in OpenClaw. Adds OpenCode Go model provider support to OpenClaw.
 
 - **[openrouter](/plugins/reference/openrouter)** (`@openclaw/openrouter-provider`) - included in OpenClaw. Adds OpenRouter model provider support to OpenClaw.

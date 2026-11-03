@@ -43,6 +43,7 @@ import { createConfigPageModels } from "./config-page-models.ts";
 import { createConfigPagePreferences } from "./config-page-preferences.ts";
 import { isAppearanceDataTarget, loadConfigPageReads } from "./config-page-reads.ts";
 import {
+  visibleConfigSchema,
   configSectionKeysForPage,
   configSelectionFromSearch,
   defaultConfigSelection,
@@ -81,6 +82,7 @@ export function createConfigPage(
 ) {
   const agents = projectOwner(context.agents, (owner) => owner.state);
   const identities = projectOwner(context.agentIdentity, (owner) => owner);
+  const applicationConfig = projectOwner(context.config, (owner) => owner.current);
   const lobsterdex = projectSource(subscribeLobsterdex, {
     read: getLobsterdex,
     subscribe: (subscribe, notify) => subscribe(notify),
@@ -433,7 +435,10 @@ export function createConfigPage(
       connected: configState.connected,
       mutationAllowed: runtimeConfig.canSet,
       openFileAllowed: runtimeConfig.canOpenFile,
-      schema: configState.configSchema,
+      schema: visibleConfigSchema(
+        configState.configSchema,
+        applicationConfig.read().openclawIdEnabled,
+      ),
       schemaLoading: configState.configSchemaLoading,
       schemaRead: runtimeConfig.schemaRead,
       onRetrySchema: () => void runtimeConfig.refreshSchema(),

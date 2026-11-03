@@ -1,0 +1,104 @@
+.ocid-access {
+  width: min(100%, 860px);
+  margin: 0 auto;
+  padding: var(--space-5);
+  color: var(--text);
+  display: grid;
+  gap: var(--space-5);
+}
+
+.ocid-access h1 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 24px;
+}
+
+.ocid-access h2 {
+  margin: 0 0 var(--space-2);
+  color: var(--text-strong);
+  font-size: 16px;
+}
+
+.ocid-access__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.ocid-access__section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.ocid-access__hint,
+.ocid-access__empty {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.ocid-access__form,
+.ocid-access__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ocid-access__form input {
+  flex: 1 1 240px;
+}
+
+.ocid-access__url {
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+}
+
+.ocid-access__list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+}
+
+.ocid-access__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.ocid-access__row + .ocid-access__row {
+  border-top: 1px solid var(--border);
+}
+
+.ocid-access__title {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.ocid-access__details {
+  margin-top: var(--space-2);
+  color: var(--muted);
+}
+
+.ocid-access__details summary {
+  width: fit-content;
+}
+
+.ocid-access__details code {
+  overflow-wrap: anywhere;
+}
+
+.ocid-access__error p {
+  margin: 0;
+}
+
+.ocid-access__error code {
+  white-space: pre-wrap;
+}

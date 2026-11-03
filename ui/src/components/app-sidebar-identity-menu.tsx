@@ -74,7 +74,7 @@ declare module "@solidjs/web" {
 
 registerEnglishCatalog(registerUpdateActionsEnglish);
 
-type SidebarIdentityMenuParams = {
+export type SidebarIdentityMenuParams = {
   position: { x: number; bottom: number; width: number; placement?: "right-end" };
   anchor?: HTMLElement;
   nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
@@ -91,6 +91,13 @@ type SidebarIdentityMenuParams = {
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
   onRetryConnect?: () => void;
+  /** Optional feature-owned extension; the ordinary menu has no feature runtime. */
+  extension?: {
+    identity: { name: string; detail: string | null } | null;
+    entries: MenuEntry[];
+    signOut: MenuEntry[];
+    onSelect: (value: string) => boolean;
+  };
 };
 
 // The slot shares the command icon column so dots, glyphs, and labels line up.
@@ -198,13 +205,18 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
     content: <div class="sidebar-customize-menu__title">{t("nav.gateway.sectionLabel")}</div>,
   };
   const profileSeparator = separator("profile-separator");
+  const openclawSeparator = separator("openclaw-id-actions-separator");
   const gatewaySeparator = separator("gateway-separator");
   const usageSeparator = separator("usage-separator");
   const helpSeparator = separator("help-separator");
   const retrySeparator = separator("retry-separator");
   const footerSeparator = separator("footer-separator");
+  const openclawIdentity = () => params.extension?.identity;
   const profileName = () =>
-    params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
+    openclawIdentity()?.name ??
+    params.profileViewer?.name ??
+    params.profileViewer?.email ??
+    t("nav.owner");
   const avatarUser = createMemo(() => ({
     id: "owner",
     watchedSessions: [],
@@ -213,13 +225,18 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
   }));
   const profileAvatar = (
     <span class="sidebar-identity-menu__avatar" aria-hidden="true">
-      <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+      {openclawIdentity() ? (
+        <span class="sidebar-openclaw-id__initial">{profileName().slice(0, 1).toUpperCase()}</span>
+      ) : (
+        <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+      )}
     </span>
   );
   const profileEmail = () =>
-    params.profileViewer?.email && params.profileViewer.email !== profileName()
+    openclawIdentity()?.detail ??
+    (params.profileViewer?.email && params.profileViewer.email !== profileName()
       ? params.profileViewer.email
-      : null;
+      : null);
   const items = createMemo<MenuEntry[]>(() => {
     const help = renderSidebarHelpMenu();
     const gateways = renderIdentityGateways(params.nativeGatewaySnapshot, params.onClose);
@@ -243,6 +260,8 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
         ),
       },
       profileSeparator,
+      ...(params.extension?.entries ?? []),
+      ...(params.extension ? [openclawSeparator] : []),
       ...(gateways ? [gatewayTitle, gateways, gatewaySeparator] : []),
       renderSidebarMenuAction("command:settings", t("nav.settings"), "settings", {
         details: (
@@ -253,6 +272,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
           />
         ),
       }),
+      ...(params.extension?.signOut ?? []),
       {
         ...renderSidebarMenuAction("command:updates", titleForRoute("updates"), "download", {
           details: params.updateAvailable ? (
@@ -353,6 +373,9 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
         }
         params.onClose(false);
         if (selectSidebarHelpLink(value)) {
+          return;
+        }
+        if (params.extension?.onSelect(value)) {
           return;
         }
         const capability = nativeGatewaysCapability();
