@@ -7,7 +7,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { runWithSessionMcpToolCallAuthority } from "../agents/agent-bundle-mcp-request-context.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 import { readEmbeddedMessageDeliveryFact } from "../agents/embedded-agent-message-delivery.js";
@@ -238,7 +239,7 @@ async function invokeGatewayToolWithSignal(
     signal: AbortSignal;
     preparedSession?: { entry: SessionEntry | undefined };
     releaseSessionFacts: Array<() => void>;
-    disposeResources: Array<() => Promise<void>>;
+    disposals: Array<() => Promise<void>>;
   },
 ): Promise<ToolsInvokeOutcome> {
   let hasClientUploads = false;
@@ -498,17 +499,18 @@ async function invokeGatewayToolWithSignal(
     sessionWorkspace,
   );
   // Only a configured server owning the `server__tool` prefix connects, after session authorization.
-  const mcpTools = knownCoreTool
-    ? undefined
-    : await acquireInvocationMcpTools({
-        toolName,
-        cfg: params.cfg,
-        workspaceDir: sessionWorkspace,
-        agentId: selectedAgentId,
-        agentDir: resolveAgentDir(params.cfg, selectedAgentId),
-      });
+  const mcpTools = await acquireInvocationMcpTools({
+    toolName,
+    knownCoreTool,
+    cfg: params.cfg,
+    workspaceDir: sessionWorkspace,
+    agentId: selectedAgentId,
+    session: { key: sessionKey, entry: sessionEntry },
+    signal: params.signal,
+  });
   if (mcpTools) {
-    params.disposeResources.push(mcpTools.dispose);
+    params.disposals.push(mcpTools.dispose);
+    sessionChecks.push(mcpTools.assertCurrent);
   }
   const resolveTools = (disablePluginTools: boolean) =>
     resolveGatewayScopedTools({
@@ -610,7 +612,11 @@ async function invokeGatewayToolWithSignal(
         assertInvocationCurrent();
         assertCapturedInputCommitAllowed();
         createGatewayToolPolicyAssertion(tool, params.cfg)(hookResult.params);
-        return await tool.execute?.(toolCallId, hookResult.params, params.signal);
+        // MCP requests recheck caller authority at server I/O, after reconnection or catalog waits.
+        return await runWithSessionMcpToolCallAuthority(
+          getPluginToolMeta(tool)?.mcp ? assertInvocationCurrent : undefined,
+          () => tool.execute?.(toolCallId, hookResult.params, params.signal),
+        );
       },
     );
     const executedAction = asOptionalRecord(hookResult.params)?.action;
@@ -659,7 +665,7 @@ export async function invokeGatewayTool(
 ): Promise<ToolsInvokeOutcome> {
   const requestAbort = new AbortController();
   const releaseSessionFacts: Array<() => void> = [];
-  const disposeResources: Array<() => Promise<void>> = [];
+  const disposals: Array<() => Promise<void>> = [];
   const signal = params.signal
     ? AbortSignal.any([params.signal, requestAbort.signal])
     : requestAbort.signal;
@@ -698,7 +704,7 @@ export async function invokeGatewayTool(
               ...params,
               signal,
               releaseSessionFacts,
-              disposeResources,
+              disposals,
               preparedSession: { entry },
               assertInvocationCurrent: assertCurrent,
             });
@@ -711,12 +717,7 @@ export async function invokeGatewayTool(
         }
       );
     }
-    return await invokeGatewayToolWithSignal({
-      ...params,
-      signal,
-      releaseSessionFacts,
-      disposeResources,
-    });
+    return await invokeGatewayToolWithSignal({ ...params, signal, releaseSessionFacts, disposals });
   } catch (error) {
     if (!(error instanceof SessionMutationFactsUnavailableError)) {
       throw error;
@@ -731,7 +732,7 @@ export async function invokeGatewayTool(
     for (const release of releaseSessionFacts) {
       release();
     }
-    await Promise.all(disposeResources.map(async (dispose) => await dispose()));
+    await Promise.all(disposals.map(async (dispose) => await dispose()));
     requestAbort.abort();
   }
 }

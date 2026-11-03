@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withSessionMcpCallerAuthority } from "../agents/agent-bundle-mcp-request-context.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { withToolsInvokeTestState } from "./tools-invoke-http.test-support.js";
@@ -59,13 +62,22 @@ function createMcpTool(toolName: string): AnyAgentTool {
   return tool;
 }
 
-const invoke = (name: string) =>
+const sessionKey = "agent:main:dashboard:mcp-overrides";
+
+const invoke = (name: string, options: { sessionKey?: string; signal?: AbortSignal } = {}) =>
   invokeGatewayTool({
     cfg: runtime.cfg,
-    input: { name, args: { limit: 3 } },
+    input: { name, args: { limit: 3 }, ...(options.sessionKey ? { sessionKey } : {}) },
     senderIsOwner: true,
     toolCallIdPrefix: "rpc",
+    signal: options.signal,
   });
+
+const storeOverrides = async (toolOverrides: SessionToolOverrides | undefined) =>
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    { sessionId: "mcp-overrides", updatedAt: Date.now(), toolOverrides },
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -169,4 +181,72 @@ describe("tools.invoke configured MCP tools", () => {
       });
     },
   );
+});
+
+describe("tools.invoke configured MCP session policy", () => {
+  it("does not connect a server the session disabled", async () => {
+    await withToolsInvokeTestState({ label: "mcp-invoke-session-disabled" }, async () => {
+      await storeOverrides({ mcpServers: { granola: false } });
+
+      const outcome = await invoke("granola__list_meetings", { sessionKey });
+
+      expect(outcome).toMatchObject({ ok: false, status: 404, error: { type: "not_found" } });
+      expect(runtime.acquire).not.toHaveBeenCalled();
+    });
+  });
+
+  it("materializes the session's MCP tool denials", async () => {
+    await withToolsInvokeTestState({ label: "mcp-invoke-session-deny" }, async () => {
+      const mcpToolsDeny = { granola: ["delete_everything"] };
+      await storeOverrides({ mcpToolsDeny });
+
+      await invoke("granola__list_meetings", { sessionKey });
+
+      expect(runtime.acquire).toHaveBeenCalledWith(
+        expect.objectContaining({ toolOverrides: { mcpToolsDeny } }),
+      );
+    });
+  });
+
+  it("refuses server I/O after the session's MCP policy changes mid-call", async () => {
+    await withToolsInvokeTestState({ label: "mcp-invoke-session-change" }, async () => {
+      await storeOverrides(undefined);
+      const serverRequest = vi.fn(async () => ({ content: [] }));
+      runtime.mcpExecute.mockImplementationOnce(async () => {
+        // The policy changes while the runtime waits for its connection or catalog.
+        await storeOverrides({ mcpServers: { granola: false } });
+        return await withSessionMcpCallerAuthority(serverRequest)();
+      });
+
+      const outcome = await invoke("granola__list_meetings", { sessionKey });
+
+      expect(outcome).toMatchObject({ ok: false, status: 403 });
+      expect(serverRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  it("retires the runtime when the request is canceled during discovery", async () => {
+    await withToolsInvokeTestState({ label: "mcp-invoke-cancel" }, async () => {
+      const controller = new AbortController();
+      let failDiscovery: (error: Error) => void = () => undefined;
+      runtime.materialize.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            failDiscovery = reject;
+            controller.abort(new Error("client disconnected"));
+          }),
+      );
+      // Retirement closes the transport, which fails the pending tools/list.
+      runtime.retire.mockImplementationOnce(async () => {
+        failDiscovery(new Error("connection closed"));
+        return true;
+      });
+
+      await expect(invoke("granola__list_meetings", { signal: controller.signal })).rejects.toThrow(
+        "client disconnected",
+      );
+      expect(runtime.retire).toHaveBeenCalledOnce();
+      expect(runtime.mcpExecute).not.toHaveBeenCalled();
+    });
+  });
 });
