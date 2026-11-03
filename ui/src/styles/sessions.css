@@ -397,6 +397,11 @@
   background: var(--field-bg);
 }
 
+/* "Descending" needs more than half of the narrowest phones, like a full date. */
+.oc-sheet .sessions-filter-popover__panel .sessions-filter-popover__fields--sort {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
 /* An unchecked toggle draws no check; its slot stays so the label doesn't move. */
 .oc-sheet .session-filter-check__input:not(:checked) + .session-filter-check__mark svg {
   visibility: hidden;
@@ -926,18 +931,6 @@ select.session-group-select {
 /* Phone width: toolbar in two rows, the table reads as a list that scrolls with
    the page. Keep the breakpoint in sync with PHONE_LAYOUT_QUERY in view.tsx. The
    page prefix outranks layout.mobile.css regardless of lazy stylesheet order. */
-@media (max-width: 560px) {
-  /* Too narrow for the big title; the heading stays for assistive tech. */
-  openclaw-sessions-page .hub-page-header .page-title {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-}
-
 @media (max-width: 640px) {
   openclaw-sessions-page .settings-section__heading {
     position: absolute;
@@ -989,12 +982,6 @@ select.session-group-select {
     flex: 1 1 0;
     min-width: 0;
     margin-inline-end: var(--space-1);
-  }
-
-  /* Safari collapses an unsized svg in the picker's inline-flex chevron rail. */
-  .sessions-filter-sheet .session-groupby .picker-select__chevron svg {
-    width: 16px;
-    height: 16px;
   }
 
   .sessions-search input::placeholder {
@@ -1070,51 +1057,6 @@ select.session-group-select {
     .settings-section__actions
     .sessions-filter-popover__trigger.btn--icon.btn--xs.active:hover {
     color: var(--accent);
-  }
-
-  .sessions-filter-sheet .sessions-filter-popover__panel {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    line-height: normal;
-  }
-
-  .sessions-filter-sheet .sessions-filter-popover__panel > * {
-    grid-column: 1 / -1;
-    min-width: 0;
-  }
-
-  .sessions-filter-sheet .sessions-filter-popover__panel > .session-groupby--half {
-    grid-column: auto;
-  }
-
-  .sessions-filter-sheet .sessions-filter-popover__panel .session-groupby {
-    display: grid;
-    justify-content: stretch;
-    gap: 6px;
-    width: 100%;
-  }
-
-  .sessions-filter-sheet .session-groupby__label {
-    color: var(--muted);
-    font-size: 13px;
-    font-weight: 500;
-  }
-
-  .sessions-filter-sheet .session-groupby > openclaw-select-picker {
-    display: block;
-    min-width: 0;
-    max-width: none;
-  }
-
-  .sessions-filter-sheet .session-groupby .picker-select__trigger {
-    justify-content: space-between;
-    width: 100%;
-    height: var(--settings-control-height);
-    min-height: var(--settings-control-height);
-    padding-inline: var(--field-padding-inline);
-    font-size: 16px;
-    background: var(--field-bg);
-    border: 1px solid var(--field-border);
-    border-radius: var(--field-radius);
   }
 
   openclaw-sessions-page .data-table-container {

@@ -1,5 +1,3 @@
-import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
-import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -16,25 +14,6 @@ import { resolveSkillWorkshopConfig } from "./config.js";
 import { workshopReviewIdOf } from "./review-undo.js";
 
 const log = createSubsystemLogger("skills/workshop");
-
-/**
- * A background Workshop run fails only when the model or runtime failed. Tool errors — a refused
- * write, a gated tool, a patch that did not match — are the model's to handle, not run failures.
- */
-export function assertSkillReviewRunSucceeded(
-  result: Pick<EmbeddedAgentRunResult, "meta" | "payloads">,
-): void {
-  const runtimeErrorPayload = result.payloads?.find(
-    (payload) => payload.isError && !getReplyPayloadMetadata(payload)?.toolErrorWarning,
-  );
-  const message =
-    result.meta.error?.message.trim() ||
-    (result.meta.aborted ? "Skill review model run aborted." : undefined) ||
-    runtimeErrorPayload?.text?.trim();
-  if (message || runtimeErrorPayload) {
-    throw new Error(message || "Skill review model run failed.");
-  }
-}
 
 const ACTION_VERB: Record<WorkshopChange["action"], SkillWorkshopNoticeAction> = {
   create: "created",

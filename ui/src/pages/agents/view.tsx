@@ -14,6 +14,7 @@ import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { ConfigError } from "../../components/config-error.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
@@ -148,6 +149,31 @@ export function Agents(props: AgentsProps) {
       : null,
     cron: props.selectedAgentId ? props.readData().cron.cronJobsTotal || null : null,
   });
+  const pageMenu = () => (
+    <AgentsPageMenu
+      agentId={selectedAgent()?.id ?? null}
+      defaultLabel={
+        settingDefault()
+          ? t("common.saving")
+          : selectedAgent()?.id === defaultId()
+            ? t("agents.default")
+            : t("agents.setDefault")
+      }
+      defaultDisabled={
+        !props.access.canUpdateConfig || settingDefault() || selectedAgent()?.id === defaultId()
+      }
+      pinLabel={t(
+        props.pinnedAgentIds.includes(selectedAgent()?.id ?? "")
+          ? "agents.unpinFromSwitcher"
+          : "agents.pinToSwitcher",
+      )}
+      refreshLabel={t(rosterPending() ? "common.loading" : "common.refresh")}
+      refreshDisabled={rosterPending()}
+      onSetDefault={setDefault}
+      onTogglePinned={props.onTogglePinnedAgent}
+      onRefresh={props.onRefresh}
+    />
+  );
   return (
     <div class="agents-layout">
       <section class="agents-toolbar">
@@ -233,31 +259,7 @@ export function Agents(props: AgentsProps) {
               busy={rosterPending()}
               onClick={() => props.onRefresh()}
             />
-            <AgentsPageMenu
-              agentId={selectedAgent()?.id ?? null}
-              defaultLabel={
-                settingDefault()
-                  ? t("common.saving")
-                  : selectedAgent()?.id === defaultId()
-                    ? t("agents.default")
-                    : t("agents.setDefault")
-              }
-              defaultDisabled={
-                !props.access.canUpdateConfig ||
-                settingDefault() ||
-                selectedAgent()?.id === defaultId()
-              }
-              pinLabel={t(
-                props.pinnedAgentIds.includes(selectedAgent()?.id ?? "")
-                  ? "agents.unpinFromSwitcher"
-                  : "agents.pinToSwitcher",
-              )}
-              refreshLabel={t(rosterPending() ? "common.loading" : "common.refresh")}
-              refreshDisabled={rosterPending()}
-              onSetDefault={setDefault}
-              onTogglePinned={props.onTogglePinnedAgent}
-              onRefresh={props.onRefresh}
-            />
+            <FloatingHeaderActions fallback={pageMenu()}>{pageMenu()}</FloatingHeaderActions>
           </div>
         </div>
         <AgentReadNotice request={props.listRead} style={{ "margin-top": "8px" }} />

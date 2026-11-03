@@ -124,19 +124,16 @@ suite.define(() => {
         await transcriptInput.waitFor();
         await transcriptInput.press("Escape");
         await filter.click();
-        const sheet = page.locator(".sessions-filter-sheet");
+        const sheet = page.locator(".sessions-filter-popover:popover-open");
         await sheet.getByRole("radiogroup", { name: "Session state" }).waitFor();
         for (const [label, value] of [
           ["Group by", "Agent"],
           ["Sort", "Session"],
           ["Direction", "Ascending"],
         ]) {
-          await sheet.getByRole("button", { name: new RegExp(`^${label}:`) }).click();
-          await sheet
-            .getByRole("listbox", { name: label, exact: true })
-            .getByRole("option", { name: value, exact: true })
-            .click();
-          await sheet.getByRole("button", { name: `${label}: ${value}`, exact: true }).waitFor();
+          const choice = sheet.getByRole("combobox", { name: label, exact: true });
+          await choice.selectOption({ label: value });
+          await expect.poll(() => choice.locator("option:checked").textContent()).toBe(value);
         }
         await sheet.getByRole("button", { name: "Close" }).last().click();
         await sheet.waitFor({ state: "hidden" });

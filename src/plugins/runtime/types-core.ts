@@ -366,6 +366,7 @@ export type PluginRuntimeCore = {
       listSessionEntries: (
         params?: Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
           readOnly?: boolean;
+          projection?: "full" | "list";
           /** Restrict results to exact persisted keys while retaining canonical listing validation. */
           sessionKeys?: readonly string[];
           /** Set false to skip derived participant identities and counts when reading metadata. */
@@ -504,7 +505,7 @@ export type PluginRuntimeCore = {
     ) => Promise<import("../../music-generation/runtime-types.js").GenerateMusicRuntimeResult>;
     listProviders: (
       params?: RuntimeProviderListParams,
-    ) => import("../../music-generation/types.js").MusicGenerationProvider[];
+    ) => import("../../music-generation/provider-types.js").MusicGenerationProvider[];
   };
   webSearch: {
     /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */

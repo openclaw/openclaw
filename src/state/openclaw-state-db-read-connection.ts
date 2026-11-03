@@ -22,6 +22,7 @@ import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
 import { assertTransactionUsable, runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { SqliteSchemaErrorContext } from "../infra/sqlite-user-version.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import {
   assertExistingDatabaseIdentity,
@@ -33,6 +34,7 @@ import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  type OpenClawStateDatabase,
   type OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
 import {
@@ -590,4 +592,21 @@ function openStateReadConnectionResult(
     throw error;
   }
   return { status: "available", value: connection };
+}
+
+export function readOnlyStateDatabase(
+  database: Pick<OpenClawStateDatabase, "db" | "path">,
+  close: () => boolean,
+): OpenClawStateDatabase {
+  return {
+    ...database,
+    walMaintenance: {
+      checkpoint: () => false,
+      stop: async () => {},
+      reclaimFreePages: createSqliteWalReclamationResult,
+      // Cleanup can fail transiently after the database closes. Keep the
+      // close contract retryable until one call finishes both responsibilities.
+      close,
+    },
+  };
 }

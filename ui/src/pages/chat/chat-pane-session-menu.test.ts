@@ -3,6 +3,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createComponent, flush, merge } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
@@ -158,6 +159,29 @@ describe("chat pane session menu boundary", () => {
       "/workspace",
       true,
     );
+    expect(request.mock.calls.filter(([method]) => method === "worktrees.branches")).toHaveLength(
+      0,
+    );
+  });
+
+  it("does not send the prior workspace after reconnecting during picker loading", async () => {
+    const request = vi.fn(async (_method: string) => ({}));
+    const { pane } = createTestChatPane({
+      client: createGatewayBrowserClientFixture({ request }),
+    });
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods([
+      "system.info",
+      "worktrees.branches",
+    ]);
+    const connected = { ...pane.context.gateway.snapshot };
+    const loading = pane.loadHeaderMenuData(
+      { key: "agent:main:current", kind: "direct", spawnedCwd: "/workspace" },
+      "/workspace",
+      true,
+    );
+    pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting", hello: null });
+    pane.applyGatewaySnapshot(connected);
+    await loading;
     expect(request.mock.calls.filter(([method]) => method === "worktrees.branches")).toHaveLength(
       0,
     );
@@ -589,6 +613,55 @@ describe("chat pane session menu boundary", () => {
       );
       expect(deleteItem).not.toBeNull();
       expect(deleteItem?.disabled).toBe(!allowed);
+    },
+  );
+
+  it.each(["session", "agent", "reconnect", "retained return", "mutation scope"])(
+    "keeps newer %s intent when a typed fork settles",
+    async (change) => {
+      const pending = createDeferred<string>();
+      const admitted = createDeferred();
+      const create = vi.fn(() => {
+        admitted.resolve();
+        return pending.promise;
+      });
+      const row: GatewaySessionRow = {
+        key: "global",
+        kind: "direct",
+        sharingRole: "owner",
+        sessionId: "source-instance",
+      };
+      const { pane, state } = createTestChatPane({
+        sessions: createSessionCapabilityFixture({ create }),
+      });
+      pane.presented = true;
+      state.sessionKey = row.key;
+      state.assistantAgentId = "main";
+      state.currentSessionId = row.sessionId!;
+      state.sessionsResult = sessionsResult([row]);
+      state.sessionsLoading = false;
+      const navigate = vi.fn();
+      pane.onPaneSessionChange = navigate;
+      const fork = pane.forkConversation("Plan B");
+      await admitted.promise;
+      expect(create).toHaveBeenCalledOnce();
+      if (change === "session") {
+        state.sessionKey = "agent:main:new-selection";
+      } else if (change === "agent") {
+        state.assistantAgentId = "work";
+      } else if (change === "reconnect") {
+        state.connectionEpoch = ++pane.connectionGeneration;
+      } else if (change === "mutation scope") {
+        pane.retireHeaderSessionMutations();
+      } else {
+        pane.presented = false;
+        pane.presented = true;
+      }
+      state.chatMessage = "Keep this newer draft";
+      pending.resolve("agent:main:late-fork");
+      await expect(fork).resolves.toBe("cancelled");
+      expect(navigate).not.toHaveBeenCalled();
+      expect(state.chatMessage).toBe("Keep this newer draft");
     },
   );
 

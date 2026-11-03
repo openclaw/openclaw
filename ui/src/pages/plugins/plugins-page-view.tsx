@@ -202,6 +202,8 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     onConfigWriteRetry: () => void page().context.runtimeConfig.retry(),
     onRefresh: () => void page().refreshCatalog(),
     onAskPlugin: onAskPlugin(),
+    onSelectPrompt: (prompt: string) => void page().recommendedPrompts.select(prompt),
+    promptBlockedReason: page().recommendedPrompts.blockedReason(),
     onAskSetting: ask(),
   }));
 
@@ -248,6 +250,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       <PluginDetailBoundary onRetry={() => void page().showDetails(detailProps.pluginId)}>
         <PluginSettingsDetail
           {...shared()}
+          promptBusy={page().recommendedPrompts.pending}
           configUnsupportedPaths={configAnalysis().unsupportedPaths}
           pluginId={detailProps.pluginId}
           installProgress={page().consent.getActiveInstall(pluginRowKey(detailProps.pluginId))}
@@ -361,6 +364,9 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                     registerInstallAction={page().registerInstallAction}
                     registerIcon={page().icons.register}
                     onAskPlugin={onAskPlugin()}
+                    onSelectPrompt={(prompt) => void page().recommendedPrompts.select(prompt)}
+                    promptBusy={page().recommendedPrompts.pending}
+                    promptBlockedReason={page().recommendedPrompts.blockedReason()}
                     connected={page().gateway.connected}
                     skillsSection={catalogSkillsSection()}
                     result={page().state.catalogDetail?.result ?? null}

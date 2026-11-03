@@ -12,7 +12,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import {
   requestDeferredPluginInstall,
-  resolvePluginInstallTransaction,
+  takePluginInstallTransaction,
 } from "./install-transaction.js";
 
 const runCommandWithTimeoutMock = vi.fn();
@@ -400,7 +400,7 @@ describe("installPluginFromGitSpec", () => {
       path.basename(expectDefined(reviewedArtifactDir, "reviewed artifact test invariant")),
     ).toMatch(/^\.openclaw-install-stage-/);
     await expect(read(result.targetDir, "index.js")).resolves.toBe("reviewed capabilities");
-    await resolvePluginInstallTransaction(result)?.commit();
+    await takePluginInstallTransaction(result)?.commit();
   });
 
   it("preserves a deferred git consent rejection without publishing its staged artifact", async () => {

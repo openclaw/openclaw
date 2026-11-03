@@ -32,8 +32,6 @@ export function PhoneSheet(props: {
   triggerId?: string;
   triggerClass?: JSX.HTMLAttributes<HTMLButtonElement>["class"];
   triggerTitle?: string;
-  /** A control beside the close button; the title stays centered on the sheet. */
-  headerAction?: JSX.Element;
   children?: JSX.Element;
   onOpenChange?(open: boolean): void;
   ref?(handle: PopoverHandle): void;
@@ -123,6 +121,10 @@ export function PhoneSheet(props: {
         props.ref?.({
           ...value,
           hide: () => {
+            // A form can submit with the sheet closed; a late dismiss would close its next opening.
+            if (!value.overlay.open) {
+              return false;
+            }
             slideOutAndDismiss();
             return true;
           },
@@ -132,11 +134,7 @@ export function PhoneSheet(props: {
         if (open) {
           restore();
           // Focus the close button, not the first field, so a tap doesn't raise the keyboard.
-          // The surface takes it when a header action has hidden the close button.
-          queueMicrotask(() => {
-            handle?.overlay.surface.focus({ preventScroll: true });
-            closeButton.focus({ preventScroll: true });
-          });
+          queueMicrotask(() => closeButton.focus({ preventScroll: true }));
         }
         props.onOpenChange?.(open);
       }}
@@ -153,7 +151,6 @@ export function PhoneSheet(props: {
         <div ref={(element) => (grabber = element)} class="oc-sheet__grabber" aria-hidden="true" />
         <div class="oc-sheet__header">
           <h2 class="oc-sheet__title">{props.label}</h2>
-          <div class="oc-sheet__action">{props.headerAction}</div>
           <button
             ref={(element) => (closeButton = element)}
             type="button"

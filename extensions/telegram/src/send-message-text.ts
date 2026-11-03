@@ -77,8 +77,8 @@ export function createTelegramTextSender(config: {
     useRichMessages,
   } = config;
 
-  const linkPreviewOptions =
-    account.config.linkPreview === false ? { is_disabled: true } : undefined;
+  const linkPreview = opts.linkPreview ?? account.config.linkPreview;
+  const linkPreviewOptions = linkPreview === false ? { is_disabled: true } : undefined;
 
   return async (
     rawText: string,
@@ -223,7 +223,7 @@ export function createTelegramTextSender(config: {
       tableMode,
       chunkMode: opts.chunkMode ?? resolveChunkMode(cfg, "telegram", account.accountId),
       richMessages: useRichMessages,
-      skipEntityDetection: account.config.linkPreview === false,
+      skipEntityDetection: linkPreview === false,
       ...(textMode === "html" ? { textMode: "html" as const } : {}),
       warn: (message) => sendLogger.warn(message),
     });

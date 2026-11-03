@@ -134,6 +134,7 @@ export async function createChildAdapter(
   if (params.anchoredShellCommand !== undefined) {
     return await createServiceChildRelayAdapter({
       executionIntent: params.executionIntent,
+      executionScopeKey: params.executionScopeKey,
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
       initiateSpawn: params.initiateSpawn,
@@ -177,6 +178,7 @@ export async function createChildAdapter(
   ) {
     return await createServiceChildRelayAdapter({
       executionIntent: params.executionIntent,
+      executionScopeKey: params.executionScopeKey,
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
       initiateSpawn: params.initiateSpawn,
@@ -280,6 +282,7 @@ export async function createChildAdapter(
       initiateSpawn: params.initiateSpawn,
       argv: [preparedSpawn.command, ...preparedSpawn.args],
       executionIntent: params.executionIntent,
+      executionScopeKey: params.executionScopeKey,
       options,
     });
 

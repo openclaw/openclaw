@@ -541,8 +541,8 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   }
   const bindExplicitRaw = bindExplicitRawStr as GatewayBindMode | undefined;
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
-    const { cleanStaleGatewayProcessesSync } = await import("../../infra/restart-stale-pids.js");
-    const stale = cleanStaleGatewayProcessesSync(port, {
+    const { cleanStaleGatewayProcesses } = await import("../../infra/restart-stale-pids.js");
+    const stale = await cleanStaleGatewayProcesses(port, {
       protectedPid: inheritedGatewayServicePid,
     });
     if (stale.length > 0) {
