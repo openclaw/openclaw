@@ -117,11 +117,11 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
     ),
     "Multi-invocation JSON supports native JSON plus console reporters. Run other file/custom reporters separately with unique destinations.",
   );
-  const { readJsonFile, validateVitestJsonReport } = await import("../test-report-utils.mts");
+  const { readJsonFile, readVitestJsonReport } = await import("../test-report-utils.mts");
   function readNativeReport(file: string) {
-    const invalid = validateVitestJsonReport(file);
-    assert.equal(invalid, null);
-    return readJsonFile(file) as JsonTestResults;
+    const report = readVitestJsonReport(file);
+    assert(report.ok, report.ok ? "" : report.error);
+    return report.value as unknown as JsonTestResults;
   }
 
   const requested = path.resolve(cwd, request.output);

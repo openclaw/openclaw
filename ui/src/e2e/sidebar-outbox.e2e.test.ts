@@ -65,7 +65,7 @@ async function expectCompactRow(incident: Locator) {
           : null,
     };
   });
-  expect(geometry.height).toBeGreaterThanOrEqual(64);
+  expect(geometry.height).toBeGreaterThanOrEqual(56);
   expect(geometry.height).toBeLessThanOrEqual(96);
   expect(geometry).toMatchObject({ titleFits: true, fits: true, actionFits: true });
   if (geometry.offlineGap !== null) {

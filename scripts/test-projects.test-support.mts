@@ -106,10 +106,7 @@ import {
   splitExtensionTestJobTargets,
   splitExtensionTestProcessTargets,
 } from "./lib/extension-test-plan.mts";
-import {
-  createGatewayServerTestTargetChunks,
-  splitTestTargetChunks as splitTargetChunks,
-} from "./lib/gateway-server-test-plan.mts";
+import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mts";
 import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./lib/list-test-files.mts";
 import {
   readRuntimeWorkerDescriptorReads,
@@ -118,6 +115,7 @@ import {
   readTestSelectorSourceFacts,
   runtimeWorkerSpecifier,
 } from "./lib/test-selector-source-facts.mts";
+import { splitTestTargetChunks as splitTargetChunks } from "./lib/test-target-chunks.mts";
 // CI imports planning before dependency installation; execution owners stay outside this closure.
 import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
@@ -129,6 +127,7 @@ import {
 } from "./lib/vitest-cli-mode.mts";
 import {
   isCiLikeEnv,
+  parseOptionalPositiveInt,
   resolveLocalFullSuiteProfile,
   type VitestHostInfo,
 } from "./lib/vitest-local-scheduling.mts";
@@ -5211,7 +5210,7 @@ function shouldUseWholeConfigTarget(kind: string, targetArg: string, cwd: string
   return isControlUiSourcePath(relative);
 }
 
-function createVitestArgs(
+export function createVitestArgs(
   params: Pick<VitestRunPlan, "config" | "forwardedArgs" | "watchMode"> & {
     env?: NodeJS.ProcessEnv;
   },
@@ -5709,7 +5708,7 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
       },
     ];
   }
-  const parallelShardCount = parsePositiveInt(
+  const parallelShardCount = parseOptionalPositiveInt(
     process.env.OPENCLAW_TEST_PROJECTS_PARALLEL,
     "OPENCLAW_TEST_PROJECTS_PARALLEL",
   );
@@ -5825,23 +5824,8 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
   });
 }
 
-function parsePositiveInt(value: string | undefined, label: string) {
-  const text = value?.trim();
-  if (!text) {
-    return null;
-  }
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${label} must be a positive integer; got: ${value}`);
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${label} must be a positive integer; got: ${value}`);
-  }
-  return parsed;
-}
-
 function hasConservativeVitestWorkerBudget(env: NodeJS.ProcessEnv) {
-  const workerBudget = parsePositiveInt(
+  const workerBudget = parseOptionalPositiveInt(
     env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS,
     env.OPENCLAW_VITEST_MAX_WORKERS === undefined
       ? "OPENCLAW_TEST_WORKERS"
@@ -5899,7 +5883,7 @@ export function resolveParallelFullSuiteConcurrency(
 ) {
   let env = envInput;
   env ??= process.env;
-  const override = parsePositiveInt(
+  const override = parseOptionalPositiveInt(
     env.OPENCLAW_TEST_PROJECTS_PARALLEL,
     "OPENCLAW_TEST_PROJECTS_PARALLEL",
   );
@@ -6095,7 +6079,7 @@ export function createVitestRunSpecs(
           : baseEnv,
       includeFilePath,
       includePatterns: plan.includePatterns,
-      pnpmArgs: createVitestArgs(plan),
+      pnpmArgs: createVitestArgs({ ...plan, env: baseEnv }),
       preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
       watchMode: plan.watchMode,
     };

@@ -110,17 +110,8 @@ async function prepareSessionPrincipalRunAccess(params: {
     sharing?.release?.();
     identity.release();
   };
-  const readRole = () => {
-    const profile = identity.readCurrentProfile();
-    return resolveOperatorRolePolicyForAssignment(
-      params.profileId,
-      profile.assignedRole,
-      getConfig(),
-      profile.githubLogin ?? null,
-    );
-  };
   const readScopes = () => {
-    identity.readCurrentProfile();
+    const profile = identity.readCurrentProfile();
     // The recorded principal must itself remain the Gateway owner; this is never a fallback.
     if (params.profileId === GATEWAY_OWNER_PROFILE_ID) {
       if (readResidentGatewayOwnerProfile(ownerProfilePath)?.id !== params.profileId) {
@@ -128,7 +119,12 @@ async function prepareSessionPrincipalRunAccess(params: {
       }
       return ["operator.admin"];
     }
-    const scopes = readRole()?.scopes;
+    const scopes = resolveOperatorRolePolicyForAssignment(
+      params.profileId,
+      profile.assignedRole,
+      getConfig(),
+      profile.githubLogin ?? null,
+    )?.scopes;
     if (!scopes || resolveMissingOperatorScope(["operator.sessions.write"], scopes) !== null) {
       throw new Error("Session principal has no current run authority.");
     }
@@ -157,7 +153,7 @@ async function prepareSessionPrincipalRunAccess(params: {
       params.assertCurrent?.();
       access?.signal.throwIfAborted();
       access?.assertCurrent();
-      identity.readCurrentFacts();
+      // readScopes validates the retained identity before consuming its current role.
       if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
         throw new Error("Session principal has no current run authority.");
       }
@@ -430,6 +426,12 @@ export async function resolveSessionMutationAuthorizationAsync(
           }
         },
         retain,
+        retainForRun: () => ({
+          // Published facts stay live without repeating history preparation or transport admission.
+          assertCurrent: () =>
+            (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)(),
+          release: retain(),
+        }),
         release: () => {
           if (!transferred) {
             releaseRequest();

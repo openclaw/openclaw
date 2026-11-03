@@ -24,14 +24,18 @@ it("repairs unusable hostname entries even for a disabled proxy", () => {
   expect(validateConfigObjectRaw(raw).ok).toBe(true);
 });
 
-it("keeps valid allowed hosts when dropping unusable entries", () => {
-  const raw = {
-    secrets: { egressProxy: { allowedHosts: ["good.example.com", "https://bad.example.com"] } },
-  };
-  expectLegacyHostIssue(raw, "allowedHosts");
-  migration.apply(raw, []);
-  expect(raw).toEqual({ secrets: { egressProxy: { allowedHosts: ["good.example.com"] } } });
-});
+it.each([{ retained: [] }, { retained: ["good.example.com"] }])(
+  "keeps allowedHosts restrictive when dropping unusable entries ($retained)",
+  ({ retained }) => {
+    const raw = {
+      secrets: { egressProxy: { allowedHosts: [...retained, "https://bad.example.com"] } },
+    };
+    expectLegacyHostIssue(raw, "allowedHosts");
+    migration.apply(raw, []);
+    expect(raw).toEqual({ secrets: { egressProxy: { allowedHosts: retained } } });
+    expect(validateConfigObjectRaw(raw).ok).toBe(true);
+  },
+);
 
 it("leaves valid host arrays unchanged without reporting issues", () => {
   const raw = {

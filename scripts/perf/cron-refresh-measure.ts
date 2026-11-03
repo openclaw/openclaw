@@ -21,7 +21,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
@@ -33,6 +32,7 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronJob } from "../../src/cron/types.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -250,12 +250,7 @@ try {
   commands.clear();
   global.gc();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const hostLoadBefore = loadavg();
   const memoryBefore = process.memoryUsage();
@@ -283,8 +278,6 @@ try {
   } else {
     assert(after.jobs.slice(0, 4).every((job) => job.state.lastRunStatus === "ok"));
   }
-  const sampledBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-    node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
   const notifications = values.workload === "refresh" ? iterations * burstSize : undefined;
   const report = {
     scope:
@@ -315,7 +308,7 @@ try {
     elapsedMs,
     processCpuMs: (cpuUsed.user + cpuUsed.system) / 1000,
     mainThreadCpuMs: (threadUsed.user + threadUsed.system) / 1000,
-    sampledMainThreadBytes: profile ? sampledBytes(profile.head) : null,
+    sampledMainThreadBytes: profile ? sumSampledHeapBytes(profile.head) : null,
     unchangedJobs: values.workload === "refresh",
     scheduleDigest: createHash("sha256")
       .update(

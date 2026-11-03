@@ -651,6 +651,7 @@ export async function finishGatewayStartup(params: {
           await cleanupGatewayRetiredPluginArtifacts({
             log,
             startupInstallPaths,
+            startupConfig: cfgAtStart,
             signal: runtime.connectionWork.signal,
             assertCurrent: () => {
               if (lifecycle.closePreludeStarted) {
@@ -661,24 +662,6 @@ export async function finishGatewayStartup(params: {
         },
         log,
         errorMessage: "retained npm generation cleanup failed",
-      }),
-    );
-    registerGatewayLifetimeSidecars(
-      gatewayRuntimeServices.scheduleGatewayIdleTask({
-        id: "maintenance:sqlite-snapshots",
-        scheduler: runtime.scheduler,
-        delayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
-        retryDelayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
-        isClosing: () => lifecycle.closePreludeStarted,
-        isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
-        repeatDelayMs: 15 * 60_000,
-        run: async () => {
-          const { reclaimAbandonedSqliteSnapshotsAsync } =
-            await import("../infra/sqlite-snapshot-reclamation.js");
-          await reclaimAbandonedSqliteSnapshotsAsync();
-        },
-        log,
-        errorMessage: "SQLite snapshot staging cleanup failed",
       }),
     );
   } else {

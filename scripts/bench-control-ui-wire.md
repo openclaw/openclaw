@@ -99,6 +99,37 @@ canonical session roster, and the visible transcript and enabled composer.
 The wire census must also show a new successful WebSocket upgrade, connect
 response, and roster response before readiness, so cached UI alone cannot pass.
 
+`--reconnect-trigger silent|online|visible` selects the recovery stimulus and is
+recorded on the report and reconnect sample. The default `silent` keeps the
+existing proxy-only drop and restoration; it does not emit an online or visibility
+event. `online` also takes the browser context offline, then returns it online
+after restoring the proxy, exercising the browser's real offline/online events.
+`visible` disables focus emulation, minimizes the headless browser window during
+the outage, verifies that the document is hidden, then restores it after the
+proxy and verifies that it becomes visible. An unavailable native visibility
+transition fails the sample rather than substituting a synthetic event. These
+are separate workloads; never present online/visible recovery as a silent-retry
+improvement or combine modes in one comparison.
+
+Before the outage, the runner subscribes to the existing application-context
+Gateway snapshot. Reconnect `retrySchedule.events` records changes in phase,
+`reconnectAt`, and error code, plus browser offline/online/visibility events and
+outage-start, before-restore, and link-restored markers. Each entry includes
+browser `performance.now()` relative to readiness zero, `Date.now()` as
+`epochMs`, the actual jittered epoch deadline `reconnectAt`, and its signed
+`reconnectInMs` at observation. `onConnecting` clears that deadline; the preceding
+scheduled entry identifies the timer that just elapsed. Error text, connection
+credentials, and payloads are omitted. The 128-entry bound reports
+`droppedEvents`; a nonzero value means the schedule is incomplete.
+
+The proxy also records `outageStartedEpochMs` and `restoredEpochMs` immediately
+before changing the link. Use the before/after browser markers to bracket that
+change and the retained deadline to calculate the remaining retry delay at
+restoration. Browser events retain `isTrusted`, current `online`, and actual
+document `visibility`. The subscription continues through the settled capture
+and is disposed afterward. These observations identify the selected deadline
+and its firing lag; close-to-create gaps alone do not reveal the jitter draw.
+
 The report retains HTTP resource types, encoded transfer sizes, cache status,
 response headers, service-worker delivery, and timings. HTTP byte and wire-request
 counters are page-observed lower bounds: this page's CDP session does not capture

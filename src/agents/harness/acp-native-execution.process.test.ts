@@ -117,6 +117,7 @@ async function peerStates(directory: string): Promise<PeerState[]> {
 
 it.each([
   ["opencode", "OpenCode", { tools: { profile: "messaging" } }],
+  ["grok-build", "Grok Build", { tools: { profile: "coding" } }],
   [
     "qoder",
     "Qoder",
@@ -151,6 +152,7 @@ it.each([
 
 it.each([
   ["kilocode", { tools: { profile: "coding", alsoAllow: ["message"] } }],
+  ["grok-build", { tools: { profile: "coding", alsoAllow: ["pdf"] } }],
   ["qoder", { tools: { profile: "full" } }],
 ] satisfies Array<[string, OpenClawConfig]>)(
   "admits %s's allowed native capabilities and commits its transcript",

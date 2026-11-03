@@ -145,7 +145,7 @@ describe("acpx plugin", () => {
   });
 
   it("detects native programs and applies current enable settings without starting the runtime", async () => {
-    for (const command of ["npx", "opencode", "qwen", "pi-acp", "copilot", "qodercli"]) {
+    for (const command of ["npx", "opencode", "qwen", "pi-acp", "copilot", "grok", "qodercli"]) {
       nativePrograms.add(command);
     }
     let config: OpenClawPluginApi["config"] = { acp: { allowedAgents: ["codex"] } };
@@ -189,13 +189,25 @@ describe("acpx plugin", () => {
     });
     expect(detected).toHaveProperty("agents.1.installation", "installed");
     expect(detected).toHaveProperty("agents.2.installation", "missing");
-    expect(detected).toHaveProperty("agents.5", {
-      id: "qoder",
-      name: "Qoder",
-      runtimeId: "acp-qoder",
-      installation: "installed",
-      enabled: true,
-    });
+    expect(detected).toHaveProperty(
+      "agents",
+      expect.arrayContaining([
+        {
+          id: "grok-build",
+          name: "Grok Build",
+          runtimeId: "acp-grok-build",
+          installation: "installed",
+          enabled: true,
+        },
+        {
+          id: "qoder",
+          name: "Qoder",
+          runtimeId: "acp-qoder",
+          installation: "installed",
+          enabled: true,
+        },
+      ]),
+    );
     const opencode = getHarness("opencode");
     const selection = {
       provider: "acp-opencode",
@@ -216,6 +228,7 @@ describe("acpx plugin", () => {
         pi: false,
         kilocode: false,
         copilot: false,
+        "grok-build": false,
         qoder: false,
       },
       agents: { qwen: { command: "npx qwen" } },
@@ -232,7 +245,13 @@ describe("acpx plugin", () => {
     expect(disabled).toHaveProperty("agents.0.enabled", false);
     expect(disabled).toHaveProperty("agents.1.installation", "unverified");
     expect(disabled).toHaveProperty("agents.2.installation", "installed");
-    expect(disabled).toHaveProperty("agents.5.enabled", false);
+    await expect(
+      getHarness("grok-build").loadModelCatalog(catalogInput(undefined, config)),
+    ).resolves.toEqual({ entries: [] });
+    expect(disabled).toHaveProperty(
+      "agents",
+      expect.arrayContaining([expect.objectContaining({ id: "qoder", enabled: false })]),
+    );
     await expect(
       getHarness("qoder").loadModelCatalog(catalogInput(undefined, config)),
     ).resolves.toEqual({ entries: [] });
@@ -242,12 +261,13 @@ describe("acpx plugin", () => {
   });
 
   it.for([
-    { agent: "opencode", runtimeId: "acp-opencode", lifecycle: "enabled" },
-    { agent: "opencode", runtimeId: "acp-opencode", lifecycle: "disposed" },
-    { agent: "qoder", runtimeId: "acp-qoder", lifecycle: "enabled" },
+    { agent: "opencode", provider: "acp-opencode", lifecycle: "enabled" },
+    { agent: "opencode", provider: "acp-opencode", lifecycle: "disposed" },
+    { agent: "grok-build", provider: "acp-grok-build", lifecycle: "enabled" },
+    { agent: "qoder", provider: "acp-qoder", lifecycle: "enabled" },
   ] as const)(
-    "inspects a real native catalog without runtime state: %j",
-    async ({ agent, runtimeId, lifecycle }, { signal }) => {
+    "inspects $agent's real native catalog without runtime state when $lifecycle",
+    async ({ agent, provider, lifecycle }, { signal }) => {
       const directory = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-native-catalog-"));
       const peerDirectory = path.join(directory, "peer");
       await fs.mkdir(peerDirectory);
@@ -309,12 +329,12 @@ export { sendReceipt };`,
               ["initial", "Initial"],
               ["selected", "Selected"],
             ].map(([id, name]) => ({
-              provider: runtimeId,
+              provider,
               id,
               name,
-              nativeRuntime: runtimeId,
+              nativeRuntime: provider,
             })),
-            outcomes: [{ provider: runtimeId, status: "ready" }],
+            outcomes: [{ provider, status: "ready" }],
           });
         }
         const sessionId = await fs.readFile(entered, "utf8");

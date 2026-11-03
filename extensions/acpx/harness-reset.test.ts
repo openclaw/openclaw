@@ -44,6 +44,7 @@ it("resets every registered ACP harness with a read-only package directory", asy
       "acp-pi",
       "acp-kilocode",
       "acp-copilot",
+      "acp-grok-build",
       "acp-qoder",
     ]);
     if (process.platform !== "win32" && process.getuid?.() !== 0) {

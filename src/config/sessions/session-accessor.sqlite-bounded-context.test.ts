@@ -234,52 +234,64 @@ it("does not acquire unrelated excluded history while selecting background depen
   expect(acquisition.acquiredBytes).toBe(0);
 });
 
-it("does not parse indexed legacy payloads outside the bounded context", async ({ scope }) => {
-  const marker = "unselected-legacy-payload";
-  await persist(scope, [
-    ...Array.from({ length: 16 }, (_, index) =>
-      user(`old-${index}`, index === 0 ? null : `old-${index - 1}`, marker),
-    ),
-    user("tail", "old-15"),
-  ]);
-  await waitProjection(scope);
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      database.db
-        .prepare(`UPDATE transcript_events
+it.for([false, true])(
+  "bounds legacy payload reads with an unindexed header: %s",
+  async (unindexedHeader, { scope }) => {
+    const marker = "unselected-legacy-payload";
+    await persist(scope, [
+      ...Array.from({ length: 16 }, (_, index) =>
+        user(`old-${index}`, index === 0 ? null : `old-${index - 1}`, marker),
+      ),
+      user("tail", "old-15"),
+    ]);
+    await waitProjection(scope);
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        database.db
+          .prepare(`UPDATE transcript_events
           SET navigation_type = NULL, navigation_custom_type = NULL,
               navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
               navigation_last_custom_type = NULL, navigation_valid = 1
           WHERE session_id = ?`)
-        .run(scope.sessionId);
-    },
-    { agentId: scope.agentId },
-  );
-  const database = openOpenClawAgentDatabaseReadOnly({ agentId: scope.agentId });
-  assert(database.found);
-  const nativeJson = new (requireNodeSqlite().DatabaseSync)(":memory:");
-  const validJson = nativeJson.prepare("SELECT json_valid(?) AS valid");
-  let unrelatedParses = 0;
-  try {
-    requireNativeSqliteDatabase(database.database.db).function(
-      "json_valid",
-      { deterministic: true },
-      (value) => {
-        unrelatedParses += Number(typeof value === "string" && value.includes(marker));
-        return validJson.get(value)?.valid ?? 0;
+          .run(scope.sessionId);
+        if (unindexedHeader) {
+          // Imported headers can lack identity ownership while later messages are indexed.
+          database.db
+            .prepare(
+              "DELETE FROM transcript_event_identities WHERE session_id = ? AND event_id = ?",
+            )
+            .run(scope.sessionId, scope.sessionId);
+        }
       },
+      { agentId: scope.agentId },
     );
-    const context = runSqliteReadSnapshotSync(database.database.db, () =>
-      boundedContext(scope, { maxBytes: 4096, maxEvents: 1, transaction: database.database }),
-    );
-    expect(eventIds(context.events)).toEqual([scope.sessionId, "tail"]);
-    expect(context).toMatchObject({ totalEvents: 17, truncated: true });
-    expect(unrelatedParses).toBe(0);
-  } finally {
-    database.database.close();
-    nativeJson.close();
-  }
-});
+    const database = openOpenClawAgentDatabaseReadOnly({ agentId: scope.agentId });
+    assert(database.found);
+    const nativeJson = new (requireNodeSqlite().DatabaseSync)(":memory:");
+    const validJson = nativeJson.prepare("SELECT json_valid(?) AS valid");
+    let unrelatedParses = 0;
+    try {
+      requireNativeSqliteDatabase(database.database.db).function(
+        "json_valid",
+        { deterministic: true },
+        (value) => {
+          unrelatedParses += Number(typeof value === "string" && value.includes(marker));
+          return validJson.get(value)?.valid ?? 0;
+        },
+      );
+      const context = runSqliteReadSnapshotSync(database.database.db, () =>
+        boundedContext(scope, { maxBytes: 4096, maxEvents: 1, transaction: database.database }),
+      );
+      expect(eventIds(context.events)).toEqual([scope.sessionId, "tail"]);
+      expect(context).toMatchObject({ totalEvents: 17, truncated: true });
+      // The imported-prefix path needs the immediate predecessor's logical parent ID.
+      expect(unrelatedParses).toBeLessThanOrEqual(unindexedHeader ? 1 : 0);
+    } finally {
+      database.database.close();
+      nativeJson.close();
+    }
+  },
+);
 
 it("enforces context count and byte budgets and releases rejected reads for later appends", async ({
   scope,

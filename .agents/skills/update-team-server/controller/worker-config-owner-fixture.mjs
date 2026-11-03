@@ -463,6 +463,9 @@ if(command==="busctl") {
   if(present("start-count")&&present("health-failure")) probes["/healthz"].ok=false;
   if(!Object.hasOwn(probes,endpoint)) reject("unsupported synthetic HTTP probe");
   event("probe."+endpoint.slice(1));
+  if(scenario==="operator-no-response"&&!present("start-count")) {
+    process.stdout.write("000");process.exit(28);
+  }
   if(read("system")!=="active"||read("listener-pid")==="0") process.exit(7);
   process.stdout.write(JSON.stringify(probes[endpoint])+"\n200");
 } else if(command==="systemctl") {

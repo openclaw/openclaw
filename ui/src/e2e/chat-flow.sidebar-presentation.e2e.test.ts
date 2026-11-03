@@ -399,7 +399,10 @@ suite.define(() => {
             const style = getComputedStyle(element);
             const accent = document.createElement("span").style;
             accent.color = style.getPropertyValue("--accent").trim();
-            return { actual: style.borderTopColor, expected: accent.color };
+            return {
+              actual: style.backgroundColor,
+              expected: accent.color,
+            };
           });
         expect.soft(spinnerColors.actual).toBe(spinnerColors.expected);
       }

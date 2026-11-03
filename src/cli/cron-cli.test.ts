@@ -6,7 +6,8 @@ import { ExitError } from "../runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerCronCli } from "./cron-cli.js";
-import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 
 const mocks = vi.hoisted(() => {
   const defaultRuntime = {

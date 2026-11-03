@@ -296,7 +296,7 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
       expect(binding).toMatchObject({ profileId, source: scheduledModel ? "user" : "auto" });
       const job: CronStoredJob = {
         ...storedJob("real-auth-continuity"),
-        inferenceBinding: binding,
+        inferenceBinding: binding ?? undefined,
       };
       const storePath = state.statePath("cron", "jobs.json");
       await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
@@ -351,7 +351,7 @@ it.each([
   ["configured key", undefined],
   [
     "unadopted stored account",
-    "Automation has no recorded inference account. Runtime openclaw would run openai/gpt-4.1 with stored account openai:platform. Record the account with openclaw automations edit <jobId> --model openai/gpt-4.1@openai:platform, or with openclaw doctor --fix.",
+    "Automation has no recorded inference account. Runtime openclaw would run openai/gpt-4.1 with stored account openai:platform. Record the account with openclaw automations edit <jobId> --model openai/gpt-4.1@openai:platform. For eligible host-managed accounts, openclaw doctor --fix can record it without pinning the model.",
   ],
   ["replacement", "inference account openai:platform on runtime openclaw was replaced"],
   ["revocation", "account openai:platform on runtime openclaw was removed or signed out"],
@@ -390,11 +390,12 @@ it.each([
     await writeConfig(state, cfg);
     const job = storedJob("legacy-account");
     if (kind === "replacement" || kind === "revocation") {
-      job.inferenceBinding = await captureCronInferenceBinding({
-        cfg,
-        agentId: "main",
-        model: `openai/gpt-4.1@${platformId}`,
-      });
+      job.inferenceBinding =
+        (await captureCronInferenceBinding({
+          cfg,
+          agentId: "main",
+          model: `openai/gpt-4.1@${platformId}`,
+        })) ?? undefined;
       expect(job.inferenceBinding).toMatchObject({ profileId: platformId, source: "user" });
     }
     const storePath = state.statePath("cron", "jobs.json");

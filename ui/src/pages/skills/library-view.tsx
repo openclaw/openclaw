@@ -1,8 +1,9 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
-import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import "../../components/modal-dialog.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
   SettingsSection,
@@ -18,6 +19,7 @@ import { SkillLibraryToolbar } from "./library-toolbar.tsx";
 export function SkillLibrary(props: {
   library: SkillLibraryModel;
   navigationActions: JSX.Element;
+  pageMenu?: () => JSX.Element;
 }) {
   const current = () => props.library.state;
   const busy = () => props.library.saving() || current().busy;
@@ -115,20 +117,31 @@ export function SkillLibrary(props: {
         </Show>
       </Show>
       <Show when={!props.library.showWorkspace()}>
-        <label class="field">
-          <span>{t("common.search")}</span>
-          <input
-            class="settings-input"
-            name="library-search"
-            value={props.library.local.query}
-            placeholder={t("skillLibrary.search")}
-            onInput={(event) =>
-              props.library.setLocal((state) => {
-                state.query = event.currentTarget.value;
-              })
-            }
-          />
-        </label>
+        <div class="skill-library-search">
+          <label class="field">
+            <span>{t("common.search")}</span>
+            <input
+              class="settings-input"
+              name="library-search"
+              value={props.library.local.query}
+              placeholder={t("skillLibrary.search")}
+              onInput={(event) =>
+                props.library.setLocal((state) => {
+                  state.query = event.currentTarget.value;
+                })
+              }
+            />
+          </label>
+          <span class="skill-library-search__action">
+            <RefreshButton
+              label={t("common.refresh")}
+              busy={current().loading}
+              disabled={props.library.saving() || current().busy}
+              onClick={() => void props.library.load()}
+            />
+          </span>
+          {props.pageMenu?.()}
+        </div>
         {/* A stable list host keeps async replacement from reparenting the focused search field. */}
         <div>
           <Loading

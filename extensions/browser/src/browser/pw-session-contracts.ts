@@ -75,7 +75,8 @@ export type PendingObservedDialog = BrowserObservedDialogRecord & {
 export type ArmedDialogResponse = {
   accept: boolean;
   promptText?: string;
-  expiresAt: number;
+  /** Process-local elapsed deadline, independent of wall-clock corrections. */
+  expiresAtMonotonicMs: number;
   timer?: ReturnType<typeof setTimeout>;
 };
 

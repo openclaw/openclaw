@@ -7,6 +7,8 @@ import { expect, it, vi } from "vitest";
 import { collectPackageDistImportErrors } from "../scripts/lib/package-dist-imports.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "../scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import {
+  collectInstalledBundledExtensionManifestErrors,
+  collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors as contextErrors,
   collectInstalledRootDependencyManifestErrors as dependencyErrors,
   collectInstalledPackageErrors,
@@ -317,13 +319,17 @@ it.each([
   expect(read).toHaveBeenCalledOnce();
 });
 
-it("rejects an oversized worker before the full verifier reads its contents", () => {
+it.each([
+  `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+  "managed-handoff-runtime.mjs",
+  "package-update-activation-recovery.mjs",
+])("rejects oversized %s before the full verifier reads its contents", (entry) => {
   const packageRoot = makeInstalledPackageRoot();
 
   writeInstalledFile(packageRoot, "package.json", '{"version":"2026.3.23"}\n');
   const workerPath = writeInstalledFile(
     packageRoot,
-    `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+    `dist/${entry}`,
     "/* Failed to load legacy context engine runtime. */\n",
   );
   fs.truncateSync(workerPath, 80 * 1024 * 1024 + 1);
@@ -333,7 +339,7 @@ it("rejects an oversized worker before the full verifier reads its contents", ()
     installedVersion: version,
     packageRoot,
   });
-  const sizeError = `installed package root dist file 'worker/${WORKER_BUNDLE_ENTRY_PATH}' is invalid or exceeds 83886080 bytes.`;
+  const sizeError = `installed package root dist file '${entry}' is invalid or exceeds 83886080 bytes.`;
 
   expect(errors.filter((error) => error === sizeError)).toEqual([sizeError]);
   expect(errors).not.toContain(
@@ -341,19 +347,81 @@ it("rejects an oversized worker before the full verifier reads its contents", ()
   );
 });
 
-it("verifies every bundled manifest when the build filter exists before module initialization", () => {
+it.each(["managed-handoff-runtime.mjs", "package-update-activation-recovery.mjs", "ordinary.js"])(
+  "applies the sealed bundle limit only to known entries (%s)",
+  (entry) => {
+    const root = makeInstalledPackageRoot({ version, dependencies: {} });
+    writePackageFile(root, "dist/postinstall-inventory.json", []);
+    writeInstalledFile(root, "dist/facade-activation-check.runtime.js");
+    writeInstalledFile(
+      root,
+      `dist/${entry}`,
+      "// sealed bundle\n".padEnd(6 * 1024 * 1024 + 1, " "),
+    );
+    const errors =
+      entry === "ordinary.js" ? [expect.stringContaining("exceeds 6291456 bytes")] : [];
+    expect(
+      collectInstalledPackageErrors({
+        expectedVersion: version,
+        installedVersion: version,
+        packageRoot: root,
+      }),
+    ).toEqual(errors);
+  },
+);
+
+it("verifies the published bundled inventory instead of the checker checkout", () => {
   const packageRoot = makeInstalledPackageRoot();
-  const errors = withEnv({ OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "ollama" }, () =>
+  const publishedExtensionIds = ["historical-a", "historical-b"];
+  writePackageFile(
+    packageRoot,
+    "dist/postinstall-inventory.json",
+    publishedExtensionIds.flatMap((id) => [
+      `dist/extensions/${id}/openclaw.plugin.json`,
+      `dist/extensions/${id}/package.json`,
+    ]),
+  );
+  const errors: string[] = withEnv({ OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "ollama" }, () =>
     probeVerifier(packageRoot, "collectInstalledBundledExtensionManifestErrors", 30_000),
   );
   expect(errors).toEqual(
     expect.arrayContaining(
-      ["ollama", "lmstudio"].flatMap((id) => [
+      publishedExtensionIds.flatMap((id) => [
         `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions", id, "package.json")}.`,
         `installed bundled plugin artifact missing: dist/extensions/${id}/openclaw.plugin.json.`,
       ]),
     ),
   );
+  expect(errors.some((error) => error.includes("/ollama/") || error.includes("/lmstudio/"))).toBe(
+    false,
+  );
+});
+
+it("checks installed bundled files against the published inventory", () => {
+  const packageRoot = makeInstalledPackageRoot();
+  writePackageFile(packageRoot, "dist/postinstall-inventory.json", [
+    "dist/extensions/historical/package.json",
+  ]);
+  writePackageFile(packageRoot, "dist/extensions/historical/package.json", {});
+  writePackageFile(packageRoot, "dist/extensions/historical/openclaw.plugin.json", {});
+
+  expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toContain(
+    "installed bundled plugin artifact omitted from dist inventory: dist/extensions/historical/openclaw.plugin.json.",
+  );
+});
+
+it("derives bundled runtime sidecars from the published inventory", () => {
+  const packageRoot = makeInstalledPackageRoot();
+  writePackageFile(packageRoot, "dist/postinstall-inventory.json", [
+    "dist/extensions/retired/runtime-api.js",
+    "dist/extensions/retired/runtime-setter-api.js",
+    "dist/extensions/retired/worker.js",
+  ]);
+
+  expect(collectInstalledBundledRuntimeSidecarPaths(packageRoot)).toEqual([
+    "dist/extensions/retired/runtime-api.js",
+    "dist/extensions/retired/runtime-setter-api.js",
+  ]);
 });
 
 it.each([

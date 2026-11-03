@@ -1,4 +1,5 @@
 import path from "node:path";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { timeWorktreePreparationPhase } from "../worktrees/preparation-timing.js";
 import {
@@ -7,6 +8,7 @@ import {
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
 } from "./container-engine.js";
+import { containerHasTerminated } from "./container-inspect.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { hashTextSha256 } from "./hash.js";
 import {
@@ -14,11 +16,20 @@ import {
   resolvePodmanSandboxRuntimeInfo,
   validateSandboxContainerEngineTarget,
 } from "./podman-runtime.js";
-import { assertSandboxRegistryEntryCurrent, readRegistry } from "./registry.js";
+import { scheduleSandboxPrune } from "./prune.js";
+import { acquireSandboxRuntimeUse, withSandboxRegistrySettlement } from "./registry-lifecycle.js";
+import {
+  assertSandboxRegistryRetirementCurrent,
+  beginSandboxRegistryRemoval,
+  readRegistry,
+  withSandboxRegistryEntryLock,
+  type SandboxRegistryEntry,
+} from "./registry.js";
 import type { SandboxConfig, SandboxDockerConfig } from "./types.js";
 
 const CONTAINER_PREFIX = "openclaw-deps-";
 const SCOPE_PREFIX = "worktree-dependencies:";
+const DEPENDENCY_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency";
 
 function dependencyDockerConfig(cfg: SandboxConfig, image: string): SandboxDockerConfig {
   return {
@@ -44,6 +55,7 @@ export async function resolveSandboxDependencyTemplateIdentity(
   cfg: SandboxConfig,
   options: { signal?: AbortSignal; assertCurrent: () => void },
 ): Promise<SandboxDependencyTemplateIdentity | undefined> {
+  using _ = observeDiagnosticsTimelinePhases(`${DEPENDENCY_PHASE}.identity`);
   if (cfg.backend !== "docker" && cfg.backend !== "podman") {
     return undefined;
   }
@@ -75,7 +87,7 @@ export async function resolveSandboxDependencyTemplateIdentity(
   };
 }
 
-/** Template GC also settles a builder interrupted before its install returned. */
+/** Stop every writer before publishing or deleting its template; removal is housekeeping. */
 export async function retireSandboxDependencyTemplate(
   directory: string,
   rollbackGuard: () => void,
@@ -85,58 +97,106 @@ export async function retireSandboxDependencyTemplate(
     context.admission.assertCurrent();
     rollbackGuard();
   };
-  const database = {
+  const { entries } = await readRegistry({
     path: context.admission.databasePath,
     env: context.environment,
-    assertCurrent: assertOwner,
-  };
-  const { entries } = await readRegistry(database);
+    workspaceDir: directory,
+  });
   assertOwner();
   for (const entry of entries) {
-    if (entry.workspaceDir !== directory || !entry.sessionKey.startsWith(SCOPE_PREFIX)) {
-      continue;
+    if (entry.sessionKey.startsWith(SCOPE_PREFIX)) {
+      await retireSandboxDependencyBuilder(entry, assertOwner);
     }
-    if (
-      (entry.backendId !== "docker" && entry.backendId !== "podman") ||
-      (entry.backendId === "podman" && !entry.backendTarget)
-    ) {
-      throw new Error("Dependency template builder has no local engine owner; template retained");
-    }
-    const engine =
-      entry.backendId === "podman"
-        ? bindPodmanSandboxEngine(entry.backendTarget!)
-        : DOCKER_SANDBOX_ENGINE;
-    await validateSandboxContainerEngineTarget(engine, entry.backendTarget);
-    rollbackGuard();
-    const assertCurrent = () => assertSandboxRegistryEntryCurrent(entry);
-    assertCurrent();
-    const inspected = await execContainer(
-      engine,
-      ["inspect", "--format", "{{.Id}}", entry.containerName],
-      { allowFailure: true },
-    );
-    rollbackGuard();
-    assertCurrent();
-    const id = inspected.code === 0 ? inspected.stdout.trim() : null;
-    if (
-      (id !== null && !/^[a-f0-9]{64}$/u.test(id)) ||
-      (id === null && !/no such (?:container|object)|does not exist/iu.test(inspected.stderr))
-    ) {
-      throw new Error("Dependency template builder removal is unconfirmed; template retained");
-    }
-    const { removeSandboxRuntimeGeneration } = await import("./manage.js");
-    await removeSandboxRuntimeGeneration({
-      runtime: { kind: "container", entry },
-      database,
-      engine,
-      id,
-      bridges: [],
-      assertCurrent: () => {
-        assertOwner();
-        assertCurrent();
-      },
-    });
   }
+}
+
+/** The registry retains failed disposal across shutdown and crash recovery. */
+export async function retireSandboxDependencyBuilder(
+  candidate: SandboxRegistryEntry,
+  assertOwner: () => void,
+  remove = false,
+): Promise<void> {
+  const context = captureOpenClawStateWorkerContext();
+  await withSandboxRegistryEntryLock(
+    candidate,
+    async () => {
+      assertOwner();
+      const entry = await beginSandboxRegistryRemoval(candidate, {
+        beforeLegacyApply: assertOwner,
+      });
+      if (!entry) {
+        return;
+      }
+      const assertCurrent = () => {
+        context.admission.assertCurrent();
+        assertOwner();
+        assertSandboxRegistryRetirementCurrent("container", entry);
+      };
+      if (
+        (entry.backendId !== "docker" && entry.backendId !== "podman") ||
+        (entry.backendId === "podman" && !entry.backendTarget)
+      ) {
+        throw new Error("Dependency template builder has no local engine owner; template retained");
+      }
+      const engine =
+        entry.backendId === "podman"
+          ? bindPodmanSandboxEngine(entry.backendTarget!)
+          : DOCKER_SANDBOX_ENGINE;
+      await validateSandboxContainerEngineTarget(engine, entry.backendTarget);
+      assertCurrent();
+      const signal = AbortSignal.timeout(120_000);
+      const inspected = await execContainer(
+        engine,
+        ["inspect", "--format", "{{.Id}}", entry.containerName],
+        {
+          allowFailure: true,
+          signal,
+        },
+      );
+      assertCurrent();
+      const id = inspected.code === 0 ? inspected.stdout.trim() : null;
+      if (
+        (id !== null && !/^[a-f0-9]{64}$/u.test(id)) ||
+        (id === null && !/no such (?:container|object)|does not exist/iu.test(inspected.stderr))
+      ) {
+        throw new Error("Dependency template builder removal is unconfirmed; template retained");
+      }
+      if (remove) {
+        const { removeSandboxRuntimeGeneration } = await import("./manage.js");
+        await removeSandboxRuntimeGeneration({
+          runtime: { kind: "container", entry },
+          database: {
+            path: context.admission.databasePath,
+            env: context.environment,
+            assertCurrent,
+          },
+          engine,
+          id,
+          bridges: [],
+          assertCurrent,
+          signal,
+        });
+      } else if (id !== null) {
+        // A finished installer may leave descendants. Fence restart first, then prove
+        // the entire container stopped before the host validates or clones its bytes.
+        const killed = await execContainer(engine, ["kill", id], {
+          allowFailure: true,
+          signal,
+          assertCurrent,
+        });
+        assertCurrent();
+        if (killed.code === 0) {
+          await execContainer(engine, ["wait", id], { signal, assertCurrent });
+        }
+        assertCurrent();
+        if (!(await containerHasTerminated(engine, id, signal))) {
+          throw new Error("Dependency template builder is still running; template retained");
+        }
+        assertCurrent();
+      }
+    },
+    context.admission.databasePath,
+  );
 }
 
 /** A disposable, credential-free sandbox is the only writer of shared dependency bytes. */
@@ -149,6 +209,7 @@ export async function prepareSandboxDependencyTemplate(params: {
   assertCurrent: () => void;
   rollbackGuard: () => void;
 }): Promise<{ installed: true } | { installed: false; reason: string }> {
+  using phases = observeDiagnosticsTimelinePhases(`${DEPENDENCY_PHASE}.prepare`);
   const { identity, directory } = params;
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
@@ -161,69 +222,87 @@ export async function prepareSandboxDependencyTemplate(params: {
     docker: identity.docker,
   });
   assertCurrent();
-  let timeout: AbortSignal | undefined;
-  try {
-    const { ensureSandboxContainer } = await import("./docker.js");
-    assertCurrent();
-    const { containerId } = await timeWorktreePreparationPhase("containerStart", () =>
-      ensureSandboxContainer({
-        engine: identity.engine,
-        podmanTarget: identity.podmanTarget,
-        scopeKey: `${SCOPE_PREFIX}${params.scopeKey}`,
-        workspaceDir: directory,
-        agentWorkspaceDir: directory,
-        workspaceSource: "managed-worktree",
-        readOnlyResourceMounts: [
+  const context = captureOpenClawStateWorkerContext();
+  return await withSandboxRegistrySettlement(context, async () => {
+    const use = await acquireSandboxRuntimeUse(
+      { scopeKey: `${SCOPE_PREFIX}${params.scopeKey}`, workspaceDir: directory },
+      context,
+    );
+    let timeout: AbortSignal | undefined;
+    try {
+      phases.mark(`${DEPENDENCY_PHASE}.container`);
+      const { ensureSandboxContainer } = await import("./docker.js");
+      assertCurrent();
+      const { containerId } = await timeWorktreePreparationPhase("containerStart", () =>
+        ensureSandboxContainer({
+          engine: identity.engine,
+          podmanTarget: identity.podmanTarget,
+          scopeKey: `${SCOPE_PREFIX}${params.scopeKey}`,
+          workspaceDir: directory,
+          agentWorkspaceDir: directory,
+          workspaceSource: "managed-worktree",
+          readOnlyResourceMounts: [
+            {
+              hostPath: path.join(directory, ".git"),
+              containerPath: path.posix.join(docker.workdir, ".git"),
+            },
+          ],
+          cfg: { ...params.cfg, scope: "session", workspaceAccess: "rw", docker },
+          assertCurrent,
+        }),
+      );
+      assertCurrent();
+      phases.mark(`${DEPENDENCY_PHASE}.validate_target`);
+      await validateSandboxContainerEngineTarget(identity.engine, identity.podmanTarget);
+      assertCurrent();
+      const installTimeout = AbortSignal.timeout(15 * 60_000);
+      timeout = installTimeout;
+      phases.mark(`${DEPENDENCY_PHASE}.install`);
+      const installed = await timeWorktreePreparationPhase("setup", () =>
+        execContainer(
+          identity.engine,
+          [
+            "exec",
+            "--workdir",
+            docker.workdir,
+            containerId,
+            "/bin/sh",
+            "-c",
+            docker.network === "none"
+              ? "exec pnpm install --offline --frozen-lockfile"
+              : "exec pnpm install --frozen-lockfile",
+          ],
           {
-            hostPath: path.join(directory, ".git"),
-            containerPath: path.posix.join(docker.workdir, ".git"),
+            allowFailure: true,
+            signal: params.signal
+              ? AbortSignal.any([params.signal, installTimeout])
+              : installTimeout,
           },
-        ],
-        cfg: { ...params.cfg, scope: "session", workspaceAccess: "rw", docker },
-        assertCurrent,
-      }),
-    );
-    assertCurrent();
-    await validateSandboxContainerEngineTarget(identity.engine, identity.podmanTarget);
-    assertCurrent();
-    const installTimeout = AbortSignal.timeout(15 * 60_000);
-    timeout = installTimeout;
-    const installed = await timeWorktreePreparationPhase("setup", () =>
-      execContainer(
-        identity.engine,
-        [
-          "exec",
-          "--workdir",
-          docker.workdir,
-          containerId,
-          "/bin/sh",
-          "-c",
-          docker.network === "none"
-            ? "exec pnpm install --offline --frozen-lockfile"
-            : "exec pnpm install --frozen-lockfile",
-        ],
-        {
-          allowFailure: true,
-          signal: params.signal ? AbortSignal.any([params.signal, installTimeout]) : installTimeout,
-        },
-      ),
-    );
-    assertCurrent();
-    return installed.code === 0
-      ? { installed: true }
-      : { installed: false, reason: `pnpm install failed (exit ${installed.code})` };
-  } catch {
-    // Installer output can contain registry credentials; retain only the failure category.
-    assertCurrent();
-    return {
-      installed: false,
-      reason: timeout?.aborted
-        ? "sandbox dependency installation exceeded 15 minutes"
-        : "sandbox dependency installation unavailable",
-    };
-  } finally {
-    // Cleanup outlives cancellation. A failed retirement must preserve the template
-    // reservation rather than publish or delete bytes a live builder can still write.
-    await retireSandboxDependencyTemplate(directory, params.rollbackGuard);
-  }
+        ),
+      );
+      assertCurrent();
+      return installed.code === 0
+        ? { installed: true }
+        : { installed: false, reason: `pnpm install failed (exit ${installed.code})` };
+    } catch {
+      // Installer output can contain registry credentials; retain only the failure category.
+      assertCurrent();
+      return {
+        installed: false,
+        reason: timeout?.aborted
+          ? "sandbox dependency installation exceeded 15 minutes"
+          : "sandbox dependency installation unavailable",
+      };
+    } finally {
+      phases.mark(`${DEPENDENCY_PHASE}.retire`);
+      // Cleanup outlives cancellation. A failed retirement must preserve the template
+      // reservation rather than publish or delete bytes a live builder can still write.
+      try {
+        await retireSandboxDependencyTemplate(directory, params.rollbackGuard);
+      } finally {
+        use[Symbol.dispose]();
+        scheduleSandboxPrune(() => context.admission.assertCurrent(), true);
+      }
+    }
+  });
 }

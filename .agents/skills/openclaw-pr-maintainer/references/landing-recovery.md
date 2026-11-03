@@ -111,11 +111,12 @@ scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
 - Outcome + verification complete → remove task-owned test logs, receipts, proof archives, scratch, `.crabbox` outputs, task archives under `.local`/temp. Published PR proof needs no local duplicate.
 - Remaining finished worktrees: ownership/holder check + advertised native closeout. No archive/export/evidence handoff/replacement cleanup receipt required. Native finalized-task option for disposable-proof refusal only; preserve guard refusals.
 - Preserve unrelated/unknown files, deliverables, explicit retention, unfinished source/necessary recovery state, active owners, credentials, agent state, shared dependencies. Never force removal, clear locks, sign off for another owner. Report `removed` only after path + registration absent; else path + exact blocker.
-- Reconciled merge with completion pending: ownership cleanup first, then current receipt OID:
+- Reconciled merge with completion pending: after ownership checks and session departure, run scoped native cleanup from the persistent checkout, then read the current receipt OID and finalize. This is an explicit closeout; no background retry is scheduled. Resolve advanced/inaccessible remote branches separately without deleting them by name. An unresolved completion-comment attempt stays inspection-only until its marker is reconciled.
 
 ```bash
-git rev-parse refs/openclaw/pr-merge-outcomes/<PR>
-scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion
+scripts/pr gc --pr <PR> &&
+  pr_cleanup_outcome=$(git rev-parse --verify refs/openclaw/pr-merge-outcomes/<PR>) &&
+  scripts/pr merge-complete <PR> "$pr_cleanup_outcome" --confirmed-operator-completion
 ```
 
 - Revalidates historical merge; native worktree, PR-owned local branches, remote head branch must be absent. Never merges/deletes resources. From `merged`, may post first completion comment; uncertain comment attempt → marker lookup only, never another POST. Missing/ambiguous marker stays pending; reread OID after every transition.

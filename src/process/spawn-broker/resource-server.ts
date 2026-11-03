@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { createServer } from "node:net";
 import { serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import type {
@@ -80,6 +81,7 @@ export async function createBrokerNativeResourceServer(options: {
   const connections = new Set<ResourceSocket>();
   let available = true;
   let sourceSealed = false;
+  let sourceLoaderRegistered = false;
   let closePromise: Promise<void> | undefined;
   let ownerBufferedBytes = 0;
   let ownerBufferedMessages = 0;
@@ -365,6 +367,8 @@ export async function createBrokerNativeResourceServer(options: {
           !Number.isSafeInteger(attachment.id) ||
           attachment.id <= 0 ||
           typeof attachment.moduleUrl !== "string" ||
+          (attachment.sourceLoaderUrl !== undefined &&
+            typeof attachment.sourceLoaderUrl !== "string") ||
           typeof attachment.ownerPort !== "boolean"
         ) {
           transport.close();
@@ -429,6 +433,17 @@ export async function createBrokerNativeResourceServer(options: {
           await readySent;
           if (!live() || sourceSealed) {
             return;
+          }
+          if (!sourceLoaderRegistered && attachment.sourceLoaderUrl) {
+            const loader: unknown = await import(attachment.sourceLoaderUrl);
+            if (!live() || sourceSealed) {
+              return;
+            }
+            if (!isRecord(loader) || typeof loader.register !== "function") {
+              throw new Error("Native resource source loader is unavailable");
+            }
+            loader.register();
+            sourceLoaderRegistered = true;
           }
           const module: NativeWorkerResourceModule = await import(attachment.moduleUrl);
           if (!live() || sourceSealed) {

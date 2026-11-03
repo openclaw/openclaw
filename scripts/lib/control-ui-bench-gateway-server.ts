@@ -3,6 +3,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path";
 import type { ControlUiRootState } from "../../src/gateway/server-control-ui-root.js";
 
+type FixtureResponse = {
+  body: string | Buffer;
+  contentType: string;
+  delayMs?: number;
+  headers?: Record<string, string>;
+  status?: number;
+};
+
 /** Production HTTP delivery for immutable benchmark bundles in an isolated process. */
 export async function startControlUiBenchGatewayServer(
   outDir: string,
@@ -13,15 +21,7 @@ export async function startControlUiBenchGatewayServer(
     | ((
         pathname: string,
         url: URL,
-      ) =>
-        | {
-            body: string | Buffer;
-            contentType: string;
-            delayMs?: number;
-            headers?: Record<string, string>;
-            status?: number;
-          }
-        | undefined)
+      ) => FixtureResponse | undefined | Promise<FixtureResponse | undefined>)
     | undefined;
   const [
     { handleControlUiHttpRequest },
@@ -63,7 +63,9 @@ export async function startControlUiBenchGatewayServer(
   let terminalEnabled = false;
   let closing: Promise<void> | undefined;
   const requests: Array<{ method: string; url: string; navigationPreload: boolean }> = [];
-  const serve = (request: IncomingMessage, response: ServerResponse) => {
+  const serve = async (request: IncomingMessage, response: ServerResponse) => {
+    // Keep this request on its admitted bundle while an asynchronous fixture waits.
+    const root = currentRoot;
     if (!preloadHeadersEnabled) {
       // Paired measurement of the pre-hints delivery path, with the same files.
       const setHeader = response.setHeader.bind(response);
@@ -76,9 +78,15 @@ export async function startControlUiBenchGatewayServer(
       navigationPreload: request.headers["service-worker-navigation-preload"] !== undefined,
     });
     const url = new URL(request.url ?? "/", "http://localhost");
-    const fixture = readFixture?.(url.pathname, url);
+    const fixture = await readFixture?.(url.pathname, url);
+    if (response.destroyed || response.writableEnded) {
+      return;
+    }
     if (fixture) {
       const send = () => {
+        if (response.destroyed || response.writableEnded) {
+          return;
+        }
         response.writeHead(fixture.status ?? 200, {
           "Content-Type": fixture.contentType,
           "Cache-Control": "no-store",
@@ -97,32 +105,34 @@ export async function startControlUiBenchGatewayServer(
     }
     // Each admitted request retains its bundle even if the next document switches builds.
     // Match the synthetic Gateway fixture; a document/bootstrap mismatch triggers a reload.
-    void handleControlUiHttpRequest(request, response, {
-      root: currentRoot,
+    const handled = await handleControlUiHttpRequest(request, response, {
+      root,
       terminalEnabled,
-    }).then(
-      (handled) => {
-        if (!handled) {
-          response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-          response.end("Not Found");
+    });
+    if (!handled) {
+      response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("Not Found");
+    }
+  };
+  const server = createServer((request, response) => {
+    const respond = () => {
+      void serve(request, response).catch(() => {
+        if (response.destroyed || response.writableEnded) {
+          return;
         }
-      },
-      () => {
         if (response.headersSent) {
           response.destroy();
         } else {
           response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
           response.end("Control UI benchmark request failed");
         }
-      },
-    );
-  };
-  const server = createServer((request, response) => {
+      });
+    };
     if (responseLatencyMs > 0) {
       // Server-side delay also covers dedicated-worker module imports.
-      setTimeout(() => serve(request, response), responseLatencyMs);
+      setTimeout(respond, responseLatencyMs);
     } else {
-      serve(request, response);
+      respond();
     }
   });
   await new Promise<void>((resolve, reject) => {

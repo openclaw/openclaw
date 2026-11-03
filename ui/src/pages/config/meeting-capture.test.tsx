@@ -440,30 +440,24 @@ describe("curated meeting capture", () => {
     },
   );
 
-  it("normalizes edited values and explicitly clears optional fields without rewriting untouched values", async () => {
-    const source = {
-      providerId: "test-voice",
-      title: "Original title",
-      sessionId: " daily ",
-      accountId: " team ",
-      guildId: " guild ",
-      channelId: " room ",
-      meetingUrl: " https://example.test/old?invitation=synthetic ",
-    };
-    const { page, runtimeConfig } = await mount({ source });
+  it("normalizes edits after unrelated autosave and explicitly clears optional fields", async () => {
+    const { page, runtimeConfig } = await mount();
     click(page, "Edit source 1");
     input(page, "accountId", " new-account ");
     input(page, "meetingUrl", " https://example.test/new?invitation=updated ");
     input(page, "sessionId", "");
     input(page, "title", " ");
+    runtimeConfig.patchForm(["messages", "ackReaction"], "updated");
+    await runtimeConfig.flushFormChanges();
+    flush();
     click(page, "Edit source 1");
     click(page, "Save source");
     expectSources(runtimeConfig, [
       {
         providerId: "test-voice",
         accountId: "new-account",
-        guildId: " guild ",
-        channelId: " room ",
+        guildId: "guild",
+        channelId: "room",
         meetingUrl: "https://example.test/new?invitation=updated",
       },
     ]);
