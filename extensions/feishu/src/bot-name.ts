@@ -17,9 +17,7 @@ const MAX_CACHE_ENTRIES = 5_000;
 const LOOKUP_BACKOFF_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 1_500;
 
-// Freshness windows stay on elapsed time: these maps are process-local and
-// never persist or exchange their timestamps, so a host wall-clock correction
-// must not shorten or extend them.
+// Process-local deadlines use elapsed time, never persisted epochs.
 const cache = new Map<string, CacheEntry>();
 const backoffUntilByAccount = new Map<string, number>();
 const inflight = new Map<string, Promise<string | undefined>>();

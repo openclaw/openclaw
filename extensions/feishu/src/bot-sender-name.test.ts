@@ -45,60 +45,32 @@ describe("resolveFeishuSenderName", () => {
     createFeishuClientMock.mockReset();
   });
 
-  it.each(["resolved", "account-scoped miss", "expired miss"] as const)(
+  it.each(["resolved", "forward", "rewind", "account-scoped miss", "expired miss"] as const)(
     "caches sender lookup: %s",
     async (scenario) => {
       vi.useFakeTimers({ toFake: ["Date", "performance"] });
-      const resolved = scenario === "resolved";
-      const get = resolved ? mockUserNames("Ada") : mockUnauthorizedLookup();
+      const resolved = ["resolved", "forward", "rewind"].includes(scenario);
+      const get = resolved ? mockUserNames("Ada", "Ada") : mockUnauthorizedLookup();
       const first = resolved ? { name: "Ada" } : {};
       const sender = `ou_${scenario}`;
       const log = vi.fn();
       await expect(resolve(sender, log)).resolves.toEqual(first);
       await expect(resolve(sender, log)).resolves.toEqual(first);
       expect(get).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(Date.now() + (scenario === "forward" ? 3_600_000 : -3_600_000));
+      if (scenario === "rewind") {
+        vi.advanceTimersByTime(10 * 60_000 + 1);
+      }
       if (scenario === "expired miss") {
         vi.advanceTimersByTime(30 * 60 * 1000 + 1);
       }
       const selected =
         scenario === "account-scoped miss" ? { ...account, accountId: "secondary" } : account;
       await expect(resolve(sender, log, selected)).resolves.toEqual({ name: "Ada" });
-      expect(get).toHaveBeenCalledTimes(resolved ? 1 : 2);
+      expect(get).toHaveBeenCalledTimes(resolved && scenario !== "rewind" ? 1 : 2);
       expect(log).not.toHaveBeenCalled();
     },
   );
-
-  it("retains the sender-name cache when the wall clock jumps forward while elapsed time stays fresh", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "performance"] });
-    const get = mockUserNames("Ada", "Ada");
-    const log = vi.fn();
-
-    await expect(resolve("ou_wall_step_forward", log)).resolves.toEqual({ name: "Ada" });
-    expect(get).toHaveBeenCalledTimes(1);
-
-    // The host clock jumps an hour forward without elapsed time moving.
-    vi.setSystemTime(Date.now() + 60 * 60 * 1000);
-
-    await expect(resolve("ou_wall_step_forward", log)).resolves.toEqual({ name: "Ada" });
-    expect(get).toHaveBeenCalledTimes(1);
-  });
-
-  it("expires the sender-name cache after elapsed time even when the wall clock rewinds", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "performance"] });
-    const get = mockUserNames("Ada", "Ada");
-    const log = vi.fn();
-
-    await expect(resolve("ou_wall_step_rewind", log)).resolves.toEqual({ name: "Ada" });
-    expect(get).toHaveBeenCalledTimes(1);
-
-    // Ten elapsed minutes end the 10-minute window; the wall clock then
-    // rewinds so a wall-clock comparison would call the entry fresh again.
-    vi.advanceTimersByTime(10 * 60 * 1000 + 1);
-    vi.setSystemTime(Date.now() - 60 * 60 * 1000);
-
-    await expect(resolve("ou_wall_step_rewind", log)).resolves.toEqual({ name: "Ada" });
-    expect(get).toHaveBeenCalledTimes(2);
-  });
 
   it("continues logging and retrying sender lookup failures other than 41050", async () => {
     const error = feishuApiError(41051, "different lookup error");

@@ -29,8 +29,7 @@ const FEISHU_USER_LOOKUP_UNAUTHORIZED_CODE = 41050;
 const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
 const SENDER_NAME_NEGATIVE_TTL_MS = 30 * 60 * 1000;
 const SENDER_NAME_CACHE_MAX_SIZE = 500;
-// Process-local freshness only: entries never leave this map, so their
-// windows are measured on elapsed time and survive wall-clock corrections.
+// Process-local deadlines use elapsed time, never persisted epochs.
 const senderNameCache = new Map<string, SenderNameCacheEntry>();
 
 function extractPermissionError(feishuErr: FeishuApiError | null): FeishuPermissionError | null {
