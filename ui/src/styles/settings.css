@@ -942,6 +942,11 @@ openclaw-appearance-background .settings-background-preview .session-background_
   flex-basis: 100%;
 }
 
+/* Without an eye there's nothing to clear, so the text keeps the field's own inset. */
+.settings-secret:not(:has(> openclaw-tooltip, > .settings-secret__toggle)) > :is(input, textarea) {
+  padding-right: var(--field-padding-inline);
+}
+
 /* Multiline secrets (JSON textareas) anchor the eye to the first line. */
 .settings-secret:has(> textarea) {
   align-items: flex-start;

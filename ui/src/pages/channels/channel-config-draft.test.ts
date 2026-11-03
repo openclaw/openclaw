@@ -5,8 +5,11 @@ import {
   buildChannelConfigPatch,
   channelConfigEditBase,
   dropConflictingChannelConfigEdits,
+  emptiesStoredSecret,
   findChannelConfigConflicts,
+  keepStoredSecrets,
   rebaseChannelConfigEdits,
+  writesOverReference,
 } from "./channel-config-draft.ts";
 
 const schema = {
@@ -93,6 +96,128 @@ describe("channel config draft", () => {
         schema,
       }),
     ).toBeNull();
+  });
+});
+
+describe("emptiesStoredSecret", () => {
+  const base = { botToken: "__OPENCLAW_REDACTED__", proxy: "http://x" };
+  const tokenPath = ["channels", "telegram", "botToken"];
+
+  it("keeps a stored secret when its field is emptied", () => {
+    expect(emptiesStoredSecret(base, "telegram", tokenPath, "")).toBe(true);
+    expect(emptiesStoredSecret(base, "telegram", tokenPath, undefined)).toBe(true);
+  });
+
+  it("leaves typed values and other fields as edits", () => {
+    expect(emptiesStoredSecret(base, "telegram", tokenPath, "new")).toBe(false);
+    expect(emptiesStoredSecret(base, "telegram", ["channels", "telegram", "proxy"], "")).toBe(
+      false,
+    );
+    expect(emptiesStoredSecret(null, "telegram", tokenPath, "")).toBe(false);
+  });
+});
+
+describe("writesOverReference", () => {
+  const REDACTED = "__OPENCLAW_REDACTED__";
+  const token = ["channels", "telegram", "botToken"];
+  const secretRefId = ["channels", "telegram", "webhookSecret", "id"];
+  const config = {
+    channels: {
+      telegram: {
+        botToken: REDACTED,
+        proxy: "http://x",
+        webhookSecret: { source: "env", provider: "default", id: REDACTED },
+      },
+    },
+  };
+  const snapshot = (parsedToken: unknown, raw: string | null = "{}") => ({
+    valid: true,
+    raw,
+    config,
+    sourceConfig: config,
+    parsed: {
+      channels: { telegram: { ...config.channels.telegram, botToken: parsedToken } },
+    },
+  });
+
+  it("lets an edit replace plain text in the file", () => {
+    expect(writesOverReference(snapshot(REDACTED), token)).toBe(false);
+    expect(writesOverReference(snapshot(REDACTED), ["channels", "telegram", "proxy"])).toBe(false);
+  });
+
+  it("never lets an edit replace a reference", () => {
+    expect(writesOverReference(snapshot("${TELEGRAM_TOKEN}"), token)).toBe(true);
+    // A template is redacted like plaintext; the Gateway then withholds the file's text.
+    expect(writesOverReference(snapshot(REDACTED, null), token)).toBe(true);
+    expect(writesOverReference(snapshot({ $include: "./token.json5" }), token)).toBe(true);
+    expect(writesOverReference(snapshot(REDACTED), secretRefId)).toBe(true);
+    expect(writesOverReference(null, token)).toBe(false);
+  });
+});
+
+describe("keepStoredSecrets", () => {
+  const REDACTED = "__OPENCLAW_REDACTED__";
+  const listPath = ["channels", "telegram", "accounts"];
+  const base = {
+    accounts: [
+      { name: "a", token: REDACTED },
+      { name: "b", token: REDACTED },
+    ],
+  };
+  const root = { channels: { telegram: base } };
+  const snapshot = (raw: string | null) => ({
+    valid: true,
+    raw,
+    config: root,
+    sourceConfig: root,
+    parsed: root,
+  });
+  const keep = (value: unknown, raw: string | null = "{}") =>
+    keepStoredSecrets({
+      base,
+      snapshot: snapshot(raw),
+      channelId: "telegram",
+      path: listPath,
+      value,
+    });
+
+  it("keeps a secret emptied inside a list row the form sends whole", () => {
+    // Typing over row b's token and clearing it sends the list without that token.
+    const emptied = [{ name: "a", token: REDACTED }, { name: "b" }];
+    const unguarded = buildChannelConfigPatch({
+      base,
+      channelId: "telegram",
+      edits: [{ path: listPath, value: emptied }],
+      schema: null,
+    });
+    expect(unguarded?.patch).toEqual({ channels: { telegram: { accounts: emptied } } });
+
+    expect(keep(emptied)).toBeUndefined();
+    expect(
+      keep([
+        { name: "a", token: REDACTED },
+        { name: "B", token: "" },
+      ]),
+    ).toEqual({
+      value: [
+        { name: "a", token: REDACTED },
+        { name: "B", token: REDACTED },
+      ],
+    });
+    // Removing a row still removes it.
+    expect(keep([{ name: "a", token: REDACTED }])).toEqual({
+      value: [{ name: "a", token: REDACTED }],
+    });
+  });
+
+  it("replaces plain text in a row, and never a reference", () => {
+    const typed = [
+      { name: "a", token: REDACTED },
+      { name: "b", token: "new" },
+    ];
+    expect(keep(typed)).toEqual({ value: typed });
+    // A template is redacted like plaintext; the Gateway then withholds the file's text.
+    expect(keep(typed, null)).toBeUndefined();
   });
 });
 
