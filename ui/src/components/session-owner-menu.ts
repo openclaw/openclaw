@@ -40,7 +40,6 @@ export function createSessionOwnerMenu(presented: () => boolean = () => true) {
         identity: { type: "profile", id: profile.id },
         label:
           userProfileDisplayName(profile.id, profile.displayName, profile.githubIdentity?.login) ||
-          profile.emails[0] ||
           profile.id,
         avatarUrl: profileAvatarUrl(profile),
       }));
