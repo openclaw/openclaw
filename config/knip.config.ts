@@ -1192,6 +1192,15 @@ const config = {
     "src/agents/model-auth-runtime.ts": ["nsExports"],
     "src/agents/model-auth-runtime-shared.ts": ["nsExports"],
     "src/agents/prepared-model-runtime.ts": ["nsExports"],
+    // OpenClaw ID focused tests drive retry timers, mailbox handling and connection custody
+    // through these exports; the full-tree scan still audits those tests.
+    "src/gateway/openclaw-id/mailbox-reader.ts": ["exports"],
+    "src/gateway/openclaw-id/publication-retry.ts": ["exports"],
+    "src/gateway/openclaw-id/tunnel-connections.ts": ["exports"],
+    // The stacked OpenClaw ID tunnel change is the first production importer of these
+    // exports, which focused tests cover now; drop each entry with that importer.
+    "src/gateway/openclaw-id/device-token-binding.ts": ["exports"],
+    "src/gateway/openclaw-id/tunnel-child/keyfile.ts": ["exports"],
   },
   workspaces: {
     ".": {

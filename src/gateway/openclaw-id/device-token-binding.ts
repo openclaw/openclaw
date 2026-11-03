@@ -1,0 +1,76 @@
+// Device tokens bound to the authenticated endpoint key (spec section 5 step 6,
+// G5). A token issued over the tunnel records the device key W that obtained
+// it; presenting it from any other W, or relayed without the W it was issued
+// to, is refused and logged as a security event. While OpenClaw ID is off no
+// binding owner is published and nothing here runs.
+
+/** One recorded binding: the token of (device, role) belongs to `peerKey`. */
+export type DeviceTokenBinding = {
+  device_id: string;
+  role: string;
+  peer_key: string;
+  bound_at: number;
+};
+
+/** The binding owner the OpenClaw ID service publishes while it is on. */
+export type DeviceTokenBindingOwner = {
+  /** The bound peer key of a device token, if any. Synchronous: served from memory. */
+  lookup(deviceId: string, role: string): string | undefined;
+  /** Records that a token was issued to `peerKey` (write-through to the claw record). */
+  record(deviceId: string, role: string, peerKey: string): Promise<void>;
+  /** Reports a refused token for the security log. */
+  reportMismatch(event: {
+    deviceId: string;
+    role: string;
+    boundTo: string | undefined;
+    presentedFrom: string | undefined;
+  }): void;
+};
+
+let owner: DeviceTokenBindingOwner | undefined;
+
+/** Publishes or clears the binding owner (the OpenClaw ID service does this). */
+export function setDeviceTokenBindingOwner(next: DeviceTokenBindingOwner | undefined): void {
+  owner = next;
+}
+
+/**
+ * Decides whether a verified device token may be used on this connection.
+ * `peerKey` is the relayed connection's authenticated W, or undefined for any
+ * other ingress. Tokens issued over the tunnel are usable only from their W;
+ * relayed connections may use only tokens bound to their own W.
+ */
+export function checkDeviceTokenPeer(params: {
+  deviceId: string;
+  role: string;
+  peerKey: string | undefined;
+}): { ok: true } | { ok: false; reason: "device-token-peer-mismatch" } {
+  if (!owner) {
+    return { ok: true };
+  }
+  const boundTo = owner.lookup(params.deviceId, params.role);
+  if (boundTo === undefined && params.peerKey === undefined) {
+    return { ok: true };
+  }
+  if (boundTo !== undefined && boundTo === params.peerKey) {
+    return { ok: true };
+  }
+  owner.reportMismatch({
+    deviceId: params.deviceId,
+    role: params.role,
+    boundTo,
+    presentedFrom: params.peerKey,
+  });
+  return { ok: false, reason: "device-token-peer-mismatch" };
+}
+
+/** Records the binding of a token just issued to a relayed connection. */
+export async function recordDeviceTokenPeer(params: {
+  deviceId: string;
+  role: string;
+  peerKey: string | undefined;
+}): Promise<void> {
+  if (owner && params.peerKey) {
+    await owner.record(params.deviceId, params.role, params.peerKey);
+  }
+}

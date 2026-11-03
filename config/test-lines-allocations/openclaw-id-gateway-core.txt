@@ -1,0 +1,3 @@
+# OpenClaw ID Gateway core: new membership authority, publication, People events and
+# Labs-off tests for new surface (src/gateway/openclaw-id). No existing tests replaced.
+3315
