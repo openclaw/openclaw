@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -5,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { readMemoryArtifactProvenance } from "../../../memory/memory-artifact-provenance.js";
 import { createInternalHookEvent } from "../../internal-hooks.js";
 import handler, { flushSessionMemoryWritesForTest } from "./handler.js";
 
@@ -19,6 +21,73 @@ describe("session-memory automatic reset", () => {
 
   afterEach(async () => {
     await flushSessionMemoryWritesForTest();
+  });
+
+  it("retains overlapping captures with matching content and provenance", async () => {
+    const storePath = path.join(tempDir, "sessions.json");
+    const cfg = {
+      agents: { defaults: { workspace: tempDir, userTimezone: "UTC" } },
+      session: { store: storePath },
+    } satisfies OpenClawConfig;
+    const sessions = Array.from({ length: 6 }, (_, index) => ({
+      sessionId: `concurrent-${index}`,
+      sessionKey: `agent:main:concurrent-${index}`,
+      marker: `capture-${index}-only`,
+      senderIsOwner: index % 2 === 0,
+    }));
+    for (const session of sessions) {
+      await replaceTranscriptEvents({ agentId: "main", storePath, ...session }, [
+        {
+          type: "message",
+          id: `${session.sessionId}-user`,
+          parentId: null,
+          message: {
+            role: "user",
+            content: session.marker,
+            __openclaw: { senderIsOwner: session.senderIsOwner },
+          },
+        },
+      ]);
+    }
+
+    await Promise.all(
+      sessions.map(async (session) => {
+        const event = createInternalHookEvent("session", "auto-reset", session.sessionKey, {
+          cfg,
+          agentId: "main",
+          workspaceDir: tempDir,
+          storePath,
+          sessionEntry: { sessionId: session.sessionId },
+          reason: "idle",
+        });
+        event.timestamp = new Date("2026-10-21T20:30:00.000Z");
+        await handler(event);
+      }),
+    );
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files).toHaveLength(sessions.length);
+    const artifacts = await Promise.all(
+      files.map(async (filename) => ({
+        content: await fs.readFile(path.join(memoryDir, filename), "utf8"),
+        provenance: await readMemoryArtifactProvenance({
+          workspaceDir: tempDir,
+          relativePath: `memory/${filename}`,
+        }),
+      })),
+    );
+    for (const session of sessions) {
+      const matches = artifacts.filter(({ content }) => content.includes(session.marker));
+      expect(matches).toHaveLength(1);
+      const artifact = expectDefined(matches[0], "capture must be retained exactly once");
+      expect(artifact.provenance).toMatchObject({
+        fileHash: createHash("sha256").update(artifact.content).digest("hex"),
+        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
+        originClass: session.senderIsOwner ? "agent" : "untrusted",
+      });
+    }
   });
 
   it.each(["daily", "idle"] as const)(

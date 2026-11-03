@@ -1281,15 +1281,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config,
     });
     expect(result.ok, JSON.stringify(result)).toBe(true);
-    expect(plannedCompactionPluginSelections(config)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          provider: "anthropic",
-          modelId: "claude-fallback",
-          runtime: "codex",
-        }),
-      ]),
-    );
+    // Fallback candidates resolve their own harness instead of inheriting the primary's.
+    expect(plannedCompactionPluginSelections(config)).toContainEqual({
+      provider: "anthropic",
+      modelId: "claude-fallback",
+      agentId: "main",
+    });
     const admittedConfig = {
       agents: {
         defaults: {

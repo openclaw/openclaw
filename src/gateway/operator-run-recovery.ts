@@ -9,6 +9,7 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
+import { GatewayOperatorRecoveryOwnershipError } from "../infra/restart-recovery-errors.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { profileCatalogPath } from "../state/user-profile-identity.read.js";
@@ -127,7 +128,7 @@ export async function restoreGatewayOperatorRecovery(params: {
       source.sourceRunId !== target.sourceRunId ||
       !isDeepStrictEqual(current.restartRecoveryOperatorSource, source)
     ) {
-      throw new Error("Restart recovery operator source no longer owns this input.");
+      throw new GatewayOperatorRecoveryOwnershipError();
     }
   };
   assertClaim(entry);

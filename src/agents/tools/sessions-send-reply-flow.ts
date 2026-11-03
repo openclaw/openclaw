@@ -23,7 +23,7 @@ import {
   runWithGatewayToolContinuationContext,
 } from "./in-process-gateway.js";
 import { recordSessionToolActionFact } from "./sessions-access.js";
-import { sendReplyResult } from "./sessions-send-helpers.js";
+import { resolveSessionsSendReply, sendReplyResult } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import type { SessionsSendStart } from "./sessions-send-tool.delivery.js";
 import { jsonResult } from "./tool-results.js";
@@ -407,5 +407,14 @@ export async function finishSessionsSendReply(params: {
       ...watchField,
     });
   }
-  return sendReplyResult({ runId, sessionKey: replyContext.displayKey, ...watchField }, result);
+  const reply = await resolveSessionsSendReply(result, {
+    runId,
+    sessionKey: acceptedTargetSessionKey,
+    agentId: replyContext.targetAgentId,
+    callGateway: replyContext.callGateway,
+  });
+  return sendReplyResult(
+    { runId, sessionKey: replyContext.displayKey, ...watchField },
+    { ...result, ...reply },
+  );
 }

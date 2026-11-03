@@ -1,5 +1,7 @@
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
+import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
 import { WorkerNodeLostError } from "../worker/worker-node-loss.js";
 import {
   AgentRunTerminalOutcomeError,
@@ -89,6 +91,32 @@ it("does not consult provider policy or rotate models for a transcript conflict"
   const error = new SqliteTranscriptMutationConflictError("conflicting-session");
   await expectTerminalStop(error);
   await expectTerminalStop(new Error("worker operation failed", { cause: error }));
+});
+
+it.each([
+  [
+    "transcript admission identity change",
+    () =>
+      new SessionTranscriptReadFenceError(
+        "Current-turn transcript admission identity changed: fixture",
+      ),
+  ],
+  [
+    "session reader invalidation",
+    () =>
+      new SessionWorkStartChangedError(
+        "Session reader operation is no longer current. Retry the turn.",
+      ),
+  ],
+  [
+    "wrapped serialized session invalidation",
+    () =>
+      new Error("503 overloaded", {
+        cause: { code: "SESSION_WORK_START_INVALIDATED", message: "Session work invalidated" },
+      }),
+  ],
+] as const)("does not rotate providers after %s", async (_name, make) => {
+  await expectTerminalStop(make());
 });
 
 it("retains closed ownership when async disposal also fails", async () => {

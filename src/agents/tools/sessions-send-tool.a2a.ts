@@ -20,7 +20,11 @@ import {
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { resolveSessionsSendReplyTarget } from "./sessions-delivery-target.js";
-import type { SessionDeliveryTarget } from "./sessions-send-helpers.js";
+import {
+  resolveSessionsSendReply,
+  SESSIONS_SEND_TRUNCATION_NOTE,
+  type SessionDeliveryTarget,
+} from "./sessions-send-helpers.js";
 import { isNonDeliverableSessionsReply } from "./sessions-send-tokens.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
@@ -132,7 +136,12 @@ export async function runSessionsSendA2AFlow(params: {
       }
       return;
     }
-    const reply = wait.replyText;
+    const { replyText: reply, replyTruncated } = await resolveSessionsSendReply(wait, {
+      runId: params.runId,
+      sessionKey: params.targetSessionKey,
+      agentId: params.targetAgentId,
+      callGateway: gatewayCall,
+    });
     if (!reply?.trim() || isNonDeliverableSessionsReply(reply)) {
       return;
     }
@@ -204,7 +213,7 @@ export async function runSessionsSendA2AFlow(params: {
         ...requesterStepContext,
         sessionKey: params.requesterSessionKey,
         message: reply,
-        extraSystemPrompt: `${child ? "A child session" : "Another session"} returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the ${child ? "child" : "target session"}.`,
+        extraSystemPrompt: `${child ? "A child session" : "Another session"} returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the ${child ? "child" : "target session"}.${replyTruncated ? ` ${SESSIONS_SEND_TRUNCATION_NOTE}` : ""}`,
         sourceAgentId: params.targetAgentId,
       });
     }

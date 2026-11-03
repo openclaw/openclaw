@@ -383,7 +383,7 @@ function clearEmbeddedRunAbortability(
   handle: EmbeddedAgentQueueHandle,
   opts?: { retainFinalizing?: boolean },
 ): void {
-  ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.humanInputWaits?.clear();
+  ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.waits?.clear();
   if (!handle.runId || ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(handle.runId) !== handle) {
     return;
   }

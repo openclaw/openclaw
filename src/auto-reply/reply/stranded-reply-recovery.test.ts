@@ -65,6 +65,41 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
     completeFollowupRunLifecycle(parent);
     expect(onComplete).toHaveBeenCalledTimes(1);
   });
+
+  it("expires the client turn's skill authoring grant instead of rebinding it", async () => {
+    // chat.send mints a personal grant that refuses a second run; carrying it over killed the retry.
+    const parent = createMockFollowupRun({ prompt: "user question" });
+    parent.run.skillLibraryAuthoring = {
+      target: "personal",
+      defaultTarget: "workspace",
+      multipleProfiles: true,
+      bind: () => {
+        throw new Error("Personal authoring cannot move to a replacement run.");
+      },
+      invoke: vi.fn(),
+    };
+
+    const recovery = resolveStrandedReplyRecovery({
+      base: parent,
+      payloads: [],
+      finalText:
+        "A substantive stranded final must be re-delivered via message(action=send). It includes enough user-facing detail to require the one-shot recovery path.",
+      sourceReplyDeliveryMode: "message_tool_only",
+      sendPolicyDenied: false,
+      successfulSourceReplyDelivery: false,
+      isHeartbeat: false,
+      isRoomEvent: false,
+    });
+    if (recovery.kind !== "retry") {
+      throw new Error("expected retry recovery");
+    }
+    const authoring = recovery.run.run.skillLibraryAuthoring;
+    expect(authoring?.defaultTarget).toBe("personal");
+    expect(() => authoring?.bind({} as never)).not.toThrow();
+    await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
+      code: "AUTHORITY_EXPIRED",
+    });
+  });
 });
 
 describe("resolveStrandedReplyRecovery", () => {

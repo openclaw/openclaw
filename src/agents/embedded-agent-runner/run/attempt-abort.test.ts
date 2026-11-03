@@ -1,4 +1,5 @@
 // Coverage for external cancellation and timeout paths.
+import { queryObjects } from "node:v8";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.start.js";
@@ -37,6 +38,45 @@ beforeEach(() => {
 });
 
 describe("createEmbeddedAttemptExternalAbortController", () => {
+  it("releases session callbacks when disposed controllers remain reachable", () => {
+    class SessionPayload {
+      active = true;
+    }
+    const cleanupAfterEarlyAbort = async () => {};
+    const createController = () => {
+      const payload = new SessionPayload();
+      const controller = createEmbeddedAttemptExternalAbortController({
+        abortSignal: new AbortController().signal,
+        cleanupAfterEarlyAbort,
+        runAbortController: new AbortController(),
+        runId: "retained-abort-controller",
+        state: { terminal: { kind: "ok" } },
+      });
+      controller.setActiveSessionAbort(async () => {
+        payload.active = false;
+      });
+      controller.setRunAbort(() => {
+        payload.active = false;
+      });
+      controller.setCompactionState({
+        isPendingOrRetrying: () => payload.active,
+        isInFlight: () => payload.active,
+      });
+      controller.arm();
+      return controller;
+    };
+    const active = createController();
+    const completed = Array.from({ length: 20 }, () => {
+      const controller = createController();
+      controller.dispose();
+      return controller;
+    });
+    expect(queryObjects(SessionPayload)).toBe(1);
+    active.dispose();
+    expect(queryObjects(SessionPayload)).toBe(0);
+    expect(completed).toHaveLength(20);
+  });
+
   it("preserves external cancellation through active session settlement", async () => {
     const source = new AbortController();
     const runAbortController = new AbortController();

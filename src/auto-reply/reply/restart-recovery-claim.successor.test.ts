@@ -105,6 +105,67 @@ describe("restart recovery claim successors", () => {
     },
   );
 
+  it.each([
+    { kind: "child", sessionKey: "agent:main:dashboard:interrupted-child", replaces: true },
+    { kind: "main", sessionKey: "agent:main:main", replaces: false },
+  ] as const)(
+    "lets a new turn replace an aborted channel claim only outside main recovery ($kind)",
+    async ({ sessionKey, replaces }) => {
+      const scope = {
+        storePath: path.join(tempDirs.make("openclaw-reply-claim-child-"), "sessions.json"),
+        sessionKey,
+      };
+      const interruptedRunId = "interrupted-child-run";
+      // Shutdown leaves this saved claim; main-session recovery never owns a child session.
+      let entry: InternalSessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        status: "interrupted",
+        abortedLastRun: true,
+        lastRunId: interruptedRunId,
+        restartRecoveryDeliveryRunId: interruptedRunId,
+        restartRecoveryDeliverySourceRunId: `${interruptedRunId}:user`,
+        restartRecoveryDeliveryContext: { channel: "webchat", to: sessionKey },
+        restartRecoverySourceIngress: "channel",
+        ...(replaces
+          ? { spawnedBy: "agent:main:main", parentSessionKey: "agent:main:main", spawnDepth: 1 }
+          : {}),
+      };
+      await replaceSessionEntry(scope, entry);
+      const before = loadSessionEntry(scope);
+      await using actor = createReplyRecoveryActorFixture({
+        agentId: "main",
+        ...scope,
+        getSessionId: () => entry.sessionId,
+      });
+      const controller = createReplyRestartRecoveryClaimController({
+        agentId: "main",
+        acquireSessionActor: () => actor.acquireSessionActor(),
+        admissionRunId: "human-child-after-restart",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        getEntry: () => entry,
+        getSessionId: () => entry.sessionId,
+        isRestartAbort: () => false,
+        resolveDeliveryContext: () => undefined,
+        setEntry: (next) => {
+          entry = next;
+        },
+        ...scope,
+      });
+      const outcome = await controller.admitUserTurn().catch((error: unknown) => error);
+      if (!replaces) {
+        expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
+        expect(loadSessionEntry(scope)).toEqual(before);
+        return;
+      }
+      expect(outcome).toBe("admitted");
+      const admitted = loadSessionEntry(scope);
+      expect(admitted).toMatchObject({ abortedLastRun: false });
+      expect(admitted?.restartRecoveryDeliveryRunId).not.toBe(interruptedRunId);
+      expect(admitted?.restartRecoveryTerminalRunIds).toContain(`${interruptedRunId}:user`);
+    },
+  );
+
   it("tracks a channel claim after retiring an aborted Control UI predecessor", async () => {
     const storePath = path.join(
       tempDirs.make("openclaw-reply-claim-channel-successor-"),

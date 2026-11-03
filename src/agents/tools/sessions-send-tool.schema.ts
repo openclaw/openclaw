@@ -100,6 +100,8 @@ export const SessionsSendOutputSchema = Type.Union([
       sessionKey: Type.String(),
       delivery: SessionsSendDeliverySchema,
       reply: Type.String(),
+      replyTruncated: Type.Optional(Type.Literal(true)),
+      note: Type.Optional(Type.String()),
       watched: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },

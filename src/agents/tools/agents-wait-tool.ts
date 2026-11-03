@@ -7,6 +7,7 @@ import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { registerActiveEmbeddedRunRuntimeWait } from "../embedded-agent-runner/run-state.js";
 import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
 import { subscribeSubagentRunChanges } from "../subagents/registry/subagent-registry-publication.js";
 import { prepareSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
@@ -16,6 +17,10 @@ import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import { describeAgentsWaitTool } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 
 const MAX_WAIT_IDS = 1_000;
 
@@ -212,11 +217,14 @@ async function waitForCollector(
     abortError: () => Error;
   },
 ) {
+  const authority = getGatewayToolCallerIdentity()?.approvalAuthority;
+  const assertCurrent = captureGatewayToolCallerAssertion();
   const deadline =
     params.timeoutMs === undefined ? undefined : performance.now() + params.timeoutMs;
   let changed: boolean;
   let resume: (() => void) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let releaseRuntimeWait: (() => void) | undefined;
   const wake = () => {
     changed = true;
     resume?.();
@@ -272,15 +280,31 @@ async function waitForCollector(
       }
       await new Promise<void>((resolve) => {
         resume = resolve;
+        // Only a successfully read, owned pending collector can park this run.
+        // Publications revoke the wait until its owner has been reread; a hung
+        // registry read remains ordinary recoverable host work. Revoked caller
+        // authority throws, which the recovery probe treats as unprotected.
+        releaseRuntimeWait = authority
+          ? registerActiveEmbeddedRunRuntimeWait(authority, () => {
+              if (resume === undefined || changed || params.signal?.aborted) {
+                return false;
+              }
+              assertCurrent?.();
+              return true;
+            })
+          : undefined;
         if (deadline !== undefined) {
           timer = setTimeout(resolve, Math.max(0, deadline - performance.now()));
         }
       });
+      releaseRuntimeWait?.();
+      releaseRuntimeWait = undefined;
       clearTimeout(timer);
       timer = undefined;
       resume = undefined;
     }
   } finally {
+    releaseRuntimeWait?.();
     clearTimeout(timer);
     unsubscribe();
     params.signal?.removeEventListener("abort", wake);

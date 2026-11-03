@@ -411,7 +411,9 @@ export function dispatchAgentRunFromGateway(params: {
         endedAt: terminalOutcome.endedAt ?? Date.now(),
         yielded: result?.meta?.yielded === true,
         terminalReply,
-        ...(terminalReply?.disposition === "visible" ? { replyText: terminalReply.text } : {}),
+        ...(terminalReply?.disposition === "visible"
+          ? { replyText: result?.meta?.finalAssistantVisibleText ?? terminalReply.text }
+          : {}),
         ...(receipt?.runId === params.runId && receipt.sourceReplyDelivered
           ? { sourceReplyDelivered: true as const }
           : {}),

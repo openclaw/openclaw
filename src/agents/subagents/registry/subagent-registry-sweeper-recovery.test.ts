@@ -536,6 +536,45 @@ describe("subagent registry recovery scheduling", () => {
     expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
   });
 
+  it.each(["saved terminal result", "unfinished execution"] as const)(
+    "recovers an interrupted predecessor after child session reuse only for its %s",
+    async (kind) => {
+      recoverRow.mockResolvedValue({ status: "handled" });
+      const { entry, runs, sweeper } = createHarness({
+        current: createMockGatewayRecoveryRuntime(),
+      });
+      if (kind === "saved terminal result") {
+        entry.terminalOwner = "interrupted-recovery";
+        entry.execution = {
+          status: "terminal",
+          endedAt: Date.now() - 30_000,
+          outcome: { status: "error" },
+        };
+      } else {
+        entry.execution = { status: "running", startedAt: Date.now() - 55_000 };
+      }
+      const successor = {
+        ...run(),
+        runId: "reused-session-successor",
+        generation: (entry.generation ?? 0) + 1,
+        createdAt: entry.createdAt + 1,
+        execution: {
+          status: "terminal" as const,
+          startedAt: Date.now() - 20_000,
+          endedAt: Date.now() - 10_000,
+          outcome: { status: "ok" as const },
+        },
+      };
+      runs.set(successor.runId, successor);
+
+      await sweeper.sweepOnce();
+
+      expect(recoverRow.mock.calls.map(([params]) => params.runId)).toEqual(
+        kind === "saved terminal result" ? [entry.runId] : [],
+      );
+    },
+  );
+
   it("coalesces duplicate schedules before the owner pass starts", async () => {
     const runtime = { current: createMockGatewayRecoveryRuntime() };
     recoverRow.mockResolvedValue({ status: "ignored" });

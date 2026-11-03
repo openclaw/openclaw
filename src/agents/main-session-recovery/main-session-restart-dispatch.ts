@@ -46,7 +46,10 @@ import {
   commitMainSessionRecovery,
   type MainSessionRecoveryStoreTarget,
 } from "./main-session-recovery-store.js";
-import { settleAcceptedRestartRecovery } from "./main-session-restart-dispatch-settlement.js";
+import {
+  settleAcceptedRestartRecovery,
+  settleRejectedRestartRecovery,
+} from "./main-session-restart-dispatch-settlement.js";
 import {
   dispatchRestartRecoveryUntilStarted,
   normalizeRestartRecoveryTerminalStatus,
@@ -660,10 +663,11 @@ async function resumeMainSessionWithinAdmission(
         await repairAcceptedRecovery();
       }
     }
+    let rollback: Awaited<ReturnType<typeof rollbackReservation>>;
     if (reservation) {
       const rollbackKind =
         dispatchStarted && !explicitlyRejected ? "abandon_reservation" : "cancel_reservation";
-      await rollbackReservation(rollbackKind).catch((rollbackError: unknown) => {
+      rollback = await rollbackReservation(rollbackKind).catch((rollbackError: unknown) => {
         log.warn(
           `failed to roll back interrupted main session recovery attempt ${params.sessionKey}: ${String(rollbackError)}`,
         );
@@ -672,10 +676,23 @@ async function resumeMainSessionWithinAdmission(
           kind: rollbackKind,
           reservation: reservation!,
         });
+        return undefined;
       });
     }
     if (params.shouldContinue?.() === false) {
       return "skipped";
+    }
+    const rejected = await settleRejectedRestartRecovery({
+      ...target,
+      cfg: params.cfg,
+      dispatchAccepted,
+      error,
+      gatewayRuntime: params.gatewayRuntime,
+      rollback,
+      shouldContinue: params.shouldContinue,
+    });
+    if (rejected) {
+      return rejected;
     }
     log.warn(
       `failed to resume interrupted main session ${params.sessionKey}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,

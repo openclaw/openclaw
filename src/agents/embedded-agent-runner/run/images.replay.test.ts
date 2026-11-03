@@ -18,6 +18,7 @@ import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-trans
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
+  buildPromptImageFailureNotice,
   detectAndLoadPromptImages,
   detectImageReferences,
   hydratePromptMediaMessages,
@@ -196,6 +197,28 @@ describe("structured prompt media replay", () => {
     expect(detectImageReferences("[media attached: media://inbound/legacy.png]")).toEqual([]);
     expect(detectImageReferences("[media attached: /tmp/legacy.png (image/png)]")).toEqual([]);
     expect(detectImageReferences("[Image: source: /tmp/legacy.png]")).toEqual([]);
+  });
+
+  it("asks the active turn to resend a recorded image it cannot read", async () => {
+    const workspaceDir = tempDirs.make("openclaw-recorded-failure-");
+    const media = [{ path: path.join(workspaceDir, "missing.png"), contentType: "image/png" }];
+    const message = {
+      role: "user",
+      content: "here",
+      __openclaw: { media, mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] } },
+    } as unknown as AgentMessage;
+    const onCurrentTurnImageFailure = vi.fn();
+    const result = await hydratePromptMediaMessages([message], {
+      workspaceDir,
+      model: { input: ["text", "image"] },
+      workspaceOnly: true,
+      onCurrentTurnImageFailure,
+    });
+    expect(onCurrentTurnImageFailure).toHaveBeenCalledExactlyOnceWith(1);
+    expect(result[0]).toHaveProperty("content", [
+      { type: "text", text: "here" },
+      { type: "text", text: buildPromptImageFailureNotice(1) },
+    ]);
   });
 
   it("dedupes the rendered alias of a private macOS path", async () => {

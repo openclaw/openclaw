@@ -446,6 +446,7 @@ export function createCronPromptExecutor(
               : undefined,
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+            messageToolFinalByDefault: sourceDelivery.messageTool.finalByDefault,
             scheduledToolPolicy,
             onExecutionStarted: notifyExecutionStarted,
             onExecutionPhase: notifyExecutionPhase,

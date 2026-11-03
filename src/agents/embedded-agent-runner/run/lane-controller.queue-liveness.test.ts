@@ -32,6 +32,7 @@ import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
+import { outsideExecutionCapacity } from "./execution-capacity.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
@@ -309,6 +310,69 @@ describe("queued embedded run context liveness", () => {
     clock.mockReturnValue(registeredAt + CONTEXT_TTL_MS + 1);
     expect(sweepStaleRunContexts()).toBe(1);
     expect(getAgentRunContext(params.runId)).toBeUndefined();
+  });
+
+  test("releases global capacity during projection recovery and rejoins the queue in order", async () => {
+    setCommandLaneConcurrency(GLOBAL_LANE, 1);
+    const replyOperation = createReplyOperation({
+      sessionId: "recovering-session",
+      sessionKey: "agent:main:recovering",
+      resetTriggered: false,
+    });
+    const first = createRunController({
+      runId: "recovering-run",
+      sessionId: "recovering-session",
+      sessionKey: "agent:main:recovering",
+      replyOperation,
+    });
+    const second = createRunController({
+      runId: "sibling-run",
+      sessionId: "sibling-session",
+      sessionKey: "agent:main:sibling",
+    });
+    const order: string[] = [];
+    const recovering = createDeferred();
+    const recovered = createDeferred();
+    const siblingEntered = createDeferred();
+    const finishSibling = createDeferred();
+    const execute = vi.fn(async () => {
+      order.push("first:start");
+      await outsideExecutionCapacity(async () => {
+        recovering.resolve();
+        await recovered.promise;
+      });
+      order.push("first:resume");
+      expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
+      return createRunResult();
+    });
+    const run = first.controller.enqueueGlobal(execute);
+    let siblingRun: Promise<unknown> | undefined;
+    try {
+      await recovering.promise;
+      expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(0);
+      siblingRun = second.controller.enqueueGlobal(async () => {
+        order.push("sibling:start");
+        siblingEntered.resolve();
+        await finishSibling.promise;
+        order.push("sibling:end");
+        return createRunResult();
+      });
+      await siblingEntered.promise;
+      recovered.resolve();
+      await waitForQueuedLane(GLOBAL_LANE);
+      // Rejoining capacity is healthy queue waiting, not a stale run.
+      expect(replyOperation.phase).toBe("waiting_for_global_lane");
+      expect(isReplyRunEvidenceStale(replyOperation)).toBe(false);
+      finishSibling.resolve();
+      await expect(run).resolves.toEqual(createRunResult());
+      expect(order).toEqual(["first:start", "sibling:start", "sibling:end", "first:resume"]);
+      expect(execute).toHaveBeenCalledOnce();
+      expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(0);
+    } finally {
+      recovered.resolve();
+      finishSibling.resolve();
+      await Promise.allSettled([run, ...(siblingRun ? [siblingRun] : [])]);
+    }
   });
 
   test("rebinds queued foreground work after its retired context expires", async () => {

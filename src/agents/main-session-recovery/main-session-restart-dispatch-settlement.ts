@@ -2,10 +2,58 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import { GatewayOperatorRecoveryOwnershipError } from "../../infra/restart-recovery-errors.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryReservation } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import type { RestartRecoveryTerminalStatus } from "./main-session-restart-dispatch-start.js";
+import { finishDelegatedRestartRecovery } from "./main-session-restart-recovery-failure.js";
+
+/** A definitive pre-admission ownership loss settles locally without dropping other recovery custody. */
+export async function settleRejectedRestartRecovery(
+  params: Omit<
+    Parameters<typeof finishDelegatedRestartRecovery>[0],
+    "entry" | "observation" | "reason"
+  > & {
+    error: unknown;
+    dispatchAccepted: boolean;
+    rollback: Awaited<ReturnType<typeof commitMainSessionRecovery>> | undefined;
+    shouldContinue?: () => boolean;
+  },
+): Promise<"settled" | "skipped" | "failed" | undefined> {
+  const { error, rollback } = params;
+  const entry = rollback?.entry;
+  if (
+    !(error instanceof GatewayOperatorRecoveryOwnershipError) ||
+    params.dispatchAccepted ||
+    rollback?.transition.kind !== "applied" ||
+    !entry?.mainRestartRecovery
+  ) {
+    return undefined;
+  }
+  if (params.shouldContinue?.() === false) {
+    return "skipped";
+  }
+  const result = await finishDelegatedRestartRecovery({
+    agentId: params.agentId,
+    cfg: params.cfg,
+    entry,
+    gatewayRuntime: params.gatewayRuntime,
+    observation: {
+      sessionId: entry.sessionId,
+      cycleId: entry.mainRestartRecovery.cycleId,
+      revision: entry.mainRestartRecovery.revision,
+    },
+    reason: error.message,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
+  return result === "settled" || result === "tombstoned"
+    ? "settled"
+    : result === "skipped"
+      ? "skipped"
+      : "failed";
+}
 
 async function settleRestartRecoveryDispatch(params: {
   agentId?: string;

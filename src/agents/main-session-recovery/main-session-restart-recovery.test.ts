@@ -45,6 +45,7 @@ import {
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import type { QueuedDelivery } from "../../infra/outbound/delivery-queue-types.js";
 import { createUnmodifiedPreparedOutboundBatch } from "../../infra/outbound/prepared-batch.js";
+import { GatewayOperatorRecoveryOwnershipError } from "../../infra/restart-recovery-errors.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -2018,6 +2019,28 @@ describe("main-session-restart-recovery", () => {
     const entry = readEntry();
     expect(entry?.mainRestartRecovery).toMatchObject({ chargedAttempts: 0 });
     expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
+  });
+
+  it("retires a stale operator recovery source once with a local notice", async () => {
+    const { sessionsDir, readEntry } = await makeMainSessionFixture();
+    await writeCompletedToolTranscript(sessionsDir);
+    vi.mocked(callGateway).mockRejectedValueOnce(new GatewayOperatorRecoveryOwnershipError());
+
+    await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 }, {});
+
+    // Stable probes agent.wait after a rejected dispatch; the resend itself happens once.
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.filter(([request]) => (request as { method?: string }).method === "agent"),
+    ).toHaveLength(1);
+    expect(readEntry()).toMatchObject({ abortedLastRun: false });
+    expect(readEntry()?.mainRestartRecovery).toBeUndefined();
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("Restart recovery operator source no longer owns this input"),
+      }),
+    );
   });
 
   it("rolls back the reservation when ambiguous settlement persistence fails", async () => {

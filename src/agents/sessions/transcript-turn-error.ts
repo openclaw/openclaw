@@ -8,6 +8,7 @@ export function isSessionTranscriptTurnMismatchErrorMessage(
     /^Session transcript keyed user is outside the current turn: \S/.test(text) ||
     text === "Pending input is no longer active in its admitted transcript" ||
     text === "Pending input session changed before transcript promotion" ||
-    text === "Pending input custody ended before transcript promotion"
+    text === "Pending input custody ended before transcript promotion" ||
+    text === "Model prompt projection lost its canonical user turn"
   );
 }

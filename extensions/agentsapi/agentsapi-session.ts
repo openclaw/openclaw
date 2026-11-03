@@ -321,7 +321,7 @@ export function createAgentsApiSession(options: {
           const result = await options.executeFunction(call);
           assertCurrent();
           signal.throwIfAborted();
-          const terminate = result.terminate || result.sourceReplyDelivered;
+          const terminate = result.terminate;
           if (terminate) {
             // Fence new input before the acknowledgement can resume native work.
             // Already reserved input remains ahead of that acknowledgement.

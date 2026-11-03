@@ -29,6 +29,7 @@ import { beginForegroundSessionMaintenance } from "../../session-maintenance/coo
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
 import { resolveSessionPlacementTurnSettlementAssertion } from "../../session-placement-forced-terminal-settlement.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
+import { withReleasableExecutionCapacity } from "./execution-capacity.js";
 import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
@@ -406,14 +407,33 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       );
     };
     const params = options.getParams();
-    let queuedRun: Promise<EmbeddedAgentRunResult>;
-    try {
-      queuedRun = enqueue(params, options.globalLane, taskWithCurrentLifecycle, globalOpts);
-    } catch (error) {
-      finishGlobalLaneAdmission();
-      throw error;
-    }
-    return queuedRun.finally(finishGlobalLaneAdmission).catch(rethrowQueueError);
+    let started = false;
+    // Only explicit preparation waits release capacity; timeouts retain raw-task custody.
+    const queuedRun = withReleasableExecutionCapacity((ticket) => {
+      if (started) {
+        // A released wait rejoins the global queue behind work admitted meanwhile.
+        options.getParams().replyOperation?.markWaitingForGlobalLane();
+        if (!waitingForGlobalLaneAdmission) {
+          waitingForGlobalLaneAdmission = true;
+          pendingGlobalLaneAdmissions += 1;
+        }
+      }
+      const runTicket = async () => {
+        if (started) {
+          endCapacityWait();
+          finishGlobalLaneAdmission();
+          noteLaneTaskProgress();
+          throwIfAborted();
+          options.getParams().replyOperation?.markGlobalLaneWaitEnded();
+          options.getParams().onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+        }
+        started = true;
+        return await ticket();
+      };
+      // Cancel raw work on queue timeout before the capacity owner joins its cleanup.
+      return enqueue(params, options.globalLane, runTicket, globalOpts).catch(rethrowQueueError);
+    }, taskWithCurrentLifecycle);
+    return queuedRun.finally(finishGlobalLaneAdmission);
   };
   const enqueueSession = async <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
     const releaseForeground =

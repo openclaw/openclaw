@@ -64,7 +64,6 @@ type ToolDelivery = AgentHarnessMessagingDeliveryFacts &
   >;
 
 export type AgentsApiToolExecutionResult = AgentsApiFunctionResult & {
-  sourceReplyDelivered?: true;
   terminate?: true;
 };
 
@@ -462,9 +461,11 @@ export async function buildAgentsApiToolSurface(
                 result: raw,
                 isError: rawIsError,
               });
+              // An omitted final takes the run's default; cron sends do not end the turn.
+              const messageFinal = resolveMessageFinal(executedArgs, params);
               terminate =
-                sourceReplyDelivered ||
-                (raw.terminate === true && !(sourceRouteDelivered && executedArgs.final === false));
+                (sourceReplyDelivered && messageFinal) ||
+                (raw.terminate === true && !(sourceRouteDelivered && !messageFinal));
               if (sourceReplyDelivered) {
                 delivery.sourceReplyDelivered = true;
               }
@@ -479,7 +480,7 @@ export async function buildAgentsApiToolSurface(
                 messagingContext,
                 delivery,
                 signal,
-                sourceRouteDelivered ? executedArgs.final !== false : undefined,
+                sourceRouteDelivered ? messageFinal : undefined,
               );
               // Presentation failures cannot downgrade a completed host mutation's receipt.
               observeTerminal(
@@ -541,11 +542,20 @@ export async function buildAgentsApiToolSurface(
       );
       return {
         ...nativeResult,
-        ...(sourceReplyDelivered ? { sourceReplyDelivered: true as const } : {}),
         ...(terminate ? { terminate: true as const } : {}),
       };
     },
   };
+}
+
+/** Whether a delivered source send ends the turn; an omitted `final` takes the run's default. */
+function resolveMessageFinal(
+  args: Record<string, unknown>,
+  params: Pick<AgentHarnessAttemptParamsV2, "messageToolFinalByDefault">,
+): boolean {
+  return args.final === undefined
+    ? params.messageToolFinalByDefault !== false
+    : args.final !== false;
 }
 
 function recordDelivery(
@@ -567,7 +577,7 @@ function recordDelivery(
       recordAgentHarnessMessagingDelivery({
         facts: delivery,
         sourceReplyPayload: payload,
-        sourceReplyFinal: args.final !== false,
+        sourceReplyFinal: resolveMessageFinal(args, params),
       });
     } else {
       const routedArgs = {

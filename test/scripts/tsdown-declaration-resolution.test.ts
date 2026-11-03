@@ -824,6 +824,8 @@ console.log("workspace/AI native compilation settled after success and failure")
           ["-p", positiveConfig, "--pretty", "false"],
           { cwd: root, encoding: "utf8" },
         );
+        expect(positive.error).toBeUndefined();
+        expect(positive.signal).toBeNull();
         expect(positive.status, positive.stdout + positive.stderr).toBe(0);
         rejectedPath = ambient;
       } else if (kind === "package symlink") {

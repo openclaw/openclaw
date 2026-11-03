@@ -287,6 +287,11 @@ the original caller lacked, and revocation still stops the recovered run.
 Older interrupted turns without a recorded authorization source remain restricted;
 send a fresh authenticated message to continue privileged work. Session ownership
 or a saved display name never grants recovery permissions.
+If the recorded source no longer matches the session or interrupted input,
+recovery retires that stale input with one local interruption notice. The
+incoming message can then continue normally without resetting the session.
+Pending replies, harness completions, and independent runs retain their existing
+recovery protection.
 
 This also covers parent turns started by subagent completion or pause notices.
 An interrupted parent continues independently of later child completions, and a

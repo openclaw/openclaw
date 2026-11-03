@@ -45,6 +45,9 @@ Run workspace selection rejects an explicitly supplied blank or invalid agent ID
 
 `openclaw onboard`, `openclaw configure`, or `openclaw setup` create the workspace and seed the bootstrap files if they are missing.
 
+Already-provisioned workspaces can continue if packaged templates are unavailable.
+Creating missing files still requires a working template installation.
+
 <Note>
 Sandbox seed copies only accept regular in-workspace files; symlink/hardlink aliases that resolve outside the source workspace are ignored.
 </Note>

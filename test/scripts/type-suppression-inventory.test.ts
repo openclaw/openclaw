@@ -135,6 +135,8 @@ describe("type suppression inventory", () => {
         "src/infra/database-engine/transcript-reader.conformance.test.ts:@ts-expect-error -- The PostgreSQL bridge deliberately lacks unused SQLite-only methods.",
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
+        "src/auto-reply/inbound-debounce.test.ts:@ts-expect-error Released plugins return promises instead of the current lifecycle shape.",
+        "src/auto-reply/inbound-debounce.test.ts:@ts-expect-error Released plugins return promises instead of the current lifecycle shape.",
         "src/plugin-sdk/plugin-config-runtime.test.ts:@ts-expect-error Arrays are also invalid persisted plugin config objects.",
         "src/plugin-sdk/plugin-config-runtime.test.ts:@ts-expect-error Exercise malformed persisted config at the runtime boundary.",
         "test/type-contracts/plugin-entry-hook-options.ts:@ts-expect-error Trigger eligibility is only supported for before_agent_reply.",

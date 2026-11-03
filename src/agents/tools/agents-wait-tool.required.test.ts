@@ -1,12 +1,21 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
+import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import { createCodeModeHarness, resetCodeModeTestState } from "../code-mode.test-support.js";
+import { resolveActiveEmbeddedRunRecoveryBlocker } from "../embedded-agent-runner/run-state.js";
+import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../embedded-agent-runner/runs.js";
 import type { PreparedSubagentRunsRead } from "../subagents/registry/subagent-registry-read-snapshot.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import { collectorRun } from "./agents-wait-tool.test-support.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 
 const records = new Map<string, SubagentRunRecord>();
 const registryEvents = vi.hoisted(() => ({
@@ -60,6 +69,134 @@ describe("required collector completion", () => {
       .mockReset()
       .mockImplementation(async (ids) => preparedRuns(() => selectRuns(ids)));
   });
+  it.each([
+    { outcome: "done", codeMode: true },
+    { outcome: "failed", codeMode: false },
+    { outcome: "aborted", codeMode: false },
+    { outcome: "revoked caller authority", codeMode: false },
+    { outcome: "stalled reread", codeMode: false },
+  ] as const)(
+    "keeps a long collector wait alive until $outcome (Code Mode: $codeMode)",
+    async ({ outcome, codeMode }) => {
+      const h = createCodeModeHarness({ agentId: "main" });
+      onTestFinished(resetCodeModeTestState);
+      const { sessionId, sessionKey, runId } = h.ctx;
+      const admission = prepareSystemAgentRunAdmission({}, runId, "main", "wait-test");
+      const admitted = await admission.admit("embedded");
+      const callerApproval = new AbortController();
+      const caller = createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext: admitted,
+        agentId: "main",
+        sessionKey,
+        approvalSignals: [callerApproval.signal],
+      });
+      const signal = new AbortController();
+      const stalledReread = createDeferred<PreparedSubagentRunsRead>();
+      const abort = vi.fn(() => {
+        signal.abort();
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      });
+      const handle = {
+        runId,
+        queueMessage: async () => {},
+        isStreaming: () => true,
+        isCompacting: () => false,
+        isAborted: () => signal.signal.aborted,
+        abort,
+      };
+      const entry = collectorRun("long-collector", sessionKey);
+      records.set(entry.runId, entry);
+      const read = createDeferred();
+      registryEvents.read.mockImplementation(async (ids) =>
+        preparedRuns(() => {
+          read.resolve();
+          return selectRuns(ids);
+        }),
+      );
+      const tool = createMainSessionWaitTool();
+      applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
+      await withGatewayToolCallerIdentity(caller, () =>
+        setActiveEmbeddedRun(sessionId, handle, sessionKey),
+      );
+      const result = withGatewayToolCallerIdentity(caller, () =>
+        (codeMode ? expectDefined(h.tools[0], "exec") : tool).execute(
+          "join",
+          codeMode
+            ? {
+                title: "Join required child",
+                awaitResults: true,
+                code: 'return await agents_wait({ids:["long-collector"], awaitResults:true});',
+              }
+            : { ids: [entry.runId], awaitResults: true },
+          signal.signal,
+        ),
+      );
+      // Always observe cancellation, including when the pre-fix recovery aborts the parent.
+      const observed = result.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await read.promise;
+        vi.useFakeTimers();
+        await vi.advanceTimersByTimeAsync(16 * 60_000);
+        await expect(
+          recoverStuckDiagnosticSession({
+            sessionId,
+            sessionKey,
+            ageMs: 16 * 60_000,
+            queueDepth: 0,
+            allowActiveAbort: true,
+          }),
+        ).resolves.toMatchObject({ status: "skipped", reason: "runtime_owned_wait" });
+        expect(abort).not.toHaveBeenCalled();
+        expect(registryEvents.read).toHaveBeenCalledOnce();
+
+        if (outcome === "revoked caller authority" || outcome === "stalled reread") {
+          if (outcome === "revoked caller authority") {
+            callerApproval.abort();
+          } else {
+            registryEvents.read.mockImplementation(() => stalledReread.promise);
+            for (const listener of registryEvents.listeners) {
+              listener();
+            }
+          }
+          // Neither a revoked caller nor a hung registry reread may park the parent.
+          expect(resolveActiveEmbeddedRunRecoveryBlocker(sessionId)).toBeUndefined();
+          signal.abort();
+          stalledReread.resolve(preparedRuns(() => selectRuns([entry.runId])));
+          vi.useRealTimers();
+          await expect(result).rejects.toThrow("agents_wait aborted");
+        } else if (outcome === "aborted") {
+          signal.abort();
+          await expect(result).rejects.toThrow("agents_wait aborted");
+        } else {
+          entry.collectorCompletion = { status: outcome };
+          entry.completion = { required: false, resultText: "collected result" };
+          for (const listener of registryEvents.listeners) {
+            listener();
+          }
+          vi.useRealTimers();
+          const completed = {
+            completed: [{ runId: entry.runId, status: outcome, result: "collected result" }],
+            pending: [],
+          };
+          await expect(result).resolves.toMatchObject({
+            details: codeMode ? { status: "completed", value: completed } : completed,
+          });
+        }
+        expect(resolveActiveEmbeddedRunRecoveryBlocker(sessionId)).toBeUndefined();
+        expect(registryEvents.listeners.size).toBe(0);
+      } finally {
+        signal.abort();
+        await observed;
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+        admission.close();
+        resetDiagnosticEventsForTest();
+        vi.useRealTimers();
+      }
+    },
+  );
   it.each(["cell", "nested"])(
     "keeps sibling results owned with %s awaitResults until every completion arrives",
     async (mode) => {

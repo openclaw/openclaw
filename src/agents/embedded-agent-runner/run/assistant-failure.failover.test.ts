@@ -110,6 +110,35 @@ async function expectFailure(input: Input): Promise<FailoverError> {
 }
 
 describe("assistant failure recovery", () => {
+  it("stops unchanged retries and model fallback after prompt projection loses its user turn", async () => {
+    let attempts = 0;
+    const run = vi.fn(async () => {
+      const input = makeInput("Model prompt projection lost its canonical user turn");
+      input.normalizedAttempt.attemptAssistant!.content = [];
+      for (;;) {
+        attempts += 1;
+        const outcome = await handleEmbeddedAssistantFailure(input);
+        if (outcome.action !== "retry") {
+          throw new Error("failure was not surfaced");
+        }
+        input.emptyErrorRetries = outcome.emptyErrorRetries;
+      }
+    });
+    await expect(
+      runWithModelFallback({
+        cfg: undefined,
+        provider: "anthropic",
+        model: "test-model",
+        manifestPlugins: [],
+        fallbacksOverride: ["openai/fixture-next", "groq/fixture-last"],
+        skipAuthProfileRuntime: true,
+        run,
+      }),
+    ).rejects.toThrow("Model prompt projection lost its canonical user turn");
+    expect(run).toHaveBeenCalledOnce();
+    expect(attempts).toBe(1);
+  });
+
   beforeEach(() => {
     vi.spyOn(log, "warn").mockImplementation(() => {});
   });

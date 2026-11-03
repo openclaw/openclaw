@@ -137,6 +137,7 @@ async function runEmbeddedAttemptOwned(
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
   let releasePreparedTools: ((reason: string) => Promise<void>) | undefined;
+  let unsubscribeYieldTurnEnd: (() => void) | undefined;
   const sessionResources = createEmbeddedAttemptSessionResources(runAbortController.signal);
   const cleanupStep = (step: string, cleanup: () => Promise<void>) =>
     runOwnedAgentCleanup({ ...params, step, cleanup, log });
@@ -248,9 +249,6 @@ async function runEmbeddedAttemptOwned(
           yieldMessage = message;
           yieldAcknowledgment = acknowledgment;
           yieldMessageWaitRegistered = messageWaitRegistered;
-          queueYieldInterruptForSession?.();
-          runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
-          abortSessionForYield?.();
         },
         runAbortController,
         runTrace,
@@ -286,9 +284,6 @@ async function runEmbeddedAttemptOwned(
     let yieldMessage: string | null = null;
     let yieldAcknowledgment: string | undefined;
     let yieldMessageWaitRegistered: boolean | undefined;
-    // Late-binding reference so onYield can abort the session (declared after tool creation)
-    let abortSessionForYield: (() => void) | null = null;
-    let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
     const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
       prepStages.measure("bundle-tools", () =>
@@ -366,12 +361,19 @@ async function runEmbeddedAttemptOwned(
           externalAbortController,
           resources: sessionResources.resources,
           onSessionYieldReady: ({ abortActiveSession, activeSession }) => {
-            abortSessionForYield = () => {
-              yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
-            };
-            queueYieldInterruptForSession = () => {
+            unsubscribeYieldTurnEnd = activeSession.agent.subscribe((event) => {
+              if (
+                event.type !== "turn_end" ||
+                !yieldDetected ||
+                runAbortController.signal.aborted
+              ) {
+                return;
+              }
+              // Keep sibling execution and authority live until their results settle.
               queueSessionsYieldInterruptMessage(activeSession);
-            };
+              runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
+              yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
+            });
           },
         }),
       );
@@ -478,6 +480,8 @@ async function runEmbeddedAttemptOwned(
           : {}),
       };
     } finally {
+      unsubscribeYieldTurnEnd?.();
+      unsubscribeYieldTurnEnd = undefined;
       // Retained review callbacks must lose the live transcript before cleanup awaits.
       sessionResources.releaseReview();
       // Transfer resources to the session cleanup owner before awaiting it. A

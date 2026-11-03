@@ -564,7 +564,7 @@ export async function waitForSessionTranscriptProjection(
   );
 }
 
-async function waitForPreparedSessionTranscriptProjection(
+export async function waitForPreparedSessionTranscriptProjection(
   sessionId: string,
   databaseOptions: PreparedReconcileParams,
   abortSignal?: AbortSignal,

@@ -5,6 +5,7 @@ import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-con
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
+  canReplaceAbortedRestartRecoveryClaim,
   getRestartRecoveryPendingFinalSourceRunId,
   hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
@@ -435,20 +436,14 @@ export function createReplyRestartRecoveryClaimController(params: {
       return "admitted";
     }
     const updatedAt = Date.now();
-    const canTransferAbortedControlUiClaim = Boolean(
-      admissionRunId &&
-      activeClaimRunId &&
-      admissionRunId !== activeClaimRunId &&
-      entry.abortedLastRun === true &&
-      (entry.status === undefined || entry.status === "interrupted") &&
-      entry.pendingFinalDelivery === undefined &&
-      entry.restartRecoveryBeforeAgentReplyState === undefined &&
-      entry.restartRecoveryDeliveryReceiptState === undefined &&
-      entry.restartRecoverySourceIngress === "control-ui",
+    const canReplaceAbortedClaim = canReplaceAbortedRestartRecoveryClaim(
+      entry,
+      params.sessionKey,
+      admissionRunId,
     );
     if (
       activeClaimRunId &&
-      !canTransferAbortedControlUiClaim &&
+      !canReplaceAbortedClaim &&
       (entry.abortedLastRun === true ||
         !isTerminalSessionStatus(entry.status) ||
         entry.status === "interrupted" ||
@@ -463,7 +458,10 @@ export function createReplyRestartRecoveryClaimController(params: {
           terminalSourceRunId: normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId),
         })
       : {};
-    const transfersControlUiClaim = canTransferAbortedControlUiClaim && !recoverableDeliveryContext;
+    const transfersControlUiClaim =
+      canReplaceAbortedClaim &&
+      entry.restartRecoverySourceIngress === "control-ui" &&
+      !recoverableDeliveryContext;
     const hasDeliveryClaim = Boolean(
       recoverableDeliveryContext || transfersControlUiClaim || operatorSource,
     );

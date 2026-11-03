@@ -967,6 +967,7 @@ Subagent runs are persisted in the shared SQLite state database, so the
 subagent registry survives the process. On boot, interrupted child runs settle
 through their normal completion path as soon as startup restores requester ownership,
 without waiting for the periodic registry sweep. The sweep remains a retry backstop.
+Accepted launches that have not recorded a child lifecycle run also settle as interrupted under the same ownership checks, without waiting for the lost-run sweep. A different recorded child run is never claimed as unstarted.
 The crash-loop breaker pauses this settlement too; the same sweep retries when
 the breaker's recovery window ends.
 Startup restores completed runs directly from the registry. Any retained delivery
@@ -976,6 +977,7 @@ Human follow-ups in retained child sessions take native custody under the actual
 executing run ID and follow-up prompt, including browser chat. The completed
 original run keeps its own outcome. Human ownership and dashboard nesting do not
 turn a child into a main-session replay candidate.
+A new human message to an interrupted child retires its saved recovery claim and starts normally; main-session recovery claims remain protected.
 They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
 For native children with completion notifications disabled, recovery sends a
