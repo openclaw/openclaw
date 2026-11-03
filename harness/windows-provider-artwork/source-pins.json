@@ -1,7 +1,7 @@
 {
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
   "baseTree": "eab5a16b2c6b57a741c7a1a22f830f737592d1ee",
-  "candidateTree": "d9b8fb0cad24ee525219ba9aeb9b56d14427b0fd",
+  "candidateTree": "f03cab09b4e81e3c2113428024862f9fee6c42e6",
   "changedFiles": [
     {
       "path": "docs/PROVIDER_ARTWORK.md",
@@ -41,16 +41,16 @@
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
       "beforeSha256": "f238918a76271fee64392bd3fbd3a93da912d24fedebad80b705a136628697e6",
-      "afterSha256": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af",
-      "bytes": 166118,
-      "afterBlob": "1769e05066c4805458d7a5aca409e44c770c5ee3"
+      "afterSha256": "a3042c0b79c5ff29f1fabcdac96a6cc662fc4433f95b982d4e1f47cdb40fbcc9",
+      "bytes": 166598,
+      "afterBlob": "3c893a3d56d1f09f338663ab03930e14d1b4d82c"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs",
       "beforeSha256": "50d1ba7d47b678a628d5ff506a50d7a906e9cf6c5ad2a8c4183774d3cad28fde",
-      "afterSha256": "eb50ede485aa22b8088269e3f3ccc5e516b867c29753bb628e29a583fbe4dada",
-      "bytes": 41925,
-      "afterBlob": "cdd19006232624076c14b218bfab797edcbdeae5"
+      "afterSha256": "23f4701c6602166348a8d47152f37035cabb738126bfb34dcabf7e0586ad24e5",
+      "bytes": 42272,
+      "afterBlob": "7d41779c8ab58e8dfea01833719dfe925ef271f7"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
@@ -61,7 +61,7 @@
     }
   ],
   "count": 2090,
-  "patchSha256": "909f270b5b786ea5c5f8b089865bb39c871eefb1e5d8179802ec57864f49a9ed",
+  "patchSha256": "0a8528b875ba8c54b7834eb2075ca89e2d0775b101f8da2de6b307d06eff1e8c",
   "sourceCommit": "NOT_CREATED",
   "state": "PREPARED-UNCOMPILED-UNEXECUTED",
   "testCases": 7,
@@ -70,43 +70,43 @@
   "packetFiles": {
     "BootstrapProbe.csproj": "f7d88528ac41739f81684ff10c6a0842387105703b299b7a78dcfed19fc16591",
     "CAUSAL-GIT-REPAIR.json": "06e84d27bba77a9d62c1187b11e92323818a4b21141203d9badbb3d92416fe94",
-    "CONTROLLER-STATIC.json": "52cd8149c6370e71df960356d13ecd72025c8ec1ad5e6063cac895ac49b8a942",
+    "CONTROLLER-STATIC.json": "8c4b1a383fd98f7842c14b4acf3f688588a3cbd0acce1aa2fcced81865637fa5",
     "Initialize-NativeRuntime.ps1": "3f042d5b6492c1271c6f5247ba38608104fa229cb16a768cad937776cca0e4f9",
-    "Invoke-ProviderArtworkCI.ps1": "ae9ad329c17f1ac9e3314e6281dfa09829c34f21ba658087ddcb220604327431",
+    "Invoke-ProviderArtworkCI.ps1": "0aecc51345719a79458e25c625fcbaf7ba4dec193bd1f259e5378a455b496434",
     "Invoke-ProviderArtworkProof.ps1": "21df5035ee6481f9de5bf256df0eeb07966a469c60f533668d75f1cfba192015",
     "Invoke-SourceLauncherProcess.ps1": "f1019f4ae57236bd1fce3876f78d77bcf9f200568f14bf8205ef3b07277235f3",
     "LAUNCHER-PROCESS-REPAIR.json": "eb0f0f467bdd6f09fc14c0ff1ca2f1802b4c4ca56d8b01f288a0dbe905e07390",
     "OWNED-POPUP.md": "dccf5df392c5b090ed37bc6c58aad5e2856a920d8965f7492c677e081776026a",
-    "PRIVATE-CUTOVER.md": "65d55854f6ac02cb6abec04cd77073c14c766efedecdc6422241713d27bc4558",
-    "PROOF-OVERLAYS.json": "cdba4a6d72727bbad45eadf3fc51eae8611b63b8ddf31d8e840e349d0a0d7033",
-    "PROOF-PLAN.md": "65d55854f6ac02cb6abec04cd77073c14c766efedecdc6422241713d27bc4558",
+    "PRIVATE-CUTOVER.md": "9c0d076a632b8504ecac4bd9c02ce3e0f56a1cfcbffc03b43f23c64449010b45",
+    "PROOF-OVERLAYS.json": "51fdd36e0d63656be46b04cf1fa2c3bfa15aee0f0b36235c68e6a5b580919671",
+    "PROOF-PLAN.md": "9c0d076a632b8504ecac4bd9c02ce3e0f56a1cfcbffc03b43f23c64449010b45",
     "Program.cs": "d7337e908472033755a5c1c83046875523931ada52ad08f4f86ef736b9eb54a2",
     "Proof.Common.ps1": "c2a8a7aad4d70af850bd0581008714b0e5e6b3767cc4550219d2cbe996a45edc",
     "QUALIFIED-OWNERS.json": "8633c2447acb427f557f5994e5f963a575edfdc62856e08a985df3b340887efb",
-    "README.md": "65d55854f6ac02cb6abec04cd77073c14c766efedecdc6422241713d27bc4558",
+    "README.md": "9c0d076a632b8504ecac4bd9c02ce3e0f56a1cfcbffc03b43f23c64449010b45",
     "REVIEW-RUNTIME2.md": "f6714d5058ab39c2ff14ff47a86aedfb264e29b95d9cfc16b208668c4d9b5c22",
     "REVIEW.md": "c99f1e33950182b8c87c071e988c856ac6521585e2d28d0b1d1716619e709da3",
-    "STATIC-PREPARATION.json": "52cd8149c6370e71df960356d13ecd72025c8ec1ad5e6063cac895ac49b8a942",
+    "STATIC-PREPARATION.json": "8c4b1a383fd98f7842c14b4acf3f688588a3cbd0acce1aa2fcced81865637fa5",
     "Save-CalculatedVersion.ps1": "a045b196c0e98341735aa8a21dc80cfdacf4504f574c602775e3e31f728e7e39",
     "TEST-COST.json": "51c635b76cd676b6c897a427c714c0ebb991b799f1a55d43aafe690b77f0202a",
     "Test-LauncherParameterTransport.ps1": "fac3d7c95d18e6e317fa82c2df13d69c11e6b9bf78b304edc92a8ff6c204cafd",
     "Test-PacketSyntaxAndStage.ps1": "9d39f26da301934b0d238bb1edf4d7376909c92f0c1f08700bc077aaf0574f5d",
     "W4-FOREGROUND-ALTERNATIVE.md": "b43ebcd08488141fcc369bc00dbfd70486f2cdc94e27648ad930f2d749c5a8da",
-    "after-private-capture.patch": "e6c194687d87e6f7ca79f6cf038a625c6c960b9303ff8026f23a10294a3bc2af",
+    "after-private-capture.patch": "1ee81d58be2cf6363cb5e0f03f1ff7017e07fb62d565a623974c3e4ba31e0504",
     "baseline-capture.patch": "d2396ed9ebba4944f4e49a5c38a3c2f0e52f1abf063294de1fbea7652800eae1",
     "baseline-postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "c70a26b6bc87c0e36636a7528296725669fab6181533d0bf0e1194e34f85705e",
-    "candidate-source.json": "b3a4a3c7bfc2108804ae033a9755a7dda16ff15a53e1ab152af1725f071cb5f2",
-    "candidate.patch": "909f270b5b786ea5c5f8b089865bb39c871eefb1e5d8179802ec57864f49a9ed",
+    "candidate-source.json": "c38efe3e331f4f35a882a64153ec377a884bfe209b0eb829e9f2f2ccaa009212",
+    "candidate.patch": "0a8528b875ba8c54b7834eb2075ca89e2d0775b101f8da2de6b307d06eff1e8c",
     "postimages/docs/PROVIDER_ARTWORK.md": "98af31e92d4006b8b3a945b1b98d94b8ddd5a55e5074ac8f812acc2d5f4be598",
     "postimages/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml": "4d1e60bc7967eccdd16abaa1fc4c7d797cf66bd994e0b83e414bc660b859c586",
     "postimages/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml.cs": "54607109071889bed77871ef707bfd1a5fe8e40ae846a1304a12bb59217487e9",
     "postimages/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml": "2661b7e401db9ee9f5db484c7e1f9112a2abcf5569e3724794020ddffe69ce25",
     "postimages/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs": "311f6f8acfa1f1769bbb85474eaa46d8b192bba6d576ba3895f74ff2b1fdb718",
     "postimages/tests/OpenClaw.Tray.UITests/MountedControlCapture.cs": "110350013890cf70155b9826284fb61d12160cd286f2a6a8fe0904c3356b3efd",
-    "postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af",
-    "postimages/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs": "eb50ede485aa22b8088269e3f3ccc5e516b867c29753bb628e29a583fbe4dada",
+    "postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "a3042c0b79c5ff29f1fabcdac96a6cc662fc4433f95b982d4e1f47cdb40fbcc9",
+    "postimages/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs": "23f4701c6602166348a8d47152f37035cabb738126bfb34dcabf7e0586ad24e5",
     "private-overlay/ProviderArtworkPrivatePresentation.cs": "974cf52be4b2b4a973dbc79363c742b5c3af8d4687536538147ed8fc8283c168",
-    "proof-postimages/After/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "07242a4bb62615c53b7bf55401171a38a2215c9a9605ba5544da90d1ef1dc9fa",
+    "proof-postimages/After/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "efdddac055a60ca17cb3df3b74daded9dacca8c054002d1460859843497a5c1c",
     "proof-postimages/Before/tests/OpenClaw.Tray.UITests/MountedControlCapture.cs": "110350013890cf70155b9826284fb61d12160cd286f2a6a8fe0904c3356b3efd",
     "proof-postimages/Before/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "c70a26b6bc87c0e36636a7528296725669fab6181533d0bf0e1194e34f85705e"
   },
@@ -129,10 +129,10 @@
   ],
   "sourceState": "EIGHT-CANONICAL-FILES-UNCOMMITTED",
   "nativeGitWrapperSha256": "fbeb977dca0320c14edd0b2d0888091d121b1449cce16d9c56f619aabbf5589f",
-  "qualification": "native-icons-w5-owned-popup-v1",
-  "priorCandidateTree": "746f015b26b6144f0743a488334d4dfe5ff3e52a",
+  "qualification": "native-icons-w5-owned-popup-after-v1",
+  "priorCandidateTree": "d9b8fb0cad24ee525219ba9aeb9b56d14427b0fd",
   "priorCandidatePatchSha256": "6194060d067b8858d832ab17951c0f518bc0750f9f6b26e807b744947bd3dc7e",
-  "afterCaptureTree": "d7fc11b355417fa268430fd98fa2ab01a1d7c9c6",
+  "afterCaptureTree": "be03e4b06c06f1ff4e0397be6709274f3cfd1aed",
   "afterCaptureChangedFiles": [
     {
       "path": "docs/PROVIDER_ARTWORK.md",
@@ -172,16 +172,16 @@
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
       "beforeSha256": "f238918a76271fee64392bd3fbd3a93da912d24fedebad80b705a136628697e6",
-      "afterSha256": "07242a4bb62615c53b7bf55401171a38a2215c9a9605ba5544da90d1ef1dc9fa",
-      "bytes": 187711,
-      "afterBlob": "89c2d3c108290d32c965f3734e9a5baff6d12c7b"
+      "afterSha256": "efdddac055a60ca17cb3df3b74daded9dacca8c054002d1460859843497a5c1c",
+      "bytes": 188191,
+      "afterBlob": "47365cb491ed569ace506d625011335e43544020"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs",
       "beforeSha256": "50d1ba7d47b678a628d5ff506a50d7a906e9cf6c5ad2a8c4183774d3cad28fde",
-      "afterSha256": "eb50ede485aa22b8088269e3f3ccc5e516b867c29753bb628e29a583fbe4dada",
-      "bytes": 41925,
-      "afterBlob": "cdd19006232624076c14b218bfab797edcbdeae5"
+      "afterSha256": "23f4701c6602166348a8d47152f37035cabb738126bfb34dcabf7e0586ad24e5",
+      "bytes": 42272,
+      "afterBlob": "7d41779c8ab58e8dfea01833719dfe925ef271f7"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
@@ -194,10 +194,10 @@
   "afterProofOverlayChangedFiles": [
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-      "beforeSha256": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af",
-      "afterSha256": "07242a4bb62615c53b7bf55401171a38a2215c9a9605ba5544da90d1ef1dc9fa",
-      "bytes": 187711,
-      "afterBlob": "89c2d3c108290d32c965f3734e9a5baff6d12c7b"
+      "beforeSha256": "a3042c0b79c5ff29f1fabcdac96a6cc662fc4433f95b982d4e1f47cdb40fbcc9",
+      "afterSha256": "efdddac055a60ca17cb3df3b74daded9dacca8c054002d1460859843497a5c1c",
+      "bytes": 188191,
+      "afterBlob": "47365cb491ed569ace506d625011335e43544020"
     }
   ],
   "priorBaselineCaptureTree": "a1c05f702d256b3675ca787bdebf18f588f8db08"

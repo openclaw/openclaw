@@ -97,8 +97,17 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
             await AssertBundledArtworkAsync(row, brand);
             var session = Assert.IsType<ProviderArtworkSession>(row.Session);
             Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
-            await InvokeChoiceAsync(page, group);
             var dialog = GetDialog(page);
+            var opened = false;
+            void Opened(ContentDialog sender, ContentDialogOpenedEventArgs args) => opened = true;
+            dialog.Opened += Opened;
+            try
+            {
+                await InvokeChoiceAsync(page, group);
+                await TestSupport.WaitForRenderedConditionAsync(() => opened && dialog.CanSubmit,
+                    "provider dialog Opened before automation inspection");
+            }
+            finally { dialog.Opened -= Opened; }
             var icon = Assert.IsType<ProviderArtwork>(dialog.FindName("ProviderIcon"));
             foreach (var type in new[] { "note", "text", "confirm" })
             {
@@ -107,7 +116,7 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
                 await AssertBundledArtworkAsync(icon, brand);
                 Assert.Same(session, icon.Session);
                 Assert.Equal(label, Assert.IsType<TextBlock>(dialog.FindName("ProviderName")).Text);
-                var peer = FrameworkElementAutomationPeer.CreatePeerForElement(dialog);
+                var peer = Assert.IsAssignableFrom<AutomationPeer>(FrameworkElementAutomationPeer.CreatePeerForElement(dialog));
                 Assert.Equal("Provider " + type, peer.GetName());
                 if (type == "text")
                 {

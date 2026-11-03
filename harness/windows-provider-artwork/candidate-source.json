@@ -1,10 +1,10 @@
 {
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
   "baseTree": "eab5a16b2c6b57a741c7a1a22f830f737592d1ee",
-  "candidateTree": "d9b8fb0cad24ee525219ba9aeb9b56d14427b0fd",
-  "priorCandidateTree": "746f015b26b6144f0743a488334d4dfe5ff3e52a",
+  "candidateTree": "f03cab09b4e81e3c2113428024862f9fee6c42e6",
+  "priorCandidateTree": "d9b8fb0cad24ee525219ba9aeb9b56d14427b0fd",
   "priorCandidatePatchSha256": "6194060d067b8858d832ab17951c0f518bc0750f9f6b26e807b744947bd3dc7e",
-  "patchSha256": "909f270b5b786ea5c5f8b089865bb39c871eefb1e5d8179802ec57864f49a9ed",
+  "patchSha256": "0a8528b875ba8c54b7834eb2075ca89e2d0775b101f8da2de6b307d06eff1e8c",
   "changedFiles": [
     {
       "path": "docs/PROVIDER_ARTWORK.md",
@@ -44,16 +44,16 @@
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
       "beforeSha256": "f238918a76271fee64392bd3fbd3a93da912d24fedebad80b705a136628697e6",
-      "afterSha256": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af",
-      "bytes": 166118,
-      "afterBlob": "1769e05066c4805458d7a5aca409e44c770c5ee3"
+      "afterSha256": "a3042c0b79c5ff29f1fabcdac96a6cc662fc4433f95b982d4e1f47cdb40fbcc9",
+      "bytes": 166598,
+      "afterBlob": "3c893a3d56d1f09f338663ab03930e14d1b4d82c"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs",
       "beforeSha256": "50d1ba7d47b678a628d5ff506a50d7a906e9cf6c5ad2a8c4183774d3cad28fde",
-      "afterSha256": "eb50ede485aa22b8088269e3f3ccc5e516b867c29753bb628e29a583fbe4dada",
-      "bytes": 41925,
-      "afterBlob": "cdd19006232624076c14b218bfab797edcbdeae5"
+      "afterSha256": "23f4701c6602166348a8d47152f37035cabb738126bfb34dcabf7e0586ad24e5",
+      "bytes": 42272,
+      "afterBlob": "7d41779c8ab58e8dfea01833719dfe925ef271f7"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
@@ -8222,11 +8222,11 @@
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-      "sha256": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af"
+      "sha256": "a3042c0b79c5ff29f1fabcdac96a6cc662fc4433f95b982d4e1f47cdb40fbcc9"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs",
-      "sha256": "eb50ede485aa22b8088269e3f3ccc5e516b867c29753bb628e29a583fbe4dada"
+      "sha256": "23f4701c6602166348a8d47152f37035cabb738126bfb34dcabf7e0586ad24e5"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingFeedbackTests.cs",
@@ -8428,6 +8428,6 @@
   "count": 2090,
   "sourceCommit": "NOT_CREATED",
   "canonicalChangeFromPrior": "Only eighth file: existing test capture owner admits one exact active owned ComboBox popup through its shared PrintWindow primitive; original seven postimages unchanged.",
-  "AfterProofTree": "d7fc11b355417fa268430fd98fa2ab01a1d7c9c6",
+  "AfterProofTree": "be03e4b06c06f1ff4e0397be6709274f3cfd1aed",
   "BeforeProofTree": "50de4508d71a67ed2fb44ad9d1cdf56781d4d4a2"
 }

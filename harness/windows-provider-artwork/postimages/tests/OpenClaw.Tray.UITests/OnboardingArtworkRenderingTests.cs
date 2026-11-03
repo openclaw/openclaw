@@ -726,8 +726,16 @@ public sealed class OnboardingArtworkRenderingTests(UIThreadFixture ui, ITestOut
                 artwork.Session = replacement;
                 await TestSupport.WaitForRenderedConditionAsync(
                     () => fallback.Visibility == Visibility.Collapsed, "borrowed replacement remains usable after detaching");
-                ui.Container.Children.Remove(artwork);
-                await TestSupport.WaitForRenderedConditionAsync(() => !artwork.IsLoaded, "artwork unloaded");
+                var unloaded = false;
+                void Unloaded(object sender, RoutedEventArgs args) => unloaded = true;
+                artwork.Unloaded += Unloaded;
+                try
+                {
+                    ui.Container.Children.Remove(artwork);
+                    await TestSupport.WaitForRenderedConditionAsync(() => unloaded && !artwork.IsLoaded,
+                        "artwork Unloaded callback observed");
+                }
+                finally { artwork.Unloaded -= Unloaded; }
                 Assert.Null(image.Source);
                 replacement.Dispose();
                 Assert.Null(image.Source);

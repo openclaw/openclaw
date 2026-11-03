@@ -259,7 +259,7 @@ z;aU=&KU_Y+ldU97yi1eEEo~o+4hR6rMoVgfSIK4vxe={_XZu~Sb?{Kp|7C2@gNd<*
 EUnWUQdH?_b
 
 diff --git a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
-index 84479dc..1769e05 100644
+index 84479dc..3c893a3 100644
 --- a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
 +++ b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
 @@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Automation.Peers;
@@ -270,7 +270,7 @@ index 84479dc..1769e05 100644
  using OpenClaw.SetupEngine;
  using OpenClaw.SetupEngine.UI;
  using OpenClaw.SetupEngine.UI.Pages;
-@@ -22,6 +23,161 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -22,6 +23,170 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
  {
      private bool _nativeProof;
 
@@ -348,8 +348,17 @@ index 84479dc..1769e05 100644
 +            await AssertBundledArtworkAsync(row, brand);
 +            var session = Assert.IsType<ProviderArtworkSession>(row.Session);
 +            Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
-+            await InvokeChoiceAsync(page, group);
 +            var dialog = GetDialog(page);
++            var opened = false;
++            void Opened(ContentDialog sender, ContentDialogOpenedEventArgs args) => opened = true;
++            dialog.Opened += Opened;
++            try
++            {
++                await InvokeChoiceAsync(page, group);
++                await TestSupport.WaitForRenderedConditionAsync(() => opened && dialog.CanSubmit,
++                    "provider dialog Opened before automation inspection");
++            }
++            finally { dialog.Opened -= Opened; }
 +            var icon = Assert.IsType<ProviderArtwork>(dialog.FindName("ProviderIcon"));
 +            foreach (var type in new[] { "note", "text", "confirm" })
 +            {
@@ -358,7 +367,7 @@ index 84479dc..1769e05 100644
 +                await AssertBundledArtworkAsync(icon, brand);
 +                Assert.Same(session, icon.Session);
 +                Assert.Equal(label, Assert.IsType<TextBlock>(dialog.FindName("ProviderName")).Text);
-+                var peer = FrameworkElementAutomationPeer.CreatePeerForElement(dialog);
++                var peer = Assert.IsAssignableFrom<AutomationPeer>(FrameworkElementAutomationPeer.CreatePeerForElement(dialog));
 +                Assert.Equal("Provider " + type, peer.GetName());
 +                if (type == "text")
 +                {
@@ -433,10 +442,10 @@ index 84479dc..1769e05 100644
      public async Task AiGroups_KeepManualInputSeparateFromAuthenticationInTheMountedPage()
      {
 diff --git a/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs b/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs
-index b0c2c59..cdd1900 100644
+index b0c2c59..7d41779 100644
 --- a/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs
 +++ b/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs
-@@ -693,6 +693,49 @@ public sealed class OnboardingArtworkRenderingTests(UIThreadFixture ui, ITestOut
+@@ -693,6 +693,57 @@ public sealed class OnboardingArtworkRenderingTests(UIThreadFixture ui, ITestOut
          });
      }
 
@@ -473,8 +482,16 @@ index b0c2c59..cdd1900 100644
 +                artwork.Session = replacement;
 +                await TestSupport.WaitForRenderedConditionAsync(
 +                    () => fallback.Visibility == Visibility.Collapsed, "borrowed replacement remains usable after detaching");
-+                ui.Container.Children.Remove(artwork);
-+                await TestSupport.WaitForRenderedConditionAsync(() => !artwork.IsLoaded, "artwork unloaded");
++                var unloaded = false;
++                void Unloaded(object sender, RoutedEventArgs args) => unloaded = true;
++                artwork.Unloaded += Unloaded;
++                try
++                {
++                    ui.Container.Children.Remove(artwork);
++                    await TestSupport.WaitForRenderedConditionAsync(() => unloaded && !artwork.IsLoaded,
++                        "artwork Unloaded callback observed");
++                }
++                finally { artwork.Unloaded -= Unloaded; }
 +                Assert.Null(image.Source);
 +                replacement.Dispose();
 +                Assert.Null(image.Source);

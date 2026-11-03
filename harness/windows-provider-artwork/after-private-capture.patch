@@ -1,5 +1,5 @@
 diff --git a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
-index 1769e05..89c2d3c 100644
+index 3c893a3..47365cb 100644
 --- a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
 +++ b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
 @@ -1,3 +1,9 @@
@@ -57,7 +57,7 @@ index 1769e05..89c2d3c 100644
              configure: transport => transport.DetectionOverride = new()
              {
                  Candidates = [], Workspace = "/synthetic-workspace", SetupComplete = false,
-@@ -117,9 +132,8 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -126,9 +141,8 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                  }
                  if (type == "confirm")
                      Assert.IsType<CheckBox>(dialog.FindName("ConfirmInput")).IsChecked = true;
@@ -69,7 +69,7 @@ index 1769e05..89c2d3c 100644
                  Invoke(DialogButton(dialog, "PrimaryButton"));
                  await TestSupport.WaitForRenderedConditionAsync(
                      () => transport.LastNext.ValueKind == JsonValueKind.Object &&
-@@ -153,7 +167,7 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -162,7 +176,7 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
              Assert.Null(Assert.IsType<Image>(icon.FindName("ArtworkImage")).Source);
              Assert.Null(Assert.IsType<Image>(row.FindName("ArtworkImage")).Source);
              Assert.Equal(0, completed());
@@ -78,7 +78,7 @@ index 1769e05..89c2d3c 100644
              configure: transport =>
              {
                  transport.DetectionOverride = new()
-@@ -2666,12 +2680,26 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2675,12 +2689,26 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                  ? await GatewayAiPreparation.PrepareAsync(transport, preparationOwner, CancellationToken.None) : null;
              var completions = 0;
              var connects = 0;
@@ -111,7 +111,7 @@ index 1769e05..89c2d3c 100644
              Frame? frame = null;
              AiSetupPage? page = null;
              IDisposable? navigation = null;
-@@ -2681,18 +2709,21 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2690,18 +2718,21 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                  {
                      OnboardingNativeProof.AssertIsolatedRoots();
                      OnboardingNativeProof.RequireProofDirectory();
@@ -141,7 +141,7 @@ index 1769e05..89c2d3c 100644
                  var data = Environment.GetEnvironmentVariable("OPENCLAW_TRAY_DATA_DIR")
                      ?? throw new InvalidOperationException("Set isolated tray data before onboarding UI tests.");
                  var args = new AiSetupPageArgs(new SetupConfig(), data, data,
-@@ -2712,15 +2743,19 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2721,15 +2752,19 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                      });
                  frame = nativeProof ? new Frame() : new Frame { Width = width, Height = 820 };
                  navigation = OnboardingNativeProof.TrackNavigation(frame);
@@ -164,7 +164,7 @@ index 1769e05..89c2d3c 100644
                  await ui.YieldToRenderAsync();
                  await assertion(page, transport, () => completions);
              }
-@@ -2734,15 +2769,24 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2743,15 +2778,24 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                  }
                  finally
                  {
@@ -197,7 +197,7 @@ index 1769e05..89c2d3c 100644
                      _nativeProof = false;
                      await ui.YieldToRenderAsync();
                  }
-@@ -2798,9 +2842,9 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2807,9 +2851,9 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
 
      private Task InvokeCardAsync(SettingsCard card)
      {
@@ -209,7 +209,7 @@ index 1769e05..89c2d3c 100644
          var handler = card.Name switch
          {
              "ApiKeysButton" => "ApiKeys_Click",
-@@ -3015,3 +3059,290 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -3024,3 +3068,290 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
          }
      }
  }

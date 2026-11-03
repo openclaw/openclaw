@@ -1,7 +1,7 @@
 {
   "canonicalBeforeTree": "eab5a16b2c6b57a741c7a1a22f830f737592d1ee",
-  "canonicalAfterTree": "d9b8fb0cad24ee525219ba9aeb9b56d14427b0fd",
-  "priorCanonicalAfterTree": "746f015b26b6144f0743a488334d4dfe5ff3e52a",
+  "canonicalAfterTree": "f03cab09b4e81e3c2113428024862f9fee6c42e6",
+  "priorCanonicalAfterTree": "d9b8fb0cad24ee525219ba9aeb9b56d14427b0fd",
   "before": {
     "tree": "50de4508d71a67ed2fb44ad9d1cdf56781d4d4a2",
     "patch": "baseline-capture.patch",
@@ -24,25 +24,25 @@
     ]
   },
   "after": {
-    "tree": "d7fc11b355417fa268430fd98fa2ab01a1d7c9c6",
+    "tree": "be03e4b06c06f1ff4e0397be6709274f3cfd1aed",
     "patch": "after-private-capture.patch",
-    "patchSha256": "e6c194687d87e6f7ca79f6cf038a625c6c960b9303ff8026f23a10294a3bc2af",
+    "patchSha256": "1ee81d58be2cf6363cb5e0f03f1ff7017e07fb62d565a623974c3e4ba31e0504",
     "changes": [
       {
         "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-        "beforeSha256": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af",
-        "afterSha256": "07242a4bb62615c53b7bf55401171a38a2215c9a9605ba5544da90d1ef1dc9fa",
-        "bytes": 187711,
-        "afterBlob": "89c2d3c108290d32c965f3734e9a5baff6d12c7b"
+        "beforeSha256": "a3042c0b79c5ff29f1fabcdac96a6cc662fc4433f95b982d4e1f47cdb40fbcc9",
+        "afterSha256": "efdddac055a60ca17cb3df3b74daded9dacca8c054002d1460859843497a5c1c",
+        "bytes": 188191,
+        "afterBlob": "47365cb491ed569ace506d625011335e43544020"
       }
     ]
   },
   "sourceOwner": "canonical MountedControlCapture; one private PrintWindow primitive with parent-window and narrowly admitted active owned ComboBox popup callers",
   "foregroundHelpers": "UNCHANGED",
-  "scope": "canonical eighth test-owner capability, prior seven postimages unchanged; Before same owner plus test-only existing compilation-unit overlay; After only existing test compilation-unit overlay",
+  "scope": "canonical eighth test-owner capability, production/capture owner unchanged; only test event boundaries changed; Before same owner plus test-only existing compilation-unit overlay; After only existing test compilation-unit overlay",
   "canonicalSourceManifest": {
     "path": "candidate-source.json",
-    "sha256": "b3a4a3c7bfc2108804ae033a9755a7dda16ff15a53e1ab152af1725f071cb5f2",
+    "sha256": "c38efe3e331f4f35a882a64153ec377a884bfe209b0eb829e9f2f2ccaa009212",
     "entries": 2090
   },
   "sourceProjectionContracts": {
