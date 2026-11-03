@@ -534,6 +534,26 @@ export function createPlacementRecoveryActions(
       ) {
         continue;
       }
+      if (
+        environmentId === undefined &&
+        candidate.state === "active" &&
+        !candidate.workspaceRecoveryPending
+      ) {
+        const placement = await placements.getAsync(candidate.sessionId);
+        const environment = placement?.environmentId
+          ? environments.get(placement.environmentId)
+          : undefined;
+        // Periodic healthy owners need no workspace projection or repository lookup. Interrupted
+        // results, moves, and journals remain candidates even with an unchanged attachment.
+        if (
+          placement?.state === "active" &&
+          isCurrentActiveWorkerEnvironment(placement, environment) &&
+          environment &&
+          !activePlacementExecutionError(placement, environment, environments)
+        ) {
+          continue;
+        }
+      }
       await measureGatewayRestartTrace(
         "worker-placement.reconcile.session",
         () =>
