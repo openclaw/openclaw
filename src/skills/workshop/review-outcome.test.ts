@@ -1,14 +1,14 @@
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { WorkshopChange } from "./changes.kernel.js";
+import { workshopPluginConfig } from "./config.test-support.js";
 import type { WorkshopMutationContext } from "./library.js";
-import { assertSkillReviewRunSucceeded, postWorkshopChangeNotice } from "./review-outcome.js";
+import { postWorkshopChangeNotice } from "./review-outcome.js";
 import {
   undoWorkshopReview,
   WorkshopReviewNotFoundError as NotFound,
@@ -91,39 +91,6 @@ vi.mock("../../infra/system-events.js", async (importOriginal) => ({
   enqueueSystemEvent: mocks.enqueue,
 }));
 
-describe("assertSkillReviewRunSucceeded", () => {
-  type Result = Parameters<typeof assertSkillReviewRunSucceeded>[0];
-  const review = (meta: Omit<Result["meta"], "durationMs">, payloads?: Result["payloads"]) =>
-    expect(() => assertSkillReviewRunSucceeded({ meta: { durationMs: 1, ...meta }, payloads }));
-  it("does not fail a review whose tool calls were denied or errored", () => {
-    const warning = setReplyPayloadMetadata(
-      { isError: true, text: "⚠️ skill_workshop failed: View it first." },
-      { toolErrorWarning: { toolName: "skill_workshop" } },
-    );
-    review(
-      {
-        toolSummary: {
-          calls: 3,
-          tools: ["sessions_yield", "skill_workshop"],
-          failures: 1,
-          unresolvedError: { toolName: "skill_workshop" },
-        },
-      },
-      [warning],
-    ).not.toThrow();
-  });
-
-  it("fails on model or runtime errors", () => {
-    review({ error: { kind: "retry_limit", message: "model retries exhausted" } }).toThrow(
-      "model retries exhausted",
-    );
-    review({}, [{ isError: true, text: "LLM request failed: 529 overloaded" }]).toThrow(
-      "529 overloaded",
-    );
-    review({ aborted: true }).toThrow("aborted");
-  });
-});
-
 describe("postWorkshopChangeNotice", () => {
   const dirs = useSessionStoreTempDirs(afterAll, "workshop-notice-");
   const change = (overrides: Partial<WorkshopChange>): WorkshopChange => ({
@@ -148,9 +115,9 @@ describe("postWorkshopChangeNotice", () => {
   });
   const reviewId = "0b6a4a52-1f43-4f0e-9d55-3c1d8e1f7a10";
   const runId = `skill-workshop-review:${reviewId}`;
-  const channelNotices: OpenClawConfig = {
-    skills: { workshop: { autonomous: { channelNotices: true } } },
-  };
+  const channelNotices: OpenClawConfig = workshopPluginConfig({
+    autonomous: { channelNotices: true },
+  });
   const reviewChanges = (
     summary = "first pass",
     lastEdit: Partial<WorkshopChange> = { summary: "typo" },
@@ -240,7 +207,9 @@ describe("postWorkshopChangeNotice", () => {
           },
         ],
         session: expect.objectContaining({ key: sessionKey }),
-        deliveryIntentId: expect.stringMatching(/^skill-workshop-notice:/),
+        deliveryIntentId: expect.stringMatching(
+          /^plugin-notice:skill-workshop:skill-workshop-notice:/,
+        ),
       }),
       undefined,
       undefined,
@@ -307,7 +276,7 @@ describe("postWorkshopChangeNotice", () => {
       mocks.entry.mockReturnValueOnce({ ...sessionEntry, lifecycleRevision: "reset-revision" });
       return { deliveryContext: { channel: "telegram", to: "42" } };
     });
-    await post([change({})]);
+    await post([change({})], undefined, channelNotices);
     expectNoNotice();
   });
 

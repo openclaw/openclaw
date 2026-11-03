@@ -229,6 +229,7 @@ export default definePluginEntry({
       runInBackgroundContext: api.lifecycle.runInBackgroundContext,
     } satisfies MemoryCoreRuntimeHost;
     configureMemoryCoreDreamingState(openKeyedStore);
+    const memorySlotSelected = normalizePluginsConfig(api.config.plugins).slots.memory === api.id;
     const memoryRuntime = createLazyMemoryRuntime(host);
     let indexStartup: Promise<void> | undefined;
     const stopIndex = async (close: () => Promise<void> | undefined) => {
@@ -259,7 +260,7 @@ export default definePluginEntry({
         }
       });
     });
-    if (normalizePluginsConfig(api.config.plugins).slots.memory === api.id) {
+    if (memorySlotSelected) {
       api.registerService({
         id: "memory-core-index",
         reload: { configPrefixes: ["memory.search", "agents", "models.providers"] },
@@ -345,19 +346,21 @@ export default definePluginEntry({
       },
     });
 
-    for (const contract of [MEMORY_SEARCH_TOOL_CONTRACT, MEMORY_GET_TOOL_CONTRACT]) {
-      api.registerTool(
-        (ctx) =>
-          createLazyMemoryTool({
-            options: resolveMemoryToolOptions(ctx, host),
-            contract,
-            load: (module, options) =>
-              contract.name === "memory_search"
-                ? module.createMemorySearchTool(options)
-                : module.createMemoryGetTool(options),
-          }),
-        { names: [contract.name], workspaceAccess: "execute" },
-      );
+    if (memorySlotSelected) {
+      for (const contract of [MEMORY_SEARCH_TOOL_CONTRACT, MEMORY_GET_TOOL_CONTRACT]) {
+        api.registerTool(
+          (ctx) =>
+            createLazyMemoryTool({
+              options: resolveMemoryToolOptions(ctx, host),
+              contract,
+              load: (module, options) =>
+                contract.name === "memory_search"
+                  ? module.createMemorySearchTool(options)
+                  : module.createMemoryGetTool(options),
+            }),
+          { names: [contract.name], workspaceAccess: "execute" },
+        );
+      }
     }
 
     api.registerTool(

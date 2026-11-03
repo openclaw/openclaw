@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { inflateRawSync } from "node:zlib";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, assert, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
@@ -162,11 +162,9 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
       patch: { checkpoint_json: null },
       manifest: checkpoint,
     });
-    expect(
-      decodeLocalWorkspaceTree(
-        readLocalWorkspaceManifestRows(db, { ...input, revision: revision + 1 }).records,
-      ),
-    ).toEqual(expected);
+    const accepted = readLocalWorkspaceManifestRows(db, { ...input, revision: revision + 1 });
+    assert(accepted.records, "A fresh reader must receive the accepted baseline records");
+    expect(decodeLocalWorkspaceTree(accepted.records)).toEqual(expected);
     expect(result.preparations).toHaveLength(1);
     const packs = result.preparations!.flatMap(
       (batch) => (deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation).packs!,

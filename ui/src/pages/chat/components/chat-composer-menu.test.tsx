@@ -183,6 +183,7 @@ it("retains the focused capability row and management link through catalog refre
       capabilityMenu: makeCapabilities({ ...previous.capabilityMenu!.read()!, ...capability }),
     }));
   await import("./chat-composer-plus-menu-content.tsx");
+  await import("./chat-composer-plus-menu-subview.tsx");
   await waitForSolid(() => expect(checkbox("Focused skill")).toBeTruthy());
   for (const [name, description] of [
     ["Broken", "deps missing"],

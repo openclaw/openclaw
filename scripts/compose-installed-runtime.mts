@@ -423,7 +423,10 @@ async function prepareTargetHelpers(app: string, sourceRoot: string) {
       continue;
     }
     const source = path.join(
-      relative === "scripts/finalize-installed-runtime.mjs" ? toolingRoot : sourceRoot,
+      relative === "scripts/finalize-installed-runtime.mjs" ||
+        relative === "scripts/check-package-dist-imports.mjs"
+        ? toolingRoot
+        : sourceRoot,
       relative,
     );
     const text = await fs.readFile(source, "utf8");
@@ -601,14 +604,24 @@ export async function composeInstalledRuntime(input: CompositionOptions) {
     .filter((row) => row.kind === "file" && row.path.startsWith("app/dist/"))
     .map((row) => row.path.slice(4));
   const importsStarted = performance.now();
+  const readText = (relative: string) => readFileSync(path.join(app, relative), "utf8");
+  const imports = collectPackageDistImports({ files, readText });
   const errors = collectPackageDistImportErrors({
     files,
-    readText: (relative: string) => readFileSync(path.join(app, relative), "utf8"),
+    imports,
+    readText,
   });
   if (errors.length) {
     throw new Error(errors.join("\n"));
   }
   console.error(`[compose] relative imports: ${Math.round(performance.now() - importsStarted)}ms`);
+  // Target lifecycle only removes dist files. Reuse these edges after pruning,
+  // checking retained importers against the actual remaining files without reparsing JS.
+  const importsPath = path.join(app, ".runtime-bootstrap/package-dist-imports.json");
+  await fs.writeFile(importsPath, JSON.stringify(imports) + "\n");
+  outputRows.push(
+    ...(await inventory(importsPath, "app/.runtime-bootstrap/package-dist-imports.json")),
+  );
   await fs.writeFile(
     outputManifest,
     outputRows.map((row) => JSON.stringify(row)).join("\n") + "\n",

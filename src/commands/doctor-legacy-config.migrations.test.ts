@@ -460,10 +460,7 @@ describe("normalizeCompatibilityConfigValues", () => {
             },
             models: {
               "claude-cli/claude-opus-4-7": { alias: "Legacy Opus" },
-              "anthropic/claude-opus-4-7": {
-                alias: "Canonical Opus",
-                agentRuntime: { id: "openclaw" },
-              },
+              "anthropic/claude-opus-4-7": { alias: "Canonical Opus" },
               "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
             },
             modelPolicy: {
@@ -485,7 +482,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         models: {
           "anthropic/claude-opus-4-7": {
             alias: "Canonical Opus",
-            agentRuntime: { id: "openclaw" },
+            agentRuntime: { id: "claude-cli" },
           },
           "anthropic/claude-sonnet-4-6": {
             alias: "Sonnet",

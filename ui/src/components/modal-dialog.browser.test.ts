@@ -641,6 +641,8 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     "wraps native Tab through $realm-document fields in an iframe modal ($tree)",
     async ({ realm, tree }) => {
       const { userEvent } = await import("vitest/browser");
+      const parentTrigger = element("button", { textContent: "Parent control" }, container);
+      await userEvent.click(parentTrigger);
       const { doc, host } = iframeHost();
       const trigger = doc.createElement("button");
       trigger.textContent = "Open editor";
@@ -669,6 +671,7 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       await expect.poll(() => dialog.open).toBe(false);
       expect(doc.activeElement).toBe(trigger);
       expect(modal.open).toBe(false);
+      expect(trigger.matches(":focus-visible")).toBe(true);
     },
   );
 

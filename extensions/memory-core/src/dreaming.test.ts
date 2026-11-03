@@ -13,8 +13,6 @@ import {
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCronHarness,
@@ -54,7 +52,6 @@ afterEach(async () => {
   await Promise.all(stops.map((stop) => stop()));
   vi.restoreAllMocks();
   vi.useRealTimers();
-  resetSystemEventsForTest();
 });
 
 type DreamingPluginApi = Parameters<typeof registerShortTermPromotionDreaming>[0];
@@ -751,10 +748,6 @@ describe("dreaming service reconciliation", () => {
     await startDreaming(api, harness);
 
     const sessionKey = "agent:main:main";
-    enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
-      sessionKey,
-      contextKey: "cron:memory-dreaming",
-    });
 
     const result = await reply({ trigger: "heartbeat", workspaceDir, sessionKey });
 

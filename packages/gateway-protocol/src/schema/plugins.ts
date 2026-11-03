@@ -138,6 +138,7 @@ export const PluginControlUiModuleSchema = closedObject({
   name: NonEmptyString,
   revision: NonEmptyString,
   entryUrl: NonEmptyString,
+  panelIcon: Type.Optional(Type.String({ maxLength: 16 * 1024 * 3 + 64 })),
   imports: Type.Optional(Type.Array(NonEmptyString, { maxItems: 128 })),
   uiCapabilities: Type.Optional(PluginUiCapabilitiesSchema),
   // Host-owned runtime provenance; plugin manifests cannot opt into this delivery route.
