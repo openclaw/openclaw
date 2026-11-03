@@ -44,7 +44,7 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
       fallback={
         <div class="settings-group oc-settings-group">
           {!props.connected ? (
-            <SettingsUnavailable message={t("pluginsPage.connectToManage")} carapace />
+            <SettingsUnavailable message={t("pluginsPage.connectToManage")} />
           ) : props.loading ? (
             <SettingsLoadingSkeleton rows={4} carapace />
           ) : props.error ? (

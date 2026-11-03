@@ -18,13 +18,13 @@ function AdvancedSettingsFields(options: InventoryProps): JSX.Element {
   return (
     <Show
       when={options.connected || Boolean(config())}
-      fallback={<SettingsUnavailable message={t("pluginsPage.connectToManage")} carapace />}
+      fallback={<SettingsUnavailable message={t("pluginsPage.connectToManage")} />}
     >
       <Show
         when={config()}
         fallback={
           !options.configError && !options.configSchemaLoading && options.configValue ? (
-            <SettingsUnavailable message={t("pluginsPage.schemaUnavailable")} carapace />
+            <SettingsUnavailable message={t("pluginsPage.schemaUnavailable")} />
           ) : null
         }
       >

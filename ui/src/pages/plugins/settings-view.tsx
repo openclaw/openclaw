@@ -224,7 +224,7 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
       {!props.connected && !props.result ? (
         <SettingsPage carapace={true}>
           <SettingsSection carapace={true}>
-            <SettingsUnavailable message={t("pluginsPage.connectToManage")} carapace={true} />
+            <SettingsUnavailable message={t("pluginsPage.connectToManage")} />
           </SettingsSection>
         </SettingsPage>
       ) : props.error && !props.result ? (

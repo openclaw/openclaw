@@ -623,20 +623,9 @@ export function SettingsEmpty(props: { message: JSX.Element; carapace?: boolean 
   );
 }
 
-/** Says why a surface can't be used here, as a row on the page's own column. */
-export function SettingsUnavailable(props: {
-  message: JSX.Element;
-  action?: JSX.Element;
-  carapace?: boolean;
-}) {
-  return (
-    <SettingsRow
-      role="status"
-      title={props.message}
-      control={props.action}
-      carapace={props.carapace}
-    />
-  );
+/** Says why a surface can't be used here, in the same quiet state as an empty list. */
+export function SettingsUnavailable(props: { message: JSX.Element }) {
+  return <SettingsEmpty message={<span role="status">{props.message}</span>} />;
 }
 
 export function SettingsLoadingSkeleton(props: {
