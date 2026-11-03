@@ -43,6 +43,22 @@ diff --git a/lib/client.js b/lib/client.js
      });
  
      // re-emit the events emitted by the crypto impl
+diff --git a/lib/http-api/utils.js b/lib/http-api/utils.js
+--- a/lib/http-api/utils.js
++++ b/lib/http-api/utils.js
+@@ -22,9 +22,11 @@ import { ConnectionError, HTTPError, MatrixError, MatrixSafetyError, MatrixSafet
+ // Ponyfill for https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout
+ export function timeoutSignal(ms) {
+   const controller = new AbortController();
+-  setTimeout(() => {
++  const timer = setTimeout(() => {
+     controller.abort();
+   }, ms);
++  // Like AbortSignal.timeout, a request deadline must not keep a finished Node process alive.
++  timer?.unref?.();
+   return controller.signal;
+ }
+ export function anySignal(signals) {
 diff --git a/lib/sync.js b/lib/sync.js
 --- a/lib/sync.js
 +++ b/lib/sync.js
@@ -137,6 +153,24 @@ diff --git a/src/client.ts b/src/client.ts
          });
  
          // re-emit the events emitted by the crypto impl
+diff --git a/src/http-api/utils.ts b/src/http-api/utils.ts
+--- a/src/http-api/utils.ts
++++ b/src/http-api/utils.ts
+@@ -30,9 +30,13 @@ import {
+ // Ponyfill for https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout
+ export function timeoutSignal(ms: number): AbortSignal {
+     const controller = new AbortController();
+-    setTimeout(() => {
++    const timer: ReturnType<typeof setTimeout> | number = setTimeout(() => {
+         controller.abort();
+     }, ms);
++    // Like AbortSignal.timeout, a request deadline must not keep a finished Node process alive.
++    if (typeof timer === "object") {
++        timer.unref?.();
++    }
+ 
+     return controller.signal;
+ }
 diff --git a/src/sync.ts b/src/sync.ts
 --- a/src/sync.ts
 +++ b/src/sync.ts
