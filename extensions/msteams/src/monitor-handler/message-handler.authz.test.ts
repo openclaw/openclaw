@@ -813,11 +813,14 @@ describe("msteams message authorization and supplemental context", () => {
         await getSessionEntryAsync({ agentId: "main", storePath, sessionKey: sessionKeyB }),
       ).toMatchObject({
         sessionId: expect.any(String),
-        origin: {
-          provider: "msteams",
-          surface: "msteams",
-          accountId: "default",
-          threadId: "root-b",
+        delivery: {
+          kind: "external",
+          origin: {
+            provider: "msteams",
+            surface: "msteams",
+            accountId: "default",
+            threadId: "root-b",
+          },
         },
       });
 
@@ -833,11 +836,14 @@ describe("msteams message authorization and supplemental context", () => {
         }),
       ).toMatchObject({
         sessionId: expect.any(String),
-        origin: {
-          provider: "msteams",
-          surface: "msteams",
-          accountId: "default",
-          threadId: "root-a",
+        delivery: {
+          kind: "external",
+          origin: {
+            provider: "msteams",
+            surface: "msteams",
+            accountId: "default",
+            threadId: "root-a",
+          },
         },
       });
       expect(inA?.Body).toContain("note in A");

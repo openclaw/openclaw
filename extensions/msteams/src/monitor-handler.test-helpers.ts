@@ -8,6 +8,11 @@ import {
   createPluginRuntimeMock,
   createTestInboundDebounceFlush,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { cleanupSessionStateForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { useAutoCleanupTempDirTracker, useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
@@ -38,6 +43,7 @@ const dispatchReplyFromConfig = vi.fn<
 >(async () => ({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } }));
 const stateDirs = new Map<string, string>();
 const sessionTasks = new Set<Promise<void>>();
+let ownsRuntimeConfigSnapshot = false;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     // Session stores own agent handles under the fixture root, but their leases
@@ -57,6 +63,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
     stateDirs.clear();
     sessionTasks.clear();
+    if (ownsRuntimeConfigSnapshot) {
+      clearRuntimeConfigSnapshot();
+      ownsRuntimeConfigSnapshot = false;
+    }
   }),
 );
 
@@ -168,8 +178,14 @@ export function createMSTeamsMessageHandlerDeps(params?: {
   cfg?: OpenClawConfig;
   runtime?: RuntimeEnv;
 }): MSTeamsMessageHandlerDeps {
+  const cfg = params?.cfg ?? {};
+  // Real history readers need prepared runtime config; preserve snapshots owned by reload tests.
+  if (!getRuntimeConfigSnapshot()) {
+    setRuntimeConfigSnapshot(cfg);
+    ownsRuntimeConfigSnapshot = true;
+  }
   return {
-    cfg: params?.cfg ?? {},
+    cfg,
     runtime: (params?.runtime ?? { error: vi.fn() }) as RuntimeEnv,
     accountId: "default",
     appId: "test-app-id",
