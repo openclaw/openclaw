@@ -70,7 +70,8 @@ describe("Playwright download capture cancellation", () => {
       f.close();
       await Promise.resolve();
       await expect(pendingOr(f.outcome)).resolves.toMatchObject({
-        message: "Page closed before download started.",
+        message:
+          "Page closed before download started. Reopen the page and retry the download wait.",
       });
       expect(f.cancel).not.toHaveBeenCalled();
     } else {
