@@ -237,11 +237,12 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
         })
       : undefined;
     // Accepted account discovery replaces fallback membership for its provider.
-    const discovered = new Set(
-      (params.snapshot.acceptedDiscoveryOrigins ?? []).map(({ provider }) =>
-        normalizeProviderId(provider),
-      ),
-    );
+    let discovered: Set<string> | undefined;
+    if (params.view === "default" && params.snapshot.acceptedDiscoveryOrigins) {
+      for (const { provider } of params.snapshot.acceptedDiscoveryOrigins) {
+        (discovered ??= new Set<string>()).add(normalizeProviderId(provider));
+      }
+    }
     for (const entry of params.snapshot.staticEntries) {
       const key = keyOf(entry);
       const explicit = policy.configuredKeys.has(key) || key === retainedKey;
@@ -249,7 +250,7 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
         params.view === "configured"
           ? explicit
           : explicit ||
-            (!discovered.has(normalizeProviderId(entry.provider)) &&
+            (!discovered?.has(normalizeProviderId(entry.provider)) &&
               policy.allows({ provider: entry.provider, model: entry.id }));
       if (!seen.has(key) && include) {
         seen.add(key);

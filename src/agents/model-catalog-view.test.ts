@@ -141,49 +141,29 @@ describe("prepared model catalog view", () => {
     expect(view.providerAuthLabels.get("codex")).toBe("missing");
   });
 
-  it("enriches permitted static choices and current metadata while preserving committed rows", () => {
-    const committed = { ...row("custom", "vendor/model"), name: "Committed" };
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: "custom/vendor/model", models: { "custom/extra": {} } } },
-    };
-    const captured = {
-      ...snapshot([committed]),
-      staticEntries: [
-        row("custom", "vendor/model"),
-        row("custom", "model"),
-        row("custom", "extra"),
-      ],
-    };
-    const choices = (view: ViewOptions["view"], retainedModel?: ViewOptions["retainedModel"]) =>
-      prepare({ cfg, snapshot: captured, view, retainedModel }).catalog;
-    expect(choices("configured")).toEqual([committed, row("custom", "extra")]);
-    expect(choices("default")).toEqual([committed, row("custom", "extra")]);
-    expect(choices("configured", { provider: "custom", model: "model" })).toEqual([
-      committed,
-      row("custom", "model"),
-      row("custom", "extra"),
-    ]);
-  });
-
-  it("drops fallback rows for providers whose account discovery was accepted", () => {
-    const cfg: OpenClawConfig = { agents: { defaults: { models: { "qwen/pinned": {} } } } };
-    const captured = {
-      ...snapshot([row("qwen", "live")]),
-      acceptedDiscoveryOrigins: [{ provider: "QWEN" }],
-      staticEntries: [row("qwen", "retired"), row("qwen", "pinned"), row("other", "seed")],
-    };
-    const choices = (acceptedDiscoveryOrigins?: { provider: string }[]) =>
-      prepare({
-        cfg: {},
-        snapshot: { ...captured, acceptedDiscoveryOrigins },
-        view: "default",
-      }).catalog.map(({ provider, id }) => `${provider}/${id}`);
-    expect(choices([{ provider: "QWEN" }])).toEqual(["qwen/live", "other/seed"]);
-    expect(choices([])).toEqual(["qwen/live", "qwen/retired", "qwen/pinned", "other/seed"]);
-    expect(
-      prepare({ cfg, snapshot: captured, view: "default" }).catalog.map(({ id }) => id),
-    ).toEqual(["live", "pinned"]);
-  });
+  it.each([undefined, "CUSTOM", "other"])(
+    "preserves explicit choices and committed metadata with accepted provider %s",
+    (provider) => {
+      const committed = { ...row("custom", "live"), name: "Committed" };
+      const cfg: OpenClawConfig = { agents: { defaults: { models: { "custom/pinned": {} } } } };
+      const captured = snapshot([committed], {
+        acceptedDiscoveryOrigins: provider ? [{ provider }] : [],
+        staticEntries: ["live", "retired", "pinned"].map((id) => row("custom", id)),
+      });
+      const choices = (options: Partial<ViewOptions>) => {
+        const catalog = prepare({ cfg, snapshot: captured, ...options }).catalog;
+        expect(catalog[0]).toEqual(committed);
+        return catalog.map(({ id }) => id);
+      };
+      expect(choices({ view: "configured" })).toEqual(["live", "pinned"]);
+      expect(choices({ view: "default" })).toEqual(["live", "pinned"]);
+      const retainedModel = { provider: "custom", model: "retired" };
+      expect(choices({ view: "configured", retainedModel })).toEqual(["live", "retired", "pinned"]);
+      expect(choices({ view: "default", cfg: {} })).toEqual(
+        provider === "CUSTOM" ? ["live"] : ["live", "retired", "pinned"],
+      );
+    },
+  );
 
   it("sorts authored inventory independently of picker allowlists, using canonical route metadata", () => {
     const cfg: OpenClawConfig = {
