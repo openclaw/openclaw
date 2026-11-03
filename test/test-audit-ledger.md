@@ -158,15 +158,20 @@ bytes, the inline escaping check and the complete second case. Production and
 shared test-line scalar stay unchanged; two fewer test lines.
 
 The complete selected suite and canonical pure formatter, determining caller
-functions and history are source-qualified. The candidate owner fault slices
-the escaped UTF-16 string instead of keeping the whole-character prefix; it
-has not been executed. Source inspection gives no runtime verdict.
+functions and causal history are source-qualified. Untouched official
+extension-discord baseline and clean candidate pass both cases without skips.
+An actual owner fault slices the escaped UTF-16 string instead of preserving
+the whole-character prefix: the original suite passes both cases; the candidate
+fails only its exact-output keeper, with the other case passing. Temporary
+owner/test bytes are restored exactly before the clean run.
 
-Untouched official baseline, original/candidate owner-fault controls, exact byte
-restoration, clean candidate, all seven removal phases, focused extension checks,
-fresh review, published proof and CI remain pending. This targets the canonical
-formatter's output. No live Discord, native payload, approval authority,
-Gateway or complete escape-token-boundary verdict is claimed.
+All seven removal phases pass with zero findings: production and full-tree
+exports, both unused-file phases and all three export-wrapper phases. No
+baseline replay or suppression is needed. Focused extension checks pass; normal
+hooks, fresh review, published proof and CI are separately recorded.
+
+This targets the canonical formatter's output. No live Discord, native payload,
+approval authority, Gateway or complete escape-token-boundary verdict is claimed.
 
 ## Completed source review
 
