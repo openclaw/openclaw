@@ -512,8 +512,22 @@ try {
     { name: "upgrade-shorthand-dollar", kind: "shorthand-dollar", surface: "token", upgrade: true },
     { name: "upgrade-shorthand-braced", kind: "shorthand-braced", surface: "token", upgrade: true },
   ];
+  const scenarioFailures: unknown[] = [];
   for (const [index, scenario] of scenarios.entries()) {
-    await observe(scenario, 19891 + index);
+    try {
+      await observe(scenario, 19891 + index);
+    } catch (error) {
+      // A failed scenario must not hide independent cases, but failed cleanup
+      // means the disposable account is no longer qualified for another case.
+      const result = results.at(-1);
+      if (result?.name !== scenario.name || result.cleanupSucceeded !== true) {
+        throw error;
+      }
+      scenarioFailures.push(error);
+    }
+  }
+  if (scenarioFailures.length) {
+    throw new AggregateError(scenarioFailures, "Native authentication scenarios failed");
   }
 } finally {
   fs.writeFileSync(
