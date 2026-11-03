@@ -177,7 +177,7 @@ main.content:where(.content--logs-page) .content-header {
   width: 14px;
   height: 14px;
   background: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   appearance: none;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 6 6 18'/%3E%3Cpath d='m6 6 12 12'/%3E%3C/svg%3E")
     center / contain no-repeat;
@@ -218,7 +218,7 @@ main.content:where(.content--logs-page) .content-header {
   align-items: center;
   gap: var(--space-2);
   font-size: var(--control-ui-text-sm);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .logs-footer {

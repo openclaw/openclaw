@@ -34,6 +34,7 @@ import { registerLogsEnglish } from "../../i18n/locales/en-logs.ts";
 import { cancelLayout, scheduleLayout } from "../../lib/layout-frame.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { LOG_LEVELS, type LogEntry, type LogLevel } from "./log-lines.ts";
 
@@ -267,7 +268,9 @@ export function LogsView(props: LogsProps) {
     updateSizeAdjustment(virtualizer, true);
     extendReaderIntent();
   };
+  let stopPointerListeners: (() => void) | undefined;
   const holdPointer = () => {
+    stopPointerListeners?.();
     readerHoldsPointer = true;
     extendReaderIntent();
     const view = stream.ownerDocument;
@@ -277,14 +280,17 @@ export function LogsView(props: LogsProps) {
       }
       readerHoldsPointer = false;
       extendReaderIntent();
-      view.removeEventListener("pointerup", release);
-      view.removeEventListener("pointercancel", release);
-      view.removeEventListener("pointermove", release);
+      stopPointerListeners?.();
     };
-    view.addEventListener("pointerup", release);
-    view.addEventListener("pointercancel", release);
+    const stopUp = listen(view, "pointerup", release);
+    const stopCancel = listen(view, "pointercancel", release);
     // A press on a scrollbar may never deliver its release.
-    view.addEventListener("pointermove", release);
+    const stopMove = listen(view, "pointermove", release);
+    stopPointerListeners = () => {
+      stopUp();
+      stopCancel();
+      stopMove();
+    };
   };
   const followReader = (element: HTMLDivElement) => {
     const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
@@ -312,6 +318,7 @@ export function LogsView(props: LogsProps) {
     const unmount = mountVirtualizer();
     return () => {
       cancelLayout(scrollRequest);
+      stopPointerListeners?.();
       clearTimeout(readerIntentTimer);
       unmount();
     };
