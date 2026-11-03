@@ -381,7 +381,7 @@ test.each(["startup", "source settlement"] as const)(
       getMethodRegistry: () => methodRegistry,
       isDispatchAvailable: () => true,
     });
-    context.recoveryRuntime = runtime.recovery;
+    context.lifecycleRuntime = runtime.lifecycle;
     onTestFinished(() => runtime.close());
     const invocation = new AbortController();
     const tool = createSessionsSpawnTool({

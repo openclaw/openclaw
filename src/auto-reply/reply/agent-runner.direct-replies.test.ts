@@ -84,22 +84,31 @@ it.each<ReplyPayload | undefined>([
   expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
 });
 
-it("returns degraded warnings with direct replies without a dispatcher", async () => {
-  const result = await runEmptyDirectReply({
-    payloads: [{ text: "continued answer" }],
-    agentEvents: [
-      { stream: "compaction", data: { phase: "start" } },
-      { stream: "compaction", data: { phase: "end", completed: true, qualityDegraded: true } },
-    ],
-  });
-  expect(result).toEqual([
-    expect.objectContaining({
-      text: expect.stringContaining("/new or a larger model"),
-      isCompactionNotice: true,
-    }),
-    expect.objectContaining({ text: "continued answer" }),
-  ]);
-});
+it.each([
+  { summaryRefused: undefined, text: "/new or a larger model" },
+  { summaryRefused: true, text: "Context trimmed because the summarizer refused" },
+])(
+  "returns degraded warnings without a dispatcher (refused=$summaryRefused)",
+  async ({ summaryRefused, text }) => {
+    const result = await runEmptyDirectReply({
+      payloads: [{ text: "continued answer" }],
+      agentEvents: [
+        { stream: "compaction", data: { phase: "start" } },
+        {
+          stream: "compaction",
+          data: { phase: "end", completed: true, qualityDegraded: true, summaryRefused },
+        },
+      ],
+    });
+    expect(result).toEqual([
+      expect.objectContaining({
+        text: expect.stringContaining(text),
+        isCompactionNotice: true,
+      }),
+      expect.objectContaining({ text: "continued answer" }),
+    ]);
+  },
+);
 
 it("surfaces terminal direct failures after runtime compaction progress", async () => {
   const onBlockReply = vi.fn();

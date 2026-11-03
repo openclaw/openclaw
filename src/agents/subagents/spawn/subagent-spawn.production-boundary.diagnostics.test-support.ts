@@ -50,7 +50,6 @@ export function readBoundExecutionState(
       childRunId ? resolveSubagentSessionStatus(subagentRuns.get(childRunId)) : undefined,
       ["queued", "running", "done", "failed", "killed", "timeout"],
     ),
-    queuedLaunchPresent: collector?.queuedLaunch !== undefined,
     collectorCleanupPending: collector?.collectorLaunchCleanupPending === true,
     collectorKillPending: collector?.killIntent !== undefined,
     outcomeStatus: label(execution?.outcome?.status, ["ok", "error", "timeout"]),

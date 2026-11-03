@@ -1,8 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { AgentToolModelConfig } from "../config/types.agents-shared.js";
+import type { MusicGenerationProvider, MusicGenerationRequest } from "./provider-types.js";
 import type { GenerateMusicParams } from "./runtime-types.js";
 import { generateMusic } from "./runtime.js";
-import type { MusicGenerationProvider, MusicGenerationRequest } from "./types.js";
 
 let providers: MusicGenerationProvider[] = [];
 const listProviders = vi.fn(() => providers);

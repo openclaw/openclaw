@@ -201,7 +201,9 @@ export class CodexAppServerClient {
     child.once("exit", (code, signal) => {
       this.transportExited = true;
       this.closeWithError(
-        child.startupFailure?.error ?? buildCodexAppServerExitError(code, signal, this.stderrTail),
+        child.startupFailure?.error ??
+          child.exitError ??
+          buildCodexAppServerExitError(code, signal, this.stderrTail),
       );
     });
     // Guard against unhandled EPIPE / write-after-close errors on the stdin
@@ -259,7 +261,8 @@ export class CodexAppServerClient {
     }
   }
 
-  static fromTransportForTests(child: CodexAppServerTransport): CodexAppServerClient {
+  /** Wraps an externally owned transport, including worker duplex connections. */
+  static fromTransport(child: CodexAppServerTransport): CodexAppServerClient {
     return new CodexAppServerClient(child);
   }
 

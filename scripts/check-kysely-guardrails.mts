@@ -41,6 +41,9 @@ const rawSqliteAllowPathGroups = {
   "native close conformance on disposable probe databases": [
     "src/infra/bun-sqlite-close-probe.worker.ts",
   ],
+  "immutable inspection reader cache/mmap PRAGMAs are connection-local SQLite primitives": [
+    "src/infra/sqlite-snapshot.ts",
+  ],
   "native Kysely adapter and sync execution": [
     "src/infra/kysely-node-sqlite.ts",
     "src/infra/kysely-sync-cache-state.ts",
@@ -75,6 +78,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-user-version.ts",
     "src/infra/sqlite-wal.ts",
     // Historical structural migrations extracted from the admitted schema owner.
+    "src/state/openclaw-agent-storage-migration.ts",
     "src/state/openclaw-agent-canonical-validation-migration.ts",
     "src/state/openclaw-agent-db-legacy-schema.ts",
     "src/state/openclaw-agent-db-maintenance.ts",
@@ -174,7 +178,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.transcript-directives-archives.ts",
     "src/infra/state-migrations.transcript-directives.ts",
     // Doctor integrity PRAGMAs and lossless native 64-bit orphan-row preservation.
-    "src/state/openclaw-state-db-task-delivery-recovery.ts",
+    "src/state/openclaw-state-db-task-delivery-recovery-preservation.ts",
   ],
   "session entry cache connection-local validity counters": [
     "src/config/sessions/session-accessor.sqlite-entry-cache.ts",

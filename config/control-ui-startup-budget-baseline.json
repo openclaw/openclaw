@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 90195,
-  "reason": "Early transport overlaps cold boot without delaying cached reloads; final current-main build measures 90,195 B gzip in 3 startup requests.",
-  "updatedAt": "2026-10-27"
+  "startupJsGzipBytes": 90111,
+  "reason": "First-pane snapshot admission starts the scoped read and validation before application loading: 11 interleaved warm chat pairs improve first rows by a 96 ms paired median, with breadcrumb and archived footer present at first mount in all 11. Exact-base startup grows 794 B to 90111 B; complete Chat/New boot shrinks 279/200 B, with unchanged request counts and FCP/hello/LoAF within A/A. Record the measured earlier-load redistribution; keep existing growth and variance allowances.",
+  "updatedAt": "2026-10-31"
 }

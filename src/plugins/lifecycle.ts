@@ -32,6 +32,8 @@ export class PluginRuntimeApplicationError extends Error {
       pluginIds: string[];
       phase: "prepare" | "drain" | "activate" | "dispose";
       committed: boolean;
+      /** The failed replacement also could not restore model/reply publication. */
+      runtimeRestorationFailed?: true;
     },
     options?: ErrorOptions,
   ) {

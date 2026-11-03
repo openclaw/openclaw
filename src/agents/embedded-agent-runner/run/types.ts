@@ -13,6 +13,7 @@ import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { AgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { PreparedAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import type { AgentTerminalSnapshot } from "../../agent-terminal-snapshot.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.types.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
 import type { ContextWindowInfo } from "../../context-window-guard.js";
@@ -52,6 +53,7 @@ export type StreamRunState = {
 };
 
 export type EmbeddedAttemptExecutionState = {
+  agentTerminal?: AgentTerminalSnapshot;
   beforeAgentRunBlockedBy: string | undefined;
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   terminal: AgentRunAttemptTerminal;
@@ -106,6 +108,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Set only by prompt admission after validating an already-delivered input. */
+  inputAlreadyDelivered?: true;
   /** Transport hooks follow the current endpoint without changing admitted request policy. */
   transportConfig?: RunEmbeddedAgentParams["config"];
   modelCallSequence?: { value: number };
@@ -297,6 +301,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 };
 
 export type EmbeddedRunAttemptResult = {
+  /** Captured by the current attempt's agent_end owner; never carried across retries. */
+  agentTerminal?: AgentTerminalSnapshot;
+  /** Exact historical input acknowledged without another model turn. */
+  inputAlreadyDelivered?: true;
   cyberAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red";
   terminal: AgentRunAttemptTerminal;
   preparedTerminalReply?: PreparedAgentRunTerminalReply;

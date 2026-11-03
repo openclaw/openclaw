@@ -11,6 +11,7 @@ import {
 import type { CronJob } from "../cron/types.js";
 import type { getChildLogger } from "../logging.js";
 import type { createCronStreamWatchers } from "./cron-stream-watchers.js";
+import { measureGatewayCloseStep } from "./restart-trace.js";
 
 const CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS = 10_000;
 
@@ -21,9 +22,17 @@ export async function drainGatewayCron(params: {
   const abortedRuns = abortActiveCronTaskRuns();
   // Payload cleanup precedes durable finalization; both retain the old state owner.
   const [activeRunDrain, activeJobDrain, settlements] = await Promise.all([
-    waitForActiveCronTaskRuns(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
-    waitForActiveCronJobs(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
-    Promise.allSettled(params.settlements),
+    measureGatewayCloseStep("restart.close.cron-active-runs", () =>
+      waitForActiveCronTaskRuns(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
+    ),
+    measureGatewayCloseStep("restart.close.cron-active-jobs", () =>
+      waitForActiveCronJobs(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
+    ),
+    Promise.allSettled(
+      params.settlements.map((settlement, index) =>
+        measureGatewayCloseStep(`restart.close.cron-settlement-${index}`, () => settlement),
+      ),
+    ),
   ]);
   if (!activeRunDrain.drained || !activeJobDrain.drained) {
     params.logger.warn(

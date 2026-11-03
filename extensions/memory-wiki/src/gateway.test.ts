@@ -78,7 +78,7 @@ function readRespond(
 }
 
 const VAULT_BACKED_GATEWAY_CASES = [
-  ["wiki.status", {}],
+  ["wiki.status", { statusMode: "snapshot" }],
   ["wiki.importRuns", {}],
   ["wiki.importInsights", {}],
   ["wiki.overview", {}],
@@ -103,10 +103,7 @@ type GatewayOptions = Partial<Omit<Parameters<typeof registerMemoryWikiGatewayMe
 async function createGateway(method: string, options: GatewayOptions = {}, agentScoped = false) {
   const rootDir = path.resolve("/tmp/memory-wiki-gateway");
   const config = resolveMemoryWikiConfig({
-    vault: {
-      path: rootDir,
-      ...(agentScoped ? { scope: "agent" } : {}),
-    },
+    vault: { path: rootDir, scope: agentScoped ? "agent" : "global" },
   });
   const { api, registerGatewayMethod } = createPluginApi();
   const resolveConfig = vi.fn<NonNullable<GatewayOptions["resolveConfig"]>>((agentId, appConfig) =>
@@ -273,12 +270,34 @@ describe("memory-wiki gateway methods", () => {
   it.each(VAULT_BACKED_GATEWAY_CASES)(
     "%s resolves its request agent exactly once",
     async (method, methodParams) => {
-      const { run, resolveConfig } = await createGateway(method, {}, true);
+      const getAppConfig = vi.fn(() => scopedAppConfig);
+      const { rootDir, run, respond, resolveConfig } = await createGateway(
+        method,
+        { getAppConfig },
+        true,
+      );
 
       await run({ ...methodParams, agentId: "marketing" });
 
+      expect(getAppConfig).toHaveBeenCalledOnce();
       expect(resolveConfig).toHaveBeenCalledOnce();
       expect(resolveConfig).toHaveBeenCalledWith("marketing", scopedAppConfig);
+      if (method === "wiki.status") {
+        expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
+        expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentId: "marketing",
+            vault: expect.objectContaining({ path: path.join(rootDir, "marketing") }),
+          }),
+          { appConfig: scopedAppConfig, mode: "snapshot" },
+        );
+        expect(readRespond(respond)).toEqual({
+          vaultScope: "agent",
+          agentId: "marketing",
+          vaultMode: "isolated",
+          vaultExists: true,
+        });
+      }
     },
   );
 
@@ -308,30 +327,6 @@ describe("memory-wiki gateway methods", () => {
       expect.objectContaining({ config, appConfig: {}, signal }),
     );
     expect(compileMemoryWikiVault).toHaveBeenCalledWith(config, { signal });
-  });
-
-  it("resolves an agent-scoped vault once from each request and live app config", async () => {
-    const getAppConfig = vi.fn(() => scopedAppConfig);
-    const { rootDir, run, respond } = await createGateway("wiki.status", { getAppConfig }, true);
-
-    await run({ agentId: "marketing", statusMode: "snapshot" });
-
-    const resolvedConfig = expect.objectContaining({
-      agentId: "marketing",
-      vault: expect.objectContaining({ path: path.join(rootDir, "marketing") }),
-    });
-    expect(getAppConfig).toHaveBeenCalledTimes(1);
-    expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
-    expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(resolvedConfig, {
-      appConfig: scopedAppConfig,
-      mode: "snapshot",
-    });
-    expect(readRespond(respond)).toEqual({
-      vaultScope: "agent",
-      agentId: "marketing",
-      vaultMode: "isolated",
-      vaultExists: true,
-    });
   });
 
   it("returns import-run results and forwards the limit", async () => {

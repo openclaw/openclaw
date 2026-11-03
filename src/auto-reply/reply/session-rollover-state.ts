@@ -39,6 +39,8 @@ export function resolveReplySessionRolloverState(
     label: entry.label,
     autoLabel: entry.autoLabel,
     displayName: entry.displayName,
+    icon: entry.icon,
+    color: entry.color,
     category: entry.category,
     sidebarRoot: entry.sidebarRoot,
     deviceFolder: entry.deviceFolder ? { ...entry.deviceFolder } : undefined,

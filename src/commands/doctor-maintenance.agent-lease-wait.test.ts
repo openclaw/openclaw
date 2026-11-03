@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TICK_INTERVAL_MS } from "../gateway/server-constants.js";
@@ -21,6 +22,7 @@ import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import * as leaseInspection from "../state/openclaw-agent-db-lease-inspection.js";
 import { claimOpenClawAgentDatabaseLease } from "../state/openclaw-agent-db-lease.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -94,6 +96,7 @@ function holdState(databasePath: string, gateway = false) {
 }
 
 function startDoctor(waitForMaintenance = false, assertCurrent?: () => void) {
+  const leaseReads = vi.spyOn(leaseInspection, "readActiveOpenClawAgentDatabaseLeasesReadOnly");
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
   let now = 0;
   vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -132,6 +135,12 @@ function startDoctor(waitForMaintenance = false, assertCurrent?: () => void) {
     advanceTo: async (ms = now) => {
       now = ms;
       await vi.advanceTimersToNextTimerAsync();
+      // A poll now awaits a real child read before it can log or arm its next timer.
+      await Promise.allSettled(
+        leaseReads.mock.results.flatMap((attempt) =>
+          attempt.type === "return" ? [attempt.value] : [],
+        ),
+      );
     },
     logged,
     firstWait: logged("Waiting"),
@@ -331,7 +340,7 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
     try {
       await doctor.firstWait;
       expect(doctor.isSettled()).toBe(false);
-      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expectBytesEqual(fs.readFileSync(databasePath), before, databasePath);
       if (outcome === "slow-released") {
         await doctor.advanceTo(
           TICK_INTERVAL_MS +
@@ -340,7 +349,7 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
             1,
         );
         expect(doctor.isSettled()).toBe(false);
-        expect(fs.readFileSync(databasePath)).toEqual(before);
+        expectBytesEqual(fs.readFileSync(databasePath), before, databasePath);
       }
       if (outcome === "rowless-released") {
         await doctor.advanceTo(GATEWAY_SHUTDOWN_RESERVE_MS - 50);

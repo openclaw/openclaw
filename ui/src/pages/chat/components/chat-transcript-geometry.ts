@@ -183,9 +183,10 @@ export function measureTranscriptRow(
 ): number {
   if (entry || !virtualizer.targetWindow?.ResizeObserver) {
     // Rounded row heights accumulate when skipped overscan uses those measurements.
-    const size =
-      entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
-    if (size !== 0 || virtualizer.scrollElement?.clientHeight !== 0) {
+    const box = entry?.borderBoxSize?.[0];
+    const size = box?.blockSize ?? measureElement(element, entry, virtualizer);
+    // Deferred observer delivery can outlive the hidden pane that produced a zero box.
+    if (size !== 0 || (box?.inlineSize !== 0 && virtualizer.scrollElement?.clientHeight !== 0)) {
       return size;
     }
   }
