@@ -7,41 +7,77 @@ import {
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 
 const targetSha = "a".repeat(40);
+const pullRequest = (title: string, extra = {}) => ({
+  __typename: "PullRequest",
+  author: { __typename: "User", login: "alice" },
+  closingIssuesReferences: { nodes: [] },
+  mergedAt: "2026-08-04T00:00:00Z",
+  title,
+  ...extra,
+});
+const recordEntry = (extra = {}) => ({
+  number: 456,
+  title: "Internal cleanup",
+  editorialEligible: false,
+  priorReferences: [],
+  externalReferences: [],
+  linkedIssues: [],
+  thanks: [],
+  ...extra,
+});
+function recordSection(line: string, partition = "1 merged PR.") {
+  return [
+    "## 2026.7.1",
+    "### Highlights",
+    [1, 2, 3, 4, 5].map((value) => `- Highlight ${value}.`).join("\n"),
+    "### Changes",
+    "### Fixes",
+    "### Complete contribution record",
+    `This audited record covers the complete base..${targetSha} history: ${partition}`,
+    "#### Pull requests",
+    line,
+  ].join("\n\n");
+}
 
 function contributionLedger({
   nodes,
   seededPullRequests = [],
   sourcePullRequests = [],
   sourceReferences = [],
+  baseTag = "v2026.7.2-beta.7",
+  now = "2026-08-05T00:00:00Z",
+  priorRecord = {
+    legacyIssues: new Map(),
+    pullRequests: new Map(
+      seededPullRequests.map((number) => [
+        number,
+        { externalReferences: [], references: [], thanks: [] },
+      ]),
+    ),
+  },
 }: {
   nodes: Map<number, Record<string, unknown>>;
   seededPullRequests?: number[];
   sourcePullRequests?: number[];
   sourceReferences?: number[];
+  baseTag?: string;
+  now?: string;
+  priorRecord?: ReturnType<typeof contributionRecordFor>;
 }) {
   return ledgerFor(
-    "v2026.7.2-beta.7",
+    baseTag,
     targetSha,
     [...nodes.keys()],
     nodes,
     new Map(),
-    new Map(),
     { issuesByPullRequest: new Map() },
-    {
-      legacyIssues: new Map(),
-      pullRequests: new Map(
-        seededPullRequests.map((number) => [
-          number,
-          { externalReferences: [], references: [], thanks: [] },
-        ]),
-      ),
-    },
+    priorRecord,
     new Set(sourcePullRequests),
     sourceReferences,
     [],
     new Set(),
     [],
-    Date.parse("2026-08-05T00:00:00Z"),
+    Date.parse(now),
     new Set([targetSha]),
   ) as ReturnType<typeof ledgerFor> & {
     provenance: {
@@ -124,82 +160,82 @@ describe("renderContributionRecordEntry", () => {
     ).toBe("- **PR #124** Related #45, OpenClaw/imsg#141, #67.");
   });
 
-  it("retains references and credits when a compact record is seeded again", () => {
-    const line = "- **PR #125** Related #45, openclaw/imsg#141. Thanks @alice and @bob.";
-    const record = contributionRecordFor({
-      source: [
-        "## 2026.7.1",
-        "",
-        "### Complete contribution record",
-        "",
-        "#### Pull requests",
-        "",
-        line,
-      ].join("\n"),
-    });
-    const seeded = record.pullRequests.get(125);
+  it.each([
+    { thanks: " Thanks @alice and @bob.", expected: [] },
+    {
+      thanks: "",
+      expected: [
+        "missing editorial Thanks @alice for PR #456",
+        "missing editorial Thanks @bob for directly landed work",
+      ],
+    },
+    {
+      thanks: " Thanks @alice and @bob and @outsider.",
+      expected: ["unexpected editorial Thanks @outsider"],
+    },
+  ])(
+    "validates explicit PR and direct-work thanks despite earlier mentions: '$thanks'",
+    ({ thanks, expected }) => {
+      const entry = recordEntry({ editorialEligible: true, thanks: ["alice"] });
+      const source = recordSection("- **PR #456** Thanks @alice.").replace(
+        "### Fixes",
+        `### Fixes\n\n- Restore playback errors by @alice and @bob; reported alongside @outsider. (#456)${thanks}`,
+      );
+      const directCommits = [
+        {
+          subject: "fix: restore playback errors",
+          closingReferences: [],
+          contributors: ["bob"],
+        },
+      ];
+      expect(
+        ledgerChecks(
+          { source },
+          [entry],
+          new Map([[456, { __typename: "PullRequest" }]]),
+          directCommits,
+        ),
+      ).toEqual(expected);
+    },
+  );
 
-    expect(seeded).toEqual({
+  it("rebuilds seeded references without trusting old credits", () => {
+    const related = "Related #45, OpenClaw/imsg#141, #67.";
+    const priorRecord = contributionRecordFor({
+      source: recordSection(
+        `- **PR #125** ${related.replace("OpenClaw", "openclaw")} Thanks @alice and @bob.`,
+      ),
+    });
+    expect(priorRecord.pullRequests.get(125)).toEqual({
       externalReferences: ["openclaw/imsg#141"],
-      references: [45],
+      references: [45, 67],
       thanks: ["alice", "bob"],
     });
-    expect(
-      renderContributionRecordEntry({
-        number: 125,
-        title: "Title changed after release",
-        priorReferences: seeded?.references,
-        externalReferences: seeded?.externalReferences,
-        linkedIssues: [{ number: 45 }],
-        thanks: seeded?.thanks ?? [],
-      }),
-    ).toBe(line);
-  });
-
-  it("retains seeded credits when the production ledger is rebuilt", () => {
-    const priorRecord = contributionRecordFor({
-      source: [
-        "## 2026.7.1",
-        "",
-        "### Complete contribution record",
-        "",
-        "#### Pull requests",
-        "",
-        "- **PR #125** Thanks @alice and @bob.",
-      ].join("\n"),
-    });
-    const nodes = new Map([
+    const nodes = new Map<number, Record<string, unknown>>([
       [
         125,
-        {
-          __typename: "PullRequest",
+        pullRequest("fix: local openclaw/openclaw#45, #45, and OpenClaw/imsg#141", {
           author: { __typename: "User", login: "carol" },
-          closingIssuesReferences: { nodes: [] },
           mergedAt: "2026-07-08T00:00:00Z",
-          title: "fix: keep release credits",
-        },
+        }),
       ],
+      ...[45, 67].map((number): [number, Record<string, unknown>] => [
+        number,
+        { __typename: "Issue", title: "Resolved issue" },
+      ]),
     ]);
 
-    const result = ledgerFor(
-      "v2026.6.11",
-      targetSha,
-      [125],
+    const result = contributionLedger({
+      baseTag: "v2026.6.11",
       nodes,
-      new Map(),
-      new Map(),
-      { issuesByPullRequest: new Map() },
       priorRecord,
-      new Set([125]),
-      new Set(),
-      new Set(),
-      new Set(),
-      [],
-      Date.parse("2026-07-09T00:00:00Z"),
-      new Set([targetSha]),
-    );
+      sourcePullRequests: [125],
+      now: "2026-07-09T00:00:00Z",
+    });
 
-    expect(result.ledger).toContain("- **PR #125** Thanks @carol and @alice and @bob.");
+    const line = `- **PR #125** ${related} Thanks @carol.`;
+    expect(result.ledger).toContain(line);
+    expect(renderContributionRecordEntry(result.pullRequests[0])).toBe(line);
   });
 
   it("counts associated and reachable source PRs before retained seed-only rows", () => {
