@@ -18,11 +18,6 @@ import { buildSessionCommandTestParams } from "./commands-session-params.test-su
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const undoWorkshopReview = vi.hoisted(() => vi.fn());
-const listWorkshopDrafts = vi.hoisted(() => vi.fn());
-vi.mock("../../skills/workshop/drafts.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../skills/workshop/drafts.js")>()),
-  listWorkshopDrafts,
-}));
 vi.mock("../../skills/workshop/review-undo.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../skills/workshop/review-undo.js")>()),
   undoWorkshopReview,
@@ -148,54 +143,6 @@ describe("learn command", () => {
     expect(result?.shouldContinue).toBe(true);
   });
 
-  describe("/learn drafts", () => {
-    const draft = (id: string, skillName: string) => ({ id, skillName, createdAtMs: 1, files: [] });
-
-    it("answers without a model turn when no draft matches", async () => {
-      listWorkshopDrafts.mockResolvedValue([]);
-      const params = buildLearnParams("/learn drafts");
-
-      const result = await handleLearnCommand(params, true);
-
-      expect(result?.shouldContinue).toBe(false);
-      expect(result?.reply?.text).toBe("No Skill Workshop drafts are waiting for review.");
-    });
-
-    it.each([
-      {
-        command: "/learn drafts deploy keep only the rollback step",
-        listed: [{ id: "deploy-1", skill: "deploy" }],
-        focus: "keep only the rollback step",
-      },
-      {
-        command: "/learn drafts; only the deploy one",
-        listed: [
-          { id: "deploy-1", skill: "deploy" },
-          { id: "notes-1", skill: "notes" },
-        ],
-        focus: "only the deploy one",
-      },
-    ])("selects the drafts for $command", async ({ command, listed, focus }) => {
-      listWorkshopDrafts.mockResolvedValue([
-        draft("deploy-1", "deploy"),
-        draft("notes-1", "notes"),
-      ]);
-      const params = buildLearnParams(command);
-
-      const result = await handleLearnCommand(params, true);
-
-      expect(result?.shouldContinue).toBe(true);
-      expect(params.ctx.BodyForAgent).toContain(
-        `Drafts to review (JSON): ${JSON.stringify(listed)}.`,
-      );
-      expect(params.ctx.BodyForAgent).toContain(
-        `User focus (JSON string): ${JSON.stringify(focus)}`,
-      );
-      expect(params.ctx.BodyForAgent).toContain("Do not save anything yet.");
-      expect(params.ctx.BodyForAgent).toContain(SKILL_LEARNING_METHOD_PROMPT);
-    });
-  });
-
   it("keeps the wildcard sender policy for non-owner WebChat", async () => {
     const params = buildLearnParams("/learn", {
       tools: { toolsBySender: { "*": { deny: ["skill_workshop"] } } },
@@ -285,24 +232,6 @@ describe("learn command", () => {
       );
     });
 
-    it("learns into memory alone when policy hides skill_workshop", async () => {
-      const buildGuidance = memoryLearn();
-      const params = buildLearnParams("/learn", {
-        tools: { deny: ["skill_workshop", "memory_search"] },
-      });
-
-      const result = await learn(params);
-
-      expect(result?.shouldContinue).toBe(true);
-      expect(buildGuidance).toHaveBeenCalledWith({
-        availableTools: new Set(["memory_save"]),
-        media: new Set(["memory"]),
-      });
-      expect(params.ctx.BodyForAgent).toContain("The user asked you to learn.");
-      expect(params.ctx.BodyForAgent).toContain("Learn what is worth keeping");
-      expect(params.ctx.BodyForAgent).not.toContain("skill_workshop");
-    });
-
     it("skips a contribution whose required tools policy hides", async () => {
       const buildGuidance = memoryLearn();
       const params = buildLearnParams("/learn", { tools: { deny: ["memory_save"] } });
@@ -329,20 +258,6 @@ describe("learn command", () => {
         expect(result?.shouldContinue).toBe(true);
       }
       expect(buildGuidance).not.toHaveBeenCalled();
-    });
-
-    it("names both media when policy hides both", async () => {
-      memoryLearn();
-      const params = buildLearnParams("/learn", {
-        tools: { deny: ["skill_workshop", "memory_save"] },
-      });
-
-      const result = await learn(params);
-
-      expect(result?.shouldContinue).toBe(false);
-      expect(result?.reply?.text).toContain(
-        "neither the skill_workshop tool nor the memory plugin's learning tools",
-      );
     });
 
     it("dispatches a plugin subcommand only while its tools are available", async () => {

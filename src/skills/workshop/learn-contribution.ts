@@ -14,8 +14,8 @@ import {
   SKILL_LEARNING_METHOD_PROMPT,
 } from "./skill-authoring-standards.js";
 
-// Only this exact form undoes; any other "/learn undo ..." text stays a learn request.
-const REVIEW_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Only "undo <id>" with whitespace undoes; any other "/learn undo ..." text stays a learn request.
+const UNDO_ARGS_PATTERN = /^\s+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Builds the /learn drafts turn over the drafts the command selected. The agent proposes and
@@ -66,7 +66,7 @@ export const workshopLearnContribution: LearnContribution = {
     {
       // Reverts one background review's skill changes, as the Undo button on its notice asks.
       name: "undo",
-      matchArgs: (args) => REVIEW_ID_PATTERN.test(args),
+      matchArgs: (args) => UNDO_ARGS_PATTERN.test(args),
       direct: true,
       handle: async ({ config, agentId, sessionKey, assertOwnerCurrent, args }) => {
         try {

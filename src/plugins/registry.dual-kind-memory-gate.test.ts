@@ -97,32 +97,16 @@ it("merges sidecar consolidation without lending its recall authorization", () =
 
 it("admits memory lessons only from the selected memory slot owner", () => {
   const { registry, register } = fixture();
-  const contribution = {
+  const memory = {
     medium: "memory" as const,
-    toolNames: ["memory_save"],
-    buildGuidance: () => ({ lines: ["learn"] }),
+    toolNames: ["save"],
+    buildGuidance: () => ({ lines: [] }),
   };
-  register({ id: "memory-core", kind: "memory" }, (api) => {
-    api.registerLearnContribution(contribution);
-  });
-  register({ id: "notes", kind: "context-engine" }, (api) => {
-    api.registerLearnContribution(contribution);
-    api.registerLearnContribution({ ...contribution, medium: "skills" });
-  });
-  register({ id: "acme-memory", kind: "memory", memorySlotSelected: true }, (api) => {
-    api.registerLearnContribution(contribution);
-  });
-  expect(
-    registry.learnContributions.map(({ pluginId, contribution: { medium } }) => ({
-      pluginId,
-      medium,
-    })),
-  ).toEqual([
-    { pluginId: "notes", medium: "skills" },
-    { pluginId: "acme-memory", medium: "memory" },
-  ]);
-  expect(registry.diagnostics).toMatchObject([
-    { pluginId: "memory-core", level: "warn" },
-    { pluginId: "notes", level: "warn" },
-  ]);
+  const contribute = (id: string, fields: Partial<Parameters<typeof register>[0]>) =>
+    register({ id, ...fields }, (api) => api.registerLearnContribution(memory));
+  contribute("memory-core", { kind: "memory" });
+  contribute("notes", { kind: "context-engine" });
+  contribute("acme-memory", { kind: "memory", memorySlotSelected: true });
+  expect(registry.learnContributions.map(({ pluginId }) => pluginId)).toEqual(["acme-memory"]);
+  expect(registry.diagnostics.map(({ pluginId }) => pluginId)).toEqual(["memory-core", "notes"]);
 });

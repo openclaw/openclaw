@@ -366,7 +366,10 @@ export type LearnSubcommandResult = { text: string } | { prompt: string };
 export type LearnSubcommand = {
   /** The word after /learn, matched case-insensitively. */
   name: string;
-  /** Whether these arguments select the subcommand; other text stays a learning request. */
+  /**
+   * Whether the raw text after the name, separator included, selects the subcommand;
+   * other text stays a learning request. The handler gets the arguments without the separator.
+   */
   matchArgs?: (args: string) => boolean;
   /**
    * Changes state without a model turn: only owners may run it, gateway clients need

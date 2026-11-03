@@ -98,8 +98,8 @@ const SKILL_WORKSHOP_UNAVAILABLE_REPLY =
 const LEARN_UNAVAILABLE_REPLY =
   "/learn can't save anything on this agent: neither the skill_workshop tool nor the memory plugin's learning tools are available here. They need a non-sandboxed session, a model and harness with tool support, and a tool policy that allows them.";
 
-// "/learn <subcommand> [args]": the first word, then separators, then the arguments.
-const SUBCOMMAND_PATTERN = /^([^\s;:,]+)(?:[\s;:,]+(.*))?$/s;
+// "/learn <subcommand> [args]": the first word, then the raw remainder from its separator on.
+const SUBCOMMAND_PATTERN = /^([^\s;:,]+)([\s;:,].*)?$/s;
 
 type LearnCommand =
   | { kind: "learn"; request: string }
@@ -117,10 +117,10 @@ function parseLearnCommand(raw: string): LearnCommand | null {
   }
   const [, word = "", rest = ""] = SUBCOMMAND_PATTERN.exec(request) ?? [];
   const name = word.toLowerCase();
-  const args = rest.trim();
+  const args = rest.replace(/^[\s;:,]+/, "").trim();
   for (const contributor of listLearnContributors()) {
     const subcommand = contributor.contribution.subcommands?.find(
-      (candidate) => candidate.name.toLowerCase() === name && (candidate.matchArgs?.(args) ?? true),
+      (candidate) => candidate.name.toLowerCase() === name && (candidate.matchArgs?.(rest) ?? true),
     );
     if (subcommand) {
       return { kind: "subcommand", contributor, subcommand, args };
