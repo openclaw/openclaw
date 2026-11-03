@@ -148,7 +148,7 @@ export function ToolRuntime(props: {
       title={t("agentTools.previewTitle")}
       description={
         <>
-          {t("agentTools.previewSubtitle")}
+          {t("agentTools.previewSubtitle")}{" "}
           <span class="mono">{props.sessionKey || t("agentTools.noSession")}</span>
         </>
       }
