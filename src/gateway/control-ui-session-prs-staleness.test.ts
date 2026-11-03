@@ -101,7 +101,7 @@ it.each(["list", "warm metadata", "cold metadata"])(
           expect(fresh.pullRequests[0]?.state).toBe(metadata ? "open" : "merged");
         }
         failed = true;
-        vi.setSystemTime(Date.now() - 60_000);
+        vi.setSystemTime(Date.now() - (metadata ? 0 : 60_000));
         vi.advanceTimersByTime(91_000);
         if (metadata) {
           // Task-PR reads can cache a failed detail request before the branch list succeeds.
