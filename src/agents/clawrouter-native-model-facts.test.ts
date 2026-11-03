@@ -294,8 +294,9 @@ it("uses Vercel's granted native Messages SDK route for catalog, replay and stre
       return new Response(
         new ReadableStream({
           start(controller) {
-            for (let offset = 0; offset < bytes.length; offset += 7)
+            for (let offset = 0; offset < bytes.length; offset += 7) {
               controller.enqueue(bytes.slice(offset, offset + 7));
+            }
             controller.close();
           },
         }),
@@ -319,8 +320,9 @@ it("uses Vercel's granted native Messages SDK route for catalog, replay and stre
         }),
         resolveProviderApiKey: () => ({ apiKey: key, discoveryApiKey: key }),
       });
-      if (!catalog || !("provider" in catalog) || !catalog.provider)
+      if (!catalog || !("provider" in catalog) || !catalog.provider) {
         throw new Error("Missing catalog");
+      }
       return catalog.provider;
     };
     const catalog = await discover(credential);
