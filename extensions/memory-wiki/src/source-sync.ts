@@ -1,3 +1,4 @@
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
 import {
@@ -131,7 +132,7 @@ export async function waitForMemoryWikiImportedSourceSyncs(): Promise<void> {
 
 /** Demand-driven maintenance belongs to the service, never to a search deadline. */
 export function createMemoryWikiSourceRefresh(options: {
-  signal: AbortSignal;
+  scheduler: PluginServiceSchedulerV1;
   onError: (config: ResolvedMemoryWikiConfig, error: unknown) => void;
 }) {
   type Refresh = {
@@ -140,16 +141,14 @@ export function createMemoryWikiSourceRefresh(options: {
     pending: boolean;
     nextRunAt: number;
     failures: number;
-    timer?: ReturnType<typeof setTimeout>;
+    retry?: ReturnType<PluginServiceSchedulerV1["schedule"]>;
   };
   const refreshes = new Map<string, Refresh>();
-  const { signal } = options;
+  const { scheduler } = options;
+  const { signal } = scheduler;
   signal.addEventListener(
     "abort",
     () => {
-      for (const refresh of refreshes.values()) {
-        clearTimeout(refresh.timer);
-      }
       refreshes.clear();
     },
     { once: true },
@@ -159,54 +158,66 @@ export function createMemoryWikiSourceRefresh(options: {
     if (signal.aborted) {
       return;
     }
-    void (async () => {
-      const vaultKey = await resolveMemoryWikiVaultMutationKey(config.vault.path);
-      if (signal.aborted) {
-        return;
-      }
-      const requestKey = JSON.stringify({ ...config, vault: { ...config.vault, path: vaultKey } });
-      let refresh = refreshes.get(vaultKey);
-      if (!refresh || refresh.requestKey !== requestKey || refresh.appConfig !== appConfig) {
-        clearTimeout(refresh?.timer);
-        refresh = { requestKey, appConfig, pending: false, nextRunAt: 0, failures: 0 };
-        refreshes.set(vaultKey, refresh);
-      }
-      const state = refresh;
-      const run = async () => {
-        if (signal.aborted || refreshes.get(vaultKey) !== state || state.pending) {
-          return;
-        }
-        state.pending = true;
-        clearTimeout(state.timer);
-        state.timer = undefined;
+    // The scheduler owns the async scope as well as cancellation. A fire-and-forget
+    // promise would retain the search caller's closing filesystem/state scope.
+    scheduler.schedule({
+      id: `memory-wiki-demand:${config.vault.path}`,
+      delayMs: 0,
+      run: async () => {
         try {
-          await syncMemoryWikiImportedSources({ config, appConfig, signal });
-          state.failures = 0;
-          // Coalesce successful checks too: dashboard polls and searches must not
-          // repeatedly stat every imported source. Explicit imports bypass this.
-          state.nextRunAt = Date.now() + 60_000;
-        } catch (error) {
-          if (signal.aborted || refreshes.get(vaultKey) !== state) {
+          const vaultKey = await resolveMemoryWikiVaultMutationKey(config.vault.path);
+          if (signal.aborted) {
             return;
           }
-          const delay = Math.min(60_000, 5_000 * 2 ** Math.min(state.failures++, 4));
-          state.nextRunAt = Date.now() + delay;
-          state.timer = setTimeout(() => {
-            void run();
-          }, delay);
-          state.timer.unref?.();
-          options.onError(config, error);
-        } finally {
-          state.pending = false;
+          const requestKey = JSON.stringify({
+            ...config,
+            vault: { ...config.vault, path: vaultKey },
+          });
+          let refresh = refreshes.get(vaultKey);
+          if (!refresh || refresh.requestKey !== requestKey || refresh.appConfig !== appConfig) {
+            refresh?.retry?.cancel();
+            refresh = { requestKey, appConfig, pending: false, nextRunAt: 0, failures: 0 };
+            refreshes.set(vaultKey, refresh);
+          }
+          const state = refresh;
+          const run = async () => {
+            if (signal.aborted || refreshes.get(vaultKey) !== state || state.pending) {
+              return;
+            }
+            state.pending = true;
+            state.retry?.cancel();
+            state.retry = undefined;
+            try {
+              await syncMemoryWikiImportedSources({ config, appConfig, signal });
+              state.failures = 0;
+              // Coalesce successful checks too: dashboard polls and searches must not
+              // repeatedly stat every imported source. Explicit imports bypass this.
+              state.nextRunAt = scheduler.now() + 60_000;
+            } catch (error) {
+              if (signal.aborted || refreshes.get(vaultKey) !== state) {
+                return;
+              }
+              const delay = Math.min(60_000, 5_000 * 2 ** Math.min(state.failures++, 4));
+              state.nextRunAt = scheduler.now() + delay;
+              state.retry = scheduler.schedule({
+                id: `memory-wiki-retry:${vaultKey}`,
+                delayMs: delay,
+                run,
+              });
+              options.onError(config, error);
+            } finally {
+              state.pending = false;
+            }
+          };
+          if (!state.pending && !state.retry && scheduler.now() >= state.nextRunAt) {
+            await run();
+          }
+        } catch (error) {
+          if (!signal.aborted) {
+            options.onError(config, error);
+          }
         }
-      };
-      if (!state.pending && !state.timer && Date.now() >= state.nextRunAt) {
-        await run();
-      }
-    })().catch((error: unknown) => {
-      if (!signal.aborted) {
-        options.onError(config, error);
-      }
+      },
     });
   };
 }

@@ -1,3 +1,5 @@
+import { AsyncWorkScope, runInDetachedAsyncContext } from "openclaw/plugin-sdk/concurrency-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, expect, it, vi } from "vitest";
 import type * as BridgeModule from "./bridge.js";
 import { compileMemoryWikiVault } from "./compile.js";
@@ -44,9 +46,17 @@ it.each([false, true])(
 
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
-    const service = new AbortController();
+    const service = createTestPluginServiceScheduler();
+    // Match the host's service scheduler: callbacks inherit the service, not demand.
+    const scheduler = {
+      ...service,
+      schedule: (params: Parameters<typeof service.schedule>[0]) =>
+        runInDetachedAsyncContext(() => service.schedule(params)),
+    };
+    const caller = new AsyncWorkScope();
     const onError = vi.fn();
-    const refresh = createMemoryWikiSourceRefresh({ signal: service.signal, onError });
+    const refreshOptions = { scheduler, signal: service.signal, onError };
+    const refresh = createMemoryWikiSourceRefresh(refreshOptions);
     bridge.mockImplementation(async () => {
       entered.resolve();
       await release.promise;
@@ -67,7 +77,7 @@ it.each([false, true])(
     });
     const search = () => tool.execute("search", { query: "cobalt", maxResults: 1 });
     try {
-      const first = search();
+      const first = caller.run(search);
       await entered.promise;
       // The importer holds the real vault mutation lease until explicitly released.
       // Both the published path and first-use fallback must answer independently.
@@ -83,7 +93,9 @@ it.each([false, true])(
         });
       }
       expect(bridge).toHaveBeenCalledTimes(1);
+      caller.beginClose();
       release.resolve();
+      await caller.drain();
       await waitForMemoryWikiImportedSourceSyncs();
       expect((await search()).details).toMatchObject({
         results: [
@@ -98,7 +110,7 @@ it.each([false, true])(
     } finally {
       release.resolve();
       await waitForMemoryWikiImportedSourceSyncs();
-      service.abort();
+      await service.stop();
     }
   },
 );

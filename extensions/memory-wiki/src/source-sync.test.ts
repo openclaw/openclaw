@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiConfig } from "./config.js";
@@ -194,9 +195,9 @@ describe("syncMemoryWikiImportedSources", () => {
 
 it("retries failed background imports with backoff, coalesces demand, and stops with the service", async () => {
   vi.useFakeTimers();
-  const service = new AbortController();
+  const service = createTestPluginServiceScheduler();
   const onError = vi.fn();
-  const refresh = createMemoryWikiSourceRefresh({ signal: service.signal, onError });
+  const refresh = createMemoryWikiSourceRefresh({ scheduler: service, onError });
   const config = createConfig();
   const first = deferred();
   const retried = deferred();
@@ -213,6 +214,7 @@ it("retries failed background imports with backoff, coalesces demand, and stops 
   refreshIndexesMock.mockResolvedValue(refreshResult);
   try {
     refresh(config, appConfig);
+    await vi.advanceTimersByTimeAsync(0);
     await first.promise;
     await waitForMemoryWikiImportedSourceSyncs();
     await vi.advanceTimersByTimeAsync(0);
@@ -237,16 +239,17 @@ it("retries failed background imports with backoff, coalesces demand, and stops 
     });
     await vi.advanceTimersByTimeAsync(60_000);
     refresh(config, appConfig);
+    await vi.advanceTimersByTimeAsync(0);
     await failedAgain.promise;
     await waitForMemoryWikiImportedSourceSyncs();
     await vi.advanceTimersByTimeAsync(0);
-    service.abort();
+    service.beginClose();
     await vi.advanceTimersByTimeAsync(120_000);
     refresh(config, appConfig);
     expect(syncBridgeMock).toHaveBeenCalledTimes(3);
     expect(vi.getTimerCount()).toBe(0);
   } finally {
-    service.abort();
+    await service.stop();
     vi.useRealTimers();
   }
 });
