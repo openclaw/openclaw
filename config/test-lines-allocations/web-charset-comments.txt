@@ -1,2 +1,0 @@
-20
-# Native capped and uncapped decoding regression for commented charset declarations.
