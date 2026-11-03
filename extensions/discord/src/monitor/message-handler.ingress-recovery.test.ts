@@ -419,7 +419,7 @@ describe("Discord durable ingress settlement", () => {
         queue,
         dispatch: async (_event, lifecycle) => {
           const ingress = fanInChannelIngressLifecycles([lifecycle]);
-          messageRunQueue.enqueue({
+          void messageRunQueue.enqueue({
             context: await createBaseDiscordMessageContext(),
             ingressSettlement: ingress,
           });
