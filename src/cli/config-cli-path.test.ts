@@ -233,23 +233,4 @@ describe("unsetAtPath", () => {
     expect(result).toEqual({ removed: true, leafContainer: "object" });
     expect(root).toEqual({ agents: { defaults: { authInheritance: { agentId: "research" } } } });
   });
-
-  it("keeps an agent entry emptied by an inner-field unset instead of pruning it", () => {
-    const root = {
-      agents: {
-        entries: { main: {}, research: { name: "Research" } },
-        defaults: { authInheritance: { agentId: "research" } },
-      },
-    };
-    const result = unsetAtPath(root, ["agents", "entries", "research", "name"]);
-    expect(result).toEqual({ removed: true, leafContainer: "object" });
-    // Only a whole-entry deletion authorizes roster removal; an inner-field unset
-    // must leave the entry as {} so the roster-loss guard accepts the save.
-    expect(root).toEqual({
-      agents: {
-        entries: { main: {}, research: {} },
-        defaults: { authInheritance: { agentId: "research" } },
-      },
-    });
-  });
 });

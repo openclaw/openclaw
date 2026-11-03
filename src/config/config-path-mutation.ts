@@ -12,13 +12,16 @@ const WRITE_PRUNED_OBJECT = Symbol("write-pruned-object");
 const AGENT_ROSTER_ENTRIES_SEGMENTS = ["agents", "entries"] as const;
 
 /**
- * True when the emptied child at this depth is a keyed agent roster entry. Only a
- * whole-entry deletion authorizes roster removal; an inner-field unset must leave
- * the entry as `{}` or the roster-loss guard rejects the save.
+ * True when the child at this depth is a keyed agent roster entry that was emptied
+ * by pruning an ancestor of the requested leaf. Only a whole-entry deletion
+ * authorizes roster removal, so an inner-field unset must leave the entry as `{}`
+ * or the roster-loss guard rejects the save; a whole-entry unset (the leaf) still
+ * deletes the entry.
  */
 function isAgentRosterEntryContainer(pathSegments: readonly string[], depth: number): boolean {
   return (
     depth === 2 &&
+    depth < pathSegments.length - 1 &&
     pathSegments[0] === AGENT_ROSTER_ENTRIES_SEGMENTS[0] &&
     pathSegments[1] === AGENT_ROSTER_ENTRIES_SEGMENTS[1]
   );
