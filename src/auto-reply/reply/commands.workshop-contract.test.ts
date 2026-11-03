@@ -348,14 +348,14 @@ describe("/learn through the command registry", () => {
     const builds: Array<ReadonlySet<string>> = [];
     beforeEach(() => {
       builds.length = 0;
-      registry.memoryCapabilities.push({
+      registry.learnContributions.push({
         pluginId: "contract-memory",
-        memorySlotSelected: true,
-        capability: {
-          learnToolNames: ["memory_save"],
-          learnGuidanceBuilder: ({ availableTools }) => {
+        contribution: {
+          medium: "memory",
+          toolNames: ["memory_save"],
+          buildGuidance: ({ availableTools }) => {
             builds.push(availableTools);
-            return [MEMORY_GUIDANCE];
+            return { lines: [MEMORY_GUIDANCE] };
           },
         },
       });
