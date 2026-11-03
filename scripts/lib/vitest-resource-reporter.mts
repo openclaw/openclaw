@@ -10,6 +10,7 @@ import type {
   TestSpecification,
   Vitest,
 } from "vitest/node";
+import { createCiTestObservationCapture } from "./ci-test-observation-capture.mts";
 import { readProcessCgroupV2Snapshot, readProcessMemoryCapacity } from "./process-memory.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
 import { detectVitestHostInfo } from "./vitest-local-scheduling.mts";
@@ -43,6 +44,7 @@ function moduleKey(spec: TestSpecification) {
 // Opt in through Vitest's existing --reporter option. Observe the resolved
 // process and native events without changing test selection or pool policy.
 export default class VitestResourceReporter implements Reporter {
+  private observations: ReturnType<typeof createCiTestObservationCapture>;
   private invocation = "";
   private readonly repositoryRoot = resolveRepoRoot(import.meta.url);
   private dependencyRoot = "";
@@ -101,6 +103,24 @@ export default class VitestResourceReporter implements Reporter {
   }
 
   onInit(ctx: Vitest) {
+    this.observations = createCiTestObservationCapture({
+      repositoryRoot: this.repositoryRoot,
+      cacheDirectory: ctx.vite.config.cacheDir,
+      configFiles: [ctx.vite.config.configFile, ...ctx.vite.config.configFileDependencies].filter(
+        (file): file is string => typeof file === "string",
+      ),
+      configuration: {
+        include: ctx.config.include,
+        exclude: ctx.config.exclude,
+        pool: ctx.config.pool,
+        isolate: ctx.config.isolate,
+        maxWorkers: ctx.config.maxWorkers,
+        fileParallelism: ctx.config.fileParallelism,
+        testTimeout: ctx.config.testTimeout,
+        hookTimeout: ctx.config.hookTimeout,
+        retry: ctx.config.retry,
+      },
+    });
     this.dependencyRoot = path
       .relative(this.repositoryRoot, ctx.config.root)
       .split(path.sep)
@@ -130,7 +150,7 @@ export default class VitestResourceReporter implements Reporter {
     this.cpu = process.cpuUsage();
     this.queued.clear();
     this.active.clear();
-    writeReceipt("inventory", {
+    this.writeObservation("inventory", {
       version: 1,
       dependencyRoot: this.dependencyRoot,
       invocation: this.invocation,
@@ -250,7 +270,7 @@ export default class VitestResourceReporter implements Reporter {
         cases.pending++;
       }
     }
-    writeReceipt("module", {
+    this.writeObservation("module", {
       invocation: this.invocation,
       observationFile: path.relative(this.repositoryRoot, spec.moduleId).split(path.sep).join("/"),
       project: module.project.name,
@@ -271,7 +291,7 @@ export default class VitestResourceReporter implements Reporter {
 
   onTestRunEnd(modules: readonly TestModule[], errors: readonly unknown[], reason: string) {
     this.writeDiagnostic(reason);
-    writeReceipt("run", {
+    this.writeObservation("run", {
       invocation: this.invocation,
       reason,
       files: modules.length,
@@ -285,5 +305,10 @@ export default class VitestResourceReporter implements Reporter {
       hostCpu: readHostCpuSnapshot(),
       cgroup: readProcessCgroupV2Snapshot(),
     });
+  }
+
+  private writeObservation(kind: string, value: unknown) {
+    writeReceipt(kind, value);
+    this.observations?.record(kind, value);
   }
 }

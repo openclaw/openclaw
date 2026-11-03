@@ -499,6 +499,35 @@ describe("release fast lane label", () => {
 
 describe("ci workflow guards", () => {
   const ci = readCiWorkflow();
+  it("limits observation uploads to the sampled current-target CI cohort", () => {
+    const job = ci.jobs["checks-node-core-test-nondist-shard"];
+    const upload = requiredWorkflowStep(job.steps, "Upload adaptive CI observations");
+    const run = requiredWorkflowStep(job.steps, "Run Node test shard");
+    for (const [eventName, repository, frozen, runId, expected] of [
+      ["schedule", "openclaw/openclaw", "false", 101, true],
+      ["pull_request", "openclaw/openclaw", "false", 100, true],
+      ["pull_request", "openclaw/openclaw", "false", 101, false],
+      ["schedule", "openclaw/openclaw", "true", 100, false],
+      ["schedule", "example/fork", "false", 100, false],
+      ["push", "openclaw/openclaw", "false", 100, false],
+    ] as const) {
+      const context = {
+        eventName,
+        repository,
+        runId,
+        runAttempt: 1,
+        preflightOutputs: { frozen_target: frozen },
+      };
+      expect(evaluateWorkflowCondition(upload.if, context)).toBe(expected);
+      expect(
+        Boolean(evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_OBSERVATIONS_DIR, context)),
+      ).toBe(expected);
+    }
+    expect(upload["continue-on-error"]).toBe(true);
+    expect(upload.with.path).toBe("${{ runner.temp }}/ci-test-observations/*/observations.json");
+    expect(upload.with["retention-days"]).toBe(7);
+  });
+
   function ciValue(
     job: string,
     property: "runs-on" | "timeout-minutes",

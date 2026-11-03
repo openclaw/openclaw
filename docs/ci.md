@@ -634,3 +634,11 @@ Cleanup bounds device commands and trust restoration so an unavailable emulator
 cannot prevent disposal or report upload. The emulator boot log is copied into
 the reports and its last 100 lines are printed before device cleanup. A cleanup
 timeout remains a failure even when the owned emulator is killed and its AVD deleted.
+
+## Adaptive observation pilot
+
+The [adaptive CI observation pilot](/ci/adaptive-testing#observation-pilot) samples
+existing `unit-fast` Vitest invocations after runtime selection. It adds no matrix
+rows, runner registrations or skipped tests. Its isolated dependency cache and
+artifact upload add measurable overhead; projected selection savings are not
+realized savings.

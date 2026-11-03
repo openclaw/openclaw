@@ -45,6 +45,36 @@ identities is treated as missing.
 The export contains repository-relative source identities, counts, outcomes,
 durations, and dependencies. It does not copy test titles, errors, or log text.
 
+## Observation pilot
+
+Ordinary canonical CI collects the first explicit `unit-fast` Vitest invocation
+for each runtime in a job on schedules and on PR runs whose run ID ends in `0`.
+Frozen targets and other events retain their existing execution. Runtime
+partitioning finishes before the reporter and dependency-recording options are
+added. Native Bun tests retain their existing command and are not represented by
+Vitest observations. The pilot never skips a test or changes a required check.
+
+Each observed invocation uses a fresh Vite cache directory. This prevents native
+dependency records from leaking between configurations or runtimes, but also
+changes optimizer and transform-cache identity. Compare complete paired job
+times, including this cold-cache cost and artifact upload. `capturePreparationMs`
+excludes final serialization and file writing as well as native recording and
+cache misses; it is not the complete collection overhead.
+
+The `ci-test-observations-*` artifacts retain sanitized exports for seven days.
+Each file is bounded to 8 MiB, with at most one invocation per Vitest runtime per
+job. Source metadata includes the workflow run, attempt, job, timestamps and
+actual checkout commit/tree. Configuration identity hashes native config
+dependencies and effective test settings; environment identity hashes an explicit
+allowlist and include-file contents. These are observational identities, not a
+claim that every possible environment input is covered. Missing exports and
+missing dependencies remain data gaps. Export/upload failures do not replace the
+test result, and raw test logs and assertion text are not uploaded by this pilot.
+
+The first readout compares usable-data coverage, native-Bun gaps, observed
+failures, fallback causes, and paired total job costs. Learned selection and
+automatic omission require a separate evaluation and rollout decision.
+
 A passed or failed file is complete only after a terminal run receipt and all
 its cases complete without skips or pending cases. Interrupted, filtered,
 unhandled-error, and missing-result runs remain unknown. Failure-tail replays
