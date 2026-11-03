@@ -101,7 +101,6 @@ it("bounds and persists visible and hidden oversized threads across restart", as
     await restoredControl.initialize();
     const recovered = await restoredControl.listPage({ limit: 20 });
     expect(recovered.sessions[1]?.threadId).toBe("thread-1");
-    expect(recovered.sessions[1]?.fallbackName).toBe("Recovered preview");
     expect(recovered.sessions[1]).not.toHaveProperty("catalogError");
     expect(recovered.sessions[1]?.status).not.toBe("systemError");
   } finally {

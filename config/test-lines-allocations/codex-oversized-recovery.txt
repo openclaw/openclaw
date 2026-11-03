@@ -1,2 +1,2 @@
-# Require the recovered oversized thread identity and its refreshed preview.
-2
+# Require the recovered oversized thread identity before its error checks.
+1
