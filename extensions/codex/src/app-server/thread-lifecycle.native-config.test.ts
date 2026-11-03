@@ -40,6 +40,7 @@ import {
   nativeQuestionConfigFixture,
   startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
+import { CodexIncognitoPolicyChangeError } from "./thread-policy.js";
 setupRunAttemptTestHooks();
 
 describe("Codex native configuration lifecycle", () => {
@@ -305,6 +306,78 @@ describe("Codex native configuration lifecycle", () => {
       }
     },
   );
+
+  it.each(["model_instructions_file", "instructions"])(
+    "keeps an authored native %s as the base on start and cold resume",
+    async (key) => {
+      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+      const native = threadStartResult("operator-base-thread", { cwd: workspaceDir });
+      const value = key === "instructions" ? "Operator policy" : "/synthetic/codex/policy.md";
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "thread/start" || method === "thread/resume") {
+            return native;
+          }
+          return readNativeConfig(method, { [key]: value });
+        },
+      });
+      await startOrResumeThread(lifecycleParams(fixture.client));
+      fixture.seed(native, { loaded: false, subscribed: false });
+      await startOrResumeThread(lifecycleParams(fixture.client));
+
+      const requests = fixture.writes
+        .map((line): unknown => JSON.parse(line))
+        .filter(isJsonObject)
+        .filter((frame) => frame.method === "thread/start" || frame.method === "thread/resume");
+      expect(requests.map((frame) => frame.method)).toEqual(["thread/start", "thread/resume"]);
+      for (const { params: request } of requests) {
+        expect(request).not.toHaveProperty("baseInstructions");
+        // OpenClaw's policy still reaches the model, through the developer carrier.
+        expect(request).toMatchObject({
+          developerInstructions: expect.stringContaining(
+            "You are a personal assistant running inside OpenClaw.",
+          ),
+        });
+      }
+    },
+  );
+
+  it("refuses warm incognito reuse when OpenClaw's base changes beside an authored native base", async () => {
+    params.sessionKey = "agent:main:dashboard:incognito-operator-base";
+    registerCodexTestSessionIdentity(sessionFile, "session-1", params.sessionKey);
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: async (method) => {
+        if (method === "thread/start") {
+          return threadStartResult("incognito-operator-thread", { cwd: workspaceDir });
+        }
+        return readNativeConfig(method, { instructions: "Operator policy" });
+      },
+    });
+    const retain = (binding: Awaited<ReturnType<typeof startOrResumeThread>>) =>
+      retainCodexAppServerLiveThread(
+        fixture.client,
+        binding.threadId,
+        binding.liveThreadOwnership?.release,
+        binding.liveThreadConfigFingerprint,
+        null,
+        binding.liveThreadEphemeralPolicy,
+      );
+    const first = await startOrResumeThread(lifecycleParams(fixture.client));
+    expect(first.liveThreadEphemeralPolicy?.baseInstructions).toContain(
+      "You are a personal assistant running inside OpenClaw.",
+    );
+    await retain(first);
+    const unchanged = await startOrResumeThread(lifecycleParams(fixture.client));
+    expect(unchanged.threadId).toBe(first.threadId);
+    await retain(unchanged);
+    // Only OpenClaw's base text changes; it rides the developer carrier for this thread.
+    params.promptMode = "minimal";
+    await expect(startOrResumeThread(lifecycleParams(fixture.client))).rejects.toBeInstanceOf(
+      CodexIncognitoPolicyChangeError,
+    );
+  });
 
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",

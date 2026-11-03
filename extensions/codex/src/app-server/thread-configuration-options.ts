@@ -12,8 +12,8 @@ export type CodexThreadConfigurationOptions = {
   dynamicTools?: CodexDynamicToolSpec[];
   /** Current executor availability, independent of retained tool declarations. */
   askUserAvailable?: boolean;
-  /** Preflight snapshot whose origins distinguish authored settings from defaults. */
-  nativeQuestionConfig?: CodexConfigReadResponse;
+  /** Preflight `config/read` snapshot whose origins distinguish authored settings from defaults. */
+  nativeConfig?: CodexConfigReadResponse;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   /** Skills, persona, and memory carried with thread developer instructions, separate from generic policy. */

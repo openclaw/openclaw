@@ -719,8 +719,8 @@ export async function startFreshCodexThread(
       ? createCodexEphemeralThreadPolicy(
           {
             ...params,
-            // Resume requests omit ring-zero's empty base, so compare it as absent.
-            baseInstructions: startParams.baseInstructions || undefined,
+            // An authored native base moves OpenClaw's base into the developer carrier.
+            baseInstructions: context.resolveOpenClawBaseInstructions(),
             config: startParams.config,
           },
           context.effectiveConfig.config,

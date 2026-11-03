@@ -12,6 +12,7 @@ import {
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { deniesCodexNativeDelegation } from "../../native-tool-policy.js";
+import { readCodexConfigValue } from "./config-layer-policy.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import {
   isMessageOnlyCodexSourceReply,
@@ -23,6 +24,7 @@ import {
   type CodexDynamicToolSpec,
 } from "./protocol.js";
 import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
+import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 
 export type CodexThreadPromptContext = Pick<
   EmbeddedRunAttemptParams,
@@ -134,6 +136,48 @@ export function buildCodexBaseInstructions(
           "\n",
         ),
   );
+}
+
+// Neither key has a Codex default, so a string in the effective config is authored.
+function hasAuthoredCodexBaseInstructions(
+  options: Pick<CodexThreadConfigurationOptions, "config" | "nativeConfig">,
+): boolean {
+  return ["model_instructions_file", "instructions"].some((key) =>
+    [options.config, options.nativeConfig?.config].some(
+      (config) => config !== undefined && typeof readCodexConfigValue(config, key) === "string",
+    ),
+  );
+}
+
+/** OpenClaw's rendered base, whichever carrier holds it; ring-zero threads have none. */
+export function resolveCodexOpenClawBaseInstructions(
+  params: CodexThreadPromptContext,
+  options: CodexThreadConfigurationOptions,
+): string | undefined {
+  return isCodexRingZeroThread(params, options.hostSystemAgentActive)
+    ? undefined
+    : buildCodexBaseInstructions(params, options);
+}
+
+/**
+ * A request base outranks `model_instructions_file` and `instructions`
+ * (codex-rs/core/src/config/mod.rs), so with either authored OpenClaw omits the base and
+ * carries its policy ahead of the developer instructions. Start and resume place it alike,
+ * keeping warm reuse and fork snapshots consistent with the creation request.
+ */
+export function placeCodexBaseInstructions(
+  params: CodexThreadPromptContext,
+  options: CodexThreadConfigurationOptions,
+  developerInstructions: string,
+  ringZero: { baseInstructions?: string },
+): { baseInstructions?: string; developerInstructions: string } {
+  const baseInstructions = resolveCodexOpenClawBaseInstructions(params, options);
+  if (baseInstructions === undefined) {
+    return { ...ringZero, developerInstructions };
+  }
+  return hasAuthoredCodexBaseInstructions(options)
+    ? { developerInstructions: joinPresentSections(baseInstructions, developerInstructions) }
+    : { baseInstructions, developerInstructions };
 }
 
 /** Move only the exact section annotated by its producer; later policy additions survive. */

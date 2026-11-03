@@ -42,6 +42,7 @@ export function isThreadBackgroundOnly(
 export type CodexEphemeralThreadPolicy = {
   autoCompactTokenLimit?: number;
   autoCompactTokenLimitScope?: string;
+  /** OpenClaw's rendered base, in the base or developer carrier. */
   baseInstructions?: string;
   developerInstructions?: string;
   refreshableInstructions?: string;

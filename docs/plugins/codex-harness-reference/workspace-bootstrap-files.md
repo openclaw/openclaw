@@ -20,6 +20,11 @@ renders from thread-stable facts only, so turn, channel, workspace, and skill
 facts keep their existing carriers below. A changed base prompt reaches an
 existing thread on its next cold resume; restricted threads rotate instead, and
 incognito threads reject the change like any other generic policy change.
+Side-question forks carry the parent's current base, so they match a parent
+whose base changed on a cold resume. When Codex configuration sets
+`model_instructions_file` or `instructions` (for example in `~/.codex/config.toml`
+with `appServer.homeScope: "user"`), that operator policy stays the base and
+OpenClaw sends its policy at the start of the developer instructions instead.
 Ring-zero threads keep empty base instructions, and app-server tool declarations
 are unchanged. Supervised threads, including canonical forks, have no outer
 OpenClaw runtime plan, so their provider guidance resolves from the thread's
