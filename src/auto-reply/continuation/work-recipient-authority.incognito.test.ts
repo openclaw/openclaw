@@ -2,9 +2,9 @@
 // epoch before its record is written. An incognito session has no durable recipient authority, so
 // its election fails visibly and elects nothing; a durable session's election binds its epoch.
 // Real: the continue_work tool, the agent runner's post-turn seam, the chain reservation, the
-// custody store, the authority capture and the incognito memory owner, bound around the turn as
-// the Gateway's incognito dispatch binds it. Observed only: the operator custody the Gateway hands
-// an operator's tool call, through its release.
+// custody store, the authority capture, the next turn's system-event drain and the incognito memory
+// owner, bound around each turn as the Gateway's incognito dispatch binds it. Observed only: the
+// operator custody the Gateway hands an operator's tool call, through its release.
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createContinueWorkTool } from "../../agents/tools/continue-work-tool.js";
@@ -17,13 +17,14 @@ import { commitMemory } from "../../config/sessions/session-actor-memory-publica
 import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { scheduleReplyContinuation } from "../reply/agent-runner-continuation-schedule.js";
 import { createReplyContinuationController } from "../reply/agent-runner-continuation.js";
 import { createTestFollowupRun } from "../reply/agent-runner.test-fixtures.js";
+import { drainFormattedSystemEvents } from "../reply/session-system-events.js";
 import { resetContinuationCustodyProjection } from "./custody/custody-projection.js";
 import { hydrateContinuationCustody, listContinuationRecords } from "./custody/custody-store.js";
 import { extractContinuationSignal } from "./signal.js";
@@ -42,8 +43,9 @@ vi.mock("../../gateway/server-plugin-in-process-authority.js", async (importOrig
   },
 }));
 
+// The exact prompt line, timestamp aside.
 const SCHEDULING_FAILED =
-  "[continuation] continue_work scheduling failed; the reserved chain budget remains fail-closed.";
+  /^System: \[[^\]]+\] \[continuation\] continue_work scheduling failed; the reserved chain budget remains fail-closed\.$/u;
 const cfg = { agents: { defaults: { continuation: { enabled: true } }, entries: { main: {} } } };
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
@@ -117,6 +119,15 @@ async function electThroughTurn(sessionKey: string, storePath: string, entry: Se
 }
 
 const workRecords = async () => await listContinuationRecords({ kinds: ["work"] });
+/** The system-event text the session's next turn takes into its prompt. */
+const nextTurnEvents = async (sessionKey: string) =>
+  await drainFormattedSystemEvents({
+    cfg,
+    agentId: "main",
+    sessionKey,
+    isMainSession: false,
+    isNewSession: false,
+  });
 
 it("fails an incognito session's continue_work election visibly and elects nothing", async () => {
   await withState(async (env) => {
@@ -138,10 +149,10 @@ it("fails an incognito session's continue_work election visibly and elects nothi
         electThroughTurn(sessionKey, binding.path, entry),
       );
 
-      // The notice the session's next turn drains; the capture's refusal is its cause.
-      expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual([
-        SCHEDULING_FAILED,
-      ]);
+      // The session's next turn, bound as the first, drains the notice into its prompt; the
+      // capture's refusal is its cause.
+      const drained = await runWithSessionActorStorage(binding, () => nextTurnEvents(sessionKey));
+      expect(drained).toMatch(SCHEDULING_FAILED);
       expect(runtimeLog).toHaveBeenCalledWith(
         expect.stringMatching(
           /continue_work scheduling failed after durable reservation .*Incognito collaboration command requires its dedicated owner/u,
@@ -180,7 +191,7 @@ it("binds a durable session's continue_work election to its recipient-authority 
       entry,
     );
 
-    expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+    expect(await nextTurnEvents(sessionKey)).toBeUndefined();
     const [record, ...others] = await workRecords();
     expect(record && others).toEqual([]);
     // Insert-if-absent: returns the epoch the election captured.
