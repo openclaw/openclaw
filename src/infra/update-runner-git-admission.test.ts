@@ -9,6 +9,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import * as diskSpace from "./disk-space.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
+import * as fsSafe from "./fs-safe.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { createGitAdmissionFixture as createFixture } from "./update-runner-git-admission.test-support.js";
@@ -265,7 +266,15 @@ it.each([false, true])(
     const state = fixture();
     const published = path.join(state.root, "published");
     let repacked = false;
-    let descriptor: number | undefined;
+    const openPack = fsSafe.openLocalFileSafely;
+    let packHandle: fsSafe.OpenResult["handle"] | undefined;
+    vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementation(async (options) => {
+      const opened = await openPack(options);
+      if (path.basename(options.filePath).startsWith("update-candidate-")) {
+        packHandle = opened.handle;
+      }
+      return opened;
+    });
     let keepName: string | undefined;
     const command: CommandRunner = async (argv, options) => {
       if (foreignKeep && argv[2] === state.install && argv[3] === "index-pack") {
@@ -280,7 +289,7 @@ it.each([false, true])(
       }
       const result = await state.runCommand(argv, options);
       if (argv[2] === state.install && argv[3] === "index-pack" && result.code === 0) {
-        descriptor = options.stdinFileDescriptor;
+        expect(packHandle?.fd).toBe(options.stdinFileDescriptor);
         state.installedGit("repack", "-a", "-d");
         repacked = true;
         expect(state.installedGit("cat-file", "-t", state.target)).toBe("commit");
@@ -298,8 +307,8 @@ it.each([false, true])(
       command,
     );
     expect(repacked).toBe(true);
-    expect(descriptor).toBeTypeOf("number");
-    expect(() => fs.fstatSync(descriptor!)).toThrow();
+    // A closed descriptor number can be reused by later cleanup I/O.
+    expect(packHandle?.fd).toBe(-1);
     state.expectUpdated(result, state.target, published);
     const packs = path.join(published, ".git", "objects", "pack");
     expect(fs.readdirSync(packs).filter((name) => name.endsWith(".keep"))).toEqual(

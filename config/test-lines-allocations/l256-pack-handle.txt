@@ -1,0 +1,2 @@
+# Observe the real pack FileHandle through disposal instead of a reused numeric descriptor.
+9
