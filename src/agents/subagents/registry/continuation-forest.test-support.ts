@@ -120,6 +120,7 @@ export type AnnexNode = {
 
 type ElectionKind = "crane" | "relay" | "branch" | "attic";
 type ElectionOutcome = "executed" | "refused" | "cancelled" | "interrupted";
+type ElectionExpectation = { outcome: ElectionOutcome; reason?: string; stage?: string };
 
 export type AnnexElection = {
   /** The election id: the child run (crane, relay), the custody record (branch, attic). */
@@ -130,7 +131,7 @@ export type AnnexElection = {
   ownerSessionKey: string;
   node?: AnnexNode;
   dueAt?: number;
-  expected: { outcome: ElectionOutcome; reason?: string };
+  expected: ElectionExpectation;
 };
 
 /** One line of the append-only attempt log, kept outside the Gateway. */
@@ -216,6 +217,8 @@ export function useContinuationForest(stateDir: () => string) {
   beforeEach(async () => {
     const config = {
       agents: { defaults: { workspace: stateDir(), continuation: { enabled: true } } },
+      // Direct rooms per sender, so a prince's chat /new lands on the prince's own room.
+      session: { dmScope: "per-account-channel-peer" as const },
     };
     await writeFile(path.join(stateDir(), "openclaw.json"), JSON.stringify(config));
     setRuntimeConfigSnapshot(config);
@@ -254,6 +257,8 @@ export class ContinuationForest {
   readonly bits = new Map<string, 0 | 1>();
   readonly reports = new Map<string, Report>();
   readonly adoptions: Adoption[] = [];
+  /** Every block a head adopted, with its room and time. */
+  readonly adoptedBlocks: Array<{ sessionKey: string; text: string; at: number }> = [];
   readonly wakes: WakeRequest[] = [];
   readonly spawns: Array<{ electionId: string; childRunId?: string; at: number }> = [];
   readonly deliveredLines: Array<{ keys: string[]; at: number }> = [];
@@ -315,8 +320,12 @@ export class ContinuationForest {
     for (const prince of this.princes) {
       const [, across, alarm] = prince.children;
       const next = this.princes[(prince.tree + 1) % shape.trees]!;
-      if (across && next !== prince && next.children[0]) {
-        across.routing = { kind: "out-of-tree", target: next.children[0] };
+      let target = next.children[0];
+      while (target && target.role !== "crane") {
+        target = target.children[0];
+      }
+      if (across && next !== prince && target) {
+        across.routing = { kind: "out-of-tree", target };
       }
       if (alarm) {
         alarm.routing = { kind: "all" };
@@ -929,24 +938,26 @@ export class ContinuationForest {
   // ---------------------------------------------------------------------------------------------
   // Heads, turns and relays
 
+  /** The room's current head: its session and the lifecycle revision a reset commits. */
   head(sessionKey: string): string | undefined {
-    return accessor.loadSessionEntry({
+    const entry = accessor.loadSessionEntry({
       storePath: this.storePath,
       sessionKey,
       readConsistency: "latest",
-    })?.sessionId;
+    });
+    return entry ? `${entry.sessionId}@${entry.lifecycleRevision ?? "initial"}` : undefined;
   }
 
   /** Every head with queued events takes a turn. True when a turn consumed anything. */
   private async takeTurns(): Promise<boolean> {
     const queued = (sessionKey: string) =>
       peekSystemEventEntries(resolveSystemEventQueueKey(sessionKey, AGENT_ID)).length;
+    const ready = [...this.sessionKeys]
+      .filter((sessionKey) => !this.heldTurns.has(sessionKey))
+      .map((sessionKey) => ({ sessionKey, before: queued(sessionKey) }))
+      .filter(({ before }) => before > 0);
     let progressed = false;
-    for (const sessionKey of this.sessionKeys) {
-      const before = queued(sessionKey);
-      if (before === 0 || this.heldTurns.has(sessionKey)) {
-        continue;
-      }
+    for (const { sessionKey, before } of ready) {
       const adopted = await this.run(() => this.nextTurn(sessionKey));
       progressed ||= adopted > 0 || queued(sessionKey) < before;
     }
@@ -977,6 +988,7 @@ export class ContinuationForest {
     this.time("turnMs", started);
     let count = 0;
     for (const block of adoption.blocks) {
+      this.adoptedBlocks.push({ sessionKey, text: block.text, at: Date.now() });
       for (const match of block.text.matchAll(REPORT_TAG)) {
         const reportId = match[1]!;
         this.adoptions.push({
@@ -1041,9 +1053,10 @@ export class ContinuationForest {
       const election = this.elections.get(node.runId!)!;
       this.logAttempt(election.id, "attempt");
       this.logAttempt(election.id, "effect");
-      void this.run(() => this.report(election)).catch((error: unknown) =>
-        this.failures.push(`${election.name}: ${String(error)}`),
-      );
+      void this.run(async () => {
+        await this.gate(`report:${election.id}`);
+        await this.report(election);
+      }).catch((error: unknown) => this.failures.push(`${election.name}: ${String(error)}`));
       started = true;
     }
     return started;
@@ -1067,6 +1080,7 @@ export class ContinuationForest {
       commandAuthorized: true,
     });
     expect(result.resetTriggered, `${prince.name}'s /new did not reset`).toBe(true);
+    expect(result.sessionKey, `${prince.name}'s /new reset another room`).toBe(prince.sessionKey);
     await this.settle();
   }
 
@@ -1179,9 +1193,9 @@ export class ContinuationForest {
     return node;
   }
 
-  /** The scenario expects this election to end without running. */
-  expectElection(election: AnnexElection, outcome: ElectionOutcome, reason?: string): void {
-    election.expected = { outcome, ...(reason ? { reason } : {}) };
+  /** The scenario expects this election to end without running (refused at `stage`, cancelled). */
+  expectElection(election: AnnexElection, expected: ElectionExpectation): void {
+    election.expected = expected;
   }
 
   /** The scenario expects `report`'s delivery to `sessionKey` to be refused with `reason`. */
@@ -1270,6 +1284,10 @@ export class ContinuationForest {
             stories.push(
               `${election.name} was not refused with ${expected.reason} (status ${record?.status}, reason ${record?.failureReason})`,
             );
+          }
+          const line = `[continuation:work-refused] stage=${expected.stage} reason=${expected.reason} session=${election.ownerSessionKey} flowId=${election.id}`;
+          if (!this.logLines.some((logged) => logged.message === line)) {
+            stories.push(`${election.name} was not reported refused at its ${expected.stage}`);
           }
         }
         if (expected.outcome === "cancelled" && record?.status !== "cancelled") {
