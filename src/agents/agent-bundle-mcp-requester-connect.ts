@@ -2,12 +2,9 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { compareMcpCatalogTools } from "./agent-bundle-mcp-names.js";
-import type {
-  McpToolCatalog,
-  RequesterMcpConnect,
-  SessionMcpRequesterScope,
-} from "./agent-bundle-mcp-types.js";
+import type { RequesterMcpConnect, SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 import type { AgentToolResult } from "./runtime/index.js";
 

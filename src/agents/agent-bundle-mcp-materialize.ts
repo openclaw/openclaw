@@ -11,6 +11,7 @@ import {
   type PluginToolMcpMeta,
 } from "../plugins/tool-metadata.js";
 import { sanitizeModelSpecialTokens } from "../security/external-content.js";
+import type { McpCatalogTool, McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
 import {
   buildSafeToolName,
@@ -25,9 +26,7 @@ import {
 import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
 import type {
   BundleMcpToolRuntime,
-  McpCatalogTool,
   McpAppRequesterIdentity,
-  McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import {

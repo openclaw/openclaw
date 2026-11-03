@@ -4,7 +4,11 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import { logWarn } from "../logger.js";
-import type { McpCatalogTool, McpServerCatalog, McpToolCatalog } from "./agent-bundle-mcp-types.js";
+import type {
+  McpCatalogTool,
+  McpServerCatalog,
+  McpToolCatalog,
+} from "./agent-bundle-mcp-catalog.types.js";
 import {
   readMcpAppIcons,
   readMcpAppSettingsCapability,

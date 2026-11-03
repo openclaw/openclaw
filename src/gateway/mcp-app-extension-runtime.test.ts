@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { McpCatalogTool } from "../agents/agent-bundle-mcp-types.js";
+import type { McpCatalogTool } from "../agents/agent-bundle-mcp-catalog.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { prepareMcpAppExtensionRuntime } from "./mcp-app-extension-runtime.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
