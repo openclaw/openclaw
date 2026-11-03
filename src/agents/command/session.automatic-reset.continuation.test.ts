@@ -1,6 +1,8 @@
 // Continuation (karmaterminal): agent-command's automatic reset (#184157) settles continuation
-// custody through the reply-session reset owner. A legacy pending-reset marker (`reset`) cancels
-// pending work; an idle or daily expiry keeps it (bootstrap#1727 ruling 6434991502).
+// custody through the reply-session reset owner. A legacy pending-reset marker (`reset`) is a head
+// swap: it keeps pending work and retires only what the replaced head owned
+// (karmaterminal/openclaw#1271); an idle or daily expiry keeps it too (bootstrap#1727 ruling
+// 6434991502).
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -104,20 +106,38 @@ async function pendingWorkStatus(mode: string) {
   return { status: record?.status, phase: record?.phase };
 }
 
-it("cancels pending continuation work when agent-command resets a session marked for reset", async () => {
+/** A post-compaction shard the replaced head staged: the one kind a head swap still retires. */
+async function stageShard(mode: string) {
+  const created = await createContinuationRecord({
+    recordId: `staged-shard-${mode}`,
+    kind: "post_compaction",
+    ownerSessionKey: SESSION_KEY,
+    status: "queued",
+    phase: "Staged for release after compaction",
+    createdAt: Date.now(),
+    stateJson: JSON.stringify({ task: "restore the plan after compaction" }),
+  });
+  expect(created.outcome).toBe("created");
+}
+
+it("keeps pending work and retires the staged shard when agent-command resets a session marked for reset", async () => {
   const target = await seedResetSession("marker");
+  await stageShard("marker");
 
   await agentCommand({ message: "Start over after the marker.", sessionKey: SESSION_KEY });
 
   expect(loadSessionEntry(target)?.lifecycleRevision).not.toBe("before-reset");
   expect(await pendingWorkStatus("marker")).toEqual({
-    status: "cancelled",
-    phase: "Cancelled by session reset",
+    status: "queued",
+    phase: "Queued for same-session continuation wake",
   });
+  const [shard] = await listContinuationRecords({ recordIds: ["staged-shard-marker"] });
+  expect(shard).toMatchObject({ status: "cancelled", phase: "Cancelled by session reset" });
 });
 
 it("settles the run's own delivery claim when reset cancellation fails after the commit", async () => {
   const target = await seedResetSession("marker");
+  await stageShard("marker");
   const runId = "announce:requester-settle:synthetic-cohort:after-reset";
   custodyWrite.failure = "custody write unavailable";
 
@@ -137,7 +157,7 @@ it("settles the run's own delivery claim when reset cancellation fails after the
       },
       ...GATEWAY_INGRESS_ARGS,
     ),
-  ).rejects.toThrow("could not cancel continuation record pending-work-marker");
+  ).rejects.toThrow("could not cancel continuation record staged-shard-marker");
 
   // The reset committed before cleanup failed.
   const committed = loadSessionEntry(target);

@@ -23,7 +23,7 @@ import {
 } from "../continuation/continuation-dispatch-claims.js";
 import { hydrateContinuationCustody } from "../continuation/custody/custody-store.js";
 import { readCustodyRecordForTest } from "../continuation/custody/custody.test-support.js";
-import { enqueuePendingDelegate } from "../continuation/delegate-store.js";
+import { stagePostCompactionDelegate } from "../continuation/delegate-store-post-compaction.js";
 import {
   hasLiveContinuationTimerRefs,
   registerContinuationTimerHandle,
@@ -119,6 +119,13 @@ async function withResetState(
   });
 }
 
+/**
+ * A record a head swap still retires. Queued delegates now outlive /reset (#1271), so these
+ * custody-write proofs use a staged post-compaction shard, which the reset still cancels.
+ */
+const stageRetiredShard = (sessionKey: string, task: string) =>
+  stagePostCompactionDelegate(sessionKey, { task, createdAt: Date.now() });
+
 const retiring = { sessionId: "incarnation", lifecycleRevision: "retiring", updatedAt: 1 };
 // Durable resets keep the transcript id and rotate only the lifecycle revision.
 const replacement = { sessionId: "incarnation", lifecycleRevision: "replacement", updatedAt: 2 };
@@ -141,10 +148,10 @@ async function resetWithGuard(scope: { agentId: string; sessionKey: string; stor
 it("negative: a replacement committed before cleanup keeps every runtime and custody path", async () => {
   await withResetState(async (scope) => {
     await replaceSessionEntry(scope, retiring);
-    const delegate = await enqueuePendingDelegate(scope.sessionKey, {
-      task: "owned by whichever incarnation is current",
-      delayMs: 60_000,
-    });
+    const delegate = await stageRetiredShard(
+      scope.sessionKey,
+      "owned by whichever incarnation is current",
+    );
     const guard = await prepareSessionResetCleanupGuard({ ...scope, expectedSession: retiring });
     try {
       await replaceSessionEntry(scope, replacement);
@@ -173,10 +180,7 @@ it("negative: a replacement committed before cleanup keeps every runtime and cus
 it("positive: a current reset cancels custody and clears the retiring transient state", async () => {
   await withResetState(async (scope) => {
     await replaceSessionEntry(scope, retiring);
-    const delegate = await enqueuePendingDelegate(scope.sessionKey, {
-      task: "retiring incarnation work",
-      delayMs: 60_000,
-    });
+    const delegate = await stageRetiredShard(scope.sessionKey, "retiring incarnation work");
     const claim = seedLiveRuntime(scope.sessionKey, scope.agentId, "retiring event");
 
     await resetWithGuard(scope);
@@ -191,10 +195,7 @@ it("positive: a current reset cancels custody and clears the retiring transient 
 it("interleaving: a replacement winning after the durable write keeps its prompt state, events, claims and timers", async () => {
   await withResetState(async (scope) => {
     await replaceSessionEntry(scope, retiring);
-    const delegate = await enqueuePendingDelegate(scope.sessionKey, {
-      task: "retiring incarnation work",
-      delayMs: 60_000,
-    });
+    const delegate = await stageRetiredShard(scope.sessionKey, "retiring incarnation work");
     let claim: ReturnType<typeof registerContinuationDispatchClaim> | undefined;
     let newerPromptState: object | undefined;
     custodyWrites.afterWrite = async () => {
@@ -220,10 +221,7 @@ it("interleaving: a replacement winning after the durable write keeps its prompt
 it("interleaving: a replacement winning after the custody read, before its write, keeps that custody", async () => {
   await withResetState(async (scope) => {
     await replaceSessionEntry(scope, retiring);
-    const delegate = await enqueuePendingDelegate(scope.sessionKey, {
-      task: "carried by the replacement",
-      delayMs: 60_000,
-    });
+    const delegate = await stageRetiredShard(scope.sessionKey, "carried by the replacement");
     custodyWrites.afterOwnerRead = async () => {
       // Cleanup listed the record; the newer incarnation commits before the write.
       await replaceSessionEntry(scope, replacement);
@@ -239,14 +237,8 @@ it("negative: an agent-scoped reset never cancels another agent's custody, claim
   await withResetState(async () => {
     // Upstream's agent-scope fixture: the alpha reset receives a foreign beta key.
     const foreignKey = "agent:beta:global";
-    const owned = await enqueuePendingDelegate("global", {
-      task: "alpha raw-key work",
-      delayMs: 60_000,
-    });
-    const foreign = await enqueuePendingDelegate(foreignKey, {
-      task: "beta work",
-      delayMs: 60_000,
-    });
+    const owned = await stageRetiredShard("global", "alpha raw-key work");
+    const foreign = await stageRetiredShard(foreignKey, "beta work");
     const foreignClaim = seedLiveRuntime(foreignKey, "beta", "beta event");
 
     await clearSessionResetRuntimeState(["global", foreignKey], {

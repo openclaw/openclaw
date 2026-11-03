@@ -749,7 +749,8 @@ describe("durable continuation_work dispatch", () => {
     expect((await firstWorkRecord())?.status).toBe("queued");
   });
 
-  it("keeps scheduled timers and idle ownership when durable reset cancellation fails", async () => {
+  // A head swap keeps queued work (#1271); delete still terminalizes it through this loop.
+  it("keeps scheduled timers and idle ownership when durable delete cancellation fails", async () => {
     const sessionKey = "agent:main:reset-persist-failure";
     mockSessionStore[sessionKey] = {
       sessionId: "reset-persist-failure-session",
@@ -775,7 +776,7 @@ describe("durable continuation_work dispatch", () => {
         agentId: "main",
         sessionKey,
         assertCurrent: () => {},
-        reason: "reset",
+        reason: "delete",
         activeReplySessionId: "reset-persist-failure-session",
       }),
     ).rejects.toThrow("could not cancel continuation record");
@@ -789,7 +790,7 @@ describe("durable continuation_work dispatch", () => {
       agentId: "main",
       sessionKey,
       assertCurrent: () => {},
-      reason: "reset",
+      reason: "delete",
       activeReplySessionId: "reset-persist-failure-session",
     });
     await flushAsyncWork();
@@ -799,7 +800,7 @@ describe("durable continuation_work dispatch", () => {
     expect((await firstWorkRecord())?.status).toBe("cancelled");
   });
 
-  it("completes reset cancellation and transient cleanup after revision conflicts", async () => {
+  it("completes delete cancellation and transient cleanup after revision conflicts", async () => {
     const sessionKey = "agent:main:reset-revision-conflict";
     const sessionId = "reset-revision-conflict-session";
     mockSessionStore[sessionKey] = { sessionId };
@@ -818,7 +819,7 @@ describe("durable continuation_work dispatch", () => {
       agentId: "main",
       sessionKey,
       assertCurrent: () => {},
-      reason: "reset",
+      reason: "delete",
       activeReplySessionId: sessionId,
     });
     await flushAsyncWork();

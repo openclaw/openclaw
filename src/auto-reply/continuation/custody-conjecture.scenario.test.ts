@@ -277,13 +277,13 @@ async function bootGateway() {
     },
     // Awaited through Promise.resolve so the test stays valid if reset becomes
     // asynchronous with the custody store's worker APIs (§5.4.3).
-    async resetOwnerSession(): Promise<void> {
+    async resetOwnerSession(reason: "reset" | "delete" = "reset"): Promise<void> {
       await Promise.resolve(
         resetCleanup.clearSessionResetRuntimeState([OWNER], {
           agentId: "main",
           sessionKey: OWNER,
           assertCurrent: () => {},
-          reason: "reset",
+          reason,
         }),
       );
     },
@@ -864,28 +864,29 @@ describe("RFC §5.4.4 reset at any boundary", () => {
     });
   });
 
-  it("reset cancels queued delegates and elections from both forms, and the attachment bytes are gone after the next startup", async () => {
+  // karmaterminal/openclaw#1271: a head swap is not a decision to cancel.
+  it("reset keeps queued delegates and elections from both forms with their attachment; each fires once after restarts", async () => {
     await withGateway(async (gateway, stateDir) => {
       await queueWorkAndAttachedDelegate(gateway);
       expect(durableFilesHolding(stateDir, CANARY)).not.toEqual([]);
 
       await gateway.resetOwnerSession();
 
+      expect(durableFilesHolding(stateDir, CANARY)).not.toEqual([]);
       vi.setSystemTime(START_MS + 91_000);
       let restarted = await restartGateway();
       await restarted.runStartupRecovery();
-      expect(spawnedTasks()).toEqual([]);
-      expect(continuationWakeTurns()).toEqual([]);
-      expect(durableFilesHolding(stateDir, CANARY)).toEqual([]);
+      expect(spawnedTasks()).toHaveLength(2);
+      expect(continuationWakeTurns()).toHaveLength(2);
 
       restarted = await restartGateway();
       await restarted.runStartupRecovery();
-      expect(spawnedTasks()).toEqual([]);
-      expect(continuationWakeTurns()).toEqual([]);
+      expect(spawnedTasks()).toHaveLength(2);
+      expect(continuationWakeTurns()).toHaveLength(2);
     });
   });
 
-  it("reset of a claimed delegate (boundary 2/3) stops it: a restart spawns no second child and the payload is gone", async () => {
+  it("a claimed delegate (boundary 2/3) that reset keeps spawns no second child after a restart, and the payload is gone", async () => {
     await withGateway(async (gateway, stateDir) => {
       const canary = "custody-conjecture-reset-claimed-canary-91b0e7";
       await crashWhileClaimed(gateway, "tool", { attachmentCanary: canary });
@@ -904,12 +905,12 @@ describe("RFC §5.4.4 reset at any boundary", () => {
     });
   });
 
-  it("[§5.4 re-home] reset releases the attachment payload immediately, not at the next startup (§5.4.9 item 6)", async () => {
+  it("[§5.4 re-home] delete releases the attachment payload immediately, not at the next startup (§5.4.9 item 6)", async () => {
     await withGateway(async (gateway, stateDir) => {
       await queueWorkAndAttachedDelegate(gateway);
       expect(durableFilesHolding(stateDir, CANARY)).not.toEqual([]);
 
-      await gateway.resetOwnerSession();
+      await gateway.resetOwnerSession("delete");
 
       // At C the payload file waited for the startup custody reconcile.
       expect(durableFilesHolding(stateDir, CANARY)).toEqual([]);

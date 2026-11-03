@@ -5,6 +5,7 @@ import {
 } from "../auto-reply/continuation/continuation-dispatch-claims.js";
 import { resetContinuationCustodyProjection } from "../auto-reply/continuation/custody/custody-projection.js";
 import { readCustodyRecordForTest } from "../auto-reply/continuation/custody/custody.test-support.js";
+import { stagePostCompactionDelegate } from "../auto-reply/continuation/delegate-store-post-compaction.js";
 import { enqueuePendingDelegate } from "../auto-reply/continuation/delegate-store.js";
 import { enqueuePendingWorkReplacing } from "../auto-reply/continuation/work-replacement-store.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -82,20 +83,34 @@ async function enqueueQueuedWork() {
   return elected.work.flowId;
 }
 
-test("sessions.reset cancels durable continuation work and delegates", async () => {
+// karmaterminal/openclaw#1271: a head swap is not a decision to cancel. Queued elections stay for
+// the successor; the explicit cancel (/continuations cancel) ends them.
+test("sessions.reset keeps queued continuation work and delegates for the successor", async () => {
   await seedWaitingActiveMainSession();
   const workId = await enqueueQueuedWork();
   const delegate = await enqueuePendingDelegate("agent:main:main", {
     task: "delegate after gateway reset",
     delayMs: 60_000,
   });
+  const queuedWork = await readCustodyRecordForTest(workId);
+  const shard = await stagePostCompactionDelegate("agent:main:main", {
+    task: "staged for the replaced head's next compaction",
+    createdAt: Date.now(),
+  });
 
   const reset = await resetMainSession();
 
   expect(reset.ok).toBe(true);
-  expect(await readCustodyRecordForTest(workId)).toMatchObject({ status: "cancelled" });
-  expect(await readCustodyRecordForTest(delegate.recordId)).toMatchObject({
+  expect(await readCustodyRecordForTest(workId)).toMatchObject({
+    status: "queued",
+    revision: queuedWork?.revision,
+    dueAt: queuedWork?.dueAt,
+  });
+  expect(await readCustodyRecordForTest(delegate.recordId)).toMatchObject({ status: "queued" });
+  // A post-compaction shard needs a rebind rule before it may outlive its head.
+  expect(await readCustodyRecordForTest(shard.recordId)).toMatchObject({
     status: "cancelled",
+    phase: "Cancelled by session reset",
   });
 });
 
@@ -105,6 +120,11 @@ test("sessions.reset reports durable continuation cancellation failures", async 
   const delegate = await enqueuePendingDelegate("agent:main:main", {
     task: "remain claimable after failed reset",
     delayMs: 60_000,
+  });
+  // The reset still retires this record, so its write is the one that fails.
+  const shard = await stagePostCompactionDelegate("agent:main:main", {
+    task: "staged shard the reset must retire",
+    createdAt: Date.now(),
   });
   const activeDelegate = registerContinuationDispatchClaim({
     sessionKey: "agent:main:main",
@@ -125,5 +145,6 @@ test("sessions.reset reports durable continuation cancellation failures", async 
   custodyWriteFailure.message = undefined;
   expect(await readCustodyRecordForTest(workId)).toMatchObject({ status: "queued" });
   expect(await readCustodyRecordForTest(delegate.recordId)).toMatchObject({ status: "queued" });
+  expect(await readCustodyRecordForTest(shard.recordId)).toMatchObject({ status: "queued" });
   expect(activeDelegate.controller.signal.aborted).toBe(false);
 });

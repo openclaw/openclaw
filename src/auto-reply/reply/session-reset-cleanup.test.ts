@@ -371,9 +371,11 @@ describe("clearSessionResetRuntimeState", () => {
     }
   });
 
-  it.each(["new", "reset"] as const)(
-    "terminalizes pending %s-session work while preserving accepted return authority",
+  // /new and /reset keep elections not yet driven for the successor (#1271); delete ends them.
+  it.each(["new", "reset", "delete"] as const)(
+    "%s settles pending session work by its boundary while preserving accepted return authority",
     async (reason) => {
+      const endsSession = reason === "delete";
       await withOpenClawTestState(
         { layout: "state-only", prefix: "openclaw-session-reset-continuation-" },
         async () => {
@@ -490,8 +492,10 @@ describe("clearSessionResetRuntimeState", () => {
             const records = new Map(
               (await listCustodyRecordsForTest()).map((record) => [record.recordId, record]),
             );
-            expect(records.get(work.flowId)?.status).toBe("cancelled");
-            expect(records.get(delegate.recordId)?.status).toBe("cancelled");
+            const pendingStatus = endsSession ? "cancelled" : "queued";
+            expect(records.get(work.flowId)?.status).toBe(pendingStatus);
+            expect(records.get(delegate.recordId)?.status).toBe(pendingStatus);
+            // The in-process claim belongs to the replaced head either way.
             expect(activeDelegate.controller.signal.aborted).toBe(true);
             expect(records.get(unrelatedWork.flowId)?.status).toBe("queued");
             expect(records.get(terminalWork.flowId)?.status).toBe("succeeded");
@@ -506,12 +510,18 @@ describe("clearSessionResetRuntimeState", () => {
             expect(records.get(acceptedPostCompaction.flowId)?.cancelRequestedAt).toBeUndefined();
             expect(await consumePendingWork(sessionKey, { includeRunning: true })).toEqual([]);
             expect(await consumePendingDelegates(sessionKey)).toEqual([]);
+            const keptLive = endsSession
+              ? []
+              : [
+                  expect.objectContaining({ recordId: work.flowId, status: "queued" }),
+                  expect.objectContaining({ recordId: delegate.recordId, status: "queued" }),
+                ];
             expect(
               await listCustodyRecordsForTest({
                 ownerSessionKey: sessionKey,
                 statuses: ["queued", "running"],
               }),
-            ).toEqual([]);
+            ).toEqual(keptLive);
             expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(false);
             expect(
               await isSessionRecipientAuthorityCurrentInWorker(
@@ -543,7 +553,7 @@ describe("clearSessionResetRuntimeState", () => {
                 ownerSessionKey: sessionKey,
                 statuses: ["queued", "running"],
               }),
-            ).toEqual([]);
+            ).toEqual(keptLive);
             expect(await readCustodyRecordForTest(handedOffDelegate.flowId)).toMatchObject({
               status: "succeeded",
               cancelRequestedAt: expect.any(Number),
