@@ -935,7 +935,8 @@
 }
 
 /* The accent owner pairs every interactive fill with its readable ink. */
-.agent-chat__input .chat-send-btn:hover:not(:disabled) {
+.agent-chat__input
+  .chat-send-btn:hover:not(:disabled, .chat-send-btn--voice, .chat-send-btn--stop) {
   background: var(--primary-hover);
   color: var(--primary-hover-foreground);
   box-shadow: none;
