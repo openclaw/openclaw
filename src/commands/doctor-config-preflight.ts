@@ -341,6 +341,7 @@ async function runDoctorConfigPreflightOperation(
       env: process.env,
       retainedPluginIds: pluginMigrations.retainedPluginIds(),
       measure: options.measure,
+      deferPackageRepair: options.deferPluginPackageRepair,
     });
     setActiveDegradedPlugins(convergence.quarantinedPlugins);
     await pluginMigrations.converged(

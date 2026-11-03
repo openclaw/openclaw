@@ -107,6 +107,9 @@ openclaw doctor
     Run without prompts, applying only safe migrations (config normalization +
     on-disk state moves). Skips restart/service/sandbox actions that need human
     confirmation. Legacy state migrations still run automatically when detected.
+    Unattended diagnosis does not download or replace plugin packages without
+    `--fix`, `--repair`, or `--yes`. It reports missing configured plugins with
+    the repair command; already-installed migration owners remain available.
     Add `--fix` for all supported startup-blocking repairs without prompts,
     including workspace setup, session stores, exec approvals, and audit schema
     migrations. Explicit repair checks ownership before database snapshots;
