@@ -547,7 +547,7 @@ unknown duration, channel usage or tariffs do not authorize free inference.
 
 Select `openrouter/openai/whisper-large-v3-turbo` to consume a qualified native
 `openrouter.audio_transcription` offer. Both request and response must use that
-format at `/v1/native/openrouter/api/v1/audio/transcriptions`. The catalog owns
+format at `/v1/native/openrouter/v1/audio/transcriptions`. The catalog owns
 the endpoint identifier; a multipart alias or a different API path is rejected.
 This client contract requires the deployment's JSON transcription dispatch and
 catalog declaration. Installing the client does not activate either prerequisite.

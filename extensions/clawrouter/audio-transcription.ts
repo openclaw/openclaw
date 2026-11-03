@@ -97,7 +97,7 @@ async function prepare(context: AudioTranscriptionConfigContext & { signal?: Abo
   }
   const configuredBaseUrl = context.baseUrl ?? context.cfg.models?.providers?.clawrouter?.baseUrl;
   const normalized = normalizeClawRouterRootUrl(configuredBaseUrl);
-  const nativeSuffix = `/v1/native/${provider}${openrouter ? "/api" : ""}`;
+  const nativeSuffix = `/v1/native/${provider}`;
   const rootUrl = normalized.endsWith(nativeSuffix)
     ? normalized.slice(0, -nativeSuffix.length)
     : normalized;
@@ -264,11 +264,7 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
         : openrouter
           ? "openrouter.audio_transcription"
           : "openai.audio_transcriptions";
-      const requestPath = deepgram
-        ? "/v1/listen"
-        : openrouter
-          ? "/api/v1/audio/transcriptions"
-          : "/v1/audio/transcriptions";
+      const requestPath = deepgram ? "/v1/listen" : "/v1/audio/transcriptions";
       const offer = offers.find(
         (candidate) =>
           candidate.providerId === prepared.provider &&

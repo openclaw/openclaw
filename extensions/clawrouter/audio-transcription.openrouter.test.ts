@@ -23,7 +23,7 @@ async function openrouterFixture(
       model,
       // The catalog owns the endpoint id; native path and format identify this operation.
       endpoint: "native-json-stt",
-      path: "/api/v1/audio/transcriptions",
+      path: "/v1/audio/transcriptions",
       requestFormat: "openrouter.audio_transcription",
       responseFormat: "openrouter.audio_transcription",
     });
@@ -39,7 +39,7 @@ describe("ClawRouter native OpenRouter JSON transcription", () => {
       await openrouterFixture(
         async ({ cfg, filePath, audio, rawRequests, requests, catalogRequests }) => {
           if (base === "native base") {
-            cfg.models!.providers!.clawrouter!.baseUrl += "/v1/native/openrouter/api/v1";
+            cfg.models!.providers!.clawrouter!.baseUrl += "/v1/native/openrouter/v1";
           }
           cfg.tools!.media!.models![0]!.providerOptions = {
             clawrouter: { temperature: 0.25 },
@@ -59,7 +59,7 @@ describe("ClawRouter native OpenRouter JSON transcription", () => {
           expect(requests).toHaveLength(0);
           expect(rawRequests).toHaveLength(1);
           const request = rawRequests[0]!;
-          expect(request.url).toBe("/v1/native/openrouter/api/v1/audio/transcriptions");
+          expect(request.url).toBe("/v1/native/openrouter/v1/audio/transcriptions");
           expect(request.authorization).toBe("Bearer fixture-router");
           expect(request.contentType).toBe("application/json");
           expect(JSON.parse(request.body.toString("utf8"))).toEqual({
@@ -80,7 +80,7 @@ describe("ClawRouter native OpenRouter JSON transcription", () => {
     ["different model", { upstream: "openai/whisper-1" }],
     ["multipart request", { requestFormat: "openai.audio_transcriptions" }],
     ["unknown response", { responseFormat: "unknown.transcription" }],
-    ["wrong API prefix", { path: "/v1/audio/transcriptions" }],
+    ["duplicated upstream API prefix", { path: "/api/v1/audio/transcriptions" }],
     ["foreign destination", { route: "https://foreign.example/api/v1/audio/transcriptions" }],
   ])("denies %s before JSON upload", async (_name, change) => {
     await openrouterFixture(async ({ cfg, filePath, catalog, rawRequests }) => {
