@@ -7,6 +7,7 @@ import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -61,7 +62,7 @@ const {
 } = resolveGlobalSingleton(Symbol.for("openclaw.pluginSourceCaptureInstances"), () => {
   const instanceRoots = pluginSourceCaptureOwnedRoots;
   const nativeCustody = createPluginNativeCaptureCustody(instanceRoots);
-  process.once("exit", () => {
+  registerProcessExitCleanup(() => {
     for (const [key, instance] of instances) {
       retireInstanceForExit(key, instance);
     }

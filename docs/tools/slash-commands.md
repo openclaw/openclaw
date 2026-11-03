@@ -82,6 +82,33 @@ without changing the old transcript. `/stop` records the command with its abort
 notice. `/btw` and `/side` remain ephemeral; ordinary message edits and deletions
 do not rewrite transcript history.
 
+## Fork a conversation
+
+Use /fork [title] in a Telegram forum topic to create a sibling topic in the
+same supergroup. Thread bindings must be enabled and the bot needs **Manage
+Topics**. DMs, channel-direct topics, and unthreaded groups are not supported.
+The original topic keeps its session; future replies in the new topic use the
+copied session. The new topic has the same supergroup audience.
+
+The new topic starts with a literal recap of the last three available visible
+text messages. This recap is not the context limit: the session fork inherits the
+existing conversation snapshot. Hidden reasoning and tool output are not posted.
+Links and mentions in copied excerpts do not notify people or expand previews.
+A busy source forks through its last completed turn, not an in-flight partial
+answer. A fork does not clone the workspace or undo file and external effects.
+
+In the Control UI, typed `/fork [title]` uses the same operation as **Fork
+conversation** and selects the new session. Inherited messages already appear in
+history, so the UI does not insert a duplicate recap. **Fork from here** remains
+the separate message-level action that cuts before the selected user message.
+
+Session ancestry and the exact inherited history cut use the existing session
+fork records. Channel setup and recap delivery can fail independently: the
+command reports whether the copied session, native thread, and recap were
+confirmed. A known copied session or created thread is retained after a later
+failure. Check that outcome and the thread list before retrying; do not assume a
+failed acknowledgment means nothing was created.
+
 <a id="config" />
 
 ## Configuration
@@ -237,6 +264,7 @@ plugins, and installed skills.
     | `/new [model]` | Archive the current session and start a fresh one |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
     | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
+    | `/fork [title]` | Copy the current conversation into an independent session; supported channel threads create a sibling thread |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |

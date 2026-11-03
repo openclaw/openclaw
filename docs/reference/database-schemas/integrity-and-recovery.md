@@ -544,6 +544,11 @@ files. The copy is removed before startup continues. Healthy DELETE databases an
 WAL databases use live readers. The exception does not authorize recovery writes
 to externally owned source databases.
 
+Current Gateway owner lease reads use the existing native read-only connection
+even when the recorded owner is dead or unverifiable. Reading committed ownership
+does not require write authority. A raw SQLite hot-journal recovery refusal keeps
+the private recovery path; explicit artifact-preserving admission remains unchanged.
+
 Private snapshots remain necessary for offline artifact-preserving inspection,
 including incomplete WAL families and rollback journals requiring private recovery.
 Those consumers keep source DB/WAL/SHM unchanged and release their private copy

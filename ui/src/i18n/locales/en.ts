@@ -452,7 +452,7 @@ const startupEnglish = {
     publicKey: "Public Key",
     probeOk: "Connection check passed",
     probeFailed: "Connection check failed",
-    reloadConfig: "Reload Config",
+    reloadConfig: "Reload config",
     multiSelect: {
       addCustom: "Add “{value}”",
       noMatches: "No matches",
@@ -821,10 +821,8 @@ const startupEnglish = {
     context: {},
     identity: {},
     overview: {
-      title: {},
-      subtitle: {},
       selectedSkills: "{count} selected",
-      allSkills: "all skills",
+      allSkills: "All skills",
       unsavedConfig: {},
       modelSelection: {},
       primaryModel: {},
@@ -1943,7 +1941,7 @@ const startupEnglish = {
       modelLocked: "Locked",
       modelLockedLabel: "Model selection controlled for this session",
       lockedSessionModel: "Session model",
-      thinkingLevel: "Chat thinking level",
+      thinkingLevel: "Effort",
     },
     permissions: {},
     toolCards: {

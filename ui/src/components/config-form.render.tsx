@@ -18,6 +18,7 @@ import {
 import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
+import { SettingsDisclosure } from "./solid/settings-disclosure.tsx";
 import { SettingsEmpty, SettingsPage, LearnMoreLink } from "./solid/settings-ui.tsx";
 
 export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element {
@@ -38,8 +39,9 @@ export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element
       </Show>
       <Show when={split().advanced}>
         {(node) => (
-          <details
+          <SettingsDisclosure
             class="config-advanced-disclosure"
+            title={t("configForm.advancedSettings")}
             open={props.revealAdvanced}
             onToggle={(event) => {
               const disclosure = event.currentTarget;
@@ -55,13 +57,8 @@ export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element
               }
             }}
           >
-            <summary class="settings-section__heading config-advanced-disclosure__summary">
-              {t("configForm.advancedSettings")}
-            </summary>
-            <Show when={props.revealAdvanced}>
-              <div class="settings-group">{props.renderTier(node)}</div>
-            </Show>
-          </details>
+            <Show when={props.revealAdvanced}>{props.renderTier(node)}</Show>
+          </SettingsDisclosure>
         )}
       </Show>
     </div>
@@ -195,6 +192,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
               maskSensitive: props.form.maskSensitive,
               isSensitivePathRevealed: props.form.isSensitivePathRevealed,
               onToggleSensitivePath: props.form.onToggleSensitivePath,
+              secretFields: props.form.secretFields,
               onPatch: props.form.onPatch,
               onRemove: props.form.onRemove,
             }}

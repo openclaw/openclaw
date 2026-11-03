@@ -40,7 +40,12 @@ vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
   spawnSync,
 }));
-vi.mock("../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease }));
+// mock-isolation: The fixture owns process identities and signals without native process discovery.
+vi.mock("../infra/gateway-owner-lease.js", () => ({
+  readGatewayOwnerLease,
+  readGatewayOwnerLeaseAsync: async (...args: Parameters<typeof readGatewayOwnerLease>) =>
+    readGatewayOwnerLease(...args),
+}));
 vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
   readWindowsProcessStartTimeSync: readWindowsProcessStartTime,

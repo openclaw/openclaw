@@ -36,6 +36,7 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { i18n } from "../../i18n/lib/translate.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { configSecretFields } from "../../lib/config/config-secret-fields.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
@@ -656,6 +657,7 @@ export function SearchPage() {
                             getPresentationLifetime={() => credentialPresentation.lifetime}
                             canEdit={canEdit}
                             busy={busy}
+                            secretFields={configSecretFields(context)}
                             commit={(path, value) =>
                               providerId === setupProvider()
                                 ? patch(renderScope, path, value)
@@ -674,6 +676,7 @@ export function SearchPage() {
                       state={configState}
                       canEdit={canEdit}
                       busy={busy}
+                      secretFields={configSecretFields(context)}
                       commit={(path, value) => patch(renderScope, path, value)}
                     />
                   </>

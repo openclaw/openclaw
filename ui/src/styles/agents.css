@@ -8,6 +8,10 @@
   grid-template-columns: 1fr;
 }
 
+.agents-main > [role="tabpanel"] {
+  padding-block-start: var(--space-5);
+}
+
 .agents-toolbar,
 .agent-file-header {
   display: flex;
@@ -57,17 +61,189 @@
   border-color: var(--accent);
 }
 
+/* Short values and pickers share one column so the panel's controls start on the
+   same edge. Long model ids widen a picker rather than truncating. */
+.agent-overview {
+  --agent-overview-control-width: 340px;
+}
+
+.agent-overview .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input {
+  width: var(--agent-overview-control-width);
+}
+
+.agent-overview .settings-row__control > .model-picker {
+  min-width: min(var(--agent-overview-control-width), 100%);
+}
+
+.agent-overview .settings-row__control > .agent-fallbacks {
+  width: fit-content;
+  min-width: min(var(--agent-overview-control-width), 100%);
+  max-width: 100%;
+}
+
+/* Selects and chips read at the row's value size and stay on one line. Only the real
+   text inputs keep the touch floor that stops iOS zooming on focus. */
+.agent-overview .settings-row__control .settings-select .picker-select__trigger {
+  font-size: var(--field-font-size);
+}
+
+.agent-overview .agent-fallbacks .multi-select__input::placeholder {
+  font-size: var(--field-font-size);
+}
+
+.agent-overview .agent-fallbacks .multi-select__chip {
+  min-width: 0;
+  padding-block: 1px;
+  font-size: var(--field-font-size);
+}
+
+.agent-overview .agent-fallbacks .multi-select__chip-icon {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+}
+
+/* The add input takes its line only while focused, so a filled chain ends at its last chip. */
+.agent-overview
+  .agent-fallbacks
+  .multi-select:has(.multi-select__chip):not(:focus-within)
+  .multi-select__input {
+  position: absolute;
+  width: 1px;
+  min-width: 0;
+  height: 1px;
+  padding: 0;
+  opacity: 0;
+}
+
+/* Touch has no title tooltip and the list leaves out chosen models, so tapping the field
+   shows the chain's full ids until focus leaves it. */
+@media (pointer: coarse), (max-width: 640px) {
+  .agent-overview .agent-fallbacks .multi-select__chip {
+    padding-inline: var(--space-2);
+  }
+
+  .agent-overview .agent-fallbacks .multi-select:focus-within .multi-select__chip {
+    border-radius: var(--radius-md);
+  }
+
+  .agent-overview .agent-fallbacks .multi-select:focus-within .multi-select__chip-label {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  /* The mark stays chip-sized; its touch target reaches past it, up to the next chip. */
+  .agent-overview .agent-fallbacks .multi-select__chip .chip-remove {
+    position: relative;
+    width: 24px;
+    min-width: 0;
+    height: 24px;
+    min-height: 0;
+  }
+
+  .agent-overview .agent-fallbacks .multi-select__chip .chip-remove::after {
+    position: absolute;
+    inset: -6px -10px;
+    content: "";
+  }
+
+  /* A save status stays on the heading line, so the group below it does not move. */
+  .agent-overview .settings-section__header {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .agent-overview .settings-section__actions {
+    flex: 0 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+
+  /* The list wraps long ids inside the select's own width. */
+  .agent-overview .picker-select__menu.oc-overlay {
+    max-width: anchor-size(width);
+  }
+}
+
+.agent-overview .settings-row__control input.settings-input:not(.picker-select__search) {
+  text-align: start;
+}
+
+.agent-overview__workspace {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+/* Reload and Save close the group they act on. The dirty note shares their line,
+   so it appears without moving anything. */
+.agent-overview__config-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.agent-overview__config-actions > .callout {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+.settings-row:has(> .settings-row__control > .agent-overview__config-actions > .callout) {
+  flex-wrap: wrap;
+}
+
+.settings-row__control:has(> .agent-overview__config-actions > .callout) {
+  flex: 1 0 100%;
+  max-width: none;
+}
+
+.settings-row__control:has(> .agent-overview__config-actions > .callout)
+  > .agent-overview__config-actions {
+  flex: 1 1 auto;
+}
+
+/* Shares the section heading's line; matching its line height keeps the header still. */
+.agent-identity-status {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.agent-identity-status--error {
+  color: var(--danger);
+}
+
+/* Avatar, name and emoji read as one identity: the portrait leads, the name takes the
+   room, and the single-glyph emoji keeps a compact field. */
+.settings-row:has(> .agent-identity-editor) {
+  padding: var(--space-4);
+}
+
 .agent-identity-editor {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: var(--space-4);
   width: 100%;
+  min-width: 0;
 }
 
-.agent-identity-editor__content {
+.agent-identity-editor__fields {
   display: grid;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  gap: var(--space-3);
   flex: 1;
+  min-width: 0;
+}
+
+.agent-identity-editor__fields .field {
+  min-width: 0;
+}
+
+.agent-identity-editor__fields input {
+  width: 100%;
   min-width: 0;
 }
 
@@ -153,23 +329,14 @@
   object-fit: cover;
 }
 
-.agent-identity-editor__fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
-  gap: 12px;
-  min-width: 0;
-}
-
-.agent-identity-editor__fields .field {
-  min-width: 0;
-}
-
 .agent-identity-editor__emoji-control {
   position: relative;
 }
 
+/* The glyph reads at emoji size, not at the text field's size. */
 .agent-identity-editor__emoji-control > input {
-  padding-inline-end: 42px;
+  padding-inline-end: 38px;
+  font-size: max(var(--field-font-size), 16px);
 }
 
 .agent-identity-editor__emoji-control > openclaw-agent-emoji-picker {
@@ -179,14 +346,35 @@
   transform: translateY(-50%);
 }
 
-.agent-identity-editor__fields input {
-  min-width: 0;
-  width: 100%;
-}
-
 @media (max-width: 640px) {
+  .agent-overview .settings-row__control > .agent-fallbacks {
+    width: 100%;
+  }
+
+  /* The name and emoji stack beside the avatar, so the name keeps its full width. */
   .agent-identity-editor__fields {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The picker is wider than the room right of the avatar; center it on the screen. */
+  .oc-overlay.agent-identity-editor__popover {
+    position-area: bottom span-all;
+    position-try-fallbacks: flip-block;
+    justify-self: center;
+  }
+
+  /* The config actions fit beside the row's empty label. */
+  .agent-overview
+    .settings-row:has(> .settings-row__control > .agent-overview__config-actions):not(
+      :has(.callout)
+    ) {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      width: auto;
+      flex: 0 0 auto;
+      justify-content: flex-end;
+    }
   }
 }
 

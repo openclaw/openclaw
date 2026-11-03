@@ -14,6 +14,7 @@ import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-l
 import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { probePortalReachable, type PortalReachability } from "./portal-reachability.ts";
 
 export type PortalsPresentation = {
@@ -109,7 +110,7 @@ export function createPortals(
   };
   let presentationRequest: { requestId: string; portalId?: string } | null = null;
   let environmentLoading = false;
-  let environmentTimer: ReturnType<typeof setInterval> | undefined;
+  const environmentPoll = useVisiblePoll(2_000, () => void loadPendingEnvironment());
   let publish = () => {};
   const portalProbeCache = new Map<string, PortalReachability>();
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
@@ -158,11 +159,10 @@ export function createPortals(
     }
   });
   function pollEnvironment(enabled: boolean) {
-    if (!enabled) {
-      clearInterval(environmentTimer);
-      environmentTimer = undefined;
-    } else if (environmentTimer === undefined) {
-      environmentTimer = setInterval(() => void loadPendingEnvironment(), 2_000);
+    if (enabled) {
+      environmentPoll.start();
+    } else {
+      environmentPoll.stop();
     }
   }
 
