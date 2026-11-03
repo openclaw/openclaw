@@ -80,22 +80,37 @@ function statusesByText(scope: Element, text: string): HTMLElement[] {
 }
 
 describe("devices pending rendering", () => {
-  it("normalizes pending device ids before matching paired access", () => {
+  it.each([
+    {
+      name: "normalizes pending device ids before matching paired access",
+      pending: { deviceId: " device-1 ", scopes: ["operator.admin", "operator.read"] },
+      pairedKey: undefined,
+      summary: /^Access change needs approval · requested /u,
+      approved: ["approved now: Roles: operator Scopes: operator.read"],
+    },
+    {
+      name: "does not show upgrade context for key-mismatched pending requests",
+      pending: { deviceId: "device-1", publicKey: "new-key", scopes: ["operator.admin"] },
+      pairedKey: "old-key",
+      summary: /^New device pairing request · requested /u,
+      approved: [],
+    },
+  ])("$name", ({ pending, pairedKey, summary, approved }) => {
     const container = renderDevicesContainer({
       devicesList: {
         pending: [
           {
             requestId: "req-1",
-            deviceId: " device-1 ",
             displayName: "Device One",
             role: "operator",
-            scopes: ["operator.admin", "operator.read"],
             ts: Date.now(),
+            ...pending,
           },
         ],
         paired: [
           {
             deviceId: "device-1",
+            publicKey: pairedKey,
             displayName: "Device One",
             roles: ["operator"],
             scopes: ["operator.read"],
@@ -105,44 +120,10 @@ describe("devices pending rendering", () => {
     });
     const details = getPendingDeviceDetails(container);
 
-    expect(details[0]).toMatch(/^Access change needs approval · requested /u);
+    expect(details[0]).toMatch(summary);
     expect(details.slice(1)).toEqual([
       "requested: Roles: operator Scopes: operator.admin, operator.read, operator.write",
-      "approved now: Roles: operator Scopes: operator.read",
-    ]);
-  });
-
-  it("does not show upgrade context for key-mismatched pending requests", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [
-          {
-            requestId: "req-1",
-            deviceId: "device-1",
-            publicKey: "new-key",
-            displayName: "Device One",
-            role: "operator",
-            scopes: ["operator.admin"],
-            ts: Date.now(),
-          },
-        ],
-        paired: [
-          {
-            deviceId: "device-1",
-            publicKey: "old-key",
-            displayName: "Device One",
-            roles: ["operator"],
-            scopes: ["operator.read"],
-          },
-        ],
-      },
-    });
-    const details = getPendingDeviceDetails(container);
-
-    expect(details[0]).toMatch(/^New device pairing request · requested /u);
-    expect(details).toEqual([
-      details[0] ?? "",
-      "requested: Roles: operator Scopes: operator.admin, operator.read, operator.write",
+      ...approved,
     ]);
   });
 

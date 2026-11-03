@@ -9,10 +9,6 @@ const enDevices = {
     readOnly: {
       browserPairingRequired:
         "You can view devices, but this browser needs approval to change them.",
-      browserAdminRequired:
-        "You can view command approvals and device bindings, but this browser needs approval to change them.",
-      browserPairingAndAdminRequired:
-        "You can view devices, command approvals, and device bindings, but this browser needs approval to change them.",
       pairingRequired: "You can view devices, but only admins can change them.",
       adminRequired:
         "You can view command approvals and device bindings, but only admins can change them.",
