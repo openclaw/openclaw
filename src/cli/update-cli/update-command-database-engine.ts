@@ -32,7 +32,7 @@ export async function readUpdateDatabaseEngineConfig(env: NodeJS.ProcessEnv) {
 export async function withUpdateDatabaseEngine<T>(
   env: NodeJS.ProcessEnv,
   run: (configReadable: boolean, malformedConfig?: ConfigFileSnapshot) => Promise<T>,
-  opts?: { dryRun?: boolean },
+  opts?: { dryRun?: boolean; callerNote?: string },
 ): Promise<T> {
   const { configEnv, snapshot, readFailed, sourceInvalid } =
     await readUpdateDatabaseEngineConfig(env);
@@ -51,7 +51,7 @@ export async function withUpdateDatabaseEngine<T>(
   const selection = await resolveDatabaseEngineSelection(snapshot.sourceConfig, configEnv);
   return await withDatabaseEngineSelection(selection, async () => {
     const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
-    await preparePostgresPoolForUpdate("openclaw update repair");
+    await preparePostgresPoolForUpdate(opts?.callerNote ?? "openclaw update repair");
     return await run(true);
   });
 }
