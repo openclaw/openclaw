@@ -53,6 +53,8 @@ type ToolCall = { args: unknown; backgroundRun: unknown; runId: unknown; senderI
 type ForkProofState = {
   toolCalls: ToolCall[];
   settled: Array<Record<string, unknown>>;
+  /** `agent_end` contexts the plugin observed. */
+  agentEnds: Array<{ sessionKey: unknown; completedTurn: unknown }>;
   /** `api.runtime.subagent` of each loaded generation, oldest first. */
   runtimes: Array<{ runForkedTurn: (params: Record<string, unknown>) => Promise<unknown> }>;
   /** The result of a fork started by `forkproof.start`. */
@@ -68,6 +70,9 @@ const FORK_PROOF_SOURCE = `module.exports = { id: "fork-proof", register(api) {
   const state = () => globalThis.forkProofState;
   // Each loaded generation records its runtime, so a test can retain a retired one.
   state().runtimes.push(api.runtime.subagent);
+  api.on("agent_end", (_event, ctx) => {
+    state().agentEnds.push({ sessionKey: ctx.sessionKey ?? null, completedTurn: ctx.completedTurn ?? null });
+  });
   api.registerTool((ctx) => ({
     name: "fork_proof_note",
     description: "Record one note about the conversation",
@@ -246,7 +251,7 @@ async function withForkGateway(
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     },
   });
-  const proof: ForkProofState = { toolCalls: [], settled: [], runtimes: [] };
+  const proof: ForkProofState = { toolCalls: [], settled: [], agentEnds: [], runtimes: [] };
   (globalThis as { forkProofState?: ForkProofState }).forkProofState = proof;
   const forkRequests: ProviderRequest[] = [];
   const foregroundRequests: ProviderRequest[] = [];
@@ -529,12 +534,19 @@ describe("plugin forked turns through the real Gateway", () => {
           });
           expect(forkRequests).toEqual([]);
 
+          // The plugin's agent_end hook names the entry that ended the turn, ready to fork.
+          await expect
+            .poll(() => proof.agentEnds.find((end) => end.sessionKey === sessionKey))
+            .toEqual({ sessionKey, completedTurn: { sessionId, entryId } });
+          const completedTurn = proof.agentEnds.find((end) => end.sessionKey === sessionKey)
+            ?.completedTurn as { sessionId: string; entryId: string };
+
           const before = JSON.stringify(transcript());
           const runId = `fork-proof-${randomUUID()}`;
           const release = createDeferred();
           const started = createDeferred();
           proof.hold = { started, release: release.promise };
-          const pending = fixture.fork(turn, { runId });
+          const pending = fixture.fork(turn, { runId, through: completedTurn });
           await started.promise;
           // Settlement holds the fork's detached admission; a graceful restart waits for it.
           expect(getActiveGatewayRootWorkHolders()).toContain("plugin:fork-proof:session-fork");

@@ -39,6 +39,11 @@ it.each([
     const { view, setRows, openChild, openCollection } = mountSubagents(initial, mobile);
     const buttons = view.getAllByRole("button");
     expect(buttons).toHaveLength(limit);
+    expect(buttons[0]!.getAttribute("aria-label")).toBe("Review Working");
+    expect(buttons[0]!.querySelector(".chat-details-subagents__status")?.classList).toContain(
+      "sr-only",
+    );
+    expect(buttons[0]!.querySelector(".chat-details-subagents__spinner")).not.toBeNull();
     buttons[0]!.click();
     expect(openChild).toHaveBeenLastCalledWith("child-1");
     buttons[1]!.click();

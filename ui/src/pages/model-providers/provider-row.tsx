@@ -124,6 +124,8 @@ export function ApiKeyInput(props: {
   disabled: boolean;
   onInput: (value: string) => void;
   replace?: boolean;
+  /** The label already names the field; a form with nothing else needs no second prompt. */
+  labelOnly?: boolean;
 }) {
   return (
     <label class="field">
@@ -131,11 +133,15 @@ export function ApiKeyInput(props: {
       <input
         type="password"
         autocomplete="off"
-        placeholder={t(
-          props.replace
-            ? "modelProviders.apiKey.replacePlaceholder"
-            : "modelProviders.apiKey.placeholder",
-        )}
+        placeholder={
+          props.labelOnly
+            ? undefined
+            : t(
+                props.replace
+                  ? "modelProviders.apiKey.replacePlaceholder"
+                  : "modelProviders.apiKey.placeholder",
+              )
+        }
         value={props.value}
         disabled={props.disabled}
         onInput={(event) => props.onInput(event.currentTarget.value)}

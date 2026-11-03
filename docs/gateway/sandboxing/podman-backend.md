@@ -61,6 +61,14 @@ set, it refuses the ambiguous selection. Unset the unused selector or repair the
 client's `podman --version` command.
 
 Each sandbox records its engine URI and, for Podman Machine, its SSH identity.
+Preparation validates that target. Commands on the prepared sandbox reuse the
+bound endpoint and full container ID without another discovery probe; native
+local execution explicitly selects `--remote=false`. If that engine or container
+disappears, the command reports Podman's error. Restore the original engine or
+prepare a new sandbox before retrying. Changing engine mode in `containers.conf`
+or replacing the Podman executable during a run is not supported; finish active
+runs before changing the engine.
+
 Earlier OpenClaw versions could pin `CONTAINER_HOST` even when the client selected
 `CONTAINER_CONNECTION`. After upgrading, those existing sandboxes can report
 "The active Podman connection changed." OpenClaw preserves the old sandbox and

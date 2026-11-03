@@ -580,7 +580,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         ),
         "position:fixed;right:12px;top:32px;width:90px",
       );
-      let trigger = role("button", "Decision Model: Alpha decision model");
+      let trigger = role("button", "Decision model: Alpha decision model");
       await trigger.click();
       await expect.element(role("button", "Search")).toBeVisible();
       const alpha = role("button", "Alpha 1");
@@ -595,7 +595,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       setValue("beta/two");
       flush();
       await picker.updateComplete;
-      trigger = role("button", "Decision Model: Beta decision model");
+      trigger = role("button", "Decision model: Beta decision model");
       expect(document.activeElement).toBe(
         picker.querySelector('[role="group"][aria-label="Beta"] button'),
       );

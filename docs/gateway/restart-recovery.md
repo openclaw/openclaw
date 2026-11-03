@@ -412,7 +412,11 @@ guaranteed exactly once.
 For a session with a human owner, the input uses that recorded principal's current
 role, scopes, and session access, narrowed by the session's current permission mode
 and tool policy. When no owner is set, the human creator is used. A removed
-principal, lost access, or archived/deleted session is skipped with a log entry.
+principal or lost access prevents automatic resume. An admission failure records
+a visible interruption notice in the existing session, with a bounded, redacted
+diagnostic. The warning identifies the session, interrupted run, and admission
+stage. Resolve the reported error, then send a new message to continue. Archived
+or deleted sessions remain skipped with a log entry.
 The Gateway never substitutes an administrator or restores a saved operator grant.
 Sessions with no human principal use ordinary system-event authority; if it lacks
 a needed capability, the agent must ask for an authorized input.

@@ -209,7 +209,7 @@ beforeAll(async () => {
     plugins: { enabled: false },
     skills: { load: { watch: false } },
     tools: {
-      allow: ["read", "probe__*", "skill_workshop"],
+      allow: ["read", "probe__*", "skill_workshop", "skill_library"],
       codeMode: false,
       toolSearch: false,
     },
@@ -275,7 +275,7 @@ async function prepareTurn(
     spawnedBy,
     spawnDepth: 1,
     inheritedToolPolicyVersion: 1 as const,
-    inheritedToolAllow: ["read", "probe__*", "skill_workshop"],
+    inheritedToolAllow: ["read", "probe__*", "skill_workshop", "skill_library"],
   });
   const entry = {
     sessionId,
@@ -379,12 +379,13 @@ const OPERATIONS = [
   },
 ];
 
-async function workshopDefinition(turn: Awaited<ReturnType<typeof prepareTurn>>) {
+async function workshopDefinition(
+  turn: Awaited<ReturnType<typeof prepareTurn>>,
+  name = "skill_workshop",
+) {
   const listed = await turn.rpc("tools/list");
   expect(listed.status).toBe(200);
-  return expectDefined(listed.body.result?.tools, "MCP catalog").find(
-    (tool) => tool.name === "skill_workshop",
-  );
+  return expectDefined(listed.body.result?.tools, "MCP catalog").find((tool) => tool.name === name);
 }
 
 it("serves complete configured-server instructions", async ({ signal }) => {
@@ -425,7 +426,7 @@ it.for(
 );
 
 it.for(["personal", "workspace"] as const)(
-  "keeps a %s-default Workshop definition on a completion turn without its authority",
+  "keeps %s-default skill definitions on a completion turn without its authority",
   async (defaultTarget, { signal }) => {
     const personalCalls: unknown[] = [];
     const human: SkillLibraryAuthoringCapability = {
@@ -440,15 +441,20 @@ it.for(["personal", "workspace"] as const)(
     };
     const name = "workshop-" + defaultTarget;
     const humanTurn = await prepareTurn(name, false, signal, human);
-    const humanDefinition = await workshopDefinition(humanTurn);
+    const humanDefinitions = {
+      library: await workshopDefinition(humanTurn, "skill_library"),
+      workshop: await workshopDefinition(humanTurn),
+    };
     const completionTurn = await prepareTurn(name, true, signal);
-    expect(humanDefinition).toBeDefined();
-    // Same definition on the completion turn keeps Claude's cached prefix.
-    expect(await workshopDefinition(completionTurn)).toEqual(humanDefinition);
+    expect(humanDefinitions.library).toBeDefined();
+    expect(humanDefinitions.workshop !== undefined).toBe(defaultTarget === "workspace");
+    // Same definitions on the completion turn keep Claude's cached prefix.
+    expect({
+      library: await workshopDefinition(completionTurn, "skill_library"),
+      workshop: await workshopDefinition(completionTurn),
+    }).toEqual(humanDefinitions);
     // Personal-library calls need a fresh human message; the live grant is not reached.
-    expect(
-      await completionTurn.call("skill_workshop", { action: "list", target: "personal" }),
-    ).toEqual({
+    expect(await completionTurn.call("skill_library", { action: "list" })).toEqual({
       isError: true,
       text: expect.stringContaining("needs a fresh message from the person"),
     });
