@@ -425,6 +425,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             isLocalClient,
             enforceOriginCheckForAnyClient,
             remoteControlUiIngress: remoteIngress,
+            openclawIdTunnel: ingressAttribution.kind === "openclaw-id-tunnel",
           }),
           browserRateLimitClientIp,
           authRateLimiter,

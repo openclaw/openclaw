@@ -1,6 +1,10 @@
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -106,6 +110,44 @@ it.each(["null", "  undefined  ", "  "])(
 );
 
 describe("HTTP shared-secret fields", () => {
+  it.each([
+    "cf-access-authenticated-user-email",
+    "cf-access-jwt-assertion",
+    "x-custom-user",
+    "x-custom-proof",
+  ])("never grants direct-local password fallback with identity header %s", async (header) => {
+    setRuntimeConfigSnapshot({ gateway: { openclawId: { enabled: true } } });
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          password: "local-password",
+          allowTailscale: false,
+          trustedProxy: {
+            userHeader: "x-custom-user",
+            requiredHeaders: ["x-custom-proof"],
+            allowLoopback: true,
+          },
+        },
+        trustedProxies: ["127.0.0.1"],
+        connectAuth: { password: "local-password" },
+        req: request({ [header]: "remote-identity" }),
+      }),
+    ).resolves.toEqual({ ok: false, reason: "proxy_attribution_required" });
+    clearRuntimeConfigSnapshot();
+  });
+
+  it("keeps loopback identity headers out of attribution while OpenClaw ID is off", async () => {
+    clearRuntimeConfigSnapshot();
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: { mode: "token", token: "fixture-token", allowTailscale: false },
+        connectAuth: { token: "fixture-token" },
+        req: request({ "cf-access-authenticated-user-email": "remote-identity" }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
   const authorize = authorizeHttpGatewayConnect;
   const secrets = { token: "token-secret", password: "password-secret", allowTailscale: false };
   it.each(["token", "password"] as const)(
