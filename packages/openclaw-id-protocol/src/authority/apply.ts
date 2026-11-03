@@ -157,9 +157,8 @@ async function ownerDevicesForPeerRevocation(
     if (!peerFps.includes(target)) {
       continue;
     }
+    // This owner is current, so every device it approved is removed with it.
     // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
-    // The freshness check already selected this owner. Every device it currently
-    // approved goes with it, including a descendant whose own certificate is newer.
     for (const each of approvalDescendants(state, fp as KeyFingerprint)) {
       found.add(each);
     }
