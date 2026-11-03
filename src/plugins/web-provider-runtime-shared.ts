@@ -30,10 +30,7 @@ export type ResolvePluginWebProvidersParams = {
   manifestRecords?: readonly PluginManifestRecord[];
 };
 
-export type ResolveRuntimeWebProvidersParams = Omit<
-  ResolvePluginWebProvidersParams,
-  "mode" | "sandboxed"
->;
+export type ResolveRuntimeWebProvidersParams = Omit<ResolvePluginWebProvidersParams, "mode">;
 
 export type WebProviderRuntimeResolution<TEntry> = {
   resolveBundledResolutionConfig: (
