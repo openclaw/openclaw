@@ -39,12 +39,14 @@ import { combineFeishuStreamText, formatReasoningPrefix } from "./streaming-upda
 /**
  * A block's post or card: its text, its delivery and where it came from. A fallback card reports
  * a failure after its first chunk through its own block, and a card the close recovered for the
- * opening prose was created after every post that preceded that close.
+ * opening prose was created after every post that preceded that close. The preview card that
+ * close failed to rewrite was created before those posts, so its receipt is kept beside it.
  */
 export type FeishuBlockPostDelivery = [
   string,
   Promise<FeishuReplyDeliveryResult>,
   ("fallback" | "close")?,
+  FeishuReplyDeliveryResult?,
 ];
 
 type FeishuReplySenderContext = {
@@ -257,6 +259,8 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     });
   };
 
+  // The answer the last close settled through its posts, and the mentions they carried.
+  let closedAnswer: { text: string; mentions?: MentionTarget[] } | undefined;
   const sendPostReply = (
     text: string,
     infoKind?: string,
@@ -288,7 +292,8 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
         const accepted: FeishuReplyDeliveryResult[] = [];
         // The walk matches the card the close recovered for the opening prose first, since its
         // text comes first, but that card was created after every post it passes, so on the
-        // block route its receipt follows theirs. Off keeps its receipts in walk order.
+        // block route its receipt follows theirs, while the preview card it stands in for keeps
+        // its place ahead of them. Off keeps its receipts in walk order.
         const recovered: FeishuReplyDeliveryResult[] = [];
         const byCreation = answerTableNeedsPostPath(blockAnswerText);
         let remaining = blockAnswerText;
@@ -299,7 +304,7 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
           // advances the prefix; a partial rejection still owns its chunks. A fallback card
           // that failed after its first chunk owns them too, but its own block reported
           // that, so the rest goes out and the final then reports the same failure.
-          for (const [blockText, pending, origin] of matchingBlocks) {
+          for (const [blockText, pending, origin, kept] of matchingBlocks) {
             if (!remaining.startsWith(blockText)) {
               continue;
             }
@@ -315,6 +320,9 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
               }
               block = error.deliveryResult;
               fallbackFailure = error.cause ?? error;
+            }
+            if (kept) {
+              accepted.push(kept);
             }
             (origin === "close" && byCreation ? recovered : accepted).push(block);
             remaining = remaining.slice(blockText.length).replace(/^\s*\n/u, "");
@@ -344,6 +352,9 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
             );
           }
           deliveredFinalTexts.add(blockAnswerText);
+          if (options?.closeAnswerText !== undefined) {
+            closedAnswer = { text: blockAnswerText, mentions: firstChunkMentions };
+          }
         } catch (error: unknown) {
           const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
           // Only the close throws a remainder it rejected whole bare. Every receipt above
@@ -413,13 +424,11 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
           blockPostDeliveries.unshift([text, Promise.resolve(result)]);
           return { result, closeError: error };
         }
-        const recovered = sendChunkedTextReply({ text, useCard: true, infoKind: "block" }).then(
-          (card) => mergeFeishuReplyDeliveryResults([result, card]),
-        );
-        blockPostDeliveries.unshift([text, recovered, "close"]);
+        const recovered = sendChunkedTextReply({ text, useCard: true, infoKind: "block" });
+        blockPostDeliveries.unshift([text, recovered, "close", result]);
         void recovered.catch(() => undefined);
         return {
-          result: await recovered,
+          result: mergeFeishuReplyDeliveryResults([result, await recovered]),
           closeError: error ?? new Error("Opening preview prose was not accepted"),
         };
       },
@@ -495,8 +504,27 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
             createFeishuReplyDeliveryResult({ results: [settled], visibleReplySent: true }),
           )
         : undefined;
+    // The close walks this post's own entry, so the entry carries the image the block sent right
+    // after the post, ahead of the tail the close posts later.
+    const [entry] = blockPostDeliveries;
+    if (deferred && entry) {
+      entry[1] = Promise.resolve(settled);
+    }
     return deferred ? { ...settled, finalization: deferred.finalization } : settled;
   };
+
+  // The core asks for idle whenever its send queue drains with a finalization pending, so the
+  // close a table post adopted can run before the model run ends. The block route then previews
+  // the rest of that answer with no card left to carry it, and the next idle posts it the way the
+  // close would have, unless a final already delivered it.
+  const postLaterTail = (answer: string) =>
+    closedAnswer &&
+    answer.length > closedAnswer.text.length &&
+    answer.startsWith(closedAnswer.text) &&
+    answerTableNeedsPostPath(answer) &&
+    ![...deliveredFinalTexts].some((delivered) => delivered.startsWith(answer))
+      ? sendPostReply(answer, "final", closedAnswer.mentions, { closeAnswerText: answer })
+      : undefined;
 
   const sendMediaReplies = async (
     payload: ReplyPayload,
@@ -649,6 +677,7 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     sendChunkedTextReply,
     sendPostReply,
     settleBlockPost,
+    postLaterTail,
     sendMediaReplies,
     ensureNoVisibleReplyFallback,
     ensureVisibleStreamingDelivery,

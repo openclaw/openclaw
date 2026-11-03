@@ -270,37 +270,45 @@ describe("createFeishuReplyDispatcher markdown table modes", () => {
   );
 
   // With the opening prose and the tail only previewed, the table post is the only caller, so its
-  // receipt settles with the close that keeps the prose card and posts the tail.
+  // receipt settles with the close that keeps the prose card and posts the tail. An image the block
+  // sends after its post comes before that tail, in the chat and in every receipt.
   it.each(
     undrawableTableShapes.flatMap(({ shape, text, posted }) =>
-      (["idle", "final"] as const).map((settle) => [shape, settle, text, posted] as const),
+      (["idle", "final"] as const).flatMap((settle) =>
+        (["", " with its image"] as const).map(
+          (image) => [shape, settle, image, text, posted] as const,
+        ),
+      ),
     ),
   )(
-    "settles a previewed reply around a %s block table through its post, %s",
-    async (_, settle, table, posted) => {
+    "settles a previewed reply around a %s block table through its post, %s%s",
+    async (_, settle, image, table, posted) => {
       createBlockTableHarness(tableCfg("block"));
       const { visible, watch } = trackChat();
       const reader = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
       const harness = { accountId: "main", cfg: tableCfg("block"), mentionTargets: reader };
       const { result, options } = createDispatcherHarness(harness);
       const parts = ["Here is the roster for the team.", table, "Roster complete."];
+      const roster = "https://example.com/roster.png";
       result.replyOptions.onPartialReply?.({ text: parts[0] });
       watch();
       result.replyOptions.onPartialReply?.({ text: parts.slice(0, 2).join("\n\n") });
-      const post = await options.deliver({ text: table }, { kind: "block" });
+      const media = image ? { mediaUrl: roster } : {};
+      const post = await options.deliver({ text: table, ...media }, { kind: "block" });
       result.replyOptions.onPartialReply?.({ text: parts.join("\n\n") });
       const final =
         settle === "final"
           ? await options.deliver({ text: parts.join("\n\n") }, { kind: "final" })
           : undefined;
       await options.onIdle?.();
-      const ids = ["om_stream", "om-1", "om-2"];
+      const ids = ["om_stream", "om-1", ...(image ? ["media-1"] : []), "om-2"];
       expect(visible().map(({ id, text, mentions }) => [id, text, mentions])).toEqual([
         [ids[0], parts[0], undefined],
         [ids[1], posted, reader],
-        [ids[2], parts[2], reader],
+        ...(image ? [["media-1", roster, undefined]] : []),
+        ["om-2", parts[2], reader],
       ]);
-      expect(post?.messageIds).toEqual(["om-1"]);
+      expect(post?.messageIds).toEqual(ids.slice(1, -1));
       expect((await post?.finalization)?.messageIds).toEqual(ids);
       if (settle === "final") {
         expect(final?.messageIds).toEqual(ids);
@@ -350,6 +358,102 @@ describe("createFeishuReplyDispatcher markdown table modes", () => {
         ["om-2", parts[2]],
       ]);
       expect(await Promise.all(settled)).toEqual([{ rejected: ids }, ["om-1"], { rejected: ids }]);
+    },
+  );
+
+  // Core asks for idle as soon as its send queue drains with the table post's close pending, so the
+  // card closes before the model run ends. The tail the answer previews after that still posts once,
+  // at the idle that follows the run, as the reply's final markDispatchIdle calls it.
+  it.each(undrawableTableShapes.map(({ shape, text, posted }) => [shape, text, posted] as const))(
+    "posts the tail a %s block table reply previews after the core queue drains",
+    async (_, table, posted) => {
+      createBlockTableHarness(tableCfg("block"));
+      const { visible, watch } = trackChat();
+      const reader = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
+      const harness = { accountId: "main", cfg: tableCfg("block"), mentionTargets: reader };
+      const { result, options } = createDispatcherHarness(harness);
+      const deliveries: ReturnType<typeof options.deliver>[] = [];
+      const dispatcher = createReplyDispatcher({
+        ...options,
+        deliver: (payload, info) => {
+          const delivery = options.deliver(payload, info);
+          deliveries.push(delivery);
+          return delivery;
+        },
+      });
+      const parts = ["Here is the roster for the team.", table, "Roster complete."];
+      result.replyOptions.onPartialReply?.({ text: parts[0] });
+      watch();
+      result.replyOptions.onPartialReply?.({ text: parts.slice(0, 2).join("\n\n") });
+      dispatcher.sendBlockReply({ text: table });
+      await dispatcher.waitForIdle();
+      expect(requireStreamingInstance().closeWithResult).toHaveBeenCalledTimes(1);
+      result.replyOptions.onPartialReply?.({ text: parts.join("\n\n") });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      await options.onIdle?.();
+      expect(visible().map(({ id, text, mentions }) => [id, text, mentions])).toEqual([
+        ["om_stream", parts[0], undefined],
+        ["om-1", posted, reader],
+        ["om-2", parts[2], reader],
+      ]);
+      const post = await deliveries[0];
+      expect(post?.messageIds).toEqual(["om-1"]);
+      expect((await post?.finalization)?.messageIds).toEqual(["om_stream", "om-1"]);
+    },
+  );
+
+  // A rejected rewrite of the opening prose leaves the prose the card accepted visible, as the
+  // streaming card reports it. That card keeps its place ahead of the table post, and only the
+  // card the close recovers for the rewritten prose follows the post.
+  it.each(
+    undrawableTableShapes.flatMap(({ shape, text, posted }) =>
+      (["idle", "final"] as const).map((settle) => [shape, settle, text, posted] as const),
+    ),
+  )(
+    "keeps an accepted preview card ahead of the %s block table post when its rewrite fails, %s",
+    async (_, settle, table, posted) => {
+      createBlockTableHarness(tableCfg("block"));
+      const { cardEntry, visible, watch } = trackChat();
+      const reader = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
+      const harness = { accountId: "main", cfg: tableCfg("block"), mentionTargets: reader };
+      const { result, options } = createDispatcherHarness(harness);
+      const opening = "Here is the roster for the team.";
+      const parts = [`${opening} More prose.`, table, "Roster complete."];
+      result.replyOptions.onPartialReply?.({ text: opening });
+      watch();
+      result.replyOptions.onPartialReply?.({ text: parts.slice(0, 2).join("\n\n") });
+      const post = await options.deliver({ text: table }, { kind: "block" });
+      result.replyOptions.onPartialReply?.({ text: parts.join("\n\n") });
+      requireStreamingInstance().closeWithResult.mockImplementationOnce(async () => {
+        cardEntry.text = streamingUpdateTexts().at(-1) ?? "";
+        throw createFeishuPartialReplyDeliveryError(new Error("final write rejected"), {
+          ...createFeishuReplyDeliveryResult({
+            results: [{ messageId: "om_stream" }],
+            visibleReplySent: true,
+            content: cardEntry.text,
+            kind: "card",
+          }),
+          finalTextAccepted: false,
+        });
+      });
+      const rejected = (error: unknown) =>
+        isChannelPartialDeliveryError(error) && error.deliveryResult.messageIds;
+      const final =
+        settle === "final"
+          ? await options.deliver({ text: parts.join("\n\n") }, { kind: "final" }).catch(rejected)
+          : undefined;
+      const idle = await Promise.resolve(options.onIdle?.()).catch(rejected);
+      expect(visible().map(({ id, text, mentions }) => [id, text, mentions])).toEqual([
+        ["om_stream", opening, undefined],
+        ["om-1", posted, reader],
+        ["oc-1", parts[0], undefined],
+        ["om-2", parts[2], reader],
+      ]);
+      const ids = ["om_stream", "om-1", "oc-1", "om-2"];
+      expect(post?.messageIds).toEqual(["om-1"]);
+      expect(await post?.finalization?.catch(rejected)).toEqual(ids);
+      expect([final, idle]).toEqual([settle === "final" ? ids : undefined, ids]);
     },
   );
 

@@ -683,6 +683,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     sendChunkedTextReply,
     sendPostReply,
     settleBlockPost,
+    postLaterTail,
     sendMediaReplies,
     ensureNoVisibleReplyFallback,
     ensureVisibleStreamingDelivery,
@@ -733,12 +734,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           // Include deliveries appended while CardKit close is in flight; every returned
           // finalization promise must be owned by this idle pass or a later loop iteration.
           const completions = pendingStreamingDeliveries.splice(0);
+          // An idle the drained core queue asks for can close the card before the run ends, so a
+          // later idle posts what the answer previewed after that close.
+          const tail = streaming || inFlightStreamingClose ? undefined : postLaterTail(streamText);
           const closeOutcome: StreamingCloseOutcome =
             streaming || inFlightStreamingClose
               ? await closeStreaming()
-              : completions.length > 0 && lastStreamingSettlement
-                ? lastStreamingSettlement
-                : { disposition: "closed", result: noVisibleFeishuReplyDelivery };
+              : tail
+                ? { disposition: "closed", result: await tail }
+                : completions.length > 0 && lastStreamingSettlement
+                  ? lastStreamingSettlement
+                  : { disposition: "closed", result: noVisibleFeishuReplyDelivery };
           for (const completion of completions) {
             const deliveryError = closeOutcome.error;
             if (closeOutcome.disposition === "discarded") {
@@ -1224,12 +1230,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // attachment is an independent send, so the rejection holds until the media
             // has been attempted and both are reported together.
             try {
+              // An answer payload reaches this branch only as a block under block streaming.
               const post =
-                previewStreamingEnabled &&
-                coreBlockStreamingEnabled &&
-                isAnswerPayload &&
-                info?.kind === "block" &&
-                tableNeedsPost
+                previewStreamingEnabled && isAnswerPayload && tableNeedsPost
                   ? await prepareBlockPost(streamText, text)
                   : undefined;
               streamText = post?.answer ?? streamText;
