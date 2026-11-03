@@ -23,7 +23,7 @@ function harness() {
     hello,
     sessionKey: "agent:main:first",
   });
-  const { gateway, publish, publishEvent } = connection;
+  const { gateway, publish } = connection;
   const snapshot = gateway.snapshot;
   const store = projectsForGateway(gateway);
   const detach = store.subscribe(vi.fn());
@@ -34,7 +34,6 @@ function harness() {
     snapshot,
     store,
     detach,
-    emitConfigChanged: () => publishEvent({ type: "event", event: "config.changed", payload: {} }),
     emit: () => publish(snapshot),
     replace: async (projects: ProjectRecord[]) => {
       request.mockResolvedValue({ projects });
@@ -43,14 +42,43 @@ function harness() {
   };
 }
 
-it("shares one cold project read across picker observers, preserving recents", async () => {
+it("records an initial discovery failure without treating the catalog as ready", async () => {
+  const request = vi.fn(async (): Promise<ProjectsListResult> => {
+    throw new Error("Project discovery unavailable");
+  });
+  const hello = gatewayHelloForMethods(["projects.list"], ["operator.read", "operator.write"]);
+  const connection = watchedGateway({
+    client: createTestGatewayClient(request),
+    hello,
+    sessionKey: "agent:main:first",
+  });
+  const store = projectsForGateway(connection.gateway);
+  const detach = store.subscribe(vi.fn());
+  onTestFinished(detach);
+  await store.pendingRead;
+  expect(store.snapshot).toMatchObject({ result: null, ready: false });
+  expect(store.snapshot.error).toEqual(new Error("Project discovery unavailable"));
+  request.mockResolvedValue({ projects: [project] });
+  await store.refresh();
+  expect(store.snapshot).toMatchObject({
+    ready: true,
+    error: null,
+    result: { projects: [project] },
+  });
+});
+
+it("shares one cold read across chat and the picker, preserving recents", async () => {
   const h = harness();
   const picker = projectsForGateway(h.gateway);
   onTestFinished(picker.subscribe(vi.fn()));
   expect(picker).toBe(h.store);
-  await h.store.refresh();
+  const pending = h.store.pendingRead;
+  expect(pending).not.toBeNull();
+  expect(picker.pendingRead).toBe(pending);
+  expect(h.store.refresh()).toBe(pending);
+  await pending;
+  expect(h.store.pendingRead).toBeNull();
   expect(h.request).toHaveBeenCalledExactlyOnceWith("projects.list", {});
-  expect(h.store.snapshot.result?.projects).toEqual([project]);
   h.snapshot.sessionKey = "agent:other:second";
   h.emit();
   expect(h.request).toHaveBeenCalledTimes(1);
@@ -84,16 +112,8 @@ describe("registered project catalog", () => {
     await h.store.refresh();
     expect(h.store.snapshot.result?.projects).toEqual([]);
   });
-  it("retires project facts on config publication and reads the current GitHub host", async () => {
-    expect(h.store.snapshot.ready).toBe(true);
-    h.request.mockResolvedValueOnce({ projects: [], githubHost: "new.ghe.example.test" });
-    h.emitConfigChanged();
-    expect(h.store.snapshot).toMatchObject({ ready: false, result: null });
-    await h.store.refresh();
-    expect(h.store.snapshot.result?.githubHost).toBe("new.ghe.example.test");
-  });
 
-  it("retires project results before an invalidating refresh can fail", async () => {
+  it("retires projects for every consumer before an invalidating refresh can fail", async () => {
     const listener = vi.fn();
     onTestFinished(h.store.subscribe(listener));
     const failed = createDeferred<ProjectsListResult>();
@@ -102,13 +122,14 @@ describe("registered project catalog", () => {
     const invalidated = h.store.snapshot;
     failed.reject(new Error("catalog unavailable"));
     await refresh;
-    expect(invalidated).toEqual({ result: null, ready: false });
-    expect(listener).toHaveBeenCalledTimes(2);
-    expect(h.store.snapshot).toEqual({ result: null, ready: false });
-    await h.replace([{ ...project, originUrl: "https://github.com/replacement/clawsweeper.git" }]);
-    expect(h.store.snapshot.result?.projects[0]?.originUrl).toBe(
-      "https://github.com/replacement/clawsweeper.git",
-    );
+    expect(invalidated).toEqual({ result: null, ready: false, error: null });
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(h.store.snapshot).toMatchObject({ result: null, ready: false });
+    expect(h.store.snapshot.error).toEqual(new Error("catalog unavailable"));
+    const replacement = { ...project, originUrl: "https://github.com/replacement/clawsweeper.git" };
+    await h.replace([replacement]);
+    expect(h.store.snapshot.result?.projects).toEqual([replacement]);
+    expect(h.store.snapshot.error).toBeNull();
   });
 
   it.each(["client", "reconnect", "principal", "scope", "connection"])(
@@ -141,10 +162,10 @@ describe("registered project catalog", () => {
     },
   );
 
-  it("clears project results on read permission loss without requesting wider access", async () => {
+  it("clears projects on read permission loss without requesting wider access", async () => {
     h.snapshot.hello!.auth!.scopes = [];
     h.emit();
-    expect(h.store.snapshot.result).toEqual({ projects: [] });
+    expect(h.store.snapshot.result?.projects).toEqual([]);
     expect(h.request).toHaveBeenCalledTimes(1);
   });
 

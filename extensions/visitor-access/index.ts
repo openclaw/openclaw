@@ -3,10 +3,13 @@ import { createVisitorAccessReader } from "./src/access.js";
 import { VisitorPolicyClient } from "./src/cloudflare.js";
 import { visitorConfigSchema, visitorPluginSchema } from "./src/config.js";
 import { visitorErrorText } from "./src/errors.js";
+import type { VisitorGrant } from "./src/grant-record.js";
+import { resolveVisitorSignInUrl } from "./src/invite-result.js";
 import { profileUsesVisitorRole, resolveVisitorRole } from "./src/roles.js";
 import { visitorRuntimeStore, type VisitorRuntime } from "./src/runtime.js";
 import { createVisitorTools } from "./src/tools.js";
-import { VisitorAccessService, type VisitorGrant } from "./src/visitors.js";
+import { VisitorAccessService } from "./src/visitors.js";
+import { VisitorWelcome, WELCOME_ENSURE_METHOD } from "./src/welcome.js";
 
 function registerVisitorPlugin(api: OpenClawPluginApi): void {
   if (api.registrationMode === "cli-metadata") {
@@ -48,8 +51,42 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
   );
   const runtime: VisitorRuntime = {
     service,
+    async readInviter() {
+      // Best-effort attribution only. users.self uses the bound requester, never a tool argument,
+      // sender ID, or session owner. Unidentified/system turns must not borrow a human identity.
+      try {
+        const { profile } = await api.runtime.gateway.request<{
+          profile: { id: string; displayName?: string | null };
+        }>("users.self", {}, { scopes: ["operator.read"] });
+        return profile.id === "gateway-owner"
+          ? undefined
+          : {
+              profileId: profile.id,
+              ...(profile.displayName ? { label: profile.displayName } : {}),
+            };
+      } catch {
+        return undefined;
+      }
+    },
+    readSignInUrl: () => resolveVisitorSignInUrl(api.runtime.config.current()),
     errorText: (error) => visitorErrorText(error, config.apiToken),
   };
+
+  // Read only while setting up a welcome session, at most once per invitation.
+  const welcome = new VisitorWelcome(
+    service,
+    api.runtime.gateway,
+    () => api.runtime.config.current({ clone: true }),
+    api.logger,
+  );
+  // Pulled by the guest Control UI on load; params select nothing (see README "Welcome session").
+  api.registerGatewayMethod(
+    WELCOME_ENSURE_METHOD,
+    async ({ client, respond }) => {
+      respond(true, await welcome.ensure(client));
+    },
+    { scope: "operator.sessions.write", profileAccess: "required" },
+  );
 
   api.registerGatewayAccessPolicy({
     resume({ profile, grantId }) {

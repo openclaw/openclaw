@@ -15,6 +15,11 @@ import {
   submitInputDialog,
   waitForInputDialog,
 } from "../test-helpers/modal-dialog.ts";
+import {
+  runSessionAction,
+  createSessionGroup,
+  renameSessionGroupFromMenu,
+} from "./session-organizer-menu.runtime.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import "./app-sidebar.tsx";
 
@@ -36,10 +41,10 @@ it.each(["rename", "new group", "rename group"] as const)(
     const open = () =>
       modal.track(
         kind === "rename"
-          ? sidebar.sessionOrganizer.runSessionAction(row, { kind: "rename" })
+          ? runSessionAction(sidebar.sessionOrganizer, row, { kind: "rename" })
           : kind === "new group"
-            ? sidebar.sessionOrganizer.createSessionGroup()
-            : sidebar.sessionOrganizer.renameSessionGroupFromMenu("Drafts"),
+            ? createSessionGroup(sidebar.sessionOrganizer)
+            : renameSessionGroupFromMenu(sidebar.sessionOrganizer, "Drafts"),
       );
     try {
       const completion = open();
@@ -108,7 +113,8 @@ it.each(["failed", "stale"] as const)(
     });
     try {
       void modal.track(
-        sidebar.sessionOrganizer.runSessionAction(
+        runSessionAction(
+          sidebar.sessionOrganizer,
           sidebar.findSidebarSessionByKey("agent:main:draft")!,
           { kind: "rename" },
         ),

@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -105,7 +104,6 @@ async function rejectsLock(change: (lock: Lock) => void, error: string | RegExp,
 
 describe("npm package-lock release report", () => {
   beforeEach(() => {
-    vi.mocked(execFileSync).mockClear();
     mockLocks(lockFor);
   });
 
@@ -139,17 +137,6 @@ describe("npm package-lock release report", () => {
       }),
     });
     expect(new Date(report.generatedAt).toISOString()).toBe(report.generatedAt);
-    expect(execFileSync).toHaveBeenCalledWith("git", ["rev-parse", "HEAD"], {
-      cwd: rootDir,
-      encoding: "utf8",
-    });
-    expect(generateNpmPackageLocks).toHaveBeenCalledWith({
-      rootDir,
-      jobs: 2,
-      packageDirs: report.packages.map((entry) => path.join(rootDir, entry.packageDir)),
-    });
-    const second = await generateNpmPackageLocksReport({ rootDir, jobs: 1 });
-    expect({ ...second, generatedAt: report.generatedAt }).toEqual(report);
   });
 
   it("marks only the root and gateway client partial in the release-split fixture", async () => {

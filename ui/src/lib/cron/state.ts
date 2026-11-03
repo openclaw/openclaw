@@ -13,6 +13,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
   description: "",
   agentId: "",
+  ownerProfileId: "",
   sessionKey: "",
   clearAgent: false,
   enabled: true,
@@ -68,6 +69,17 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   timeoutSeconds: "",
 };
 
+export const DEFAULT_CRON_JOBS_FILTERS = {
+  cronJobsLimit: 50,
+  cronJobsQuery: "",
+  cronJobsEnabledFilter: "all",
+  cronJobsScheduleKindFilter: "all",
+  cronJobsLastStatusFilter: "all",
+  cronJobsTriggerFilter: "all",
+  cronJobsSortBy: "nextRunAtMs",
+  cronJobsSortDir: "asc",
+} as const;
+
 export function createInitialCronState<Row = CronJob>(
   snapshot: Partial<Pick<CronState, "client" | "connected">> = {},
 ): CronState<Row> {
@@ -76,6 +88,7 @@ export function createInitialCronState<Row = CronJob>(
     connected: snapshot.connected ?? false,
     cronLoading: false,
     cronJobsError: null,
+    cronJobsReadDenied: false,
     cronJobsLoadingMore: false,
     cronJobsReloadPending: false,
     cronJobsReloadPendingTableFilters: false,
@@ -84,19 +97,13 @@ export function createInitialCronState<Row = CronJob>(
     cronJobsTotal: 0,
     cronJobsHasMore: false,
     cronJobsNextOffset: null,
-    cronJobsLimit: 50,
-    cronJobsQuery: "",
-    cronJobsEnabledFilter: "all",
-    cronJobsScheduleKindFilter: "all",
-    cronJobsLastStatusFilter: "all",
-    cronJobsTriggerFilter: "all",
-    cronJobsSortBy: "nextRunAtMs",
-    cronJobsSortDir: "asc",
+    ...DEFAULT_CRON_JOBS_FILTERS,
     cronAgentId: null,
     cronStatus: null,
     cronScopedTotal: null,
     cronScopedNextWakeAtMs: null,
     cronError: null,
+    cronNotice: null,
     cronForm: { ...DEFAULT_CRON_FORM },
     cronCreateOpen: false,
     cronFieldErrors: {},

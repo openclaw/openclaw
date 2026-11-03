@@ -12,6 +12,7 @@ import {
 } from "../../plugins/services.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createVisitorAccessPluginConfig } from "../../test-utils/visitor-access-config.test-support.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodRegistry,
@@ -57,18 +58,10 @@ export function createVisitorGatewayConfig(workspaceDir: string): OpenClawConfig
     },
     tools: { allow: ["visitor_invite"] },
     plugins: {
-      allow: ["visitor-access"],
-      slots: { memory: "none" },
+      ...createVisitorAccessPluginConfig("test-account", "test-app", "test-token"),
       entries: {
-        "visitor-access": {
-          enabled: true,
-          config: { accountId: "test-account", appId: "test-app", apiToken: "test-token" },
-        },
-        "github-repositories": {
-          config: {
-            service: { token: "synthetic-visitor-github-token" },
-          },
-        },
+        ...createVisitorAccessPluginConfig("test-account", "test-app", "test-token").entries,
+        "github-repositories": { config: { service: { token: "synthetic-visitor-github-token" } } },
       },
     },
   };
@@ -152,18 +145,17 @@ export function createAccessPolicyTransport(initialEmails: readonly string[] = [
   return { fetcher, writes, emails: () => targets.filter((target) => typeof target === "string") };
 }
 
-export async function startVisitorGateway(options: {
+export async function startVisitorGateway({
+  config,
+  state: { workspaceDir, env },
+  context,
+  resolveGatewayContext,
+}: {
   config: OpenClawConfig;
   state: OpenClawTestState;
   context: GatewayRequestContext;
   resolveGatewayContext: GatewayContextResolver;
 }) {
-  const {
-    config,
-    state: { workspaceDir, env },
-    context,
-    resolveGatewayContext,
-  } = options;
   const handlers = {
     agent: expectDefined(agentHandlers.agent, "agent handler missing"),
     "tools.invoke": expectDefined(toolsInvokeHandlers["tools.invoke"], "tools.invoke missing"),

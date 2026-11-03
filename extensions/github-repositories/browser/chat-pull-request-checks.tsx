@@ -1,7 +1,7 @@
 /** @jsxImportSource @solidjs/web */
 
 import type { JSX } from "@solidjs/web";
-import { createEffect, createUniqueId, onSettled, useContext } from "solid-js";
+import { createEffect, createSignal, createUniqueId, onSettled, Show, useContext } from "solid-js";
 import { NativeContext } from "./native-context.tsx";
 import { Icon } from "./presentation-components.tsx";
 import { presentationTranslator } from "./presentation-context.ts";
@@ -12,10 +12,11 @@ export function ChatPullRequestChecks(props: {
   checksState: string;
   presented: boolean;
   dismissed?: boolean;
-  children: JSX.Element;
+  children: () => JSX.Element;
 }) {
   const native = useContext(NativeContext);
   const t = presentationTranslator();
+  const [opened, setOpened] = createSignal(false);
   let details!: HTMLDetailsElement;
   let trigger!: HTMLElement;
   let surface!: HTMLElement;
@@ -31,6 +32,9 @@ export function ChatPullRequestChecks(props: {
       // Explicit Details dismissal clears intent; parking only hides the surface.
       if (dismissed) {
         details.open = false;
+      }
+      if (presented && details.open) {
+        setOpened(true);
       }
       overlay.request(presented && details.open);
     }
@@ -82,7 +86,13 @@ export function ChatPullRequestChecks(props: {
         data-anchored-overlay
         popover="manual"
       >
-        {props.children}
+        <div
+          class="chat-pr__checks-menu"
+          role="group"
+          aria-label={t("chat.pullRequests.ciMonitoring")}
+        >
+          <Show when={opened()}>{props.children()}</Show>
+        </div>
       </div>
     </details>
   );

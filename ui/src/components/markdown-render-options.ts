@@ -12,6 +12,8 @@ export type MarkdownRenderOptions = {
   codeBlockInteraction?: "interactive" | "static";
   fileLinks?: boolean;
   textReferences?: readonly ControlUiTextReferenceSnapshot[];
+  /** Selection cues accept query-bearing references without resolving or reading them. */
+  documentFileLinks?: boolean | "select";
   humanMentions?: readonly HumanMention[];
   interactiveImages?: boolean;
   linkFavicons?: boolean;
@@ -36,6 +38,7 @@ export function normalizeMarkdownRenderOptions(
     codeBlockInteraction: options.codeBlockInteraction ?? "static",
     fileLinks: options.fileLinks ?? false,
     textReferences: options.textReferences ?? [],
+    documentFileLinks: options.documentFileLinks ?? false,
     humanMentions: options.humanMentions ?? [],
     interactiveImages: options.interactiveImages ?? false,
     linkFavicons: options.linkFavicons ?? false,
@@ -67,5 +70,11 @@ export function markdownTextReferenceSignature(
 }
 
 export function markdownRenderKey(options: MarkdownRenderEnv, locale: string): string {
-  return `${locale}\0${options.assistantTranscriptRoleHeaders}\0${options.codeBlockChrome}\0${options.codeBlockInteraction}\0${options.fileLinks}\0${markdownTextReferenceSignature(options.textReferences)}\0${options.interactiveImages}\0${options.linkFavicons}\0${options.progressBars}\0${options.mode}\0${options.remoteImages}\0${options.sessionLinks}\0${options.tableInteractions}\0${JSON.stringify(options.humanMentionTokens ?? [])}`;
+  return `${locale}\0${options.assistantTranscriptRoleHeaders}\0${options.codeBlockChrome}\0${options.codeBlockInteraction}\0${options.fileLinks}\0${options.documentFileLinks}\0${markdownReferenceSignature(options)}\0${options.interactiveImages}\0${options.linkFavicons}\0${options.progressBars}\0${options.mode}\0${options.remoteImages}\0${options.sessionLinks}\0${options.tableInteractions}\0${JSON.stringify(options.humanMentionTokens ?? [])}`;
+}
+
+export function markdownReferenceSignature(
+  options: Pick<MarkdownRenderOptions, "textReferences">,
+): string {
+  return markdownTextReferenceSignature(options.textReferences);
 }

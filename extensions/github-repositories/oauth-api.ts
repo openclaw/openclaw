@@ -1,10 +1,14 @@
 import { createHash } from "node:crypto";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
 import { registerSecretValueForRedaction } from "openclaw/plugin-sdk/logging-core";
 import type { NativeGitHubOAuthTokenPair as GitHubOAuthTokenPair } from "openclaw/plugin-sdk/native-github-account-host";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
+} from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveConfiguredGitHubApiBaseUrl } from "./host-api.js";
 import { clearNativeGitHubTokenCache } from "./read-identity-api.js";
 import type { GitHubToolAccount } from "./tool-account-api.js";
@@ -49,14 +53,7 @@ type GitHubOAuthRequestOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
   apiBaseUrl?: string;
-};
-
-type GitHubOAuthDeviceAuthorization = {
-  deviceCode: string;
-  userCode: string;
-  verificationUri: typeof GITHUB_OAUTH_VERIFICATION_URL;
-  expiresInSeconds: number;
-  intervalSeconds: number;
+  assertCurrent?: () => void | Promise<void>;
 };
 
 const GITHUB_OAUTH_ERROR_CODES = [
@@ -74,24 +71,6 @@ const GITHUB_OAUTH_ERROR_CODES = [
 ] as const;
 type GitHubOAuthErrorCode = (typeof GITHUB_OAUTH_ERROR_CODES)[number];
 const GITHUB_OAUTH_ERROR_CODE_SET: ReadonlySet<string> = new Set(GITHUB_OAUTH_ERROR_CODES);
-
-type GitHubOAuthDevicePollResult =
-  | { status: "authorized"; tokens: GitHubOAuthTokenPair }
-  | { status: "authorization_pending" }
-  | { status: "slow_down"; intervalSeconds?: number }
-  | { status: "expired_token" }
-  | { status: "access_denied" }
-  | {
-      status: "error";
-      code: Exclude<
-        GitHubOAuthErrorCode,
-        "authorization_pending" | "slow_down" | "expired_token" | "access_denied"
-      >;
-    };
-
-type GitHubOAuthRefreshResult =
-  | { status: "refreshed"; tokens: GitHubOAuthTokenPair }
-  | { status: "error"; code: GitHubOAuthErrorCode };
 
 function githubOAuthProtocolError(surface: string): Error {
   return new Error(`GitHub OAuth ${surface} response was invalid`);
@@ -218,17 +197,44 @@ async function postGitHubOAuthForm(
   const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, GITHUB_OAUTH_REQUEST_TIMEOUT_MS, 1);
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
-  const response = await fetch(url, {
-    method: "POST",
-    redirect: "error",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: form,
-    signal,
-  });
-  return { response, body: await readGitHubResponse(response, surface, timeoutMs) };
+  let dispatched = false;
+  let received = false;
+  try {
+    await options.assertCurrent?.();
+    signal.throwIfAborted();
+    dispatched = true;
+    const response = await fetch(url, {
+      method: "POST",
+      redirect: "error",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: form,
+      signal,
+    });
+    received = true;
+    return { response, body: await readGitHubResponse(response, surface, timeoutMs) };
+  } catch (error) {
+    if (surface !== "token refresh") {
+      throw error;
+    }
+    throw createOAuthRefreshError(
+      "GitHub OAuth token refresh failed",
+      dispatched
+        ? {
+            version: 1,
+            phase: received ? "after-token-response" : "token-response",
+            outcome: "unknown",
+          }
+        : {
+            version: 1,
+            phase: "before-dispatch",
+            outcome: "not-attempted",
+            recovery: { kind: "later", evidence: "dispatch-not-started" },
+          },
+    );
+  }
 }
 
 async function readGitHubResponse(response: Response, surface: string, timeoutMs: number) {
@@ -318,13 +324,30 @@ async function exchangeGitHubOAuthToken(
   form: Record<string, string>,
   surface: string,
   options: GitHubOAuthRequestOptions,
-) {
+): Promise<
+  | { tokens: GitHubOAuthTokenPair; error?: never }
+  | {
+      error: { code: GitHubOAuthErrorCode; intervalSeconds?: number; failure?: Error };
+      tokens?: never;
+    }
+> {
   const { response, body } = await postGitHubOAuthForm(
     GITHUB_OAUTH_ACCESS_TOKEN_URL,
     new URLSearchParams({ client_id: GITHUB_OAUTH_CLIENT_ID, ...form }),
     surface,
     options,
   );
+  if (surface === "token refresh" && (!response.ok || body.error !== undefined)) {
+    const failure = createOAuthRefreshResponseError(
+      "GitHub OAuth token refresh",
+      response.status,
+      body,
+    );
+    if (body.access_token !== undefined || !isGitHubOAuthErrorCode(body.error)) {
+      throw failure;
+    }
+    return { error: { ...parseGitHubOAuthError(body, surface), failure } };
+  }
   if (body.error !== undefined && body.access_token !== undefined) {
     throw githubOAuthProtocolError(surface);
   }
@@ -334,12 +357,29 @@ async function exchangeGitHubOAuthToken(
   if (!response.ok) {
     throwGitHubOAuthHttpError(response, surface);
   }
-  return { tokens: parseGitHubOAuthTokenPair(body, surface) };
+  try {
+    return { tokens: parseGitHubOAuthTokenPair(body, surface) };
+  } catch (error) {
+    if (surface !== "token refresh") {
+      throw error;
+    }
+    throw createOAuthRefreshError("GitHub OAuth token refresh response was invalid", {
+      version: 1,
+      phase: "after-token-response",
+      outcome: "unknown",
+    });
+  }
 }
 
 export async function requestGitHubOAuthDeviceCode(
   options: GitHubOAuthRequestOptions = {},
-): Promise<GitHubOAuthDeviceAuthorization> {
+): Promise<{
+  deviceCode: string;
+  userCode: string;
+  verificationUri: typeof GITHUB_OAUTH_VERIFICATION_URL;
+  expiresInSeconds: number;
+  intervalSeconds: number;
+}> {
   const { response, body } = await postGitHubOAuthForm(
     GITHUB_OAUTH_DEVICE_CODE_URL,
     new URLSearchParams({
@@ -381,7 +421,20 @@ export async function requestGitHubOAuthDeviceCode(
 // applies GitHub's cumulative slow_down floor using the returned interval.
 export async function pollGitHubOAuthDeviceToken(
   params: GitHubOAuthRequestOptions & { deviceCode: string },
-): Promise<GitHubOAuthDevicePollResult> {
+): Promise<
+  | { status: "authorized"; tokens: GitHubOAuthTokenPair }
+  | { status: "authorization_pending" }
+  | { status: "slow_down"; intervalSeconds?: number }
+  | { status: "expired_token" }
+  | { status: "access_denied" }
+  | {
+      status: "error";
+      code: Exclude<
+        GitHubOAuthErrorCode,
+        "authorization_pending" | "slow_down" | "expired_token" | "access_denied"
+      >;
+    }
+> {
   const deviceCode = readBoundedString(params.deviceCode, "device token");
   if (!/^[A-Za-z0-9_-]{40}$/u.test(deviceCode)) {
     throw githubOAuthProtocolError("device token");
@@ -415,7 +468,10 @@ export async function pollGitHubOAuthDeviceToken(
 
 export async function refreshGitHubOAuthToken(
   params: GitHubOAuthRequestOptions & { refreshToken: string },
-): Promise<GitHubOAuthRefreshResult> {
+): Promise<
+  | { status: "refreshed"; tokens: GitHubOAuthTokenPair }
+  | { status: "error"; code: GitHubOAuthErrorCode; failure?: Error }
+> {
   const refreshToken = readBoundedString(params.refreshToken, "token refresh");
   // Device-flow refresh is a public-client exchange. Sending a bundled client
   // secret would not make it confidential and is not required by GitHub.
@@ -428,7 +484,7 @@ export async function refreshGitHubOAuthToken(
     params,
   );
   if (result.error) {
-    return { status: "error", code: result.error.code };
+    return { status: "error", code: result.error.code, failure: result.error.failure };
   }
   return { status: "refreshed", tokens: result.tokens };
 }

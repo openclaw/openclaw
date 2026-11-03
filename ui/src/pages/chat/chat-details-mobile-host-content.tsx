@@ -1,9 +1,12 @@
-import { For, Show, createMemo, onSettled } from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatDetailsEnglish } from "../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
@@ -18,7 +21,12 @@ import {
   ChatDetailsMobileControls,
   type ChatDetailsMobilePage,
 } from "./components/chat-details-mobile-content.tsx";
+import { createDetailsProcessesPresentation } from "./components/chat-details-processes-presentation.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
+import {
+  createProcessesPresentation,
+  isProcessesPresentationReady,
+} from "./components/chat-processes-presentation.ts";
 import { syncSessionPanelInputs, useSessionPanel } from "./components/chat-session-panel.tsx";
 import { createChatSessionSharingMobileAdapter } from "./components/chat-session-sharing-mobile-adapter.tsx";
 import type { PreparedChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
@@ -27,6 +35,7 @@ import { createSessionAutomationInventory } from "./components/chat-summary-auto
 import { ProcessesPanelData } from "./processes-panel-data.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 export type MobileDetailsBindings = {
   sharing?: PreparedChatSessionSharing;
@@ -84,6 +93,7 @@ function MobileHostContent(
   nativeHost: ChatDetailsMobileHostContent,
 ) {
   const context = useOptionalApplication();
+  const gateway = context ? projectGateway(context.gateway) : undefined;
   const processes = context
     ? useSessionPanel(
         nativeHost,
@@ -96,13 +106,25 @@ function MobileHostContent(
         () => {},
       )
     : () => undefined;
+  const processPresentation = createProcessesPresentation(processes, true);
+  const detailsProcesses = createDetailsProcessesPresentation(
+    () => processes()?.snapshot.rows ?? [],
+  );
   const processData = createMemo(() => {
     const data = processes();
     if (!data) {
       return undefined;
     }
-    const { rows, error, loading } = data.snapshot;
-    return { rows, error, loading, refresh: () => data.refresh() };
+    const { error, errorKind, loading, hasResult } = data.snapshot;
+    return {
+      rows: detailsProcesses(),
+      presentation: processPresentation,
+      error,
+      errorKind,
+      loading,
+      hasResult,
+      refresh: () => data.refresh(),
+    };
   });
   const route = () => props.host.destination.page?.details;
   const activePeople = createMemo(() =>
@@ -254,7 +276,6 @@ function MobileHostContent(
           people: t("chat.mobileDetails.people"),
           taskProgress: t("sessionProgressCard.composerTitle"),
           subagents: t("chat.sessionDetails.subagents"),
-          processes: t("chat.sessionDetails.processes"),
           environment: t("chat.sessionDetails.environment"),
           context: t("chat.sessionDetails.context"),
           automations: t("chat.sessionDetails.automations"),
@@ -302,9 +323,6 @@ function MobileHostContent(
           switch (destination.kind) {
             case "people":
               open(destination, t("chat.sessionHeader.people"));
-              break;
-            case "context":
-              open(destination, t("chat.sessionDetails.context"));
               break;
             case "outputs":
               open(destination, t("chat.mobileDetails.outputs"));
@@ -354,7 +372,6 @@ function MobileHostContent(
       { kind: "sharing", content: sharing },
       { kind: "session-access", content: sharing },
       { kind: "outputs" },
-      { kind: "context" },
       {
         kind: "automations",
         content: {
@@ -439,6 +456,21 @@ function MobileHostContent(
       <For each={pages()} keyed={(page) => page.kind}>
         {(page) => {
           const visible = () => props.presented && (route()?.kind ?? "root") === page().kind;
+          const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
+          createScrollPosition(() => {
+            const owner = processes();
+            return {
+              retain:
+                page().kind === "root"
+                  ? {
+                      identity: [props.host.scopeKey, page().kind],
+                      target: scrollport(),
+                      presented: visible(),
+                      ready: isProcessesPresentationReady(owner, gateway?.read().snapshot),
+                    }
+                  : undefined,
+            };
+          });
           return (
             <ContentPresentation value={visible}>
               <div
@@ -449,7 +481,7 @@ function MobileHostContent(
               >
                 <div
                   class="chat-mobile-details-page__body"
-                  ref={[elementRef(props.details.onScrollPortRef)]}
+                  ref={[setScrollport, elementRef(props.details.onScrollPortRef)]}
                 >
                   <Show when={page().kind === "people"}>
                     <Show when={props.bindings?.peopleMentions?.status === "loading"}>

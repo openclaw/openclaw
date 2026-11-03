@@ -1,16 +1,39 @@
 import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { fixture } from "./native-subagent-inventory.test-support.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   agentMessage,
   closeAgentNotification,
   createClient,
+  turnStartedNotification,
   threadRead,
 } from "./native-subagent-monitor.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 
 setupRunAttemptTestHooks();
+
+async function observationFixture() {
+  const f = await fixture();
+  const client = createClient();
+  const parent = await f.register(client);
+  await parent.ready;
+  const request = {
+    client: client.client,
+    agentId: f.identity.agentId,
+    sessionKey: f.identity.sessionKey,
+    sessionId: f.identity.sessionId,
+    lifecycleRevision: f.historyOwner().lifecycleRevision,
+    storePath: resolveStorePath(undefined, { agentId: f.identity.agentId }),
+    parentThreadId: "parent-thread",
+    historyOwner: f.historyOwner(),
+    assertCurrent: vi.fn(),
+  };
+  const read = () => codexNativeSubagentMonitorRuntime.readNativeSubagents(request);
+  return { f, client, parent, request, read };
+}
 
 function observeAssignment(
   store: Awaited<ReturnType<typeof fixture>>["store"],
@@ -125,15 +148,10 @@ it("settles delayed close writes without consuming a replacement monitor's resum
   await unregister;
   first.closeCaller();
 
+  expect.soft(earlyUnregister).toBe(false);
   expect
-    .soft({
-      earlyUnregister,
-      assignments: await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner()),
-    })
-    .toMatchObject({
-      earlyUnregister: false,
-      assignments: [{ runId: "codex-thread:child-thread", nativeTurnId: "resumed-turn" }],
-    });
+    .soft(await f.assignments())
+    .toMatchObject([{ runId: "codex-thread:child-thread", nativeTurnId: "resumed-turn" }]);
   await nextClient.completeTurn({
     turnId: "resumed-turn",
     status: "completed",
@@ -147,10 +165,65 @@ it("settles delayed close writes without consuming a replacement monitor's resum
       result: "Resumed result",
     }),
   );
-  expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual([]);
+  expect(await f.assignments()).toEqual([]);
   nextClient.close();
-  const duplicate = await f.register(createClient());
-  await duplicate.ready;
-  await duplicate.unregister();
+  await f.settle(createClient());
   expect(f.deliver).toHaveBeenCalledOnce();
+});
+
+it("reads direct and nested native observations only for the registered physical requester", async () => {
+  const { f, client, parent, request, read } = await observationFixture();
+  parent.bindTurn("parent-turn");
+  expect(read()).toEqual({ coverage: "live", children: [], truncated: false });
+  await client.spawn();
+  await client.notify(turnStartedNotification("child-turn"));
+  await client.spawn("nested-thread", "child-turn", "v2", "child-thread");
+  await client.notify(turnStartedNotification("nested-turn", { threadId: "nested-thread" }));
+  expect(read()).toEqual({
+    coverage: "live",
+    children: [
+      { id: "child-thread", label: "/root/child-thread", status: "running" },
+      { id: "nested-thread", label: "/root/nested-thread", status: "running" },
+    ],
+    truncated: false,
+  });
+  for (const changed of [
+    { sessionId: "foreign-physical-session" },
+    { lifecycleRevision: "foreign-lifecycle" },
+    { storePath: `${request.storePath}.foreign` },
+    { sessionKey: "agent:main:foreign" },
+    { agentId: "foreign" },
+    { historyOwner: { ...request.historyOwner, connectionFingerprint: "f".repeat(64) } },
+  ]) {
+    expect(
+      codexNativeSubagentMonitorRuntime.readNativeSubagents({ ...request, ...changed }),
+    ).toBeUndefined();
+  }
+  await client.completeTurn({ status: "completed" });
+  await client.completeTurn({
+    status: "interrupted",
+    threadId: "nested-thread",
+    turnId: "nested-turn",
+  });
+  expect(read()?.children).toEqual([
+    { id: "child-thread", label: "/root/child-thread", status: "completed" },
+    { id: "nested-thread", label: "/root/nested-thread", status: "interrupted" },
+  ]);
+  // Turn completion is observation, not a fabricated result or consumed delivery receipt.
+  expect(f.deliver).not.toHaveBeenCalled();
+  request.assertCurrent.mockImplementation(() => {
+    throw new Error("Synthetic read scope revoked");
+  });
+  expect(read).toThrow("Synthetic read scope revoked");
+  request.assertCurrent.mockReset();
+  client.close();
+  expect(read()).toBeUndefined();
+});
+
+it("does not create an observation owner after an idle parent is pruned", async () => {
+  const { client, parent, read } = await observationFixture();
+  expect(read()?.coverage).toBe("live");
+  await parent.unregister();
+  expect(read()).toBeUndefined();
+  client.close();
 });

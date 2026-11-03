@@ -6,6 +6,7 @@ import {
   createTestWizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { isRecoverableOAuthRefreshFailure } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { jsonResponse, requestUrl, withProxyFixture } from "openclaw/plugin-sdk/test-env";
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { fetch as undiciFetch, MockAgent, type Dispatcher } from "undici";
@@ -170,6 +171,130 @@ describe("xAI OAuth", () => {
     vi.restoreAllMocks();
   });
 
+  it("retries only verified Cloudflare challenge headers without reading the challenge body", async () => {
+    const cancelled = vi.fn();
+    const challenge = () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(Uint8Array.of(0x80));
+            controller.close();
+          },
+          cancel: cancelled,
+        }),
+        {
+          status: 403,
+          headers: { "cf-mitigated": "challenge" },
+        },
+      );
+    mockResponses(
+      challenge(),
+      challenge(),
+      jsonResponse({ access_token: "recovered", expires_in: 3600 }),
+    );
+    await expect(refresh()).resolves.toMatchObject({ access: "recovered", refresh: "refresh-1" });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(cancelled).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds repeated verified challenges and leaves the unconsumed grant recoverable", async () => {
+    fetchImpl.mockImplementation(
+      async () => new Response(null, { status: 403, headers: { "cf-mitigated": "challenge" } }),
+    );
+    const error = await refresh().catch((cause: unknown) => cause);
+    expect(error).toMatchObject({ oauthRefreshOutcome: { outcome: "unchanged", status: 403 } });
+    expect(isRecoverableOAuthRefreshFailure(error)).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    [429, () => jsonResponse({}, 429)],
+    [
+      503,
+      () =>
+        new Response("<html>upstream unavailable</html>", {
+          status: 503,
+          headers: { "content-type": "text/html" },
+        }),
+    ],
+    [500, () => new Response(null, { status: 500 })],
+    [503, () => jsonResponse({ error: "temporarily_unavailable" }, 503)],
+  ])(
+    "keeps the stored sign-in after a transient HTTP %s so a later refresh succeeds",
+    async (status, response) => {
+      fetchImpl.mockResolvedValueOnce(response());
+      const error = await refresh().catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({
+        oauthRefreshOutcome: {
+          version: 1,
+          phase: "token-response",
+          outcome: "unchanged",
+          status,
+          recovery: { kind: "later", evidence: "owner-accepted-provider-retry" },
+        },
+      });
+      expect(isRecoverableOAuthRefreshFailure(error)).toBe(true);
+      mockResponses(
+        jsonResponse({ access_token: "access-2", refresh_token: "refresh-2", expires_in: 3600 }),
+      );
+      await expect(refresh()).resolves.toMatchObject({ access: "access-2", refresh: "refresh-2" });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      for (const [, init] of fetchImpl.mock.calls) {
+        expectPost(init, { grant_type: "refresh_token", refresh_token: "refresh-1" });
+      }
+    },
+  );
+
+  it.each([
+    [429, { error: "invalid_grant" }, "rejected"],
+    [500, { error: "invalid_client" }, "rejected"],
+    [503, { error: "invalid_request" }, "unknown"],
+    [401, { error: "invalid_grant" }, "rejected"],
+    [200, { refresh_token: "possibly-consumed" }, "unknown"],
+    [200, "invalid JSON", "unknown"],
+  ])("never infers nonconsumption from HTTP %s", async (status, body, outcome) => {
+    fetchImpl.mockResolvedValueOnce(jsonResponse(body, status));
+    const error = await refresh().catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ oauthRefreshOutcome: { version: 1, status, outcome } });
+    expect(isRecoverableOAuthRefreshFailure(error)).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    Object.assign(new Error("reset before headers"), { code: "ECONNRESET" }),
+    Object.assign(new Error("timed out before headers"), { name: "TimeoutError" }),
+    new Error("unknown provider failure"),
+  ])("does not infer nonconsumption before response headers: %s", async (failure) => {
+    fetchImpl.mockRejectedValueOnce(failure);
+    const error = await refresh().catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      oauthRefreshOutcome: { version: 1, phase: "token-response", outcome: "unknown" },
+    });
+    expect(isRecoverableOAuthRefreshFailure(error)).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("never restores a success whose body fails with a transport-looking error", async () => {
+    fetchImpl.mockResolvedValueOnce(
+      streamResponse({
+        start(controller) {
+          controller.error(Object.assign(new Error("reset after 200"), { code: "ECONNRESET" }));
+        },
+      }),
+    );
+    const error = await refresh().catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toMatchObject({ oauthRefreshFailure: { retryable: true } });
+    expect(error).toMatchObject({
+      oauthRefreshOutcome: { version: 1, phase: "token-response", outcome: "unknown" },
+    });
+    expect(isRecoverableOAuthRefreshFailure(error)).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it("preserves https_proxy routing", async () => {
     await withProxyFixture(async (fixture) => {
       for (const key of ["http_proxy", "https_proxy", "all_proxy"]) {
@@ -191,7 +316,9 @@ describe("xAI OAuth", () => {
           return jsonResponse({ error: "temporarily_unavailable" }, 503);
         },
       );
-      await expect(refresh()).rejects.toThrow("temporarily_unavailable");
+      await expect(refresh()).rejects.toMatchObject({
+        oauthRefreshOutcome: { status: 503, outcome: "unchanged" },
+      });
       expect(fetchImpl).toHaveBeenCalledOnce();
       expect(fixture.connections).toEqual(["http:auth.x.ai"]);
       expect(fixture.originRoutes).toEqual([]);
@@ -335,12 +462,11 @@ describe("xAI OAuth", () => {
       expect(requestUrl(url)).toBe(request);
       throw new Error(message);
     });
-    await expect(refresh(endpoint)).rejects.toThrow(message);
+    await expect(refresh(endpoint)).rejects.toMatchObject({ cause: { message } });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("retries transient HTML refresh failures before succeeding", async () => {
-    vi.useFakeTimers();
+  it("retries a verified intermediary challenge but never infers nonconsumption from HTML alone", async () => {
     mockResponses(
       new Response("<!DOCTYPE html><html><body>Attention Required! Cloudflare</body></html>", {
         status: 403,
@@ -352,13 +478,13 @@ describe("xAI OAuth", () => {
       }),
       jsonResponse({ access_token: "access-2", expires_in: 120 }),
     );
-    const pending = refresh();
-    await vi.advanceTimersByTimeAsync(250);
-    await vi.advanceTimersByTimeAsync(250);
-    const refreshed = await pending;
-
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(refreshed).toMatchObject({ access: "access-2", refresh: "refresh-1" });
+    const error = await refresh().catch((cause: unknown) => cause);
+    expect(error).toMatchObject({
+      message: expect.stringContaining("HTML/Cloudflare challenge"),
+      oauthRefreshOutcome: { outcome: "unknown", status: 403 },
+    });
+    expect(isRecoverableOAuthRefreshFailure(error)).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("preserves the cached xAI expiry when token lifetimes overflow safe milliseconds", async () => {
@@ -483,14 +609,14 @@ describe("xAI OAuth", () => {
       headers: undefined,
       request: { auth: undefined, headers: undefined },
     });
-    expect(savedProvider?.models.map((model) => model.id)).toEqual(["grok-4.6"]);
+    expect(savedProvider?.models?.map((model) => model.id)).toEqual(["grok-4.6"]);
     expect(
       fetchImpl.mock.calls
         .map(([input]) => requestUrl(input))
         .filter((url) => url.endsWith("/models")),
     ).toEqual([MODELS_URL]);
-    expect(savedProvider?.models[0]?.thinkingLevelMap).toBeUndefined();
-    expect(savedProvider?.models[0]?.compat?.supportedReasoningEfforts).toBeUndefined();
+    expect(savedProvider?.models?.[0]?.thinkingLevelMap).toBeUndefined();
+    expect(savedProvider?.models?.[0]?.compat?.supportedReasoningEfforts).toBeUndefined();
     if (setup === "api") {
       expect(savedProvider?.request?.allowPrivateNetwork).toBe(false);
     }

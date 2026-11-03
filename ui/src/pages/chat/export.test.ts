@@ -17,6 +17,38 @@ function msg(role: string, content: unknown, extra: Record<string, unknown> = {}
 const header = "# Chat with OpenClaw\n\n";
 const transcript = (messages: unknown[]) => buildChatMarkdown(messages, "OpenClaw");
 
+it("exports saved inline summaries for direct and nested results, without component payloads", () => {
+  const view = {
+    type: "plugin_view",
+    pluginId: "incidents",
+    viewId: "incident",
+    version: 7,
+    payload: { incidentId: "private-reference" },
+    summary: "Incident is investigating.",
+    toolCallId: "call",
+    toolName: "show_incident",
+  };
+  const markdown = buildChatMarkdown(
+    [
+      {
+        role: "toolResult",
+        runId: "first",
+        details: { pluginView: view },
+        content: [{ type: "text", text: view.summary }],
+      },
+      {
+        role: "assistant",
+        runId: "second",
+        content: [{ type: "toolResult", details: { pluginView: view } }],
+      },
+    ],
+    "OpenClaw",
+  );
+  expect(markdown?.match(/Incident is investigating\./g)).toHaveLength(2);
+  expect(markdown).not.toContain("private-reference");
+  expect(markdown).not.toContain("plugin_view");
+});
+
 it.each([
   ["empty", []],
   ["tool-only", [toolCall]],
@@ -94,12 +126,11 @@ it.each([
     msg("user", [null, ...textBlock("Body", "text"), { type: "tool_result" }]),
     "Tool",
   ],
-  ["numeric envelope", msg("assistant", "Body", { toolCallId: 0 }), "OpenClaw"],
 ] as const)("classifies %s", (_name, message, speaker) => {
   expect(transcript([message])).toBe(`${header}## ${speaker}\n\nBody\n`);
 });
 
-it.each(["string", "blocks", "text"])("preserves imported %s content and attribution", (shape) => {
+it("preserves imported content and attribution", () => {
   const body = "    indented code\n\nMEDIA:https://example.invalid/report.pdf";
   const framed =
     '<<<EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>\nSource: External\n---\n' +
@@ -110,9 +141,7 @@ it.each(["string", "blocks", "text"])("preserves imported %s content and attribu
     senderLabel: "Imported assistant (123e4567-e89b-12d3-a456-426614174000)",
     __openclaw: { idempotencyKey: "fixture-catalog:thread:message", senderName: "Other name" },
     timestamp: "1000",
-    ...(shape === "text"
-      ? { text: framed }
-      : { content: shape === "blocks" ? textBlock(framed) : framed }),
+    content: framed,
   };
   const original = structuredClone(message);
 

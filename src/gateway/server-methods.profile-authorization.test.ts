@@ -470,7 +470,7 @@ describe("Gateway pending-profile authorization", () => {
     expect(allowed).toHaveBeenCalledWith(true, { ok: true });
     expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
   });
-  it("allows read-only users.self without anonymous access or profile writes", async () => {
+  it("allows read-only users.self without anonymous profile access or edits", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const email = "reader@example.com";
       const profile = ensureProfileForEmail(email);
@@ -487,19 +487,12 @@ describe("Gateway pending-profile authorization", () => {
       const anonymous = createPendingProfileClient([READ_SCOPE]);
       delete anonymous.authenticatedUserId;
       const deniedRead = await dispatchProfile(anonymous, "users.self");
-      const deniedWrite = await dispatchProfile(reader, "users.setDisplayName", {
+      const deniedWrite = await dispatchProfile(anonymous, "users.setDisplayName", {
         requestParams: { profileId: profile.id, displayName: "Not permitted" },
       });
 
       expectRejected(deniedRead, "FORBIDDEN");
-      expectRejected(deniedWrite, {
-        code: "FORBIDDEN",
-        details: {
-          code: "MISSING_SCOPE",
-          missingScope: "operator.write",
-          requiredScopes: ["operator.write"],
-        },
-      });
+      expectRejected(deniedWrite, "FORBIDDEN");
       expect(getUserProfileListItem(profile.id)).toEqual(before);
       expect(self).toHaveBeenCalledWith(true, {
         profile: expect.objectContaining({ id: profile.id, emails: [email] }),

@@ -6,6 +6,7 @@ import type {
 } from "@openclaw/gateway-protocol";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createSessionGoalFixture } from "../../../../../src/gateway/session-goal.test-support.js";
 import type { SessionGoal } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { i18n } from "../../../i18n/index.ts";
@@ -13,22 +14,13 @@ import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { createContext, createGateway, createSessions } from "../../../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { installRepositoryPresentation } from "../../../test-helpers/repository-presentation.test-support.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
 import { ChatActivityPills } from "./chat-activity-pills.tsx";
 
-const goal: SessionGoal = {
-  schemaVersion: 1,
-  id: "release-goal",
-  objective: "Verify the release",
-  status: "active",
-  createdAt: 1,
-  updatedAt: 2,
-  tokenStart: 0,
-  tokensUsed: 100,
-  continuationTurns: 0,
-};
+const goal = createSessionGoalFixture("release-goal", "Verify the release");
 const fontsDescriptor = Object.getOwnPropertyDescriptor(document, "fonts");
 
 beforeEach(async () => {
@@ -41,18 +33,18 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanupSolid();
-  if (fontsDescriptor) {
-    Object.defineProperty(document, "fonts", fontsDescriptor);
-  } else {
-    Reflect.deleteProperty(document, "fonts");
-  }
+  restorePropertyDescriptor(document, "fonts", fontsDescriptor);
 });
 
-function mountPills(initial: ChatActivityPillsProps, context?: ApplicationContext) {
-  let publish: (next: ChatActivityPillsProps) => void;
+function mountPills(initial: Partial<ChatActivityPillsProps>, context?: ApplicationContext) {
+  let publish: (next: Partial<ChatActivityPillsProps>) => void;
   const view = mountSolid(() => {
-    const [props, setProps] = createSignal(initial);
-    publish = setProps;
+    const [props, setProps] = createSignal<ChatActivityPillsProps>({
+      presented: true,
+      approvalPending: false,
+      ...initial,
+    });
+    publish = (next) => setProps((current) => ({ ...current, ...next }));
     return context ? (
       <ApplicationProvider value={context}>
         <ChatActivityPills {...props()} />
@@ -64,7 +56,8 @@ function mountPills(initial: ChatActivityPillsProps, context?: ApplicationContex
   flush();
   return {
     ...view,
-    update(next: ChatActivityPillsProps) {
+    button: (name: string | RegExp) => view.getByRole<HTMLButtonElement>("button", { name }),
+    update(next: Partial<ChatActivityPillsProps>) {
       publish(next);
       flush();
     },
@@ -73,24 +66,18 @@ function mountPills(initial: ChatActivityPillsProps, context?: ApplicationContex
 
 it("reports a pursuing goal only after execution is confirmed and opens its current destination", () => {
   const onOpen = vi.fn();
-  const initial: ChatActivityPillsProps = {
-    presented: true,
-    approvalPending: false,
-    goal: { value: goal, executionConfirmed: false, onOpen },
-  };
-  const view = mountPills(initial);
-  expect(view.getByRole("button", { name: "Goal active: Verify the release" })).toBeTruthy();
+  const initial = { value: goal, executionConfirmed: false, onOpen };
+  const view = mountPills({ goal: initial });
+  expect(view.button("Goal active: Verify the release")).toBeTruthy();
   expect(view.queryByRole("button", { name: /Pursuing goal/ })).toBeNull();
 
-  view.update({ ...initial, goal: { value: goal, executionConfirmed: true, onOpen } });
-  const button = view.getByRole<HTMLButtonElement>("button", {
-    name: "Pursuing goal: Verify the release",
-  });
+  view.update({ goal: { ...initial, executionConfirmed: true } });
+  const button = view.button("Pursuing goal: Verify the release");
   button.click();
   expect(onOpen).toHaveBeenCalledExactlyOnceWith(button);
 
-  view.update(initial);
-  expect(view.getByRole("button", { name: "Goal active: Verify the release" })).toBeTruthy();
+  view.update({ goal: initial });
+  expect(view.button("Goal active: Verify the release")).toBeTruthy();
   expect(view.queryByRole("button", { name: /Pursuing goal/ })).toBeNull();
 });
 
@@ -103,27 +90,21 @@ it("preserves Markdown-only progress refresh outcomes and clears them after reco
       updatedAt: 1,
       markdown: "Release notes preserved",
     },
-    showInChat: true,
     hasActiveRun: false,
     onOpen,
   };
-  const initial: ChatActivityPillsProps = {
-    presented: true,
-    approvalPending: false,
-    progress,
-  };
-  const view = mountPills(initial);
-  expect(view.getByRole("button", { name: "Task progress" })).toBeTruthy();
+  const view = mountPills({ progress });
+  expect(view.button("Task progress")).toBeTruthy();
   for (const refresh of ["pending", "failed", "timeout"] as const) {
-    view.update({ ...initial, progress: { ...progress, refresh } });
+    view.update({ progress: { ...progress, refresh } });
     const status =
       refresh === "pending"
         ? "Updating saved progress"
         : "Progress update unavailable; last plan preserved";
-    expect(view.getByRole("button", { name: `Task progress, ${status}` })).toBeTruthy();
+    expect(view.button(`Task progress, ${status}`)).toBeTruthy();
   }
-  view.update(initial);
-  const button = view.getByRole<HTMLButtonElement>("button", { name: "Task progress" });
+  view.update({ progress });
+  const button = view.button("Task progress");
   expect(view.queryByRole("button", { name: /Progress update unavailable/ })).toBeNull();
   button.click();
   expect(onOpen).toHaveBeenCalledExactlyOnceWith(button);
@@ -132,9 +113,7 @@ it("preserves Markdown-only progress refresh outcomes and clears them after reco
 it("retains the goal action while approval hides subagent activity, then restores it", () => {
   const onGoal = vi.fn();
   const onSubagents = vi.fn();
-  const initial: ChatActivityPillsProps = {
-    presented: true,
-    approvalPending: false,
+  const view = mountPills({
     goal: { value: goal, executionConfirmed: false, onOpen: onGoal },
     subagents: {
       activities: [
@@ -148,20 +127,17 @@ it("retains the goal action while approval hides subagent activity, then restore
       ],
       onOpen: onSubagents,
     },
-  };
-  const view = mountPills(initial);
-  expect(view.getByRole("button", { name: "1 working" })).toBeTruthy();
-  view.update({ ...initial, approvalPending: true });
-  expect(view.queryByRole("button", { name: "1 working" })).toBeNull();
-  const goalButton = view.getByRole<HTMLButtonElement>("button", {
-    name: "Goal active: Verify the release",
   });
+  expect(view.button("1 working")).toBeTruthy();
+  view.update({ approvalPending: true });
+  expect(view.queryByRole("button", { name: "1 working" })).toBeNull();
+  const goalButton = view.button("Goal active: Verify the release");
   goalButton.click();
   expect(onGoal).toHaveBeenCalledExactlyOnceWith(goalButton);
   expect(onSubagents).not.toHaveBeenCalled();
 
-  view.update(initial);
-  const subagentButton = view.getByRole<HTMLButtonElement>("button", { name: "1 working" });
+  view.update({ approvalPending: false });
+  const subagentButton = view.button("1 working");
   subagentButton.click();
   expect(onSubagents).toHaveBeenCalledExactlyOnceWith(subagentButton);
 });

@@ -110,6 +110,50 @@ beforeEach(() => {
   f = new ProfileFixture();
 });
 
+it("loads a changed locale without replacing the edited profile input", async () => {
+  const input = f.input("name");
+  input.focus();
+  input.setSelectionRange(2, 5);
+  f.update({ locale: "sv" });
+  await f.waitForText("Spara och publicera");
+  expect(f.input("name")).toBe(input);
+  expect(input.value).toBe("Alice Updated");
+  expect(document.activeElement).toBe(input);
+  expect(input.selectionStart).toBe(2);
+  expect(input.selectionEnd).toBe(5);
+  expect(f.request).not.toHaveBeenCalled();
+  f.update({ locale: "en" });
+  expect(f.button("Save & Publish")).toBeDefined();
+});
+
+it("retains channel and profile facts while refreshed snapshots update their values", () => {
+  f.click("Cancel");
+  const fact = (label: string) =>
+    [...f.container.querySelectorAll("dt")].find((node) => node.textContent === label)!;
+  const configured = fact("Configured");
+  const name = fact("Name");
+  const nameValue = name.nextElementSibling;
+  const key = f.container.querySelector("code");
+
+  f.update({
+    status: {
+      configured: false,
+      running: false,
+      publicKey: "synthetic-public-key",
+      profile: { name: "Refreshed", about: "A new profile description" },
+    },
+  });
+
+  expect(fact("Configured")).toBe(configured);
+  expect(configured.nextElementSibling?.textContent).toBe("No");
+  expect(fact("Name")).toBe(name);
+  expect(name.nextElementSibling).toBe(nameValue);
+  expect(nameValue?.textContent).toBe("Refreshed");
+  expect(fact("About").nextElementSibling?.textContent).toBe("A new profile description");
+  expect(f.container.querySelector("code")).toBe(key);
+  expect(key?.textContent).toBe("synthetic-public-key");
+});
+
 it.each([true, false])("publishes the live draft with persisted=%s", async (persisted) => {
   f.request.mockResolvedValue(ok({ ok: true, persisted }));
   const input = f.input("name");

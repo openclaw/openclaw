@@ -1,13 +1,16 @@
 import { execFile, execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
+import { bindGitInvocation } from "../../../scripts/pr-lib/git-invocation.mjs";
+import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveExecutablePath } from "../../infra/executable-path.js";
+import { gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -25,13 +28,20 @@ function expectReady(result: SpawnSyncReturns<string>) {
   expect(JSON.parse(result.stdout)).toEqual({ ready: true });
 }
 
-async function fixture(fail = false, networkUrl?: string) {
+async function fixture(fail = false, networkUrl?: string, sourceUrl = url) {
   const root = await fs.realpath(tempDirs.make("project-seed-script-"));
   const home = path.join(root, "home's directory");
   const repository = path.join(root, "source");
   const bin = path.join(root, "bin");
   await Promise.all([home, repository, bin].map((dir) => fs.mkdir(dir)));
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const selectedGit = resolveExecutablePath("git", { cwd: process.cwd(), useCache: false });
+  assert(selectedGit, "Project seed fixture requires git");
+  // Keep a policy launcher's backend discovery outside the fixture shim's PATH;
+  // otherwise its bare Git delegation can recursively select that same shim.
+  const realGit = bindGitInvocation(
+    tempDirs.make("project-seed-host-git-"),
+    selectedGit,
+  ).executable;
   const git = (cwd: string, args: string[]) =>
     execFileSync(realGit, ["-C", cwd, ...args], {
       encoding: "utf8",
@@ -77,10 +87,11 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
-if (args.includes("fetch") && args.includes(${JSON.stringify(url)})) {
+if (args.includes("fetch") && args.includes(${JSON.stringify(sourceUrl)})) {
   for (const flag of ["--depth=1", "--no-write-fetch-head", "--no-recurse-submodules", "http.followRedirects=false", "protocol.allow=never", "credential.helper="]) assert(args.includes(flag));
   assert.equal(args.at(-1), ${JSON.stringify(baseCommit)});
-  const inheritedAuthKeys = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_TRACE", "GH_TOKEN", "GITHUB_TOKEN", "git_config_count", "git_config_key_0", "git_config_value_0", "Git_Trace", "gh_token", "GitHub_Token"].filter((key) => process.env[key] !== undefined);
+  assert.deepEqual(Object.fromEntries(Object.entries(process.env).filter(([key]) => /^GIT_CONFIG_(COUNT|KEY_[0-9]+|VALUE_[0-9]+)$/i.test(key))), ${JSON.stringify(gitMaintenanceEnvironment())});
+  const inheritedAuthKeys = ["GIT_TRACE", "GH_TOKEN", "GITHUB_TOKEN", "Git_Trace", "gh_token", "GitHub_Token"].filter((key) => process.env[key] !== undefined);
   fs.writeFileSync(${JSON.stringify(inheritedAuthWitness)}, JSON.stringify(inheritedAuthKeys));
   assert.deepEqual(inheritedAuthKeys, []);
   assert.equal(process.env.GIT_CONFIG_GLOBAL, require("node:os").devNull);
@@ -98,7 +109,7 @@ if (args.includes("fetch") && args.includes(${JSON.stringify(url)})) {
     fs.writeSync(2, "synthetic remote fetch diagnostic\\n".repeat(20000));
     process.exit(17);
   }
-  args.splice(args.indexOf(${JSON.stringify(url)}), 1, ${JSON.stringify(networkUrl ?? repository)});
+  args.splice(args.indexOf(${JSON.stringify(sourceUrl)}), 1, ${JSON.stringify(networkUrl ?? repository)});
   args.unshift("-c", ${JSON.stringify(networkUrl ? "protocol.http.allow=always" : "protocol.file.allow=always")});
 }
 const result = spawnSync(${JSON.stringify(realGit)}, args, { env: process.env, stdio: "inherit" });
@@ -154,12 +165,12 @@ process.exit(result.status ?? 1);
     setupScript,
     run,
     runAsync: (inheritedEnv: NodeJS.ProcessEnv) =>
-      execFileAsync("sh", command({ repository: { directory, url } }), {
+      execFileAsync("sh", command({ repository: { directory, url: sourceUrl } }), {
         encoding: "utf8",
         timeout: 30_000,
         env: { ...env, ...inheritedEnv },
       }),
-    transport: { directory, url },
+    transport: { directory, url: sourceUrl },
     seed: path.join(path.dirname(directory), input.seedKey),
     baseCommit,
   };
@@ -173,12 +184,7 @@ describe("public repository project seeds", () => {
       response.writeHead(401, { "WWW-Authenticate": 'Basic realm="synthetic-test"' });
       response.end();
     });
-    await once(server.listen(0, "127.0.0.1"), "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("HTTP authentication fixture did not bind a TCP port");
-    }
-    const f = await fixture(false, `http://127.0.0.1:${address.port}/repository.git`);
+    const f = await fixture(false, `${await listenLoopback(server)}/repository.git`);
     const netrc = "machine 127.0.0.1 login synthetic-user password synthetic-password\n";
     for (const name of [".netrc", "_netrc", "override.netrc"]) {
       await fs.writeFile(path.join(f.home, name), netrc, { mode: 0o600 });
@@ -203,44 +209,51 @@ describe("public repository project seeds", () => {
     expect(await read(path.join(f.home, ".netrc"))).toBe(netrc);
   });
 
-  it("installs only the pinned Git objects without inherited authentication or executing repository code, then reuses them offline", async () => {
-    const f = await fixture();
-    expectReady(f.run({ repository: f.transport }));
-    expect(JSON.parse(await read(f.inheritedAuthWitness))).toEqual([]);
-    expect(await read(path.join(f.seed, "input.txt"))).toBe("pinned A\n");
-    expect((await fs.readdir(f.seed)).toSorted()).toEqual([".git", ".openclaw", "input.txt"]);
-    expect(await read(path.join(f.seed, ".openclaw", "worktree-setup.sh"))).toBe(f.setupScript);
-    expect(f.git(f.seed, ["rev-parse", "HEAD"])).toBe(f.baseCommit);
-    expect(f.git(f.seed, ["rev-list", "--count", "HEAD"])).toBe("1");
-    expect(f.git(f.seed, ["remote", "get-url", "origin"])).toBe(url);
-    expect(f.git(f.seed, ["status", "--porcelain"])).toBe("");
-    expect(await read(path.join(f.seed, ".git", "config"))).not.toContain(token);
-    await expectAbsent(path.join(f.seed, ".git", "FETCH_HEAD"), f.directory);
-    await fs.rename(f.repository, `${f.repository}-offline`);
-    expectReady(f.run());
-    expect(await read(f.witness)).toBe("fetch\n");
-    await expectAbsent(f.codeWitness, f.askpassWitness);
-  });
+  it.each([url, "https://forge.example.test/team/subgroup/project.git"])(
+    "installs pinned Git objects from %s without inherited authentication or executing repository code, then reuses them offline",
+    async (sourceUrl) => {
+      const f = await fixture(false, undefined, sourceUrl);
+      expectReady(f.run({ repository: f.transport }));
+      expect(JSON.parse(await read(f.inheritedAuthWitness))).toEqual([]);
+      expect(await read(path.join(f.seed, "input.txt"))).toBe("pinned A\n");
+      expect((await fs.readdir(f.seed)).toSorted()).toEqual([".git", ".openclaw", "input.txt"]);
+      expect(await read(path.join(f.seed, ".openclaw", "worktree-setup.sh"))).toBe(f.setupScript);
+      expect(f.git(f.seed, ["rev-parse", "HEAD"])).toBe(f.baseCommit);
+      expect(f.git(f.seed, ["rev-list", "--count", "HEAD"])).toBe("1");
+      expect(f.git(f.seed, ["remote", "get-url", "origin"])).toBe(sourceUrl);
+      expect(f.git(f.seed, ["status", "--porcelain"])).toBe("");
+      expect(await read(path.join(f.seed, ".git", "config"))).not.toContain(token);
+      await expectAbsent(path.join(f.seed, ".git", "FETCH_HEAD"), f.directory);
+      await fs.rename(f.repository, `${f.repository}-offline`);
+      expectReady(f.run());
+      expect(await read(f.witness)).toBe("fetch\n");
+      await expectAbsent(f.codeWitness, f.askpassWitness);
+    },
+  );
 
-  it("installs an enterprise repository pack without contacting its credentialed origin", async () => {
+  it.each([
+    "https://ghe.example.test/acme/private-repo.git",
+    "https://gitlab.example.test/group/subgroup/private-repo.git",
+    "ssh://git@forge.example.test/group/subgroup/private-repo.git",
+    "git@forge.example.test:group/subgroup/private-repo.git",
+  ])("installs a repository pack without contacting its origin %s", async (repositoryUrl) => {
     const f = await fixture();
     const pack = execFileSync("git", ["-C", f.repository, "pack-objects", "--stdout", "--revs"], {
       input: `${f.baseCommit}\n`,
       env: f.env,
     });
     await fs.writeFile(path.join(f.directory, "base.pack"), pack);
-    const enterpriseUrl = "https://ghe.example.test/acme/private-repo.git";
     expectReady(
       f.run({
         pack: {
           directory: f.directory,
           bytes: pack.byteLength,
           sha256: createHash("sha256").update(pack).digest("hex"),
-          repositoryUrl: enterpriseUrl,
+          repositoryUrl,
         },
       }),
     );
-    expect(f.git(f.seed, ["remote", "get-url", "origin"])).toBe(enterpriseUrl);
+    expect(f.git(f.seed, ["remote", "get-url", "origin"])).toBe(repositoryUrl);
     await expectAbsent(f.witness);
   });
 

@@ -2,6 +2,7 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { escapeRegExp } from "../../shared/regexp.js";
+import type { TextProjection } from "../../shared/text/text-projection.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./delivery-hints.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
 
@@ -11,18 +12,10 @@ const ACTIVE_MEMORY_CONTEXT_HEADER = "Context:";
 const ACTIVE_MEMORY_OPEN_TAG = "<active_memory_plugin>";
 const ACTIVE_MEMORY_CLOSE_TAG = "</active_memory_plugin>";
 // Historical producer bytes: this companion preceded the marked JSON hint field.
-export const LEGACY_REQUESTER_PROFILE_HINT =
+const LEGACY_REQUESTER_PROFILE_HINT =
   'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
-export const INBOUND_METADATA_MARKERS = [
-  "[",
-  INBOUND_CONTEXT_MARKER,
-  ...MESSAGE_TOOL_DELIVERY_HINTS,
-  ACTIVE_MEMORY_CONTEXT_HEADER,
-];
-const METADATA_TOKENS_RE = new RegExp(
-  [INBOUND_CONTEXT_MARKER, ...MESSAGE_TOOL_DELIVERY_HINTS].map(escapeRegExp).join("|"),
-  "g",
-);
+const INBOUND_METADATA_SENTINELS = [INBOUND_CONTEXT_MARKER, ...MESSAGE_TOOL_DELIVERY_HINTS];
+const METADATA_TOKENS_RE = new RegExp(INBOUND_METADATA_SENTINELS.map(escapeRegExp).join("|"), "g");
 
 type TextLine = { start: number; end: number; next: number; trimmed: string };
 type LineSpan = { start: number; next: number };
@@ -74,6 +67,63 @@ export function hasInboundMetadataSentinel(text: string): boolean {
     // Bare Context: is a sentinel only as a complete line.
     (text.includes(ACTIVE_MEMORY_CONTEXT_HEADER) && /^[ \t]*Context:[ \t]*$/m.test(text))
   );
+}
+
+/** Probe appended bytes only until canonical metadata can affect the visible text. */
+export function createInboundMetadataProbe(): (input: TextProjection) => boolean {
+  const scanOverlap = Math.max(...INBOUND_METADATA_SENTINELS.map((token) => token.length - 1));
+  let active = false;
+  let tail = "";
+  let contextOffset = 0;
+  let timestampHead: string | null = "";
+  let timestampOpen = false;
+  return ({ text, delta }) => {
+    if (active) {
+      return true;
+    }
+    const appended = delta ?? text;
+    const scan = tail + appended;
+    tail = scan.slice(-scanOverlap);
+    if (INBOUND_METADATA_SENTINELS.some((token) => scan.includes(token))) {
+      active = true;
+      return true;
+    }
+    let timestampTail = appended;
+    if (timestampHead !== null) {
+      // The fixed timestamp grammar through minutes is 21 ASCII characters.
+      const needed = 21 - timestampHead.length;
+      timestampHead += appended.slice(0, needed);
+      timestampTail = appended.slice(needed);
+      if (timestampHead.length === 21) {
+        timestampOpen = LEADING_TIMESTAMP_PREFIX_RE.test(timestampHead + "]");
+        timestampHead = null;
+      }
+    }
+    if (timestampOpen && timestampTail.includes("]")) {
+      active = true;
+      return true;
+    }
+    for (const char of appended) {
+      if (char === "\n" || char === "\r" || char === "\u2028" || char === "\u2029") {
+        if (contextOffset === ACTIVE_MEMORY_CONTEXT_HEADER.length) {
+          active = true;
+          return true;
+        }
+        contextOffset = 0;
+      } else if (char === " " || char === "\t") {
+        if (contextOffset !== 0 && contextOffset !== ACTIVE_MEMORY_CONTEXT_HEADER.length) {
+          contextOffset = -1;
+        }
+      } else if (contextOffset >= 0 && char === ACTIVE_MEMORY_CONTEXT_HEADER[contextOffset]) {
+        contextOffset++;
+      } else {
+        contextOffset = -1;
+      }
+    }
+    // Complete lines follow JavaScript's line boundaries, like the canonical sentinel.
+    // At EOF, don't latch: the next delta may turn Context: into ordinary inline prose.
+    return contextOffset === ACTIVE_MEMORY_CONTEXT_HEADER.length;
+  };
 }
 
 function metadataBlockEnd(text: string, header: TextLine): number {
@@ -197,7 +247,7 @@ export function stripInboundMetadata(text: string): string {
 }
 
 /** Returns the leading metadata boundary without rewriting any later content. */
-export function readLeadingInboundMetadataEnd(text: string): number {
+function readLeadingInboundMetadataEnd(text: string): number {
   let start = skipEmptyLines(text, 0, false);
   let line = readTextLine(text, start);
   const strippedDeliveryHint = Boolean(line && isMessageToolDeliveryHintLine(line.trimmed));

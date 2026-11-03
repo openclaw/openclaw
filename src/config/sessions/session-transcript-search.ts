@@ -30,10 +30,8 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -209,7 +207,7 @@ export function searchSessionTranscriptsReadOnlySync(
               params.sessionKeys === undefined
                 ? eb.or([
                     isPostgresSqlConnection(database.db)
-                      ? /* kysely-allow-raw: Literal prefix comparison preserves underscores in agent IDs. */ sql<boolean>`left(${eb.ref("session_key")}, ${agentPrefix.length}) = ${agentPrefix}`
+                      ? /* kysely-allow-raw: starts_with keeps underscores literal and, unlike left(), has planner selectivity, so the GIN match can drive the join. The prefix is a literal so reused prepared statements keep that estimate in their generic plan. */ sql<boolean>`${eb.ref("session_key")} ^@ ${sql.lit(agentPrefix)}`
                       : /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */ sql<boolean>`${eb.ref("session_key")} GLOB ${toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" })}`,
                     eb("session_key", "in", ["global", "unknown"]),
                   ])

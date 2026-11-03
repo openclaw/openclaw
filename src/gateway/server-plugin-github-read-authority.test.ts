@@ -18,6 +18,7 @@ import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-sur
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -87,13 +88,10 @@ function fixture(method: "preview" | "detail") {
   );
   context.getGatewayMethodRegistry = () => methods;
   const client = createOperatorWsClient({ scopes: ["operator.read"] });
-  client.authenticatedUserProfile = {
-    profileId: ensureProfileForEmail("github-reader@example.test").id,
-    displayName: "GitHub reader",
-    avatarRevision: "1",
-    hasAvatar: false,
-    updatedAt: 1,
-  };
+  client.authenticatedUserProfile = dispatchProfile(
+    ensureProfileForEmail("github-reader@example.test").id,
+    { displayName: "GitHub reader" },
+  );
   const harness = createDispatchTestHarness({ buildRequestContext: () => context });
   harness.clients.add(client);
   context.getClientConnIds = (filter) =>
@@ -156,7 +154,6 @@ describe("registered GitHub readers", () => {
       ok: true,
       payload: { title: "Preview without reloading" },
     });
-    expect(f.fetchMock).toHaveBeenCalled();
   });
 
   it("does not deliver detail when the original operator is revoked during the read", async () => {

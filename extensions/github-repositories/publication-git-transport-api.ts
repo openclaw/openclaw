@@ -1,8 +1,10 @@
 import os from "node:os";
 import {
+  appendGitConfig,
+  gitMaintenanceEnvironment,
+  withGitNetworkRetry,
   runCommandBuffered,
   withGitProcessOperation,
-  withGitNetworkRetry,
 } from "openclaw/plugin-sdk/process-runtime";
 import { parseGitHubPublicationBaseRef } from "./publication-base-api.js";
 type GitHubCommandOptions = {
@@ -28,9 +30,7 @@ export async function runGitHubPublicationCommand(
           env: {
             ...(options.env ?? process.env),
             GIT_NO_REPLACE_OBJECTS: "1",
-            GIT_CONFIG_COUNT: "1",
-            GIT_CONFIG_KEY_0: "core.hooksPath",
-            GIT_CONFIG_VALUE_0: os.devNull,
+            ...appendGitConfig(gitMaintenanceEnvironment(), [["core.hooksPath", os.devNull]]),
           },
           ...(options.input !== undefined
             ? { input: typeof options.input === "function" ? options.input() : options.input }

@@ -15,8 +15,8 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../components/solid/settings-ui.tsx";
-import { mountSolidContent } from "../lib/dom/solid-snapshot.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { mountSolidContent } from "../lib/reactive/mount-solid-content.ts";
 
 export function createControlUiSettingsComponents(
   signal: AbortSignal,

@@ -94,7 +94,7 @@ export function readSelectedSessionEntryRows(
       ]),
   );
   const participantQuery = windowQuery.$if(
-    options?.includeWindowFacts === true &&
+    (options?.includeWindowFacts === true || options?.includeRowTranscriptProjection === true) &&
       options.projectParticipants !== false &&
       projection !== "delivery",
     (builder) =>
@@ -114,7 +114,6 @@ export function readSelectedSessionEntryRows(
                     inner.ref("actor_id"),
                     inner.ref("identity_namespace"),
                   ],
-                  "native",
                 ).as("identities"),
               )
               .whereRef("session_participants.session_key", "=", "session_nodes.session_key")
@@ -166,9 +165,12 @@ export function readSelectedSessionEntryRows(
           ? outer
               .selectFrom("session_members")
               .select((builder) =>
-                jsonOrderedArray(database.db, builder.ref("identity_id"), [
+                jsonOrderedArray(
+                  database.db,
                   builder.ref("identity_id"),
-                ]).as("ids"),
+                  [builder.ref("identity_id")],
+                  "not-null",
+                ).as("ids"),
               )
               .whereRef("session_members.session_key", "=", "session_nodes.session_key")
               .$asScalar()

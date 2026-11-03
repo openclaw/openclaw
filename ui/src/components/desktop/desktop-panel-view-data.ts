@@ -95,7 +95,7 @@ export function projectDesktopPanelView(facts: DesktopViewFacts, actions: Deskto
       loading,
       automaticSource,
       hasTarget: host.sessionKey !== null || host.requestedSource !== null,
-      errorText: controls.launcher.feedback().error ?? errorText,
+      errorText,
       noticeText,
       takeoverText:
         controlTakeoverRecoveryUsed && (phase === "connecting" || phase === "connected")
@@ -124,7 +124,7 @@ export function projectDesktopPanelView(facts: DesktopViewFacts, actions: Deskto
     },
     controlling,
     desktopApps,
-    launchingApp: controls.launcher.feedback().app ?? null,
+    launcher: controls.launcher,
     startup: sessionSource.startupEnvironment,
     sizing: {
       mode: sizingMode,

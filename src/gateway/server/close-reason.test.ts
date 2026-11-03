@@ -17,11 +17,11 @@ describe("truncateCloseReason", () => {
     expect(result).toBe("a".repeat(120));
   });
 
-  it("respects a custom maxBytes cap", () => {
-    const reason = "😀".repeat(10); // each 4 bytes = 40 bytes
-    const result = truncateCloseReason(reason, 10);
-    expect(Buffer.byteLength(result)).toBeLessThanOrEqual(10);
+  it("does not split a UTF-8 code point at the byte cap", () => {
+    const reason = "a" + "😀".repeat(40);
+    const result = truncateCloseReason(reason);
+    expect(Buffer.byteLength(result)).toBeLessThanOrEqual(120);
     expect(result).not.toContain("�");
-    expect(result).toBe("😀".repeat(2)); // 8 bytes, next emoji would exceed 10
+    expect(result).toBe("a" + "😀".repeat(29));
   });
 });

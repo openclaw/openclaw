@@ -64,6 +64,7 @@ import { linkCanonicalUserProfileEmail } from "../../src/state/user-profile-writ
 import { linkEmail, setUserProfileRole } from "../../src/state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../src/test-utils/gateway-scheduler-clock.js";
+import { withoutMainThreadSql } from "../../src/test-utils/main-thread-sql-spies.test-support.js";
 import { requireNativeSqliteDatabase } from "../../src/test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
@@ -111,7 +112,9 @@ const preparePoll = (client = alice) => preparePersonalGitHubPoll(owner(client))
 async function connect(client = alice) {
   const started = await start(client);
   preparePoll(client);
-  const result = await rpc(client, "users.github.authorize.poll", { requestId: started.requestId });
+  const result = await withoutMainThreadSql(() =>
+    rpc(client, "users.github.authorize.poll", { requestId: started.requestId }),
+  );
   expect(result.mock.calls[0]?.[1]).toMatchObject({ status: "success" });
   const connection = (await readConnection(owner(client)))!;
   if (connection.selection.kind !== "connected") {
@@ -348,6 +351,18 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       unobserve();
       warning.mockRestore();
     }
+  });
+
+  it("keeps personal profile install, refresh, and retirement leases off the Gateway thread", async () => {
+    await connect();
+    expireUserGitHubAccessToken(owner());
+    await withoutMainThreadSql(async () => {
+      await lifecycle.personal.refresh(owner());
+      expect(network.refresh).toHaveBeenCalledOnce();
+      expect(await rpc(alice, "users.github.disconnect")).toHaveBeenCalledWith(true, {
+        disconnected: true,
+      });
+    });
   });
 
   it("rejects a missing GitHub CLI before creating personal authorization state", async () => {
@@ -911,7 +926,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
 
   it("skips maintenance leases for fresh personal connections", async () => {
     const connection = await connect();
-    const lease = vi.spyOn(stateLease, "withOpenClawStateLease");
+    const lease = vi.spyOn(stateLease, "withOpenClawStateLeaseAsync");
     try {
       await lifecycle.personal.maintain();
       expect(lease).not.toHaveBeenCalled();
@@ -934,16 +949,13 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
               ...connected,
               selection: { kind: "disconnected" as const },
             };
-      const acquire = stateLease.withOpenClawStateLease;
+      const acquire = stateLease.withOpenClawStateLeaseAsync;
       const lease = vi
-        .spyOn(stateLease, "withOpenClawStateLease")
-        .mockImplementation((options, run) =>
-          acquire(options, async (owned, identity) => {
-            updateUserGitHubConnection(
-              owner(),
-              () => current,
-              () => owned.assertOwned(),
-            );
+        .spyOn(stateLease, "withOpenClawStateLeaseAsync")
+        .mockImplementation((options, captured, run) =>
+          acquire(options, captured, async (owned, identity) => {
+            await owned.assertOwned();
+            updateUserGitHubConnection(owner(), () => current, owned.assertCurrent);
             return run(owned, identity);
           }),
         );

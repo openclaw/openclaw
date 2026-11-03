@@ -43,7 +43,10 @@ export async function performSessionGitHubInspection(
   const inspected = await service.inspectPullRequest({
     pullRequestUrl: params.pullRequestUrl,
     agentId: session.agentId,
-    reader: prepareOwnGitHubPullRequestReader(admitted.requester),
+    reader: await prepareOwnGitHubPullRequestReader(admitted.requester, {
+      ...session,
+      sessionId: loaded.entry.sessionId,
+    }),
     assertCurrent: () => {
       assertService();
       selected.readCurrent();

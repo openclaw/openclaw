@@ -22,8 +22,10 @@ import {
   NpmChannelResolutionError,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
+import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import {
   copyPluginInstallTransactionRequest,
+  retainPluginInstallTransaction,
   withPluginInstallTransactions,
 } from "./install-transaction.js";
 import {
@@ -38,8 +40,11 @@ import {
   resolveTrustedSourceLinkedOfficialClawHubInstall as resolveOfficialClawHubInstall,
   resolveTrustedSourceLinkedOfficialNpmInstall as resolveOfficialNpmInstall,
 } from "./official-external-install-records.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
-import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
+import {
+  auditDeclaredOpenClawHostDependency,
+  repairInstalledOpenClawHostLinks,
+} from "./plugin-peer-link.js";
 import {
   buildClawHubTrustSkippedOutcome,
   buildDryRunPluginUpdateOutcome,
@@ -56,13 +61,8 @@ import {
 } from "./update-attempt.js";
 import { preparePluginUpdateCapabilityConsent } from "./update-capability-consent.js";
 import {
-  resolveRecordedClawHubPackage,
-  runPluginUpdateWithClawHubLease,
-} from "./update-claw-lifecycle.js";
-import {
   hasRunnableInstalledNpmPayload,
   migratePluginConfigId,
-  repairRegisteredOpenClawHostLink,
   resolveRecordedExtensionsDir,
 } from "./update-config.js";
 import {
@@ -83,12 +83,11 @@ import {
   type PluginUpdateSummary,
   type UpdateInstalledPluginsParams,
 } from "./update-source.js";
+import { finalizePluginUpdateSummary } from "./update-summary.js";
 import {
-  createPluginUpdateTransactionState,
-  finalizePluginUpdateSummary,
-  recordPluginUpdateFailure,
-  recordPluginUpdateTransaction,
-} from "./update-summary.js";
+  resolveRecordedClawHubPackage,
+  runPluginUpdateWithClawHubLease,
+} from "./update-template-lifecycle.js";
 import { reconcileUnchangedUpdate } from "./update-unchanged.js";
 
 export async function updateNpmInstalledPlugins(
@@ -97,8 +96,8 @@ export async function updateNpmInstalledPlugins(
   if (params.dryRun) {
     return await runInstalledPluginUpdate(params);
   }
-  return await withPluginLifecycleLease({}, (lease) =>
-    withPluginInstallTransactions(params, () => lease.assertOwned(), runInstalledPluginUpdate),
+  return await withPluginLifecycleLeaseAsync({}, (lease) =>
+    withPluginInstallTransactions(params, lease, runInstalledPluginUpdate),
   );
 }
 
@@ -121,7 +120,7 @@ async function runInstalledPluginUpdate(
     bundledSources: bundled,
   });
   const outcomes: PluginUpdateOutcome[] = [];
-  const transactionState = createPluginUpdateTransactionState(params);
+  const installOwnerMigrations: Record<string, string> = {};
   let next = params.config;
   let changed = false;
   let ranNpmInstaller = false;
@@ -129,23 +128,13 @@ async function runInstalledPluginUpdate(
     outcomes.push({ pluginId, status: "skipped", message });
   };
 
-  const recordFailure = (
-    pluginId: string,
-    message: string,
-    options: Parameters<typeof recordPluginUpdateFailure>[0]["options"] = {},
-  ) => {
-    const failure = recordPluginUpdateFailure({
-      config: next,
-      disableOnFailure: params.disableOnFailure,
-      dryRun: params.dryRun,
-      logger,
-      outcomes,
+  const recordFailure = (pluginId: string, message: string, code?: string) => {
+    outcomes.push({
       pluginId,
+      status: "error",
+      code,
       message,
-      options,
     });
-    next = failure.config;
-    changed ||= failure.changed;
   };
 
   const duplicateAliases = new Map<string, string>();
@@ -355,13 +344,15 @@ async function runInstalledPluginUpdate(
       continue;
     }
     if (!params.dryRun && record.source === "npm" && currentVersion) {
-      changed =
-        (await repairRegisteredOpenClawHostLink({
-          pluginId,
-          record,
-          logger,
-          beforePersistentEffect: assertCurrent,
-        })) || changed;
+      const repaired = await repairInstalledOpenClawHostLinks({
+        managedNpmRoots: [],
+        installRecords: { [pluginId]: record },
+        extensionsDir: resolveDefaultPluginExtensionsDir(),
+        logger,
+        beforePersistentApply: assertCurrent,
+        beforePersistentEffect: params.beforePersistentEffect,
+      });
+      changed = repaired.registeredRepaired > 0 || changed;
     }
     const recordSourceFailure = async (
       message: string,
@@ -369,19 +360,19 @@ async function runInstalledPluginUpdate(
       source: "npm" | "clawhub" = "npm",
     ): Promise<void> => {
       let installedPayloadRunnable = false;
+      // Metadata failures precede target availability; core sync must retain a
+      // runnable install during a registry outage when retention is requested.
       if (
+        retainOnUnavailable &&
         (code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE ||
-          (retainOnUnavailable && isUnavailablePluginSource(source, { ok: false, code }))) &&
-        (params.disableOnFailure || retainOnUnavailable) &&
+          isUnavailablePluginSource(source, { ok: false, code })) &&
         !params.dryRun &&
         currentVersion
       ) {
-        const compatible =
-          !retainOnUnavailable ||
-          isNpmMetadataCompatibleWithCurrentHost(
-            { packageOpenClaw: installedManifest?.openclaw },
-            { hostVersion: params.coreVersion, allowLegacyBareSemver: true },
-          );
+        const compatible = isNpmMetadataCompatibleWithCurrentHost(
+          { packageOpenClaw: installedManifest?.openclaw },
+          { hostVersion: params.coreVersion, allowLegacyBareSemver: true },
+        );
         try {
           installedPayloadRunnable =
             compatible &&
@@ -405,7 +396,7 @@ async function runInstalledPluginUpdate(
         });
         return;
       }
-      recordFailure(pluginId, message, { code, installedPayloadRunnable });
+      recordFailure(pluginId, message, code);
     };
     if (npmResolutionError) {
       await recordSourceFailure(npmResolutionError.message, npmResolutionError.code);
@@ -619,8 +610,9 @@ async function runInstalledPluginUpdate(
     }
 
     const resolvedPluginId = result.pluginId;
-    recordPluginUpdateTransaction(transactionState, result, pluginId, resolvedPluginId);
+    retainPluginInstallTransaction(params, result);
     if (resolvedPluginId !== pluginId) {
+      installOwnerMigrations[pluginId] = resolvedPluginId;
       next = migratePluginConfigId(next, pluginId, resolvedPluginId);
     }
 
@@ -693,7 +685,7 @@ async function runInstalledPluginUpdate(
     skipIds: params.skipIds,
     dryRun: params.dryRun,
     outcomes,
-    installOwnerMigrations: transactionState.installOwnerMigrations,
+    installOwnerMigrations,
   });
   next = duplicateReconciliation.config;
   changed ||= duplicateReconciliation.changed;
@@ -704,7 +696,8 @@ async function runInstalledPluginUpdate(
     outcomes,
     ranNpmInstaller,
     logger,
-    transactionState,
-    beforePersistentEffect: assertCurrent,
+    installOwnerMigrations,
+    beforePersistentApply: assertCurrent,
+    beforePersistentEffect: params.beforePersistentEffect,
   });
 }

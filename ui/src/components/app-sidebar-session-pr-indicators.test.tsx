@@ -293,3 +293,18 @@ describe("GitHub plugin session-row accessory", () => {
     });
   });
 });
+
+it("retains the plugin badge artwork when a receipt confirms its displayed count", async () => {
+  const h = await mountRow({
+    worktree: { id: "worktree", branch: "feature", repoRoot: "/synthetic" },
+  });
+  h.push({ pullRequests: [pullRequest(17)] });
+  await waitForSolid(() => expect(h.badge()?.getAttribute("aria-label")).toContain("#17"));
+  const original = h.badge();
+  h.push({ pullRequests: [pullRequest(17)], pullRequestCount: 1 });
+  await waitForSolid(() => expect(h.badge()).toBe(original));
+  h.push({ pullRequests: [pullRequest(17)], pullRequestCount: 2 });
+  await waitForSolid(() =>
+    expect(h.badge()?.getAttribute("aria-label")).toContain("2 pull requests"),
+  );
+});

@@ -40,14 +40,14 @@ export type ControlUiGitHubSessionIdentity = ControlUiGitHubPreviewIdentity & {
   apiBaseUrl: string;
   repository: { id: number; owner: string; repo: string };
 };
-type ControlUiGitHubPreviewTarget = {
+type GitHubItemTarget = {
   owner: string;
   repo: string;
   kind: "issue" | "pull";
   number: number;
 };
 type GitHubDetailTarget =
-  | ControlUiGitHubPreviewTarget
+  | GitHubItemTarget
   | { owner: string; repo: string; kind: "commit"; sha: string };
 
 type GitHubReadTarget =
@@ -124,6 +124,18 @@ type GitHubPublicApi = {
     request: (token: string | undefined) => Promise<T>,
   ) => Promise<T>;
   readGitHubJsonResponse: (response: Response, maxBytes?: number) => Promise<unknown>;
+  fetchGitHubJsonPage: (
+    url: string,
+    fetchImpl: typeof fetch,
+    token?: string,
+    options?: {
+      maxBytes?: number;
+      apiBaseUrl?: string;
+      beforeRedirect?: (url: URL) => Promise<void>;
+      identity?: Pick<ControlUiGitHubPreviewIdentity, "revalidate" | "assertSelected" | "signal">;
+      signal?: AbortSignal;
+    },
+  ) => Promise<{ value: unknown; link: string | null }>;
   fetchGitHubJson: (
     url: string,
     fetchImpl: typeof fetch,
@@ -131,7 +143,7 @@ type GitHubPublicApi = {
     maxBytes?: number,
     apiBaseUrl?: string,
   ) => Promise<unknown>;
-  parseControlUiGitHubPreviewTarget: (params: unknown) => ControlUiGitHubPreviewTarget | null;
+  parseControlUiGitHubPreviewTarget: (params: unknown) => GitHubDetailTarget | null;
   parseGitHubTarget: (params: unknown) => GitHubDetailTarget | null;
   parseGitHubReadTarget: (params: unknown) => GitHubReadTarget | null;
   parseGitHubSearchParams: (params: unknown) => GitHubSearchParams | null;
@@ -150,7 +162,7 @@ type GitHubPublicApi = {
     section?: ControlUiLinkReaderSection,
   ) => Promise<ControlUiLinkReaderDocument>;
   loadSessionGitHubPreview: (
-    target: ControlUiGitHubPreviewTarget,
+    target: GitHubDetailTarget,
     identity: ControlUiGitHubSessionIdentity,
     fetchImpl?: typeof fetch,
   ) => Promise<Awaited<ReturnType<GitHubPublicApi["loadControlUiGitHubPreview"]>>>;
@@ -162,7 +174,7 @@ type GitHubPublicApi = {
     section?: ControlUiLinkReaderSection,
   ) => Promise<ControlUiLinkReaderDocument>;
   loadControlUiGitHubPreview: (
-    target: ControlUiGitHubPreviewTarget,
+    target: GitHubDetailTarget,
     identity?: ControlUiGitHubPreviewIdentity,
     fetchImpl?: typeof fetch,
     refresh?: boolean,
@@ -268,13 +280,13 @@ export const gitHubPublicApi: GitHubPublicApi = (() => {
     return {
       token,
       apiBaseUrl,
-      cacheScope: `${selectedHost}:${apiBaseUrl}:${library.githubApiCredentialCacheScope(token)}`,
+      apiScope: `${selectedHost}:${apiBaseUrl}`,
     };
   };
   const resolvePublicScope = () =>
     resolveConfiguredGitHubHost(getRuntimeConfigSnapshot()) === "github.com"
       ? resolveScope()
-      : { token: undefined, cacheScope: "public:anonymous" };
+      : { token: undefined, apiScope: "public" };
   const resolveReadIdentity = (
     identity: ControlUiGitHubPreviewIdentity | undefined,
   ): ControlUiGitHubPreviewIdentity => {
@@ -285,12 +297,14 @@ export const gitHubPublicApi: GitHubPublicApi = (() => {
     }
     const selected = resolvePublicScope();
     const assertSelected = () => {
-      if (resolvePublicScope().cacheScope !== selected.cacheScope) {
+      const current = resolvePublicScope();
+      if (current.apiScope !== selected.apiScope || current.token !== selected.token) {
         throw new library.ControlUiGitHubError(409, "GitHub credential changed; retry the request");
       }
     };
     return {
-      ...selected,
+      token: selected.token,
+      cacheScope: `${selected.apiScope}:${library.githubApiCredentialCacheScope(selected.token)}`,
       optionalAuth: true,
       assertSelected,
       revalidate: async () => assertSelected(),
@@ -331,11 +345,25 @@ export const gitHubPublicApi: GitHubPublicApi = (() => {
       args[8] ??= resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot());
       return library.fetchGitHubApi(...args);
     },
+    fetchGitHubJsonPage(url, fetchImpl, token, options) {
+      return library.fetchGitHubJsonPage(url, fetchImpl, token, {
+        ...options,
+        apiBaseUrl:
+          options?.apiBaseUrl ?? resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot()),
+      });
+    },
     fetchGitHubJson(...args) {
       args[4] ??= resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot());
       return library.fetchGitHubJson(...args);
     },
-    resolveGitHubApiCredentialScope: resolveScope,
+    resolveGitHubApiCredentialScope(env, host) {
+      const { token, apiBaseUrl, apiScope } = resolveScope(env, host);
+      return {
+        token,
+        apiBaseUrl,
+        cacheScope: `${apiScope}:${library.githubApiCredentialCacheScope(token)}`,
+      };
+    },
     formatControlUiGitHubPreviewError(error) {
       return isTrustedSecretSurfaceUnavailableError(error)
         ? { message: CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE, retryable: false }

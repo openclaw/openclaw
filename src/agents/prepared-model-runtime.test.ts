@@ -55,10 +55,10 @@ const scopedModel = (model: string, runtime: string, allow: string) => ({
 function holdNextBuild() {
   const started = createDeferred();
   const finish = createDeferred();
-  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, targetDir) => {
+  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _targetDir) => {
     started.resolve();
     await finish.promise;
-    return { agentDir: String(targetDir), wrote: false };
+    return {};
   });
   const work: Promise<unknown>[] = [];
   pendingBuilds.push(async () => {
@@ -191,7 +191,7 @@ describe("prepared model runtime snapshots", () => {
         }) => void;
       };
       options.onProviderCatalogOutcome?.({ provider: "openai", status: "auth-rejected" });
-      return { agentDir: fixture.state.agentDir("provider-outcome-agent"), wrote: false };
+      return {};
     });
 
     const snapshot = await publish(inputFor("provider-outcome-agent"));

@@ -185,6 +185,41 @@ it("prepares a plugin SecretRef through the real web-tools secret owner before e
   );
 });
 
+// A chat proxy's key is configured as the model-provider key; it must not become a search key.
+const CHAT_PROXY = "https://chat-proxy.example/v1";
+function modelKeyConfig(baseUrl: string, explicit: boolean): OpenClawConfig {
+  const config = searchConfig({ explicit, apiKey: "" });
+  config.models = { providers: { deepseek: { baseUrl, models: [], apiKey: API_KEY } } };
+  return config;
+}
+
+it("does not auto-detect DeepSeek from a chat proxy's model key", async () => {
+  const agentDir = state.agentDir();
+  const proxied = modelKeyConfig(CHAT_PROXY, false);
+  expect(resolveWebSearchProviderId({ config: proxied })).toBe("");
+  expect(await hasUsableWebSearchProvider({ config: proxied, agentDir })).toBe(false);
+});
+
+it("prepares the model key as a search key only while chat uses DeepSeek's API", async () => {
+  // The same model key, with DeepSeek's API and then with a chat proxy.
+  for (const [baseUrl, searchKey] of [
+    ["https://api.deepseek.com", API_KEY],
+    [CHAT_PROXY, ""],
+  ] as const) {
+    const sourceConfig = modelKeyConfig(baseUrl, true);
+    const resolvedConfig = structuredClone(sourceConfig);
+    const { manifestRegistry } = loadPluginMetadataSnapshot({
+      config: sourceConfig,
+      env: process.env,
+    });
+    const context = createResolverContext({ sourceConfig, env: process.env, manifestRegistry });
+    await resolveTools({ sourceConfig, resolvedConfig, context });
+    expect(resolvedConfig.plugins?.entries?.deepseek?.config).toEqual({
+      webSearch: { apiKey: searchKey },
+    });
+  }
+});
+
 it("does not select or contact a disabled DeepSeek plugin", async () => {
   const config = searchConfig({ enabled: false });
   expect(await hasUsableWebSearchProvider({ config, agentDir: state.agentDir() })).toBe(false);

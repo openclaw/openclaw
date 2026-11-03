@@ -7,8 +7,7 @@ import {
   type PillView,
 } from "../../../components/solid/activity-pill.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { PluginContributions } from "../../../plugins/control-ui-contributions.solid.tsx";
@@ -16,7 +15,7 @@ import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
 import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
 import "./chat-activity-pills.css";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 registerEnglishCatalog(registerChatGoalsEnglish);
 
@@ -69,6 +68,7 @@ function progressView(input: NonNullable<ChatActivityPillsProps["progress"]>): P
     input.startedAt,
     input.endedAt,
     input.hasActiveRun,
+    input.runtime,
   );
   let badge: NonNullable<PillView["badge"]>;
   if (input.refresh === "pending") {
@@ -78,6 +78,24 @@ function progressView(input: NonNullable<ChatActivityPillsProps["progress"]>): P
       icon: "alertTriangle",
       tone: "warn",
       label: t("chat.activityPills.progress.updateUnavailable"),
+    };
+  } else if (input.runtime?.connected === false || input.runtime?.known === false) {
+    badge = {
+      icon: "alertTriangle",
+      tone: "warn",
+      label: t(
+        input.runtime.connected === false
+          ? "sessionProgressCard.runtime.offline"
+          : "sessionProgressCard.runtime.unknown",
+      ),
+    };
+  } else if (input.runtime?.children?.failed) {
+    badge = {
+      icon: "x",
+      tone: "danger",
+      label: t("sessionProgressCard.runtime.failed", {
+        count: String(input.runtime.children.failed),
+      }),
     };
   } else if (!view.counts) {
     return { label: t("sessionProgressCard.composerTitle"), icon: "listChecks" };
@@ -179,7 +197,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
         (agent) => agent.status === "running" || agent.status === "waiting",
       ) ?? [],
   );
-  const hasGoal = () => Boolean(props.goal && !props.goal.hidden);
+  const hasGoal = () => Boolean(props.goal);
   onSettled(() => {
     const scroll = observeScrollState(
       strip,
@@ -314,7 +332,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
             onOpen={(source) => props.goal!.onOpen(source)}
           />
         </Show>
-        <Show when={!props.approvalPending && props.progress?.showInChat}>
+        <Show when={!props.approvalPending && props.progress}>
           <ActivityPill
             registerButton={registerButton}
             family="progress"

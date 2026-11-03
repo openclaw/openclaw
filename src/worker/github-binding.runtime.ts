@@ -6,8 +6,9 @@ import { root as fsRoot } from "@openclaw/fs-safe/root";
 import { stringify as stringifyYaml } from "yaml";
 import type { WorkerHeartbeatResult } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
+import { isMissingPathError } from "../infra/errno.js";
 import { executeGitCommand } from "../infra/git-exec.js";
-import { AGENT_EXEC_GIT_CONFIG_PARAMETERS as AGENT_GIT_CONFIG_PARAMETERS } from "../infra/host-env-security.js";
+import { AGENT_GIT_CONFIG_PARAMETERS } from "../infra/git-maintenance-env.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PreparedExecutionEnvironment } from "../plugins/execution-environment-types.js";
@@ -35,8 +36,19 @@ async function writeManagedGitHubProfileFiles(
   identity: { login: string; token: string },
   options?: { assertCurrent: () => void },
 ) {
-  await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-  await fs.chmod(profileDir, 0o700);
+  if (process.platform === "win32") {
+    // Turn profiles live outside the node state ACL; create their own private directory.
+    const parentDir = path.dirname(profileDir);
+    await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
+    const parent = await fsRoot(parentDir);
+    await parent.mkdir(path.basename(profileDir), {
+      private: true,
+      assertBeforeMutation: options?.assertCurrent,
+    });
+  } else {
+    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    await fs.chmod(profileDir, 0o700);
+  }
   const profile = await fsRoot(profileDir, { mode: 0o600, mkdir: false, durable: false });
   await profile.write("config.yml", stringifyYaml({ version: "1" }));
   await profile.write(
@@ -123,6 +135,50 @@ async function bindWorkerGitHubCheckout(
       return;
     }
     if (signal?.aborted) {
+      return;
+    }
+    const added = (
+      await requireGit([
+        "diff",
+        "--name-only",
+        "--diff-filter=A",
+        "--no-renames",
+        "-z",
+        "HEAD",
+        "FETCH_HEAD",
+        "--",
+      ])
+    )
+      .split("\0")
+      .filter(Boolean);
+    let hasPathPrefixCollision = false;
+    // Native path lookup also recognizes the filesystem's case and Unicode aliases.
+    // Inspect only incoming components, not unrelated or ignored workspace files.
+    for (const addedPath of added) {
+      const segments = addedPath.split("/");
+      let localPath = cwd;
+      for (const [index, segment] of segments.entries()) {
+        localPath = path.join(localPath, segment);
+        try {
+          const stats = await fs.lstat(localPath);
+          const isExactPath = index === segments.length - 1;
+          if (isExactPath ? stats.isDirectory() : !stats.isDirectory()) {
+            hasPathPrefixCollision = true;
+            break;
+          }
+        } catch (error) {
+          if (!isMissingPathError(error)) {
+            throw error;
+          }
+          break;
+        }
+      }
+      if (hasPathPrefixCollision) {
+        break;
+      }
+    }
+    if (hasPathPrefixCollision) {
+      log.warn(`GitHub checkout fast-forward skipped: local path conflicts with ${binding.branch}`);
       return;
     }
     // Paths already missing before the move are the session's own deletions and stay

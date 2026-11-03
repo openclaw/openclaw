@@ -14,6 +14,7 @@ import {
   createTestGitHubPublicationCoordinator,
   createRealPublicationWorkspace,
   githubPublicationTestMocks,
+  overrideCommands,
   installGitHubPublicationTestHarness,
   persistPublicationTestSession,
 } from "./github-publication.test-support.js";
@@ -116,9 +117,7 @@ describe("personal publication authority and recovery", () => {
     const response = await rpc("sessions.github.publish", request());
     expect(response[0], JSON.stringify(response[2])).toBe(true);
     expect(response[1].status).toBe("needs_confirmation");
-    const receipt = readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-      requestId: response[1].requestId,
-    })!;
+    const receipt = readReceipt(response[1].requestId)!;
     await session.reset(placements);
     coordinator = createTestGitHubPublicationCoordinator({ placements });
     const discovered = await rpc("sessions.github.status", {
@@ -236,6 +235,21 @@ describe("personal publication authority and recovery", () => {
     },
   );
 
+  it("issues each offered account image from that account's GitHub host", async () => {
+    client.connect.scopes = ["operator.read"];
+    mocks.prepareIdentity.mockResolvedValueOnce({
+      source: "system-configured",
+      host: "ghe.example.test",
+      account: { accountId: 42, login: "roboclaw-bot", avatarUrl: null },
+    });
+    const response = await rpc("sessions.github.options");
+    expect(response[0]).toBe(true);
+    expect(response[1].avatarUrls).toEqual({
+      shared: "https://ghe.example.test/avatars/u/42",
+      personal: `https://avatars.githubusercontent.com/u/${account.accountId}?v=4`,
+    });
+  });
+
   it.each(["hidden", "sync-failed", "stale", "demoted"] as const)(
     "does not disguise %s options authorization as absent personal identity",
     async (change) => {
@@ -333,13 +347,11 @@ describe("personal publication authority and recovery", () => {
     });
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const fallback = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+    overrideCommands(async (argv) => {
       if (argv.includes("push")) {
         entered.resolve();
         await release.promise;
       }
-      return await fallback(argv, options);
     });
     const pending = rpc(
       "sessions.github.confirm",
@@ -458,9 +470,7 @@ describe("personal publication authority and recovery", () => {
     await expectPersonalPublicationReplay(
       { generation, coordinator, action: prepared },
       (requestId) => ({
-        receipt: readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
-          requestId,
-        }),
+        receipt: readReceipt(requestId),
         commandCount: commands.length,
       }),
     );
@@ -883,7 +893,7 @@ describe("personal publication authority and recovery", () => {
         code: "workspace_changed",
         publisher: interrupted.publisher,
         effect: interrupted.effect,
-        nextAction: expect.stringContaining("new publication"),
+        nextAction: expect.stringContaining(drift === "branch" ? "branch -m" : "new publication"),
       });
       expect(workspace.effects).toEqual(effectsBefore);
       expect(await status(interrupted.requestId)).toEqual({

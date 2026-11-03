@@ -14,7 +14,7 @@ import {
   readGitHubDeviceAuthorizationRecord,
   writeGitHubDeviceAuthorizationRecord,
   writeGitHubOAuthRecord,
-  listGitHubOAuthRecords,
+  listGitHubAuthorizationRecords,
 } from "../agents/github-oauth-records.js";
 import {
   deleteGitHubDeviceAuthorizationRecordNative,
@@ -28,10 +28,7 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-export type GitHubOAuthInventory = {
-  deviceRecords: Awaited<ReturnType<typeof listGitHubDeviceAuthorizationRecords>>;
-  oauthRecords: Awaited<ReturnType<typeof listGitHubOAuthRecords>>;
-};
+export type GitHubOAuthInventory = Awaited<ReturnType<typeof listGitHubAuthorizationRecords>>;
 
 export function createGitHubOAuthInventoryReader(onChange: () => void, signal?: AbortSignal) {
   let dirty = true;
@@ -69,10 +66,8 @@ export function createGitHubOAuthInventoryReader(onChange: () => void, signal?: 
       dirty = false;
       try {
         signal?.throwIfAborted();
-        const deviceRecords = await listGitHubDeviceAuthorizationRecords();
+        snapshot = await listGitHubAuthorizationRecords();
         signal?.throwIfAborted();
-        const oauthRecords = await listGitHubOAuthRecords();
-        snapshot = { deviceRecords, oauthRecords };
         return snapshot;
       } catch (error) {
         dirty = true;

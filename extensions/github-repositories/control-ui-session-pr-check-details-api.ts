@@ -110,12 +110,12 @@ export async function loadControlUiSessionPullRequestChecks(
     });
     activeCheckDetails += 1;
     const load = async (): Promise<ControlUiSessionPullRequestCheckDetails> => {
-      const deadline = Date.now() + 25_000;
+      const deadline = performance.now() + 25_000;
       const signal = AbortSignal.timeout(25_000);
       let requests = 0;
       const request = async (url: string, maxBytes?: number) => {
         transportRead.assertCurrent();
-        if (++requests > 64 || Date.now() > deadline) {
+        if (++requests > 64 || performance.now() > deadline) {
           throw new gitHubPublicApi.ControlUiGitHubError(
             502,
             "CI details exceeded the request budget; open the job on GitHub",

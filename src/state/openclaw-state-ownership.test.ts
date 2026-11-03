@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
+import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import { runDoctorStateSqliteCompact } from "../commands/doctor-state-sqlite-compact.js";
 import {
   readConfigHealthStateFromStore,
@@ -25,7 +26,12 @@ import * as sqliteReadonlyLocation from "../infra/sqlite-snapshot-source.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
-import { withArtifactPreservingStateReads } from "./artifact-preserving-state-reads.js";
+import {
+  withArtifactPreservingStateReads,
+  withLiveStateReads,
+} from "./artifact-preserving-state-reads.js";
+import { createDanglingSkillWorkshopReviewIndex } from "./openclaw-state-db-corruption.test-support.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -141,6 +147,45 @@ function snapshotSqliteFamily(databasePath: string) {
 }
 
 describe("external shared-state ownership", () => {
+  it.each([false, true])(
+    "reads startup maintenance ownership without copying (external=%s)",
+    async (external) => {
+      const env = createEnv(external);
+      const databasePath = openOpenClawStateDatabase({ env }).path;
+      if (external) {
+        claimOpenClawStateOwnership("startup-maintenance", { env });
+      }
+      await closeOpenClawStateDatabaseAsync();
+      await withLiveStateReads(() =>
+        withDoctorSqliteMaintenanceLock({
+          env,
+          operation: "startup ownership inspection",
+          protectedPaths: [databasePath],
+          run: async (authority) => {
+            authority.assertCurrent();
+            const snapshot = vi.spyOn(sqliteReadonlyLocation, "prepareSqliteReadOnlyLocation");
+            const synchronous = vi.spyOn(
+              sqliteReadonlyLocation,
+              "prepareSqliteReadOnlyLocationSync",
+            );
+            const admission = assertOpenClawStateWriteAllowedAtPath({
+              databasePath,
+              env: withoutExternalMarker(env),
+              openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
+            });
+            if (external) {
+              await expect(admission).rejects.toThrow(OpenClawStateOwnershipError);
+            } else {
+              await expect(admission).resolves.toBeUndefined();
+            }
+            expect(snapshot).not.toHaveBeenCalled();
+            expect(synchronous).not.toHaveBeenCalled();
+          },
+        }),
+      );
+    },
+  );
+
   it("returns unowned for a missing path without creating its state tree", async () => {
     const rootDir = tempDirs.make("openclaw-state-ownership-missing-");
     const missingStateDir = path.join(rootDir, "missing-state");
@@ -210,9 +255,14 @@ describe("external shared-state ownership", () => {
     }
   });
 
-  it.each([false, true])(
-    "reads active WAL ownership without copying the database (external=%s)",
-    async (external) => {
+  it.each([
+    { external: false, live: false },
+    { external: true, live: false },
+    { external: false, live: true },
+    { external: true, live: true },
+  ])(
+    "reads active WAL ownership without copying the database (external=$external, live=$live)",
+    async ({ external, live }) => {
       const root = tempDirs.make("ownership-native-reader-");
       const databasePath = path.join(root, "state.sqlite");
       const preload = path.join(root, "forbid-copy.cjs");
@@ -240,7 +290,8 @@ describe("external shared-state ownership", () => {
       database.exec("BEGIN IMMEDIATE;");
       try {
         await withEnvAsync(sqliteWorkerPreloadEnv(preload), async () => {
-          const admission = assertOpenClawStateWriteAllowedAtPath({ databasePath, env: {} });
+          const read = () => assertOpenClawStateWriteAllowedAtPath({ databasePath, env: {} });
+          const admission = live ? withLiveStateReads(read) : read();
           if (external) {
             await expect(admission).rejects.toThrow(OpenClawStateOwnershipError);
           } else {
@@ -627,28 +678,7 @@ describe("external shared-state ownership", () => {
     const databasePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
     const { DatabaseSync } = requireNodeSqlite();
-    const damaged = new DatabaseSync(databasePath);
-    damaged.exec(
-      "CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT; CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
-    );
-    damaged.enableDefensive?.(false);
-    damaged.exec("PRAGMA writable_schema = ON;");
-    damaged
-      .prepare(
-        `UPDATE sqlite_schema
-            SET sql = 'CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
-                         ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)'
-          WHERE type = 'index'
-            AND name = 'idx_skill_workshop_collection_reviews_workspace_time'`,
-      )
-      .run();
-    const schemaVersion = damaged.prepare("PRAGMA schema_version").get() as {
-      schema_version: number;
-    };
-    damaged.exec(
-      `PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion.schema_version + 1};`,
-    );
-    damaged.close();
+    createDanglingSkillWorkshopReviewIndex(databasePath);
 
     const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
       | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)

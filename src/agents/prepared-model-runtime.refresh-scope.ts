@@ -4,9 +4,13 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
+import { PreparedModelRuntimeRecoveryError } from "./prepared-model-runtime-admission-errors.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
-import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import {
+  capturePreparedModelRuntimeRefreshError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
 import {
   PreparedModelRuntimeClosedError,
   retirePreparedModelRuntimeGeneration,
@@ -147,7 +151,7 @@ export function updateOwnersForScopedRefresh(
     owner.generation += 1;
     retirePreparedModelRuntimeGeneration(owner);
     owner.needsRefresh = true;
-    owner.refreshError = staleError;
+    owner.refreshError = capturePreparedModelRuntimeRefreshError(staleError);
     if (options.clearPending) {
       owner.pending = undefined;
     }
@@ -276,9 +280,10 @@ export function createPreparedModelRuntimeRecovery(host: {
         error instanceof Error &&
         !(error instanceof PreparedModelRuntimePublicationSupersededError)
       ) {
-        const recovery = { error, scheduledAttempted: false, retryAfter: 0 };
+        const refreshError = capturePreparedModelRuntimeRefreshError(error);
+        const recovery = { error: refreshError, scheduledAttempted: false, retryAfter: 0 };
         for (const owner of affected) {
-          if (owners.get(ownerKey(owner.input)) === owner && owner.refreshError === error) {
+          if (owners.get(ownerKey(owner.input)) === owner && owner.refreshError === refreshError) {
             owner.catalogRecovery = recovery;
           }
         }
@@ -287,7 +292,7 @@ export function createPreparedModelRuntimeRecovery(host: {
     }
   }
 
-  /** Rechecks only failed catalog-worker replacements, using the existing publication barrier. */
+  /** Rechecks failed publications using the existing publication barrier. */
   async function ensureGatewayPreparedModelRuntimeReady({
     agentId,
     demand = "interactive",
@@ -311,6 +316,15 @@ export function createPreparedModelRuntimeRecovery(host: {
       return;
     }
     const assertLifetime = host.captureLifetime();
+    if (recovery.pending) {
+      assertPreparedModelRuntimeAdmissionCanWait();
+      if (demand === "scheduled") {
+        recovery.scheduledAttempted = true;
+      }
+      await racePromiseWithAbortSignal(recovery.pending, abortSignal);
+      assertLifetime();
+      return;
+    }
     const replacement = host.getAdmissionReplacement();
     if (replacement && !replacement.degraded) {
       assertPreparedModelRuntimeAdmissionCanWait();
@@ -329,9 +343,14 @@ export function createPreparedModelRuntimeRecovery(host: {
     if (
       !owner.needsRefresh ||
       owner.refreshError !== recovery.error ||
-      (demand === "scheduled" ? recovery.scheduledAttempted : Date.now() < recovery.retryAfter)
+      (demand === "scheduled" && recovery.scheduledAttempted)
     ) {
       return;
+    }
+    if (Date.now() < recovery.retryAfter) {
+      throw new PreparedModelRuntimeRecoveryError(agentId, "backoff", recovery.retryAfter, {
+        cause: recovery.error,
+      });
     }
     assertPreparedModelRuntimeAdmissionCanWait(owner);
     if (demand === "scheduled") {
@@ -342,8 +361,8 @@ export function createPreparedModelRuntimeRecovery(host: {
     );
     const publication = host
       .publish(owner.input.config, {
-        catalogMode: "static",
-        allowGatewaySubagentBinding: true,
+        catalogMode: owner.catalogMode,
+        allowGatewaySubagentBinding: owner.input.allowGatewaySubagentBinding,
         agentIds: new Set(affected.flatMap((candidate) => candidate.input.agentId ?? [])),
         pluginMetadataSnapshot: owner.snapshot?.metadataSnapshot,
         isPublicationCurrent: () =>
@@ -355,13 +374,25 @@ export function createPreparedModelRuntimeRecovery(host: {
           !(error instanceof PreparedModelRuntimePublicationSupersededError) &&
           host.owners.get(ownerKey(owner.input)) === owner &&
           owner.catalogRecovery === recovery &&
-          owner.refreshError === error
+          owner.refreshError === capturePreparedModelRuntimeRefreshError(error)
         ) {
-          recovery.error = error;
+          recovery.error = owner.refreshError;
           recovery.retryAfter = Date.now() + CATALOG_RECOVERY_DEMAND_COOLDOWN_MS;
+          throw new PreparedModelRuntimeRecoveryError(
+            agentId,
+            "attempt-failed",
+            recovery.retryAfter,
+            { cause: error },
+          );
         }
         throw error;
+      })
+      .finally(() => {
+        if (recovery.pending === publication) {
+          recovery.pending = undefined;
+        }
       });
+    recovery.pending = publication;
     recovery.replacementGateId = host.getReplacement()?.gateId;
     await racePromiseWithAbortSignal(publication, abortSignal);
     assertLifetime();

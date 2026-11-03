@@ -1,6 +1,3 @@
-/* The route host must hand the bounded shell height to the fill-height
-   workspace; otherwise a populated stream expands the main page and defeats
-   its own scroll/auto-follow owner. */
 main.content:where(.content--activity-page) {
   overflow: hidden;
 }
@@ -26,8 +23,6 @@ main.content:where(.content--activity-page) .content-header {
   flex: 0 0 auto;
 }
 
-/* Fill-height chain: the section, group, and stream absorb the remaining
-   viewport height inside .settings-workspace--fill-height (settings.css). */
 .settings-workspace--fill-height .activity-page {
   flex: 1 1 auto;
   min-height: 0;
@@ -55,7 +50,7 @@ main.content:where(.content--activity-page) .content-header {
   flex-direction: column;
   gap: var(--space-2);
   min-height: 0;
-  max-height: min(240px, 35vh);
+  max-height: min(264px, 35vh);
   margin-bottom: var(--space-3);
 }
 
@@ -68,16 +63,13 @@ main.content:where(.content--activity-page) .content-header {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
+  padding: var(--list-row-padding);
   color: var(--text);
-}
-
-.activity-current-work__row + .activity-current-work__row {
-  border-top: 1px solid var(--border);
+  min-height: var(--list-row-min-height);
 }
 
 a.activity-current-work__row:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .activity-current-work__copy {
@@ -114,6 +106,9 @@ a.activity-current-work__row:hover {
 
 .activity-feed {
   overflow: hidden;
+  width: calc(100% + 2 * var(--space-1));
+  margin-inline: calc(-1 * var(--space-1));
+  padding-inline: var(--space-1);
 }
 
 .activity-feed__toolbar,
@@ -126,7 +121,10 @@ a.activity-current-work__row:hover {
   padding: var(--space-3) var(--space-4);
 }
 
-/* Reserve feedback outside the scroll content so errors and retries never shift results. */
+.activity-feed__toolbar {
+  padding-inline: 0;
+}
+
 .activity-feed__feedback {
   display: flex;
   flex: 0 0 var(--settings-control-height);
@@ -214,15 +212,6 @@ a.activity-current-work__row:hover {
   box-shadow: var(--focus-ring);
 }
 
-.activity-feed__selected-person,
-.activity-feed__session-headline,
-.activity-feed__session-owner {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .activity-feed__facepile {
   display: inline-flex;
   align-items: center;
@@ -241,25 +230,6 @@ a.activity-current-work__row:hover {
   position: relative;
   display: inline-flex;
   flex: none;
-}
-
-.activity-feed__presence-dot {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 7px;
-  height: 7px;
-  border: 1.5px solid var(--bg-elevated);
-  border-radius: var(--radius-full);
-  background: var(--ok);
-}
-
-.activity-feed__presence-dot[data-presence-activity="idle"] {
-  background: var(--presence-idle);
-}
-
-.activity-feed__presence-dot[data-presence-activity="unknown"] {
-  background: var(--muted);
 }
 
 .activity-feed__unknown-avatar {
@@ -328,7 +298,7 @@ a.activity-current-work__row:hover {
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-5);
+  padding-block: var(--space-5);
 }
 
 .activity-feed__identity h2,
@@ -354,7 +324,12 @@ a.activity-current-work__row:hover {
   font-size: var(--control-ui-text-sm);
 }
 
+.activity-feed__loading {
+  --skeleton-base: var(--skeleton-base-raised);
+}
+
 .activity-pulse--loading {
+  background: var(--skeleton-base);
   height: 108px;
 }
 
@@ -395,7 +370,7 @@ a.activity-current-work__row:hover {
   height: 7px;
   margin-right: var(--space-1);
   border-radius: 50%;
-  background: var(--ok);
+  background: var(--status-running);
 }
 
 .activity-pulse__bars {
@@ -419,7 +394,6 @@ a.activity-current-work__row:hover {
   background: var(--accent);
 }
 
-/* One cell per bar keeps each label under the bucket it names. */
 .activity-pulse__axis {
   display: flex;
   gap: 3px;
@@ -458,18 +432,14 @@ a.activity-current-work__row:hover {
 
 .activity-feed__day > h3 {
   margin: 0 0 var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .activity-feed__sessions,
 .activity-feed__viewing-list {
   overflow: hidden;
+  background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .activity-feed__session {
@@ -477,8 +447,8 @@ a.activity-current-work__row:hover {
   grid-template-columns: 28px minmax(0, 1fr) auto;
   gap: var(--space-3);
   align-items: center;
-  min-height: 54px;
-  padding: var(--space-3) var(--space-4);
+  min-height: var(--list-row-min-height);
+  padding: var(--list-row-padding);
   color: var(--text);
 }
 
@@ -500,14 +470,6 @@ a.activity-current-work__row:hover {
   margin: 0;
 }
 
-.activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
-  background: linear-gradient(90deg, var(--text) 35%, var(--muted) 50%, var(--text) 65%);
-  background-size: 200% 100%;
-  background-clip: text;
-  color: transparent;
-  animation: text-shimmer 2.4s ease-in-out infinite;
-}
-
 .activity-feed__recap-skeleton {
   display: grid;
   gap: var(--space-2);
@@ -526,20 +488,15 @@ a.activity-current-work__row:hover {
   margin-top: var(--space-1);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
-    animation: none;
-    background: none;
-    color: var(--text);
-  }
-}
-
 .activity-feed__note {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
   font-size: var(--control-ui-text-xs);
+}
+
+.activity-feed__note {
   color: var(--muted);
 }
 
@@ -563,12 +520,6 @@ a.activity-current-work__row:hover {
 .activity-feed__note-action:disabled {
   color: var(--muted);
   text-decoration: none;
-}
-
-.activity-feed__session-row + .activity-feed__session-row,
-.activity-feed__automation-group + .activity-feed__session-row,
-.activity-feed__session-row + .activity-feed__automation-group {
-  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
 }
 
 .activity-feed__automation-group {
@@ -609,11 +560,9 @@ a.activity-current-work__row:hover {
   transform: rotate(90deg);
 }
 
-/* The whole row is the hover surface: recap, git chips and media highlight
-   together with the header link. Rows without a navigation target stay flat. */
 .activity-feed__session-row--link:hover,
 .activity-feed__session-row:focus-within {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .activity-feed__session-row:has(.activity-feed__inspect-run) .activity-feed__session {
@@ -668,7 +617,7 @@ a.activity-current-work__row:hover {
   bottom: auto;
   left: -2px;
   border-color: var(--card);
-  background: var(--accent);
+  background: var(--status-running);
   animation: pulse-subtle 1.8s ease-in-out infinite;
 }
 
@@ -681,7 +630,7 @@ a.activity-current-work__row:hover {
 .activity-feed__session-title {
   overflow: hidden;
   color: var(--text-strong);
-  font-weight: 600;
+  font-weight: var(--list-row-title-weight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -806,8 +755,6 @@ a.activity-current-work__row:hover {
   gap: 4px;
 }
 
-/* The credit is a license term for the default database, so it stays visible
-   next to the value it describes rather than living in a settings page. */
 .activity-feed__device-attribution {
   display: inline-flex;
   width: 16px;
@@ -834,11 +781,6 @@ a.activity-current-work__row:hover {
 .activity-feed__viewing h3 {
   margin-bottom: var(--space-2);
   font-size: var(--control-ui-text-sm);
-}
-
-.activity-feed__viewing-list .activity-feed__session {
-  min-height: 46px;
-  padding-block: var(--space-2);
 }
 
 .activity-feed__empty,
@@ -871,7 +813,8 @@ a.activity-current-work__row:hover {
   padding: 0;
 }
 
-.activity-live-filter-trigger.active {
+.activity-live-filter-trigger.active,
+.activity-feed__people-trigger.active {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-subtle);
@@ -962,7 +905,7 @@ a.activity-current-work__row:hover {
 }
 
 .activity-entry__summary:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .activity-entry__chevron {
@@ -1071,7 +1014,7 @@ a.activity-current-work__row:hover {
 
   .activity-feed__main {
     overflow: visible;
-    padding: var(--space-4);
+    padding-block: var(--space-4);
   }
 
   .activity-feed__session {
@@ -1117,5 +1060,205 @@ a.activity-current-work__row:hover {
     display: block;
     width: auto;
     height: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .activity-feed__search,
+  .activity-live-search {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .activity-feed__search input,
+  .activity-live-search input {
+    text-overflow: ellipsis;
+  }
+
+  .activity-feed__people-control {
+    margin-left: 0;
+  }
+
+  .activity-feed__time-filter {
+    display: flex;
+    flex: 1 0 100%;
+    order: 1;
+  }
+
+  .activity-feed__time-filter > .settings-segmented__btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .activity-feed__people-trigger,
+  .activity-live-filter-trigger,
+  .activity-live-actions__trigger {
+    width: var(--settings-control-height);
+    min-width: 0;
+    max-width: none;
+    height: var(--settings-control-height);
+    padding: 0;
+    justify-content: center;
+  }
+
+  .activity-feed__people-trigger svg,
+  .activity-live-actions__trigger svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .activity-live-actions__trigger .oc-menu-item__label {
+    display: inline-flex;
+    flex: none;
+  }
+
+  .activity-live-toolbar {
+    flex-wrap: nowrap;
+  }
+
+  .activity-live-filter-trigger {
+    margin-left: 0;
+  }
+
+  .activity-live-filter-popover__panel {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .activity-live-autofollow {
+    justify-content: space-between;
+  }
+
+  .activity-live-filter-popover__panel .field > span,
+  .activity-live-autofollow {
+    color: var(--text);
+    font-size: var(--control-ui-text-sm);
+    font-weight: var(--control-ui-font-weight-normal);
+  }
+
+  .activity-status-filter:focus-within:not(:has(:focus-visible)) {
+    outline: none;
+  }
+
+  .activity-current-work {
+    max-height: none;
+  }
+
+  .activity-current-work__rows {
+    overflow: clip;
+  }
+
+  .activity-stream {
+    border-top: 0;
+  }
+
+  .activity-entry {
+    border-bottom: 0;
+  }
+
+  .activity-entry + .activity-entry {
+    margin-top: var(--space-1);
+  }
+
+  .activity-feed__feedback {
+    position: relative;
+    z-index: 1;
+    margin: 0 0 calc(-1 * var(--settings-control-height));
+    pointer-events: none;
+  }
+
+  .activity-feed__feedback:has(> span:not(:empty), > button) {
+    padding-inline: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+    pointer-events: auto;
+  }
+
+  .activity-feed__toolbar {
+    padding-block: var(--space-3);
+  }
+
+  .activity-feed__main {
+    padding-top: 0;
+  }
+
+  .activity-feed__session {
+    align-items: start;
+  }
+
+  .activity-feed__automation-group {
+    align-items: center;
+  }
+
+  .activity-feed__session-row:has(.activity-feed__inspect-run) .activity-feed__session {
+    padding-right: var(--space-4);
+  }
+
+  .activity-feed__session-headline {
+    color: var(--muted);
+    font-size: var(--control-ui-text-sm);
+  }
+
+  .activity-feed__session-meta--line {
+    align-items: baseline;
+    gap: var(--space-1);
+    white-space: nowrap;
+  }
+
+  .activity-feed__session-meta--line > * + *::before {
+    margin-inline-end: var(--space-1);
+    content: "\00b7";
+  }
+
+  .activity-feed__session-meta--line > .activity-feed__session-owner {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .activity-feed__session-meta--line > .activity-feed__session-scope {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .activity-feed__session-meta--line > .activity-feed__session-source,
+  .activity-feed__session-meta--line > .activity-feed__session-time {
+    display: block;
+    flex: none;
+    max-width: none;
+  }
+
+  .activity-feed__session-meta--line .agent-row-chip__avatar {
+    display: none;
+  }
+
+  .activity-feed__session-meta--line openclaw-agent-row-chip {
+    vertical-align: baseline;
+  }
+
+  .activity-feed__recap:not(.activity-feed__recap-skeleton) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .activity-feed__recap-text {
+    min-width: 0;
+  }
+
+  .activity-feed__recap > .activity-feed__recap-skeleton {
+    flex: 1 0 100%;
+  }
+
+  .activity-feed__inspect-run {
+    position: static;
+    flex: none;
+    margin-inline-start: auto;
+    opacity: 1;
+    pointer-events: auto;
+    translate: none;
   }
 }

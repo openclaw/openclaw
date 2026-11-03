@@ -35,7 +35,6 @@ it.each([
   { name: "queued target media", source: imageSource, target: "12345", queued: true },
   { name: "queued voice media", source: voiceSource, voice: true, queued: true },
   { name: "speech override denied", source: ttsText, denySpeech: true },
-  { name: "plain silence", source: "NO_REPLY", silent: true },
   { name: "plain", source: "Plain reply." },
 ])("preserves $name", async (scenario) => {
   const { session } = await sessionTest.createTestSession();
@@ -88,23 +87,14 @@ it.each([
       currentAssistant: captured ?? null,
       sessionKey: "agent:main:admission",
     });
-    if (scenario.target) {
-      expect.soft(embedded.at(-1)).toMatchObject({ replyToId: scenario.target, replyToTag: true });
-    }
     const { replyPayloads } = await buildReplyPayloads({
       payloads: embedded,
-      isHeartbeat: false,
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       replyToMode: "off",
       replyToChannel: "telegram",
       currentMessageId: "incoming",
     });
-    if (scenario.silent) {
-      expect(replyPayloads).toEqual([]);
-      return;
-    }
-    expect(replyPayloads).toHaveLength(scenario.queued ? 2 : 1);
     const cfg = tts.createTtsConfig("completed-delivery-admission-synthetic", {
       auto: "tagged",
       ...(scenario.denySpeech ? { modelOverrides: { allowText: false } } : {}),

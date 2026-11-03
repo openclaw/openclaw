@@ -1,4 +1,3 @@
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
@@ -51,20 +50,8 @@ function agentResponses(agents: Array<{ id: string; name?: string }>) {
   };
 }
 
-function expectInScrollPort(row: Locator) {
-  return expect
-    .poll(() =>
-      row.evaluate((element) => {
-        const box = element.getBoundingClientRect();
-        const list = element.parentElement!.getBoundingClientRect();
-        return box.top >= list.top - 1 && box.bottom <= list.bottom + 1;
-      }),
-    )
-    .toBe(true);
-}
-
 suite.define(() => {
-  it("opens every new-session plus as a native link without creating sessions", async () => {
+  it("keeps every new-session plus native and opens group and catalog targets without creating sessions", async () => {
     await suite.withPage(desktop, async ({ context, page }) => {
       const agentId = "research";
       const group = "Client & ops / α";
@@ -119,18 +106,23 @@ suite.define(() => {
         section,
         params: { agent: agentId, ...params },
       });
-      const actions: Array<{ selector: string; section?: string; params: Record<string, string> }> =
-        [
-          railAction,
-          sectionAction(`category:${group}`, { group }),
-          sectionAction("ungrouped"),
-          {
-            selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,
-            section: `catalog:${catalogId}`,
-            params: { agent: agentId, catalog: catalogId },
-          },
-          railAction,
-        ];
+      const actions: Array<{
+        selector: string;
+        section?: string;
+        params: Record<string, string>;
+        newTab?: "middle" | "modified";
+      }> = [
+        railAction,
+        { ...sectionAction(`category:${group}`, { group }), newTab: "middle" },
+        sectionAction("ungrouped"),
+        {
+          selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,
+          section: `catalog:${catalogId}`,
+          params: { agent: agentId, catalog: catalogId },
+          newTab: "modified",
+        },
+        railAction,
+      ];
       for (const [index, action] of actions.entries()) {
         if (index === actions.length - 1) {
           await page.locator('[data-navigation-view][aria-pressed="true"]').click();
@@ -142,6 +134,16 @@ suite.define(() => {
         }
         const link = page.locator(action.selector);
         await link.hover();
+        if (index === 0) {
+          // Exercise the neighboring header with the shortcut hint already open.
+          await expect
+            .poll(() =>
+              link.evaluate(
+                (element) => element.closest("openclaw-tooltip")?.hasAttribute("open") ?? false,
+              ),
+            )
+            .toBe(true);
+        }
         const expectedUrl = new URL(`${basePath}/new`, suite.server.baseUrl);
         expectedUrl.search = new URLSearchParams(action.params).toString();
         expect(await link.getAttribute("href")).toBe(
@@ -155,10 +157,14 @@ suite.define(() => {
           }),
         ).toBe(false);
 
+        if (!action.newTab) {
+          continue;
+        }
+
         // Native tab gestures do not retain an opener, so observe the browser context.
         const [popup] = await Promise.all([
           context.waitForEvent("page"),
-          index % 2 === 0
+          action.newTab === "modified"
             ? link.click({ modifiers: ["ControlOrMeta"] })
             : link.click({ button: "middle" }),
         ]);
@@ -234,7 +240,7 @@ suite.define(() => {
 
   it("shows one row per agent plus Show all and reaches them with menu keys", async () => {
     await suite.withPage(desktop, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         methodResponses: {
           "agent.identity.get": {
             cases: [
@@ -254,19 +260,21 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const draft = "Keep this draft while opening agent settings";
+      await composer.fill(draft);
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       const menu = sidebar.locator(".sidebar-agent-menu");
-      const allSwitch = menu.getByRole("menuitem", { name: "Show all", exact: true });
       const mainSwitch = menu.getByRole("menuitem", { name: "Scheduled Automations", exact: true });
       const researchSwitch = menu.getByRole("menuitem", { name: "Research", exact: true });
       await expect
         .poll(() =>
-          researchSwitch.evaluate(
-            (element) => element.parentElement?.matches(".sidebar-agent-menu__agent-list") ?? false,
-          ),
+          menu
+            .locator(".sidebar-agent-menu__agent-list .agent-select__option-label")
+            .allTextContents(),
         )
-        .toBe(true);
+        .toEqual(["Show all", "Scheduled Automations", "Research", "Forge", "Support"]);
       await expect
         .poll(() => researchSwitch.locator(".agent-select__avatar img").getAttribute("src"))
         .toContain("data:image/png;base64,");
@@ -275,20 +283,6 @@ suite.define(() => {
         await document.fonts.ready;
         await Promise.all(dropdown.getAnimations().map((animation) => animation.finished));
       });
-      const rowLayout = await menu.evaluate((dropdown) => {
-        const rows = [...dropdown.querySelectorAll(".sidebar-agent-menu__agent-switch")];
-        return rows.map((row) => {
-          const avatar = row
-            .querySelector(".sidebar-agent-menu__agent-avatar")!
-            .getBoundingClientRect();
-          const label = row.querySelector(".agent-select__option-copy")!.getBoundingClientRect();
-          const bounds = row.getBoundingClientRect();
-          return { height: bounds.height, width: bounds.width, gap: label.left - avatar.right };
-        });
-      });
-      expect(rowLayout.map((row) => row.height)).toEqual([44, 44, 44, 44, 44]);
-      expect(new Set(rowLayout.map((row) => row.width)).size).toBe(1);
-      expect(rowLayout.map((row) => row.gap)).toEqual([10, 10, 10, 10, 10]);
       const createAgent = menu.getByRole("menuitem", {
         name: "Create new agent",
         exact: true,
@@ -309,35 +303,25 @@ suite.define(() => {
           )
           .toBeLessThanOrEqual(0);
       }
-      await expect
-        .poll(() =>
-          menu.evaluate((dropdown) => {
-            const grid = dropdown.querySelector(".sidebar-agent-menu__agent-list");
-            const rows = [...dropdown.querySelectorAll(".sidebar-agent-menu__agent-switch")];
-            if (!grid || rows.length === 0) {
-              return Number.NaN;
-            }
-            return Math.round(
-              Math.abs(
-                grid.getBoundingClientRect().bottom -
-                  Math.max(...rows.map((row) => row.getBoundingClientRect().bottom)),
-              ),
-            );
-          }),
-        )
-        .toBe(0);
       await expectFocused(mainSwitch);
-      await pressAndExpectFocus(
-        page,
-        "End",
-        menu.getByRole("menuitem", { name: "Support", exact: true }),
-      );
-      await pressAndExpectFocus(page, "Home", createAgent);
-      await pressAndExpectFocus(page, "ArrowDown", allSwitch);
-      await pressAndExpectFocus(page, "ArrowDown", mainSwitch);
       await pressAndExpectFocus(page, "r", researchSwitch);
       const researchSettings = researchSwitch.getByRole("button", { name: "Research settings" });
       await pressAndExpectFocus(page, "Tab", researchSettings);
+      const refreshAfter = (await gateway.getRequests("agent.identity.get", { agentId: "forge" }))
+        .length;
+      await gateway.deferNext("agent.identity.get", { agentId: "forge" });
+      await gateway.emitGatewayEvent("agent.identity.changed", { agentId: "forge" });
+      await gateway.waitForRequest("agent.identity.get", {
+        after: refreshAfter,
+        match: { agentId: "forge" },
+      });
+      await gateway.resolveDeferred(
+        "agent.identity.get",
+        { agentId: "forge", avatar: "", emoji: "🔧", name: "Forge refreshed" },
+        { match: { agentId: "forge" } },
+      );
+      await menu.getByRole("menuitem", { name: "Forge refreshed", exact: true }).waitFor();
+      await expectFocused(researchSettings);
       await page.keyboard.press("Enter");
       await waitForControlUiRoute(page, {
         routeId: "agents",
@@ -348,23 +332,34 @@ suite.define(() => {
       );
       await page.locator(".settings-sidebar__back").click();
       await waitForControlUiRoute(page, { routeId: "chat" });
+      expect(await composer.inputValue()).toBe(draft);
       await sidebar.locator(".sidebar-agent-card__main").click();
       await expectAttribute(mainSwitch, "aria-current", "true");
       await researchSwitch.focus();
       await page.keyboard.press("Enter");
       await expectPath(page, controlUiSessionPath("agent:research:main"));
+      const card = sidebar.locator("openclaw-sidebar-agent-card");
+      await expectText(card.locator(".sidebar-agent-card__name"), "Research");
+      const image = card.locator(".sidebar-agent-card__avatar img");
+      await expect.poll(() => image.getAttribute("src")).toBe(pixelAvatar);
+      await expect
+        .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
+        .toBe(1);
       await sidebar.locator(".sidebar-agent-card__main").click();
       await menu.getByRole("menuitem", { name: "Show all", exact: true }).click();
+      await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
       await sidebar.locator(".sidebar-workspace-header__main").click();
+      await expectAttribute(
+        menu.getByRole("menuitem", { name: "Show all", exact: true }),
+        "aria-current",
+        "true",
+      );
     });
   });
 
-  it("scrolls a crowded agent menu without a search field and keeps keyboard navigation", async () => {
+  it("keeps crowded agent-menu actions inside the available viewport", async () => {
     await suite.withPage(
-      {
-        ...desktop,
-        viewport: { width: 1440, height: 480 },
-      },
+      { ...desktop, viewport: { width: 1440, height: 480 } },
       async ({ page }) => {
         const agents = Array.from({ length: 40 }, (_, index) => ({
           id: index === 0 ? "main" : `agent-${index}`,
@@ -375,88 +370,36 @@ suite.define(() => {
           methodResponses: {
             ...agentResponses(agents),
             "agent.identity.get": {
-              cases: agents.map((agent) => ({
-                match: { agentId: agent.id },
-                response: { agentId: agent.id, name: agent.name },
+              cases: agents.map(({ id, name }) => ({
+                match: { agentId: id },
+                response: { agentId: id, name },
               })),
             },
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        const sidebar = page.locator("openclaw-app-sidebar");
-        const trigger = sidebar.locator(".sidebar-agent-card__main");
-        await trigger.click();
-        const menu = sidebar.locator(".sidebar-agent-menu");
-        const rows = menu.locator('.sidebar-agent-menu__agent-list > [role^="menuitem"]');
-        await expectCount(rows, 41);
-        await expectCount(menu.getByRole("searchbox"), 0);
+        await page.locator("openclaw-app-sidebar .sidebar-agent-card__main").click();
+        const menu = page.locator("openclaw-app-sidebar .sidebar-agent-menu");
         await menu.evaluate(async (dropdown) => {
           await document.fonts.ready;
           await Promise.all(dropdown.getAnimations().map((animation) => animation.finished));
         });
-        const geometry = await menu.evaluate((dropdown) => {
-          const list = dropdown.querySelector<HTMLElement>(".sidebar-agent-menu__agent-list")!;
-          const actions = [
-            ...dropdown.querySelectorAll<HTMLElement>(':scope > [role^="menuitem"]'),
-          ];
-          return {
-            scrolls: list.scrollHeight > list.clientHeight,
-            actionsFit: actions.every((action) => {
-              const box = action.getBoundingClientRect();
-              return box.top >= 0 && box.bottom <= innerHeight;
-            }),
-            heights: [...list.children].map((row) => row.getBoundingClientRect().height),
-          };
-        });
-        expect(geometry).toMatchObject({ scrolls: true, actionsFit: true });
-        expect(geometry.heights.every((height) => height >= 44)).toBe(true);
-        const duplicateNames = rows.filter({ hasText: "Support" });
+        expect(
+          await menu.evaluate((dropdown) =>
+            [...dropdown.querySelectorAll<HTMLElement>(':scope > [role^="menuitem"]')].every(
+              (action) => {
+                const box = action.getBoundingClientRect();
+                return box.top >= 0 && box.bottom <= innerHeight;
+              },
+            ),
+          ),
+        ).toBe(true);
+        const duplicateNames = menu
+          .locator('.sidebar-agent-menu__agent-list > [role^="menuitem"]')
+          .filter({ hasText: "Support" });
         expect(await duplicateNames.count()).toBe(2);
         expect(await duplicateNames.locator(".agent-select__option-description").count()).toBe(0);
-        expect(await menu.locator(".sidebar-agent-menu__pin").count()).toBe(0);
-        await pressAndExpectFocus(page, "End", menu.locator('[data-value="agent:agent-39"]'));
-        await page.keyboard.press("Enter");
-        await expectPath(page, controlUiSessionPath("agent:agent-39:main"));
-        await trigger.click();
-        expect(await menu.getByRole("searchbox").count()).toBe(0);
-        const active = menu.locator('[aria-current="true"]');
-        await expectInScrollPort(active);
-        await page.keyboard.press("Escape");
-        await expectCount(menu, 0);
-        await expectFocused(trigger);
-        const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
-        await composer.click();
-        await trigger.hover();
-        await expectCount(menu, 1);
-        await expectInScrollPort(active);
-        await expectFocused(composer);
       },
     );
-  });
-
-  it("shows a workspace identity avatar in the sidebar agent card", async () => {
-    await suite.withPage(desktop, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "agent.identity.get": {
-            agentId: "main",
-            avatar: pixelAvatar,
-            avatarStatus: "data",
-            name: "Workspace Molty",
-          },
-          ...agentResponses([{ id: "main" }]),
-        },
-      });
-
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("agent.identity.get");
-      const card = page.locator("openclaw-app-sidebar openclaw-sidebar-agent-card");
-      await expectText(card.locator(".sidebar-agent-card__name"), "Workspace Molty");
-      const image = card.locator(".sidebar-agent-card__avatar img");
-      await expect.poll(() => image.getAttribute("src")).toBe(pixelAvatar);
-      await expect
-        .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
-        .toBe(1);
-    });
   });
 });

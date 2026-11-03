@@ -1,4 +1,4 @@
-import { createSignal, Errored, lazy, Loading, onCleanup, onSettled, Show } from "solid-js";
+import { createSignal, Errored, lazy, Loading, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -36,7 +36,7 @@ export function createModelProviderDiscovery(options: DiscoveryOptions) {
       reset();
     }
   }
-  onCleanup(() => {
+  onSettled(() => () => {
     owner = null;
     loading = false;
   });

@@ -19,6 +19,8 @@ type Params = Parameters<typeof AgentFiles>[0] &
     | "agentFileActive"
     | "agentFileEditors"
     | "agentFilesLoading"
+    | "agentFileRead"
+    | "agentFileOutcome"
     | "agentFileSaving"
     | "agentFileConflict"
   >;
@@ -81,14 +83,17 @@ function renderPreview(
     readData() {
       return { ...createAgentViewTestProps().readData(), ...this };
     },
+    presentationRetired: createAgentViewTestProps().presentationRetired,
     agentId: "main",
+    listRead: null,
     agentFilesList: {
       agentId: "main",
       workspace: "/synthetic/workspace",
       files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing: false }],
     },
     agentFilesLoading: false,
-    agentFilesError: null,
+    agentFileRead: null,
+    agentFileOutcome: null,
     agentFileActive: "AGENTS.md",
 
     agentFileSaving: false,

@@ -199,8 +199,6 @@ export async function resolveDiscordModelPickerCurrentModel(params: {
 }
 
 export function resolveDiscordModelPickerCurrentRuntime(params: {
-  cfg: OpenClawConfig;
-  route: ResolvedAgentRoute;
   sessionEntry: SessionEntry | undefined;
 }): string {
   return normalizeOptionalString(params.sessionEntry?.agentRuntimeOverride) ?? "auto";

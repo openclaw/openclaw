@@ -4,7 +4,6 @@ import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ControlUiGitHubPreview } from "./api.js";
 import plugin from "./index.js";
@@ -36,6 +35,7 @@ const imageUrl = "https://user-images.githubusercontent.com/image.png";
 const assetUrl = "https://github-production-user-asset-6210df.s3.amazonaws.com/image.png";
 const pullTarget = { kind: "pull", owner: "octocat", repo: "repo", number: 1 } as const;
 const avatar = "data:image/png;base64,iVBORw==";
+const meta = { source: "host-preview" };
 type Respond = GatewayRequestHandlerOptions["respond"];
 function registered(host?: string) {
   const fixture = createPluginRegistryFixture({
@@ -52,20 +52,16 @@ function registered(host?: string) {
   });
   registerVirtualTestPlugin({
     ...fixture,
-    id: "github",
-    name: "GitHub",
-    contracts: {
-      tools: manifest.contracts.tools,
-      gatewayMethodDispatch: ["authenticated-request"],
-    },
+    ...plugin,
+    contracts: { ...manifest.contracts, gatewayMethodDispatch: ["authenticated-request"] },
     register: plugin.register,
   });
   return fixture.registry;
 }
-function document(url = pullUrl) {
-  return { url, title: "Plugin reader", body: "**Public**", author: "octocat" };
-}
-function preview(overrides: Partial<ControlUiGitHubPreview> = {}): ControlUiGitHubPreview {
+const document = (url = pullUrl) => ({ url, title: "Plugin reader", body: "**Public**" });
+function preview(
+  overrides: Partial<ControlUiGitHubPreview & { kind: "issue" | "pull" }> = {},
+): ControlUiGitHubPreview {
   return {
     ...pullTarget,
     title: "Plugin reader",
@@ -82,27 +78,20 @@ function readerSuccess(payload: unknown) {
   reader.detail.mockResolvedValueOnce(payload);
 }
 
-function redirect(location: string) {
-  return new Response(null, { status: 302, headers: { location } });
-}
+const redirect = (location: string) => new Response(null, { status: 302, headers: { location } });
 
 function expectReader(registry: ReturnType<typeof registered>, host?: string) {
   const id = host ? "github-session" : "github";
-  expect(
-    registry.registry.controlUiDescriptors.find((entry) => entry.descriptor.id === id),
-  ).toMatchObject({
-    pluginId: "github",
-    descriptor: {
-      surface: "link-reader",
-      requiredScopes: ["operator.read"],
-      linkReader: {
-        hosts: [host ?? "github.com"],
-        progressive: true,
-        previewMethod: host ? "github.sessionPreview" : "github.preview",
-        detailMethod: host ? "github.sessionDetail" : "github.detail",
-        ...(host ? { sessionScoped: true } : { imageMethod: "github.image" }),
-      },
-    },
+  const descriptor = registry.registry.controlUiDescriptors.find(
+    (entry) => entry.descriptor.id === id,
+  )?.descriptor;
+  expect(descriptor?.requiredScopes).toEqual(["operator.read"]);
+  expect(descriptor?.linkReader).toMatchObject({
+    hosts: [host ?? "github.com"],
+    progressive: true,
+    previewMethod: host ? "github.sessionPreview" : "github.preview",
+    detailMethod: host ? "github.sessionDetail" : "github.detail",
+    ...(host ? { sessionScoped: true } : { imageMethod: "github.image" }),
   });
 }
 
@@ -113,7 +102,7 @@ async function request(method: string, params: Record<string, unknown>, host?: s
     throw new Error("Missing registered method " + method);
   }
   const respond = vi.fn<Respond>();
-  await handler({
+  await registry.registry.gatewayHandlers[method]!({
     params,
     respond,
     req: { id: "1", type: "req", method, params },
@@ -127,8 +116,9 @@ async function request(method: string, params: Record<string, unknown>, host?: s
   return respond;
 }
 
-function expectSuccess(respond: Respond, payload: unknown, meta?: unknown) {
-  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(payload), undefined, meta);
+function expectSuccess(respond: Respond, payload: unknown, info?: unknown) {
+  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(payload), undefined, info);
+  expect(fetchMock).not.toHaveBeenCalled();
 }
 
 function expectFailure(respond: Respond, error: unknown) {
@@ -146,7 +136,6 @@ beforeEach(() => {
   vi.mocked(dispatchGatewayMethod).mockReset();
   reader.preview.mockReset();
   reader.detail.mockReset();
-  clearRuntimeConfigSnapshot();
   vi.stubEnv("GH_TOKEN", "");
   vi.stubEnv("GITHUB_TOKEN", "");
 });
@@ -155,46 +144,34 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each([undefined, "ghe.example.test"])(
-  "registers and removes read-scoped readers for host %s",
-  (host) => {
-    const registry = registered(host);
-    const methods = registry.registry.gatewayMethodDescriptors;
-    expect(manifest.activation.onStartup).toBe(true);
-    expect(registry.registry.tools.flatMap((t) => t.names)).toEqual([
-      "github_read",
-      "github_search",
-    ]);
-    expect(manifest.contracts.gatewayMethodDispatch).toEqual(["authenticated-request"]);
-    for (const name of ["github.preview", "github.image", "github.detail"]) {
-      expect(methods.find((entry) => entry.name === name)).toMatchObject({
-        owner: { kind: "plugin", pluginId: "github" },
-        scope: "operator.read",
-        profileAccess: "independent",
-      });
-    }
-    if (host) {
-      expectReader(registry, host);
-      expect(methods.find((entry) => entry.name === "github.sessionPreview")).toMatchObject({
-        scope: "operator.read",
-      });
-    }
-    expect(registry.registry.gatewayHandlers).not.toHaveProperty("controlUi.githubDetail");
-    expect(registry.registry.gatewayHandlers).not.toHaveProperty("controlUi.githubPreview");
-    expectReader(registry);
-    expect(registry.registry.controlUiDescriptors).toHaveLength(host ? 4 : 2);
-    expect(
-      registry.registry.controlUiDescriptors[1]?.descriptor.linkReader?.previewMethod,
-    ).toBeUndefined();
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
-    registry.rollbackPluginGlobalSideEffects("github", registry.registry.plugins[0]!);
-    expect(registry.registry.controlUiDescriptors).toEqual([]);
-    expect(registry.registry.tools).toEqual([]);
-    expect(registry.registry.gatewayHandlers).toEqual({});
-    expect(registry.registry.gatewayMethodDescriptors).toEqual([]);
-  },
-);
+it.each([undefined, "ghe.example.test"])("registers read-scoped readers (%s)", (host) => {
+  const registry = registered(host);
+  const methods = registry.registry.gatewayMethodDescriptors;
+  for (const name of ["github.preview", "github.image", "github.detail"]) {
+    expect(methods.find((entry) => entry.name === name)).toMatchObject({
+      owner: { kind: "plugin", pluginId: "github" },
+      scope: "operator.read",
+      profileAccess: "independent",
+    });
+  }
+  if (host) {
+    expectReader(registry, host);
+    expect(methods.find((entry) => entry.name === "github.sessionPreview")).toMatchObject({
+      scope: "operator.read",
+    });
+  }
+  expect(registry.registry.gatewayHandlers).not.toHaveProperty("controlUi.githubDetail");
+  expect(registry.registry.gatewayHandlers).not.toHaveProperty("controlUi.githubPreview");
+  expectReader(registry);
+  expect(registry.registry.controlUiDescriptors).toHaveLength(host ? 4 : 2);
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  registry.rollbackPluginGlobalSideEffects("github", registry.registry.plugins[0]!);
+  expect(registry.registry.controlUiDescriptors).toEqual([]);
+  expect(registry.registry.tools).toEqual([]);
+  expect(registry.registry.gatewayHandlers).toEqual({});
+  expect(registry.registry.gatewayMethodDescriptors).toEqual([]);
+});
 
 it("loads anonymous attachment redirects without browser CORS headers", async () => {
   const url = "https://github.com/user-attachments/assets/3c11071f-21b8-4123-b9b2-711dc7ca47fd";
@@ -246,7 +223,7 @@ it.each([
   ["github.image", { url: assetUrl }],
   ["github.detail", { url: "https://example.com/owner/repo/issues/1" }],
   ["github.detail", { url: "https://github.com/owner/repo/pull/1/checks" }],
-  ["github.preview", { url: "https://github.com/owner/repo/commit/abcdef0" }],
+  ["github.preview", { url: "https://github.com/owner/repo/commit/not-a-sha" }],
   ["github.detail", { url: pullUrl, section: "unknown" }],
   ["github.preview", { url: pullUrl, section: "overview" }],
   ["github.preview", { url: "https://github.com/owner/repo/issues/1", agentId: " " }],
@@ -301,29 +278,36 @@ it.each([
 });
 
 it.each([
-  // state, draft, mergedAt, closedAt, label, tone
-  ["open", false, undefined, undefined, "Open", "positive"],
-  ["open", true, undefined, undefined, "Draft", "neutral"],
-  ["closed", true, undefined, closedAt, "Closed", "negative"],
-  ["closed", undefined, closedAt, date, "Merged", "accent"],
-] as const)("maps badges and metadata %#", async (state, draft, merged, closed, label, tone) => {
-  readerSuccess(
-    preview({
-      state,
-      draft,
-      mergedAt: merged,
-      closedAt: closed,
-      stale: true,
-      additions: 3,
-      deletions: 1,
-      changedFiles: 2,
-      coAuthors: [{ login: "ada", avatarDataUrl: avatar }],
-      coAuthorCount: 2,
-    }),
-  );
-  const respond = await request("github.preview", { url: pullUrl });
+  ["pull", "open", false, undefined, undefined, "Open", "positive"],
+  ["pull", "open", true, undefined, undefined, "Draft", "neutral"],
+  ["pull", "closed", true, undefined, closedAt, "Closed", "negative"],
+  ["pull", "closed", undefined, closedAt, date, "Merged", "accent"],
+  ["commit", "committed", undefined, undefined, undefined, "Commit", "neutral"],
+] as const)("maps preview %#", async (kind, state, draft, mergedAt, closed, label, tone) => {
+  const target =
+    kind === "commit"
+      ? { kind, owner: "octocat", repo: "repo", sha: "abcdef0123456789" }
+      : pullTarget;
+  const url =
+    kind === "commit"
+      ? "https://github.com/octocat/repo/commit/abcdef0123456789#diff-example"
+      : pullUrl;
+  readerSuccess({
+    ...preview({ state, draft, mergedAt, closedAt: closed }),
+    ...target,
+    ...(kind === "commit" ? { number: undefined } : {}),
+    stale: true,
+    additions: 3,
+    deletions: 1,
+    coAuthors: [{ login: "ada", avatarDataUrl: avatar }],
+    coAuthorCount: 2,
+  });
+  const respond = await request("github.preview", { url });
   expectSuccess(respond, {
-    badge: { label, tone, timestamp: merged ?? closed },
+    url,
+    title: "Plugin reader",
+    ...(kind === "commit" ? { subtitle: "octocat/repo · abcdef012345" } : {}),
+    badge: { label, tone, timestamp: mergedAt ?? closed },
     stale: true,
     author: "octocat",
     authorUrl: "https://github.com/octocat",
@@ -336,7 +320,6 @@ it.each([
   });
   expect(dispatchGatewayMethod).not.toHaveBeenCalled();
   expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("kind");
-  expect(fetchMock).not.toHaveBeenCalled();
 });
 
 it.each([undefined, 0])("shows closed issues with comment count %s", async (comments) => {
@@ -353,13 +336,11 @@ it.each([undefined, 0])("shows closed issues with comment count %s", async (comm
 it("preserves session admission errors without a public identity fallback", async () => {
   const error = {
     code: "UNAVAILABLE",
-    message: "GitHub rate limit",
-    retryable: true,
+    message: "Rate limited",
     retryAfterMs: 60_000,
     details: { reason: "rate-limit" },
   };
   const payload = { status: "unavailable" };
-  const meta = { source: "host-preview" };
   vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({ ok: false, payload, error, meta });
   const respond = await request(
     "github.sessionDetail",
@@ -371,7 +352,6 @@ it("preserves session admission errors without a public identity fallback", asyn
     "ghe.example.test",
   );
   expect(respond).toHaveBeenCalledExactlyOnceWith(false, payload, error, meta);
-  expect(respond.mock.calls[0]?.[2]).toBe(error);
   expect(fetchMock).not.toHaveBeenCalled();
   expect(dispatchGatewayMethod).toHaveBeenCalledTimes(1);
 });

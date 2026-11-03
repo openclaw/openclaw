@@ -40,3 +40,33 @@ export function sessionGitHubRepository(
   const repository = snapshot?.repository ?? snapshot?.branch ?? snapshot?.pullRequests[0];
   return repository ? { owner: repository.owner, repo: repository.repo } : null;
 }
+
+export type SessionDisplayPullRequest = Omit<ControlUiSessionPullRequest, "state"> & {
+  state?: ControlUiSessionPullRequest["state"];
+  sourceSessionKey?: string;
+  sourceAgentId?: string;
+};
+
+/** Presentation only: task results never become evidence that the current branch was published. */
+export function displaySessionPullRequests(
+  snapshot: ControlUiSessionPullRequestSnapshot | undefined,
+): SessionDisplayPullRequest[] {
+  const requests = new Map<string, SessionDisplayPullRequest>();
+  for (const task of snapshot?.taskPullRequests ?? []) {
+    requests.set(task.url, {
+      owner: task.owner,
+      repo: task.repo,
+      number: task.number,
+      branch: task.branch,
+      url: task.url,
+      title: task.title ?? `${task.owner}/${task.repo}#${task.number}`,
+      ...task.pullRequest,
+      sourceSessionKey: task.sourceSessionKey,
+      sourceAgentId: task.sourceAgentId,
+    });
+  }
+  for (const request of snapshot?.pullRequests ?? []) {
+    requests.set(request.url, { ...requests.get(request.url), ...request });
+  }
+  return orderSessionPullRequests([...requests.values()]);
+}

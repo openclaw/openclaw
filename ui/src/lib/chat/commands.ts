@@ -12,9 +12,9 @@ import {
 } from "../../../../src/auto-reply/reply/directive-handling.parse.js";
 import type { IconName } from "../../components/icon-data.ts";
 import { t } from "../../i18n/index.ts";
-import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
+import { registerChatCommandsEnglish } from "../../i18n/locales/en-chat-commands.ts";
 
-registerCommandPaletteEnglish();
+registerChatCommandsEnglish();
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -153,30 +153,16 @@ const COMMAND_OVERRIDES: Partial<
   Record<string, Pick<SlashCommandDef, "description" | "descriptionKey" | "args">>
 > = {
   steer: {
-    description: registerCommandPaletteEnglish.catalog.chat.commands.steerDescription,
+    description: registerChatCommandsEnglish.catalog.chat.commands.steerDescription,
     descriptionKey: "chat.commands.steerDescription",
     args: "<message>",
   },
   "export-session": {
-    description: registerCommandPaletteEnglish.catalog.chat.commands.exportDescription,
+    description: registerChatCommandsEnglish.catalog.chat.commands.exportDescription,
     descriptionKey: "chat.commands.exportDescription",
     args: undefined,
   },
 };
-
-function getSlashAliases(command: CommandLike): string[] {
-  return (command.aliases ?? [])
-    .map((alias) => alias.trim())
-    .filter(Boolean)
-    .map((alias) => (alias.startsWith("/") ? alias.slice(1) : alias));
-}
-
-function formatArgs(command: CommandLike): string | undefined {
-  if (!command.args?.length) {
-    return undefined;
-  }
-  return command.args.map((arg) => (arg.required ? `<${arg.name}>` : `[${arg.name}]`)).join(" ");
-}
 
 function choiceToValue(command: CommandLike, argName: string, choice: LocalArgChoice): string {
   const value = typeof choice === "string" ? choice : choice.value;
@@ -212,9 +198,15 @@ function toSlashCommand(command: CommandLike, source: "local" | "remote"): Slash
   return {
     key: command.key,
     name,
-    aliases: getSlashAliases(command).filter((alias) => alias !== name),
+    aliases: (command.aliases ?? [])
+      .map((alias) => alias.trim())
+      .filter(Boolean)
+      .map((alias) => (alias.startsWith("/") ? alias.slice(1) : alias))
+      .filter((alias) => alias !== name),
     description: command.description,
-    args: formatArgs(command),
+    args: command.args?.length
+      ? command.args.map((arg) => (arg.required ? `<${arg.name}>` : `[${arg.name}]`)).join(" ")
+      : undefined,
     ...COMMAND_OVERRIDES[command.key],
     icon: presentation?.icon ?? "terminal",
     category:
@@ -263,60 +255,50 @@ export function buildFallbackSlashCommands(): SlashCommandDef[] {
   return [...builtins, ...UI_ONLY_COMMANDS];
 }
 
-function buildReservedLocalSlashNames(localCommands: SlashCommandDef[]): Set<string> {
-  const reserved = new Set<string>();
-  for (const command of localCommands) {
-    reserved.add(normalizeLowercaseStringOrEmpty(command.name));
-    for (const alias of command.aliases ?? []) {
-      const normalized = normalizeSlashIdentifier(alias);
-      if (normalized) {
-        reserved.add(normalized);
-      }
-    }
-  }
-  return reserved;
-}
-
-function normalizeCommandEntry(
-  entry: CommandEntry,
-  reservedLocalNames: Set<string>,
-): CommandLike | null {
-  const aliases = (entry.textAliases ?? [])
-    .map(normalizeSlashIdentifier)
-    .filter((alias): alias is string => Boolean(alias))
-    .filter((alias) => !reservedLocalNames.has(alias));
-  const primaryName = aliases[0] ?? normalizeSlashIdentifier(entry.name);
-  if (!primaryName || reservedLocalNames.has(primaryName)) {
-    return null;
-  }
-  const args = entry.args?.map((arg) => ({
-    name: arg.name,
-    required: arg.required,
-    choices: arg.dynamic ? [] : arg.choices?.filter((choice) => choice.value),
-  }));
-  return {
-    key: primaryName,
-    name: primaryName,
-    aliases: aliases.map((alias) => `/${alias}`),
-    description: entry.description,
-    args,
-    category: entry.category,
-    source: entry.source,
-    skillDisplayName: entry.skillDisplayName?.trim() || undefined,
-    skillModelVisible: entry.skillModelVisible,
-    clientPresentation: entry.source === "plugin" ? entry.clientPresentation : undefined,
-  };
-}
-
 export function replaceSlashCommands(next: SlashCommandDef[]) {
   SLASH_COMMANDS.splice(0, SLASH_COMMANDS.length, ...next);
 }
 
 export function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef[] {
   const local = buildFallbackSlashCommands();
-  const reservedLocalNames = buildReservedLocalSlashNames(local);
+  const reservedLocalNames = new Set<string>();
+  for (const command of local) {
+    reservedLocalNames.add(normalizeLowercaseStringOrEmpty(command.name));
+    for (const alias of command.aliases ?? []) {
+      const normalized = normalizeSlashIdentifier(alias);
+      if (normalized) {
+        reservedLocalNames.add(normalized);
+      }
+    }
+  }
   const mapped = entries
-    .map((entry) => normalizeCommandEntry(entry, reservedLocalNames))
+    .map<CommandLike | null>((entry) => {
+      const aliases = (entry.textAliases ?? [])
+        .map(normalizeSlashIdentifier)
+        .filter((alias): alias is string => Boolean(alias))
+        .filter((alias) => !reservedLocalNames.has(alias));
+      const primaryName = aliases[0] ?? normalizeSlashIdentifier(entry.name);
+      if (!primaryName || reservedLocalNames.has(primaryName)) {
+        return null;
+      }
+      const args = entry.args?.map((arg) => ({
+        name: arg.name,
+        required: arg.required,
+        choices: arg.dynamic ? [] : arg.choices?.filter((choice) => choice.value),
+      }));
+      return {
+        key: primaryName,
+        name: primaryName,
+        aliases: aliases.map((alias) => `/${alias}`),
+        description: entry.description,
+        args,
+        category: entry.category,
+        source: entry.source,
+        skillDisplayName: entry.skillDisplayName?.trim() || undefined,
+        skillModelVisible: entry.skillModelVisible,
+        clientPresentation: entry.source === "plugin" ? entry.clientPresentation : undefined,
+      };
+    })
     .filter((command): command is CommandLike => command !== null)
     .map((command) => toSlashCommand(command, "remote"))
     .filter((command): command is SlashCommandDef => command !== null);
@@ -370,13 +352,11 @@ function getSlashCommandRelevance(command: SlashCommandDef, filter: string): num
 export function getSlashCommandCompletions(
   filter: string,
   options?: {
-    showAll?: boolean;
     inlineOnly?: boolean;
     allowImmediateInlineCommands?: boolean;
   },
 ): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter);
-  const showAll = options?.showAll ?? false;
   let commands = options?.inlineOnly
     ? SLASH_COMMANDS.filter(
         (command) =>
@@ -389,10 +369,6 @@ export function getSlashCommandCompletions(
         (command) => getSlashCommandRelevance(command, lower) < NON_MATCHING_COMMAND_RANK,
       )
     : commands;
-
-  if (!lower && !showAll) {
-    commands = commands.filter((cmd) => (cmd.tier ?? "standard") !== "power");
-  }
 
   return commands.toSorted(
     (a, b) =>
@@ -450,21 +426,27 @@ export function getSkillDisplayName(command: SlashCommandDef): string {
 }
 
 export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
-  const lower = normalizeLowercaseStringOrEmpty(filter);
+  const lower = normalizeLowercaseStringOrEmpty(filter).normalize("NFC");
   const normalized = lower.replace(/[\s_]+/gu, "-");
   return SLASH_COMMANDS.filter(
     (command) => command.source === "skill" && command.skillModelVisible === true,
   )
     .filter((command) => {
-      const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command));
+      const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command)).normalize(
+        "NFC",
+      );
       const displayLookup = displayName.replace(/[\s_]+/gu, "-");
-      const commandLookup = normalizeLowercaseStringOrEmpty(command.name).replace(/[\s_]+/gu, "-");
+      const commandLookup = normalizeLowercaseStringOrEmpty(command.name)
+        .normalize("NFC")
+        .replace(/[\s_]+/gu, "-");
       return (
         !lower ||
         displayName.includes(lower) ||
         displayLookup.includes(normalized) ||
         commandLookup.startsWith(normalized) ||
-        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(lower)
+        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command))
+          .normalize("NFC")
+          .includes(lower)
       );
     })
     .toSorted((left, right) => getSkillDisplayName(left).localeCompare(getSkillDisplayName(right)));

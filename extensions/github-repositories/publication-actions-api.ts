@@ -33,7 +33,41 @@ function assertPreservedPublicationFooter(before: string, after: string) {
 export async function performGitHubPullRequestAction(
   input: RepositoryPublicationActionInput,
 ): Promise<RepositoryPublicationActionResult> {
-  const { params, binding, publication, pullRequest, fullWrite } = input;
+  const { params, binding, publication, fullWrite } = input;
+  const explicitPullRequestUrl =
+    params.action === "edit" || params.action === "request_review"
+      ? params.pullRequestUrl
+      : undefined;
+  const inspectExplicit = async () => {
+    if (!explicitPullRequestUrl || !input.reader) {
+      throw new Error("Inspecting your PR requires your verified linked GitHub account.");
+    }
+    return await inspectOwnGitHubPullRequest({
+      pullRequestUrl: explicitPullRequestUrl,
+      agentId: input.agentId,
+      reader: input.reader,
+      assertCurrent: input.assertCurrent,
+    });
+  };
+  const explicit = explicitPullRequestUrl ? await inspectExplicit() : undefined;
+  const explicitHead = explicit?.details.head;
+  if (
+    explicit &&
+    (!isRecord(explicitHead) || typeof explicitHead.ref !== "string" || !explicitHead.ref)
+  ) {
+    throw new Error(
+      "GitHub returned an invalid PR head reference; inspect the PR before retrying.",
+    );
+  }
+  const pullRequest =
+    explicit && isRecord(explicitHead) && typeof explicitHead.ref === "string"
+      ? {
+          url: explicit.result.url,
+          repository: explicit.result.base.repository,
+          branch: explicitHead.ref,
+        }
+      : input.pullRequest;
+  const originalTarget = explicit?.result ?? binding;
   const edit = params.action === "edit" ? params : undefined;
   const evidenceUpload = params.action === "upload_evidence" ? params : undefined;
   const requestReview = params.action === "request_review";
@@ -49,7 +83,7 @@ export async function performGitHubPullRequestAction(
       ...identity.account,
     });
   }
-  let inspection: Awaited<ReturnType<typeof inspectOwnGitHubPullRequest>> | undefined;
+  let inspection: Awaited<ReturnType<typeof inspectOwnGitHubPullRequest>> | undefined = explicit;
   const assertIdentity = () => {
     input.assertCurrent();
     if (!matchesCurrentGitHubPublicationIdentity({ agentId: input.agentId, identity })) {
@@ -70,7 +104,7 @@ export async function performGitHubPullRequestAction(
     !url ||
     url.protocol !== "https:" ||
     url.host !== host ||
-    (binding && binding.host !== host) ||
+    (originalTarget && originalTarget.host !== host) ||
     url.username ||
     url.password ||
     !url.pathname.startsWith(expectedPath) ||
@@ -84,6 +118,16 @@ export async function performGitHubPullRequestAction(
   const endpoint = `repos/${pullRequest.repository}/pulls/${number}`;
   const read = async () => {
     assertCurrent();
+    if (explicitPullRequestUrl) {
+      inspection = await inspectExplicit();
+      assertCurrent();
+      return pullRequestState(
+        inspection.details,
+        pullRequest,
+        originalTarget,
+        explicit?.result.author.accountId,
+      );
+    }
     if (binding && !fullWrite) {
       if (!input.reader) {
         throw new Error("Inspecting your PR requires your verified linked GitHub account.");
@@ -127,7 +171,14 @@ export async function performGitHubPullRequestAction(
     assertCurrent();
     return result;
   };
-  let before = await read();
+  let before = explicit
+    ? pullRequestState(
+        explicit.details,
+        pullRequest,
+        originalTarget,
+        explicit.result.author.accountId,
+      )
+    : await read();
   if (params.action === "inspect" || (edit && !editsMetadata)) {
     return present(before);
   }
@@ -140,11 +191,20 @@ export async function performGitHubPullRequestAction(
   };
   assertHead(before);
   const prepareImportedEffect = async () => {
+    if (explicitPullRequestUrl) {
+      const current = await read();
+      assertHead(current);
+      if (current.state === "closed" || current.state === "merged") {
+        throw new Error("The PR is closed; no metadata action was performed.");
+      }
+      return current;
+    }
     if (inspection) {
       const current = await assertExistingPullRequestWriteAccess({
         pullRequest: inspection.result,
         identity,
         assertCurrent,
+        requirePublicRepositories: inspection.requirePublicRepositories,
       });
       assertCurrent();
       return pullRequestState(current, pullRequest, binding, inspection.result.author.accountId);

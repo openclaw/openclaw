@@ -399,36 +399,30 @@ function isValidTenantIdentifier(value: string): boolean {
 
 export async function promptTenantId(
   ctx: ProviderAuthContext,
-  params?: {
+  params: {
     suggestions?: Array<{ id: string; label?: string }>;
-    required?: boolean;
-    reason?: string;
+    reason: string;
   },
 ): Promise<string | undefined> {
   const suggestionLines =
-    params?.suggestions && params.suggestions.length > 0
+    params.suggestions && params.suggestions.length > 0
       ? params.suggestions.map((entry) => `- ${entry.id}${entry.label ? ` (${entry.label})` : ""}`)
       : [];
-  if (params?.reason || suggestionLines.length > 0) {
-    await ctx.prompter.note(
-      [
-        params?.reason,
-        suggestionLines.length > 0 ? "Suggested tenants:" : undefined,
-        ...suggestionLines,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      "Azure Tenant",
-    );
-  }
+  await ctx.prompter.note(
+    [
+      params.reason,
+      ...(suggestionLines.length > 0 ? ["Suggested tenants:", ...suggestionLines] : []),
+    ].join("\n"),
+    "Azure Tenant",
+  );
   const tenantId = (
     await ctx.prompter.text({
-      message: params?.required ? "Azure tenant ID" : "Azure tenant ID (optional)",
-      placeholder: params?.suggestions?.[0]?.id ?? "00000000-0000-0000-0000-000000000000",
+      message: "Azure tenant ID",
+      placeholder: params.suggestions?.[0]?.id ?? "00000000-0000-0000-0000-000000000000",
       validate: (value) => {
         const trimmed = normalizeStringifiedOptionalString(value) ?? "";
         if (!trimmed) {
-          return params?.required ? "Tenant ID is required" : undefined;
+          return "Tenant ID is required";
         }
         return isValidTenantIdentifier(trimmed)
           ? undefined
@@ -457,7 +451,6 @@ export async function loginWithTenantFallback(
     }
     const tenantId = await promptTenantId(ctx, {
       suggestions: extractTenantSuggestions(message),
-      required: true,
       reason:
         "Azure login needs a tenant-scoped retry. This often happens when your tenant requires MFA or your account has no Azure subscriptions.",
     });

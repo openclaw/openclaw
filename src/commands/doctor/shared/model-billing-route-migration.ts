@@ -196,12 +196,11 @@ function collectBillingRoutes(params: {
 export function collectModelBillingRouteMigrationWarnings(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): string[] {
   const authStores: AuthStores = new Map();
   const options = {
-    env: params.env ?? process.env,
+    env: process.env,
     metadataSnapshot: params.metadataSnapshot,
     authStores,
   };

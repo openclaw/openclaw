@@ -12,13 +12,18 @@ const childKeys = Array.from(
   (_, index) => `agent:main:dashboard:child-${index + 1}`,
 );
 
-async function mountChildSessions(extraRows: GatewaySessionRow[] = []) {
+async function mountChildSessions(
+  extraRows: GatewaySessionRow[] = [],
+  childFields: (index: number) => Partial<GatewaySessionRow> = (index) => ({
+    updatedAt: index + 1,
+  }),
+) {
   const harness = createSessionsHarness("main", [parentKey]);
   const children = childKeys.map((key, index) => ({
     key,
     spawnedBy: parentKey,
     kind: "direct" as const,
-    updatedAt: index + 1,
+    ...childFields(index),
   }));
   harness.list.mockResolvedValue({
     ...sessionList([...children, ...extraRows], 100_000),
@@ -87,4 +92,29 @@ it("keeps live children visible past the cap", async () => {
   await waitForFast(() => expect(find(`[data-session-key="${childKeys[5]}"]`)).not.toBeNull());
   expect(find(`[data-session-key="${childKeys[4]}"]`)).toBeNull();
   expect(find("[data-show-more-children]")?.textContent?.trim()).toBe("Show 1 more");
+});
+
+it("orders capped children by the selected session sort instead of their keys", async () => {
+  // Real child keys end in random ids, so key order is unrelated to activity.
+  const createdAt = [3, 6, 1, 5, 2, 4];
+  const updatedAt = [60, 10, 50, 20, 40, 30];
+  const { sidebar, find } = await mountChildSessions([], (index) => ({
+    createdAt: createdAt[index],
+    updatedAt: updatedAt[index],
+  }));
+  const visibleChildren = () =>
+    [...sidebar.querySelectorAll(".sidebar-recent-session--child[data-session-key]")].map((row) =>
+      row.getAttribute("data-session-key")?.replace("agent:main:dashboard:", ""),
+    );
+
+  expect(find("[data-child-session-toggle]")?.getAttribute("aria-expanded")).toBe("true");
+  await waitForFast(() =>
+    expect(visibleChildren()).toEqual(["child-2", "child-4", "child-6", "child-1"]),
+  );
+
+  sidebar.setSessionSortMode("updated");
+  await waitForFast(() =>
+    expect(visibleChildren()).toEqual(["child-1", "child-3", "child-5", "child-6"]),
+  );
+  expect(find("[data-show-more-children]")?.textContent?.trim()).toBe("Show 2 more");
 });

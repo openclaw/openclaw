@@ -5,9 +5,9 @@ import type {
   ControlUiAgentPickerProps,
   ControlUiComponents,
 } from "openclaw/plugin-sdk/control-ui";
-import { createSignal, flush } from "solid-js";
+import { createEffect, createMemo, createSignal, flush } from "solid-js";
 import { afterEach, vi } from "vitest";
-import { getWorkboardState } from "../../lib/workboard/index.ts";
+import { getWorkboardState, subscribeWorkboard } from "../../lib/workboard/runtime.ts";
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { waitForFast } from "../../test/wait-for.ts";
 import { WorkboardView } from "./view.tsx";
@@ -61,7 +61,7 @@ export function renderInto(container: HTMLElement, props: WorkboardRenderProps) 
   } else {
     const [current, setCurrent] = createSignal(props);
     const [revision, setRevision] = createSignal(0);
-    const requestUpdate = () => {
+    const publishPresentation = () => {
       current().onRequestUpdate?.();
       setRevision((value) => value + 1);
     };
@@ -71,7 +71,7 @@ export function renderInto(container: HTMLElement, props: WorkboardRenderProps) 
           return revision();
         }
         if (key === "onRequestUpdate") {
-          return requestUpdate;
+          return publishPresentation;
         }
         return Reflect.get(current(), key);
       },
@@ -82,7 +82,12 @@ export function renderInto(container: HTMLElement, props: WorkboardRenderProps) 
         return { configurable: true, enumerable: true };
       },
     });
-    const dispose = render(() => createComponent(WorkboardView, reactiveProps), container);
+    const dispose = render(() => {
+      // Prop-only renders must not re-subscribe during an owner notification.
+      const currentHost = createMemo(() => current().host);
+      createEffect(currentHost, (host) => subscribeWorkboard(host, publishPresentation));
+      return createComponent(WorkboardView, reactiveProps);
+    }, container);
     renderedViews.set(container, {
       update(next) {
         setCurrent(next);
@@ -122,6 +127,27 @@ export function buttonByText(container: Element, text: string): HTMLButtonElemen
       button.textContent?.includes(text),
     ) ?? null
   );
+}
+
+export function openCardMenu(card: Element): HTMLElement {
+  const trigger = expectDefined(
+    card.querySelector<HTMLButtonElement>(".workboard-card__menu-trigger"),
+    "card menu trigger",
+  );
+  trigger.click();
+  flush();
+  const panel = expectDefined(
+    trigger.ownerDocument.getElementById(
+      expectDefined(trigger.getAttribute("popovertarget"), "card menu target"),
+    ),
+    "card menu panel",
+  );
+  // The unit DOM stubs native popover default actions; deliver its public event.
+  panel.dispatchEvent(
+    Object.assign(new Event("beforetoggle"), { oldState: "closed", newState: "open" }),
+  );
+  flush();
+  return panel;
 }
 
 export function requireButton(root: Element, label: string) {

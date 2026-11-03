@@ -39,23 +39,22 @@ function subscriptions<T>() {
   };
 }
 
-export function createHovercard(
-  options: {
-    sessionKey?: string;
-    card?: ProgressCard | null;
-    holdProgress?: boolean;
-    rowDetails?: Partial<SidebarSessionHovercardRow>;
-    triggerKind?: "sidebar" | "markdown";
-    browser?: boolean;
-  } = {},
-) {
-  const {
-    sessionKey = "global",
-    holdProgress = false,
-    triggerKind = "sidebar",
-    browser = false,
-  } = options;
-  let { card, rowDetails = {} } = options;
+export function createHovercard({
+  sessionKey = "global",
+  card,
+  holdProgress = false,
+  rowDetails: initialRowDetails = {},
+  triggerKind = "sidebar",
+  browser = false,
+}: {
+  sessionKey?: string;
+  card?: ProgressCard | null;
+  holdProgress?: boolean;
+  rowDetails?: Partial<SidebarSessionHovercardRow>;
+  triggerKind?: "sidebar" | "markdown";
+  browser?: boolean;
+} = {}) {
+  let rowDetails = initialRowDetails;
   let selectedId = "research";
   let releaseProgress: (() => void) | undefined;
   const selection = subscriptions<ApplicationContext["agentSelection"]["state"]>();
@@ -98,7 +97,13 @@ export function createHovercard(
         ? params.sessionKey
         : `agent:${params.agentId}:${params.sessionKey}`;
       return {
-        card: { sessionKey: key, revision: 1, updatedAt: 1, markdown: `${owner} progress` },
+        card: {
+          sessionKey: key,
+          revision: 1,
+          updatedAt: 1,
+          markdown: `${owner} progress`,
+          steps: [{ step: `${owner} progress`, status: "in_progress" }],
+        },
       };
     },
   );
@@ -189,9 +194,10 @@ export function createHovercard(
   });
   provider.lookupSidebarRow = sidebar.findSidebarHovercardRowByKey;
   sidebar.hidden = browser; // A registered real sidebar must not render in the browser fixture.
-  const row = Object.assign(document.createElement("div"), { className: "sidebar-recent-session" });
-  row.dataset.sessionKey = sessionKey;
-  if (browser) {
+  const row = Object.assign(document.createElement("div"), {
+    className: triggerKind === "markdown" ? "chat-thread" : "sidebar-recent-session",
+  });
+  if (browser && triggerKind !== "markdown") {
     row.style.cssText = "position:fixed;left:20px;top:80px;width:200px;height:32px";
   }
   const trigger = Object.assign(document.createElement("a"), {
@@ -200,24 +206,15 @@ export function createHovercard(
     href: browser ? "#synthetic-provider-session" : "#",
     textContent: browser ? "Synthetic provider session" : "Session",
   });
+  (triggerKind === "markdown" ? trigger : row).dataset.sessionKey = sessionKey;
+  row.append(trigger);
   provider.append(sidebar);
-  if (triggerKind === "markdown") {
-    trigger.dataset.sessionKey = sessionKey;
-    const thread = Object.assign(document.createElement("div"), { className: "chat-thread" });
-    thread.append(trigger);
-    provider.append(thread);
-  } else {
-    row.append(trigger);
-    (browser ? provider : sidebar).append(row);
-  }
-  const emitProgressChange = (revision = 2) =>
-    emit("progressCard.changed", { sessionKey, revision });
+  (browser || triggerKind === "markdown" ? provider : sidebar).append(row);
   const reads = (method: string) =>
     request.mock.calls.filter(([called]) => called === method).length;
   return {
     provider,
     gateway,
-    row,
     trigger,
     request,
     getReads: () => reads("progressCard.get"),
@@ -239,10 +236,6 @@ export function createHovercard(
       selectedId = agentId;
       selection.emit(context.agentSelection.state);
     },
-    change(next: ProgressCard) {
-      card = next;
-      emitProgressChange(next.revision);
-    },
     updateRow(details: Partial<SidebarSessionHovercardRow>) {
       rowDetails = { ...rowDetails, ...details };
       sessions.emit();
@@ -257,7 +250,7 @@ export function createHovercard(
         },
       });
     },
-    emitProgressChange,
+    emitProgressChange: (revision = 2) => emit("progressCard.changed", { sessionKey, revision }),
     async releaseProgress() {
       releaseProgress?.();
       await Promise.all(request.mock.results.map((result) => result.value));

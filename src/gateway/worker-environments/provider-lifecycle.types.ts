@@ -33,6 +33,10 @@ export type WorkerEnvironmentAbandonment = {
 
 export type WorkerProviderLifecycleInputOptions = {
   store: WorkerEnvironmentStore;
+  waitForRetainedNode?: (
+    nodeId: string,
+    options: { signal: AbortSignal; assertCurrent: () => void },
+  ) => Promise<void>;
   getConfig: () => OpenClawConfig;
   getRepositorySources?: () => import("../repository-sources.js").RepositorySources;
   resolveProvider: (providerId: string) => WorkerProvider | undefined;
@@ -120,6 +124,7 @@ export type WorkerProviderLifecycleOptions = Omit<
   ) => Promise<T>;
   callProvider: <T>(
     environmentId: string,
+    operationName: string,
     run: () => Promise<T>,
     timeoutMs?: number,
     observationSignal?: AbortSignal,

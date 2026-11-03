@@ -14,6 +14,7 @@ import {
   uiSessionEventMatches,
 } from "../../../ui/src/lib/sessions/session-key.ts";
 import { createControlUiRequests } from "../../../ui/src/plugins/control-ui-requests.ts";
+import { createApplicationGatewaySnapshot } from "../../../ui/src/test-helpers/application-context-fixtures.ts";
 import {
   createRepositoryBrowserRuntime,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -31,17 +32,13 @@ export function createHello(scopes: string[] = ["operator.read"]): GatewayHelloO
 export function createGatewayHarness() {
   const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ subscribed: true });
   const client = { request } as unknown as GatewayBrowserClient;
-  let snapshot: ApplicationGatewaySnapshot = {
+  let snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
     hello: createHello(),
-    canvasPluginSurfaceUrl: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const snapshotListeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const unsubscribeSnapshots = vi.fn();

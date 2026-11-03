@@ -3,18 +3,8 @@ import { listAgentIds } from "../agents/agent-scope.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { CronJob } from "../cron/types.js";
-
-export type HeartbeatSummary = {
-  enabled: boolean;
-  every: string;
-  everyMs: number | null;
-  prompt: string;
-  target: string;
-  model?: string;
-  session?: string;
-  ackMaxChars: number;
-};
 
 function resolveHeartbeatSummaryJobs(
   cfg: OpenClawConfig,
@@ -28,20 +18,46 @@ function resolveHeartbeatSummaryJobs(
 }
 
 /** Missing state is empty; unreadable or unmigrated state remains an explicit failure. */
-export async function readHeartbeatSummarySnapshot(cfg: OpenClawConfig): Promise<CronJob[]> {
-  const { readDefaultProactiveJobsAsync } = await import("../cron/proactive-job-receipt.js");
-  const jobs = await readDefaultProactiveJobsAsync(undefined, listAgentIds(cfg));
+export async function readHeartbeatSummarySnapshot(
+  cfg: OpenClawConfig,
+  storePath?: string,
+  storeKey?: string,
+): Promise<CronJob[]> {
+  const { readDefaultProactiveJobsAsync, readDefaultProactiveJobsByKeyAsync } =
+    await import("../cron/proactive-job-receipt.js");
+  const jobs = storeKey
+    ? await readDefaultProactiveJobsByKeyAsync(storeKey, listAgentIds(cfg))
+    : await readDefaultProactiveJobsAsync(storePath, listAgentIds(cfg));
   return resolveHeartbeatSummaryJobs(cfg, jobs);
 }
 
-export function projectHeartbeatSummary(job?: CronJob): HeartbeatSummary {
-  const enabled = Boolean(job?.enabled && !job.state.autoDisabled);
+/** Diagnostics stay available while the default cron partition awaits an operator choice. */
+export async function readHeartbeatSummaryForStatus(read: () => Promise<CronJob[]>) {
+  try {
+    return { jobs: await read(), selectionWarning: undefined };
+  } catch (error) {
+    if (!(error instanceof CronStoreSelectionRequiredError)) {
+      throw error;
+    }
+    return { jobs: [], selectionWarning: error.message };
+  }
+}
+
+export function projectHeartbeatSummary(job?: CronJob, selectionWarning?: string) {
+  const enabled = Boolean(!selectionWarning && job?.enabled && !job.state.autoDisabled);
   const everyMs = job?.schedule.kind === "every" ? job.schedule.everyMs : null;
   return {
     enabled,
-    every: enabled ? (everyMs ? `${everyMs}ms` : "scheduled") : "disabled",
+    every: selectionWarning
+      ? "paused"
+      : enabled
+        ? everyMs
+          ? `${everyMs}ms`
+          : "scheduled"
+        : "disabled",
     everyMs: enabled ? everyMs : null,
-    prompt: job?.payload.kind === "agentTurn" ? job.payload.message : "",
+    // The existing diagnostics field carries the actionable pause reason when no job is selected.
+    prompt: selectionWarning ?? (job?.payload.kind === "agentTurn" ? job.payload.message : ""),
     target:
       job?.delivery?.mode === "none"
         ? "none"

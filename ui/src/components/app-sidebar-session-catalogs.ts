@@ -32,14 +32,16 @@ export function catalogSessionActivity(
   liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
   isRunVisuallyActive: (row: GatewaySessionRow) => boolean,
 ) {
-  const rows = sessions.flatMap((session) => {
+  let running = false;
+  let unread = false;
+  for (const session of sessions) {
     const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
-    return row ? [row] : [];
-  });
-  return {
-    running: rows.some(isRunVisuallyActive),
-    unread: rows.some((row) => row.unread === true),
-  };
+    running ||= row
+      ? isRunVisuallyActive(row) || (row.backgroundProcessCount ?? 0) > 0
+      : session.status === "active" || session.status === "running";
+    unread ||= row?.unread === true;
+  }
+  return { running, unread };
 }
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
@@ -155,7 +157,7 @@ export type SidebarSessionCatalog = SessionCatalog & { visibleHosts: SessionCata
 
 type SessionVisibilityRow = Pick<GatewaySessionRow, "key" | "archived" | "snoozedUntil">;
 
-/** Section peers and rendering share the same nonempty, owner-filtered catalogs. */
+/** Section peers and rendering share the same owner-filtered catalogs and discovery failures. */
 export function projectSidebarSessionCatalogs(
   catalogs: readonly SessionCatalog[],
   ownerId: string | null,
@@ -193,7 +195,12 @@ export function projectSidebarSessionCatalogs(
         visibleHosts.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
       }
     }
-    return visibleHosts.length > 0 ? [{ ...catalog, visibleHosts }] : [];
+    // Discovery failures may expose an empty catalog, not sessions excluded by the user's filter.
+    return visibleHosts.length > 0 ||
+      (catalog.hosts.every((host) => host.sessions.length === 0) &&
+        catalogErrorMessages(catalog).length > 0)
+      ? [{ ...catalog, visibleHosts }]
+      : [];
   });
 }
 
@@ -249,4 +256,29 @@ export function bindAdoptedCatalogSession(
         }
       : catalog,
   );
+}
+
+const CATALOG_CONTROLS = [
+  ["link", ".sidebar-recent-session__link"],
+  ["children", "[data-child-session-toggle]"],
+  ["pin", "[data-sidebar-session-pin]"],
+  ["archive", "[data-sidebar-session-archive]"],
+  ["menu", "[data-sidebar-session-menu]"],
+  ["catalogMenu", "[data-catalog-session-menu]"],
+] as const;
+
+export function catalogRowFocusControl(
+  previousFocus: Element | null,
+  identityKey: string,
+  sessionKey: string,
+) {
+  const active = previousFocus instanceof HTMLElement ? previousFocus : null;
+  const activeRow = active?.closest<HTMLElement>("[data-session-key]");
+  const control = CATALOG_CONTROLS.find(([, selector]) => active?.matches(selector))?.[0];
+  return control !== undefined &&
+    (activeRow?.dataset.catalogSessionKey === identityKey ||
+      activeRow?.dataset.sessionKey === identityKey ||
+      activeRow?.dataset.sessionKey === sessionKey)
+    ? control
+    : undefined;
 }

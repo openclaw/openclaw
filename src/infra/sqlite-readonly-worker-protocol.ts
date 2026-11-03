@@ -1,6 +1,5 @@
 import path from "node:path";
 import { toUSVString } from "node:util";
-import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import type { SqlitePrivateSnapshotFamily } from "./sqlite-readonly-location.types.js";
@@ -20,9 +19,10 @@ export type SqliteReadOnlyWorkerMode =
   | "file-generation"
   | "update-generation"
   | "async"
+  | "staged-sync"
+  | "staged-async"
   | "metadata"
   | "consolidated"
-  | "reclaim"
   | "auth-profile-rows"
   | "operation"
   | "staging-create"
@@ -42,7 +42,6 @@ export type SqliteReadOnlyWorkerResult =
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
   | { ok: true; generation: string }
-  | { ok: true; warnings: string[] }
   | { ok: false; message: string };
 
 export class SqliteReadOnlyInspectionContentionError extends Error {}
@@ -77,7 +76,16 @@ export type SqliteReadOnlyWorkerOptions =
       signal?: AbortSignal;
     }
   | {
-      mode: Exclude<SqliteReadOnlyWorkerMode, "auth-profile-rows" | "operation" | "private-fork">;
+      mode: "staged-sync" | "staged-async";
+      stagingRoot: string;
+      signal?: AbortSignal;
+      expectedSourceIdentity?: DatabaseFileIdentity;
+    }
+  | {
+      mode: Exclude<
+        SqliteReadOnlyWorkerMode,
+        "auth-profile-rows" | "operation" | "private-fork" | "staged-sync" | "staged-async"
+      >;
       stagingRoot?: string;
       signal?: AbortSignal;
       expectedSourceIdentity?: DatabaseFileIdentity;
@@ -96,7 +104,7 @@ export function sqliteReadOnlyWorkerRequestArgs(
       ? undefined
       : options.expectedSourceIdentity;
   if (expected !== undefined) {
-    if (options.mode !== "sync" && options.mode !== "metadata") {
+    if (options.mode !== "sync" && options.mode !== "staged-sync" && options.mode !== "metadata") {
       throw new Error("SQLite source identity is supported only for sync or metadata snapshots");
     }
     args.push(stagingRoot ?? "", JSON.stringify(readDatabaseFileIdentity(expected)));
@@ -118,7 +126,6 @@ export type SqliteReadOnlyWorkerOutput =
   | { kind: "launch-failed"; error: Error };
 export type SqliteReadOnlyWorkerValue =
   | string
-  | string[]
   | SqliteAuthProfileRows
   | SqliteReadOnlyOperationResult;
 export const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
@@ -137,7 +144,6 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
       typeof value.contentVersion === "string" &&
       /^(?:[a-f0-9]{64})?$/.test(value.contentVersion)) ||
     (value.ok === true && "generation" in value && typeof value.generation === "string") ||
-    (value.ok === true && "warnings" in value && isStringArray(value.warnings)) ||
     (value.ok === false && "message" in value && typeof value.message === "string")
   );
 }
@@ -180,16 +186,14 @@ export function readSqliteReadOnlyWorkerValue(
     | "sync"
     | "private-fork"
     | "async"
+    | "staged-sync"
+    | "staged-async"
     | "metadata"
     | "consolidated"
     | "content-version"
     | "file-generation"
     | "update-generation",
 ): string;
-export function readSqliteReadOnlyWorkerValue(
-  params: SqliteReadOnlyWorkerOutput,
-  mode: "reclaim",
-): string[];
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
   mode: SqliteReadOnlyWorkerMode,
@@ -237,6 +241,8 @@ export function readSqliteReadOnlyWorkerValue(
     (mode === "sync" ||
       mode === "private-fork" ||
       mode === "async" ||
+      mode === "staged-sync" ||
+      mode === "staged-async" ||
       mode === "metadata" ||
       mode === "consolidated" ||
       isSqliteSnapshotStagingMode(mode)) &&
@@ -249,9 +255,6 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if ((mode === "file-generation" || mode === "update-generation") && "generation" in result) {
     return result.generation;
-  }
-  if (mode === "reclaim" && "warnings" in result) {
-    return result.warnings;
   }
   throw createSqliteReadOnlyWorkerError(
     "returned a result for a different operation",

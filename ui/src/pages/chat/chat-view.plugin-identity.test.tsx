@@ -6,6 +6,7 @@ import type {
   ControlUiSurface,
   ControlUiViewContext,
 } from "../../../../src/plugin-sdk/control-ui.js";
+import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
 import { createControlUiPluginHost } from "../../plugins/control-ui-host.ts";
 import {
   ControlUiPluginRuntime,
@@ -22,7 +23,6 @@ import { createChatProps } from "./chat-view.test-helpers.ts";
 import { ChatView } from "./chat-view.tsx";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { GroupedMessage } from "./components/chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./components/chat-message-markdown-view.tsx";
 import "../../plugins/control-ui-view.solid.tsx";
 import "../../plugins/control-ui-contributions.solid.tsx";
 
@@ -55,6 +55,7 @@ it("passes the pane's raw global owner to transcript and tool replacements", asy
       widgets: new Map(),
       replacements: new Map(),
       textReferences: new Map(),
+      inlineViews: new Map(),
     },
   };
   const host = createControlUiPluginHost(() => context, runtime, owner);

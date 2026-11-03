@@ -2,6 +2,7 @@ import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import type { SecretEgressSentinelBinding } from "../secrets/egress-proxy/proxy-server.js";
 import type {
+  DurableExecOptions,
   ExecHostCommandParams,
   ExecApprovalFollowupFactory,
   ExecToolApprovalReview,
@@ -12,6 +13,7 @@ import type { AgentToolResult } from "./runtime/index.js";
 export type ProcessGatewayAllowlistParams = ExecHostCommandParams & {
   workdir: string;
   secretEgressBindings?: readonly SecretEgressSentinelBinding[];
+  durable?: DurableExecOptions;
   wrapLocalLaunch?: (argv: readonly string[]) => readonly string[];
   assertExecutionEnvironmentCurrent?: () => void;
   transportCredentialScrubEnv?: Readonly<Record<string, string>>;

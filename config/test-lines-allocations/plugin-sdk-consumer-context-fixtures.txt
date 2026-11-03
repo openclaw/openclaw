@@ -1,0 +1,2 @@
+# Restore real plugin runtime ownership and capability-refresh catalogs in speech, hovercard, and repository-picker regression fixtures.
+12

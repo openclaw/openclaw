@@ -4,6 +4,7 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { createGitHubPublicationWorkerScope } from "../state/github-publication-worker.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { createGitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import {
   listRepositoryGitHubPublicationsAsync,
   listSharedGitHubPublicationsAsync,
@@ -24,6 +25,7 @@ export function createGitHubPublicationRuntime(params: {
   provider: RepositoryPublicationProvider;
   formatReport: RepositoryPublicationProvider["formatReport"];
   placements: WorkerSessionPlacementStore;
+  environments?: Parameters<typeof createGitHubPublicationCoordinator>[0]["environments"];
   getCommittedRuntimeConfig: () => OpenClawConfig;
   loadSessionRuntime: () => Promise<RepositoryPublicationTranscriptRuntime>;
   warn: (message: string) => void;
@@ -36,6 +38,10 @@ export function createGitHubPublicationRuntime(params: {
       throw new Error("Repository publication runtime is closing.");
     }
     return work.track(run);
+  };
+  const recovery = {
+    shared: createGitHubPublicationRecoveryBackoff(),
+    repository: createGitHubPublicationRecoveryBackoff(),
   };
   const pendingRequests = new Set<string>();
   let pendingKnown = false;
@@ -102,15 +108,19 @@ export function createGitHubPublicationRuntime(params: {
       for (const [key, pending] of updates) {
         updatePending(key, pending);
       }
+      // This invocation can skip empty recovery only until a receipt changes the loaded facts.
+      return (kind: "shared" | "repository") =>
+        (kind === "shared" ? shared : repository).length === 0 &&
+        updates.size === 0 &&
+        pendingKnown;
     } catch (error) {
       pendingKnown = false;
       throw error;
-    } finally {
-      loadingUpdates = undefined;
     }
   };
   const nativeCoordinator = createGitHubPublicationCoordinator({
     ...params,
+    recovery,
     assertCurrent: () => {
       params.signal.throwIfAborted();
       scope.assertCurrent();
@@ -152,11 +162,17 @@ export function createGitHubPublicationRuntime(params: {
     publication: import("./github-publication.js").GitHubPublicationTranscriptReport,
   ) => {
     try {
+      const lifecycleRevision = await nativeCoordinator.readReportLifecycleAsync(publication);
       const presentation = params.formatReport(publication.result);
       await reportRepositoryPublicationTranscript(
         params.loadSessionRuntime,
         (requestId) => nativeCoordinator.markReportedAsync(requestId),
-        { ...publication, requestId: publication.result.requestId, ...presentation },
+        {
+          ...publication,
+          lifecycleRevision,
+          requestId: publication.result.requestId,
+          ...presentation,
+        },
       );
       return true;
     } catch (error) {
@@ -176,31 +192,11 @@ export function createGitHubPublicationRuntime(params: {
   };
   const publishAcceptedWorkspace = async (claim: WorkerSessionTurnClaim) => {
     await ready;
-    const placement = await params.placements.getAsync(claim.sessionId);
-    if (!placement) {
-      params.warn(`GitHub publication deferred because placement ${claim.sessionId} disappeared.`);
-      return;
-    }
-    let results;
-    try {
-      results = await nativeCoordinator.processClaim(claim);
-    } catch (error) {
-      params.warn(
-        `GitHub publication deferred for ${claim.sessionId}: ${formatErrorMessage(error)}`,
-      );
-      throw error;
-    }
-    for (const result of results) {
-      if (result.status !== "published" && result.status !== "failed") {
-        continue;
-      }
-      await reportDeferred({
-        sessionId: placement.sessionId,
-        sessionKey: placement.sessionKey,
-        agentId: placement.agentId,
-        result,
-      });
-    }
+    // The accepted snapshot is durable before this handoff. Release its claim binding
+    // through the existing writer; the lifecycle sweep publishes after workspace
+    // settlement, including after a restart, without holding settlement on network I/O.
+    await coordinator.deferClaimPreparationAsync(claim);
+    reconcileNeeded = true;
   };
   const reconcilePublications = async (isStopping?: () => boolean) => {
     // Retain accepted and uncertain outcomes while the native provider is unavailable.
@@ -212,42 +208,46 @@ export function createGitHubPublicationRuntime(params: {
     if (isStopping?.()) {
       return;
     }
-    if (!pendingKnown) {
-      await loadPendingRequests();
-    }
-    if (isStopping?.()) {
-      return;
-    }
-    if (!reconcileNeeded && pendingRequests.size === 0) {
-      return;
-    }
-    reconcileNeeded = false;
     try {
-      await nativeCoordinator.deferOrphanedRequestsAsync();
-      if (!isStopping?.()) {
-        await nativeCoordinator.resumeSessionRequests(isStopping);
+      const isPendingEmpty = !pendingKnown ? await loadPendingRequests() : undefined;
+      if (isStopping?.()) {
+        return;
       }
-    } catch (error) {
-      reconcileNeeded = true;
-      params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);
-    }
-    if (isStopping?.()) {
-      reconcileNeeded = true;
-      return;
-    }
-    try {
-      for (const publication of await nativeCoordinator.listUnreportedResultsAsync()) {
-        if (isStopping?.()) {
-          reconcileNeeded = true;
-          break;
-        }
-        if (!(await reportDeferred(publication))) {
-          reconcileNeeded = true;
-        }
+      if (!reconcileNeeded && pendingRequests.size === 0) {
+        recovery.shared.clear();
+        recovery.repository.clear();
+        return;
       }
-    } catch (error) {
-      reconcileNeeded = true;
-      throw error;
+      reconcileNeeded = false;
+      try {
+        await coordinator.deferOrphanedRequestsAsync(isPendingEmpty);
+        if (!isStopping?.()) {
+          await coordinator.resumeSessionRequests(isStopping, isPendingEmpty);
+        }
+      } catch (error) {
+        reconcileNeeded = true;
+        params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);
+      }
+      if (isStopping?.()) {
+        reconcileNeeded = true;
+        return;
+      }
+      try {
+        for (const publication of await coordinator.listUnreportedResultsAsync()) {
+          if (isStopping?.()) {
+            reconcileNeeded = true;
+            break;
+          }
+          if (!(await reportDeferred(publication))) {
+            reconcileNeeded = true;
+          }
+        }
+      } catch (error) {
+        reconcileNeeded = true;
+        throw error;
+      }
+    } finally {
+      loadingUpdates = undefined;
     }
   };
   return {
@@ -258,6 +258,8 @@ export function createGitHubPublicationRuntime(params: {
     close: async () => {
       stopFacts();
       await work.drain();
+      recovery.shared.clear();
+      recovery.repository.clear();
       await scope.close();
     },
     coordinator,

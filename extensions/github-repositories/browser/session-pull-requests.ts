@@ -50,8 +50,6 @@ export function summarizeSessionPullRequests(
     : { numbers, state: current.state };
 }
 
-export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
-
 const STRUCTURAL_SESSION_REASONS = new Set<unknown>([
   "new",
   "reset",
@@ -378,10 +376,17 @@ export function createSessionPullRequestStore(
         );
         next = {
           ...next,
-          // Membership is authoritative even when passive reads omit GitHub metadata.
-          taskPullRequests: snapshot.taskPullRequests?.map((task) =>
-            Object.assign({}, task, { pullRequest: task.pullRequest ?? retained.get(task.url) }),
-          ),
+          // Membership is authoritative even when passive reads omit GitHub metadata. Passive
+          // state chips replace richer retained details only when the state changed.
+          taskPullRequests: snapshot.taskPullRequests?.map((task) => {
+            const prior = retained.get(task.url);
+            return Object.assign({}, task, {
+              pullRequest:
+                prior && prior.state === (task.pullRequest?.state ?? prior.state)
+                  ? prior
+                  : task.pullRequest,
+            });
+          }),
         };
       }
       if (!canRetainCurrent) {

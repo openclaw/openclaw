@@ -4,22 +4,26 @@ import {
   composeSessionSourceAssertion,
   sessionEntryCommitGuardOptions,
 } from "../config/sessions/session-source-authority.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolvePluginRepositorySource } from "../plugins/repository-sources.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
-import type { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import type { RepositoryGatewayMaterializationParams } from "./session-repository-materialization.js";
 import type { GatewaySessionEntryRead } from "./session-utils-store.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { applyStagedWorkerWorkspace } from "./worker-environments/workspace-reconcile-apply.js";
+import { restoreWorkerWorkspaceHistory } from "./worker-environments/workspace-result-history.js";
 
 /** Restore accepted generic source results without enrolling them in native publication policy. */
 export async function materializePluginRepositoryWorkspace(
-  params: Parameters<typeof materializeSessionRepositoryWorkspaceOnGateway>[0] & {
+  params: RepositoryGatewayMaterializationParams & {
     initial: GatewaySessionEntryRead;
     repository: SessionRepositoryWorkspaceRecord;
     repositorySourceId: string;
     source: ReturnType<typeof resolvePluginRepositorySource>;
     assertRepositoryCurrent: () => void;
+    snapshot: Pick<SessionRepositoryWorkspaceRecord, "checkpointRef" | "manifestHash">;
+    verifyDisk?: () => Promise<void>;
   },
 ) {
   const { initial, repository } = params;
@@ -91,9 +95,9 @@ export async function materializePluginRepositoryWorkspace(
   }
   let bound = false;
   try {
-    if (repository.checkpointRef) {
+    if (params.snapshot.checkpointRef) {
       await withSessionRepositoryCheckpoint(
-        { workspaceId: repository.workspaceId },
+        { workspaceId: repository.workspaceId, checkpointRef: params.snapshot.checkpointRef },
         async (snapshot) => {
           assertCurrent();
           const applied = await applyStagedWorkerWorkspace({
@@ -107,16 +111,35 @@ export async function materializePluginRepositoryWorkspace(
               abort: async () => {},
             },
           });
-          if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {
+          if (
+            applied.conflictPaths.length ||
+            applied.manifestRef !== params.snapshot.manifestHash
+          ) {
             throw new Error(
               "Repository changes could not be fully restored; retry the Gateway move",
             );
+          }
+          await applied.verifyLocalStable();
+          const historyNote = await restoreWorkerWorkspaceHistory({
+            ...snapshot,
+            root: workspace.spawnedCwd!,
+            assertCurrent,
+          });
+          if (historyNote && repository.diskAuthority) {
+            throw new Error(
+              "Repository disk history could not be restored exactly; the original disk is preserved",
+            );
+          }
+          if (historyNote) {
+            createSubsystemLogger("gateway/worker-workspace").info(historyNote);
           }
           await applied.verifyLocalStable();
           assertCurrent();
         },
       );
     }
+    await params.verifyDisk?.();
+    assertCurrent();
     const bind = async (assertSourceCurrent: () => void) =>
       await patchSessionEntryCore(
         target,

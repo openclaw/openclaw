@@ -1,3 +1,4 @@
+import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { SqliteReadOnlyWorkerMode } from "./sqlite-readonly-worker-protocol.js";
@@ -25,6 +26,7 @@ afterEach(() => {
   process.argv = originalArgv;
   process.exitCode = originalExitCode;
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   prepare.mockReset();
   prepareCopy.mockReset();
   createToken.mockReset();
@@ -57,20 +59,34 @@ type FailureOptions = {
   contention?: boolean;
   allocationRefused?: boolean;
 };
-async function expectWorkerFailure({
-  error,
-  message,
-  contention = false,
-  mode = "async",
-  allocationRefused = false,
-  refused,
-}: ReturnType<typeof failureCase>): Promise<void> {
+async function expectWorkerFailure(
+  error: unknown,
+  message: string,
+  { contention = false, mode = "async", allocationRefused = false, refused }: FailureOptions = {},
+): Promise<void> {
   if (refused) {
     const { markPrivateDirectoryCreationRefused } = await import("./private-directory-creation.js");
     markPrivateDirectoryCreationRefused(error);
   }
-  process.argv = [process.execPath, "worker", "--openclaw-sqlite-readonly-child", mode, "/db"];
-  const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  vi.stubGlobal(
+    "process",
+    Object.setPrototypeOf(
+      {
+        ...process,
+        argv: [process.execPath, "worker", "--openclaw-sqlite-readonly-child", mode, "/db"],
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+      },
+      process,
+    ),
+  );
+  const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk, ...rest) => {
+    const callback = rest.find((argument) => typeof argument === "function");
+    if (typeof callback === "function") {
+      queueMicrotask(() => callback());
+    }
+    return true;
+  });
   if (mode === "async") {
     prepare.mockRejectedValueOnce(error);
   } else {
@@ -85,7 +101,7 @@ async function expectWorkerFailure({
     (contention ? "Retryable SQLite inspection contention: " : "") +
     (allocationRefused ? "SQLite snapshot directory creation refused: " : "");
   const stdout = JSON.stringify({ ok: false, message: `${prefix}${message}` });
-  expect(write).toHaveBeenCalledExactlyOnceWith(stdout);
+  expect(write).toHaveBeenCalledExactlyOnceWith(stdout, expect.any(Function));
   expect(process.exitCode).toBe(1);
   expect(await readFailure(stdout, mode)).toEqual({
     contention,
@@ -95,12 +111,6 @@ async function expectWorkerFailure({
 
 const codedError = (fields: { code?: string; errcode?: number }) =>
   Object.assign(new Error("failure"), fields);
-
-const failureCase = (error: unknown, message: string, options: FailureOptions = {}) => ({
-  error,
-  message,
-  ...options,
-});
 
 function cyclicFailure() {
   const error = Object.assign(new Error("disk I/O error"), {
@@ -130,37 +140,35 @@ function deepFailure() {
   return cause;
 }
 
-it.each([
-  failureCase(codedError({ errcode: 5 }), "failure (errcode=5)", {
-    mode: "sync",
-    refused: true,
-    contention: true,
-  }),
-  failureCase(codedError({ errcode: 6 }), "failure (errcode=6)", {
-    mode: "staging-create-legacy",
-    refused: true,
-    contention: true,
-    allocationRefused: true,
-  }),
-  failureCase(codedError({ code: "EACCES" }), "failure (code=EACCES)", {
-    mode: "staging-create",
-    refused: true,
-    allocationRefused: true,
-  }),
-  failureCase(codedError({ code: "ENOENT" }), "failure (code=ENOENT)", { mode: "staging-create" }),
-  failureCase(new SourceChangedError("source changed"), "source changed", {
-    contention: true,
-  }),
-  failureCase(cyclicFailure(), "disk I/O error (code=ERR_SQLITE_ERROR, errcode=778)"),
-  failureCase(
+it.each<[unknown, string, FailureOptions?]>([
+  [
+    codedError({ errcode: 5 }),
+    "failure (errcode=5)",
+    { mode: "sync", refused: true, contention: true },
+  ],
+  [
+    codedError({ errcode: 6 }),
+    "failure (errcode=6)",
+    { mode: "staging-create-legacy", refused: true, contention: true, allocationRefused: true },
+  ],
+  [
+    codedError({ code: "EACCES" }),
+    "failure (code=EACCES)",
+    { mode: "staging-create", refused: true, allocationRefused: true },
+  ],
+  [codedError({ code: "ENOENT" }), "failure (code=ENOENT)", { mode: "staging-create" }],
+  [new SourceChangedError("source changed"), "source changed", { contention: true }],
+  [cyclicFailure(), "disk I/O error (code=ERR_SQLITE_ERROR, errcode=778)"],
+  [
     deepFailure(),
     "staging failure (code=E0, errcode=0, code=E1, errcode=1, code=E2, errcode=2, code=E3, errcode=3, code=E4, errcode=4, code=E5, errcode=5, code=E6, errcode=6, code=E7, errcode=7)",
-  ),
-  failureCase(codedError({ code: "EIO\n", errcode: 11 }), "failure (errcode=11)"),
-  ...[-1, 1.5, 2 ** 31].map((errcode) =>
-    failureCase(codedError({ code: "EIO", errcode }), "failure (code=EIO)"),
-  ),
-])("serializes $message through the worker boundary", expectWorkerFailure);
+  ],
+  [codedError({ code: "EIO\n", errcode: 11 }), "failure (errcode=11)"],
+  ...[-1, 1.5, 2 ** 31].map((errcode): [unknown, string] => [
+    codedError({ code: "EIO", errcode }),
+    "failure (code=EIO)",
+  ]),
+])("serializes %s as %s through the worker boundary", expectWorkerFailure);
 
 it.each([
   ["wrong-mode", true, "async", undefined],

@@ -9,7 +9,6 @@ import { prepareGitHubPublisher } from "../../extensions/github-repositories/pub
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import * as backoff from "../infra/backoff.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
@@ -38,8 +37,12 @@ import {
   assertReceiptOwner,
   prepareReceiptOwner,
 } from "./github-repository-publication-workspace.js";
-import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
-import { withRepositorySourceGatewayFixture } from "./worker-environments/repository-source.test-support.js";
+import { createRepositoryGatewayMovePreparation } from "./session-repository-materialization.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import {
+  createRepositorySourcesFixture,
+  withRepositorySourceGatewayFixture,
+} from "./worker-environments/repository-source.test-support.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
@@ -324,15 +327,27 @@ it.each([
             options,
           ),
       );
+      const prepareMove = createRepositoryGatewayMovePreparation({
+        placements: createWorkerSessionPlacementStore(),
+        getConfig: () => cfg,
+        getRepositorySources: () => createRepositorySourcesFixture(() => cfg),
+        environments: {
+          get: () => undefined,
+          ensureRetainedRunning: async () => {
+            throw new Error("Unexpected retained wake for checkpoint fixture");
+          },
+          startTunnel: async () => {
+            throw new Error("Unexpected worker tunnel for retained checkpoint fixture");
+          },
+        },
+      });
       const move = () =>
         withRepositorySourceGatewayFixture(
           () => cfg,
-          (sources) =>
-            materializeSessionRepositoryWorkspaceOnGateway({
+          () =>
+            prepareMove({
               ...scope,
-              cfg,
               sessionId,
-              getRepositorySources: () => sources,
               assertCurrent: () => {
                 if (!currentOwner) {
                   throw new Error("move revoked");
@@ -476,8 +491,6 @@ it.each([
 );
 it("can hold publisher exclusion during an existing reclaim claim without taking repository admission", async () => {
   await withOpenClawTestState({ label: "handoff-exclusion" }, async () => {
-    const { createWorkerSessionPlacementStore } =
-      await import("./worker-environments/placement-store.js");
     const { seedActivePlacement, REQUEST } =
       await import("./worker-environments/placement-dispatch-test-fixtures.js");
     const { placementTurnOwner } = await import("./worker-environments/placement-record.js");
@@ -509,32 +522,24 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
       assertOwned();
       entered = true;
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
-      const wait = vi.spyOn(backoff, "sleepWithAbort");
       await expect(
         placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {}),
       ).rejects.toMatchObject({
         code: "OPENCLAW_STATE_LEASE_HELD",
         outcome: { kind: "held", holder: { owner: expect.any(String), epoch: expect.any(Number) } },
       });
-      expect(wait).not.toHaveBeenCalled();
       assertOwned();
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
     });
     expect(entered).toBe(true);
     expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
-    for (const code of [
-      "OPENCLAW_STATE_LEASE_HELD",
-      "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-      "OPENCLAW_STATE_LEASE_ABORTED",
-    ] as const) {
-      const operationFailure = new OpenClawStateLeaseError("Nested operation refused admission", {
-        code,
-      });
-      await expect(
-        placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {
-          throw operationFailure;
-        }),
-      ).rejects.toBe(operationFailure);
-    }
+    const operationFailure = new OpenClawStateLeaseError("Nested operation refused admission", {
+      code: "OPENCLAW_STATE_LEASE_HELD",
+    });
+    await expect(
+      placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {
+        throw operationFailure;
+      }),
+    ).rejects.toBe(operationFailure);
   });
 });

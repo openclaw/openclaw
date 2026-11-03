@@ -12,6 +12,17 @@ import {
   validateUsersSetAvatarParams,
   validateUsersSetDisplayNameParams,
   validateUsersSetRoleParams,
+  type ProtocolValidator,
+  validateUsersAuthConnectCancelParams,
+  validateUsersAuthConnectAnswerParams,
+  validateUsersAuthConnectStartParams,
+  validateUsersAuthConnectStatusParams,
+  validateUsersAuthConnectCatalogParams,
+  validateUsersListAuthLinksParams,
+  validateUsersLinkAuthProfileParams,
+  validateUsersUnlinkAuthProfileParams,
+  validateUsersListModelAccountsParams,
+  validateUsersSelectModelAccountParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -34,6 +45,11 @@ import {
 } from "../../state/user-profile-writes.js";
 import { UserProfileMergeError, UserProfileOwnerError } from "../../state/user-profiles-schema.js";
 import { listProfiles, UserProfileNotFoundError } from "../../state/user-profiles.js";
+import type { ModelAccountConnectAction } from "../model-account-authority.js";
+import {
+  ModelAccountConnectAuthorityError,
+  ModelAccountConnectInputError,
+} from "../model-account-connect-errors.js";
 import {
   invalidateOperatorRolePolicy,
   resolveOperatorRoleSelection,
@@ -45,11 +61,17 @@ import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { respondError } from "./response.js";
+import type {
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+  GatewayRequestContext,
+  GatewayRequestHandler,
+} from "./types.js";
 import { publishUserPreferencesChanged } from "./user-preference-events.js";
-import { usersAuthConnectHandlers } from "./users-auth-connect.js";
 import { prepareUserBackgroundAction, usersBackgroundHandlers } from "./users-background.js";
-import { usersChannelIdentityHandlers } from "./users-channel-identities.js";
+import { usersChannelIdentityHandlers } from "./users-channel-identity.js";
+import { prepareUserModelAccountAction } from "./users-model-account-access.js";
 import { usersPersonalFileHandlers } from "./users-personal-file.js";
 import {
   prepareAuthenticatedProfile,
@@ -102,10 +124,104 @@ function preparePersonalPreferences(client: GatewayRequestHandlerOptions["client
   }
 }
 
+function connectHandler<P extends { profileId?: string }>(
+  method: string,
+  validate: ProtocolValidator<P>,
+  run: (
+    service: NonNullable<GatewayRequestContext["modelAccountConnectService"]>,
+    action: ModelAccountConnectAction,
+    params: P,
+  ) => unknown,
+  requiredScope: "operator.read" | "operator.write" | "operator.admin" = "operator.write",
+): GatewayRequestHandler {
+  return defineValidatedGatewayHandler(
+    method,
+    validate,
+    async (options) => {
+      const action = await prepareUserModelAccountAction(
+        options,
+        options.params.profileId,
+        requiredScope,
+      );
+      const service = options.context.modelAccountConnectService;
+      if (!service) {
+        throw new Error("Model-account service is not running.");
+      }
+      const result = await run(service, action, options.params);
+      action.assertCurrent();
+      options.respond(true, result);
+    },
+    (error) =>
+      error instanceof ModelAccountConnectAuthorityError
+        ? errorShape(ErrorCodes.FORBIDDEN, error.message)
+        : error instanceof ModelAccountConnectInputError ||
+            error instanceof UserProfileNotFoundError
+          ? errorShape(ErrorCodes.INVALID_REQUEST, error.message)
+          : errorShape(
+              ErrorCodes.UNAVAILABLE,
+              "Model account connect is unavailable right now; try again shortly.",
+            ),
+  );
+}
+
 export const usersHandlers: GatewayRequestHandlers = {
-  ...usersAuthConnectHandlers,
-  ...usersChannelIdentityHandlers,
+  "users.listAuthLinks": connectHandler(
+    "users.listAuthLinks",
+    validateUsersListAuthLinksParams,
+    (service, action) => service.listLinksAsync(action),
+    "operator.read",
+  ),
+  "users.linkAuthProfile": connectHandler(
+    "users.linkAuthProfile",
+    validateUsersLinkAuthProfileParams,
+    (service, action, params) => service.linkAsync(action, params.authProfileId),
+    // Choosing an existing shared credential remains an explicit admin decision.
+    "operator.admin",
+  ),
+  "users.unlinkAuthProfile": connectHandler(
+    "users.unlinkAuthProfile",
+    validateUsersUnlinkAuthProfileParams,
+    (service, action, params) => service.unlinkAsync(action, params.provider),
+  ),
+  "users.listModelAccounts": connectHandler(
+    "users.listModelAccounts",
+    validateUsersListModelAccountsParams,
+    (service, action, params) => service.listAsync(action, params.cursor),
+    "operator.read",
+  ),
+  "users.selectModelAccount": connectHandler(
+    "users.selectModelAccount",
+    validateUsersSelectModelAccountParams,
+    (service, action, params) => service.selectAsync(action, params.authProfileId),
+  ),
+  "users.authConnect.start": connectHandler(
+    "users.authConnect.start",
+    validateUsersAuthConnectStartParams,
+    (service, action, params) => service.start(action, params.provider, params.method),
+  ),
+  "users.authConnect.answer": connectHandler(
+    "users.authConnect.answer",
+    validateUsersAuthConnectAnswerParams,
+    (service, action, params) =>
+      service.answer(action, params.connectId, params.stepId, params.value),
+  ),
+  "users.authConnect.status": connectHandler(
+    "users.authConnect.status",
+    validateUsersAuthConnectStatusParams,
+    (service, action, params) => service.statusAsync(action, params.connectId),
+  ),
+  "users.authConnect.cancel": connectHandler(
+    "users.authConnect.cancel",
+    validateUsersAuthConnectCancelParams,
+    (service, action, params) => service.cancelAsync(action, params.connectId),
+  ),
+  "users.authConnect.catalog": connectHandler(
+    "users.authConnect.catalog",
+    validateUsersAuthConnectCatalogParams,
+    (service, action) => service.catalog(action),
+  ),
   ...usersPersonalFileHandlers,
+  ...usersChannelIdentityHandlers,
   ...usersBackgroundHandlers,
   "users.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
@@ -140,11 +256,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     if (!client?.authenticatedUserId && !client?.authenticatedUserProfile) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "users.self requires an authenticated user"),
-      );
+      respondError(respond, ErrorCodes.FORBIDDEN, "users.self requires an authenticated user");
       return;
     }
     try {
@@ -237,31 +349,25 @@ export const usersHandlers: GatewayRequestHandlers = {
           return;
         }
         if (result.error.code === "profile-key-limit") {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `users.prefs.set exceeds the ${result.error.limit}-key profile limit (current count: ${result.error.currentCount})`,
-              {
-                details: {
-                  code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
-                  limit: result.error.limit,
-                  currentCount: result.error.currentCount,
-                },
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            `users.prefs.set exceeds the ${result.error.limit}-key profile limit (current count: ${result.error.currentCount})`,
+            {
+              details: {
+                code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
+                limit: result.error.limit,
+                currentCount: result.error.currentCount,
               },
-            ),
+            },
           );
           return;
         }
         const key = "key" in result.error ? ` for ${result.error.key}` : "";
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid users.prefs.set entry${key}: ${result.error.code}`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `invalid users.prefs.set entry${key}: ${result.error.code}`,
         );
         return;
       }
@@ -278,7 +384,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     const email = params.email.trim();
     if (!email) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "email must not be empty"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "email must not be empty");
       return;
     }
     const targetProfileId = params.targetProfileId;
@@ -362,7 +468,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     };
     const unknownRoleMessage = `unknown operator role "${role}"; define it under gateway.roles.definitions before assigning it`;
     if (!isConfiguredRole()) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, unknownRoleMessage));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, unknownRoleMessage);
       return;
     }
     try {
@@ -392,11 +498,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     const avatarBase64 = params.avatarBase64.trim();
     if (!isValidBase64(avatarBase64)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "avatarBase64 must be base64"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "avatarBase64 must be base64");
       return;
     }
     const bytes = Buffer.from(avatarBase64, "base64");
@@ -410,7 +512,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       });
       assertCurrent();
       if (!result.ok) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error.code));
+        respondError(respond, ErrorCodes.INVALID_REQUEST, result.error.code);
         return;
       }
       const { profile, display } = result.value;

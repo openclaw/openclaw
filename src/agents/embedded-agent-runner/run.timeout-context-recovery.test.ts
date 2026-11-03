@@ -1,7 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
-import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
@@ -13,7 +10,7 @@ import { isSessionRunActive } from "../../sessions/session-controller.queries.js
 import { testing as deliveryTesting } from "../subagents/announce/subagent-announce-delivery.test-support.js";
 import { sendSubagentAnnounceDirectly } from "../subagents/announce/subagent-announce-direct-delivery.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
-import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
+import { createRecoveryDefaults, createRecoveryOwner } from "./run.recovery.test-support.js";
 import { recoverEmbeddedRunTimeout } from "./run/timeout-context-recovery.js";
 import {
   attachActiveEmbeddedRun,
@@ -28,7 +25,6 @@ import {
   createEmbeddedRunHandle,
   testing as runsTesting,
 } from "./runs.test-support.js";
-import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const mocks = vi.hoisted(() => ({ compact: vi.fn(), postCompactionSideEffects: vi.fn() }));
 vi.mock("./compaction-hooks.js", () => ({
@@ -47,55 +43,11 @@ const successfulCompaction = (sessionId?: string) =>
 
 function makeInput(overrides: Partial<RecoveryInput> = {}): RecoveryInput {
   const input: RecoveryInput = {
-    runParams: {
-      runId: "run-1",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      config: {},
-      workspaceDir: "/tmp/workspace",
-      prompt: "continue",
-      timeoutMs: 1_000,
-      onAutoCompactionSucceeded: vi.fn(),
-    },
-    state: createEmbeddedRunContextRecoveryState(),
-    assertRecoveryActive: vi.fn(),
+    ...createRecoveryDefaults(mocks.compact, () => input),
     // Admission and writer fencing have composed coverage in run.compaction-runtime.test.ts.
-    prepareRecoveryOwner: () => {
-      const assertActive = composeSessionSourceAssertion([
-        () => input.runParams.abortSignal?.throwIfAborted(),
-        input.assertRecoveryActive,
-      ]);
-      assertActive();
-      const session = input.getActiveSession();
-      return {
-        session: {
-          ...session,
-          target: {
-            agentId: input.sessionAgentId,
-            sessionId: session.id,
-            sessionKey: input.resolvedSessionKey,
-            storePath: "/tmp/workspace/openclaw-agent.sqlite",
-          },
-        },
-        assertActive,
-        withTranscriptWrites: async <T>(signal: AbortSignal | undefined, run: () => Promise<T>) => {
-          signal?.throwIfAborted();
-          assertActive();
-          return await run();
-        },
-      };
-    },
+    prepareRecoveryOwner: () => createRecoveryOwner(input, input.assertRecoveryActive),
     prepareRecoverySession: vi.fn<RecoveryInput["prepareRecoverySession"]>(),
-    contextEngine: {
-      info: { id: "legacy", name: "Legacy" },
-      ingest: vi.fn(),
-      assemble: vi.fn(),
-      compact: mocks.compact,
-    },
-    contextTokenBudget: 200_000,
-    genericCompactionRecoveryAllowed: true,
     timedOut: true,
-    signalOwnedInterruption: false,
     timedOutDuringCompaction: false,
     timedOutDuringToolExecution: false,
     timedOutByRunBudget: false,
@@ -105,32 +57,7 @@ function makeInput(overrides: Partial<RecoveryInput> = {}): RecoveryInput {
       sessionIdUsed: "session-1",
       assistantTexts: [],
     }),
-    runtimeAuthPlan: { providerForAuth: "openai", authProfileProviderForAuth: "openai" },
-    resolvedSessionKey: "agent:main:session-1",
-    sessionAgentId: "main",
-    agentDir: "/tmp/agent",
-    workspaceDir: "/tmp/workspace",
-    modelSelection: { provider: "openai", model: "gpt-5.6-luna", authProfileIdSource: "auto" },
     harnessRuntime: "openclaw",
-    thinkLevel: "off",
-    resolveContextEnginePluginId: () => undefined,
-    buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
-      buildContextEngineRuntimeSettings({
-        contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-        provider: input.modelSelection.provider,
-        requestedModel: input.modelSelection.model,
-        resolvedModel: input.modelSelection.model,
-        promptTokenBudget: tokenBudget,
-        degradedReason,
-      }),
-    onCompactionHookMessages: vi.fn(async () => {}),
-    runOwnsCompactionBeforeHook: vi.fn(async () => {}),
-    runOwnsCompactionAfterHook: vi.fn(async () => {}),
-    adoptCompactionTranscript: vi.fn(async () => undefined),
-    getActiveSession: () => ({ id: "session-1", file: "/tmp/session-1.jsonl" }),
-    prepareCompactedTranscriptRetry: vi.fn(async () => {}),
-    armPostCompactionGuard: vi.fn(),
-    usageAccumulator: createUsageAccumulator(),
     ...overrides,
   };
   return input;

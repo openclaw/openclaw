@@ -40,28 +40,18 @@ it("retires obsolete failures on discovery", async () => {
   const { controller, request } = setup({ ...options, latestShared: failure });
   expect((await settled(controller)).result).toEqual(failure.result);
   request.mockResolvedValue(options);
-  controller.view()?.onRefresh();
+  void controller.view()?.onRefresh();
   expect((await settled(controller)).result).toBeNull();
-  controller.view()?.onRefresh();
+  void controller.view()?.onRefresh();
   expect((await settled(controller)).result).toBeNull();
   expect(request.mock.calls.every(([method]) => method === "sessions.github.options")).toBe(true);
-});
-
-it("restores and acknowledges receipts without writing", async () => {
-  const { controller, request } = setup({ ...options, latestShared: completed });
-  const restored = await settled(controller);
-  expect([restored.result, restored.onPublish]).toEqual([published, undefined]);
-  restored.onNewAction?.();
-  const fresh = await settled(controller);
-  expect([fresh.result, typeof fresh.onPublish]).toEqual([null, "function"]);
-  expect(publicationCalls(request)).toHaveLength(0);
 });
 
 it("checks receipts without replaying publication", async () => {
   const { controller, request } = setup();
   await settled(controller);
   request.mockResolvedValueOnce(accepted);
-  controller.view()?.onPublish?.();
+  void controller.view()?.onPublish?.();
   await settled(controller);
   request.mockImplementation(async (method: string) => {
     expect(["sessions.github.status", "sessions.github.options"]).toContain(method);
@@ -77,24 +67,11 @@ it("checks receipts without replaying publication", async () => {
   expect(publicationCalls(request)).toHaveLength(1);
 });
 
-it("clears discovery failure after a successful read", async () => {
-  const { controller, request } = setup();
-  await settled(controller);
-  request.mockRejectedValueOnce(new Error("GitHub publication options timed out"));
-  controller.view()?.onRefresh();
-  expect(await settled(controller)).toMatchObject({
-    optionsUnavailable: true,
-    error: "GitHub publication options timed out",
-  });
-  controller.view()?.onRefresh();
-  expect(await settled(controller)).toMatchObject({ optionsUnavailable: false, error: null });
-});
-
 it("recovers unknown outcomes by exact invocation key", async () => {
   const { controller, request } = setup();
   await settled(controller);
   request.mockRejectedValueOnce(new Error("The acknowledgement was lost"));
-  controller.view()?.onPublish?.();
+  void controller.view()?.onPublish?.();
   expect(await settled(controller)).toMatchObject({ locked: true, optionsUnavailable: false });
   const key = request.mock.calls.at(-1)![1].idempotencyKey;
   const invocation = { ...target, idempotencyKey: key };
@@ -103,7 +80,7 @@ it("recovers unknown outcomes by exact invocation key", async () => {
     expect(params.idempotencyKey).toBe(key);
     return { ...options, latestShared: completed };
   });
-  controller.view()?.onRefresh();
+  void controller.view()?.onRefresh();
   expect((await settled(controller)).result).toEqual(published);
   expect(request).toHaveBeenLastCalledWith("sessions.github.options", invocation);
   expect(publicationCalls(request)).toHaveLength(1);

@@ -21,77 +21,71 @@ afterEach(() => {
 });
 
 describe("signalCheck", () => {
-  it("probes only the configured native endpoint", async () => {
-    nativeCheck.mockResolvedValue({ ok: true, status: 200 });
-
+  it.each([
+    ["external-native", { ok: true, status: 200 }],
+    [
+      "container",
+      {
+        ok: false,
+        status: 200,
+        error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
+      },
+    ],
+  ] as const)("probes only the configured %s endpoint", async (transportKind, result) => {
+    if (transportKind === "container") {
+      containerCheck.mockResolvedValue(result);
+    } else {
+      nativeCheck.mockResolvedValue(result);
+    }
+    const baseUrl = `http://${transportKind === "container" ? "container" : "native"}:8080`;
     await expect(
-      signalCheck("http://native:8080", 5_000, { transportKind: "external-native" }),
-    ).resolves.toEqual({ ok: true, status: 200 });
-    expect(nativeCheck).toHaveBeenCalledWith("http://native:8080", 5_000);
-    expect(containerCheck).not.toHaveBeenCalled();
-  });
-
-  it("validates the configured container account's receive WebSocket", async () => {
-    const result = {
-      ok: false,
-      status: 200,
-      error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
-    };
-    containerCheck.mockResolvedValue(result);
-
-    await expect(
-      signalCheck("http://container:8080", 5_000, {
-        transportKind: "container",
-        account: "+15550001111",
-      }),
+      signalCheck(baseUrl, 5_000, { transportKind, account: "+15550001111" }),
     ).resolves.toEqual(result);
-    expect(containerCheck).toHaveBeenCalledWith("http://container:8080", 5_000, "+15550001111");
-    expect(nativeCheck).not.toHaveBeenCalled();
+    if (transportKind === "container") {
+      expect(containerCheck).toHaveBeenCalledWith(baseUrl, 5_000, "+15550001111");
+      expect(nativeCheck).not.toHaveBeenCalled();
+    } else {
+      expect(nativeCheck).toHaveBeenCalledWith(baseUrl, 5_000);
+      expect(containerCheck).not.toHaveBeenCalled();
+    }
   });
 });
 
 describe("streamSignalEvents", () => {
-  it("uses native SSE for managed and external native transports", async () => {
-    nativeStream.mockImplementation(async (params) => {
-      params.onEvent({ event: "receive", data: "native" });
-    });
-    const onEvent = vi.fn();
-    const onStreamOpen = vi.fn();
-
-    const params = {
-      baseUrl: "http://native:8080",
-      account: "+15555550123",
-      timeoutMs: 0,
-      onEvent,
-      onStreamOpen,
-    };
-    await streamSignalEvents({ ...params, transportKind: "managed-native" });
-
-    expect(nativeStream).toHaveBeenCalledWith(expect.objectContaining(params));
-    expect(onEvent).toHaveBeenCalledWith({ event: "receive", data: "native" });
-    expect(containerStream).not.toHaveBeenCalled();
-  });
-
-  it("forwards an undefined container timeout and converts its event shape", async () => {
-    containerStream.mockImplementation(async (params) => {
-      params.onEvent({ envelope: { sourceNumber: "+15555550124" } });
-    });
-    const onEvent = vi.fn();
-    const onStreamOpen = vi.fn();
-
-    const params = {
-      baseUrl: "http://container:8080",
-      account: "+15555550123",
-      timeoutMs: undefined,
-      onStreamOpen,
-    };
-    await streamSignalEvents({ ...params, transportKind: "container", onEvent });
-
-    expect(containerStream).toHaveBeenCalledWith(expect.objectContaining(params));
-    expect(onEvent).toHaveBeenCalledWith({
-      event: "receive",
-      data: JSON.stringify({ envelope: { sourceNumber: "+15555550124" } }),
-    });
-    expect(nativeStream).not.toHaveBeenCalled();
-  });
+  it.each(["managed-native", "container"] as const)(
+    "streams and converts %s events",
+    async (transportKind) => {
+      if (transportKind === "container") {
+        containerStream.mockImplementation(async (params) => {
+          params.onEvent({ envelope: { sourceNumber: "+15555550124" } });
+        });
+      } else {
+        nativeStream.mockImplementation(async (params) => {
+          params.onEvent({ event: "receive", data: "native" });
+        });
+      }
+      const onEvent = vi.fn();
+      const params = {
+        baseUrl: "http://localhost:8080",
+        account: "+15555550123",
+        timeoutMs: transportKind === "container" ? undefined : 0,
+        onStreamOpen: vi.fn(),
+      };
+      await streamSignalEvents({ ...params, transportKind, onEvent });
+      const selected = transportKind === "container" ? containerStream : nativeStream;
+      const unused = transportKind === "container" ? nativeStream : containerStream;
+      expect(selected).toHaveBeenCalledWith(expect.objectContaining(params));
+      if (transportKind !== "container") {
+        expect(nativeStream.mock.calls[0]?.[0].onEvent).toBe(onEvent);
+      }
+      expect(onEvent).toHaveBeenCalledWith({
+        event: "receive",
+        data:
+          transportKind === "container"
+            ? JSON.stringify({ envelope: { sourceNumber: "+15555550124" } })
+            : "native",
+      });
+      expect(unused).not.toHaveBeenCalled();
+    },
+  );
 });

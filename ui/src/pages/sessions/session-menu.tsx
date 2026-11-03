@@ -28,6 +28,7 @@ import {
   runSessionNavigationAction,
 } from "../../lib/sessions/session-menu-navigation.ts";
 import { createSessionMenuActionsProjection } from "../../plugins/control-ui-action-observation.solid.ts";
+import type { SessionsPageMutationResult } from "./mutation-runner.ts";
 
 type SessionsPageMenuAction = Exclude<SessionMenuAction, { kind: "snooze" | "wake" }>;
 
@@ -40,7 +41,10 @@ export type SessionsPageMenuProps = {
   groups: string[];
   work: Promise<SessionMenuWork | null> | null;
   onClose: () => void;
-  onAction: (action: SessionsPageMenuAction) => void;
+  onAction: (
+    action: SessionsPageMenuAction,
+    onAdmittedCommand?: (completion: Promise<SessionsPageMutationResult | void>) => void,
+  ) => Promise<SessionsPageMutationResult | void> | void;
 };
 
 export function SessionManagementMenu(props: SessionsPageMenuProps) {
@@ -134,7 +138,7 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
         onAction={(action: SessionMenuAction) => {
           // Snooze controls belong to the sidebar; the page retains its existing action contract.
           if (action.kind !== "snooze" && action.kind !== "wake") {
-            props.onAction(action);
+            void props.onAction(action);
           }
         }}
       />

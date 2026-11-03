@@ -100,10 +100,24 @@ export function createControlUiSessionPrRead(
   read: (() => Promise<PreparedRepositorySessionRead | undefined>) | undefined,
   getConfig: () => OpenClawConfig,
 ): ControlUiSessionPrRead | undefined {
+  let previousRead: PreparedRepositorySessionRead | undefined;
+  let previousConfig: OpenClawConfig | undefined;
+  let previousTarget: ControlUiSessionPrTarget | undefined;
   return read
     ? async () => {
         const selected = await read();
-        return selected ? repositorySessionPrTarget(selected, getConfig(), selected) : undefined;
+        if (!selected) {
+          previousRead = undefined;
+          previousTarget = undefined;
+          return undefined;
+        }
+        const config = getConfig();
+        if (selected !== previousRead || config !== previousConfig) {
+          previousRead = selected;
+          previousConfig = config;
+          previousTarget = repositorySessionPrTarget(selected, config, selected);
+        }
+        return previousTarget;
       }
     : undefined;
 }

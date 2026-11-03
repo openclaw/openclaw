@@ -1,5 +1,4 @@
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
-import { createPluginBoardWidgetContentKindRegistrar } from "./board-widget-content-kinds.js";
 import { createPluginDashboardDataBindingRegistrar } from "./dashboard-capabilities.js";
 import { publishPluginSessionSchedulerJobs } from "./host-hook-runtime.js";
 import {
@@ -436,7 +435,8 @@ export function createHostRegistrars(state: PluginRegistryState) {
         return;
       }
     }
-    if (!validateSessionActionSchema(record, id, action.schema)) {
+    const schema = action.schema;
+    if (!validateSessionActionSchema(record, id, schema)) {
       return;
     }
     const existing = registry.sessionActions.find(
@@ -450,6 +450,7 @@ export function createHostRegistrars(state: PluginRegistryState) {
       createRegistration(record, {
         action: {
           ...action,
+          schema,
           id,
           ...(description !== undefined ? { description } : {}),
           ...(requiredScopes !== undefined
@@ -477,7 +478,6 @@ export function createHostRegistrars(state: PluginRegistryState) {
     registerTrustedToolPolicy,
     registerToolMetadata,
     registerControlUiDescriptor,
-    registerBoardWidgetContentKind: createPluginBoardWidgetContentKindRegistrar(registry),
     registerDashboardDataBinding: createPluginDashboardDataBindingRegistrar(),
     registerRuntimeLifecycle,
     registerAgentEventSubscription,

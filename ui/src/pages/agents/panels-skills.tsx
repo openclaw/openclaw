@@ -1,5 +1,20 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { Errored, For, Loading, Show, createMemo, isPending } from "solid-js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  action,
+  createDeferred,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  isPending,
+  latest,
+  onSettled,
+  refresh,
+} from "solid-js";
 import type { SkillStatusReport } from "../../api/types.ts";
 import {
   SettingsSection,
@@ -8,7 +23,7 @@ import {
   SettingsEmpty,
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { resolveAgentConfig, resolveAgentSkillsFilter } from "../../lib/agents/display.ts";
+import { resolveAgentConfig } from "../../lib/agents/display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
@@ -39,72 +54,126 @@ export function AgentSkills(params: AgentSkillsProps) {
       ? params.readData().agentSkillsReport
       : null,
   );
-  const report = createMemo(async () => {
-    const read = issued();
-    return read?.agentId === params.agentId ? read.result : cached();
-  });
   const scope = createMemo(() => `${params.agentId}:${params.readData().requestGeneration}`);
   return (
     <Show when={scope()} keyed>
-      <Show when={issued() ?? scope()} keyed>
-        {(_receipt) => {
-          return (
-            <Errored
-              fallback={(error) => (
-                <AgentSkillsContent
-                  {...params}
-                  report={cached()}
-                  pending={false}
-                  readError={formatUiError(error())}
-                />
-              )}
-            >
-              <Loading fallback={<AgentSkillsContent {...params} report={cached()} pending />}>
-                <AgentSkillsContent
-                  {...params}
-                  report={report() ?? cached()}
-                  pending={isPending(() => report())}
-                />
-              </Loading>
-            </Errored>
-          );
-        }}
-      </Show>
+      {(capturedScope) => {
+        // Keep one list mounted; JSX reads this scope's cached report until the first result.
+        const report = createDeferred<
+          { report: SkillStatusReport | null; error?: string } | undefined
+        >(
+          async () => {
+            const read = issued();
+            const fallback = cached();
+            try {
+              return {
+                report:
+                  read?.agentId === params.agentId ? ((await read.result) ?? fallback) : fallback,
+              };
+            } catch (error) {
+              return { report: fallback, error: formatUiError(error) };
+            }
+          },
+          { loadingValue: undefined },
+        );
+        const pending = createMemo(() => report() === undefined || isPending(report));
+        const config = createMemo(() => resolveAgentConfig(params.configForm, params.agentId));
+        const [explicit, setExplicit] = createOptimistic(() =>
+          Array.isArray(config().entry?.skills),
+        );
+        const [resetting, setResetting] = createOptimistic(false);
+        const [command, setCommand] = createSignal<{ completion: Promise<void> } | null>(null);
+        const allowlist = createMemo(() => {
+          const skills = explicit() ? config().entry?.skills : config().defaults?.skills;
+          return Array.isArray(skills) ? normalizeStringEntries(skills) : undefined;
+        });
+        const reset = action(function* (completion: Promise<void>) {
+          setExplicit(false);
+          setResetting(true);
+          yield completion;
+          if (latest(scope) === capturedScope) {
+            yield refresh(explicit);
+          }
+        });
+        const onClear = () => {
+          const completion = params.onClear(params.agentId);
+          if (!completion) {
+            return;
+          }
+          setCommand({ completion });
+          // Publish the new receipt before the action holds its pending frame.
+          onSettled(() => {
+            void reset(completion).catch(() => undefined);
+          });
+        };
+        return (
+          <AgentSkillsContent
+            {...params}
+            explicit={explicit()}
+            allowlist={allowlist()}
+            resetting={resetting()}
+            command={command()}
+            onClear={onClear}
+            report={report()?.report ?? cached()}
+            pending={pending()}
+            readError={pending() ? undefined : report()?.error}
+          />
+        );
+      }}
     </Show>
   );
 }
 
 function AgentSkillsContent(
-  params: AgentSkillsProps & {
+  params: Omit<AgentSkillsProps, "onClear"> & {
+    onClear: () => void;
+    explicit: boolean;
+    allowlist: string[] | undefined;
+    resetting: boolean;
+    command: { completion: Promise<void> } | null;
     report: SkillStatusReport | null;
     pending: boolean;
     readError?: string;
   },
 ) {
   const configReady = () =>
-    Boolean(params.configForm) && !params.configLoading && !params.configSaving;
+    Boolean(params.configForm) &&
+    !params.configLoading &&
+    !params.configSaving &&
+    !params.resetting;
   const editable = () => params.canUpdateConfig && configReady();
-  const config = createMemo(() => resolveAgentConfig(params.configForm, params.agentId));
-  const hasExplicitAllowlist = () => Array.isArray(config().entry?.skills);
-  const allowlist = createMemo(() => resolveAgentSkillsFilter(params.configForm, params.agentId));
-  const allowSet = createMemo(() => new Set(allowlist() ?? []));
-  const usingAllowlist = () => allowlist() !== undefined;
+  const allowSet = createMemo(() => new Set(params.allowlist ?? []));
+  const usingAllowlist = () => params.allowlist !== undefined;
   const rawSkills = createMemo(() => params.report?.skills ?? []);
-  const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter));
-  const filtered = createMemo(() =>
-    filter()
-      ? rawSkills().filter((skill) =>
-          normalizeLowercaseStringOrEmpty(
-            [skill.name, skill.description, skill.source].join(" "),
-          ).includes(filter()),
-        )
-      : rawSkills(),
+  const searchableSkills = createMemo(() =>
+    rawSkills().map((skill) => ({
+      skill,
+      text: normalizeLowercaseStringOrEmpty(
+        [skill.name, skill.description, skill.source].join(" "),
+      ).normalize("NFC"),
+    })),
+  );
+  const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter).normalize("NFC"));
+  const filtered = createMemo(
+    () =>
+      filter()
+        ? searchableSkills()
+            .filter((entry) => entry.text.includes(filter()))
+            .map((entry) => entry.skill)
+        : rawSkills(),
+    {
+      equals: (previous, next) =>
+        previous.length === next.length && previous.every((skill, index) => skill === next[index]),
+    },
   );
   const groups = createMemo(() => groupSkills(filtered()));
   const enabledCount = createMemo(() =>
     usingAllowlist()
       ? rawSkills().filter((skill) => isWorkshopSkill(skill) || allowSet().has(skill.name)).length
       : rawSkills().length,
+  );
+  const inventoryReady = createMemo(
+    () => !params.pending && !params.readError && Boolean(params.report),
   );
 
   return (
@@ -115,7 +184,7 @@ function AgentSkillsContent(
       <div class="callout info">
         {t(
           usingAllowlist()
-            ? !hasExplicitAllowlist()
+            ? !params.explicit
               ? "agents.skillsPanel.inheritedAllowlist"
               : "agents.skillsPanel.customAllowlist"
             : "agents.skillsPanel.allEnabled",
@@ -124,11 +193,19 @@ function AgentSkillsContent(
       {!params.report && !params.pending ? (
         <div class="callout info">{t("agents.skillsPanel.loadAgent")}</div>
       ) : undefined}
-      {params.readError || params.readData().agentSkillsUpdateError ? (
-        <div class="callout danger">
-          {params.readError || params.readData().agentSkillsUpdateError}
-        </div>
-      ) : undefined}
+      {params.readError ? (
+        <div class="callout danger">{params.readError}</div>
+      ) : (
+        <Show when={params.command} keyed>
+          {(command) => (
+            <Errored
+              fallback={(error) => <div class="callout danger">{formatUiError(error())}</div>}
+            >
+              <AgentSkillsResetCompletion completion={command.completion} />
+            </Errored>
+          )}
+        </Show>
+      )}
       <SettingsSection
         title={t("agents.skillsPanel.title")}
         description={
@@ -149,9 +226,9 @@ function AgentSkillsContent(
               onClick={() => params.onDisableAll(params.agentId)}
             />
             <AgentPanelAction
-              label={t("common.reset")}
-              disabled={!params.canPatchConfig || !hasExplicitAllowlist() || !configReady()}
-              onClick={() => params.onClear(params.agentId)}
+              label={t(params.resetting ? "common.saving" : "common.reset")}
+              disabled={!params.canPatchConfig || !params.explicit || !configReady()}
+              onClick={() => params.onClear()}
             />
             <AgentConfigButtons {...params}>
               <AgentPanelAction
@@ -165,7 +242,11 @@ function AgentSkillsContent(
       >
         <SettingsRow
           title={t("agents.skillsPanel.filter")}
-          description={t("agents.skillsPanel.shown", { count: String(filtered().length) })}
+          description={
+            inventoryReady()
+              ? t("agents.skillsPanel.shown", { count: String(filtered().length) })
+              : undefined
+          }
           control={
             <input
               class="settings-input"
@@ -178,7 +259,7 @@ function AgentSkillsContent(
             />
           }
         />
-        {filtered().length === 0 ? (
+        {inventoryReady() && filtered().length === 0 ? (
           <SettingsEmpty message={t("agents.skillsPanel.empty")} />
         ) : (
           <div class="agents-panel-body agent-skills-groups">
@@ -216,14 +297,15 @@ function AgentSkillsContent(
                                     ["agents.skillsPanel.reason", computeSkillReasons(skill())],
                                   ] as const
                                 }
+                                keyed={(entry) => entry[0]}
                               >
-                                {(entry) =>
-                                  entry[1].length > 0 ? (
+                                {(entry) => (
+                                  <Show when={entry()[1].length > 0}>
                                     <span class="settings-row__desc">
-                                      {t(entry[0], { items: entry[1].join(", ") })}
+                                      {t(entry()[0], { items: entry()[1].join(", ") })}
                                     </span>
-                                  ) : undefined
-                                }
+                                  </Show>
+                                )}
                               </For>
                               {learned() ? (
                                 <span class="settings-row__desc">
@@ -254,4 +336,12 @@ function AgentSkillsContent(
       </SettingsSection>
     </>
   );
+}
+
+function AgentSkillsResetCompletion(params: { completion: Promise<void> }) {
+  const settled = createMemo(async () => {
+    await params.completion;
+    return null;
+  });
+  return <Loading fallback={null}>{settled()}</Loading>;
 }

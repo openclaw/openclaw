@@ -1,4 +1,36 @@
 import { execFileSync } from "node:child_process";
+import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { withLocalWorkspaceStore } from "../worker-environments/local-workspace-store.js";
+import { localWorkspaceProjectionFixture } from "../worker-environments/local-workspace-store.test-support.js";
+
+export async function seedManagedReview(
+  worktree: { id: string; repoRoot: string; branch: string },
+  owner: { sessionKey: string; sessionId: string; lifecycleRevision?: string },
+  projectionRoot: string,
+  baseCommit: string,
+  name = "review",
+) {
+  await insertRegistryWorktree(process.env, {
+    ...worktree,
+    name,
+    repoFingerprint: "review-fixture",
+    path: worktree.repoRoot,
+    baseRef: "main",
+    ownerKind: "session",
+    ownerId: owner.sessionKey,
+    createdAt: 0,
+    lastActiveAt: 0,
+  });
+  await withLocalWorkspaceStore({ worktreeId: worktree.id }, (store) =>
+    store.create({
+      ...localWorkspaceProjectionFixture(worktree.id, projectionRoot),
+      session_key: owner.sessionKey,
+      session_id: owner.sessionId,
+      ...(owner.lifecycleRevision ? { lifecycle_revision: owner.lifecycleRevision } : {}),
+      base_commit: baseCommit,
+    }),
+  );
+}
 
 export function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });

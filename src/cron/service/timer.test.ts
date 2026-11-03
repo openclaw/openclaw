@@ -1,7 +1,5 @@
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
 import { onTimer } from "../../cron/service/timer.test-support.js";
@@ -10,7 +8,6 @@ import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { advanceCronActiveJobGeneration } from "../active-jobs.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add as addJob, update as updateJob } from "./ops-mutations.js";
@@ -32,15 +29,14 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 });
 let storePath: string;
 let enqueueSystemEvent = vi.fn();
-let requestHeartbeat = vi.fn();
 let runSessionEvent = vi.fn<NonNullable<StateDeps["runSessionEvent"]>>(async () => ({
   status: "ok",
 }));
 let states: ReturnType<typeof createCronServiceStateBase>[];
+const ok = { status: "ok" } as const;
 beforeEach(async () => {
   ({ storePath } = await makeStorePath());
   enqueueSystemEvent = vi.fn();
-  requestHeartbeat = vi.fn();
   runSessionEvent = vi.fn<NonNullable<StateDeps["runSessionEvent"]>>(async () => ({
     status: "ok",
   }));
@@ -57,7 +53,6 @@ function createCronServiceState(
     nowMs: () => now,
     scheduler: createTestGatewayScheduler(),
     enqueueSystemEvent,
-    requestHeartbeat,
     runSessionEvent,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     cronEnabled: true,
@@ -71,6 +66,8 @@ function createCronServiceState(
 const readJob = async () => (await loadCronStore(storePath)).jobs[0]!;
 const writeJobs = (...jobs: CronJob[]) => writeCronStoreSnapshot({ storePath, jobs });
 const findRun = (jobId: string) => findCronRunByBaseRunId(storePath, `cron:${jobId}:${now}`);
+const noRun = { ok: true, ran: false, reason: "not-due" };
+const ran = { ok: true, ran: true };
 
 function scriptFixture(
   outcome: Awaited<ReturnType<NonNullable<StateDeps["runScriptJob"]>>>,
@@ -117,12 +114,8 @@ describe("cron service timer seam coverage", () => {
       expect(job.state.startupCatchupAtMs).toBeUndefined();
       expect(job.state.pacedNextRunAtMs).toBeUndefined();
       expect(job.state.forcePreservedNextRunAtMs).toBeUndefined();
-      await expect(run(state, job.id, "due")).resolves.toEqual({
-        ok: true,
-        ran: false,
-        reason: "not-due",
-      });
-      await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+      await expect(run(state, job.id, "due")).resolves.toEqual(noRun);
+      await expect(run(state, job.id, "force")).resolves.toEqual(ran);
     }
     expect(runSessionEvent).toHaveBeenCalledTimes(2);
   });
@@ -146,7 +139,6 @@ describe("cron service timer seam coverage", () => {
       }),
     );
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
 
     const persistedState = (await readJob()).state;
     expect(persistedState).toMatchObject({
@@ -159,11 +151,6 @@ describe("cron service timer seam coverage", () => {
       jobId: "main-heartbeat-job",
       agentId: "ops",
       status: "succeeded",
-      startedAt: now,
-      lastEventAt: now,
-      endedAt: now,
-      cleanupAfter: now + 7 * 24 * 60 * 60_000,
-      runId: expect.stringMatching(new RegExp(`^cron:main-heartbeat-job:${now}:`)),
     });
     expect(task?.sessionKey).toBeUndefined();
 
@@ -181,9 +168,9 @@ describe("cron service timer seam coverage", () => {
       evaluationEntered.resolve();
       return evaluation.promise;
     });
-    const runCommandJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
-    const runScriptJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
-    const runIsolatedAgentJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
+    const runCommandJob = vi.fn(async () => ok);
+    const runScriptJob = vi.fn(async () => ok);
+    const runIsolatedAgentJob = vi.fn(async () => ok);
     const state = createCronServiceState({
       cronConfig: { triggers: { enabled: true } },
       evaluateCronTrigger,
@@ -210,7 +197,6 @@ describe("cron service timer seam coverage", () => {
 
       await expect(result).resolves.toMatchObject({ status: "error" });
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
       expect(runCommandJob).not.toHaveBeenCalled();
       expect(runScriptJob).not.toHaveBeenCalled();
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
@@ -246,12 +232,8 @@ describe("cron service timer seam coverage", () => {
       jobs: 1,
       nextWakeAtMs: null,
     });
-    await expect(run(state, job.id, "due")).resolves.toEqual({
-      ok: true,
-      ran: false,
-      reason: "not-due",
-    });
-    await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+    await expect(run(state, job.id, "due")).resolves.toEqual(noRun);
+    await expect(run(state, job.id, "force")).resolves.toEqual(ran);
     expect(runPayload).toHaveBeenCalledOnce();
   });
 
@@ -275,21 +257,12 @@ describe("cron service timer seam coverage", () => {
     "routes $target script side effects (notify=$notify, wake=$wake)",
     async ({ target, notify, wake }) => {
       const sessionKey = "agent:ops:telegram:group:42:topic:77";
-      const sessionStorePath = path.join(path.dirname(path.dirname(storePath)), "sessions.json");
       const deliveryContext = {
         channel: "telegram",
         to: "telegram:42",
         accountId: "ops-bot",
         threadId: 77,
       };
-      await upsertSessionEntryCore(
-        { storePath: sessionStorePath, sessionKey },
-        {
-          sessionId: "ops-telegram-session",
-          updatedAt: now,
-          delivery: normalizeSessionDeliveryState({ context: deliveryContext }),
-        },
-      );
       const enqueueSessionEvent = vi.fn();
       const expectedTarget = {
         agentId: "ops",
@@ -302,7 +275,6 @@ describe("cron service timer seam coverage", () => {
         { status: "ok", notify, wake },
         {
           resolveDefaultAgentId: () => "other",
-          resolveSessionStorePath: () => sessionStorePath,
           captureSessionEventTarget: async () => expectedTarget,
           enqueueSessionEvent,
         },
@@ -318,7 +290,6 @@ describe("cron service timer seam coverage", () => {
         expect.objectContaining({ agentId: "ops", sessionKey, expectedTarget, deliveryContext }),
       );
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
     },
   );
 
@@ -351,7 +322,6 @@ describe("cron service timer seam coverage", () => {
     expect(runSessionEvent).not.toHaveBeenCalled();
     expect(enqueueSessionEvent).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
   });
 
   it("rejects nextCheck without pacing before applying state", async () => {
@@ -389,16 +359,19 @@ describe("cron service timer seam coverage", () => {
   });
 
   it("records current-bound cron metadata against the backing cron session", async () => {
-    const runIsolatedAgentJob = vi.fn(async () => ({
-      status: "ok" as const,
-      summary: "done",
+    const metadata = {
       sessionId: "session-run-1",
-      delivered: true,
-      sessionKey: "agent:finn:cron:isolated-agent-job:run:run-1",
       delivery: { intended: { channel: "telegram", to: "42" } },
       model: "gpt-test",
       provider: "openai",
       usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+    };
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      ...structuredClone(metadata),
+      status: "ok" as const,
+      summary: "done",
+      delivered: true,
+      sessionKey: "agent:finn:cron:isolated-agent-job:run:run-1",
     }));
 
     await writeJobs({
@@ -416,15 +389,11 @@ describe("cron service timer seam coverage", () => {
       status: "succeeded",
       summary: "done",
       detail: {
+        ...metadata,
         kind: "cron-run",
         status: "ok",
-        sessionId: "session-run-1",
         durationMs: 0,
         nextRunAtMs: now + 60_000,
-        delivery: { intended: { channel: "telegram", to: "42" } },
-        model: "gpt-test",
-        provider: "openai",
-        usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
       },
     });
   });

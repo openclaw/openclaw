@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  captureChildToolAllowlist,
+  type InheritedToolPolicyDefinition,
+} from "../agents/agent-tools.inheritance.js";
+import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import {
   captureGatewayToolCallerAssertion,
   withGatewayToolCallerIdentity,
@@ -9,9 +15,14 @@ import {
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import { PluginRuntimeExecutionFrame } from "./runtime/execution-frame.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import { createPluginToolFactoryContext } from "./tool-factory-context.js";
-import { bindPluginToolCallbacks } from "./tool-factory-runtime.js";
+import {
+  bindPluginToolCallbacks,
+  createPluginToolFactoryResolver,
+} from "./tool-factory-runtime.js";
 import type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "./tool-types.js";
 
 const probe = (effect: () => void, assertCurrent?: () => void) => ({
@@ -79,6 +90,45 @@ const continuation = (isCurrent: () => boolean) => ({
   senderId: "original-owner",
   channel: "discord",
   accountId: "original-account",
+});
+
+it("enters the registered owner's scopes and retains the execution cancellation scope", async () => {
+  const observed: string[] = [];
+  const observe = () => {
+    const scope = getPluginRuntimeGatewayRequestScope();
+    expect(scope?.pluginId).toBe("probe");
+    expect(scope?.pluginRegistry).toBe(registration.registry);
+    observed.push(scope!.pluginId!);
+  };
+  const registration = register(() => {
+    observe();
+    return {
+      ...probe(observe),
+      prepareArguments(args: unknown) {
+        observe();
+        return args;
+      },
+    };
+  });
+  const frames = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
+  try {
+    const resolver = createPluginToolFactoryResolver((error) => assert.fail(error));
+    const { resolved } = resolver.resolve(registration.entry, registration.context, ["probe"]);
+    assert(resolved && !Array.isArray(resolved));
+    const tool = bindPluginToolCallbacks(registration.entry, registration.registry, resolved);
+    const args = {};
+    expect(tool.prepareArguments?.(args)).toBe(args);
+    await tool.execute("probe", args);
+    expect(observed).toEqual(["probe", "probe", "probe"]);
+    // Handoff acknowledgment has a separate host-owned store. Count only the
+    // invocation/recovery carrier so native ALS entry/restore is not plugin scope work.
+    expect(
+      frames.mock.calls.filter(([value]) => value instanceof PluginRuntimeExecutionFrame),
+    ).toHaveLength(4);
+    expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+  } finally {
+    frames.mockRestore();
+  }
 });
 
 it("prepares detached, ordered, case-sensitive declarations once per record", () => {
@@ -316,7 +366,8 @@ it("limits child policy declarations to the current plugin registration", () => 
   const f = register(() => null, { context: { inheritToolPolicy: inherited } });
   const declaration = probe(() => {});
   f.context.inheritToolPolicy?.(declaration);
-  expect(inherited).toHaveBeenCalledExactlyOnceWith(declaration);
+  expect(inherited).toHaveBeenCalledOnce();
+  expect(inherited.mock.calls[0]?.[0]).toMatchObject(declaration);
   expect(() => f.context.inheritToolPolicy?.({ ...declaration, name: "another_tool" })).toThrow(
     "undeclared tool",
   );
@@ -324,3 +375,38 @@ it("limits child policy declarations to the current plugin registration", () => 
   expect(() => f.context.inheritToolPolicy?.(declaration)).toThrow("no longer active");
   expect(inherited).toHaveBeenCalledOnce();
 });
+
+it.each([
+  ["manifest group", "group:sessions", undefined, true],
+  ["explicit denial", "group:sessions", ["probe"], false],
+  ["forged group", "group:runtime", undefined, false],
+] as const)(
+  "inherits unavailable plugin tools through %s policy",
+  (_label, group, deny, permitted) => {
+    const definitions: InheritedToolPolicyDefinition[] = [];
+    const f = register(() => null, {
+      manifestToolMetadata: { probe: { policyGroups: ["group:sessions"] } },
+      context: { inheritToolPolicy: (definition) => definitions.push(definition) },
+    });
+    const definition = {
+      ...probe(() => {}),
+      pluginMetadata: { pluginId: "forged-owner", policyGroups: ["group:runtime"] },
+    };
+    f.context.inheritToolPolicy?.(definition);
+    expect(f.entry.factory(f.context)).toBeNull();
+    const config = { tools: { allow: [group], ...(deny ? { deny: [...deny] } : {}) } };
+    const inherited: string[] = [];
+    const extra: string[] = [];
+    captureChildToolAllowlist({
+      options: { config, additionalInheritedToolNamesRef: extra },
+      capabilityProfile: resolveConversationCapabilityProfile({ config }),
+      tools: [],
+      inheritedToolAllowlist: inherited,
+      policyDefinitions: definitions,
+      includeOpenClawTools: true,
+      isMemoryFlushRun: false,
+    });
+    expect(extra).toEqual(permitted ? ["probe"] : []);
+    expect(inherited).toEqual(permitted ? ["probe"] : []);
+  },
+);

@@ -2,6 +2,7 @@ import path from "node:path";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -72,10 +73,10 @@ export function makeRegistry(plugins: RegistryPlugin[]): PluginManifestRegistry 
       contracts: plugin.contracts,
       configSchema: plugin.configSchema,
       channelConfigs: plugin.channelConfigs,
-      providers: plugin.providers ?? [],
-      cliBackends: plugin.cliBackends ?? [],
       skills: [],
       hooks: [],
+      providers: plugin.providers ?? [],
+      cliBackends: plugin.cliBackends ?? [],
       origin: plugin.origin ?? "config",
       rootDir: `/fake/${plugin.id}`,
       source: `/fake/${plugin.id}/index.js`,
@@ -96,50 +97,19 @@ export function createPluginMetadataSnapshot({
 }): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash(config);
   const { plugins, diagnostics } = manifestRegistry;
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash,
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  };
+  const empty = createEmptyPluginMetadataSnapshot(workspaceDir || undefined);
+  empty.index.policyHash = policyHash;
+  empty.owners.providerAuthContributions =
+    buildPluginMetadataProviderFacts(plugins).providerAuthContributions;
+  empty.metrics.manifestPluginCount = plugins.length;
   return {
+    ...empty,
     policyHash,
-    ...(workspaceDir ? { workspaceDir } : {}),
-    index,
-    registryIndex: index,
-    registryDiagnostics: [],
     manifestRegistry,
     plugins,
     diagnostics,
     byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
-    normalizePluginId: (pluginId) => pluginId,
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      providerAuthContributions:
-        buildPluginMetadataProviderFacts(plugins).providerAuthContributions,
-      modelIdNormalizationPolicies: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: plugins.length,
-    },
   };
 }
 

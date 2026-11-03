@@ -1,5 +1,5 @@
+import { createMemo, createSignal, For, onSettled } from "solid-js";
 import "../../styles/settings.css";
-import { createMemo, createSignal, For, onCleanup, onSettled } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { getLobsterdexEntries } from "../../components/lobster-dex.ts";
@@ -10,15 +10,21 @@ import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobst
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
-import { t, getLocale } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t, getLocale } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 // Page stars must override the shared mini-star rules loaded by lobster-pet-look.
 import "../../styles/lobsterdex.css";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+
+registerRouteSubtitlesEnglish();
+
+registerEnglishCatalog(registerPreferencesEnglish);
 
 type LobsterdexCopyFeedback = { paletteId: LobsterPetPaletteId; status: "copied" | "error" };
 
@@ -46,7 +52,7 @@ export function LobsterdexPage() {
   let disposed = false;
   let copyAttempt = 0;
   let copyResetTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     copyAttempt += 1;
     globalThis.clearTimeout(copyResetTimer);
@@ -227,12 +233,9 @@ export function LobsterdexPage() {
             <a
               class="btn btn--sm"
               href={pathForRoute("appearance", context.basePath)}
-              onClick={(event) => {
-                if (shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  context.navigate("appearance");
-                }
-              }}
+              onClick={(event) =>
+                handleNavigationClick(event, () => context.navigate("appearance"))
+              }
             >
               {t("tabs.appearance")}
             </a>

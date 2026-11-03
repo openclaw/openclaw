@@ -8,7 +8,6 @@ import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-bi
 import { resolvePluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-selection.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "./runtime/index.js";
-import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 import type { OpenClawPluginToolContext } from "./tool-types.js";
 
 export type MockRegistryToolEntry = {
@@ -21,19 +20,54 @@ export type MockRegistryToolEntry = {
   factory: (ctx: OpenClawPluginToolContext) => unknown;
 };
 
-const toolManifest = (id: string, tool: string) => ({
-  id,
-  origin: "bundled",
-  enabledByDefault: true,
-  channels: [],
-  providers: [],
-  contracts: { tools: [tool] },
-});
+export function createOptionalToolManifest(
+  id: string,
+  toolNames: readonly string[],
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    id,
+    origin: "bundled" as const,
+    enabledByDefault: true,
+    channels: [],
+    providers: [],
+    contracts: { tools: [...toolNames] },
+    ...overrides,
+  };
+}
+
+export function createOptionalToolContext(): { config: OpenClawConfig; workspaceDir: string } {
+  return {
+    config: {
+      plugins: {
+        enabled: true,
+        load: { paths: ["/tmp/plugin.js"] },
+        slots: { memory: "none" },
+      },
+    },
+    workspaceDir: "/tmp",
+  };
+}
+
+export function createConfiguredFeishuToolContext<T extends string>(conversationReadOrigin: T) {
+  const context = createOptionalToolContext();
+  return {
+    ...context,
+    config: {
+      ...context.config,
+      plugins: {
+        ...context.config.plugins,
+        allow: ["feishu"],
+      },
+    },
+    conversationReadOrigin,
+  };
+}
 
 export function createXaiToolManifest() {
   const rootPath = "plugins.entries.xai.config";
   return {
-    ...toolManifest("xai", "x_search"),
+    ...createOptionalToolManifest("xai", ["x_search"]),
     providers: ["xai"],
     setup: { providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }] },
     toolMetadata: {
@@ -49,7 +83,7 @@ export function createXaiToolManifest() {
 export function createFeishuToolManifest() {
   const credentials = { rootPath: "channels.feishu", required: ["appId", "appSecret"] };
   return {
-    ...toolManifest("feishu", "feishu_doc"),
+    ...createOptionalToolManifest("feishu", ["feishu_doc"]),
     channels: ["feishu"],
     toolMetadata: {
       feishu_doc: {
@@ -92,15 +126,27 @@ export function createToolRegistry(
       Omit<MockRegistryToolEntry, "declaredNames"> & { declaredNames?: ReadonlySet<string> }
     >;
   } = builder.registry;
-  registry.plugins = entries.map((entry) =>
-    createToolRuntimeRecord(entry.pluginId, entry.source, entry.origin),
-  );
+  registry.plugins = entries.map(({ pluginId: id, source, origin = "bundled" }) => {
+    const artifact = {
+      source,
+      rootDir: path.dirname(source),
+      origin,
+      preferBuiltPluginArtifacts: false,
+    };
+    const record = createLoaderPluginRecord({ id, ...artifact, enabled: true, configSchema: true });
+    bindPluginRuntimeArtifactSelection(record, {
+      preferBuiltPluginArtifacts: false,
+      runtimeEntry: resolvePluginRuntimeArtifactSelection({ ...artifact, entryKind: "runtime" }),
+    });
+    return record;
+  });
   registry.tools = entries.map((entry, index) => {
     const record = registry.plugins[index]!;
     const api = builder.createApi(record, { config: {}, registrationMode });
     runPluginRegisterSyncInRegistry(() => {}, api, builder.registry, entry.pluginId);
     const instance = getPluginInstance(record);
     assert(instance, "expected the registry API's plugin instance");
+    instance.admitFactory(entry.factory, "tool");
     const { declaredNames, ...registration } = entry;
     return {
       ...registration,
@@ -109,75 +155,4 @@ export function createToolRegistry(
     };
   });
   return registry;
-}
-
-export function createToolRuntimeRecord(
-  id: string,
-  source = `/tmp/${id}.js`,
-  origin: MockRegistryToolEntry["origin"] = "bundled",
-) {
-  const rootDir = path.dirname(source);
-  const artifact = { source, rootDir, origin, preferBuiltPluginArtifacts: false };
-  const record = createLoaderPluginRecord({ id, ...artifact, enabled: true, configSchema: true });
-  bindPluginRuntimeArtifactSelection(record, {
-    preferBuiltPluginArtifacts: false,
-    runtimeEntry: resolvePluginRuntimeArtifactSelection({ ...artifact, entryKind: "runtime" }),
-  });
-  return record;
-}
-
-export function createToolManifest(
-  id: string,
-  toolNames: readonly string[],
-  overrides: Record<string, unknown> = {},
-) {
-  return {
-    id,
-    origin: "bundled" as const,
-    enabledByDefault: true,
-    channels: [],
-    providers: [],
-    contracts: { tools: [...toolNames] },
-    ...overrides,
-  };
-}
-
-export function createContext(): { config: OpenClawConfig; workspaceDir: string } {
-  return {
-    config: {
-      plugins: {
-        enabled: true,
-        load: { paths: ["/tmp/plugin.js"] },
-        slots: { memory: "none" },
-      },
-    },
-    workspaceDir: "/tmp",
-  };
-}
-
-export function createResolveToolsParams(params?: {
-  context?: ReturnType<typeof createContext> & Record<string, unknown>;
-  clientCaps?: string[];
-  toolAllowlist?: readonly string[];
-  toolDenylist?: readonly string[];
-  existingToolNames?: Set<string>;
-  env?: NodeJS.ProcessEnv;
-  suppressNameConflicts?: boolean;
-  allowGatewaySubagentBinding?: boolean;
-  runtimePluginToolGrant?: { pluginId: string; toolNames: readonly string[] };
-}) {
-  const toolAllowlist = appendRuntimePluginToolGrant(
-    [...(params?.toolAllowlist ?? [])],
-    params?.runtimePluginToolGrant,
-  );
-  return {
-    context: (params?.context ?? createContext()) as never,
-    ...(params?.clientCaps ? { clientCaps: params.clientCaps } : {}),
-    ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
-    ...(params?.toolDenylist ? { toolDenylist: [...params.toolDenylist] } : {}),
-    ...(params?.existingToolNames ? { existingToolNames: params.existingToolNames } : {}),
-    ...(params?.env ? { env: params.env } : {}),
-    ...(params?.suppressNameConflicts ? { suppressNameConflicts: true } : {}),
-    ...(params?.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-  };
 }

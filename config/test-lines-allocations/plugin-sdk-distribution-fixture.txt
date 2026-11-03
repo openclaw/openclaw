@@ -1,0 +1,2 @@
+# Resolve the plugin build fixture compiler from root devDependencies regardless of the test working directory.
+5

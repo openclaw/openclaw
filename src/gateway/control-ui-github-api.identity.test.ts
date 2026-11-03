@@ -1,3 +1,4 @@
+import { Hash } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
 import type { GitHubPluginConfig } from "../../extensions/github-repositories/config-api.js";
@@ -101,4 +102,59 @@ it("fails closed for an explicitly configured cold SecretRef owner", () => {
   );
   expect(hasConfiguredGitHubApiCredential({}, config)).toBe(true);
   expect(githubApiToken({ GH_TOKEN: "ambient" }, {})).toBe("ambient");
+});
+
+it("does not rehash credentials during live checks for interleaved cached preview readers", async () => {
+  const hash = vi.spyOn(Hash.prototype, "update");
+  const target = { owner: "synthetic", repo: "preview", kind: "issue" as const, number: 1 };
+  const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    return Response.json(
+      url.endsWith("/issues/1")
+        ? {
+            title: new Headers(init?.headers).get("Authorization") ?? "Anonymous preview",
+            state: "open",
+            user: { login: "synthetic" },
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+            repository_url: "https://api.github.com/repos/synthetic/preview",
+          }
+        : { private: false, visibility: "public" },
+    );
+  });
+  const select = (token: string) => setRuntimeConfigSnapshot(previewConfig({ token }));
+  const read = () => gitHubPublicApi.loadControlUiGitHubPreview(target, undefined, fetchMock);
+  for (const token of ["synthetic-first", " synthetic-second "]) {
+    select(token);
+    await read();
+  }
+  hash.mockClear();
+  fetchMock.mockClear();
+  select("synthetic-first");
+  const first = read();
+  select("synthetic-second");
+  const second = read();
+  await expect(first).rejects.toThrow("GitHub credential changed");
+  await expect(second).resolves.toMatchObject({ title: "Bearer synthetic-second" });
+  expect(
+    hash.mock.calls.filter(([data]) => data === "synthetic-first" || data === "synthetic-second"),
+  ).toHaveLength(4);
+  expect(fetchMock).not.toHaveBeenCalled();
+
+  vi.stubEnv("GH_TOKEN", "");
+  vi.stubEnv("GITHUB_TOKEN", "");
+  for (const changed of [
+    previewConfig(undefined, enterpriseHost),
+    {
+      plugins: {
+        entries: { "github-repositories": { config: { apiBaseUrl: "https://github.com/api/v3" } } },
+      },
+    },
+  ]) {
+    setRuntimeConfigSnapshot({});
+    await read();
+    const anonymous = read();
+    setRuntimeConfigSnapshot(changed);
+    await expect(anonymous).rejects.toThrow("GitHub credential changed");
+  }
 });

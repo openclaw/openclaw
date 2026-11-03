@@ -49,6 +49,7 @@ it("returns the upstream seed to every joined catalog Continue request", async (
     api,
     bindingStore,
     control: { forRequest },
+    getPluginConfig: () => ({ supervision: { enabled: true } }),
     getRuntimeConfig: () => config,
   });
   const provider = getProvider();

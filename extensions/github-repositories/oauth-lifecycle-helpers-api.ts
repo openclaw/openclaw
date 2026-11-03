@@ -5,18 +5,28 @@ import {
   matchesAgentLifecycleBinding,
   matchesAgentLifecycleBindingAsync,
   inspectGitHubOAuthRecord,
+  parseGitHubOAuthRecord,
   type NativeGitHubDeviceAuthorizationRecord as GitHubDeviceAuthorizationRecord,
   type NativeGitHubIdentityScope as GitHubIdentityScope,
   type NativeGitHubOAuthRecord as GitHubOAuthRecord,
   type NativeGitHubOAuthStateHostV1 as RepositoryOAuthStateHostV1,
 } from "openclaw/plugin-sdk/native-github-account-host";
-import { readGitHubConfig, readGitHubAgentIdentity } from "./config-api.js";
-import type { GitHubToolIdentityConfig } from "./config-api.js";
-import { resolveConfiguredGitHubToolIdentity } from "./tool-identity-api.js";
+import {
+  readGitHubConfig,
+  readGitHubAgentIdentity,
+  type GitHubToolIdentityConfig,
+} from "./config-api.js";
+import type { GitHubToolAccount } from "./tool-account-api.js";
+import {
+  GitHubAccountMismatchError,
+  refreshManagedGitHubProfile,
+  resolveConfiguredGitHubToolIdentity,
+  resolveManagedGitHubProfileDir,
+} from "./tool-identity-api.js";
 type GitHubOAuthInventory = Awaited<
   ReturnType<ReturnType<RepositoryOAuthStateHostV1["inventory"]["createReader"]>["read"]>
 >;
-
+type RefreshRecordWriter = Pick<RepositoryOAuthStateHostV1["records"], "writeGitHubOAuthRecord">;
 export const REFRESH_SKEW_MS = 10 * 60_000;
 export const MAINTENANCE_INTERVAL_MS = 60_000;
 export const SHUTDOWN_DRAIN_TIMEOUT_MS = 31_000;
@@ -147,5 +157,81 @@ export async function pendingInitialOAuthIdentitySelected(
     (binding !== undefined && (await matchesAgentLifecycleBindingAsync(() => config, binding)));
   return (
     agentBindingMatches && identity?.profileId === record.profileId && identity.kind === "oauth"
+  );
+}
+
+export async function settleGitHubOAuthRefreshRecord(
+  next: GitHubOAuthRecord,
+  expected: GitHubOAuthRecord,
+  records: RefreshRecordWriter,
+): Promise<void> {
+  try {
+    await records.writeGitHubOAuthRecord(next, expected);
+  } catch (error) {
+    // A lost commit reply is reconciled by exact postimage, never another provider request.
+    const observed = await inspectGitHubOAuthRecord(next.profileId);
+    if (
+      observed.state !== "valid" ||
+      !isDeepStrictEqual(
+        observed.record,
+        parseGitHubOAuthRecord(JSON.stringify(next), next.profileId),
+      )
+    ) {
+      throw error;
+    }
+  }
+}
+export function assertGitHubOAuthIdentitySelected(
+  getConfig: () => OpenClawConfig,
+  record: GitHubOAuthRecord,
+): void {
+  const identity = resolveConfiguredGitHubToolIdentity({ config: getConfig(), ...record });
+  if (identity?.kind !== "oauth" || identity.profileId !== record.profileId) {
+    throw new Error("GitHub OAuth identity changed");
+  }
+}
+export async function applyPendingGitHubOAuthRefresh(
+  getConfig: () => OpenClawConfig,
+  record: GitHubOAuthRecord & { pendingRefresh: true },
+  accessToken: string,
+  records: RefreshRecordWriter,
+): Promise<void> {
+  const profileDir = resolveManagedGitHubProfileDir({
+    agentId: record.agentId,
+    scope: record.scope,
+    profileId: record.profileId,
+  });
+  let account: GitHubToolAccount;
+  try {
+    account = await refreshManagedGitHubProfile({
+      profileDir,
+      token: accessToken,
+      expectedAccountId: record.accountId,
+      assertCurrent: () => assertGitHubOAuthIdentitySelected(getConfig, record),
+    });
+  } catch (error) {
+    if (error instanceof GitHubAccountMismatchError) {
+      await settleGitHubOAuthRefreshRecord(
+        {
+          ...record,
+          pendingRefresh: undefined,
+          refreshFailure: "expired",
+        },
+        record,
+        records,
+      );
+    }
+    return;
+  }
+  assertGitHubOAuthIdentitySelected(getConfig, record);
+  await settleGitHubOAuthRefreshRecord(
+    {
+      ...record,
+      login: account.login,
+      pendingRefresh: undefined,
+      refreshFailure: undefined,
+    },
+    record,
+    records,
   );
 }

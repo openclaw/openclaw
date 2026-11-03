@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createComponent, createRoot, createSignal, merge, Show } from "solid-js";
+import { createRoot, createSignal, merge, Show } from "solid-js";
 import type { ControlUiComponentHandle } from "../../../src/plugin-sdk/control-ui-components.js";
 import type { ControlUiPresentationHost } from "../../../src/plugin-sdk/control-ui-presentation.js";
 import {
@@ -14,13 +14,13 @@ import { Menu, type MenuEntry } from "../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../components/solid/text-overflow.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
-import { mountSolidContent } from "../lib/dom/solid-snapshot.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { resolveSafeExternalUrl } from "../lib/open-external-url.ts";
 import { subscribeI18n, t } from "../lib/reactive/i18n.ts";
-import "../components/tooltip.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import "../components/tooltip.ts";
+import { mountSolidContent } from "../lib/reactive/mount-solid-content.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { showToast } from "../lib/toast.ts";
 import { registerControlUiEnglish } from "./control-ui-english.ts";
@@ -40,13 +40,9 @@ export function createControlUiPresentationHost(
   ): ControlUiComponentHandle<P> {
     active();
     const [state, setState] = createSignal({ value: initial }, { ownedWrite: true });
+    const View = view;
     // SDK controls own an independent renderer even when mounted from a plugin effect.
-    const stop = mountSolidContent(container, () =>
-      createComponent(
-        view,
-        merge(() => state().value),
-      ),
-    );
+    const stop = mountSolidContent(container, () => <View {...merge(() => state().value)} />);
     let disposed = false;
     const dispose = () => {
       if (disposed) {

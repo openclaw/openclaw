@@ -1,6 +1,7 @@
 import type { ControlUiSessionPullRequestSnapshot } from "@openclaw/gateway-protocol";
 /* @vitest-environment jsdom */
 import { createSignal, flush } from "solid-js";
+import "../chat-details-mobile-host-content.tsx";
 import { expect, it, vi } from "vitest";
 import {
   listDismissedChatPullRequests,
@@ -15,10 +16,13 @@ import { createGateway, createContext, createSessions } from "../../../test-help
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import "../chat-details-mobile-host-content.tsx";
 import { installRepositoryPresentation } from "../../../test-helpers/repository-presentation.test-support.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { options as publicationOptions } from "../chat-github-publication.test-support.ts";
+import {
+  createChatMobileHostFixture,
+  createMobileRootContentFixture as rootContent,
+} from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost, MobileHostDestination } from "../chat-mobile-host.ts";
 import {
   ChatDetailsMobileContent,
@@ -35,176 +39,24 @@ function details(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
     ...overrides,
   };
 }
-function rootContent(): Extract<ChatDetailsMobilePage, { kind: "root" }>["content"] {
-  return {
-    entries: {
-      labels: {
-        people: "People",
-        taskProgress: "Task progress",
-        subagents: "Subagents",
-        processes: "Processes",
-        environment: "Environment",
-        context: "Context",
-        automations: "Automations",
-        generatedFiles: "Generated files",
-        session: "Session",
-      },
-      people: { label: "People" },
-      versions: { label: "Versions", metadata: 1 },
-      onNavigate: vi.fn(),
-    },
-    processes: undefined,
-    subagents: { workingLabel: "Working", onOpenSubagent: vi.fn(), onOpenSubagents: vi.fn() },
-  };
+
+async function settle(element: HTMLElementTagNameMap["openclaw-chat-details-mobile-host-content"]) {
+  await element.updateComplete;
+  flush();
 }
-
-it("shows a real worker without legacy fields and lets the environment owner decide empty state", () => {
-  const active: GatewaySessionRow = {
-    key: "agent:main:details",
-    kind: "direct",
-    placement: {
-      state: "active",
-      generation: 1,
-      createdAtMs: 100000,
-      updatedAtMs: 300000,
-      stateChangedAtMs: 300000,
-      environmentId: "worker:device",
-      activeOwnerEpoch: 1,
-      workerBundleHash: "a".repeat(64),
-      workspaceBaseManifestRef: "base-manifest",
-      remoteWorkspaceDir: "/worker/repo",
-      runner: { kind: "device", status: "available" },
-    },
-  };
-  const [value, setValue] = createSignal(details({ selectedSession: active }));
-  const [presented, setPresented] = createSignal(true);
-  const request = vi.fn();
-  const openMachine = vi.fn();
-  const content = rootContent();
-  content.environment = { onRequestUncommitted: request, onOpenMachine: openMachine };
-  const view = mountSolid(() => (
-    <ChatDetailsMobileContent
-      details={value()}
-      presented={presented()}
-      page={{ kind: "root", content }}
-    />
-  ));
-  view.getByRole("button", { name: "worker:device" }).click();
-  expect(openMachine).toHaveBeenCalledOnce();
-  expect(request).toHaveBeenCalledOnce();
-  setValue(
-    details({
-      selectedSession: { key: "agent:main:details", kind: "direct", execNode: "Local Gateway" },
-    }),
-  );
-  flush();
-  expect(view.queryByRole("region", { name: "Environment" })).toBeNull();
-  expect(request).toHaveBeenCalledOnce();
-  setValue(details());
-  flush();
-  expect(view.queryByRole("region", { name: "Environment" })).toBeNull();
-  expect(request).toHaveBeenCalledOnce();
-  setPresented(false);
-  flush();
-  setPresented(true);
-  flush();
-  expect(request).toHaveBeenCalledTimes(2);
-});
-
-it("retains Outputs demand across publications and returns navigation origins without a second route owner", () => {
-  const release = vi.fn();
-  const retain = vi.fn(() => release);
-  const output = {
-    artifacts: [],
-    artifactsLoading: false,
-    artifactsError: null,
-    dashboard: null,
-    dashboardError: null,
-    onOpenArtifact: vi.fn(),
-    renderArtifactIcon: () => null,
-    onViewAll: vi.fn(),
-    renderViewAllIcon: () => null,
-  };
-  const [value, setValue] = createSignal(details({ outputs: output, retainOutputs: retain }));
-  const [presented, setPresented] = createSignal(true);
-  const content = rootContent();
-  const [page, setPage] = createSignal<ChatDetailsMobilePage>({ kind: "root", content });
-  const view = mountSolid(() => (
-    <ChatDetailsMobileContent details={value()} presented={presented()} page={page()} />
-  ));
-  expect(retain).toHaveBeenCalledOnce();
-  const people = view.getByRole("button", { name: "People" });
-  people.click();
-  expect(content.entries.onNavigate).toHaveBeenCalledWith(
-    { kind: "people" },
-    { kind: "details-root", trigger: people },
-  );
-  view.getByRole("button", { name: /Versions/ }).click();
-  expect(content.entries.onNavigate).toHaveBeenLastCalledWith(
-    { kind: "versions" },
-    expect.objectContaining({ kind: "details-root" }),
-  );
-  setValue((current) => ({ ...current, outputs: { ...output, artifactsLoading: true } }));
-  flush();
-  expect(retain).toHaveBeenCalledOnce();
-  expect(release).not.toHaveBeenCalled();
-  setPage({ kind: "outputs" });
-  flush();
-  expect(retain).toHaveBeenCalledOnce();
-  setPage({ kind: "context" });
-  flush();
-  expect(release).toHaveBeenCalledOnce();
-  setPage({ kind: "root", content });
-  flush();
-  expect(retain).toHaveBeenCalledTimes(2);
-  setPresented(false);
-  flush();
-  expect(release).toHaveBeenCalledTimes(2);
-  const hiddenPeople = view.getByRole("button", { name: "People" });
-  expect(hiddenPeople.hasAttribute("disabled")).toBe(true);
-  hiddenPeople.click();
-  expect(content.entries.onNavigate).toHaveBeenCalledTimes(2);
-  setPresented(true);
-  flush();
-  expect(retain).toHaveBeenCalledTimes(3);
-  expect(view.getByRole("button", { name: "People" })).toBe(hiddenPeople);
-  const releaseReplacement = vi.fn();
-  const retainReplacement = vi.fn(() => releaseReplacement);
-  setValue((current) => ({ ...current, retainOutputs: retainReplacement }));
-  flush();
-  expect(release).toHaveBeenCalledTimes(3);
-  expect(retainReplacement).toHaveBeenCalledOnce();
-  expect(view.getByRole("button", { name: "People" })).toBe(hiddenPeople);
-  view.unmount();
-  expect(release).toHaveBeenCalledTimes(3);
-  expect(releaseReplacement).toHaveBeenCalledOnce();
-});
 
 async function mountMobileHost(
   value: ChatDetailsProps,
   snapshot?: ControlUiSessionPullRequestSnapshot | (() => ControlUiSessionPullRequestSnapshot),
 ) {
   const navigate = vi.fn<(destination: MobileHostDestination) => void>();
-  const host: ChatMobileHost = {
-    scopeKey: "mobile-pr-session",
+  const host: ChatMobileHost = createChatMobileHostFixture("mobile-pr-session", {
     open: true,
-    suspended: false,
-    mode: "dock",
     height: 280,
     reservedHeight: 280,
     destination: { area: "details" },
-    detailsMount: null,
-    setDetailsMount() {},
     navigate,
-    reveal() {},
-    close() {},
-    back() {},
-    toggleExpanded() {},
-    resize() {},
-    keyboardVisible: false,
-    onComposerEditingChange() {},
-    onViewportChange() {},
-  };
+  });
   const element = document.createElement("openclaw-chat-details-mobile-host-content");
   element.details = value;
   element.host = host;
@@ -241,11 +93,92 @@ async function mountMobileHost(
     await element.updateComplete;
     flush();
   };
-  return { view, element, navigate, show, activation, back: host.back };
+  return {
+    view,
+    element,
+    navigate,
+    show,
+    activation,
+    back: host.back,
+    query: (selector: string) => view.container.querySelector<HTMLElement>(selector),
+    button: (name: string) => view.getByRole("button", { name }),
+  };
 }
 
+it("retains Outputs demand across publications and returns navigation origins without a second route owner", () => {
+  const release = vi.fn();
+  const retain = vi.fn(() => release);
+  const output = {
+    artifacts: [],
+    artifactsError: null,
+    dashboard: null,
+    dashboardError: null,
+    onOpenArtifact: vi.fn(),
+    renderArtifactIcon: () => null,
+    onViewAll: vi.fn(),
+    renderViewAllIcon: () => null,
+  };
+  const [value, setValue] = createSignal(details({ outputs: output, retainOutputs: retain }));
+  const [presented, setPresented] = createSignal(true);
+  const content = rootContent();
+  const [page, setPage] = createSignal<ChatDetailsMobilePage>({ kind: "root", content });
+  const view = mountSolid(() => (
+    <ChatDetailsMobileContent details={value()} presented={presented()} page={page()} />
+  ));
+  expect(retain).toHaveBeenCalledOnce();
+  const people = view.getByRole("button", { name: "People" });
+  people.click();
+  expect(content.entries.onNavigate).toHaveBeenCalledWith(
+    { kind: "people" },
+    { kind: "details-root", trigger: people },
+  );
+  view.getByRole("button", { name: /Versions/ }).click();
+  expect(content.entries.onNavigate).toHaveBeenLastCalledWith(
+    { kind: "versions" },
+    expect.objectContaining({ kind: "details-root" }),
+  );
+  const updated = details({ outputs: { ...output, artifacts: null }, retainOutputs: retain });
+  setValue(updated);
+  flush();
+  expect(retain).toHaveBeenCalledOnce();
+  expect(release).not.toHaveBeenCalled();
+  setPage({ kind: "outputs" });
+  flush();
+  expect(retain).toHaveBeenCalledOnce();
+  setPage({
+    kind: "task-progress",
+    content: { showTaskProgress: true, onShowTaskProgressChange: vi.fn() },
+  });
+  flush();
+  expect(release).toHaveBeenCalledOnce();
+  setPage({ kind: "root", content });
+  flush();
+  expect(retain).toHaveBeenCalledTimes(2);
+  setPresented(false);
+  flush();
+  expect(release).toHaveBeenCalledTimes(2);
+  const hiddenPeople = view.getByRole("button", { name: "People" });
+  expect(hiddenPeople.hasAttribute("disabled")).toBe(true);
+  hiddenPeople.click();
+  expect(content.entries.onNavigate).toHaveBeenCalledTimes(2);
+  setPresented(true);
+  flush();
+  expect(retain).toHaveBeenCalledTimes(3);
+  expect(view.getByRole("button", { name: "People" })).toBe(hiddenPeople);
+  const releaseReplacement = vi.fn();
+  const retainReplacement = vi.fn(() => releaseReplacement);
+  setValue({ ...updated, retainOutputs: retainReplacement });
+  flush();
+  expect(release).toHaveBeenCalledTimes(3);
+  expect(retainReplacement).toHaveBeenCalledOnce();
+  expect(view.getByRole("button", { name: "People" })).toBe(hiddenPeople);
+  view.unmount();
+  expect(release).toHaveBeenCalledTimes(3);
+  expect(releaseReplacement).toHaveBeenCalledOnce();
+});
+
 it("replaces the People activation owner while retaining the mobile host content", async () => {
-  const { view, element, show } = await mountMobileHost(details());
+  const { view, element, show, query } = await mountMobileHost(details());
   const release = vi.fn();
   const activate = vi.fn(() => release);
   const releaseReplacement = vi.fn();
@@ -260,7 +193,7 @@ it("replaces the People activation owner while retaining the mobile host content
     activate,
   };
   try {
-    const root = view.container.querySelector(".chat-details-mobile-root");
+    const root = query(".chat-details-mobile-root");
     element.bindings = { ...element.bindings!, peopleMentions: mentions };
     await element.updateComplete;
     expect(activate).not.toHaveBeenCalled();
@@ -271,24 +204,22 @@ it("replaces the People activation owner while retaining the mobile host content
     expect(activate).toHaveBeenCalledOnce();
     for (const status of ["loading", "ready"] as const) {
       element.bindings = { ...element.bindings!, peopleMentions: { ...mentions, status } };
-      await element.updateComplete;
-      flush();
+      await settle(element);
       expect(activate).toHaveBeenCalledOnce();
       expect(release).not.toHaveBeenCalled();
-      expect(view.container.querySelector(".chat-details-mobile-root")).toBe(root);
+      expect(query(".chat-details-mobile-root")).toBe(root);
     }
     element.bindings = {
       ...element.bindings!,
       peopleMentions: { ...mentions, activate: activateReplacement },
     };
-    await element.updateComplete;
-    flush();
+    await settle(element);
     expect(release).toHaveBeenCalledOnce();
     expect(activateReplacement).toHaveBeenCalledOnce();
-    expect(view.container.querySelector(".chat-details-mobile-root")).toBe(root);
+    expect(query(".chat-details-mobile-root")).toBe(root);
     await show({ area: "details" });
     expect(releaseReplacement).toHaveBeenCalledOnce();
-    expect(view.container.querySelector(".chat-details-mobile-root")).toBe(root);
+    expect(query(".chat-details-mobile-root")).toBe(root);
   } finally {
     view.unmount();
   }

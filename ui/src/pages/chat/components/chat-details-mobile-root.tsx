@@ -1,10 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { For, Show, children } from "solid-js";
 import type { CronCompactJob } from "../../../api/types.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
 import { ChatDetailsSubagents, type ChatDetailsSubagentsProps } from "./chat-details-subagents.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import "../../../styles/chat/details-mobile-root.css";
 
 /** Presentation supplied by the domain owner; marks/metadata are noninteractive. */
@@ -12,6 +13,8 @@ export type ChatDetailsMobileEntry = {
   label: string;
   description?: string;
   descriptionLeading?: JSX.Element;
+  /** Supplementary status rendered by the domain owner. */
+  status?: JSX.Element;
   /** Note-only progress is the one root summary that uses ellipsis. */
   truncateDescription?: boolean;
   accessibleLabel?: string;
@@ -33,7 +36,6 @@ type ChatDetailsMobileCollection<T> = {
 
 type ChatDetailsMobileRootDestination =
   | { kind: "people" }
-  | { kind: "context" }
   | { kind: "task-progress" }
   | { kind: "subagents" }
   | { kind: "subagent"; sessionKey: ChatSubagentActivity["key"] }
@@ -42,11 +44,6 @@ type ChatDetailsMobileRootDestination =
   | { kind: "outputs" }
   | { kind: "versions" };
 
-type ChatDetailsMobileRootOrigin = {
-  kind: "details-root";
-  trigger: HTMLButtonElement;
-};
-
 export type ChatDetailsMobileRootProps = {
   /** The mobile host owns hidden/inert, mounting, scroll, focus and navigation retention. */
   presented: boolean;
@@ -54,7 +51,6 @@ export type ChatDetailsMobileRootProps = {
     | "people"
     | "taskProgress"
     | "subagents"
-    | "processes"
     | "environment"
     | "context"
     | "automations"
@@ -69,7 +65,7 @@ export type ChatDetailsMobileRootProps = {
   taskProgress?: ChatDetailsMobileEntry;
   taskProgressNotice?: JSX.Element;
   subagents?: Omit<ChatDetailsSubagentsProps, "mobile" | "collapsed">;
-  /** Mobile content without another section heading or scroll container. */
+  /** Complete Processes section; its owner retains the empty exit envelope. */
   processes?: JSX.Element;
   /** The complete mobile Environment section, including its own heading and group. */
   environment?: JSX.Element;
@@ -78,12 +74,14 @@ export type ChatDetailsMobileRootProps = {
   contributions?: JSX.Element;
   automations?: ChatDetailsMobileCollection<CronCompactJob["id"]>;
   outputs?: ChatDetailsMobileEntry;
-  outputsNotice?: JSX.Element;
   /** Supply even for one version; omission is not a greater-than-one policy. */
   versions?: ChatDetailsMobileEntry;
   onNavigate: (
     destination: ChatDetailsMobileRootDestination,
-    origin: ChatDetailsMobileRootOrigin,
+    origin: {
+      kind: "details-root";
+      trigger: HTMLButtonElement;
+    },
   ) => void;
 };
 
@@ -137,10 +135,7 @@ function RootEntry(props: {
       <span class="chat-details-mobile-root__copy">
         <span
           ref={createTextOverflow(() => props.entry.label)}
-          class={[
-            "chat-details-mobile-root__label",
-            { "chat-details-mobile-root__label--note": props.entry.truncateDescription },
-          ]}
+          class="chat-details-mobile-root__label"
         >
           {props.entry.label}
         </span>
@@ -160,6 +155,7 @@ function RootEntry(props: {
             </span>
           </span>
         </Show>
+        {props.entry.status}
       </span>
       <Show when={props.entry.metadata != null}>
         <span class="chat-details-mobile-root__metadata">{props.entry.metadata}</span>
@@ -172,6 +168,7 @@ function RootEntry(props: {
 /** Mobile root only. Domain owners supply facts; the mobile host records every transition. */
 export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
   const automationsTotal = () => props.automations?.total ?? props.automations?.items.length ?? 0;
+  const automationNotice = children(() => props.automations?.notice);
 
   return (
     <div class="chat-details-mobile-root">
@@ -219,55 +216,58 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
         </RootGroup>
       </Show>
       {props.contributions}
-      <Show when={automationsTotal() > 0 || props.automations?.notice}>
-        <RootGroup name="automations" label={props.labels.automations}>
-          <Show when={props.automations}>
-            {(collection) => (
-              <>
-                <Show
-                  when={automationsTotal() > 1}
-                  fallback={
-                    <For each={collection().items} keyed={(entry) => entry.value}>
-                      {(entry) => (
-                        <RootEntry
-                          entry={entry()}
-                          icon="clock"
-                          destination={{ kind: "automation", jobId: entry().value }}
-                          root={props}
-                        />
-                      )}
-                    </For>
-                  }
-                >
-                  <Show when={automationsTotal() > 0}>
-                    <RootEntry
-                      entry={collection().summary}
-                      icon="clock"
-                      destination={{ kind: "automations" }}
-                      root={props}
-                    />
+      <ChatLazyBoundary>
+        <Show when={automationsTotal() > 0 || automationNotice.toArray().length > 0}>
+          <RootGroup
+            name="automations"
+            label={props.labels.automations}
+            heading={automationsTotal() === 1}
+          >
+            <Show when={props.automations}>
+              {(collection) => (
+                <>
+                  <Show
+                    when={automationsTotal() > 1}
+                    fallback={
+                      <For each={collection().items} keyed={(entry) => entry.value}>
+                        {(entry) => (
+                          <RootEntry
+                            entry={entry()}
+                            icon="clock"
+                            destination={{ kind: "automation", jobId: entry().value }}
+                            root={props}
+                          />
+                        )}
+                      </For>
+                    }
+                  >
+                    <Show when={automationsTotal() > 0}>
+                      <RootEntry
+                        entry={collection().summary}
+                        icon="clock"
+                        destination={{ kind: "automations" }}
+                        root={props}
+                      />
+                    </Show>
                   </Show>
-                </Show>
-                {collection().notice}
-              </>
-            )}
-          </Show>
-        </RootGroup>
-      </Show>
-      <Show when={props.outputs || props.outputsNotice}>
-        <RootGroup name="outputs" label={props.labels.generatedFiles}>
-          <Show when={props.outputs}>
-            {(entry) => (
-              <RootEntry
-                entry={entry()}
-                icon="fileText"
-                destination={{ kind: "outputs" }}
-                root={props}
-              />
-            )}
-          </Show>
-          {props.outputsNotice}
-        </RootGroup>
+                  {automationNotice()}
+                </>
+              )}
+            </Show>
+          </RootGroup>
+        </Show>
+      </ChatLazyBoundary>
+      <Show when={props.outputs}>
+        {(entry) => (
+          <RootGroup name="outputs" label={props.labels.generatedFiles} heading={false}>
+            <RootEntry
+              entry={entry()}
+              icon="fileText"
+              destination={{ kind: "outputs" }}
+              root={props}
+            />
+          </RootGroup>
+        )}
       </Show>
       <Show when={props.versions && props.versions.metadata !== 0 && props.versions}>
         {(entry) => (
@@ -281,11 +281,7 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
           </RootGroup>
         )}
       </Show>
-      <Show when={props.processes}>
-        <RootGroup name="processes" label={props.labels.processes}>
-          {props.processes}
-        </RootGroup>
-      </Show>
+      {props.processes}
     </div>
   );
 }

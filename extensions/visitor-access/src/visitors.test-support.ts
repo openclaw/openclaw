@@ -1,12 +1,13 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { PluginRuntime, PluginStateKeyedStore } from "../api.js";
 import { createVisitorAccessReader } from "./access.js";
 import { VisitorPolicyClient, type VisitorTarget } from "./cloudflare.js";
 import type { VisitorAccessConfig } from "./config.js";
-import { VisitorAccessService, type VisitorGrant } from "./visitors.js";
+import type { VisitorGrant } from "./grant-record.js";
+import { VisitorAccessService } from "./visitors.js";
 
 export const NOW = Date.parse("2026-08-28T12:00:00.000Z");
 export const DAY_MS = 86_400_000;
@@ -27,18 +28,7 @@ export function useVisitorFixtures() {
   });
 }
 
-export function visitorGate() {
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
-}
+export { createAsyncGate as visitorGate } from "../../test-support/async-gate.test-support.js";
 
 export function closeVisitorFixtures(): void {
   services.forEach((service) => service.close());
@@ -80,12 +70,6 @@ export const staffRole: GatewayRoles["definitions"][string] = {
   agents: "*",
   scopes: ["operator.admin"],
 };
-
-function requestUrl(input: Parameters<typeof fetch>[0]): URL {
-  return new URL(input instanceof Request ? input.url : input);
-}
-
-type PolicyFixture = ReturnType<typeof namedPolicy>;
 
 export function namedPolicy(
   targets: VisitorTarget[] = ["first@example.com"],
@@ -144,9 +128,7 @@ export function visitorProfileFixture(
 ) {
   let profiles = initial;
   const response = async (method: string, params?: Record<string, unknown>) => {
-    if (method !== "users.list") {
-      throw new Error("Unexpected Gateway request");
-    }
+    assert.equal(method, "users.list");
     const requested = params?.githubAccountIds;
     return {
       profiles,
@@ -167,13 +149,12 @@ export function visitorProfileFixture(
           .filter((identity) => identity.profileId === profileId)
           .map((identity) => identity.accountId),
       );
-      if (
-        !profile ||
-        emails.some((email) => !profile.emails.includes(email)) ||
-        githubAccountIds?.some((accountId) => !linkedAccounts.has(accountId))
-      ) {
-        throw new Error("Profile bindings changed");
-      }
+      assert(
+        profile &&
+          emails.every((email) => profile.emails.includes(email)) &&
+          !githubAccountIds?.some((accountId) => !linkedAccounts.has(accountId)),
+        "Profile bindings changed",
+      );
     };
     assertCurrent();
     return await run(assertCurrent);
@@ -186,6 +167,7 @@ export function visitorProfileFixture(
     },
     readSessionFacts: unexpected,
     withSessionFacts: unexpected,
+    appendAgentMessage: unexpected,
     openPluginPanel: unexpected,
     withUserProfileIdentity,
     resolveGitHubAccount: async ({ login }) => ({ accountId: 42, login }),
@@ -273,17 +255,13 @@ export function visitorFixture(
   };
   const response = (result: unknown) => Response.json({ success: true, result });
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
-    const url = requestUrl(input);
+    const url = new URL(input instanceof Request ? input.url : input);
     const method = init?.method ?? "GET";
     const collection = url.pathname === policiesPath;
     const detail = url.pathname === `${policiesPath}/visitors`;
-    if (url.origin !== "https://api.cloudflare.com" || !url.pathname.startsWith(policiesPath)) {
-      throw new Error("Unexpected Cloudflare endpoint");
-    }
+    assert(url.origin === "https://api.cloudflare.com" && url.pathname.startsWith(policiesPath));
     if (method === "GET") {
-      if (!collection && !(detail && cloudflare.policy)) {
-        throw new Error("Unknown policy read");
-      }
+      assert(collection || (detail && cloudflare.policy));
       return response(
         collection ? (cloudflare.policy ? [cloudflare.policy] : []) : cloudflare.policy,
       );
@@ -295,10 +273,8 @@ export function visitorFixture(
     if (method === "DELETE" && detail) {
       cloudflare.policy = undefined;
     } else if ((method === "POST" && collection) || (method === "PUT" && detail)) {
-      if (typeof init?.body !== "string") {
-        throw new Error("Expected a JSON policy");
-      }
-      const body = JSON.parse(init.body) as Omit<PolicyFixture, "id">;
+      assert(typeof init?.body === "string");
+      const body = JSON.parse(init.body) as Omit<ReturnType<typeof namedPolicy>, "id">;
       cloudflare.policy = { ...body, id: "visitors" };
     } else {
       throw new Error("Unexpected policy mutation");

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { PRESENTATION_CHANGED_EVENT } from "../../../ui/src/lib/presentation.ts";
 import { ContentPresentation } from "../../../ui/src/lib/solid/presentation.ts";
+import { ChatDetailsDesktopBody } from "../../../ui/src/pages/chat/components/chat-details-desktop-body.tsx";
 import { ChatDetailsSession } from "../../../ui/src/pages/chat/components/chat-details-session.tsx";
 import { disposeSidebarContextLifecycles } from "../../../ui/src/test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext, createSessions } from "../../../ui/src/test-helpers/app-sidebar.ts";
@@ -16,11 +17,12 @@ import { mountSolid } from "../../../ui/src/test-helpers/mount-solid.ts";
 import { mountRepositorySolid } from "../../../ui/src/test-helpers/repository-ci.test-support.tsx";
 import { installRepositoryPresentation } from "../../../ui/src/test-helpers/repository-presentation.test-support.ts";
 import { createSolidApplicationContextProvider } from "../../../ui/src/test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../../ui/src/test-helpers/solid-settle.ts";
 import "./repository-chat.css";
 import "./repository-presentation.css";
-import { flush, waitForSolid } from "../../../ui/src/test-helpers/solid-settle.ts";
 import { ChatPullRequests } from "./api.ts";
 import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
+import { RepositoryEnvironment } from "./repository-environment.tsx";
 import baseStyles from "../../../ui/src/styles/base.css?inline";
 import desktopDetailsStyles from "../../../ui/src/styles/chat/details-desktop.css?inline";
 import detailsStyles from "../../../ui/src/styles/chat/details.css?inline";
@@ -145,17 +147,29 @@ it.each(["props", "owner", "parked"])(
 );
 
 it.each([
-  { viewport: 1440, width: 360, repo: "openclaw" },
-  { viewport: 900, width: 300, repo: "a-very-long-repository-name-that-needs-truncation" },
-  { viewport: 393, width: 360, repo: "openclaw" },
+  { viewport: 1440, width: 360, repo: "openclaw", clipped: false },
+  {
+    viewport: 900,
+    width: 300,
+    repo: "a-very-long-repository-name-that-needs-truncation",
+    clipped: false,
+  },
+  { viewport: 393, width: 360, repo: "openclaw", clipped: false },
+  { viewport: 900, width: 300, repo: "openclaw", clipped: true },
 ])(
-  "keeps compact branch rows horizontal with native menu actions at $viewport/$width",
-  async ({ viewport, width, repo }) => {
+  "keeps the contributed branch row above aligned diff and publication actions at $viewport/$width (clipped: $clipped)",
+  async ({ viewport, width, repo, clipped }) => {
     await page.viewport(viewport, 700);
     document.body.append(container);
     const onPublish = vi.fn();
+    const onSelect = vi.fn();
     const onDismissBranch = vi.fn();
-    const branch = sessionBranch({ repo, branch: "openclaw/custom-snooze-date-time" });
+    const branch = sessionBranch({
+      repo,
+      branch: clipped
+        ? "openclaw/custom-snooze-date-time-with-a-branch-name-that-needs-truncation"
+        : "openclaw/custom-snooze-date-time",
+    });
     const shared = { source: "agent-override" as const, accountId: 1, login: "agent-bot" };
     mounted = mountRepositorySolid(
       () => (
@@ -168,56 +182,76 @@ it.each([
             data-instant
             style={{ position: "relative", width: `${width}px`, "max-width": "none" }}
           >
-            <div class="chat-details-desktop-body">
-              <ChatPullRequests
-                pullRequests={[]}
-                branch={branch}
-                status="ready"
-                compact
-                onDismiss={() => {}}
-                onDismissBranch={onDismissBranch}
-                publication={publication({
-                  onPublish,
-                  onSelect: () => {},
-                  options: {
-                    shared,
-                    personal: {
-                      state: "connected",
-                      generation: "personal",
-                      account: { accountId: 2, login: "alice-tools" },
-                      accessExpiresAtMs: null,
-                      refreshState: "available",
-                      pending: null,
+            <ChatDetailsDesktopBody presented>
+              <RepositoryEnvironment
+                worktree={false}
+                presented
+                {...{
+                  pullRequests: [],
+                  branch,
+                  status: "ready",
+                  onDismiss: () => {},
+                  onDismissBranch,
+                  publication: publication({
+                    onPublish,
+                    onSelect,
+                    options: {
+                      shared,
+                      personal: {
+                        state: "connected",
+                        generation: "personal",
+                        account: { accountId: 2, login: "alice-tools" },
+                        accessExpiresAtMs: null,
+                        refreshState: "available",
+                        pending: null,
+                      },
+                      pendingPersonal: null,
+                      latestShared: null,
                     },
-                    pendingPersonal: null,
-                    latestShared: null,
-                  },
-                  selection: { source: "shared", expected: shared },
-                })}
+                    selection: { source: "shared", expected: shared },
+                  }),
+                }}
               />
-            </div>
+            </ChatDetailsDesktopBody>
           </section>
         </>
       ),
       { container },
     );
-    await waitForSolid(() => expect(container.querySelector(".chat-pr")).not.toBeNull());
-    const row = container.querySelector<HTMLElement>(".chat-pr")!;
-    const label = row.querySelector<HTMLElement>(".chat-pr__link")!;
-    const branchLabel = row.querySelector<HTMLElement>(".chat-pr__branch")!;
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector(".chat-environment__branch .chat-pr__actions-trigger"),
+      ).not.toBeNull(),
+    );
+    const row = container.querySelector<HTMLElement>(".chat-environment__branch")!;
+    const branchLabel = row.querySelector<HTMLElement>(".chat-environment__branch-name")!;
     const diff = row.querySelector<HTMLElement>(".chat-pr__diff")!;
     const trigger = row.querySelector<HTMLButtonElement>(".chat-pr__actions-trigger")!;
+    const publish = page.getByRole("button", { name: "Create PR", exact: true });
+    await expect.element(publish).toBeVisible();
+    const publishButton = row.querySelector<HTMLButtonElement>("button.chat-pr__create")!;
     await expect.element(page.elementLocator(row)).toBeVisible();
     await expect.element(page.elementLocator(trigger)).toBeVisible();
-    expect(row.getBoundingClientRect().height).toBe(32);
+    expect(publishButton.getBoundingClientRect().height).toBe(26);
+    expect(trigger.getBoundingClientRect().width).toBeGreaterThanOrEqual(26);
     expect(row.getBoundingClientRect().left).toBeGreaterThanOrEqual(0);
     expect(row.getBoundingClientRect().right).toBeLessThanOrEqual(viewport);
-    expect(label.textContent).toBe(branch.branch);
+    expect(branchLabel.textContent).toBe(branch.branch);
     expect(row.querySelector(".chat-pr__repo")).toBeNull();
-    expect(label.getBoundingClientRect().right).toBeLessThanOrEqual(
-      diff.getBoundingClientRect().left,
+    expect(
+      Math.abs(branchLabel.getBoundingClientRect().left - diff.getBoundingClientRect().left),
+    ).toBeLessThanOrEqual(1);
+    expect(diff.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      branchLabel.getBoundingClientRect().bottom,
     );
+    expect(
+      diff.getBoundingClientRect().top - branchLabel.getBoundingClientRect().bottom,
+    ).toBeLessThanOrEqual(12);
     expect(diff.getBoundingClientRect().right).toBeLessThanOrEqual(
+      publishButton.getBoundingClientRect().left,
+    );
+    expect(publishButton.getBoundingClientRect().right).toBeLessThanOrEqual(
       trigger.getBoundingClientRect().left,
     );
     expect(diff.textContent).toContain("+2,819");
@@ -229,12 +263,14 @@ it.each([
       Number.parseFloat(getComputedStyle(branchLabel).lineHeight) + 1,
     );
     expect(getComputedStyle(branchLabel).textOverflow).toBe("clip");
-    await waitForSolid(() =>
-      expect(getComputedStyle(branchLabel).maskImage).toContain("linear-gradient"),
-    );
-    expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
+    await waitForSolid(() => {
+      expect(branchLabel.scrollWidth > branchLabel.clientWidth + 1).toBe(clipped);
+      expect(getComputedStyle(branchLabel).maskImage !== "none").toBe(clipped);
+    });
+    expect(branchLabel.parentElement?.getAttribute("title")).toBe(branch.branch);
+    const scrollPort = row.closest<HTMLElement>(".chat-details-desktop-body")!;
+    expect(scrollPort.scrollWidth).toBeLessThanOrEqual(scrollPort.clientWidth + 1);
 
-    const publish = page.getByRole("button", { name: "Publish PR", exact: true });
     const dismiss = page.getByRole("button", {
       name: `Hide ${branch.branch} for this session`,
       exact: true,
@@ -243,11 +279,22 @@ it.each([
     await expect.element(menu).not.toBeVisible();
     trigger.focus();
     await userEvent.keyboard("{Enter}");
-    await expect.element(publish).toBeVisible();
     await expect.element(dismiss).toBeVisible();
+    const personalChoice = page.getByRole("menuitemradio", { name: "@alice-tools", exact: true });
+    await expect.element(personalChoice).toBeVisible();
+    const personalElement = row.querySelector<HTMLElement>(
+      '[role="menuitemradio"][value="personal"]',
+    )!;
+    expect(personalElement.closest('[role="menu"]')).toBe(
+      row.querySelector(".chat-pr-branch-menu"),
+    );
+    await personalChoice.click();
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("personal");
+    await expect.element(menu).not.toBeVisible();
     await publish.click();
     expect(onPublish).toHaveBeenCalledOnce();
     expect(onDismissBranch).not.toHaveBeenCalled();
+    await page.elementLocator(trigger).click();
     await dismiss.click();
     expect(onDismissBranch).toHaveBeenCalledExactlyOnceWith(branch);
     await expect.element(menu).not.toBeVisible();
@@ -306,6 +353,7 @@ it.each([
         pullRequest,
         { ...pullRequest, number: 173825, state, url: pullRequest.url.replace("173824", "173825") },
       ],
+      branch: sessionBranch({ repo, branch: pullRequest.branch, additions: 12, deletions: 3 }),
       status: "ready",
       rateLimited: false,
     }));
@@ -331,7 +379,7 @@ it.each([
     );
     const host = container.querySelector("openclaw-chat-details-session")!;
     await host.updateComplete;
-    await waitForSolid(() => expect(container.querySelector(".chat-pr")).not.toBeNull());
+    await waitForSolid(() => expect(container.querySelector("a.chat-pr__link")).not.toBeNull());
     const group = container.querySelector<HTMLDetailsElement>(
       '[data-details-group="pull-requests"]',
     )!;
@@ -367,14 +415,19 @@ it.each([
     ).toBe(true);
     expect(group.querySelectorAll(".chat-pr")).toHaveLength(2);
     expect(group.querySelectorAll(".chat-pr")[1]?.getAttribute("data-state")).toBe(state);
-    // PR totals stay descriptive; only All changes opens the session diff.
+    // PR totals stay descriptive; the Environment diff opens this session’s changes.
     expect(row.querySelector("button.chat-pr__diff")).toBeNull();
-    const allChanges = container.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
-    expect(allChanges.closest("summary")).toBeNull();
-    expect(allChanges.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    const changes = container.querySelector<HTMLButtonElement>(
+      ".chat-environment__branch button.chat-pr__diff",
+    )!;
+    await expect.element(page.elementLocator(changes)).toBeVisible();
+    expect(changes.textContent).toContain("+12");
+    expect(changes.textContent).toContain("−3");
+    expect(changes.closest("summary")).toBeNull();
+    expect(changes.getBoundingClientRect().bottom).toBeLessThanOrEqual(
       row.getBoundingClientRect().top,
     );
-    await page.elementLocator(allChanges).click();
+    await page.elementLocator(changes).click();
     expect(onOpenSessionDiff).toHaveBeenCalledOnce();
     expect(group.open).toBe(true);
     const summary = group.querySelector<HTMLElement>(":scope > summary")!;
@@ -388,7 +441,7 @@ it.each([
     trigger.focus();
     await userEvent.keyboard("{Enter}");
     const dismiss = page.getByRole("menuitem", {
-      name: "Hide from this session",
+      name: "Hide",
       exact: true,
     });
     await expect.element(dismiss).toBeVisible();
@@ -406,6 +459,13 @@ it.each([
     expect(document.activeElement).toBe(trigger);
     await userEvent.keyboard("{Enter}");
     await expect.element(dismiss).toBeVisible();
+
+    for (const id of ["checks", "monitoring"]) {
+      await page.elementLocator(menu.querySelector<HTMLElement>(`[data-value="${id}"]`)!).click();
+      await expect.poll(() => document.activeElement?.getAttribute("data-value")).toBe("back");
+      await userEvent.keyboard("{Escape}");
+      await expect.poll(() => document.activeElement?.getAttribute("data-value")).toBe(id);
+    }
     host.presented = false;
     await host.updateComplete;
     await expect.poll(() => menu.matches(":popover-open")).toBe(false);

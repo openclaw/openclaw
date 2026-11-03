@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   alertCallArg,
   createTelegramDelivery,
@@ -34,13 +33,9 @@ function skipped(
   };
 }
 
-function withAlerts(
-  run: (context: AlertCase) => Promise<void>,
-  options: Omit<AlertParams[0], "scheduler"> = {},
-) {
+function withAlerts(run: (context: AlertCase) => Promise<void>, options: AlertParams[0] = {}) {
   return withFailureAlertCron(
     {
-      scheduler: createTestGatewayScheduler(),
       failureAlert: { enabled: true, after: 1 },
       ...options,
     },
@@ -219,7 +214,12 @@ describe("CronService failure alerts", () => {
 
         expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining('Automation "work-owned failure" failed 1 times'),
-          { agentId: "work", sessionKey, contextKey: `cron:${job.id}:failure-alert` },
+          {
+            agentId: "work",
+            sessionKey,
+            contextKey: `cron:${job.id}:failure-alert`,
+            jobId: job.id,
+          },
         );
         expect(requestHeartbeat).not.toHaveBeenCalled();
       },

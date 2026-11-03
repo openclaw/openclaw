@@ -21,6 +21,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
 import { createRepositorySessionReadHost } from "./control-ui-session-pr-runtime.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
@@ -51,10 +52,12 @@ export const snapshot: ControlUiSessionPullRequests = {
 export const readerChanges = [
   "unchanged",
   "role",
+  "assignment",
   "connection",
   "profile",
   "visibility",
   "grant",
+  "grant without abort",
   "replacement grant",
 ] as const;
 export type Load = SessionPrLoader;
@@ -84,10 +87,14 @@ export async function createFixture(
   const profile = ensureProfileForEmail(readerEmail);
   const other = ensureProfileForEmail(`publication-owner-${fixtureId}@example.test`);
   const seeded = new Set<string>();
-  const sessionId = `${sessionKey}-${fixtureId}`;
   const readerRole = { agents: ["main"], sessions: { others: "view" as const }, scopes: [scope] };
   const cfg: OpenClawConfig = {
-    gateway: { roles: { default: "reader", definitions: { reader: readerRole } } },
+    gateway: {
+      roles: {
+        default: "reader",
+        definitions: { reader: readerRole, revoked: { ...readerRole, scopes: [] } },
+      },
+    },
   };
   setUserProfileRole(profile.id, "reader");
   setRuntimeConfigSnapshot(cfg);
@@ -133,7 +140,7 @@ export async function createFixture(
     connections.clients.add(client);
     return { client, socket, access };
   };
-  const load = vi.fn<Load>(async () => snapshot);
+  const load = vi.fn<SessionPrLoader>(async () => snapshot);
   if (!useDefaultLoader) {
     spyOnSessionPrLoader(load);
   }
@@ -185,7 +192,7 @@ export async function createFixture(
     profile,
     readerEmail,
     other,
-    sessionId,
+    sessionId: `${sessionKey}-${fixtureId}`,
     cfg,
     seed,
     load,
@@ -200,6 +207,9 @@ export async function createFixture(
         const revoked = structuredClone(cfg);
         revoked.gateway!.roles!.definitions!.reader!.scopes = [];
         setRuntimeConfigSnapshot(revoked);
+      } else if (change === "assignment") {
+        setUserProfileRole(profile.id, "revoked");
+        prepareGatewayRecipientProfile(reader.client);
       } else if (change === "connection") {
         reader.client.invalidated = true;
       } else if (change === "profile") {
@@ -208,6 +218,13 @@ export async function createFixture(
         await seed(key, other.id, { visibility: "draft", updatedAt: 2 });
       } else if (change === "grant") {
         reader.access.abort(new Error("Original access retired"));
+      } else if (change === "grant without abort") {
+        vi.spyOn(
+          reader.client.internal!.operatorAccessAuthority!,
+          "assertCurrent",
+        ).mockImplementation(() => {
+          throw new Error("Original access retired without aborting its signal");
+        });
       } else if (change === "replacement grant") {
         reader.client.internal = {
           ...reader.client.internal,
@@ -269,4 +286,27 @@ export async function createFixture(
       }
     },
   };
+}
+
+export async function withDefaultLoader(
+  provider: typeof fetch,
+  run: (f: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
+) {
+  try {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.stubEnv("GH_TOKEN", "");
+      vi.stubEnv("GITHUB_TOKEN", "");
+      vi.stubGlobal("fetch", provider);
+      const f = await createFixture("operator.read", true);
+      try {
+        await run(f);
+      } finally {
+        await f.close();
+      }
+    });
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  }
 }

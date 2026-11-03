@@ -150,6 +150,7 @@ function resolveAgentRuntimePluginRegistryLoad(
     onlyPluginIds: startupPluginIds === undefined ? undefined : plan.pluginIds,
     channelPluginLoadIntent: startupPluginIds === undefined ? undefined : "full",
     borrowRegistry: params.borrowRegistry,
+    previousRegistry: params.purpose === "model-catalog" ? params.reusableRegistry : undefined,
   };
 }
 
@@ -377,7 +378,9 @@ export async function withAgentPluginRegistry<T>(params: {
       : { metadataSnapshot: loadPluginMetadataSnapshot(params) }),
   });
   // The resolver inherits request or configured scope; an empty override drops hook-only plugins.
-  const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
+  // Gateway ingress runs land here too: load incrementally so a cold registry never holds the
+  // shared event loop for the whole plugin set.
+  const pluginRegistry = await loadAgentRuntimePluginRegistryHandleAsync({
     config: params.config,
     env: context.env,
     metadataSnapshot: context.metadataSnapshot,

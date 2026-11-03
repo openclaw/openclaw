@@ -33,6 +33,7 @@ export async function executeRepositoryPublication(params: {
   source: { url: string; branch: string; requestedRef?: string | null };
   snapshotRoot: string;
   storePath: string;
+  requesterProfileId?: string;
   assertWorkspace: () => void;
   readCurrentEntry: () => InternalSessionEntry | undefined;
   validateAuthority: () => boolean;
@@ -135,6 +136,7 @@ export async function executeRepositoryPublication(params: {
       contentHost: createRepositoryPublicationContentHostV1({
         session,
         accountId: row.identity_account_id,
+        requesterProfileId: params.requesterProfileId,
         storePath: params.storePath,
         config: params.config,
         readCurrentEntry: params.readCurrentEntry,

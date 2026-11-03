@@ -4,6 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import { afterEach, expect, vi } from "vitest";
+import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
@@ -139,9 +140,7 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
     }
   }
   const server = http.createServer(serve);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const origin = await listenLoopback(server);
   cleanups.push(
     () =>
       new Promise<void>((resolve, reject) => {
@@ -149,12 +148,9 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
         server.closeAllConnections();
       }),
   );
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Synthetic Git endpoint has no TCP address");
-  }
-  const endpoint = `http://127.0.0.1:${address.port}/remote.git`;
-  const fetches: { argv: string[]; settled: boolean }[] = [];
+  const endpoint = `${origin}/remote.git`;
+  const fetches: { argv: string[]; settled: boolean; configCount: number; configKeys: string[] }[] =
+    [];
   const failedDiagnostics: string[] = [];
   // Only translate the admitted network boundary. Git transport, authentication,
   // object selection, cancellation, and the emitted pack all execute for real.
@@ -162,7 +158,13 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
     if (!args.includes(URL)) {
       return executeGitCommand(cwd, args, options);
     }
-    const fetch = { argv: [...args], settled: false };
+    const env = { ...options?.baseEnv, ...options?.env };
+    const configCount = Number(env.GIT_CONFIG_COUNT);
+    const configKeys = Array.from(
+      { length: configCount },
+      (_, index) => env[`GIT_CONFIG_KEY_${index}`]!,
+    );
+    const fetch = { argv: [...args], settled: false, configCount, configKeys };
     fetches.push(fetch);
     try {
       const result = await executeGitCommand(
@@ -171,7 +173,15 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
         {
           ...options,
           baseEnv: { ...options?.baseEnv, GIT_ALLOW_PROTOCOL: "http" },
-          env: { ...options?.env, GIT_CONFIG_KEY_2: `http.${endpoint}.extraHeader` },
+          env: {
+            ...Object.fromEntries(
+              Object.entries(options?.env ?? {}).map(([key, value]) => [
+                key,
+                value === `http.${URL}.extraHeader` ? `http.${endpoint}.extraHeader` : value,
+              ]),
+            ),
+            GIT_ALLOW_PROTOCOL: "http",
+          },
         },
       );
       if (result.code !== 0) {

@@ -5,11 +5,11 @@ import type {
   ToolsGitHubStatusResult,
 } from "@openclaw/gateway-protocol";
 import { generateUUID } from "@openclaw/normalization-core/uuid";
+import { createDeferred as createDeferredCore } from "openclaw/plugin-sdk/concurrency-runtime";
 import type {
   ControlUiSettingsClient as GatewayBrowserClient,
   ControlUiSettingsConfigMutation,
 } from "openclaw/plugin-sdk/control-ui";
-import { createSignal, onCleanup } from "solid-js";
 import { createGitHubDeviceAuthorization } from "./github-device-authorization.ts";
 import {
   githubConnectionOwnerKey,
@@ -22,23 +22,22 @@ import {
   type SharedRequestOwner,
 } from "./github-identity-shared.ts";
 
-export type GitHubIdentity = ReturnType<typeof createGitHubIdentity>;
-
 export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
   const t = deps.translate;
   const showConfirmDialog = deps.confirm;
-  const formatUiError = deps.formatError;
   let status: ToolsGitHubStatusResult | null = null;
   let personal: PersonalGitHubStatus | null = null;
   let system: GitHubIdentityFacts | null = null;
-  let loading = false;
-  let busy = false;
+  let readOwner: RequestOwner | null = null;
+  let retirement = createDeferredCore();
+  let statusCompletion: Promise<void> | undefined;
+  let mutationCompletion: Promise<void> | undefined;
   let error: string | null = null;
   let statusReadable = false;
   let configurable = false;
   let authorizable = false;
-  const [tokenRevealed, setTokenRevealed] = createSignal(false);
-  const [patVisible, setPatVisible] = createSignal(false);
+  let tokenRevealed = false;
+  let patVisible = false;
 
   let target: GitHubConnectionTarget | null = null;
   let client: GatewayBrowserClient | null = null;
@@ -55,7 +54,22 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
   let draftDirty = false;
   let configFingerprint = "";
 
-  let publish = () => {};
+  const listeners = new Set<() => void>();
+  const publish = () => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+  const loading = () => readOwner !== null;
+  const busy = () => mutationOwner !== null;
+  function retireRequests() {
+    retirement.resolve();
+    retirement = createDeferredCore();
+    readOwner = null;
+    mutationOwner = null;
+    statusCompletion = undefined;
+    mutationCompletion = undefined;
+  }
 
   const deviceAuthorization = createGitHubDeviceAuthorization({
     ...deps,
@@ -83,6 +97,13 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
   const connectionReady = () => connected && client !== null;
   const readDraft = () =>
     readScope() === "personal" ? readGitHubIdentityDraft(undefined) : selectedDraft;
+
+  const canConfigureSharedIdentity = () =>
+    target?.kind === "shared" &&
+    configurable &&
+    !busy() &&
+    !deviceAuthorization.active() &&
+    !confirmationPending;
 
   function queueVerification() {
     if (
@@ -139,8 +160,8 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
     }
     if (contextChanged) {
       deviceAuthorization.retire(true);
+      retireRequests();
       requestRevision += 1;
-      mutationOwner = null;
       mutationIdentityChanged = false;
     }
     client = params.client;
@@ -176,17 +197,16 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
     displayedIdentityFingerprint = fingerprint;
     const activeMutation = mutationOwner;
     const mutationOwnsIdentityChange =
-      identityChanged && activeMutation !== null && busy && isCurrent(activeMutation);
+      identityChanged && activeMutation !== null && busy() && isCurrent(activeMutation);
     if (mutationOwnsIdentityChange) {
       mutationIdentityChanged = true;
     } else if (identityChanged) {
       requestRevision += 1;
+      retireRequests();
       deviceAuthorization.retire(true);
     }
     if (contextChanged || (identityChanged && !mutationOwnsIdentityChange)) {
-      loading = false;
-      busy = false;
-      setTokenRevealed(false);
+      tokenRevealed = false;
       confirmationPending = false;
     }
     if (presentationChanged || (identityChanged && !mutationOwnsIdentityChange)) {
@@ -194,7 +214,7 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
       personal = null;
       system = null;
       error = null;
-      setPatVisible(false);
+      patVisible = false;
     }
     const selected = nextScope === "personal" ? undefined : values[nextScope];
     const selectedFingerprint = JSON.stringify(selected ?? null);
@@ -218,21 +238,24 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
 
   function showPatFallback() {
     if (configurable && readScope() !== "personal" && !deviceAuthorization.active()) {
-      setPatVisible(true);
+      patVisible = true;
+      publish();
     }
   }
   function hidePatFallback() {
-    if (busy) {
+    if (busy()) {
       return;
     }
-    setPatVisible(false);
-    setTokenRevealed(false);
+    patVisible = false;
+    tokenRevealed = false;
+    publish();
   }
   function toggleTokenVisibility() {
     if (!configurable || readScope() === "personal") {
       return;
     }
-    setTokenRevealed((value) => !value);
+    tokenRevealed = !tokenRevealed;
+    publish();
   }
   function setDraft(field: keyof GitHubIdentityDraft, value: string) {
     if (readScope() === "personal") {
@@ -245,19 +268,19 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
 
   function release() {
     deviceAuthorization.retire(true);
+    retireRequests();
+    listeners.clear();
     requestRevision += 1;
     client = null;
     target = null;
     connected = false;
-    loading = false;
-    busy = false;
-    mutationOwner = null;
     selectedDraft = readGitHubIdentityDraft(undefined);
   }
   function captureRequest(): RequestOwner | null {
     if (!client || !connected || !target) {
       return null;
     }
+    retireRequests();
     return {
       client,
       target:
@@ -278,24 +301,23 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
   }
 
   async function startAuthorization() {
-    if (!authorizable || deviceAuthorization.active() || busy || confirmationPending) {
+    if (!authorizable || deviceAuthorization.active() || busy() || confirmationPending) {
       return;
     }
     const owner = captureRequest();
     if (!owner) {
       return;
     }
-    loading = false;
+    readOwner = null;
     error = null;
-    setPatVisible(false);
-    await deviceAuthorization.start(owner);
+    patVisible = false;
+    await Promise.race([deviceAuthorization.start(owner), retirement.promise]);
   }
 
   function beginMutation(owner: RequestOwner) {
     mutationOwner = owner;
     mutationIdentityChanged = false;
-    loading = false;
-    busy = true;
+    readOwner = null;
     error = null;
     publish();
   }
@@ -309,7 +331,6 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
     if (!isCurrent(owner)) {
       return;
     }
-    busy = false;
     publish();
     if (verifyAfterSettle) {
       queueVerification();
@@ -319,12 +340,15 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
   async function runMutation(owner: RequestOwner, run: () => Promise<boolean>): Promise<boolean> {
     beginMutation(owner);
     let succeeded = false;
+    const result = Promise.race([run(), retirement.promise.then(() => false)]);
+    mutationCompletion = result.then(() => undefined);
+    // Imperative callers keep their admission API; the native boundary owns failures.
+    void mutationCompletion.catch(() => {});
+    publish();
     try {
-      succeeded = await run();
-    } catch (cause) {
-      if (isCurrent(owner)) {
-        error = formatUiError(cause);
-      }
+      succeeded = await result;
+    } catch {
+      // The actual completion receipt preserves the current failure for the renderer.
     } finally {
       finishMutation(owner, succeeded);
     }
@@ -356,25 +380,38 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
     acceptSharedStatus(owner, nextStatus);
     selectedDraft = nextDraft;
     draftDirty = false;
-    setTokenRevealed(false);
-    setPatVisible(false);
+    tokenRevealed = false;
+    patVisible = false;
     error = refreshError
       ? `GitHub identity was updated, but its configuration refresh failed: ${refreshError}`
       : null;
   }
 
-  async function verify() {
-    if (!statusReadable || loading || busy || confirmationPending || deviceAuthorization.active()) {
-      return;
+  function verify() {
+    if (
+      !statusReadable ||
+      loading() ||
+      busy() ||
+      confirmationPending ||
+      deviceAuthorization.active()
+    ) {
+      return undefined;
     }
     const owner = captureRequest();
     if (!owner) {
-      return;
+      return undefined;
     }
     verificationRequested = true;
-    loading = true;
+    readOwner = owner;
     error = null;
+    const result = readStatus(owner);
+    statusCompletion = Promise.race([result, retirement.promise]);
+    void statusCompletion.catch(() => {});
     publish();
+    return statusCompletion;
+  }
+
+  async function readStatus(owner: RequestOwner) {
     try {
       if (owner.target.kind === "personal") {
         const result = await owner.client.request<UsersGitHubStatusResult>(
@@ -401,18 +438,18 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
       }
     } catch (cause) {
       if (isCurrent(owner)) {
-        error = formatUiError(cause);
+        throw cause;
       }
     } finally {
       if (isCurrent(owner)) {
-        loading = false;
+        readOwner = null;
         publish();
       }
     }
   }
 
   async function disconnect() {
-    if (target?.kind !== "personal" || !authorizable || busy || deviceAuthorization.active()) {
+    if (target?.kind !== "personal" || !authorizable || busy() || deviceAuthorization.active()) {
       return;
     }
     const owner = captureRequest();
@@ -428,18 +465,12 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
       return true;
     });
     if (succeeded && isCurrent(owner)) {
-      await verify();
+      await verify()?.catch(() => {});
     }
   }
 
   async function configure() {
-    if (
-      target?.kind !== "shared" ||
-      !configurable ||
-      busy ||
-      deviceAuthorization.active() ||
-      confirmationPending
-    ) {
+    if (!canConfigureSharedIdentity()) {
       return;
     }
     const draft = { ...readDraft() };
@@ -457,69 +488,51 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
     const name = draft.name.trim();
     const email = draft.email.trim();
     await runMutation(owner, async () => {
-      const result = await runExternalMutation(
-        async (mutationClient) => {
-          const secretName = `github-setup-${generateUUID().replaceAll("-", "").toLowerCase()}`;
-          let stored = false;
-          try {
-            await mutationClient.request("secrets.store.set", {
-              name: secretName,
-              value: draft.token,
-              kind: "secret",
-              allowedHosts: [],
-            });
-            stored = true;
-            if (!isCurrent(owner) || !configurable) {
-              throw new Error("Access changed before the GitHub identity update started.");
-            }
-            const configuredStatus = await mutationClient.request<ToolsGitHubStatusResult>(
-              "tools.github.configure",
-              {
-                scope: owner.target.scope,
-                agentId: owner.target.agentId,
-                mode: "managed",
-                secretName,
-                ...(name || email
-                  ? { gitAuthor: { ...(name ? { name } : {}), ...(email ? { email } : {}) } }
-                  : {}),
-              },
-            );
-            stored = false;
-            return configuredStatus;
-          } finally {
-            if (stored) {
-              await mutationClient
-                .request("secrets.store.delete", { name: secretName })
-                .catch(() => undefined);
-            }
-          }
-        },
-        {
-          canDispatch: () => isCurrent(owner) && configurable,
-          dispatchError: "Access changed before the GitHub identity update started.",
-        },
-      );
-      if (!result.ok) {
-        throw new Error(result.error);
+      const secretName = `github-setup-${generateUUID().replaceAll("-", "").toLowerCase()}`;
+      let stored = false;
+      try {
+        await owner.client.request("secrets.store.set", {
+          name: secretName,
+          value: draft.token,
+          kind: "secret",
+          allowedHosts: [],
+        });
+        stored = true;
+        if (!isCurrent(owner)) {
+          return false;
+        }
+        const result = await runConfigureMutation(owner, runExternalMutation, {
+          scope: owner.target.scope,
+          agentId: owner.target.agentId,
+          mode: "managed",
+          secretName,
+          ...(name || email
+            ? { gitAuthor: { ...(name ? { name } : {}), ...(email ? { email } : {}) } }
+            : {}),
+        });
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        stored = false;
+        applyMutationStatus(
+          owner,
+          result.value,
+          { ...draft, token: "" },
+          result.refresh.ok ? null : result.refresh.error,
+        );
+        return true;
+      } finally {
+        if (stored) {
+          await owner.client
+            .request("secrets.store.delete", { name: secretName })
+            .catch(() => undefined);
+        }
       }
-      applyMutationStatus(
-        owner,
-        result.value,
-        { ...draft, token: "" },
-        result.refresh.ok ? null : result.refresh.error,
-      );
-      return true;
     });
   }
 
   async function inherit() {
-    if (
-      target?.kind !== "shared" ||
-      !configurable ||
-      busy ||
-      deviceAuthorization.active() ||
-      confirmationPending
-    ) {
+    if (!canConfigureSharedIdentity()) {
       return;
     }
     const captured = captureRequest();
@@ -551,7 +564,13 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
         confirmationPending = false;
       }
     }
-    if (!confirmed || !isCurrent(owner) || !configurable || busy || deviceAuthorization.active()) {
+    if (
+      !confirmed ||
+      !isCurrent(owner) ||
+      !configurable ||
+      busy() ||
+      deviceAuthorization.active()
+    ) {
       return;
     }
     await runMutation(owner, async () => {
@@ -582,6 +601,9 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
   ) {
     return runExternalMutation(
       (current) => {
+        if (!isCurrent(owner) || !configurable) {
+          throw new Error("Connection changed before the GitHub identity update started.");
+        }
         return current.request<ToolsGitHubStatusResult>("tools.github.configure", params);
       },
       {
@@ -591,21 +613,27 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
     );
   }
   function ensureVerified() {
-    if (statusReadable && !(readScope() === "personal" ? personal : status) && !loading && !error) {
+    if (
+      statusReadable &&
+      !(readScope() === "personal" ? personal : status) &&
+      !loading() &&
+      !statusCompletion &&
+      !mutationCompletion
+    ) {
       void verify();
     }
   }
-  // Admission and drafts are synchronous; this projection only publishes their outcomes.
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const readProjection = () => {
-    revision();
+  function read() {
     return {
       status,
       personal,
       system,
-      loading,
-      busy,
+      loading: loading(),
+      busy: busy(),
       error,
+      statusCompletion,
+      mutationCompletion,
+      completion: mutationCompletion ?? statusCompletion,
       statusReadable,
       configurable,
       authorizable,
@@ -614,16 +642,19 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
       draft: readDraft(),
       authorization: deviceAuthorization.state(),
       authorizationActive: deviceAuthorization.active(),
+      tokenRevealed,
+      patVisible,
     };
-  };
-  publish = () => setRevision((value) => value + 1);
-  onCleanup(release);
+  }
   return {
-    read: () => ({
-      ...readProjection(),
-      tokenRevealed: tokenRevealed(),
-      patVisible: patVisible(),
-    }),
+    read,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    dispose: release,
     sync,
     ensureVerified,
     verify,
@@ -632,9 +663,11 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies) {
     hidePatFallback,
     toggleTokenVisibility,
     startAuthorization,
-    cancelAuthorization: deviceAuthorization.cancel,
+    cancelAuthorization: () => Promise.race([deviceAuthorization.cancel(), retirement.promise]),
     configure,
     inherit,
     disconnect,
   };
 }
+
+export type GitHubIdentity = ReturnType<typeof createGitHubIdentity>;

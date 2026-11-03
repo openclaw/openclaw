@@ -44,36 +44,28 @@ async function expectFiles(root: string, files: Record<string, string>) {
   expect(Object.fromEntries(names.map((name, i) => [name, contents[i]]))).toEqual(files);
 }
 
-type FilePatchCase = {
-  name: string;
-  hunks: string;
-  files: Record<string, string>;
-  move?: string;
-};
-
 describe("applyPatch preflight", () => {
   it.each([
-    {
-      name: "a delete before an update of a missing file",
-      input: patch("*** Delete File: important.txt", update("missing.txt", "old", "new")),
-      error: /Failed to read file to update .*missing\.txt/,
-    },
-    {
-      name: "an add and an update before a context mismatch",
-      input: patch(
+    [
+      "missing file",
+      patch("*** Delete File: important.txt", update("missing.txt", "old", "new")),
+      /Failed to read file to update .*missing\.txt/,
+    ],
+    [
+      "context mismatch",
+      patch(
         "*** Add File: created.txt\n+created",
         update("important.txt", "irreplaceable", "rewritten"),
         update("important.txt", "not in the file", "changed"),
       ),
-      error: /Failed to find expected lines in .*important\.txt/,
-    },
-  ])("leaves the workspace unchanged when $name rejects", async ({ input, error }) => {
+      /Failed to find expected lines in .*important\.txt/,
+    ],
+  ] as const)("leaves the workspace unchanged on %s", async (_name, input, error) => {
     await fs.writeFile(path.join(dir, "important.txt"), "irreplaceable\n");
 
     await expect(applyPatch(input, { cwd: dir })).rejects.toThrow(error);
 
-    expect(await fs.readdir(dir)).toEqual(["important.txt"]);
-    expect(await fs.readFile(path.join(dir, "important.txt"), "utf8")).toBe("irreplaceable\n");
+    await expectFiles(dir, { "important.txt": "irreplaceable\n" });
   });
 
   it("updates files that earlier hunks in the same patch add or change", async () => {
@@ -188,22 +180,22 @@ describe("applyPatch preflight", () => {
     await expect(fs.readFile(target, "utf8")).resolves.toBe("keep\n");
   });
 
-  it.runIf(process.platform !== "win32").each<FilePatchCase>([
-    {
-      name: "a replaced link apart from its old target",
-      hunks: [
+  it.runIf(process.platform !== "win32").each([
+    [
+      "replacement apart from old target",
+      [
         "*** Add File: link.txt\n+draft",
         update("target.txt", "keep", "kept"),
         update("link.txt", "draft", "final"),
       ].join("\n"),
-      files: { "link.txt": "final\n", "target.txt": "kept\n" },
-    },
-    {
-      name: "a move of the old target onto the link path",
-      hunks: "*** Update File: target.txt\n*** Move to: link.txt\n@@\n-keep\n+moved",
-      files: { "link.txt": "moved\n" },
-    },
-  ])("stages $name after deleting an in-workspace symlink", async ({ hunks, files }) => {
+      { "link.txt": "final\n", "target.txt": "kept\n" },
+    ],
+    [
+      "move of old target",
+      "*** Update File: target.txt\n*** Move to: link.txt\n@@\n-keep\n+moved",
+      { "link.txt": "moved\n" },
+    ],
+  ] as const)("stages %s after deleting a symlink", async (_name, hunks, files) => {
     const { link } = await symlink(dir);
     await execute(dir, patch("*** Delete File: link.txt", hunks));
 
@@ -211,47 +203,45 @@ describe("applyPatch preflight", () => {
     await expectFiles(dir, files);
   });
 
-  it.each<FilePatchCase>([
-    {
-      name: "re-creates a hardlinked path",
-      hunks: "*** Add File: alias.txt\n+new",
-      files: { "alias.txt": "new\n", "original.txt": "keep\n" },
-    },
-    {
-      name: "updates the other name of a hardlink",
-      hunks: update("original.txt", "keep", "changed"),
-      files: { "original.txt": "changed\n" },
-    },
-  ])("$name after the same patch deletes one name", async ({ hunks, files }) => {
+  it.each([
+    [
+      "re-creates path",
+      "*** Add File: alias.txt\n+new",
+      { "alias.txt": "new\n", "original.txt": "keep\n" },
+    ],
+    [
+      "updates other name",
+      update("original.txt", "keep", "changed"),
+      { "original.txt": "changed\n" },
+    ],
+  ] as const)("%s after deleting a hardlink name", async (_name, hunks, files) => {
     await hardlink(dir);
     await execute(dir, patch("*** Delete File: alias.txt", hunks));
     await expectFiles(dir, files);
   });
 
-  it.each<FilePatchCase>([
-    {
-      name: "updates the other name with contents written through the first",
-      hunks: update("alias.txt", "two", "three"),
-      files: { "alias.txt": "three\n", "original.txt": "three\n" },
-    },
-    {
-      name: "updates the other name after deleting the first",
-      hunks: "*** Delete File: original.txt\n*** Update File: alias.txt\n@@\n-two\n+three",
-      files: { "alias.txt": "three\n" },
-    },
-    {
-      name: "keeps the other name's contents when the first is moved away",
-      hunks: update("alias.txt", "one", "kept"),
-      move: "*** Move to: moved.txt\n",
-      files: { "alias.txt": "kept\n", "moved.txt": "two\n" },
-    },
-  ])("$name after an update through one name of a hardlink", async ({ hunks, move, files }) => {
+  it.each([
+    [
+      "updates other name",
+      update("alias.txt", "two", "three"),
+      "",
+      { "alias.txt": "three\n", "original.txt": "three\n" },
+    ],
+    [
+      "deletes first name",
+      "*** Delete File: original.txt\n*** Update File: alias.txt\n@@\n-two\n+three",
+      "",
+      { "alias.txt": "three\n" },
+    ],
+    [
+      "moves first name",
+      update("alias.txt", "one", "kept"),
+      "*** Move to: moved.txt\n",
+      { "alias.txt": "kept\n", "moved.txt": "two\n" },
+    ],
+  ] as const)("%s after updating a hardlink", async (_name, hunks, move, files) => {
     await hardlink(dir, "one\n");
-    await execute(
-      dir,
-      patch(`*** Update File: original.txt\n${move ?? ""}@@\n-one\n+two`, hunks),
-      false,
-    );
+    await execute(dir, patch(`*** Update File: original.txt\n${move}@@\n-one\n+two`, hunks), false);
     await expectFiles(dir, files);
   });
 
@@ -315,7 +305,9 @@ describe("applyPatch preflight", () => {
       await fs.writeFile(path.join(dir, "unrelated.txt"), "keep\n", "utf8");
       const input = patch("*** Delete File: unrelated.txt", update("link.txt", "keep", "changed"));
 
-      await expect(applyPatch(input, { cwd: dir })).rejects.toThrow(/sandbox root/);
+      await expect(applyPatch(input, { cwd: dir, workspaceOnly: true })).rejects.toThrow(
+        /sandbox root/,
+      );
 
       await expect(fs.readFile(path.join(dir, "unrelated.txt"), "utf8")).resolves.toBe("keep\n");
     },

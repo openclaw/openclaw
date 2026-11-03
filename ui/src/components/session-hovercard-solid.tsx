@@ -1,39 +1,168 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { createMemo, For, Show, useContext } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createMemo, createSignal, For, onSettled, Show, useContext } from "solid-js";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { registerSessionHovercardEnglish } from "../i18n/locales/en-session-hovercard.ts";
+import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
 import { i18nRevision, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { sessionOwnerInitials } from "../lib/session-owner.ts";
 import { PluginContributions } from "../plugins/control-ui-contributions.solid.tsx";
+import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { PersonAvatarLink, PersonName } from "./person-activity-link-solid.tsx";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createHovercardControlRef, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
-import { SessionColorDot } from "./session-color.tsx";
 import {
-  SessionHovercardContext,
-  type SessionHovercardContextInput,
-} from "./session-hovercard-context-solid.tsx";
-import { participantLabel, formatSessionAge, sessionAttribution } from "./session-hovercard.ts";
+  participantLabel,
+  formatSessionAge,
+  sessionAttribution,
+  writeHovercardExcerpt,
+} from "./session-hovercard.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import { progressCardHeadsUp } from "./session-progress-card.ts";
 import { ChannelAvatar } from "./solid/channel-avatar.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { ViewerAvatar, ViewerFacepile } from "./solid/viewer-facepile.tsx";
 import "./session-hovercard.css";
 import "./tooltip.ts";
-import { ViewerAvatar, ViewerFacepile } from "./solid/viewer-facepile.tsx";
+
+registerEnglishCatalog(registerSessionProgressEnglish);
+
+function ContextRow(props: {
+  icon: JSX.Element;
+  value: JSX.Element;
+  label: string;
+  title?: string;
+  end?: JSX.Element;
+}) {
+  return (
+    <div class="session-hovercard__context-row" aria-label={props.label} title={props.title}>
+      <span class="session-hovercard__context-icon" aria-hidden="true">
+        {props.icon}
+      </span>
+      <span class="session-hovercard__context-value session-hovercard__context-text">
+        {props.value}
+      </span>
+      {props.end}
+    </div>
+  );
+}
+
+function ProgressHeadsUp(props: { headsUp: ReturnType<typeof progressCardHeadsUp> }) {
+  const statusLabel = () =>
+    t(
+      props.headsUp?.status === "in_progress"
+        ? "sessionProgressCard.status.inProgress"
+        : props.headsUp?.status === "paused"
+          ? "sessionProgressCard.status.paused"
+          : "sessionProgressCard.status.pending",
+    );
+  return (
+    <Show when={props.headsUp}>
+      <div
+        class="session-hovercard__context-row session-hovercard__plan-row"
+        aria-label={t("sessionProgressCard.stepLabel", {
+          status: statusLabel(),
+          step: props.headsUp?.step ?? "",
+        })}
+        title={props.headsUp?.step}
+      >
+        <span class="session-hovercard__context-icon" aria-hidden="true">
+          <Show when={props.headsUp?.status === "in_progress"} fallback={<Icon name="clock" />}>
+            <span class="session-run-spinner" />
+          </Show>
+        </span>
+        <span class="session-hovercard__context-value session-hovercard__plan-step">
+          {props.headsUp?.step}
+        </span>
+        <span class="session-hovercard__plan-count">
+          {props.headsUp?.completed}/{props.headsUp?.total}
+        </span>
+      </div>
+    </Show>
+  );
+}
+
+function SessionHovercardContext(props: { row?: SidebarSessionHovercardRow }) {
+  const context = () => props.row?.workContext;
+  const contextLabel = () =>
+    t(
+      context()?.kind === "project"
+        ? "sessionHovercard.projectLabel"
+        : "sessionHovercard.workspaceLabel",
+    );
+  const directory = () => {
+    const current = context();
+    return current?.kind === "project" ? current.cwd : current?.path;
+  };
+  const projectLocation = () => directory() ?? context()?.path;
+  const name = () => context()?.name;
+  const branch = () => {
+    const current = context();
+    return current?.kind === "project" ? current.branch : undefined;
+  };
+  const locationLabel = () =>
+    [
+      `${contextLabel()}: ${name() ?? ""}`,
+      branch() ? `${t("sessionHovercard.branchLabel")}: ${branch()}` : "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+  const placement = createMemo(() =>
+    props.row?.placementProviderId && props.row.placementProfileId
+      ? {
+          label: `${props.row.placementProviderId} · ${props.row.placementProfileId}`,
+          title: t("sessionHovercard.runsOn", {
+            providerId: props.row.placementProviderId,
+            profileId: props.row.placementProfileId,
+          }),
+        }
+      : undefined,
+  );
+  return (
+    <div class="session-hovercard__context">
+      <Show when={name()}>
+        <ContextRow
+          icon={<Icon name={branch() ? "gitBranch" : "folder"} />}
+          value={
+            <>
+              {name()}
+              <Show when={branch()}>
+                {" "}
+                <span class="session-hovercard__context-separator">/</span> {branch()}
+              </Show>
+            </>
+          }
+          label={locationLabel()}
+          title={projectLocation() ? `${contextLabel()}: ${projectLocation()}` : undefined}
+        />
+      </Show>
+      <Show when={placement()}>
+        <ContextRow
+          icon={<Icon name="server" />}
+          value={placement()?.label ?? ""}
+          label={placement()?.title ?? ""}
+          title={placement()?.title}
+        />
+      </Show>
+    </div>
+  );
+}
 
 registerEnglishCatalog(registerSessionHovercardEnglish);
 
 const MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS = 4;
 type SessionHovercardAvatarAuth = { authTokens: readonly string[]; authReady: boolean };
-export type SessionHovercardInput = SessionHovercardContextInput & {
+export type SessionHovercardInput = {
+  row?: SidebarSessionHovercardRow;
   selfUserId?: string;
   avatarAuth?: SessionHovercardAvatarAuth;
   personActivity?: PersonActivityRouting;
   session?: { sessionKey: string; agentId?: string };
   onContentChange?: (phase: "before" | "after") => void;
   progressCard?: ProgressCard | null;
+  connected?: boolean;
 };
 function ParticipantLink(props: {
   participant: SessionParticipant;
@@ -250,43 +379,56 @@ function Header(props: SessionHovercardInput) {
   };
   return (
     <header class="session-hovercard__header">
-      <span class="session-hovercard__heading">
-        <Show when={channel()}>
-          <span class="session-hovercard__channel">
-            <span aria-hidden="true">
-              <Icon name="link" />
-            </span>
-            {t("sessionHovercard.linkedChannel", { channel: channel()?.channelLabel ?? "" })}
+      <Show when={channel()}>
+        <span class="session-hovercard__channel">
+          <span aria-hidden="true">
+            <Icon name="link" />
           </span>
-        </Show>
-        <span class="session-hovercard__title">
-          <SessionColorDot value={props.row?.color} />
-          {props.row?.label}
+          {t("sessionHovercard.linkedChannel", { channel: channel()?.channelLabel ?? "" })}
         </span>
-        <Show when={channel()} fallback={<SessionAttribution {...props} />}>
-          <span class="session-hovercard__conversation">
-            <Show when={channel()?.kind} keyed>
-              {(kind) => (
-                <span>
-                  {channel()?.topicId
-                    ? t("sessionHovercard.topicNumber", { id: channel()?.topicId ?? "" })
-                    : t(`sessionHovercard.chatKinds.${kind}`)}
-                </span>
-              )}
-            </Show>
-            <For each={details()}>{(detail) => <span>{detail}</span>}</For>
-            <Show when={channel()?.account} keyed>
-              {(account) => <span>{t("sessionHovercard.viaAccount", { account })}</span>}
-            </Show>
-          </span>
-        </Show>
-      </span>
+      </Show>
+      <span class="session-hovercard__title">{props.row?.label}</span>
       <Show when={age()}>
         <span class="session-hovercard__created-age" title={age(true)}>
           {age()}
         </span>
       </Show>
+      <Show when={channel()} fallback={<SessionAttribution {...props} />}>
+        <span class="session-hovercard__conversation">
+          <Show when={channel()?.kind} keyed>
+            {(kind) => (
+              <span>
+                {channel()?.topicId
+                  ? t("sessionHovercard.topicNumber", { id: channel()?.topicId ?? "" })
+                  : t(`sessionHovercard.chatKinds.${kind}`)}
+              </span>
+            )}
+          </Show>
+          <For each={details()}>{(detail) => <span>{detail}</span>}</For>
+          <Show when={channel()?.account} keyed>
+            {(account) => <span>{t("sessionHovercard.viaAccount", { account })}</span>}
+          </Show>
+        </span>
+      </Show>
     </header>
+  );
+}
+
+function HovercardExcerpt(props: { text: string }) {
+  let element!: HTMLDivElement;
+  createLayoutMeasurement(
+    () => props.text,
+    (text) => () => writeHovercardExcerpt(element, text!),
+    { targets: () => [element], fonts: true, changeTiming: "sync" },
+  );
+  return (
+    <div
+      class="session-hovercard__excerpt"
+      dir="auto"
+      ref={(node) => {
+        element = node;
+      }}
+    />
   );
 }
 
@@ -297,52 +439,53 @@ export function SessionHovercard(props: SessionHovercardInput) {
       props.progressCard,
       props.row?.status,
       props.row?.startedAt,
-      props.row?.hasActiveRun ?? false,
+      props.connected !== false &&
+        (props.row?.gatewayHasActiveRun ?? props.row?.hasActiveRun) === true,
+      props.connected !== false && props.row?.hasActiveSubagentRun === true,
+      props.row?.endedAt,
     ),
   );
   const hasContext = () =>
     Boolean(
-      props.row?.workContext ||
-      (props.row?.placementProviderId && props.row?.placementProfileId) ||
-      props.row?.boardFace === "dashboard" ||
-      (props.row?.hasAutomation && props.automationLink) ||
-      headsUp(),
+      props.row?.workContext || (props.row?.placementProviderId && props.row?.placementProfileId),
     );
+  const commentary = () => props.progressCard?.markdown?.trim() || undefined;
   const preview = () =>
     props.progressCard ? undefined : props.row?.lastMessagePreview?.trim() || undefined;
+  const nativeContent = () => Boolean(props.row || hasContext() || props.progressCard);
+  const [contributionPresent, setContributionPresent] = createSignal(false, { ownedWrite: true });
   return (
-    <Show when={Boolean(props.row || props.session || props.progressCard)}>
-      <div class="session-hovercard">
-        <Show when={props.row}>
-          <section class="session-hovercard__section session-hovercard__section--header">
-            <Header {...props} />
-          </section>
-        </Show>
-        <Show when={hasContext()}>
-          <section class="session-hovercard__section session-hovercard__section--metadata">
-            <SessionHovercardContext
-              row={props.row}
-              automationLink={props.automationLink}
-              headsUp={headsUp()}
-            />
-          </section>
+    <Show when={Boolean(props.row || props.session || hasContext() || props.progressCard)}>
+      <div class="session-hovercard" hidden={!nativeContent() && !contributionPresent()}>
+        <Show when={props.row || hasContext()}>
+          <div class="session-hovercard__top">
+            <Show when={props.row}>
+              <section class="session-hovercard__section session-hovercard__section--header">
+                <Header {...props} />
+              </section>
+            </Show>
+            <Show when={hasContext()}>
+              <section class="session-hovercard__section session-hovercard__section--metadata">
+                <SessionHovercardContext row={props.row} />
+              </section>
+            </Show>
+          </div>
         </Show>
         <Show when={props.session}>
           {(session) => (
             <PluginContributions
               kind="session-hovercard"
-              agentId={session().agentId ?? ""}
               sessionKey={session().sessionKey}
+              agentId={session().agentId}
               presented={true}
               registerControls={controls?.registerSource}
               onContentChange={props.onContentChange}
+              onPresenceChange={(present) => {
+                setContributionPresent(present);
+                onSettled(() => props.onContentChange?.("after"));
+              }}
             />
           )}
-        </Show>
-        <Show when={preview()}>
-          <section class="session-hovercard__section session-hovercard__section--optional">
-            <div class="session-hovercard__excerpt">{preview()}</div>
-          </section>
         </Show>
         <Show when={props.row?.attention?.kind === "error"}>
           <section class="session-hovercard__section session-hovercard__error">
@@ -354,17 +497,30 @@ export function SessionHovercard(props: SessionHovercardInput) {
             </span>
           </section>
         </Show>
-        <Show when={props.progressCard?.markdown?.trim()}>
+        <Show when={commentary() || headsUp()}>
           <section
-            class="session-hovercard__section session-hovercard__notepad"
+            class="session-hovercard__section session-hovercard__task session-hovercard__notepad"
             aria-label={t("sessionHovercard.agentNotepad")}
           >
-            <div class="session-hovercard__notepad-title">{t("sessionHovercard.agentNotepad")}</div>
-            <ProgressCardMarkdown
-              markdown={props.progressCard?.markdown}
-              promoteProgress
-              registerControls={controls?.registerSource}
-            />
+            <div class="session-hovercard__section-title session-hovercard__notepad-title">
+              {t("sessionHovercard.agentNotepad")}
+            </div>
+            <Show when={commentary()}>
+              <div class="session-hovercard__commentary">
+                <ProgressCardMarkdown
+                  markdown={props.progressCard?.markdown}
+                  omitProgress
+                  previewLines={3}
+                  registerControls={controls?.registerSource}
+                />
+              </div>
+            </Show>
+            <ProgressHeadsUp headsUp={headsUp()} />
+          </section>
+        </Show>
+        <Show when={preview()}>
+          <section class="session-hovercard__section session-hovercard__task">
+            <HovercardExcerpt text={preview()!} />
           </section>
         </Show>
         <Show

@@ -11,8 +11,18 @@ function mode(sidebar: Parameters<typeof settleRoster>[0], sidebarAgentsMode: "c
   return settleRoster(sidebar);
 }
 
-function railPin(sidebar: HTMLElement, key: string) {
-  return sidebar.querySelector(`.sidebar-rail [data-sidebar-entry="session:${key}"]`);
+function pinnedRow(sidebar: HTMLElement, key: string) {
+  return sidebar.querySelector(
+    `[data-session-section="pinned"] .sidebar-recent-session[data-session-key="${key}"]`,
+  );
+}
+
+function pinnedKeys(sidebar: HTMLElement) {
+  return [
+    ...sidebar.querySelectorAll<HTMLElement>(
+      '[data-session-section="pinned"] .sidebar-recent-session',
+    ),
+  ].map((row) => row.dataset.sessionKey);
 }
 
 function expectChipPin(sidebar: HTMLElement) {
@@ -25,7 +35,7 @@ function expectChipPin(sidebar: HTMLElement) {
 }
 
 describe("AppSidebar agent roster pins", () => {
-  it("keeps cross-agent icon shortcuts in saved order with their session glyphs and routes", async () => {
+  it("lists cross-agent pins in saved order in the Pinned section, not the rail", async () => {
     const avatarRoute = "/avatar/working?v=pinned-roster";
     const parentKey = "agent:working:pinned";
     const childKey = "agent:recent:recent";
@@ -61,15 +71,21 @@ describe("AppSidebar agent roster pins", () => {
     await mode(sidebar, "roster");
 
     const rail = dom.all<HTMLElement>(".sidebar-rail [data-sidebar-entry]");
-    expect([...rail].map(({ dataset }) => dataset.sidebarEntry)).toEqual(entries);
+    expect([...rail].map(({ dataset }) => dataset.sidebarEntry)).toEqual([
+      "route:usage",
+      "route:plugins",
+    ]);
+    const pinned = entries.flatMap((entry) =>
+      entry.startsWith("session:") ? [entry.slice("session:".length)] : [],
+    );
+    expect(pinnedKeys(sidebar)).toEqual(pinned);
     for (const [id, face] of [
       ["working", `img.identity-avatar__image[src="${avatarRoute}"]`],
       ["main", '[data-avatar="⚓"]'],
       ["recent", ".identity-avatar__agent-face"],
     ] as const) {
-      const pin = railPin(sidebar, `agent:${id}:pinned`)!;
+      const pin = pinnedRow(sidebar, `agent:${id}:pinned`)!;
       expect(pin.closest("[data-agent-group]")).toBeNull();
-      expect(pin.querySelector(".sidebar-recent-session")).toBeNull();
       expect(pin.querySelector(".session-glyph__emoji")?.textContent).toBe("⭐");
       expect(pin.querySelector<HTMLAnchorElement>("a")?.pathname).toBe(`/chat/${id}/pinned`);
       const avatar = dom.query(
@@ -77,16 +93,19 @@ describe("AppSidebar agent roster pins", () => {
       );
       expect(avatar!.querySelector(face)).not.toBeNull();
     }
-    expect(sessionKeys(sidebar)).toEqual([]);
+    expect(sessionKeys(sidebar)).toEqual(pinned);
     expect(dom.query("[data-agent-collapse]")).toBeNull();
     await mode(sidebar, "chip");
-    expect(sessionKeys(sidebar)).toEqual(["agent:main:pinned", "agent:main:recent"]);
+    // Other agents' pins resolve through descriptors; the loaded row is listed once, first.
+    const chipPins = pinnedKeys(sidebar);
+    expect(chipPins).toContain("agent:main:pinned");
+    expect(sessionKeys(sidebar)).toEqual([...chipPins, "agent:main:recent"]);
     expectChipPin(sidebar);
     expect(sidebar.sidebarEntries).toEqual(entries);
 
     await mode(sidebar, "roster");
     expect(context.agentSelection.state.selectedId).toBe("main");
-    railPin(sidebar, "agent:working:pinned")?.querySelector<HTMLAnchorElement>("a")?.click();
+    pinnedRow(sidebar, "agent:working:pinned")?.querySelector<HTMLAnchorElement>("a")?.click();
     await settleRoster(sidebar);
     expect(context.agentSelection.state.selectedId).toBe("working");
     expect(onNavigate).toHaveBeenLastCalledWith(
@@ -116,7 +135,8 @@ describe("AppSidebar agent roster pins", () => {
       expect(sessions.patch).not.toHaveBeenCalled();
       expect(result.sessions[0]?.pinned).not.toBe(true);
       expect(sidebar.sidebarEntries.includes(`session:${key}`)).toBe(pinned);
-      expect(railPin(sidebar, key) !== null).toBe(pinned);
+      expect(pinnedRow(sidebar, key) !== null).toBe(pinned);
+      expect(dom.query(`.sidebar-rail [data-sidebar-entry="session:${key}"]`)).toBeNull();
       const rows = dom.all(`[data-session-key="${key}"]`);
       expect(rows).toHaveLength(1);
       expect(rows[0]?.classList.contains("session-row-host--pinned")).toBe(pinned);

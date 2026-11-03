@@ -90,14 +90,14 @@ export function captureNativeGitHubServiceHost():
 /** Prepare canonical personal authority without eagerly loading the account/publication graph. */
 export async function prepareGatewayNativeGitHubPersonalCallerV2(
   ...args: Parameters<
-    typeof import("../gateway/server-methods/github-personal-authorization.js").preparePersonalGitHubActionV2
+    typeof import("../gateway/server-methods/personal-profile-authorization.js").preparePersonalProfileAction
   >
 ): ReturnType<
-  typeof import("../gateway/server-methods/github-personal-authorization.js").preparePersonalGitHubActionV2
+  typeof import("../gateway/server-methods/personal-profile-authorization.js").preparePersonalProfileAction
 > {
-  const { preparePersonalGitHubActionV2 } =
-    await import("../gateway/server-methods/github-personal-authorization.js");
-  return preparePersonalGitHubActionV2(...args);
+  const { preparePersonalProfileAction } =
+    await import("../gateway/server-methods/personal-profile-authorization.js");
+  return preparePersonalProfileAction(...args);
 }
 
 /** Publication installation loads instance machinery only for an admitted service start. */

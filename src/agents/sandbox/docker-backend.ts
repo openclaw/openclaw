@@ -1,4 +1,5 @@
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import type { PreparedSandboxExecutionEnvironment } from "../../plugins/execution-environment-types.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
@@ -8,6 +9,7 @@ import type {
   SandboxBackendManager,
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { buildSandboxContainerEngineArgv } from "./container-engine.js";
 import { containerHasTerminated } from "./container-inspect.js";
 import {
   captureSandboxContainerTermination,
@@ -29,7 +31,6 @@ import {
   execContainer,
   execContainerRaw,
   PODMAN_SANDBOX_ENGINE,
-  resolvePodmanSandboxRuntimeInfo,
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
   validateSandboxContainerEngineTarget,
@@ -51,6 +52,7 @@ async function createContainerSandboxBackend(
   operatorAuthority?: AdmittedRunOperatorAuthority,
   executionEnvironment?: PreparedSandboxExecutionEnvironment & { assertCurrent?: () => void },
 ): Promise<SandboxBackendHandle> {
+  using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.target");
   const assertCurrent = () => {
     operatorAuthority?.assertCurrent();
     params.assertRuntimeCurrent?.();
@@ -62,19 +64,13 @@ async function createContainerSandboxBackend(
       "Podman sandboxing does not support browser sandboxes. Install Docker and select the docker backend, or disable sandbox.browser.enabled.",
     );
   }
-  const podmanTarget =
-    engine.id === "podman" ? (await resolvePodmanSandboxRuntimeInfo()).target : undefined;
   const dockerTarget = engine.id === "docker" ? await captureDockerPersistentTarget() : undefined;
   assertCurrent();
-  const boundEngine = podmanTarget
-    ? bindPodmanSandboxEngine(podmanTarget)
-    : dockerTarget
-      ? bindDockerPersistentTarget(dockerTarget)
-      : engine;
-  const { containerName, containerId, configHash, mountPlan, currentConfig } =
+  const configuredEngine = dockerTarget ? bindDockerPersistentTarget(dockerTarget) : engine;
+  phases.mark("attempt.setup.sandbox.backend.container");
+  const { containerName, containerId, configHash, mountPlan, currentConfig, podmanTarget } =
     await ensureSandboxContainer({
-      engine: boundEngine,
-      ...(podmanTarget ? { podmanTarget } : {}),
+      engine: configuredEngine,
       ...(dockerTarget ? { dockerTarget } : {}),
       scopeKey: params.scopeKey,
       workspaceDir: params.workspaceDir,
@@ -90,16 +86,20 @@ async function createContainerSandboxBackend(
         : {}),
     });
   assertCurrent();
+  const boundEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : configuredEngine;
   // Allocation pins the generation under its lifecycle lock; never rediscover it
   // by reusable name after another admission or recreation can acquire the lock.
+  phases.mark("attempt.setup.sandbox.backend.mount_snapshot");
   const containerOnlyMounts = await resolveSandboxContainerOnlyMounts({
     engine: boundEngine,
     containerName: containerId,
     assertCurrent,
   });
   assertCurrent();
+  phases.mark("attempt.setup.sandbox.backend.bridge_import");
   const { createSandboxFsBridge } = await import("./fs-bridge.js");
   assertCurrent();
+  phases.mark("attempt.setup.sandbox.backend.handle");
   const { workdir: defaultWorkdir, env: configuredEnv, image } = params.cfg.docker;
   const engineTarget =
     podmanTarget ?? (dockerTarget ? dockerPersistentTargetToEngineTarget(dockerTarget) : undefined);
@@ -140,7 +140,7 @@ async function createContainerSandboxBackend(
       const envFile = await createContainerEnvFile(containerEnv);
       try {
         assertCurrent();
-        const argv = [boundEngine.command, ...(boundEngine.globalArgs ?? []), "exec", "-i"];
+        const argv = buildSandboxContainerEngineArgv(boundEngine, ["exec", "-i"]);
         if (usePty) {
           argv.push("-t");
         }
@@ -246,6 +246,7 @@ async function createContainerSandboxBackend(
     return bridge;
   };
   if (dockerTarget && configHash && currentConfig) {
+    phases.mark("attempt.setup.sandbox.backend.persistent_generation");
     const container = await readDockerPersistentContainer(
       boundEngine,
       containerId,
@@ -255,6 +256,7 @@ async function createContainerSandboxBackend(
     if (container.kind !== "running") {
       throw new Error("The admitted Docker sandbox container ended during preparation.");
     }
+    phases.mark("attempt.setup.sandbox.backend.persistent_capability");
     const allocation = structuredClone({
       cfg: params.cfg.docker,
       dockerTmpfsSource: params.cfg.dockerTmpfsSource,

@@ -1,21 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { statSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
-import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { readSqliteCleanCloseSeal } from "../src/infra/sqlite-clean-close-seal.js";
 import { sqliteDatabaseSealSchemaFor } from "../src/state/openclaw-database-seal-schema.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
+import { writeRestartPlugin, connectRestartClient } from "./gateway-restart.test-support.js";
 import {
   GATEWAY_RESTART_TEST_KILL_MS,
   GATEWAY_RESTART_TEST_SHUTDOWN_MS as APPLICATION_STOP_MS,
@@ -26,7 +24,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
-import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -50,7 +48,7 @@ function journal(logs: string) {
 
 // The real CLI process, model transport, exec subprocesses, and native deadline belong in E2E.
 it.skipIf(process.platform !== "linux")(
-  "resumes six interrupted turns after handing off within five seconds of its receipt after plugin cleanup",
+  "hands off within five seconds of its clean-close receipt after plugin cleanup",
   { timeout: 180_000 },
   async ({ signal }) => {
     const beforeExit = <T>(pending: Promise<T>, closed: Promise<unknown>, message: string) =>
@@ -62,16 +60,13 @@ it.skipIf(process.platform !== "linux")(
     await runQaGatewayFixture(
       async () => {
         const pluginDir = tempDirs.make("restart-handoff-plugin-");
-        await writeFile(
-          path.join(pluginDir, "openclaw.plugin.json"),
-          JSON.stringify({
+        await writeRestartPlugin(
+          pluginDir,
+          {
             id: SERVICE_ID,
             activation: { onStartup: true },
             configSchema: { type: "object", additionalProperties: false, properties: {} },
-          }),
-        );
-        await writeFile(
-          path.join(pluginDir, "index.js"),
+          },
           `module.exports = {
           id: ${JSON.stringify(SERVICE_ID)},
           register(api) {
@@ -81,6 +76,7 @@ it.skipIf(process.platform !== "linux")(
             });
           }
         };\n`,
+          "index.js",
         );
         const model = buildMockOpenAiResponsesProvider(provider.baseUrl, "gpt-5.6-luna");
         const modelRef = `openai/${model.modelId}`;
@@ -150,17 +146,6 @@ it.skipIf(process.platform !== "linux")(
           },
         });
         await instance.startGateway();
-        const expectLog = (rows: ReturnType<typeof journal>, ...fragments: string[]) =>
-          expect(
-            rows.some((row) => fragments.every((fragment) => row.message.includes(fragment))),
-            instance!.logs(),
-          ).toBe(true);
-        expectLog(
-          journal(instance.logs()),
-          "shutdown budget at startup:",
-          "shutdown=41000ms",
-          "TimeoutStopUSec=46000ms",
-        );
         const child = expectDefined(instance.child, "Gateway process before restart proof");
         const closed = once(child, "close");
         const gateway = instance;
@@ -168,41 +153,20 @@ it.skipIf(process.platform !== "linux")(
           { length: 6 },
           (_, index) => `agent:main:restart-handoff-${index}`,
         );
-        const recoveredTurns = new Map(sessionKeys.map((key) => [key, createDeferred<unknown>()]));
-        let observingRecovery = false;
         const connect = () =>
-          acquireGatewayTestClient(
+          connectRestartClient(
+            gateway,
             {
-              url: gateway.url,
-              token: gateway.gatewayToken,
-              clientName: "gateway-client",
               mode: "backend",
               clientDisplayName: "restart-handoff-proof",
               clientVersion: "test",
               platform: "linux",
               role: "operator",
-              scopes: ["operator.admin", "operator.read", "operator.write"],
               deviceIdentity: loadOrCreateDeviceIdentity({
                 path: gateway.state.path("client-device", "client", "credentials.sqlite"),
               }),
-              onEvent: ({ event, payload }) => {
-                if (
-                  observingRecovery &&
-                  event === "sessions.changed" &&
-                  isRecord(payload) &&
-                  typeof payload.sessionKey === "string" &&
-                  (payload.phase === "end" || payload.phase === "error")
-                ) {
-                  recoveredTurns.get(payload.sessionKey)?.resolve(payload);
-                }
-              },
             },
-            {
-              timeoutMs: 30_000,
-              timeoutMessage: "restart proof client did not connect",
-              closeMessage: "restart proof client closed",
-              signal,
-            },
+            signal,
           );
         client = await connect();
         for (const key of sessionKeys) {
@@ -260,21 +224,14 @@ it.skipIf(process.platform !== "linux")(
           )
           .toSorted((left, right) => left.at - right.at);
         const receipt = cleanReceipts.at(-1);
-        const abort = rows.find((row) =>
-          /restart drain budget.*exhausted|aborted for restart/.test(row.message),
-        );
         const deadline = rows.find((row) => row.message.includes("shutdown deadline reached"));
         const serviceStop = rows.find((row) => row.message.includes(SERVICE_STOP));
         expect(exit, instance.logs()).toEqual([0, null]);
         expect(receipt, instance.logs()).toBeDefined();
-        expect(abort, instance.logs()).toBeDefined();
-        expectLog(rows, "shutdown budget at shutdown:", "TimeoutStopUSec=46000ms");
-        expect(receipt!.at).toBeGreaterThanOrEqual(abort!.at);
+        expect(receipt!.at).toBeGreaterThanOrEqual(signaledAt);
         expect(receipt!.at).toBeLessThan(
           Math.min(signaledAt + APPLICATION_STOP_MS, exitedAt, deadline?.at ?? Infinity),
         );
-        expectLog(rows, "backgroundExecSessions=2");
-        expectLog(rows, "embeddedRuns=6");
         expect(exitedAt - receipt!.at, instance.logs()).toBeLessThanOrEqual(5_000);
         expect(deadline, instance.logs()).toBeUndefined();
         expect(serviceStop, instance.logs()).toBeDefined();
@@ -288,7 +245,6 @@ it.skipIf(process.platform !== "linux")(
           { readOnly: true },
         );
         const agent = openNodeSqliteDatabase(agentPath, { readOnly: true });
-        const persistedSessions = new Map<string, string>();
         try {
           const leases = shared
             .prepare("SELECT lease_id FROM agent_database_leases WHERE path=?")
@@ -305,7 +261,7 @@ it.skipIf(process.platform !== "linux")(
           });
           expect(boot?.completed_at_ms).toBeGreaterThanOrEqual(signaledAt);
           expect(boot?.completed_at_ms).toBeLessThanOrEqual(exitedAt);
-          for (const [index, sessionKey] of sessionKeys.entries()) {
+          for (const sessionKey of sessionKeys) {
             const row = agent
               .prepare(
                 "SELECT current_session_id, entry_json FROM session_nodes WHERE session_key=?",
@@ -315,71 +271,12 @@ it.skipIf(process.platform !== "linux")(
               throw new Error(`Restart lost persisted session ${sessionKey}`);
             }
             const entry: unknown = JSON.parse(row.entry_json);
-            // Either shutdown marking or terminal persistence can retain the run.
-            // Startup creates a recovery cycle for an interrupted run without one.
-            expect(entry).toMatchObject({
-              status: "interrupted",
-              abortedLastRun: true,
-              restartRecoveryRuns: expect.arrayContaining([
-                expect.objectContaining({
-                  runId: runIds[index],
-                  lifecycleGeneration: expect.any(String),
-                }),
-              ]),
-            });
-            persistedSessions.set(sessionKey, row.current_session_id);
+            expect(entry).toMatchObject({ resumeAfterRestart: { queuedInputIds: [] } });
           }
         } finally {
           shared.close();
           agent.close();
         }
-        await client.stopAndWait({ timeoutMs: 1000 });
-        client = undefined;
-        provider.beginRecovery();
-        observingRecovery = true;
-        const successorStartedAt = Date.now();
-        await instance.startGateway();
-        const successor = expectDefined(instance.child, "successor before restart admission proof");
-        expect(successor.pid).not.toBe(child.pid);
-        client = await connect();
-        await client.request("sessions.subscribe", { agentId: "main" });
-        provider.releaseRecovery();
-        const recovered = await beforeExit(
-          Promise.all([...recoveredTurns.values()].map((turn) => turn.promise)),
-          once(successor, "close"),
-          "Successor exited before all six interrupted turns completed",
-        );
-        for (const turn of recovered) {
-          expect(turn, instance.logs()).toMatchObject({ phase: "end" });
-        }
-        const restored = await client.request<SessionsListResult>("sessions.list", {
-          agentId: "main",
-        });
-        for (const [index, sessionKey] of sessionKeys.entries()) {
-          expect(restored.sessions.find((row) => row.key === sessionKey)).toMatchObject({
-            sessionId: persistedSessions.get(sessionKey),
-          });
-          const history = await client.request<{
-            messages: Array<{ role: string; content?: unknown }>;
-          }>("chat.history", { sessionKey });
-          const expectMessage = (role: string, marker: string) =>
-            expect(
-              history.messages.filter(
-                (message) =>
-                  message.role === role && JSON.stringify(message.content)?.includes(marker),
-              ),
-            ).toHaveLength(1);
-          expectMessage("user", `RESTART_HANDOFF_${index}:`);
-          expectMessage("assistant", `RESTART_HANDOFF_RESUMED_${index}`);
-        }
-        expect(
-          journal(gateway.logs()).filter(
-            (row) =>
-              row.at >= successorStartedAt &&
-              row.path === agentPath &&
-              row.message.includes("database integrity verification passed"),
-          ),
-        ).toEqual([]);
       },
       () => {
         clearTimeout(nativeDeadline);

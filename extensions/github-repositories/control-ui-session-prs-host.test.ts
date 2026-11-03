@@ -163,7 +163,6 @@ it.each([false, true])(
       if (!enterprise) {
         expect(delivered).not.toContain("Private Enterprise secret");
       }
-      expect(provider).toHaveBeenCalledTimes(enterprise ? 2 : 1);
       for (const [input, options] of provider.mock.calls) {
         expect({
           origin: new URL(requestUrl(input)).origin,

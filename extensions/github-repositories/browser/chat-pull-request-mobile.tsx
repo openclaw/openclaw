@@ -1,14 +1,14 @@
-/** @jsxImportSource @solidjs/web */
-
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "@openclaw/gateway-protocol";
-import { For, Show, createSignal, onSettled, useContext } from "solid-js";
-import { ChatCiAutomation } from "./chat-ci-automation-control.tsx";
-import { ChatCiDetails } from "./chat-ci-details.tsx";
-import { ChecksRows } from "./chat-pull-request-shared.tsx";
+/** @jsxImportSource @solidjs/web */
+import { For, Show, createSignal, useContext } from "solid-js";
+import { ChatCiAutomationPanel, ChatCiDetailsPanel } from "./chat-ci-panels.tsx";
+import { createPullRequestCopy } from "./chat-pull-request-copy.ts";
+import { ChecksRows, PullRequestCopyError } from "./chat-pull-request-shared.tsx";
 import { GitDiffValues } from "./native-components.tsx";
+import { PanelEmptyState } from "./panel-empty-state.tsx";
 import { Icon } from "./presentation-components.tsx";
 import { presentationTranslator, PresentationContext } from "./presentation-context.ts";
 import { chatPullRequestId } from "./pull-request-dismissal.ts";
@@ -19,7 +19,6 @@ import "./chat-pull-request-presenters.css";
 export type ChatPullRequestMobileRecoveryProps = {
   status: ControlUiSessionPullRequestSnapshot["status"];
   hasSnapshot: boolean;
-  lastUpdatedAt?: number;
   retrying: boolean;
   onRetry: () => void;
 };
@@ -55,17 +54,8 @@ export function ChatPullRequestMobileRecovery(
                   : "chat.pullRequests.couldNotLoad",
             )}
           </strong>
-          <Show when={props.hasSnapshot} fallback={<p>{t("chat.pullRequests.tryAgain")}</p>}>
-            <Show when={props.lastUpdatedAt !== undefined}>
-              <p>
-                {t("chat.pullRequests.lastUpdated", {
-                  time: new Date(props.lastUpdatedAt!).toLocaleTimeString(undefined, {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  }),
-                })}
-              </p>
-            </Show>
+          <Show when={!props.hasSnapshot}>
+            <p>{t("chat.pullRequests.tryAgain")}</p>
           </Show>
         </div>
         <button
@@ -132,12 +122,24 @@ export type ChatPullRequestMobileCollectionProps = ChatPullRequestMobileRecovery
 export function ChatPullRequestMobileCollection(props: ChatPullRequestMobileCollectionProps) {
   const t = presentationTranslator();
   return (
-    <div class="chat-pr-mobile">
+    <div
+      class={[
+        "chat-pr-mobile",
+        { "chat-pr-mobile--empty": props.hasSnapshot && props.pullRequests.length === 0 },
+      ]}
+    >
       <ChatPullRequestMobileRecovery {...props} collection />
       <Show when={props.hasSnapshot}>
         <Show
           when={props.pullRequests.length}
-          fallback={<p class="chat-pr-mobile__empty">{t("chat.pullRequests.empty")}</p>}
+          fallback={
+            <PanelEmptyState
+              presentation="mobile"
+              icon={<Icon name="gitPullRequest" />}
+              heading={t("chat.sessionDetails.pullRequests")}
+              description={t("chat.pullRequests.empty")}
+            />
+          }
         >
           <div class="chat-pr-mobile__group">
             <For each={props.pullRequests} keyed={chatPullRequestId}>
@@ -163,39 +165,13 @@ export type ChatPullRequestMobileDetailProps = ChatPullRequestMobileRecoveryProp
 
 /** Body only: actual title, Back, scroll fades and presentation are owned by the mobile host. */
 export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailProps) {
+  const presentationHost = useContext(PresentationContext);
   const t = presentationTranslator();
-  const presentation = useContext(PresentationContext);
-  const [copying, setCopying] = createSignal(false);
-  const [copyFailed, setCopyFailed] = createSignal(false);
-  let mounted = false;
-  onSettled(() => {
-    mounted = true;
-    return () => {
-      mounted = false;
-    };
+  const clipboard = createPullRequestCopy({
+    url: () => props.pullRequest?.url,
+    presented: () => props.hasSnapshot,
+    onCopied: () => presentationHost.notify(t("chat.pullRequests.linkCopied")),
   });
-  const copy = async () => {
-    const pr = props.pullRequest;
-    if (!pr || copying()) {
-      return;
-    }
-    setCopying(true);
-    setCopyFailed(false);
-    const current = () => mounted && props.pullRequest?.url === pr.url;
-    const copied = await presentation.copyText(pr.url, current);
-    if (!mounted) {
-      return;
-    }
-    setCopying(false);
-    if (!current()) {
-      return;
-    }
-    if (copied) {
-      presentation.notify(t("chat.pullRequests.linkCopied"));
-    } else {
-      setCopyFailed(true);
-    }
-  };
   return (
     <div class="chat-pr-mobile">
       <ChatPullRequestMobileRecovery {...props} />
@@ -301,15 +277,15 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
                 <span>{t("chat.pullRequests.openGitHub")}</span>
                 <Icon name="externalLink" />
               </a>
-              <button type="button" disabled={copying()} onClick={() => void copy()}>
+              <button
+                type="button"
+                disabled={clipboard.copying()}
+                onClick={() => void clipboard.copy()}
+              >
                 <Icon name="link" />
                 <span>{t("chat.pullRequests.copyLink")}</span>
               </button>
-              <Show when={copyFailed()}>
-                <p class="chat-pr-menu__error" role="alert">
-                  {t("chat.pullRequests.copyFailed")}
-                </p>
-              </Show>
+              <PullRequestCopyError clipboard={clipboard} />
               <button
                 type="button"
                 class="chat-pr-mobile__hide"
@@ -337,17 +313,18 @@ export type ChatPullRequestMobileCiProps = ChatPullRequestMobileRecoveryProps & 
 /** Native CI owners retain requests and mutations across the host's nested pages. */
 export function ChatPullRequestMobileChecks(props: ChatPullRequestMobileCiProps) {
   const t = presentationTranslator();
+  const [visited] = createSignal<boolean>((previous) => previous || props.presented);
   return (
     <div class="chat-pr-mobile">
       <ChatPullRequestMobileRecovery {...props} />
-      <Show when={props.pullRequest}>
+      <Show when={visited() && props.pullRequest}>
         {(pullRequest) => (
           <>
-            <ChatCiDetails
+            <ChatCiDetailsPanel
               pullRequest={pullRequest()}
               sessionKey={props.sessionKey}
               presented={props.presented}
-              inline={true}
+              inline
             />
             <Show when={pullRequest().checksUrl}>
               {(url) => (
@@ -370,18 +347,19 @@ export function ChatPullRequestMobileChecks(props: ChatPullRequestMobileCiProps)
 }
 
 export function ChatPullRequestMobileMonitoring(props: ChatPullRequestMobileCiProps) {
+  const [visited] = createSignal<boolean>((previous) => previous || props.presented);
   return (
     <div class="chat-pr-mobile">
       <ChatPullRequestMobileRecovery {...props} />
-      <Show when={props.pullRequest}>
+      <Show when={visited() && props.pullRequest}>
         {(pullRequest) => (
-          <ChatCiAutomation
+          <ChatCiAutomationPanel
             pullRequest={pullRequest()}
             sessionKey={props.sessionKey}
             sessionId={props.sessionId ?? ""}
             presented={props.presented}
-            inline={true}
-            menuPresentation={true}
+            inline
+            menuPresentation
           />
         )}
       </Show>

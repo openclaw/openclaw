@@ -1,0 +1,2 @@
+# Preserve non-GitHub plugin worker commits, fresh retained-disk exports, and the final disk-authority fence through the existing real materialization matrix.
+2

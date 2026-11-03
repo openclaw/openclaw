@@ -1,19 +1,19 @@
-import { createComponent, merge } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
-import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 import baseStyles from "../../styles/base.css?inline";
+import queueContentStyles from "../../styles/chat/composer-queue-content.css?inline";
 import queueStyles from "../../styles/chat/composer-queue.css?inline";
+import componentStyles from "../../styles/components.css?inline";
 
 const imageData =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
@@ -21,10 +21,8 @@ const imageData =
 let container: HTMLDivElement;
 let styles: HTMLStyleElement;
 let attachments: ChatAttachment[];
-let view: ReturnType<typeof mountSolid> | undefined;
 type QueueProps = Parameters<typeof renderChatQueueSolid>[0];
-let current: QueueProps;
-let invalidate: (() => void) | undefined;
+let view: ReturnType<typeof mountSolid<QueueProps>> | undefined;
 const all = <T extends HTMLElement = HTMLElement>(selector: string) => [
   ...container.querySelectorAll<T>(selector),
 ];
@@ -33,7 +31,7 @@ const left = (row: Element, selector: string) =>
 
 beforeEach(() => {
   styles = document.createElement("style");
-  styles.textContent = baseStyles + queueStyles;
+  styles.textContent = baseStyles + componentStyles + queueStyles + queueContentStyles;
   document.head.append(styles);
   container = document.createElement("div");
   container.className = "agent-chat__composer-shell";
@@ -47,9 +45,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  view?.unmount();
+  view?.dispose();
   view = undefined;
-  invalidate = undefined;
   container.remove();
   styles.remove();
   releaseChatAttachmentPayloads(attachments);
@@ -58,7 +55,7 @@ afterEach(() => {
 });
 
 function draw(queue: ChatQueueItem[], editingId?: string, onQueueMove?: QueueProps["onQueueMove"]) {
-  current = {
+  const props: QueueProps = {
     queue,
     onQueueMove,
     queuedEdit: onQueueMove
@@ -66,29 +63,14 @@ function draw(queue: ChatQueueItem[], editingId?: string, onQueueMove?: QueuePro
       : { editingId: editingId ?? null, onCancel: vi.fn(), onEdit: vi.fn() },
     onQueueRemove: vi.fn(),
   };
-  if (invalidate) {
-    invalidate();
+  if (view) {
+    view.update(props);
   } else {
-    view = mountSolid(
-      () => {
-        const lifecycle = createSolidRenderLifecycle({
-          host: {},
-          presented: () => true,
-          read: () => current,
-        });
-        invalidate = () => lifecycle.invalidate();
-        return createComponent(renderChatQueueSolid, merge(lifecycle.snapshot));
-      },
-      { container },
-    );
+    view = mountSolid(renderChatQueueSolid, props, container);
   }
-  flush();
 }
 
-it.each([
-  { key: "ArrowUp", expected: ["c", "b"] },
-  { key: "ArrowDown", expected: ["c", "d"] },
-])("moves the focused row on $key", async ({ key, expected }) => {
+it("keeps focus and consumes ArrowDown while moving a row to the final position", async () => {
   const waiting = (id: string, createdAt: number): ChatQueueItem => ({
     id,
     text: id,
@@ -96,11 +78,10 @@ it.each([
     sendState: "waiting-reconnect",
   });
   let queue = ["a", "b", "c", "d"].map((id, index) => waiting(id, index + 1));
-  const ids = key === "ArrowUp" ? ["a", "c", "b", "d"] : ["a", "b", "d", "c"];
+  const ids = ["a", "b", "d", "c"];
   const onQueueMove = vi.fn<(id: string, targetId: string) => void>(() => {
     queue = ids.map((id, index) => waiting(id, index));
-    current = { ...current, queue };
-    invalidate?.();
+    draw(queue, undefined, onQueueMove);
   });
   draw(queue, undefined, onQueueMove);
   await waitForSolid(() => expect(all(".chat-queue__grip")).toHaveLength(4));
@@ -108,29 +89,25 @@ it.each([
   grip.focus();
   expect(document.activeElement).toBe(grip);
 
-  let moveEvent: KeyboardEvent | undefined;
+  let prevented = false;
   container.addEventListener(
     "keydown",
     (event) => {
-      moveEvent = event;
+      prevented = event.defaultPrevented;
     },
     { once: true },
   );
-  await userEvent.keyboard(`{${key}}`);
-  expect(onQueueMove.mock.calls).toEqual([expected]);
+  await userEvent.keyboard("{ArrowDown}");
+  expect(onQueueMove).toHaveBeenCalledWith("c", "d");
   // Arrow keys belong to the handle, so the transcript must not also scroll.
-  expect(moveEvent?.defaultPrevented).toBe(true);
+  expect(prevented).toBe(true);
   await waitForSolid(() =>
     expect(all("[data-chat-queue-item]").map((row) => row.dataset.chatQueueItem)).toEqual(ids),
   );
   expect(container.querySelector('[data-chat-queue-item="c"] .chat-queue__grip')).toBe(grip);
   expect(document.activeElement).toBe(grip);
-  await userEvent.keyboard(`{${key}}`);
-  if (key === "ArrowUp") {
-    expect(onQueueMove).toHaveBeenLastCalledWith("c", "a");
-  } else {
-    expect(onQueueMove).toHaveBeenCalledOnce();
-  }
+  await userEvent.keyboard("{ArrowDown}");
+  expect(onQueueMove).toHaveBeenCalledOnce();
 });
 
 it.each([
@@ -162,10 +139,7 @@ it.each([
     const rows = all(".chat-queue__item");
     const snippets = all<HTMLImageElement>(".chat-queue__images");
     expect(snippets).toHaveLength(3);
-    // Compare like-for-like: the last row intentionally has no bottom divider.
-    for (const [index, row] of rows.entries()) {
-      expect(row.getBoundingClientRect().height).toBe(baselineHeights[index]);
-    }
+    expect(rows.map((row) => row.getBoundingClientRect().height)).toEqual(baselineHeights);
     const textStarts = rows.slice(1).map((row) => left(row, ".chat-queue__text"));
     expect(new Set(textStarts).size).toBe(1);
     for (const row of rows.slice(1)) {

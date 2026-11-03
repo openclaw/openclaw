@@ -23,6 +23,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import * as databaseIdentity from "../infra/sqlite-worker-identity.js";
 import { runExec } from "../process/exec.js";
 import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
@@ -49,6 +50,7 @@ import {
   readerChanges,
   sessionKey,
   snapshot,
+  withDefaultLoader,
   type Load,
 } from "./control-ui-session-pr-access.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
@@ -97,8 +99,6 @@ async function withFixture(
   }
 }
 
-type Fixture = Awaited<ReturnType<typeof createFixture>>;
-
 function holdLoad<T>() {
   const entered = createDeferredCore();
   const held = createDeferredCore<T>();
@@ -129,26 +129,6 @@ function closedPull(number?: number) {
     head: {},
     base: { ref: "main", repo: { name: "publication", owner: { login: "synthetic" } } },
   });
-}
-
-async function withDefaultLoader(provider: typeof fetch, run: (f: Fixture) => Promise<void>) {
-  try {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      vi.stubEnv("GH_TOKEN", "");
-      vi.stubEnv("GITHUB_TOKEN", "");
-      vi.stubGlobal("fetch", provider);
-      const f = await createFixture("operator.read", true);
-      try {
-        await run(f);
-      } finally {
-        await f.close();
-      }
-    });
-  } finally {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
-  }
 }
 
 function frames(socket: ReturnType<typeof createGatewayWsTestSocket>) {
@@ -244,13 +224,15 @@ it.each(["incarnation", "namespace", "repository"] as const)(
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const exposed = vi.fn();
+        // Replacement targets may finish sooner than the retired load's caller.
+        const retiredSnapshot = { ...snapshot, branch: { ...branch, branch: "retired" } };
         f.load.mockImplementationOnce(async (_params, _signal, read) => {
           read.assertCurrent();
           entered.resolve();
           await release.promise;
           read.assertCurrent();
           exposed();
-          return snapshot;
+          return retiredSnapshot;
         });
         const loading = f.subscriptions.replace(f.client.connId!, [key]);
         try {
@@ -277,7 +259,7 @@ it.each(["incarnation", "namespace", "repository"] as const)(
           release.resolve();
           await loading;
           expect(exposed).not.toHaveBeenCalled();
-          expect(frames(f.socket)).not.toContainEqual(expectedFrame(key));
+          expect(frames(f.socket)).not.toContainEqual(expectedFrame(key, retiredSnapshot));
         } finally {
           release.resolve();
           await loading;
@@ -350,7 +332,7 @@ it.each(["unchanged", "revoked"] as const)(
         .mockImplementation(() => {
           const source = captureSource();
           return {
-            ...source,
+            own: (close) => source.own(close),
             createTransport(command) {
               const owned = source.createTransport(command);
               if (held || command.type !== "agentDatabaseDeletion.snapshot") {
@@ -358,7 +340,8 @@ it.each(["unchanged", "revoked"] as const)(
               }
               held = true;
               return {
-                ...owned,
+                startValidateFresh: (...args) => owned.startValidateFresh(...args),
+                startClose: () => owned.startClose(),
                 async startRead(...args) {
                   const result = await owned.startRead(...args);
                   entered.resolve();
@@ -550,6 +533,7 @@ it("retires cached branch data after canonical replacement and hydrates the new 
   try {
     await withFixture("operator.read", async (f) => {
       await f.subscribe();
+      await f.subscriptions.pollNow();
       await f.subscriptions.replace(f.client.connId!, [sessionKey], new Set([sessionKey]));
       const retiredRefresh = f.subscriptions.replace(
         f.client.connId!,
@@ -591,6 +575,8 @@ it("retires cached branch data after canonical replacement and hydrates the new 
 it.each([
   "archived",
   "unchanged",
+  "row refresh",
+  "source",
   "grant",
   "selection",
   "literal-global",
@@ -608,7 +594,6 @@ it.each([
       if (change === "literal-global-visibility") {
         await f.seed("global", f.profile.id, { sessionId: "separate-global-row" });
       }
-      const replacementKey = `${key}:replacement`;
       const projection = getSessionRowProjection(f.context);
       if (change === "archived") {
         if (!projection) {
@@ -618,10 +603,6 @@ it.each([
         sessionChanges.emit({ all: true, scope: "catalog" });
         await projection.ensureMaterialized();
         expect(projection.capture({ agentId: "main", key })?.materialized).toBeUndefined();
-      }
-      if (change === "selection") {
-        await f.seed(replacementKey, f.other.id);
-        await projection?.ensureMaterialized();
       }
       const mutation =
         change === "literal-global" || change === "archived"
@@ -672,26 +653,29 @@ it.each([
         );
         if (mutation === "store closure") {
           await closeOpenClawAgentDatabaseByPathAsync((await sessionSource(key)).path);
+        } else if (mutation === "row refresh") {
+          sessionChanges.emit({ agentId: "main", sessionKey: key, scope: "session-entry" });
+          await projection?.ensureMaterialized();
+        } else if (mutation === "source") {
+          await f.seed(key, f.other.id, { spawnedCwd: "/synthetic/replacement" });
+          await projection?.ensureMaterialized();
         } else if (mutation === "selection") {
           if (!projection) {
             throw new Error("Missing session projection for selection replacement");
           }
-          const capture = projection.capture.bind(projection);
-          const replacement = capture({ agentId: "main", key: replacementKey });
-          expect(replacement).toBeDefined();
-          vi.spyOn(projection, "capture").mockImplementation((query) =>
-            query.key === key ? replacement : capture(query),
-          );
+          await f.seed(key, f.other.id, { sessionId: "replacement-selection" });
+          await projection.ensureMaterialized();
         } else {
           await f.changeReader(mutation, key);
         }
         held.resolve(result);
         await request;
         expect(load).toHaveBeenCalledOnce();
+        const allowed = mutation === "unchanged" || mutation === "row refresh";
         expect(respond).toHaveBeenCalledExactlyOnceWith(
-          mutation === "unchanged",
-          mutation === "unchanged" ? result : undefined,
-          mutation === "unchanged"
+          allowed,
+          allowed ? result : undefined,
+          allowed
             ? undefined
             : expect.objectContaining({
                 code: "UNAVAILABLE",
@@ -718,6 +702,23 @@ it.each(["local", "repository"] as const)(
       const repositories = getSessionRepositoryWorkspaceStore();
       const repository = source === "repository" ? await f.seedRepository() : undefined;
       await f.subscribe();
+      const read = createControlUiSessionPrRead(
+        f.sessionReads.createViewerRead(f.client.connId!, { sessionKey }),
+        f.context.getRuntimeConfig,
+      )!;
+      const target = await read();
+      expect(target).toBeDefined();
+      const sorts = vi.spyOn(f.client.connect.scopes!, "toSorted");
+      try {
+        for (let index = 0; index < 64; index++) {
+          sessionChanges.emit({ agentId: "main", sessionKey, scope: "runtime" });
+          expect(await read()).toBe(target);
+          target!.assertCurrent!();
+        }
+        expect(sorts).not.toHaveBeenCalled();
+      } finally {
+        sorts.mockRestore();
+      }
       const statements = observeSqliteReadSql(StatementSync.prototype);
       try {
         for (let index = 1; index < 20; index++) {
@@ -745,9 +746,30 @@ it.each(["local", "repository"] as const)(
       }
       if (repository) {
         const previousCache = f.load.mock.calls[0]?.[1];
-        await repositories.delete({ workspaceId: repository.workspaceId, assertCurrent: () => {} });
+        expect((await read())?.source).toMatchObject({ repo: "publication" });
         const unavailable = { pullRequests: [], rateLimited: false };
-        f.load.mockResolvedValue(unavailable);
+        f.load.mockImplementation(async (_params, _signal, current) =>
+          current.target.source === null ? unavailable : snapshot,
+        );
+        // Read before background preparation can replace the invalidated repository facts.
+        const notifiedRead = vi.fn(read);
+        const stop = sessionChanges.subscribe((change) => {
+          if ("sessionKey" in change && change.sessionKey === sessionKey) {
+            void notifiedRead();
+          }
+        });
+        try {
+          await repositories.delete({
+            workspaceId: repository.workspaceId,
+            assertCurrent: () => {},
+          });
+          expect(notifiedRead).toHaveBeenCalledOnce();
+          expect((await notifiedRead.mock.results[0]!.value)?.source).toBeNull();
+        } finally {
+          stop();
+        }
+        // Settle the replacement load, then verify another poll emits no stale snapshot.
+        await f.subscriptions.pollNow();
         await f.subscriptions.pollNow();
         expect(previousCache?.aborted).toBe(true);
         expect(frames(f.socket)).toEqual([
@@ -755,6 +777,33 @@ it.each(["local", "repository"] as const)(
           expectedFrame(sessionKey, unavailable),
         ]);
       }
+    });
+  },
+);
+
+it.each(["remove", "replace"] as const)(
+  "preserves scope order and duplicate multiplicity before scopes %s",
+  async (change) => {
+    await withFixture("operator.admin", async (f) => {
+      f.client.connect.scopes = ["operator.read", "operator.write", "operator.read"];
+      const read = createControlUiSessionPrRead(
+        f.sessionReads.createViewerRead(f.client.connId!, { sessionKey }),
+        f.context.getRuntimeConfig,
+      )!;
+      const target = await read();
+      expect(target).toBeDefined();
+      expect(f.client.connect.scopes).toEqual(["operator.read", "operator.write", "operator.read"]);
+      f.client.connect.scopes = ["operator.write", "operator.read", "operator.read"];
+      expect(() => target!.assertCurrent!()).not.toThrow();
+      expect(await read()).toBe(target);
+      expect(f.client.connect.scopes).toEqual(["operator.write", "operator.read", "operator.read"]);
+      if (change === "remove") {
+        f.client.connect.scopes.pop();
+      } else {
+        f.client.connect.scopes[0] = "operator.admin";
+      }
+      expect(() => target!.assertCurrent!()).toThrow(/target changed/);
+      expect(await read()).toBeUndefined();
     });
   },
 );
@@ -781,7 +830,7 @@ it("keeps warm default-loader SQL constant as readers join without a native row 
       expect(preparation).toHaveBeenCalledTimes(1);
       preparation.mockClear();
       await f.subscriptions.replace(f.client.connId!, [sessionKey]);
-      expect(preparation).toHaveBeenCalledTimes(2);
+      expect(preparation).not.toHaveBeenCalled();
     } finally {
       preparation.mockRestore();
     }
@@ -814,6 +863,33 @@ it("keeps warm default-loader SQL constant as readers join without a native row 
     expect(frames(f.socket)).toHaveLength(1);
     expect(JSON.stringify(frames(f.socket))).toContain('"number":103469');
     expect(provider).toHaveBeenCalledTimes(1);
+  });
+});
+
+it("checks physical source once per load while every assertion observes owner retirement", async () => {
+  await withFixture("operator.admin", async (f) => {
+    const source = await sessionSource(sessionKey);
+    const read = await f.sessionReads.createViewerRead(f.client.connId!, { sessionKey })?.();
+    if (!read) {
+      throw new Error("Fixture reader was not admitted");
+    }
+    const identities = vi.spyOn(databaseIdentity, "readDatabasePathIdentitySync");
+    try {
+      const load = read.withSource(async ({ assertCurrent }) => {
+        const captured = identities.mock.calls.length;
+        expect(captured).toBeGreaterThan(0);
+        for (let index = 0; index < 20; index++) {
+          assertCurrent();
+        }
+        expect(identities).toHaveBeenCalledTimes(captured);
+        expect(captured).toBe(1);
+        await closeOpenClawAgentDatabaseByPathAsync(source.path);
+        expect(assertCurrent).toThrow(/source changed or closed/);
+      });
+      await expect(load).rejects.toThrow(/source changed or closed/);
+    } finally {
+      identities.mockRestore();
+    }
   });
 });
 

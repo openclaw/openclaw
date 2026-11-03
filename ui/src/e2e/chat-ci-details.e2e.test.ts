@@ -1,18 +1,15 @@
-import path from "node:path";
-import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { ciAutomationJobSpec as jobSpec } from "../../../extensions/github-repositories/browser/api.ts";
 import type { CiAutomationOption } from "../../../extensions/github-repositories/browser/api.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../extensions/github-repositories/session-pull-requests-api.ts";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
   type ControlUiSessionPullRequestCheck,
   type ControlUiSessionPullRequestCheckDetails,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
 import type { CronJob } from "../api/types.ts";
-import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { installRepositoryGateway as installMockGateway } from "../test-helpers/repository-plugin.ts";
@@ -22,6 +19,7 @@ import {
   openDesktopPullRequestPage,
 } from "./chat-details.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
+import { polledCount, polledVisible } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const DETAILS_METHOD = "controlUi.sessionPullRequests.checks";
@@ -395,51 +393,7 @@ suite.define(() => {
     const unselected = page
       .locator(".chat-pr")
       .filter({ has: page.locator(`a.chat-pr__link[href="${other.url}"]`) });
-    try {
-      await openDesktopPullRequestPage(unselected, "monitoring");
-    } catch (error) {
-      await withTimeout(
-        page.evaluate(
-          ([selectedUrl, otherUrl]) => {
-            const findRow = (url: string) =>
-              [...document.querySelectorAll(".chat-pr")].find(
-                (row) => row.querySelector<HTMLAnchorElement>("a.chat-pr__link")?.href === url,
-              );
-            const selectedRow = findRow(selectedUrl);
-            const otherRow = findRow(otherUrl);
-            const selectedMenu = selectedRow?.querySelector<HTMLElement>(".chat-pr-menu");
-            const otherMenu = otherRow?.querySelector<HTMLElement>(".chat-pr-menu");
-            const selectedTrigger = selectedRow?.querySelector(".chat-pr__actions-trigger");
-            const otherTrigger = otherRow?.querySelector(".chat-pr__actions-trigger");
-            const visible = (element: Element | null | undefined) =>
-              element?.checkVisibility({ visibilityProperty: true }) ?? false;
-            return {
-              selectedMenuOpen: selectedMenu?.matches(":popover-open") ?? false,
-              selectedTriggerExpanded: selectedTrigger?.getAttribute("aria-expanded") === "true",
-              selectedMenuFocused: selectedMenu?.contains(document.activeElement) ?? false,
-              otherMenuPresent: Boolean(otherMenu),
-              otherMenuOpen: otherMenu?.matches(":popover-open") ?? false,
-              otherMenuInert: otherMenu?.inert ?? null,
-              otherTriggerExpanded: otherTrigger?.getAttribute("aria-expanded") === "true",
-              otherTriggerFocused: document.activeElement === otherTrigger,
-              otherMenuFocused: otherMenu?.contains(document.activeElement) ?? false,
-              otherBackVisible: visible(otherMenu?.querySelector('[data-value="back"]')),
-              otherMonitoringEntryVisible: visible(
-                otherMenu?.querySelector('[data-value="monitoring"]'),
-              ),
-              otherVisiblePages: [
-                ...(otherMenu?.querySelectorAll(".chat-pr-menu__page") ?? []),
-              ].filter(visible).length,
-            };
-          },
-          [pullRequest.url, other.url] as const,
-        ),
-        1_000,
-      )
-        .then((facts) => recordControlUiE2eFailureFacts(page, facts))
-        .catch(() => undefined);
-      throw error;
-    }
+    await openDesktopPullRequestPage(unselected, "monitoring");
     const otherToggle = unselected.getByRole("switch", { name: "Auto-merge when ready" });
     await expect.poll(() => otherToggle.isEnabled()).toBe(true);
     expect(await otherToggle.isChecked()).toBe(false);
@@ -504,12 +458,6 @@ suite.define(() => {
       await collection.locator(".chat-pr-mobile__row").click();
       await page.locator(".chat-pr-mobile__metadata").waitFor();
       expect(await gateway.getRequests(DETAILS_METHOD)).toHaveLength(0);
-      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `${width}-pr-detail.png`),
-          animations: "disabled",
-        });
-      }
       await page.getByRole("button", { name: "Checks", exact: true }).click();
       menu = page.locator('[data-repository-page="checks"]:not([hidden])');
     } else {
@@ -541,15 +489,9 @@ suite.define(() => {
     const linuxJob = menu.locator('.chat-ci__job[data-check-id="11"]');
     const jobLink = linuxJob.locator(".chat-ci__job-link");
     await jobLink.click({ trial: true });
-    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-      await page.screenshot({
-        path: path.join(suite.artifactDir, `${width}-expanded-checks.png`),
-        animations: "disabled",
-      });
-    }
     // Focus inside the active page so Escape exercises the nested menu owner.
     await jobLink.focus();
-    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    await polledCount(page.locator("openclaw-tooltip[open]")).toBe(0);
     if (mobile) {
       await page
         .locator(".chat-mobile-host__header")
@@ -599,12 +541,6 @@ suite.define(() => {
       await gateway.resolveDeferred("cron.update", disabledFix);
       await expect.poll(() => autoFix.isEnabled()).toBe(true);
       expect(await autoFix.isChecked()).toBe(false);
-      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `${width}-ci-monitoring.png`),
-          animations: "disabled",
-        });
-      }
       await page
         .locator(".chat-mobile-host__header")
         .getByRole("button", { name: "Back", exact: true })
@@ -613,10 +549,10 @@ suite.define(() => {
       expect(await monitoring.isVisible()).toBe(false);
     } else {
       await page.keyboard.press("Escape");
-      await expect.poll(() => menu.locator(".chat-pr-menu__page:visible").count()).toBe(0);
+      await polledCount(menu.locator(".chat-pr-menu__page:visible")).toBe(0);
       expect(await menu.isVisible()).toBe(true);
       await page.keyboard.press("Escape");
-      await expect.poll(() => menu.isVisible()).toBe(false);
+      await polledVisible(menu).toBe(false);
       expect(await page.locator('.chat-details[role="dialog"]').isVisible()).toBe(true);
     }
   });

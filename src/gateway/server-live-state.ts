@@ -2,7 +2,7 @@
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { RepositorySessionReadHost } from "./control-ui-session-pr-runtime.js";
 import type { HooksConfigResolved } from "./hooks.js";
-import type { GatewayCronState } from "./server-cron.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import {
   createGatewayServerMutableState,
   type GatewayServerMutableState,

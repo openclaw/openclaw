@@ -7,9 +7,23 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { sessionMachineParts } from "./session-machine.ts";
 
-export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
+export function sidebarSessionBadgeFacts(row: SidebarRecentSession) {
+  const attention = row.attention;
+  return (
+    row.snapshot ?? {
+      // A leading question may also carry an approval that needs its own badge.
+      hasApproval:
+        (attention.kind === "question" &&
+          attention.requests.some((request) => request.kind === "approval")) ||
+        undefined,
+    }
+  );
+}
+
+type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
 export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 
@@ -29,9 +43,10 @@ export type SessionRowBadgesParams = {
 
 export type SessionRowBadge = {
   label: string;
-  icon: "incognito" | "alertTriangle" | "pencil" | "globe";
+  icon: "incognito" | "alertTriangle" | "draft" | "globe";
   modifier: string;
   count?: number;
+  countLabel?: string;
   placementState?: SessionPlacementState;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
@@ -126,7 +141,7 @@ export function resolveSessionRowBadges(
   if (params.hasComposerDraft) {
     badges.push({
       label: translate("sessionsView.unsentDraft"),
-      icon: "pencil",
+      icon: "draft",
       modifier: "draft",
     });
   }
@@ -140,5 +155,44 @@ export function resolveSessionRowBadges(
       workspaceConflictCount,
     });
   }
-  return badges;
+  return trimSessionRowBadges(badges);
+}
+
+// The trailing column holds two context signals at most. Badges asking for action
+// outrank passive context, and healthy placement yields to action badges; the
+// survivors keep their reading order.
+const SESSION_ROW_BADGE_LIMIT = 2;
+const SESSION_ROW_BADGE_PRIORITY = [
+  "attention",
+  "approval",
+  "cloud",
+  "draft",
+  "placement",
+  "incognito",
+];
+const SESSION_ROW_COUNT_LIMIT = 99;
+
+function sessionRowBadgeRank(badge: SessionRowBadge): number {
+  const healthyPlacement =
+    badge.modifier === "cloud" &&
+    badge.placementState !== "failed" &&
+    !badge.workspaceConflictCount &&
+    (badge.diskSpaceStatus === undefined || badge.diskSpaceStatus === "ok");
+  return SESSION_ROW_BADGE_PRIORITY.indexOf(healthyPlacement ? "placement" : badge.modifier);
+}
+
+function trimSessionRowBadges(badges: SessionRowBadge[]): SessionRowBadge[] {
+  const kept = new Set(
+    badges
+      .toSorted((a, b) => sessionRowBadgeRank(a) - sessionRowBadgeRank(b))
+      .slice(0, SESSION_ROW_BADGE_LIMIT),
+  );
+  const visible = badges.filter((badge) => kept.has(badge));
+  for (const badge of visible) {
+    if ((badge.count ?? 0) > SESSION_ROW_COUNT_LIMIT) {
+      badge.count = undefined;
+      badge.countLabel = `${SESSION_ROW_COUNT_LIMIT}+`;
+    }
+  }
+  return visible;
 }

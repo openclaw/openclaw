@@ -61,15 +61,8 @@ type ControllerPhase =
   | "injection-outcome"
   | "successor-barrier"
   | "followup-barrier"
-  | "lifecycle-admission"
-  | "recovery-predecessor";
-type ControllerPhaseStatus =
-  | "waiting"
-  | "selected"
-  | "settled"
-  | "failed"
-  | "reserved"
-  | "restored";
+  | "lifecycle-admission";
+type ControllerPhaseStatus = "waiting" | "selected" | "settled" | "failed";
 
 type PhaseRecord = {
   phase: ControllerPhase;
@@ -372,7 +365,7 @@ export function createSessionControllerPhaseLogger(
 
 /** Supplemental phase events have a separate budget so they cannot suppress slow warnings. */
 export function logSessionControllerPhase(params: PhaseRecord): void {
-  if (!areDiagnosticsEnabledForProcess() || !diagnosticLogger.isEnabled("info")) {
+  if (!areDiagnosticsEnabledForProcess() || !diagnosticLogger.isEnabled("info", "file")) {
     return;
   }
   try {
@@ -383,6 +376,7 @@ export function logSessionControllerPhase(params: PhaseRecord): void {
     }
     const { sessionKey, sessionId, sourceId, prioritySourceId, reason, ...fields } = params;
     diagnosticLogger.info("session controller phase", {
+      consoleMessage: false,
       ...fields,
       diagnosticEpoch: current.epoch,
       omittedObservations: current.phaseOmitted,

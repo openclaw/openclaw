@@ -8,6 +8,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
+import {
+  createApplicationGatewaySnapshot,
+  hiddenScopeUpgradeCapability,
+} from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -17,19 +21,15 @@ export function createConnectedContext(
   request: GatewayBrowserClient["request"],
   selfUser: AuthenticatedUser | null = null,
 ) {
-  let snapshot: ApplicationGatewaySnapshot = {
+  let snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client: createTestGatewayClient(request),
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
     selfUser,
-  };
+  });
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const routeListeners = new Set<() => void>();
   const subscribe = () => () => undefined;
   const baseContext = {
     plugins: {
@@ -44,6 +44,13 @@ export function createConnectedContext(
         return { view: settingsViews[0], signal, dispose() {} };
       },
     },
+    router: {
+      subscribe(listener: () => void) {
+        routeListeners.add(listener);
+        return () => routeListeners.delete(listener);
+      },
+    },
+    scopeUpgrade: hiddenScopeUpgradeCapability,
     runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
     gateway: {
       connect: vi.fn(),
@@ -114,6 +121,11 @@ export function createConnectedContext(
   };
   return {
     context,
+    emitNavigation() {
+      for (const listener of routeListeners) {
+        listener();
+      }
+    },
     emitSnapshot(next: Partial<ApplicationGatewaySnapshot>) {
       snapshot = { ...snapshot, ...next };
       for (const listener of listeners) {

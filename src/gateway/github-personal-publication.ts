@@ -12,11 +12,10 @@ import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import { presentPersonalGitHubPublicationStatusAsync } from "./github-personal-publication-status.js";
 import { personalGitHubRequestDigest } from "./github-personal-publication-store.js";
-import type { PersonalGitHubPublicationRow } from "./github-personal-publication-store.js";
+import type { PersonalGitHubPublicationRow } from "./github-personal-publication-store.worker.js";
 import {
   readGitHubPublicationWorktreeOwner,
   readRepositoryPublicationTargetFacts,
-  type PublicationSessionIdentity as SessionIdentity,
 } from "./github-publication-availability.js";
 import { RepositoryPublicationRequesterUnavailableError } from "./github-publication-errors.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
@@ -29,6 +28,7 @@ import {
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import { insertPersonalGitHubPublicationAsync } from "./github-publication-request-async.js";
 import type { GitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import type { PublicationSessionIdentity as SessionIdentity } from "./github-publication-session.types.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import {
   claimPersonalGitHubPublicationAsync,
@@ -178,6 +178,7 @@ export function createPersonalGitHubPublicationCoordinator(
         provider,
         config: getCommittedRuntimeConfig(),
         initial: execution.row,
+        requesterProfileId: () => action.owner,
         validateAuthority: () => {
           assertCurrent();
           return execution.ownsExecution();

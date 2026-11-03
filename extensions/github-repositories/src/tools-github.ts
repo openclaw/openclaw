@@ -5,6 +5,7 @@ import {
   validateToolsGitHubConfigureParams,
   validateToolsGitHubStatusParams,
 } from "@openclaw/gateway-protocol";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { getActiveSecretsRuntimeConfigSnapshot } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
 import {
   resolveAgentIdOrRespondError,
@@ -15,6 +16,7 @@ import {
   errorShape,
   type GatewayRequestHandlers,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { consumeGitHubSetupHandoff } from "openclaw/plugin-sdk/native-github-account-host";
 import { readRepositoryServices } from "../account-runtime-api.js";
 import { GitHubCliUnavailableError } from "../cli-preflight-api.js";
@@ -26,6 +28,8 @@ import {
   resolveManagedGitHubProfileDir,
 } from "../tool-identity-api.js";
 import { updateGitHubToolIdentityConfig } from "../tool-identity-config-api.js";
+const log = createSubsystemLogger("github-repositories");
+
 export const toolsGitHubHandlers: GatewayRequestHandlers = {
   "tools.github.status": defineValidatedGatewayHandler(
     "tools.github.status",
@@ -129,7 +133,11 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
             selectedScope: params.scope,
           }),
         );
-      } catch {
+      } catch (error) {
+        // Credential setup causes must be safe even in raw file logs.
+        log.warn(
+          `tools-github: GitHub identity setup failed: ${formatErrorMessage(error, { redact: redactToolPayloadText })}`,
+        );
         respond(
           false,
           undefined,

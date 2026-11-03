@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   prepareSandboxDependencyTemplate,
   resolveSandboxDependencyTemplateIdentity,
@@ -33,6 +34,7 @@ const directory = "/owned/template";
 const image = `sha256:${"a".repeat(64)}`;
 const containerId = "b".repeat(64);
 const cfg: SandboxConfig = {
+  ...resolveSandboxConfigForAgent(),
   mode: "all",
   backend: "docker",
   scope: "session",
@@ -48,28 +50,6 @@ const cfg: SandboxConfig = {
       setupCommand: "private-setup",
     },
   }).docker,
-  ssh: {
-    command: "ssh",
-    workspaceRoot: "/workspace",
-    strictHostKeyChecking: true,
-    updateHostKeys: false,
-  },
-  browser: {
-    enabled: false,
-    image: "unused",
-    containerPrefix: "unused",
-    network: "none",
-    cdpPort: 9222,
-    vncPort: 5900,
-    noVncPort: 6080,
-    headless: true,
-    noVncEnabled: false,
-    allowHostControl: false,
-    autoStart: false,
-    autoStartTimeoutMs: 1000,
-  },
-  tools: {},
-  prune: { idleHours: 24, maxAgeDays: 7 },
 };
 
 beforeEach(() => {
@@ -96,14 +76,14 @@ beforeEach(() => {
   });
 });
 
-async function prepare(signal?: AbortSignal, rollbackGuard = vi.fn()) {
-  const identity = await resolveSandboxDependencyTemplateIdentity(cfg, {
+async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn()) {
+  const identity = await resolveSandboxDependencyTemplateIdentity(config, {
     assertCurrent: () => {},
   });
   expect(identity).toBeDefined();
   return await prepareSandboxDependencyTemplate({
     directory,
-    cfg,
+    cfg: config,
     scopeKey: "fixture",
     identity: identity!,
     signal,
@@ -144,20 +124,7 @@ it("records install failure without exposing installer output and retires the wr
 
 it("uses offline installation when the sandbox has no network", async () => {
   const offlineCfg = { ...cfg, docker: { ...cfg.docker, network: "none" } };
-  const identity = await resolveSandboxDependencyTemplateIdentity(offlineCfg, {
-    assertCurrent: () => {},
-  });
-  if (!identity) {
-    throw new Error("Fixture image identity is missing");
-  }
-  await prepareSandboxDependencyTemplate({
-    directory,
-    cfg: offlineCfg,
-    scopeKey: "fixture",
-    identity,
-    assertCurrent: () => {},
-    rollbackGuard: () => {},
-  });
+  await prepare(offlineCfg);
   expect(mocks.exec.mock.calls.find(([, args]) => args[0] === "exec")?.[1]).toContain(
     "exec pnpm install --offline --frozen-lockfile",
   );
@@ -170,7 +137,7 @@ it("settles cancellation through independent cleanup authority", async () => {
     controller.abort(new Error("run ended"));
     return { containerName: "builder", containerId };
   });
-  await expect(prepare(controller.signal, rollbackGuard)).rejects.toThrow("run ended");
+  await expect(prepare(cfg, controller.signal, rollbackGuard)).rejects.toThrow("run ended");
   expect(rollbackGuard).toHaveBeenCalled();
   expect(mocks.retire).toHaveBeenCalledOnce();
 });

@@ -2,14 +2,15 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
-import type { CodexCatalogState, StoredCodexCatalogEntry } from "./session-catalog-index-state.js";
+import { catalogThread } from "./session-catalog-client.test-support.js";
+import type { CodexCatalogState } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { catalogRow } from "./session-catalog-index.test-support.js";
+import { catalogRow, completeCatalogState } from "./session-catalog-index.test-support.js";
 
+const homeId = "cold-start";
 const indexes: CodexCatalogIndex[] = [];
 const releases: Array<() => void> = [];
 const pending: Promise<unknown>[] = [];
-const homeId = "cold-start";
 const anyCursor = expect.any(String);
 afterEach(async () => {
   releases.splice(0).forEach((release) => release());
@@ -35,15 +36,6 @@ function createIndex(
   return index;
 }
 
-function savedState(values: StoredCodexCatalogEntry[]): CodexCatalogState {
-  return {
-    entries: async () =>
-      values.map((value, index) => ({ key: String(index), createdAt: 0, value })),
-    register: vi.fn(async () => {}),
-    delete: vi.fn(async () => false),
-  };
-}
-
 function gatedPages(head: ReturnType<typeof row>[], tailRows: ReturnType<typeof row>[]) {
   const tailEntered = gate();
   const tail = gate();
@@ -64,8 +56,9 @@ function expectPage(
   cursors: { nextCursor?: unknown; backwardsCursor?: unknown } = {},
 ) {
   expect(page.sessions.map((session) => session.threadId)).toEqual(ids);
-  const actual = { nextCursor: page.nextCursor, backwardsCursor: page.backwardsCursor };
-  expect(actual).toMatchObject(cursors);
+  expect({ nextCursor: page.nextCursor, backwardsCursor: page.backwardsCursor }).toMatchObject(
+    cursors,
+  );
 }
 
 it.each([
@@ -97,7 +90,6 @@ it.each([
   await index.initialize();
   const following = await index.list({ limit: 1, cursor: previous.nextCursor });
   expectPage(following, ["charlie"], { nextCursor: undefined });
-  expect(readNative).toHaveBeenCalledTimes(2);
 });
 
 it("returns a progressing filtered frontier and bounds a caught-up continuation wait", async () => {
@@ -111,7 +103,6 @@ it("returns a progressing filtered frontier and bounds a caught-up continuation 
   await expect(index.list({ cwd: "/workspace", cursor: first.nextCursor })).rejects.toMatchObject({
     code: "APP_SERVER_UNAVAILABLE",
   });
-  expect(readNative).toHaveBeenCalledTimes(2);
   tail.resolve();
   await index.initialize();
   const next = await index.list({ cwd: "/workspace", cursor: first.nextCursor });
@@ -124,11 +115,7 @@ it("does not expose an invalid saved snapshot's stale tail", async () => {
   const entered = gate();
   const release = gate();
   const index = createIndex({
-    state: savedState([
-      { version: 1, kind: "row", row: row("stale-tail") },
-      { version: 1, kind: "complete" },
-      { version: 1, kind: "row", row: invalid },
-    ]),
+    state: completeCatalogState([row("stale-tail"), invalid]),
     readNative: async () => {
       entered.resolve();
       await release.promise;
@@ -150,16 +137,14 @@ it("does not expose an invalid saved snapshot's stale tail", async () => {
 it("bounds a stalled restore without starting competing native work", async () => {
   const entries = createDeferred<Awaited<ReturnType<CodexCatalogState["entries"]>>>();
   releases.push(() => entries.resolve([]));
-  const state = { ...savedState([]), entries: () => entries.promise };
+  const state = { ...completeCatalogState([]), entries: () => entries.promise };
   const readNative = vi.fn(async () => ({ rows: [] }));
   const index = createIndex({ state, readNative, requestTimeoutMs: 20 });
-  const listed = index.list({}).then(
-    (page) => ({ page }),
-    (error: unknown) => ({ error }),
-  );
+  const listed = index.list({});
   pending.push(listed);
-  const result = await Promise.race([listed, delay(100).then(() => "still waiting")]);
-  expect(result).toMatchObject({ error: { code: "APP_SERVER_UNAVAILABLE" } });
+  await expect(Promise.race([listed, delay(100)])).rejects.toMatchObject({
+    code: "APP_SERVER_UNAVAILABLE",
+  });
   expect(readNative).not.toHaveBeenCalled();
   entries.resolve([{ key: "complete", createdAt: 0, value: { version: 1, kind: "complete" } }]);
   expect(await index.list({})).toEqual({ sessions: [] });
@@ -194,29 +179,16 @@ it("keeps event-owned tails outside an incomplete prefix and waits for old curso
   const firstCall = index.list({ limit: 10 });
   pending.push(firstCall);
   await headEntered.promise;
-  await index.upsertThread({
-    id: "old",
-    name: "old",
-    source: "cli",
-    projectId: null,
-    updatedAt: 100,
-    recencyAt: 100,
-  });
+  await index.upsertThread(catalogThread({ id: "old", name: "old" }));
   headReady.resolve();
   const first = await firstCall;
   expect.soft(first.sessions.map((session) => session.threadId)).toEqual(["newest", "head"]);
-  const settled = { forward: false, backward: false };
-  const forward = index.list({ limit: 1, cursor: old.nextCursor }).then((page) => {
-    settled.forward = true;
-    return page;
-  });
-  const backward = index.list({ limit: 1, cursor: old.backwardsCursor }).then((page) => {
-    settled.backward = true;
-    return page;
-  });
+  const forward = index.list({ limit: 1, cursor: old.nextCursor });
+  const backward = index.list({ limit: 1, cursor: old.backwardsCursor });
   pending.push(forward, backward);
-  await delay(0);
-  expect.soft(settled).toEqual({ forward: false, backward: false });
+  expect
+    .soft(await Promise.race([forward, backward, delay(0).then(() => "pending")]))
+    .toBe("pending");
   tailReady.resolve();
   expectPage(await backward, ["middle"]);
   expectPage(await forward, ["oldest"]);

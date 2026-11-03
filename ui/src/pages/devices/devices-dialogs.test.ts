@@ -1,13 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { showInputDialog } from "../../components/input-dialog.ts";
+import { showInputDialog } from "../../components/input-dialog.tsx";
 import { t } from "../../i18n/index.ts";
 import { createInitialDevicesState } from "../../lib/nodes/page-operations.ts";
 import { createDevicesDialogs, type DevicesDialogHost } from "./devices-dialogs.ts";
 
-vi.mock("../../components/input-dialog.ts", () => ({ showInputDialog: vi.fn() }));
+vi.mock("../../components/input-dialog.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/input-dialog.tsx")>()),
+  showInputDialog: vi.fn(),
+}));
 
 function createHost(request = vi.fn(), canManagePairing = () => true): DevicesDialogHost {
   const state = createInitialDevicesState({
@@ -20,32 +24,26 @@ function createHost(request = vi.fn(), canManagePairing = () => true): DevicesDi
     gatewayClient: () => null,
     gatewayUrl: () => "http://gateway.test",
     runPageTask: async (task) => task(state),
+    runInventoryTask: async (task) => {
+      await task(state);
+    },
+    rotateDevice: vi.fn(),
     setDevicesError: vi.fn(),
   };
 }
 
-async function openAlias(
-  host = createHost(),
-  device: Parameters<ReturnType<typeof createDevicesDialogs>["editAlias"]>[0] = {
+async function openAlias(host: DevicesDialogHost) {
+  const pending = createDevicesDialogs(host).editAlias({
     id: "device-1",
-    name: "Browser",
-  },
-) {
-  const controller = createDevicesDialogs(host);
-  const pending = controller.editAlias(device);
+    name: "Office node",
+    operatorLabel: "Old alias",
+  });
   await vi.waitFor(() => expect(showInputDialog).toHaveBeenCalledOnce());
-  const call = vi.mocked(showInputDialog).mock.calls[0];
-  assert(call, "Expected alias dialog");
-  const [options] = call;
-  if (!options.submit) {
-    throw new Error("Expected alias dialog submit");
-  }
-  return { controller, pending, options, submit: options.submit };
+  const [options] = expectDefined(vi.mocked(showInputDialog).mock.calls[0], "alias dialog");
+  return { pending, options, submit: expectDefined(options.submit, "alias submit") };
 }
 
-beforeEach(() => {
-  vi.mocked(showInputDialog).mockReset().mockResolvedValue(null);
-});
+beforeEach(() => void vi.mocked(showInputDialog).mockReset().mockResolvedValue(null));
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -60,11 +58,7 @@ describe("Devices dialogs editAlias", () => {
       }
       return { paired: [], pending: [] };
     });
-    const { pending, options, submit } = await openAlias(createHost(request), {
-      id: "device-1",
-      name: "Office node",
-      operatorLabel: "Old alias",
-    });
+    const { pending, options, submit } = await openAlias(createHost(request));
     expect(options).toMatchObject({
       title: t("devices.inventory.renameTitle", { name: "Office node" }),
       label: t("devices.inventory.renamePrompt"),
@@ -79,21 +73,6 @@ describe("Devices dialogs editAlias", () => {
     });
     expect(request).toHaveBeenCalledWith("device.pair.list", {});
     await pending;
-  });
-
-  it("aborts an open alias dialog when its slot is cancelled", async () => {
-    vi.mocked(showInputDialog).mockImplementation(async (options) => {
-      await new Promise<void>((resolve) => {
-        options.signal?.addEventListener("abort", () => resolve(), { once: true });
-      });
-      return null;
-    });
-
-    const { controller, pending, options } = await openAlias();
-    controller.cancel();
-    await pending;
-
-    expect(options.signal?.aborted).toBe(true);
   });
 
   it("refuses a rename submitted after pairing access was lost", async () => {

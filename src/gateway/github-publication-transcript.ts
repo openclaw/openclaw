@@ -16,6 +16,7 @@ export type RepositoryPublicationTranscriptReport = {
   sessionKey: string;
   agentId: string;
   requestId: string;
+  lifecycleRevision?: string | null;
   runId?: string;
   text: string;
   responseId: string;
@@ -50,6 +51,17 @@ export async function reportRepositoryPublicationTranscript(
         };
       })();
   const { target, entry } = selected;
+  // A reset or rotation ended that transcript for good; the receipt stays readable by request id.
+  if (
+    entry &&
+    target.canonicalKey === params.sessionKey &&
+    (entry.sessionId !== params.sessionId ||
+      (params.lifecycleRevision !== undefined &&
+        (entry.lifecycleRevision ?? null) !== params.lifecycleRevision))
+  ) {
+    await markReported(params.requestId);
+    return;
+  }
   if (entry?.sessionId !== params.sessionId || target.canonicalKey !== params.sessionKey) {
     throw new Error("Publication transcript owner changed");
   }
@@ -59,6 +71,7 @@ export async function reportRepositoryPublicationTranscript(
       sessionId: params.sessionId,
       sessionKey: target.canonicalKey,
       storePath: target.storePath,
+      expectedLifecycleRevision: params.lifecycleRevision ?? undefined,
     },
     {
       kind: "assistant",

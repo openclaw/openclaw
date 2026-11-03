@@ -23,8 +23,7 @@ describe("prepared project retention compatibility", () => {
       .mockReset()
       .mockRejectedValue(new Error("Retention must not access the repository"));
     fixture.config.agents = { entries: { main: {} } };
-    fixture.provider.requiresNodeEnrollment = true;
-    fixture.provider.supportsProjectPreparation = () => true;
+    const options = fixture.intentOwnerOptions("gateway");
     const { target, artifacts } = readWorkerPreparation(fixture.profile())!;
     fixture.provider.resolvePreparationTarget = () => target;
     const project: RepositoryWorkerProjectSnapshot = {
@@ -65,14 +64,10 @@ describe("prepared project retention compatibility", () => {
     const providerFor = vi.fn(() => fixture.provider);
     const sources = createRepositorySourcesFixture(() => fixture.config);
     const owner = createWorkerProviderIntent({
-      store: fixture.store,
-      getConfig: () => fixture.config,
+      ...options,
       getRepositorySources: () => sources,
-      projectNamespace: "gateway",
       providerFor,
       prepareNodeArtifacts,
-      isStopping: () => false,
-      withLock: async (_id, run) => await run(),
       resumeProvision: async (environment) => environment,
     });
     return {
@@ -90,25 +85,22 @@ describe("prepared project retention compatibility", () => {
   it("uses repository admission and fences a changed source owner before allocation", async () => {
     const { owner, project } = await setup();
     let current = true;
-    sourceAdmission.mockImplementation(async (request) => {
-      request.assertCurrent();
-      return {
-        project,
-        setupRecipe: "e".repeat(40),
-        recipe: {
-          source: "script",
-          identity: "e".repeat(40),
-          inputs: { ".openclaw/worktree-setup.sh": "e".repeat(40) },
-          env: {},
-          onCreate: ["./.openclaw/worktree-setup.sh"],
-        },
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Repository owner changed");
-          }
-        },
-        revalidate: async () => {},
-      };
+    sourceAdmission.mockResolvedValue({
+      project,
+      setupRecipe: "e".repeat(40),
+      recipe: {
+        source: "script",
+        identity: "e".repeat(40),
+        inputs: { ".openclaw/worktree-setup.sh": "e".repeat(40) },
+        env: {},
+        onCreate: ["./.openclaw/worktree-setup.sh"],
+      },
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("Repository owner changed");
+        }
+      },
+      revalidate: async () => {},
     });
     const intent = await owner.prepareIntent("development", {
       executionMode: "worker-turn",

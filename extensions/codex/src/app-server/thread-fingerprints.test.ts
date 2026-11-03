@@ -1,36 +1,46 @@
 import { describe, expect, it } from "vitest";
-import type { CodexDynamicToolFunctionSpec, JsonObject } from "./protocol.js";
+import type { JsonObject } from "./protocol.js";
 import {
   codexDynamicToolsFingerprint,
+  codexLegacyDynamicToolsFingerprint,
   fingerprintCodexThreadConfig,
   fingerprintRestrictedThreadConfig,
   fingerprintUserMcpServersConfigPatch,
   readActiveCodexTurnIdsFromResume,
 } from "./thread-fingerprints.js";
 
-it("keeps tool fingerprints stable when tools and schema properties are reordered", () => {
-  const message: CodexDynamicToolFunctionSpec = {
+it("preserves legacy JSON bytes, including literal prototype keys and escaped descriptions", () => {
+  const tools = [
+    {
+      type: "function",
+      name: "message",
+      inputSchema: {
+        type: "object",
+        required: ["text", "__proto__"],
+        properties: {
+          text: { type: "string", description: 'Line one\n"Line two"' },
+          ["__proto__"]: { type: "string" },
+        },
+      },
+      description: "Send a message.",
+    },
+  ];
+  expect(codexLegacyDynamicToolsFingerprint(tools)).toBe(
+    '[{"description":"Send a message.","inputSchema":{"properties":{"__proto__":{"type":"string"},"text":{"description":"Line one\\n\\\"Line two\\\"","type":"string"}},"required":["text","__proto__"],"type":"object"},"name":"message","type":"function"}]',
+  );
+  expect(codexLegacyDynamicToolsFingerprint([])).toBe("[]");
+});
+
+it("keeps hashed tool fingerprints stable when tools are reordered", () => {
+  const message = {
     type: "function",
     name: "message",
-    description: "Send a message.",
-    inputSchema: {
-      type: "object",
-      properties: { channel: { type: "string", description: "Current channel." } },
-    },
-  };
-  const reorderedMessage: CodexDynamicToolFunctionSpec = {
-    name: message.name,
-    type: message.type,
-    inputSchema: {
-      properties: { channel: { description: "Current channel.", type: "string" } },
-      type: "object",
-    },
-    description: message.description,
+    inputSchema: { type: "string", description: "Current channel." },
   };
   const search = { ...message, name: "search" };
 
   expect(codexDynamicToolsFingerprint([message, search])).toBe(
-    codexDynamicToolsFingerprint([search, reorderedMessage]),
+    codexDynamicToolsFingerprint([search, message]),
   );
 });
 
@@ -64,7 +74,7 @@ describe("fingerprintCodexThreadConfig", () => {
   });
 });
 
-describe.each(["ordinary", "restricted"] as const)("%s proxied thread fingerprint", (kind) => {
+it.each(["ordinary", "restricted"] as const)("preserves %s proxy identity", (kind) => {
   function fingerprint(
     port: number,
     upstream = "https://api.example.com/v1",
@@ -93,28 +103,20 @@ describe.each(["ordinary", "restricted"] as const)("%s proxied thread fingerprin
       : fingerprintRestrictedThreadConfig(request, auth, "tools", {}, false, undefined, inference);
   }
 
-  it("keeps identity across proxy restarts", () => {
-    expect(fingerprint(41001)).toBe(fingerprint(41002));
-  });
-
-  it("retains upstream, auth profile, and other configuration identity", () => {
-    const original = fingerprint(41001);
-    expect(fingerprint(41002, "https://other.example.com/v1")).not.toBe(original);
-    expect(fingerprint(41002, undefined, "work")).not.toBe(original);
-    expect(fingerprint(41002, undefined, undefined, false)).not.toBe(original);
-  });
+  const original = fingerprint(41001);
+  expect(fingerprint(41002)).toBe(original);
+  expect(fingerprint(41002, "https://other.example.com/v1")).not.toBe(original);
+  expect(fingerprint(41002, undefined, "work")).not.toBe(original);
+  expect(fingerprint(41002, undefined, undefined, false)).not.toBe(original);
 });
 
 it("retains literal __proto__ MCP header keys during redaction", () => {
+  const headers = (value: string) => ({
+    Authorization: "synthetic",
+    ["__proto__"]: value,
+  });
   const config = (value: string): JsonObject => ({
-    mcp_servers: {
-      calendar: {
-        http_headers: {
-          Authorization: "synthetic-access-token",
-          ["__proto__"]: value,
-        },
-      },
-    },
+    mcp_servers: { calendar: { http_headers: headers(value) } },
   });
   const first = fingerprintUserMcpServersConfigPatch(config("synthetic-first"));
   const second = fingerprintUserMcpServersConfigPatch(config("synthetic-second"));

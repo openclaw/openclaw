@@ -424,9 +424,9 @@ describe("renderModelSetup", () => {
       expect(link?.target).toBe("_blank");
       expect(link?.rel).toBe("noreferrer");
       expect(text(container)).toContain("ABCD-EFGH");
-      expect(text(container)).toContain("Expires in 10 minutes");
+      expect(text(container)).not.toContain("Expires in");
     }
-    const copy = container.querySelector<HTMLButtonElement>(".wizard-step__sign-in button");
+    const copy = container.querySelector<HTMLButtonElement>(".wizard-sign-in__code button");
     copy?.click();
 
     const feedback = copied ? "Copied!" : "Copy failed";

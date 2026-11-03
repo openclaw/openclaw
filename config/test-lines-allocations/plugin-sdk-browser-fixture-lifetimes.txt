@@ -1,0 +1,2 @@
+# Keep annotation contrast proof independent of the retained named palette in the shared browser.
+1

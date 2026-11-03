@@ -36,7 +36,7 @@ it.each(["runtime", "missing updater"] as const)(
     const confirm = vi.spyOn(prompts, "confirm").mockResolvedValue(false);
     const message =
       failure === "runtime"
-        ? "Target package: openclaw@2026.9.4; Minimum Node engine: 24.16.0; Running Node: 22.23.2"
+        ? "Target package: openclaw@2026.9.4; Minimum Node engine: 24.22.1; Running Node: 22.23.2"
         : "Cannot locate the installed updater; run `openclaw doctor` before retrying.";
 
     await withTriageTerminal(true, () =>

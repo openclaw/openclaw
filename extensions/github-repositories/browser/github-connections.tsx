@@ -12,7 +12,7 @@ import {
   GitHubHealth,
   GitHubUnloadedStatus,
 } from "./github-identity-view.tsx";
-import { createGitHubIdentity } from "./github-identity.ts";
+import { createGitHubIdentityView } from "./github-identity-view.tsx";
 import { translator } from "./i18n.ts";
 import {
   SettingsRow,
@@ -51,8 +51,8 @@ export function GitHubConnections(props: {
   const [setupOpen, setSetupOpen] = createSignal(false);
   const deps = createIdentityDependencies(context);
   const authorizationSucceeded = () => setSetupOpen(false);
-  const personal = createGitHubIdentity({ ...deps, authorizationSucceeded });
-  const system = createGitHubIdentity({ ...deps, authorizationSucceeded });
+  const personal = createGitHubIdentityView({ ...deps, authorizationSucceeded });
+  const system = createGitHubIdentityView({ ...deps, authorizationSucceeded });
   let observedProfileId: string | null = initial.profile?.id ?? null;
   let previousCanRead = initial.canRead === true;
   let previousCanAdmin = initial.canAdmin === true;
@@ -251,10 +251,7 @@ export function GitHubConnections(props: {
                 <>
                   <GitHubHealth
                     identity={view().systemIdentity}
-                    request={{
-                      loading: systemView().loading || personalView().loading,
-                      error: systemView().error ?? personalView().error,
-                    }}
+                    request={view().canAdmin ? systemView() : personalView()}
                   />
                   {view().canAdmin ? (
                     <button
@@ -307,6 +304,8 @@ export function GitHubConnections(props: {
           ) : undefined}
           <GitHubConnectionError
             error={personalView().error ?? systemView().error}
+            completion={personalView().completion}
+            secondaryCompletion={systemView().completion}
             control={
               <button class="btn btn--sm" disabled={view().locked} onClick={verify}>
                 {t("common.retry")}

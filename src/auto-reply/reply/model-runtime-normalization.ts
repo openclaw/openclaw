@@ -81,16 +81,6 @@ export function isKnownModelSelectionProvider(params: {
   );
 }
 
-type ModelSelectionPreparation =
-  | {
-      status: "ready";
-      catalog: ModelCatalogEntry[];
-      runtime: Exclude<ReturnType<typeof resolveModelRuntimeDirective>, { kind: "invalid" }>;
-      validateRuntimeSelection?: () => string | undefined;
-      harness?: AgentHarness;
-    }
-  | { status: "rejected"; reason: "invalid-runtime" | "unknown-provider"; message: string };
-
 /** Prepare runtime and capabilities for the selected route before any session mutation. */
 export async function prepareModelSelectionRuntime(params: {
   cfg: OpenClawConfig;
@@ -113,7 +103,16 @@ export async function prepareModelSelectionRuntime(params: {
     | "modelProvider"
     | "providerOverride"
   >;
-}): Promise<ModelSelectionPreparation> {
+}): Promise<
+  | {
+      status: "ready";
+      catalog: ModelCatalogEntry[];
+      runtime: Exclude<ReturnType<typeof resolveModelRuntimeDirective>, { kind: "invalid" }>;
+      validateRuntimeSelection?: () => string | undefined;
+      harness?: AgentHarness;
+    }
+  | { status: "rejected"; reason: "invalid-runtime" | "unknown-provider"; message: string }
+> {
   const sessionEntry = params.profileOverride
     ? {
         ...params.sessionEntry,

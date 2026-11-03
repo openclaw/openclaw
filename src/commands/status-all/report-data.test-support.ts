@@ -41,7 +41,6 @@ const mocks = vi.hoisted(() => {
       async () => createTestConfigSnapshot({}),
     ),
     inspectPortUsage: vi.fn<() => Promise<PortUsage | null>>(async () => null),
-    resolveGatewayBindHost: vi.fn(async () => "127.0.0.1"),
     resolveStatusGatewayDiagnosticsSafe: vi.fn<
       typeof import("../status-runtime-shared.ts").resolveStatusGatewayDiagnosticsSafe
     >(async () => ({ ok: true, value: {} })),
@@ -49,11 +48,9 @@ const mocks = vi.hoisted(() => {
       typeof import("../status-runtime-shared.ts").resolveStatusGatewayHealthSafe
     >(async () => createStatusHealth()),
     resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
-    loadExecApprovalsReadOnly: vi.fn(() => ({ version: 1, agents: {} })),
     buildWorkspaceSkillReadiness: vi.fn<
       typeof import("../../skills/discovery/status.js").buildWorkspaceSkillReadiness
     >(() => ({ workspaceDir: "/tmp/mock-skills", eligible: 0, missing: 0 })),
-    resolveStatusSummaryFromOverview: vi.fn(async (_params: unknown) => ({})),
     resolveStatusAllConnectionDetails: vi.fn(() => ""),
     resolveGatewayLogPaths:
       vi.fn<typeof import("../../daemon/restart-logs.js").resolveGatewayLogPaths>(noLogs),
@@ -101,9 +98,7 @@ vi.mock("../../daemon/diagnostics.js", async (importOriginal) => ({
 }));
 vi.mock("../../gateway/net.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../gateway/net.js")>()),
-  resolveGatewayBindHost: mocks.resolveGatewayBindHost,
-  resolveGatewayRequiredListenHosts: (bindHost: string) =>
-    bindHost === "100.64.0.40" ? [bindHost, "127.0.0.1"] : [bindHost],
+  resolveGatewayBindHost: async () => "127.0.0.1",
 }));
 vi.mock("../../infra/ports-inspect.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/ports-inspect.js")>()),
@@ -111,7 +106,7 @@ vi.mock("../../infra/ports-inspect.js", async (importOriginal) => ({
 }));
 vi.mock("../../infra/exec-approvals.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/exec-approvals.js")>()),
-  loadExecApprovalsReadOnly: mocks.loadExecApprovalsReadOnly,
+  loadExecApprovalsReadOnly: () => ({ version: 1, agents: {} }),
 }));
 vi.mock("../../infra/update-run-ledger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-run-ledger.js")>()),
@@ -160,10 +155,9 @@ vi.mock("../status.gateway-connection.ts", async (importOriginal) => ({
 // mock-isolation: Reuse fixed scan facts while retaining the real downstream report rendering.
 vi.mock("../status.scan-overview.ts", () => ({
   collectStatusScanOverview: mocks.collectStatusScanOverview,
-  prepareStatusSummaryFromOverview: async (params: unknown) => {
-    const summary = await mocks.resolveStatusSummaryFromOverview(params);
-    return { publish: () => ({ summary, sessionStores: undefined }) };
-  },
+  prepareStatusSummaryFromOverview: async () => ({
+    publish: () => ({ summary: {}, sessionStores: undefined }),
+  }),
 }));
 
 vi.mock("../../daemon/restart-logs.js", async (importOriginal) => ({
@@ -183,11 +177,7 @@ import { statusAllCommand } from "../status-all.js";
 export async function runStatusAllReport(
   params: Partial<{
     overview: Partial<Awaited<ReturnType<typeof collectStatusScanOverview>>>;
-    daemon: Awaited<ReturnType<typeof resolveStatusServiceSummaries>>[0];
-    nodeService: Awaited<ReturnType<typeof resolveStatusServiceSummaries>>[1];
     nodeOnlyGateway: Awaited<ReturnType<typeof resolveNodeOnlyGatewayInfo>>;
-    timeoutMs?: number;
-    gatewayProbeDeadlineMs: number;
   }> = {},
 ) {
   const service = {
@@ -209,23 +199,29 @@ export async function runStatusAllReport(
     channelsStatus: null,
     ...params.overview,
   });
-  mocks.resolveStatusServiceSummaries.mockResolvedValueOnce([
-    params.daemon ?? service,
-    params.nodeService ?? service,
-  ]);
+  mocks.resolveStatusServiceSummaries.mockResolvedValueOnce([service, service]);
   mocks.resolveNodeOnlyGatewayInfo.mockResolvedValueOnce(params.nodeOnlyGateway ?? null);
   const log = vi.fn();
-  await statusAllCommand(
-    { log, error: vi.fn(), exit: vi.fn() },
-    {
-      timeoutMs: params.timeoutMs,
-      gatewayProbeDeadlineMs:
-        params.gatewayProbeDeadlineMs ??
-        createStatusGatewayProbeBudget(params.timeoutMs).gatewayProbeDeadlineMs,
-    },
-  );
+  await statusAllCommand({ log, error: vi.fn(), exit: vi.fn() }, createStatusGatewayProbeBudget());
   expect(log).toHaveBeenCalledOnce();
   return stripAnsi(String(log.mock.calls[0]?.[0])).split("\n");
+}
+
+export async function reportText(params: Parameters<typeof runStatusAllReport>[0] = {}) {
+  return (await runStatusAllReport(params)).join("\n");
+}
+
+export function expectReport(
+  output: string,
+  contains: readonly string[],
+  excludes: readonly string[] = [],
+) {
+  for (const text of contains) {
+    expect(output).toContain(text);
+  }
+  for (const text of excludes) {
+    expect(output).not.toContain(text);
+  }
 }
 
 export function setupStatusAllReportTest() {

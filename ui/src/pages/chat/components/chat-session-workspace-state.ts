@@ -23,10 +23,11 @@ type SessionWorkspaceOwner = {
   publish(): void;
 };
 
-const workspaceOwners = new WeakMap<SessionWorkspaceHost, SessionWorkspaceOwner>();
+type SessionWorkspaceSource = Pick<SessionWorkspaceHost, "sessionWorkspaceState">;
+const workspaceOwners = new WeakMap<SessionWorkspaceSource, SessionWorkspaceOwner>();
 
 /** Publishes workspace mutations without replacing the raw preview and editor identities. */
-export function sessionWorkspaceForHost(host: SessionWorkspaceHost): SessionWorkspaceOwner {
+export function sessionWorkspaceForHost(host: SessionWorkspaceSource): SessionWorkspaceOwner {
   let owner = workspaceOwners.get(host);
   if (!owner) {
     const listeners = createChangeListeners();
@@ -197,6 +198,7 @@ export function loadSessionWorkspaceArtifacts(
       }
     }
   })();
+  artifacts.readResult = request;
   artifactLoads.set(artifacts, request);
   sessionWorkspaceForHost(state).publish();
   return request;
@@ -222,7 +224,6 @@ export function retainSessionWorkspaceArtifacts(
 export function loadSessionWorkspaceDirectory(
   state: SessionWorkspaceHost,
   path: string,
-  force = false,
 ): Promise<void> {
   const workspace = getSessionWorkspace(state);
   const directories = (workspace.directories ??= Object.create(null));
@@ -235,7 +236,7 @@ export function loadSessionWorkspaceDirectory(
   if (pending) {
     return pending;
   }
-  if (!state.connected || !state.client || (directories[path]?.browser && !force)) {
+  if (!state.connected || !state.client || directories[path]?.browser) {
     return Promise.resolve();
   }
   const directory = (directories[path] ??= { loading: false, error: null });
@@ -263,6 +264,7 @@ export function loadSessionWorkspaceDirectory(
       }
     }
   })();
+  directory.readResult = request;
   requests.set(path, request);
   sessionWorkspaceForHost(state).publish();
   return request;
@@ -288,20 +290,27 @@ export function captureSessionWorkspaceNavigation(
   };
 }
 
-/** The tabs owner calls this without changing preview identity or reader contents. */
-function restoreSessionWorkspaceNavigation(
-  state: SessionWorkspaceHost,
+function applySessionWorkspaceNavigation(
+  workspace: SessionWorkspaceState,
   navigation: SessionWorkspaceNavigation,
 ) {
-  const workspace = getSessionWorkspace(state);
   clearWorkspaceTimer(workspace);
   const { browserPath, browserSearch, filter, ...tree } = navigation;
   workspace.browserPath = browserPath;
   workspace.browserSearch = browserSearch;
   workspace.filter = filter;
   workspace.tree = { ...tree, expandedPaths: [...tree.expandedPaths] };
+}
+
+/** The tabs owner calls this without changing preview identity or reader contents. */
+function restoreSessionWorkspaceNavigation(
+  state: SessionWorkspaceHost,
+  navigation: SessionWorkspaceNavigation,
+) {
+  const workspace = getSessionWorkspace(state);
+  applySessionWorkspaceNavigation(workspace, navigation);
   loadSessionWorkspace(state, workspace);
-  for (const path of tree.expandedPaths) {
+  for (const path of navigation.expandedPaths) {
     void loadSessionWorkspaceDirectory(state, path);
   }
   sessionWorkspaceForHost(state).publish();
@@ -335,8 +344,7 @@ export function loadSessionWorkspace(
     workspace.directories === directories &&
     workspace.browserPath === browserPath &&
     workspace.browserSearch === browserSearch;
-  sessionWorkspaceForHost(state).publish();
-  void (async () => {
+  workspace.readResult = (async () => {
     try {
       const [files] = await Promise.all([
         requestWorkspaceFiles(state, workspace, browserSearch ? "" : browserPath, browserSearch),
@@ -377,6 +385,7 @@ export function loadSessionWorkspace(
       }
     }
   })();
+  sessionWorkspaceForHost(state).publish();
 }
 
 /** Refresh workspace facts after a run, which may have created a git checkout. */
@@ -454,6 +463,16 @@ export function openSessionWorkspacePreview(
       workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
     }
   }
+  // Apps leave the catalog in place, but must keep an existing return snapshot current.
+  if (
+    workspace.activePreviewId === null &&
+    (content.kind !== "mcp-app" || workspace.catalogNavigation)
+  ) {
+    workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
+    if (content.kind !== "mcp-app") {
+      workspace.tree!.treeVisible = false;
+    }
+  }
   let preview = workspace.previews.find(
     (entry) =>
       entry.id === id ||
@@ -484,6 +503,8 @@ export function openSessionWorkspacePreview(
   if (context?.navigation) {
     preview.catalogNavigation = context.navigation;
     preview.catalogVisible = false;
+  } else if (content.kind !== "mcp-app") {
+    preview.catalogNavigation ??= captureSessionWorkspaceNavigation(workspace);
   }
   if (context?.canonicalKey) {
     preview.canonicalKey = context.canonicalKey;
@@ -555,6 +576,14 @@ function closeSessionWorkspacePreview(state: SessionWorkspaceHost, id: string) {
 export function clearSessionWorkspacePreviews(state: SessionWorkspaceHost) {
   const workspace = state.sessionWorkspaceState;
   if (workspace) {
+    if (workspace.activePreviewId !== null) {
+      workspace.activeId = null;
+      if (workspace.catalogNavigation) {
+        applySessionWorkspaceNavigation(workspace, workspace.catalogNavigation);
+        // Hidden panes retire readers now; Files admits its catalog read on presentation.
+        workspace.pendingReload = true;
+      }
+    }
     workspace.pendingPreview = undefined;
     workspace.previews = [];
     workspace.activePreviewId = null;
@@ -627,16 +656,16 @@ export async function requestCloseSessionWorkspacePreview(
         return false;
       }
     } else {
-      const choice = await showConfirmChoiceDialog({
-        message: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
-        confirmLabel: t("common.save"),
-        alternativeLabel: t("chat.detailPanel.discard"),
-        cancelLabel: t("common.cancel"),
-      });
-      if (!choice || !current()) {
-        return false;
-      }
       try {
+        const choice = await showConfirmChoiceDialog({
+          message: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
+          confirmLabel: t("common.save"),
+          alternativeLabel: t("chat.detailPanel.discard"),
+          cancelLabel: t("common.cancel"),
+        });
+        if (!choice || !current()) {
+          return false;
+        }
         const settled = choice === "confirm" ? await draft.save() : draft.discard();
         if (!current()) {
           return false;

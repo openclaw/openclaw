@@ -22,6 +22,12 @@ type WorkerSample = {
   heap?: Awaited<ReturnType<Worker["getHeapStatistics"]>>;
   error?: string;
 };
+export type GatewayWorkerCpuSnapshot = {
+  wallMs: number;
+  mainThread: NodeJS.CpuUsage;
+  workers: Array<{ threadId: number; cpu?: NodeJS.CpuUsage; error?: string }>;
+};
+
 type WorkerRecording = {
   target: WorkerTarget;
   threadId?: number;
@@ -159,6 +165,26 @@ export class GatewayBenchWorkerProfiler {
         }
       },
     );
+  }
+
+  async sampleCpu(): Promise<GatewayWorkerCpuSnapshot> {
+    const start = performance.now();
+    const mainThread = process.threadCpuUsage();
+    const workers = await Promise.all(
+      [...this.workers].map(async (worker) => {
+        const threadId = worker.threadId;
+        try {
+          return { threadId, cpu: await worker.cpuUsage() };
+        } catch (error) {
+          return { threadId, error: errorMessage(error) };
+        }
+      }),
+    );
+    return {
+      wallMs: performance.now() - start,
+      mainThread: process.threadCpuUsage(mainThread),
+      workers,
+    };
   }
 
   private async post(target: WorkerTarget, method: string, params: object = {}) {

@@ -21,13 +21,11 @@ export type PluginsPageDetail = {
   tools?: PluginToolPreview[];
   pluginId: string;
   inspection: PluginsInspectResult | null;
-  error: string | null;
 };
 
 export type PluginsPageCatalogDetail = {
   id: string;
   result: PluginDiscoveryDetailResult | null;
-  error: string | null;
 };
 
 export function createPluginsPageState(): {

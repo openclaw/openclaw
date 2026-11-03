@@ -1,10 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
-import { resolveConfiguredGitHubHost } from "../../extensions/github-repositories/host-api.js";
+import { resolveConfiguredGitHubHost } from "../../extensions/github-repositories/api.js";
+import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { captureAgentDatabaseAdmission } from "../state/agent-database-admission.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
-import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
+import {
+  readUserProfileAliasRevision,
+  readUserProfileVersion,
+} from "../state/user-profile-events.js";
 import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import {
   observeSelectedRepositorySession,
@@ -22,9 +27,14 @@ import { READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
 import type { PreparedRepositorySessionRead } from "./repository-session-read.types.js";
 import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { isSessionCreatorProfile } from "./session-creator.js";
+import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { withReadySessionRows } from "./session-row-prepared-read.js";
+import { withReadySessionRows, SessionRowFactsPending } from "./session-row-prepared-read.js";
+import {
+  hasEntry,
+  isPreparedSessionRowDatabaseFacts,
+  type EntryRow,
+} from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 import { retainGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
@@ -55,7 +65,21 @@ export function createRepositoryViewerRead(params: {
   const actorProfile = actor?.kind === "operator" ? actor.profileId : undefined;
   const profileInput = client.authenticatedUserProfile?.profileId;
   const userInput = client.authenticatedUserId;
-  const scopes = [...(client.connect.scopes ?? [])].toSorted().join("\0");
+  const scopes = [...(client.connect.scopes ?? [])];
+  const scopeKey = scopes.toSorted().join("\0");
+  const hasCurrentScopes = () => {
+    const current = client.connect.scopes;
+    if ((current?.length ?? 0) !== scopes.length) {
+      return false;
+    }
+    for (let index = 0; index < scopes.length; index++) {
+      if (current![index] !== scopes[index]) {
+        // Reordering preserves the grant, including duplicate multiplicity.
+        return current!.toSorted().join("\0") === scopeKey;
+      }
+    }
+    return true;
+  };
   const access = client.internal?.operatorAccessAuthority;
   const connectionSignal = client.connectionSignal;
   const projection = getSessionRowProjection();
@@ -63,6 +87,19 @@ export function createRepositoryViewerRead(params: {
     return undefined;
   }
   let aliasRevision = -1;
+  let retained: PreparedRepositorySessionRead | undefined;
+  let capture:
+    | {
+        cfg: OpenClawConfig;
+        query: { key: string; agentId: string };
+        selected: EntryRow;
+        sharing: object | undefined;
+        configRevision: ReturnType<typeof getRuntimeConfigSnapshotMetadata>;
+        profileVersion: number;
+        profile: GatewayClient["preparedSessionProfile"];
+        assertAgentAdmitted: () => void;
+      }
+    | undefined;
   const captureCurrent = () => {
     try {
       params.lifetime.throwIfAborted();
@@ -78,7 +115,7 @@ export function createRepositoryViewerRead(params: {
         client.authenticatedUserId !== userInput ||
         currentActor?.kind !== actorKind ||
         (currentActor?.kind === "operator" ? currentActor.profileId : undefined) !== actorProfile ||
-        [...(client.connect.scopes ?? [])].toSorted().join("\0") !== scopes ||
+        !hasCurrentScopes() ||
         client.internal?.operatorAccessAuthority !== access ||
         !hasCurrentGatewayOperatorAccess(access)
       ) {
@@ -86,12 +123,39 @@ export function createRepositoryViewerRead(params: {
       }
       const currentAliasRevision = readUserProfileAliasRevision();
       if (currentAliasRevision !== aliasRevision) {
+        capture = undefined;
         if (actorProfile && readResidentUserProfileId(actorProfile) !== actorProfile) {
           return undefined;
         }
         aliasRevision = currentAliasRevision;
       }
       const cfg = getRuntimeConfig();
+      if (getSessionRowProjection() !== projection) {
+        return undefined;
+      }
+      // Prepare deferred lineage before consulting the row owner's publication identities.
+      void projection.state;
+      const sharing = projection.sharingRevision;
+      const configRevision = getRuntimeConfigSnapshotMetadata();
+      const profileVersion = readUserProfileVersion();
+      if (
+        capture &&
+        sharing &&
+        capture.sharing === sharing &&
+        capture.cfg === cfg &&
+        capture.configRevision === configRevision &&
+        capture.profileVersion === profileVersion &&
+        capture.profile === client.preparedSessionProfile &&
+        !client.internal?.operatorRunAuthority &&
+        (!cfg.gateway?.roles ||
+          actorKind === "system" ||
+          (actorProfile && client.preparedSessionProfile?.aliases.has(actorProfile)))
+      ) {
+        // Prepared role facts are replaced by their owner. Opaque run/unprepared role
+        // authorities keep their live path; admission and plugin access always stay live.
+        capture.assertAgentAdmitted();
+        return capture;
+      }
       if (
         authorizeCurrentOperatorRoleScopes(client, cfg) ||
         !roleScopesAllow({
@@ -106,23 +170,41 @@ export function createRepositoryViewerRead(params: {
       if (!requested.ok) {
         return undefined;
       }
-      if (getSessionRowProjection() !== projection) {
-        return undefined;
-      }
       const query = { key: sessionKey, agentId: requested.agentId };
       const selected = projection.capture(query);
       // Exact reads prepare this session; unrelated pending membership must not hide it.
       if (
-        !selected?.entry ||
+        !hasEntry(selected) ||
         !projection.isCurrent(selected) ||
         (isIncognitoSessionKey(selected.key)
           ? projection.needsMembershipPreparation()
           : projection.sharingTargetState(query).status !== "ready") ||
-        createSessionListEntryFilter({ cfg, client })?.(selected.key, selected.entry) === false
+        createSessionListEntryFilter({
+          cfg,
+          client,
+          // Private rows retain their prepared memory authority, outside resident membership.
+          membership: isIncognitoSessionKey(selected.key)
+            ? undefined
+            : projection.readMembership({
+                ...query,
+                storePath: selected.storeTarget.storePath,
+              }),
+        })?.(selected.key, selected.entry) === false
       ) {
         return undefined;
       }
-      return { cfg, query, selected };
+      const current = {
+        cfg,
+        query,
+        selected,
+        sharing,
+        configRevision,
+        profileVersion,
+        profile: client.preparedSessionProfile,
+        assertAgentAdmitted: captureAgentDatabaseAdmission(requested.agentId),
+      };
+      capture = isIncognitoSessionKey(selected.key) ? undefined : current;
+      return current;
     } catch {
       return undefined;
     }
@@ -133,7 +215,15 @@ export function createRepositoryViewerRead(params: {
       if (getSessionRowProjection() !== projection) {
         return undefined;
       }
-      return await withReadySessionRows(
+      if (retained) {
+        try {
+          retained.assertCurrent();
+          return retained;
+        } catch {
+          retained = undefined;
+        }
+      }
+      const result = await withReadySessionRows(
         projection,
         (cfg) => {
           const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentId);
@@ -172,6 +262,11 @@ export function createRepositoryViewerRead(params: {
           if (privateRow && captured.selected.entry?.repositoryWorkspaceId && !rowContext) {
             return undefined;
           }
+          let currentSelection = captured.selected;
+          let currentFactsRevision = captured.selected.databaseFactsRevision;
+          let currentConfig = captured.cfg;
+          let currentRepository = repository;
+          const originalBinding = record.entry.worktree?.githubPullRequest;
           const original = privateRow
             ? {
                 generation: captured.selected.generation,
@@ -187,8 +282,47 @@ export function createRepositoryViewerRead(params: {
               throw new Error("Session repository target changed");
             }
             if (!original) {
-              if (current.selected !== captured.selected) {
-                throw new Error("Session repository target changed");
+              if (
+                current.selected !== currentSelection ||
+                current.selected.databaseFactsRevision !== currentFactsRevision ||
+                (current.selected.materialized?.row.repository ?? null) !== currentRepository ||
+                current.cfg !== currentConfig
+              ) {
+                if (current.selected.generation !== currentSelection.generation) {
+                  throw new Error("Session repository target changed");
+                }
+                if (!isPreparedSessionRowDatabaseFacts(current.selected.retainedDatabaseFacts)) {
+                  throw new SessionRowFactsPending([current.query]);
+                }
+                const row = projection.describe(current.query, current.selected);
+                const observed =
+                  row &&
+                  observeSelectedRepositorySession(
+                    {
+                      cfg: current.cfg,
+                      agentId: row.agentId,
+                      canonicalKey: row.key,
+                      storePath: row.storeTarget.storePath,
+                      readSource: {
+                        agentId: row.storeTarget.agentId,
+                        path: row.storeTarget.storePath,
+                      },
+                      entry: row.entry,
+                    },
+                    row.materialized.row.repository ?? null,
+                  );
+                if (
+                  !row ||
+                  observed?.identity !== observation.identity ||
+                  (params.allowOwnImportedPullRequest &&
+                    !isDeepStrictEqual(row.entry.worktree?.githubPullRequest, originalBinding))
+                ) {
+                  throw new Error("Session repository target changed");
+                }
+                currentSelection = row;
+                currentFactsRevision = row.databaseFactsRevision;
+                currentConfig = current.cfg;
+                currentRepository = row.materialized.row.repository ?? null;
               }
               return;
             }
@@ -262,14 +396,29 @@ export function createRepositoryViewerRead(params: {
             projection,
             record,
             () => {
-              const filter = createSessionListEntryFilter({ cfg: getRuntimeConfig(), client });
-              return (row) => filter?.(row.key, row.entry) !== false;
+              const cfg = getRuntimeConfig();
+              const isCreator = prepareSessionCreatorProfile(profileInput ?? actorProfile);
+              return (row) =>
+                createSessionListEntryFilter(
+                  {
+                    cfg,
+                    client,
+                    membership: projection.readMembership({
+                      key: row.key,
+                      agentId: row.agentId,
+                      storePath: row.storeTarget.storePath,
+                    }),
+                  },
+                  isCreator,
+                )?.(row.key, row.entry) !== false;
             },
             params.readTaskReceipts,
             actorProfile,
           );
         },
       );
+      retained = result?.viewerProfileId || isIncognitoSessionKey(sessionKey) ? undefined : result;
+      return result;
     } catch {
       return undefined;
     }

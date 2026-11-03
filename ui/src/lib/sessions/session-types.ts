@@ -26,19 +26,13 @@ export type SessionState = {
   loading: boolean;
   error: string | null;
   startupPending?: boolean;
-  deletedSessions: readonly SessionDeletionFact[];
+  deletedSessions: readonly { key: string; agentId?: string; retireBeforeRevision: number }[];
   /** Gateway-owned custom group catalog in display order. */
   groups: readonly string[];
   /** New Session defaults associated with each gateway-owned group. */
   groupSettings: readonly SessionGroupSettings[];
   /** Gateway-owned sidebar section order; pinned is intentionally absent. */
   sectionOrder: readonly string[];
-};
-
-type SessionDeletionFact = {
-  key: string;
-  agentId?: string;
-  retireBeforeRevision: number;
 };
 
 export type SessionGroupMutationResult = "completed" | "stale";
@@ -98,17 +92,15 @@ export type SessionListSnapshot = Pick<
 
 export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;
 
-type SessionRowReadOutcome =
-  | { status: "current"; row: GatewaySessionRow | null }
-  | { status: "retired" };
-
 export type SessionRowObservation = {
   readonly row: GatewaySessionRow | null;
   readonly sessionId: string | null;
   /** False until this owner accepts a row or confirms its absence. */
   readonly hasObserved: boolean;
   isCurrent: () => boolean;
-  captureReconcile: () => (row: GatewaySessionRow | undefined) => SessionRowReadOutcome;
+  captureReconcile: () => (
+    row: GatewaySessionRow | undefined,
+  ) => { status: "current"; row: GatewaySessionRow | null } | { status: "retired" };
   dispose: () => void;
 };
 
@@ -135,10 +127,13 @@ export type SessionDeleteTarget = SessionDeleteOptions & {
   key: string;
 };
 
-export type SessionDeleteOutcome = Pick<SessionsDeleteResult, "deleted" | "worktreePreserved">;
+export type SessionDeleteOutcome = Pick<SessionsDeleteResult, "deleted" | "worktreePreserved"> & {
+  queued?: true;
+};
 
 export type SessionDeleteBatchResult = {
   deleted: string[];
+  queued?: string[];
   errors: { target: SessionDeleteTarget; error: unknown }[];
   preservedWorktrees: PreservedSessionWorktree[];
 };

@@ -12,7 +12,6 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
-import { hasMainSessionRecoveryClaim } from "./restart-recovery-state.js";
 import { isPinnableSessionEntry } from "./session-pin-policy.js";
 import {
   getSessionMaintenanceActivityAt,
@@ -304,13 +303,6 @@ export function pruneStaleModelRunEntries(
 }
 
 const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000;
-const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted outright
-
-type QuotaSuspensionEntryMaintenanceResult = {
-  /** Patch to apply to the entry, or null when no TTL transition is due. */
-  patch: Partial<SessionEntry> | null;
-  cleared: boolean;
-};
 
 /**
  * Resolves the TTL maintenance patch for one session entry without reading or
@@ -320,26 +312,21 @@ type QuotaSuspensionEntryMaintenanceResult = {
 export function resolveQuotaSuspensionEntryMaintenance(params: {
   entry: SessionEntry;
   now: number;
-  ttlMs?: number;
-}): QuotaSuspensionEntryMaintenanceResult {
+}): Partial<SessionEntry> | null {
   const suspension = params.entry.quotaSuspension;
   if (!suspension) {
-    return { patch: null, cleared: false };
+    return null;
   }
-  const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_TTL_MS;
-  const cleanupAfterResumeMs = ttlMs * (QUOTA_SUSPENSION_CLEANUP_FACTOR - 1);
+  const ttlMs = DEFAULT_QUOTA_SUSPENSION_TTL_MS;
   const resumeAtMs = suspension.expectedResumeBy ?? suspension.suspendedAt + ttlMs;
-  const cleanupAtMs = resumeAtMs + cleanupAfterResumeMs;
+  const cleanupAtMs = resumeAtMs + ttlMs;
   if (params.now >= cleanupAtMs) {
-    return { patch: { quotaSuspension: undefined }, cleared: true };
+    return { quotaSuspension: undefined };
   }
   if (suspension.state === "suspended" && params.now >= resumeAtMs) {
-    return {
-      patch: { quotaSuspension: { ...suspension, state: "resuming" } },
-      cleared: false,
-    };
+    return { quotaSuspension: { ...suspension, state: "resuming" } };
   }
-  return { patch: null, cleared: false };
+  return null;
 }
 
 /** Archive inactive dashboard sessions while retaining runtime-owned or explicitly active keys. */
@@ -447,7 +434,8 @@ function shouldPreserveNonArchivedMaintenanceEntry(params: SessionMaintenanceEnt
   // the same conversation under an incompatible model, so pressure may exceed
   // configured retention limits while the lock remains.
   return (
-    (hasMainSessionRecoveryClaim(params.entry) && !params.entry?.mainRestartRecovery?.tombstone) ||
+    params.entry?.resumeAfterRestart !== undefined ||
+    params.entry?.pendingFinalDelivery?.kind === "transport-only" ||
     params.entry?.modelSelectionLocked === true ||
     params.preserveKeys?.has(params.key) === true ||
     isRecentSessionMaintenanceEntry(params) ||

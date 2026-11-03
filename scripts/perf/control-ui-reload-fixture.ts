@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -9,6 +10,7 @@ import { createServer } from "vite";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { asOptionalRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { buildControlUiSessionPath } from "../../packages/session-url-contract/src/index.ts";
+import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import {
   createGatewayBenchEnv,
@@ -26,6 +28,10 @@ const { values } = parseArgs({
     "ui-root": { type: "string" },
     "runtime-entry": { type: "string", default: "dist/index.js" },
     "skip-seed": { type: "boolean", default: false },
+    "service-tier-port": { type: "string" },
+    "service-tier-responses": { type: "string", default: "fast" },
+    "stream-delay-ms": { type: "string", default: "0" },
+    "subagent-seed": { type: "boolean", default: false },
     port: { type: "string", default: "41514" },
     "proxy-port": { type: "string", default: "41516" },
     prepare: { type: "boolean", default: false },
@@ -34,6 +40,9 @@ const { values } = parseArgs({
 });
 if (!values["state-dir"] || !values["ui-root"]) {
   throw new Error("Expected --state-dir <synthetic-fixture> --ui-root <built-ui> [--prepare]");
+}
+if (values["subagent-seed"] && !values["service-tier-port"]) {
+  throw new Error("--subagent-seed requires --service-tier-port <unused-loopback-port>");
 }
 const root = path.resolve(values["state-dir"]);
 const port = parseStrictIntegerOption({
@@ -152,6 +161,187 @@ if (fixture.format !== "openclaw-team-shape-v1") {
   throw new Error("Expected a generated team-shape fixture; never use live state");
 }
 await mkdir(path.join(root, "tmp"), { recursive: true });
+const serviceTierPort = values["service-tier-port"]
+  ? parseStrictIntegerOption({
+      raw: values["service-tier-port"],
+      label: "service-tier-port",
+      min: 40000,
+      fallback: 40000,
+    })
+  : undefined;
+if (
+  serviceTierPort &&
+  (serviceTierPort > 65535 || [port, port + 1, proxyPort].includes(serviceTierPort))
+) {
+  throw new Error("The synthetic provider needs a separate loopback port >= 40000");
+}
+let providerRequests = 0;
+const responseTiers = values["service-tier-responses"].split(",").map((tier) => tier.trim());
+if (responseTiers.some((tier) => !["fast", "default", "flex", "priority"].includes(tier))) {
+  throw new Error("--service-tier-responses expects comma-separated fast/default/flex/priority");
+}
+const streamDelayMs = parseStrictIntegerOption({
+  raw: values["stream-delay-ms"],
+  label: "stream-delay-ms",
+  min: 0,
+  fallback: 0,
+});
+const provider = serviceTierPort
+  ? createHttpServer((request, response) => {
+      if (request.url === "/v1/models") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ object: "list", data: [{ id: "gpt-5", object: "model" }] }));
+        return;
+      }
+      if (request.method !== "POST" || request.url !== "/v1/responses") {
+        response.writeHead(404).end();
+        return;
+      }
+      void (async () => {
+        request.setEncoding("utf8");
+        let body = "";
+        for await (const chunk of request) {
+          body += chunk;
+        }
+        const payload = asOptionalRecord(JSON.parse(body));
+        const requestedTier = payload?.service_tier;
+        const input = Array.isArray(payload?.input) ? payload.input.map(asOptionalRecord) : [];
+        const seed = input
+          .filter((item) => item?.role === "user")
+          .map((item) =>
+            JSON.stringify(item?.content ?? "").match(
+              /Synthetic subagent seed ([a-z0-9_-]+) ([0-9a-f-]{36})/,
+            ),
+          )
+          .findLast((match) => match);
+        const callId = seed ? `call_${seed[2]}` : undefined;
+        const tools = Array.isArray(payload?.tools) ? payload.tools : [];
+        providerRequests++;
+        const responseTier = responseTiers[(providerRequests - 1) % responseTiers.length];
+        // Only tier observations enter the proof log; request content remains private.
+        console.log(
+          JSON.stringify({
+            providerRequest: providerRequests,
+            atEpochMs: Date.now(),
+            requestedTier,
+            responseTier,
+          }),
+        );
+        if (
+          seed &&
+          !input.some((item) => item?.call_id === callId) &&
+          tools.some((tool) => asOptionalRecord(tool)?.name === "sessions_spawn")
+        ) {
+          const item = {
+            type: "function_call",
+            id: `fc_${seed[2]}`,
+            call_id: callId,
+            name: "sessions_spawn",
+            arguments: JSON.stringify({
+              task: "Reply with one short synthetic child response.",
+              agentId: seed[1],
+              label: `perf-child-${seed[2]}`,
+              runtime: "subagent",
+              mode: "run",
+              context: "isolated",
+              cleanup: "keep",
+              runTimeoutSeconds: 120,
+            }),
+          };
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          for (const event of [
+            {
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { ...item, arguments: "" },
+            },
+            {
+              type: "response.function_call_arguments.delta",
+              item_id: item.id,
+              output_index: 0,
+              delta: item.arguments,
+            },
+            { type: "response.output_item.done", output_index: 0, item },
+            {
+              type: "response.completed",
+              response: {
+                id: `resp_${providerRequests}`,
+                status: "completed",
+                service_tier: responseTier,
+                output: [item],
+                usage: { input_tokens: 11, output_tokens: 10, total_tokens: 21 },
+              },
+            },
+          ]) {
+            response.write(`data: ${JSON.stringify(event)}\n\n`);
+          }
+          response.end("data: [DONE]\n\n");
+          return;
+        }
+        const item = {
+          type: "message",
+          id: `msg_${providerRequests}`,
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "Synthetic tier response.", annotations: [] }],
+        };
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        for (const event of [
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: { ...item, status: "in_progress", content: [] },
+          },
+          ...(streamDelayMs
+            ? ["Synthetic ", "tier ", "response."]
+            : ["Synthetic tier response."]
+          ).map((delta) => ({
+            type: "response.output_text.delta",
+            item_id: item.id,
+            output_index: 0,
+            content_index: 0,
+            delta,
+          })),
+          { type: "response.output_item.done", output_index: 0, item },
+          {
+            type: "response.completed",
+            response: {
+              id: `resp_${providerRequests}`,
+              status: "completed",
+              service_tier: responseTier,
+              output: [item],
+              usage: { input_tokens: 11, output_tokens: 4, total_tokens: 15 },
+            },
+          },
+        ]) {
+          response.write(`data: ${JSON.stringify(event)}\n\n`);
+          if (streamDelayMs && event.type === "response.output_text.delta") {
+            await delay(streamDelayMs);
+          }
+        }
+        response.end("data: [DONE]\n\n");
+      })().catch(() => response.destroy());
+    })
+  : undefined;
+if (provider) {
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  applyMockOpenAiModelConfig(config, { mockPort: serviceTierPort, modelRef: "openai/gpt-5" });
+  if (values["subagent-seed"]) {
+    config.tools = { codeMode: false, toolSearch: false, allow: ["read", "sessions_spawn"] };
+  }
+  config.plugins.allow = [...new Set([...config.plugins.allow, "openai"])];
+  config.plugins.load.paths = [
+    ...new Set([
+      ...config.plugins.load.paths,
+      path.resolve(path.dirname(values["runtime-entry"]), "extensions/openai"),
+    ]),
+  ];
+  await json(configPath, config);
+  await new Promise<void>((resolve, reject) => {
+    provider.once("error", reject);
+    provider.listen(serviceTierPort, "127.0.0.1", resolve);
+  });
+}
 const gateway = spawn(
   process.execPath,
   [values["runtime-entry"], "gateway", "run", "--bind", "loopback", "--port", String(port)],
@@ -164,6 +354,7 @@ const gateway = spawn(
         OPENCLAW_STATE_DIR: root,
         TMPDIR: path.join(root, "tmp"),
         OPENCLAW_SKIP_CHANNELS: "1",
+        ...(serviceTierPort ? { OPENAI_API_KEY: "synthetic-loopback-only" } : {}),
         OPENCLAW_PROFILE: `reload-${port}`,
         OPENCLAW_SYSTEMD_UNIT: `reload-${port}`,
       },
@@ -181,6 +372,11 @@ const stop = () =>
     client?.close();
     await proxy?.close();
     await stopChild(gateway, { teardownGraceMs: 10_000 });
+    if (provider) {
+      await new Promise<void>((resolve) => {
+        provider.close(() => resolve());
+      });
+    }
     log.end();
   })());
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -263,8 +459,12 @@ try {
     ) {
       throw new Error("Fixture preferences require a durable synthetic profile");
     }
-    for (const key of pinKeys) {
-      await rpc("sessions.patch", { key, label: `Reload pin ${key.split("-").at(-1)}` });
+    for (const key of [selectedKey, ...pinKeys]) {
+      await rpc("sessions.patch", {
+        key,
+        label: `Reload pin ${key.split("-").at(-1)}`,
+        statusNote: null,
+      });
     }
     await rpc("board.widget.put", {
       sessionKey: selectedKey,
@@ -281,6 +481,7 @@ try {
   console.log(
     JSON.stringify({
       ready: true,
+      gatewayPid: gateway.pid,
       origin,
       selectedKey,
       paths: ["dashboard", "chat"].map((namespace) =>

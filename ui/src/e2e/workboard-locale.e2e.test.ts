@@ -1,16 +1,15 @@
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  controlUiBundledSettingsStorageKey,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
-import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { configResponse } from "./appearance-prefs.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installWorkboardPage } from "./workboard-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Workboard plugin locale catalog",
   startServerBeforeBrowser: true,
 });
+const named = (host: Page | Locator, role: Parameters<Page["getByRole"]>[0], name: string) =>
+  host.getByRole(role, { name, exact: true });
 
 suite.define(() => {
   it.each(["en", "fr"])(
@@ -38,26 +37,14 @@ suite.define(() => {
             archived: 0,
             byStatus: {},
           };
-          const gateway = await installMockGateway(page, {
-            ...workboardUi,
-            methodResponses: {
-              "workboard.boards.list": { boards: [board] },
-              "workboard.cards.list": { boards: [board], cards: [] },
-              "workboard.sessionsBoard.read": { board, columns, sessions: [], people: [] },
-            },
+          const gateway = await installWorkboardPage(page, suite.server.baseUrl, "sessions", {
+            "workboard.boards.list": { boards: [board] },
+            "workboard.cards.list": { boards: [board], cards: [] },
+            "workboard.sessionsBoard.read": { board, columns, sessions: [], people: [] },
           });
-          await page.addInitScript(
-            ({ key, locale: initialLocale }) => {
-              localStorage.setItem("openclaw.i18n.locale", initialLocale);
-              localStorage.setItem(
-                key,
-                JSON.stringify({
-                  railShortcuts: ["route:sessions", "plugin:workboard/board-sessions"],
-                }),
-              );
-            },
-            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), locale },
-          );
+          await page.addInitScript((initialLocale) => {
+            localStorage.setItem("openclaw.i18n.locale", initialLocale);
+          }, locale);
           await page.goto(`${suite.server.baseUrl}new`);
           await page
             .locator('[data-sidebar-entry="plugin:workboard/board-sessions"]')
@@ -65,24 +52,19 @@ suite.define(() => {
             .click();
           await gateway.waitForRequest("workboard.sessionsBoard.read");
           await page.locator(".workboard-page-title").hover();
-          await page
-            .getByRole("button", {
-              name: locale === "fr" ? "Modifier le tableau" : "Edit board",
-              exact: true,
-            })
-            .click();
+          await named(
+            page,
+            "button",
+            locale === "fr" ? "Modifier le tableau" : "Edit board",
+          ).click();
           const form = page.locator(".workboard-board-draft");
           const column = form.locator('[data-column-id="working"]');
           await column.waitFor();
           expect(
-            await column
-              .getByRole("combobox", { name: locale === "fr" ? "Couleur" : "Color", exact: true })
-              .count(),
+            await named(column, "combobox", locale === "fr" ? "Couleur" : "Color").count(),
           ).toBe(1);
           expect(await form.textContent()).not.toContain("workboard.boardColor");
-          await form
-            .getByRole("button", { name: locale === "fr" ? "Annuler" : "Cancel", exact: true })
-            .waitFor();
+          await named(form, "button", locale === "fr" ? "Annuler" : "Cancel").waitFor();
           if (locale === "fr") {
             const name = form.locator(".workboard-board-draft__name input");
             await name.fill("Unsaved locale draft");
@@ -92,11 +74,9 @@ suite.define(() => {
               configResponse({ locale: "en" }, "workboard-locale-en"),
             );
             await gateway.emitGatewayEvent("config.changed", { hash: "workboard-locale-en" });
-            await form.getByRole("button", { name: "Cancel", exact: true }).waitFor();
+            await named(form, "button", "Cancel").waitFor();
             expect(await name.inputValue()).toBe("Unsaved locale draft");
-            expect(await column.getByRole("combobox", { name: "Color", exact: true }).count()).toBe(
-              1,
-            );
+            expect(await named(column, "combobox", "Color").count()).toBe(1);
           }
         },
       );

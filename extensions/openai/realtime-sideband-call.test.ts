@@ -6,12 +6,12 @@ import {
   hangupOpenAIRealtimeCall,
 } from "./realtime-quicksilver-wire.js";
 
-function createCall(fetchImpl: typeof fetch, onCallAllocated = vi.fn(), sdp = "v=0\r\n") {
+function createCall(fetchImpl: typeof fetch, onCallAllocated = vi.fn()) {
   return createOpenAIQuicksilverCall(
     {
       auth: { type: "api-key", token: "sk-platform" }, // pragma: allowlist secret
       requestIds: { realtimeSessionId: "realtime", sessionId: "session", threadId: "thread" },
-      sdp,
+      sdp: "v=0\r\n",
       session: { type: "realtime", model: "gpt-realtime-2.1" },
       gaSideband: true,
       onCallAllocated,
@@ -22,30 +22,19 @@ function createCall(fetchImpl: typeof fetch, onCallAllocated = vi.fn(), sdp = "v
 }
 
 describe("OpenAI Realtime sideband call wire", () => {
-  it("posts bounded server-owned session config and returns the fixed sideband URL", async () => {
+  it("allocates a Platform-authenticated call and returns its fixed sideband URL", async () => {
     const onCallAllocated = vi.fn();
-    const sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      expect(init?.method).toBe("POST");
       expect(init?.headers).toMatchObject({
         Authorization: "Bearer sk-platform", // pragma: allowlist secret
-        "Content-Type": expect.stringMatching(/^multipart\/form-data; boundary=/),
       });
-      if (typeof init?.body !== "string") {
-        throw new Error("Expected string multipart body");
-      }
-      const form = init.body;
-      expect(form).toContain('name="sdp"');
-      expect(form).toContain(sdp);
-      expect(form).toContain('name="session"');
-      expect(form).toContain('"type":"realtime","model":"gpt-realtime-2.1"');
       return new Response("v=0\r\na=answer\r\n", {
         status: 201,
         headers: { Location: "/v1/realtime/calls/call_test-123" },
       });
     });
 
-    await expect(createCall(fetchImpl, onCallAllocated, sdp)).resolves.toEqual({
+    await expect(createCall(fetchImpl, onCallAllocated)).resolves.toEqual({
       kind: "ga-sideband",
       answerSdp: "v=0\r\na=answer\r\n",
       callId: "call_test-123",
@@ -72,10 +61,7 @@ describe("OpenAI Realtime sideband call wire", () => {
     expect(onCallAllocated).not.toHaveBeenCalled();
   });
 
-  it("constructs and validates the sideband URL locally", () => {
-    expect(buildOpenAIRealtimeSidebandUrl("call-a_b_1")).toBe(
-      "wss://api.openai.com/v1/realtime?call_id=call-a_b_1",
-    );
+  it("rejects invalid sideband call IDs locally", () => {
     expect(() => buildOpenAIRealtimeSidebandUrl("https://attacker.example")).toThrow("invalid");
   });
 

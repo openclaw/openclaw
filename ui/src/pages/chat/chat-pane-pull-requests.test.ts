@@ -125,12 +125,8 @@ function createPublicationPane(
   state.assistantAgentId = agentId;
   state.sessionsResultAgentId = agentId;
   state.sessionsResult = {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
     // Scoped lists may carry the owner only at the result/route level.
-    sessions: [
+    ...sessionsResult([
       {
         key: sessionKey,
         sessionId: "publication",
@@ -142,7 +138,8 @@ function createPublicationPane(
         kind: scope ? "global" : "direct",
         updatedAt: 1,
       },
-    ],
+    ]),
+    path: "",
   };
   const settled = async () => {
     await vi.waitFor(() => {
@@ -196,6 +193,47 @@ it.each(["global", "per-sender"] as const)(
   },
 );
 
+it("retires hidden publication feedback while retaining the admitted write and its result", async () => {
+  const { pane, request, responses, publications, settled } = createPublicationPane();
+  const response = Promise.withResolvers<unknown>();
+  responses.set("sessions.github.publish", response.promise);
+  const ready = await settled();
+  let retired = false;
+  void ready.readiness.retired.then(() => {
+    retired = true;
+  });
+  const completion = ready.onPublish?.();
+  let completed = false;
+  void Promise.resolve(completion).then(() => {
+    completed = true;
+  });
+  expect(publications()).toHaveLength(1);
+
+  pane.presented = false;
+  // Hiding must retire the receipt before any render of the parked frame or RPC settlement.
+  await Promise.resolve();
+  expect(retired).toBe(true);
+  expect(completed).toBe(false);
+
+  const result = {
+    requestId,
+    publisher: shared,
+    status: "published",
+    url: "https://github.com/openclaw/openclaw/pull/111532",
+    repository: "openclaw/openclaw",
+    branch: "feature/publication",
+    headCommit: "a".repeat(40),
+  };
+  response.resolve(result);
+  await completion;
+  pane.presented = true;
+  expect((await settled()).result).toEqual(result);
+  expect(publications()).toHaveLength(1);
+  expect(
+    request.mock.calls.filter(([method]) => method === "sessions.github.options"),
+  ).toHaveLength(1);
+});
+
 it.each(["shared", "personal"] as const)(
   "retains an unknown %s publication across a retained-pane navigation",
   async (source) => {
@@ -215,7 +253,7 @@ it.each(["shared", "personal"] as const)(
     });
     if (source === "shared") {
       options.shared = null;
-      unknown.onRefresh();
+      void unknown.onRefresh();
       unknown = await settled();
       expect(unknown.onPublish).toBeTypeOf("function");
     }
@@ -226,8 +264,8 @@ it.each(["shared", "personal"] as const)(
     // the following RPC assertions prove it cannot admit hidden mutations.
     expect(pane.publicationView()?.locked).toBe(true);
     const hiddenRequests = request.mock.calls.length;
-    unknown.onPublish?.();
-    unknown.onRefresh();
+    void unknown.onPublish?.();
+    void unknown.onRefresh();
     expect(request).toHaveBeenCalledTimes(hiddenRequests);
     pane.presented = true;
     const returned = await settled();
@@ -236,15 +274,15 @@ it.each(["shared", "personal"] as const)(
     const knownRoster = state.sessionsResult!;
     state.sessionsResult = { ...knownRoster, count: 0, sessions: [] };
     const beforeMissingRow = request.mock.calls.length;
-    returned.onPublish?.();
-    returned.onRefresh();
+    void returned.onPublish?.();
+    void returned.onRefresh();
     expect(request).toHaveBeenCalledTimes(beforeMissingRow);
     pane.render();
     expect(pane.publicationView()).toBeUndefined();
     state.sessionsResult = knownRoster;
     const restored = await settled();
     expect([restored.locked, restored.selection]).toEqual([true, unknown.selection]);
-    restored.onPublish?.();
+    void restored.onPublish?.();
     await settled();
     expect(publications()).toEqual([first, first]);
   },
@@ -297,7 +335,7 @@ it.each([
     return;
   }
   expect(guest.onPublish).toBeTypeOf("function");
-  guest.onPublish?.();
+  void guest.onPublish?.();
   await settled();
   expect(request).toHaveBeenLastCalledWith("sessions.github.publish", {
     sessionKey: state.sessionKey,
@@ -310,7 +348,7 @@ it.each([
     ["sessions.github.publish", "sessions.github.options"],
     ["operator.sessions.read"],
   );
-  previous.onPublish?.();
+  void previous.onPublish?.();
   expect(publications()).toHaveLength(1);
   expect((await settled()).onPublish).toBeUndefined();
 });
@@ -335,7 +373,7 @@ it.each(["incarnation", "sharing", "archive-projection"] as const)(
     state.sessionsResult = { ...state.sessionsResult!, sessions: [row] };
     context.sessions.reconcile(row);
     // Invoke the captured action before rendering its replacement.
-    idle.onPublish?.();
+    void idle.onPublish?.();
     expect(publications()).toHaveLength(0);
     pane.render();
   },

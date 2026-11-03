@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { githubReferenceOptions } from "../../../test-helpers/github-text-references.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 import { SidebarPanel } from "./chat-sidebar-content.tsx";
 
@@ -24,7 +24,6 @@ describe("GitHub reference presentation parity", () => {
           () => (
             <SidebarPanel
               {...{
-                ...context,
                 content: { kind: "markdown", content: text },
                 showingRawText: false,
                 error: null,
@@ -44,7 +43,7 @@ describe("GitHub reference presentation parity", () => {
           () => (
             <StreamGroupParts
               parts={[{ kind: "stream", key: "live", text, isStreaming: true, startedAt: 1 }]}
-              options={context}
+              options={{}}
               presentation="standalone"
             />
           ),
@@ -56,7 +55,7 @@ describe("GitHub reference presentation parity", () => {
             <GroupedMessage
               preparation={prepareChatMessageRender(message)}
               messageKey="reply"
-              options={{ ...context, isStreaming: false, showReasoning: false }}
+              options={{ isStreaming: false, showReasoning: false }}
             />
           ),
           { container },

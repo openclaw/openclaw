@@ -17,11 +17,6 @@ export type StartupTask = {
   run: () => Promise<StartupTaskResult>;
 };
 
-type StartupTaskLogger = {
-  debug: (message: string, meta?: Record<string, unknown>) => void;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
-};
-
 function taskMeta(task: StartupTask, reason: string): Record<string, unknown> {
   return {
     source: task.source,
@@ -35,7 +30,10 @@ function taskMeta(task: StartupTask, reason: string): Record<string, unknown> {
 /** Runs startup tasks in order and logs failed/skipped task metadata. */
 export async function runStartupTasks(params: {
   tasks: StartupTask[];
-  log: StartupTaskLogger;
+  log: {
+    debug: (message: string, meta?: Record<string, unknown>) => void;
+    warn: (message: string, meta?: Record<string, unknown>) => void;
+  };
 }): Promise<void> {
   for (const task of params.tasks) {
     let result: StartupTaskResult;

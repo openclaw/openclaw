@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { gitEnvironment } from "../../agents/worktrees/git.js";
 import { executeGitCommand, gitNullConfigPath } from "../../infra/git-exec.js";
+import { appendGitConfig } from "../../infra/git-maintenance-env.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 
@@ -62,15 +63,12 @@ export async function prepareRepositoryCheckoutPack(params: {
       ["-c", "http.followRedirects=false", ...args],
       {
         baseEnv,
-        ...(authenticated && params.httpAuthorization
-          ? {
-              env: {
-                GIT_CONFIG_COUNT: "3",
-                GIT_CONFIG_KEY_2: `http.${params.url}.extraHeader`,
-                GIT_CONFIG_VALUE_2: `Authorization: ${params.httpAuthorization}`,
-              },
-            }
-          : {}),
+        env:
+          authenticated && params.httpAuthorization
+            ? appendGitConfig(baseEnv, [
+                [`http.${params.url}.extraHeader`, `Authorization: ${params.httpAuthorization}`],
+              ])
+            : undefined,
         input: "",
         timeoutMs: FETCH_TIMEOUT_MS,
         signal: params.signal,

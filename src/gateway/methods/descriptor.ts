@@ -104,6 +104,7 @@ export function createPluginGatewayMethodDescriptor(
 export type GatewayMethodRegistryView = {
   /** Opaque registry handle carried into request scope by the gateway composition root. */
   pluginRegistry?: object;
+  getDescriptor: (name: string) => GatewayMethodDescriptor | undefined;
   getHandler: (name: string) => GatewayMethodHandler | undefined;
   listMethods: () => string[];
   listAdvertisedMethods: () => string[];

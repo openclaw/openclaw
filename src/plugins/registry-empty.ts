@@ -41,10 +41,12 @@ export const pluginArrays = [
   "gatewayAccessPolicies",
   "executionEnvironments",
   "repositorySources",
+  "repositoryIntegrations",
   "securityAuditCollectors",
   "services",
   "gatewayDiscoveryServices",
   "commands",
+  "subagentProfiles",
   "interactiveHandlers",
   "sessionExtensions",
   "trustedToolPolicies",
@@ -62,7 +64,6 @@ export const pluginMaps = [
   "sessionDiscussionProviders",
   "dashboardDataBindings",
   "dashboardActionVerbs",
-  "boardWidgetContentKinds",
 ] as const satisfies ReadonlyArray<keyof PluginRegistry>;
 
 export function createEmptyPluginRegistry(): PluginRegistry {

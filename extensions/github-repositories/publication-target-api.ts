@@ -3,7 +3,7 @@ import {
   type NativeGitHubPublicationProvider as RepositoryPublicationProvider,
   type NativeGitHubPullRequestBinding as SessionGitHubPullRequestBinding,
   NativeGitHubPublicationRequesterUnavailableError as RepositoryPublicationRequesterUnavailableError,
-  nativeGitHubPublicationBaseBranch as publicationBaseBranch,
+  nativeGitHubPublicationBaseBranch as parseGitHubPublicationBaseBranch,
   NativeGitHubPublicationWorkspaceChangedError as RepositoryPublicationWorkspaceChangedError,
 } from "openclaw/plugin-sdk/native-github-publication-host";
 import { resolveGitHubHost } from "./host-runtime-api.js";
@@ -80,7 +80,7 @@ export async function prepareGitHubPublicationTarget(params: {
   const repository = `${target.pullRequest.owner}/${target.pullRequest.repo}`;
   const baseBranch = target.fork
     ? target.pullRequest.defaultBranch
-    : publicationBaseBranch(source.baseRef, target.pullRequest.defaultBranch);
+    : parseGitHubPublicationBaseBranch(source.baseRef, target.pullRequest.defaultBranch);
   if (!target.fork && branch === baseBranch) {
     throw new RepositoryPublicationWorkspaceChangedError(
       "GitHub publication branch changed to its pull request base.",
@@ -160,6 +160,7 @@ export async function prepareBoundGitHubPublication(
           return readGitHubPublisher(params.publisher);
         })(),
         assertCurrent,
+        requirePublicRepositories: inspected.requirePublicRepositories,
       });
     }
     assertCurrent();

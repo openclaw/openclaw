@@ -18,6 +18,7 @@ import {
 } from "../../../ui/src/test-helpers/solid-application-context.tsx";
 import { flush } from "../../../ui/src/test-helpers/solid-settle.ts";
 import { waitForFast } from "../../../ui/src/test-helpers/wait-for.ts";
+import { createMutationRunner } from "./github-identity-harness.test-support.ts";
 import { settingsViews } from "./index.tsx";
 
 const system: ToolsGitHubStatusResult["effective"] = {
@@ -407,3 +408,101 @@ it("keeps unavailable canonical settings distinct from a loaded empty selection"
   harness.openPat();
   expect(author()?.value).toBe("");
 });
+
+it("disables connection controls while a PAT save is pending", async () => {
+  const stored = createDeferredCore<{ ok: boolean }>();
+  const request = vi.fn(async (method: string) =>
+    method === "secrets.store.set"
+      ? stored.promise
+      : method === "users.github.status"
+        ? personalStatus
+        : status(),
+  );
+  const ui = mount(["operator.admin"], "profile-a", request);
+  vi.mocked(ui.context.runtimeConfig.runExternalMutation).mockImplementation(
+    createMutationRunner(ui.context.gateway.snapshot.client!),
+  );
+  await ui.waitText(["@system-account"]);
+  ui.openPat();
+  const token = ui.query<HTMLInputElement>(".settings-secret input")!;
+  token.value = "synthetic-pending-pat";
+  token.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  ui.button("Save Identity").click();
+  flush();
+  try {
+    await waitForFast(() => expect(ui.button("Saving…").disabled).toBe(true));
+    expect(ui.button("Verify").disabled).toBe(true);
+    expect(ui.button("Change System GitHub").disabled).toBe(true);
+  } finally {
+    stored.resolve({ ok: true });
+  }
+  await waitForFast(() => expect(ui.button("Verify").disabled).toBe(false));
+});
+
+it.each([false, true])(
+  "settles a queued PAT save through the Settings facade (revoked: %s)",
+  async (revoked) => {
+    const queued = createDeferredCore<void>();
+    const release = createDeferredCore<void>();
+    const settled = createDeferredCore<void>();
+    const savedIdentity = { ...system, account: { login: "saved-account" } };
+    let saved = false;
+    const request = vi.fn(async (method: string) => {
+      if (method === "tools.github.configure") {
+        saved = true;
+      }
+      const current = saved ? savedIdentity : system;
+      return method === "users.github.status"
+        ? { personal: disconnected, system: current }
+        : status("main", current);
+    });
+    const ui = mount(["operator.admin"], "profile-a", request);
+    const runMutation = createMutationRunner(ui.context.gateway.snapshot.client!);
+    vi.mocked(ui.context.runtimeConfig.runExternalMutation).mockImplementation(
+      async (task, options) => {
+        queued.resolve();
+        await release.promise;
+        try {
+          return await runMutation(task, options);
+        } finally {
+          settled.resolve();
+        }
+      },
+    );
+    await ui.waitText(["@system-account"]);
+    ui.openPat();
+    const token = ui.query<HTMLInputElement>(".settings-secret input")!;
+    token.value = "synthetic-facade-pat";
+    token.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    ui.button("Save Identity").click();
+    await queued.promise;
+    if (revoked) {
+      ui.emit({
+        hello: gatewayHelloForMethods(
+          ["users.github.status", "tools.github.status", "tools.github.configure"],
+          ["operator.read"],
+        ),
+      });
+    }
+    release.resolve();
+    await settled.promise;
+    const configured = request.mock.calls.filter(([method]) => method === "tools.github.configure");
+    expect(configured).toHaveLength(revoked ? 0 : 1);
+    if (revoked) {
+      await waitForFast(() =>
+        expect(
+          request.mock.calls.filter(([method]) => method === "secrets.store.delete"),
+        ).toHaveLength(1),
+      );
+      ui.text([], ["@saved-account"]);
+    } else {
+      await ui.waitText(["@saved-account"]);
+      expect(ui.query('[role="alert"]')).toBeNull();
+      expect(
+        request.mock.calls.filter(([method]) => method === "secrets.store.delete"),
+      ).toHaveLength(0);
+    }
+  },
+);

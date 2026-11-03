@@ -1,7 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { spawnOomScoreAdjusted as spawn } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { formatBoundedChildOutput } from "./bounded-child-output.js";
 import type { VoiceCallStreamExposurePath } from "./config.js";
 import {
   cleanupTailscaleExposureRoute,
@@ -9,6 +8,7 @@ import {
 } from "./webhook/tailscale.js";
 
 const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
+const NGROK_ERROR_OUTPUT_MAX_CHARS = 16_384;
 const NGROK_ERROR_MARKER = "ERR_NGROK";
 const NGROK_STDERR_TAIL_MAX_CHARS = NGROK_ERROR_MARKER.length - 1;
 const NGROK_STOP_GRACE_MS = 2_000;
@@ -164,7 +164,12 @@ async function startNgrokTunnel(config: TunnelConfig): Promise<TunnelResult> {
     proc.stderr.on("data", (chunk: string) => {
       const combined = stderrTail + chunk;
       if (combined.includes(NGROK_ERROR_MARKER)) {
-        rejectIfPending(`ngrok error: ${formatBoundedChildOutput(combined)}`, true);
+        // Keep the newest diagnostic text without splitting a surrogate pair.
+        const diagnostic =
+          combined.length > NGROK_ERROR_OUTPUT_MAX_CHARS
+            ? `[output truncated]\n${sliceUtf16Safe(combined, -NGROK_ERROR_OUTPUT_MAX_CHARS)}`
+            : combined;
+        rejectIfPending(`ngrok error: ${diagnostic}`, true);
       }
       stderrTail = sliceUtf16Safe(combined, -NGROK_STDERR_TAIL_MAX_CHARS);
     });

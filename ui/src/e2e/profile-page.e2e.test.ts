@@ -1,25 +1,19 @@
 // Control UI tests cover the settings profile page against a mocked Gateway.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, type Locator, type Page } from "playwright/test";
+import { expect, type Page } from "playwright/test";
 import { beforeEach, it } from "vitest";
-import {
-  GIT_COAUTHOR_PREFERENCE_KEY,
-  type UserModelAccount,
-} from "../../../packages/gateway-protocol/src/index.ts";
-import {
-  buildControlUiCspHeader,
-  computeInlineScriptHashes,
-} from "../../../src/gateway/control-ui-csp.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
-  takeControlUiElementScreenshot,
   takeControlUiScreenshotFrame,
+  takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
-import { installRepositoryGateway } from "../test-helpers/repository-plugin.ts";
+import { installRepositoryGateway as installMockGateway } from "../test-helpers/repository-plugin.ts";
+import { fulfillWithControlUiCsp } from "./control-ui-csp.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { defineProfilePreferenceTests } from "./profile-page-preferences.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI profile page mocked Gateway E2E",
@@ -35,6 +29,10 @@ beforeEach(() => {
     proofDir = createControlUiE2eArtifactDir("profile-identity");
   }
 });
+const avatarPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
+  "base64",
+);
 const basePath = "/wilfred";
 const profilePath = `${basePath}/settings/profile`;
 
@@ -42,6 +40,7 @@ async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
+  await page.bringToFront();
   const identity = page.locator("#settings-profile-identity");
   const frame = await takeControlUiScreenshotFrame(
     page,
@@ -67,15 +66,6 @@ const testProfile = {
   githubIdentity: null,
   hasAvatar: false,
 };
-const githubAvatarUrl = "https://avatars.githubusercontent.com/u/583231?v=4";
-const linkedGitHubProfile = {
-  ...testProfile,
-  githubIdentity: {
-    login: "octocat",
-    profileUrl: "https://github.com/octocat",
-    avatarUrl: githubAvatarUrl,
-  },
-};
 const testPresenceUsers: NonNullable<ControlUiMockGatewayScenario["presenceUsers"]> = [
   {
     self: true,
@@ -92,7 +82,7 @@ suite.define(() => {
     methodResponses: Record<string, unknown> = {},
     presenceUsers = testPresenceUsers,
   ) {
-    const gateway = await installRepositoryGateway(page, {
+    const gateway = await installMockGateway(page, {
       basePath,
       presenceUsers,
       methodResponses: {
@@ -134,155 +124,243 @@ suite.define(() => {
     });
   });
 
-  it.each([
-    {
-      issuer: "public",
-      profile: linkedGitHubProfile,
-    },
-    {
-      issuer: "enterprise",
-      profile: {
-        ...linkedGitHubProfile,
-        githubIdentity: {
-          ...linkedGitHubProfile.githubIdentity,
-          host: "ghe.example.test",
-          profileUrl: "https://ghe.example.test/octocat",
-          avatarUrl: "https://ghe.example.test/avatars/u/583231",
-        },
-      },
-    },
-  ])(
-    "shows $issuer sign-in verification separately from explicit Git co-author credit",
-    async ({ profile }) => {
-      await suite.withPage(
-        {
-          ...(captureUiProof
-            ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 800 } } }
-            : {}),
-          viewport: { width: 1280, height: 800 },
-        },
-        async ({ page }) => {
-          const avatarRequests: string[] = [];
-          const avatarUrl = profile.githubIdentity.avatarUrl;
-          await page.route(avatarUrl, async (route) => {
-            avatarRequests.push(route.request().url());
-            await route.fulfill({
-              body: `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="32" fill="#24292f"/><circle cx="32" cy="27" r="14" fill="white"/><path d="M12 62c2-15 10-23 20-23s18 8 20 23" fill="white"/></svg>`,
-              contentType: "image/svg+xml",
-              status: 200,
-            });
-          });
-          const gateway = await openProfilePage(page, {
-            "users.self": { profile: testProfile },
-            "users.prefs.get": {
-              status: "ok",
-              entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false },
-            },
-            "users.prefs.set": { status: "ok" },
-          });
+  defineProfilePreferenceTests({
+    suite,
+    testProfile,
+    openProfilePage,
+    screenshot,
+    captureUiProof,
+    getProofDir: () => proofDir,
+  });
 
-          const githubRow = page
-            .locator("#settings-profile-identity .settings-row")
-            .filter({ has: page.locator(".settings-row__title", { hasText: "GitHub account" }) });
-          const coauthorRow = page.locator("#settings-profile-identity .settings-row").filter({
-            has: page.locator(".settings-row__title", { hasText: "Git co-author credit" }),
-          });
-          await expect(githubRow).toContainText("Unavailable");
-          await expect(githubRow).toContainText("No single verified GitHub sign-in account");
-          await expect(githubRow.locator(".settings-account")).toHaveCount(0);
-          await expect(
-            coauthorRow.getByRole("switch", { name: "Git co-author credit" }),
-          ).toBeEnabled();
-          await expect(page.getByRole("textbox", { name: "GitHub username" })).toHaveCount(0);
-          await expect(
-            page
-              .locator("#settings-profile-identity")
-              .getByRole("button", { name: /Link GitHub|Change|Disconnect/u }),
-          ).toHaveCount(0);
-          await screenshot(page, "08-github-identity-unlinked.png");
+  it("keeps keyboard editing and retry available after a rejected display-name save", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await openProfilePage(page);
+      const input = page.getByRole("textbox", { name: "Display name", exact: true });
+      const save = page.locator(".identity-name-control button");
+      await expect(input).toBeEnabled();
+      await gateway.deferNext("users.setDisplayName");
+      await input.fill("Keyboard Draft");
+      await input.press("Enter");
+      const first = await gateway.waitForRequest("users.setDisplayName");
+      expect(first.params).toEqual({ profileId: testProfile.id, displayName: "Keyboard Draft" });
+      await expect(save).toBeDisabled();
+      await page.keyboard.press("Enter");
+      expect(await gateway.getRequests("users.setDisplayName")).toHaveLength(1);
 
-          await gateway.setMethodResponse("users.self", { profile });
-          const readsBeforeRefresh = (await gateway.getRequests("users.self")).length;
-          await page.locator(".profile-refresh").click();
-          await gateway.waitForRequest("users.self", { after: readsBeforeRefresh });
-          const prefGet = await gateway.waitForRequest("users.prefs.get");
-          expect(prefGet.params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
-          const account = githubRow.getByRole("link", { name: "@octocat" });
-          await expect(account).toBeVisible();
-          await expect(account).toHaveAttribute("href", profile.githubIdentity.profileUrl);
-          await expect(account).toHaveAttribute("target", "_blank");
-          await account.focus();
-          await expect(account).toBeFocused();
-          const avatar = account.locator("img");
-          await expect(avatar).toBeVisible();
-          await expect(avatar).toHaveAttribute("src", avatarUrl);
-          await expect
-            .poll(() => avatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
-            .toBe(64);
-          expect(avatarRequests).toEqual([avatarUrl]);
-          await expect(githubRow).toContainText("Verified from your GitHub-backed sign-in");
-          await screenshot(page, "09-github-identity-linked.png");
-          // A public primary can also hold enterprise credit after explicit profile linking.
-          await expect(coauthorRow).toContainText("public GitHub noreply address");
-          await expect(coauthorRow).toContainText("verified enterprise email address");
-          await expect(coauthorRow).toContainText("visible in commit history");
-          await expect(coauthorRow).toContainText("future commits only");
-          const toggle = coauthorRow.getByRole("switch", { name: "Git co-author credit" });
-          await expect(toggle).toBeEnabled();
-          await expect(toggle).not.toBeChecked();
-
-          await toggle.click();
-          const prefSet = await gateway.waitForRequest("users.prefs.set");
-          expect(prefSet.params).toEqual({
-            entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true },
-          });
-          await expect(toggle).toBeChecked();
-          await screenshot(page, "10-git-coauthor-enabled.png");
-        },
-      );
-    },
-  );
-
-  it("keeps co-author consent editable for merged enterprise hosts without a display primary", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
-      const gateway = await openProfilePage(page, {
-        "users.self": {
-          profile: {
-            ...testProfile,
-            emails: ["github:ghe.example.test:101", "github:code.example.test:101"],
-            githubIdentity: null,
-          },
-        },
-        "users.prefs.get": { status: "ok", entries: {} },
-        "users.prefs.set": { status: "ok" },
+      await gateway.rejectDeferred("users.setDisplayName", {
+        message: "Synthetic profile name save rejected",
       });
-      const identity = page.locator("#settings-profile-identity");
-      const toggle = identity.getByRole("switch", { name: "Git co-author credit" });
-      // Capture before the changed assertion so the same scenario records the original defect.
-      await screenshot(page, "14-multi-host-consent-initial.png");
-      await expect(toggle).toBeEnabled();
-      await expect(toggle).toBeChecked();
-      await toggle.click();
-      const saved = await gateway.waitForRequest("users.prefs.set");
-      expect(saved.params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } });
-      await expect(toggle).not.toBeChecked();
+      await expect(page.locator(".identity-error")).toContainText(
+        "Synthetic profile name save rejected",
+      );
+      await expect(save).toBeEnabled();
+      await expect(input).toHaveValue("Keyboard Draft");
+      await screenshot(page, "display-name-rejected.png");
+      await expect(input).toBeFocused();
+
+      await page.keyboard.press("End");
+      await page.keyboard.type(" retry");
+      await expect(input).toHaveValue("Keyboard Draft retry");
+      await gateway.deferNext("users.setDisplayName");
+      await page.keyboard.press("Enter");
+      const retry = await gateway.waitForRequest("users.setDisplayName", { after: 1 });
+      expect(retry.params).toEqual({
+        profileId: testProfile.id,
+        displayName: "Keyboard Draft retry",
+      });
+      const profile = { ...testProfile, displayName: "Keyboard Draft retry" };
+      await gateway.setMethodResponse("users.self", { profile });
+      await gateway.resolveDeferred("users.setDisplayName", { profile });
+      await expect(save).toHaveText("Save");
+      await expect(input).toHaveValue(profile.displayName);
+      await expect(save).toBeDisabled();
+      expect(await gateway.getRequests("users.setDisplayName")).toHaveLength(2);
     });
   });
 
-  it("credits a verified GitHub account by default with no stored preference", async () => {
+  it("shows the personal connection context without exposing credential fields", async () => {
+    await suite.withPage(undefined, async ({ page }) => {
+      await openProfilePage(page);
+      const section = page.locator("section.settings-section", {
+        has: page.locator(".profile-auth-link-input"),
+      });
+      const row = (title: string) =>
+        section.locator(".settings-row").filter({
+          has: page.locator(".settings-row__title", { hasText: new RegExp(`^${title}$`, "u") }),
+        });
+      await expect(row("Gateway")).toContainText(new URL(suite.server.baseUrl).host);
+      await expect(row("Person")).toContainText(testProfile.displayName);
+      await expect(row("Scope")).toContainText("Personal");
+      await expect(section.getByRole("heading", { name: "Connected accounts" })).toBeVisible();
+      await expect(section.locator('input[type="password"]')).toHaveCount(0);
+    });
+  });
+
+  it("shares one authenticated avatar between the sidebar and profile preview", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
-      await openProfilePage(page, {
-        "users.self": { profile: linkedGitHubProfile },
-        "users.prefs.get": { status: "ok", entries: {} },
+      const el = (selector: string) => page.locator(selector);
+
+      await page.route(new URL(profilePath, suite.server.baseUrl).href, (route) =>
+        fulfillWithControlUiCsp(route),
+      );
+      const gatewayUrl = suite.server.baseUrl.replace(/^http/u, "ws").replace(/\/$/u, "");
+      await page.addInitScript((sameOriginGatewayUrl) => {
+        (
+          window as Window & {
+            ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string; token: string };
+          }
+        )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+          gatewayUrl: sameOriginGatewayUrl,
+          token: "test",
+        };
+      }, gatewayUrl);
+      const avatarRequests: Array<{ authorization?: string; url: string }> = [];
+      await page.route(`**/api/users/${testProfile.id}/avatar*`, async (route) => {
+        avatarRequests.push({
+          authorization: route.request().headers().authorization,
+          url: route.request().url(),
+        });
+        await route.fulfill({ body: avatarPng, contentType: "image/png", status: 200 });
+      });
+      await installMockGateway(page, {
+        basePath,
+        presenceUsers: testPresenceUsers,
+        methodResponses: {
+          "users.self": { profile: testProfile },
+        },
       });
 
-      const coauthorRow = page.locator("#settings-profile-identity .settings-row").filter({
-        has: page.locator(".settings-row__title", { hasText: "Git co-author credit" }),
+      const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["content-security-policy"]).toContain(
+        "img-src 'self' data: blob:",
+      );
+
+      const profileAvatar = el("#settings-profile-identity openclaw-viewer-avatar img");
+      await profileAvatar.waitFor({ timeout: 10_000 });
+      const imageUrl = await profileAvatar.getAttribute("src");
+      expect(imageUrl).toMatch(/^blob:/u);
+      await expect
+        .poll(() => profileAvatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+        .toBe(1);
+      expect(
+        await profileAvatar.evaluate((image) =>
+          image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+        ),
+      ).toBe(false);
+
+      await page.getByRole("button", { name: "Back to app" }).click();
+      const sidebarAvatar = el(".sidebar-identity-card openclaw-viewer-avatar img");
+      await sidebarAvatar.waitFor({ timeout: 10_000 });
+      await expect.poll(() => avatarRequests.length).toBe(1);
+      expect(avatarRequests[0]).toEqual({
+        authorization: "Bearer e2e-device-token",
+        url: new URL(`${basePath}/api/users/${testProfile.id}/avatar?v=2`, suite.server.baseUrl)
+          .href,
       });
-      const toggle = coauthorRow.getByRole("switch", { name: "Git co-author credit" });
-      await expect(toggle).toBeEnabled();
-      await expect(toggle).toBeChecked();
-      await screenshot(page, "13-git-coauthor-default-on.png");
+      expect(await sidebarAvatar.getAttribute("src")).toBe(imageUrl);
+      expect(
+        await sidebarAvatar.evaluate((image) =>
+          image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
+        ),
+      ).toBe(false);
+    });
+  });
+
+  it("uploads an avatar through the keyboard-accessible chooser", async () => {
+    await suite.withPage(undefined, async ({ page }) => {
+      const revision = "uploaded-content-hash-png";
+      const gateway = await installMockGateway(page, {
+        basePath,
+        presenceUsers: testPresenceUsers,
+        deferredMethods: ["users.setAvatar"],
+        methodResponses: { "users.self": { profile: testProfile } },
+      });
+      await page.goto(new URL(profilePath, suite.server.baseUrl).href);
+      const chooser = page.locator(".identity-avatar-control > button");
+      await expect(chooser).toHaveAccessibleName("Choose image");
+      await expect(chooser).toBeEnabled();
+      await chooser.focus();
+      await expect(chooser).toBeFocused();
+      const [fileChooser] = await Promise.all([
+        page.waitForEvent("filechooser"),
+        chooser.press("Enter"),
+      ]);
+      await fileChooser.setFiles({ name: "avatar.png", mimeType: "image/png", buffer: avatarPng });
+      const request = await gateway.waitForRequest("users.setAvatar");
+      expect(request.params).toMatchObject({ profileId: testProfile.id, mime: "image/png" });
+      await expect(chooser).toBeDisabled();
+      await expect
+        .poll(() => chooser.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("0.5");
+      await gateway.resolveDeferred("users.setAvatar", {
+        profile: { ...testProfile, avatarMime: "image/png", hasAvatar: true },
+        avatarRevision: revision,
+      });
+      await expect(chooser).toBeEnabled();
+    });
+  });
+  it("links and disconnects Discord below linked emails without changing GitHub identity", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const account = { accountId: "team", available: true, senderIds: [] as string[] };
+      const gateway = await openProfilePage(page, {
+        "users.channelIdentity": { status: "ready", accounts: [account] },
+      });
+      const rows = page.locator("#settings-profile-identity .settings-row");
+      const discord = rows.filter({
+        has: page.locator(".settings-row__title", { hasText: "Discord account" }),
+      });
+      await expect(discord.getByRole("button", { name: "Connect Discord" })).toBeEnabled();
+      const titles = await rows.locator(".settings-row__title").allTextContents();
+      expect(titles.indexOf("Discord account")).toBe(titles.indexOf("Linked emails") + 1);
+      expect(titles.indexOf("GitHub account")).toBe(titles.indexOf("Discord account") + 1);
+      await screenshot(page, "20-discord-disconnected.png");
+      await page.context().route("https://discord.example/**", (route) =>
+        route.fulfill({
+          body: "Synthetic Discord consent — no live OAuth",
+          contentType: "text/plain",
+        }),
+      );
+      const afterStart = await gateway.deferNext("users.channelIdentity", { action: "start" });
+      await discord.getByRole("button", { name: "Connect Discord" }).click();
+      await gateway.waitForRequest("users.channelIdentity", {
+        match: { action: "start" },
+        after: afterStart,
+      });
+      await gateway.setMethodResponse("users.channelIdentity", {
+        status: "linked",
+        accounts: [{ ...account, senderIds: ["123456789012345678"] }],
+      });
+      await gateway.resolveDeferred("users.channelIdentity", {
+        status: "pending",
+        requestId: "test-request",
+        authorizationUrl: "https://discord.example/consent",
+      });
+      await expect(discord).toContainText("Verified");
+      await expect(discord).toContainText("123456789012345678");
+      await screenshot(page, "21-discord-linked.png");
+      await gateway.setMethodResponse("users.channelIdentity", {
+        status: "ready",
+        accounts: [account],
+      });
+      await discord.getByRole("button", { name: "Disconnect", exact: true }).click();
+      await expect(discord.getByRole("button", { name: "Connect Discord" })).toBeEnabled();
+      const afterError = await gateway.deferNext("users.channelIdentity", { action: "start" });
+      await discord.getByRole("button", { name: "Connect Discord" }).click();
+      await gateway.waitForRequest("users.channelIdentity", {
+        match: { action: "start" },
+        after: afterError,
+      });
+      await gateway.rejectDeferred("users.channelIdentity", {
+        code: "INVALID_REQUEST",
+        message: "Discord sign-in is unavailable. Try again.",
+      });
+      await expect(discord.getByRole("alert")).toContainText("Try again");
+      await screenshot(page, "22-discord-error.png");
+      expect(
+        await page.locator("body").evaluate((element) => element.scrollWidth),
+      ).toBeLessThanOrEqual(1280);
     });
   });
 
@@ -360,232 +438,6 @@ suite.define(() => {
             path.join(proofDir, "06-authenticated-assistant-avatar.png"),
             await takeControlUiElementScreenshot(page, page.locator(".profile-hero"), [image]),
           );
-        }
-      },
-    );
-  });
-
-  it("shares one authenticated avatar between the sidebar and profile preview", async () => {
-    await suite.withPage(
-      {
-        ...(captureUiProof
-          ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 800 } } }
-          : {}),
-        viewport: { width: 1280, height: 800 },
-      },
-      async ({ page }) => {
-        await page.route(new URL(profilePath, suite.server.baseUrl).href, async (route) => {
-          const response = await route.fetch();
-          const body = await response.text();
-          await route.fulfill({
-            body,
-            headers: {
-              ...response.headers(),
-              "content-security-policy": buildControlUiCspHeader({
-                inlineScriptHashes: computeInlineScriptHashes(body),
-              }),
-            },
-            response,
-          });
-        });
-        const gatewayUrl = suite.server.baseUrl.replace(/^http/u, "ws").replace(/\/$/u, "");
-        await page.addInitScript((sameOriginGatewayUrl) => {
-          (
-            window as Window & {
-              ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string; token: string };
-            }
-          )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
-            gatewayUrl: sameOriginGatewayUrl,
-            token: "test",
-          };
-        }, gatewayUrl);
-        const avatarRequests: Array<{ authorization?: string; url: string }> = [];
-        let releaseRevisedAvatar: (() => void) | undefined;
-        const revisedAvatarReady = new Promise<void>((resolve) => {
-          releaseRevisedAvatar = resolve;
-        });
-        // Profile images require the same bearer auth as gateway RPCs. One cached
-        // blob keeps the sidebar and preview inside the Control UI's image CSP.
-        await page.route(`**/api/users/${testProfile.id}/avatar*`, async (route) => {
-          const revision = new URL(route.request().url()).searchParams.get("v");
-          avatarRequests.push({
-            authorization: route.request().headers().authorization,
-            url: route.request().url(),
-          });
-          if (revision === "3") {
-            // Hold the real response so Chromium can prove pending fallback and
-            // stable image-node identity before the replacement finishes loading.
-            await revisedAvatarReady;
-          }
-          if (revision === "4") {
-            await route.fulfill({
-              body: JSON.stringify({ ok: false, error: { type: "not_found" } }),
-              contentType: "application/json",
-              status: 404,
-            });
-            return;
-          }
-          await route.fulfill({
-            body: Buffer.from(
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
-              "base64",
-            ),
-            contentType: "image/png",
-            status: 200,
-          });
-        });
-        const gateway = await installRepositoryGateway(page, {
-          basePath,
-          presenceUsers: testPresenceUsers,
-          methodResponses: {
-            "users.self": { profile: testProfile },
-          },
-        });
-
-        const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
-        expect(response?.status()).toBe(200);
-        expect(response?.headers()["content-security-policy"]).toContain(
-          "img-src 'self' data: blob:",
-        );
-
-        const profileAvatar = page.locator("#settings-profile-identity openclaw-viewer-avatar img");
-        await profileAvatar.waitFor({ timeout: 10_000 });
-        const imageUrl = await profileAvatar.getAttribute("src");
-        expect(imageUrl).toMatch(/^blob:/u);
-        await expect
-          .poll(() => profileAvatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
-          .toBe(1);
-        expect(
-          await profileAvatar.evaluate((image) =>
-            image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
-          ),
-        ).toBe(false);
-        if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "03-authenticated-profile-avatar.png"),
-          });
-        }
-
-        await page.getByRole("button", { name: "Back to app" }).click();
-        const sidebarAvatar = page.locator(".sidebar-identity-card openclaw-viewer-avatar img");
-        await sidebarAvatar.waitFor({ timeout: 10_000 });
-        await expect.poll(() => avatarRequests.length).toBe(1);
-        expect(avatarRequests[0]).toEqual({
-          authorization: "Bearer e2e-device-token",
-          url: new URL(`${basePath}/api/users/${testProfile.id}/avatar?v=2`, suite.server.baseUrl)
-            .href,
-        });
-        expect(await sidebarAvatar.getAttribute("src")).toBe(imageUrl);
-        expect(
-          await sidebarAvatar.evaluate((image) =>
-            image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
-          ),
-        ).toBe(false);
-        if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "03-authenticated-user-avatar-cache.png"),
-          });
-        }
-
-        const originalSidebarImage = await sidebarAvatar.elementHandle();
-        expect(originalSidebarImage).not.toBeNull();
-        const connect = await gateway.waitForRequest("connect");
-        const selfInstanceId = (connect.params as { client?: { instanceId?: string } } | undefined)
-          ?.client?.instanceId;
-        expect(selfInstanceId).toBeTruthy();
-        const updatedDisplayName = "Updated Person";
-        const publishAvatarRevision = async (revision: number) => {
-          await gateway.emitGatewayEvent("presence", {
-            presence: [
-              {
-                instanceId: selfInstanceId,
-                mode: "webchat",
-                reason: "connect",
-                user: {
-                  id: testProfile.id,
-                  name: updatedDisplayName,
-                  email: testProfile.emails[0],
-                  avatarUrl: `/api/users/${testProfile.id}/avatar?v=${revision}`,
-                },
-                watchedSessions: [],
-              },
-            ],
-          });
-        };
-
-        await publishAvatarRevision(3);
-        await expect.poll(() => avatarRequests.length).toBe(2);
-        await expect(page.locator(".sidebar-identity-card__name")).toHaveText(updatedDisplayName);
-        expect(
-          await originalSidebarImage?.evaluate((image) =>
-            image.closest(".viewer-avatar")?.classList.contains("is-pending"),
-          ),
-        ).toBe(true);
-        expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);
-
-        releaseRevisedAvatar?.();
-        await expect
-          .poll(() => sidebarAvatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
-          .toBe(1);
-        const revisedImageUrl = await sidebarAvatar.getAttribute("src");
-        expect(revisedImageUrl).toMatch(/^blob:/u);
-        expect(revisedImageUrl).not.toBe(imageUrl);
-        expect(await originalSidebarImage?.evaluate((image) => image.getAttribute("src"))).toBe(
-          revisedImageUrl,
-        );
-        expect(
-          await sidebarAvatar.evaluate((image) =>
-            image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
-          ),
-        ).toBe(false);
-        expect(avatarRequests[1]).toEqual({
-          authorization: "Bearer e2e-device-token",
-          url: new URL(`${basePath}/api/users/${testProfile.id}/avatar?v=3`, suite.server.baseUrl)
-            .href,
-        });
-        if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "04-authenticated-user-avatar-revision.png"),
-          });
-        }
-
-        const missingAvatarResponse = page.waitForResponse(
-          (candidateResponse) =>
-            candidateResponse.url().includes(`/api/users/${testProfile.id}/avatar?v=4`) &&
-            candidateResponse.status() === 404,
-        );
-        await publishAvatarRevision(4);
-        await missingAvatarResponse;
-        await expect.poll(() => avatarRequests.length).toBe(3);
-        await expect.poll(() => sidebarAvatar.getAttribute("src")).toBeNull();
-        await expect
-          .poll(() =>
-            sidebarAvatar.evaluate((image) =>
-              image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
-            ),
-          )
-          .toBe(true);
-        await expect
-          .poll(async () =>
-            (
-              await page.locator(".sidebar-identity-card .viewer-avatar__fallback").textContent()
-            )?.trim(),
-          )
-          .toBe("UP");
-        expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);
-        expect(avatarRequests[2]).toEqual({
-          authorization: "Bearer e2e-device-token",
-          url: new URL(`${basePath}/api/users/${testProfile.id}/avatar?v=4`, suite.server.baseUrl)
-            .href,
-        });
-        if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "05-authenticated-user-avatar-missing.png"),
-          });
         }
       },
     );
@@ -877,7 +729,7 @@ suite.define(() => {
         viewport: { width: 1280, height: 800 },
       },
       async ({ page }) => {
-        const gateway = await installRepositoryGateway(page, {
+        const gateway = await installMockGateway(page, {
           basePath,
           deferredMethods: ["users.self"],
           presenceUsers: testPresenceUsers,
@@ -948,7 +800,7 @@ suite.define(() => {
           status: 200,
         });
       });
-      const gateway = await installRepositoryGateway(page, {
+      const gateway = await installMockGateway(page, {
         basePath,
         deferredMethods: ["users.setAvatar"],
         presenceUsers: testPresenceUsers,

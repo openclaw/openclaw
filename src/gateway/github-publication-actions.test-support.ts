@@ -1,3 +1,4 @@
+import { createContext as createGatewayContext } from "./server-plugin-in-process-dispatch.test-support.js";
 // oxfmt-ignore
 import {
   commandResult,
@@ -6,8 +7,7 @@ import {
   SESSION_KEY,
 } from "./github-publication.test-support.js";
 import { randomUUID } from "node:crypto";
-import { expect, vi } from "vitest";
-import { readRepositoryServices } from "../../extensions/github-repositories/account-runtime-api.js";
+import { assert, expect, vi } from "vitest";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { createGitHubPublishTool } from "../agents/test-helpers/github-plugin-tools.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -20,6 +20,7 @@ import {
   createGitHubPublicationRequesterFixture,
   createRequesterPublicationFixture,
 } from "./github-publication-requester.test-support.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 
 const mocks = githubPublicationTestMocks();
@@ -60,10 +61,7 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
   const publication = await f.coordinator.requestForSessionV2(
     f.request(randomUUID(), f.guest, "Publish session work"),
   );
-  expect(publication.status).toBe("published");
-  if (publication.status !== "published") {
-    throw new Error("Publication fixture did not publish");
-  }
+  assert(publication.status === "published", "Publication fixture did not publish");
   const writerSource =
     backend === "repository"
       ? await createGitHubPublicationRequesterFixture({
@@ -163,15 +161,13 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
     }
     return response;
   });
-  const invoke = createPublicationActionInvoker(f, writerSource);
-  const expected = { requestId: publication.requestId, expectedHeadCommit: publication.headCommit };
   return {
     ...f,
     publication,
     state,
     writes,
-    invoke,
-    expected,
+    invoke: createPublicationActionInvoker(f, writerSource),
+    expected: { requestId: publication.requestId, expectedHeadCommit: publication.headCommit },
     onRead: (callback: () => Promise<void>) => void (beforeRead = callback),
     rejectMerge(
       result: ReturnType<typeof commandResult> | Error = commandResult(
@@ -210,9 +206,14 @@ export function createPublicationActionInvoker(
     });
     const principal =
       actor === "guest" ? f.guestSource : actor === "writer" ? writerSource : f.maintainerSource;
-    if (!readRepositoryServices(principal.context)) {
-      await installPublicationRpcFixture(principal.context, f.coordinator);
-    }
+    const client = invocation.client ?? principal.client;
+    const context = Object.assign(
+      createGatewayContext([], principal.context.getRuntimeConfig),
+      principal.context,
+    );
+    context.resolveGatewayContext = () => context;
+    await installPublicationRpcFixture(context, f.coordinator);
+    const operator = await captureGatewayOperatorRunAuthority({ client, context });
     const callGateway: InProcessGatewayCaller = async <T>(
       method: string,
       params: Record<string, unknown>,
@@ -220,8 +221,8 @@ export function createPublicationActionInvoker(
       const respond = vi.fn();
       await handleGatewayRequest({
         req: { type: "req", id: randomUUID(), method, params },
-        client: invocation.client ?? principal.client,
-        context: principal.context,
+        client,
+        context,
         isWebchatConnect: () => false,
         respond,
       });
@@ -232,18 +233,26 @@ export function createPublicationActionInvoker(
       }
       return result as T;
     };
-    return await withPublicationToolTransport(callGateway, () =>
-      withGatewayToolCallerIdentity({ agentId: "main", sessionKey: source }, async () =>
-        invocation.raw
-          ? {
-              content: [],
-              details: await callGateway("sessions.github.action", { sessionKey: source, ...args }),
-            }
-          : createGitHubPublishTool({
-              actionsAvailable: actor !== "guest",
-              sandbox: invocation.sandbox,
-            }).execute("publication-action", args),
-      ),
-    );
+    try {
+      return await withPublicationToolTransport(callGateway, () =>
+        withGatewayToolCallerIdentity(
+          { agentId: "main", sessionKey: source, operatorAuthority: operator?.authority },
+          async () =>
+            invocation.raw
+              ? {
+                  content: [],
+                  details: await callGateway("sessions.github.action", {
+                    sessionKey: source,
+                    ...args,
+                  }),
+                }
+              : createGitHubPublishTool({
+                  sandbox: invocation.sandbox,
+                }).execute("publication-action", args),
+        ),
+      );
+    } finally {
+      operator?.release();
+    }
   };
 }

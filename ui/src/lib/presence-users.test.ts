@@ -10,7 +10,9 @@ import {
 
 it.each([
   [{ id: "gateway-owner" }, "Shared owner", true],
-  [{ id: "gateway-owner", name: "Saved owner name" }, "Shared owner", true],
+  [{ id: "gateway-owner", name: "Saved owner name" }, "Saved owner name · Shared owner", true],
+  [{ id: "gateway-owner", name: "  " }, "Shared owner", true],
+  [{ id: "gateway-owner", email: "shared@example.test" }, "Shared owner", true],
   [{ id: "person", name: "Example person", email: "person@example.test" }, "Example person", false],
   [{ id: "person", email: "person@example.test" }, "person@example.test", false],
   [{ id: "person" }, "person", false],
@@ -41,19 +43,16 @@ it("isolates namespaces while merging renamed tabs and excluding disconnected fa
     { instanceId: "closed", user: raw, reason: "disconnect", watchedSessions: ["closed-session"] },
   ];
   const forward = projectPresencePayload({ presence });
-  expect(forward.users).toHaveLength(2);
-  expect(
-    forward.users.map(({ id: userId, identity, name, watchedSessions, entries }) => [
-      userId,
-      identity,
-      name,
-      watchedSessions,
-      entries?.length,
-    ]),
-  ).toEqual([
-    [id, profile.identity, profile.name, ["profile-extra", "profile-session"], 2],
-    [id, undefined, raw.name, ["raw-extra", "raw-session"], 2],
+  const entries = [expect.any(Object), expect.any(Object)];
+  expect(forward.users).toEqual([
+    expect.objectContaining({
+      ...profile,
+      watchedSessions: ["profile-extra", "profile-session"],
+      entries,
+    }),
+    expect.objectContaining({ ...raw, watchedSessions: ["raw-extra", "raw-session"], entries }),
   ]);
+  expect(forward.users[1]?.identity).toBeUndefined();
   expect(projectPresencePayload({ presence: presence.toReversed() })).toEqual(forward);
 });
 

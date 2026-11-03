@@ -18,6 +18,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createRepositorySessionReadHost } from "../control-ui-session-pr-runtime.js";
 import { installGitHubAccountFixture } from "../github-account-service.test-support.js";
 import { handleGatewayRequest, createRequestGatewayMethodRegistry } from "../server-methods.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -27,6 +28,7 @@ export const sessionId = "publication-read-session";
 export const publisher = { source: "agent-override" as const, accountId: 7, login: "shared-bot" };
 export const publisherIdentity = () => ({
   source: publisher.source,
+  host: "github.com",
   account: { accountId: publisher.accountId, login: publisher.login, avatarUrl: null },
 });
 export function mockPublicationIdentity() {
@@ -44,6 +46,45 @@ export const receipt = {
   },
   confirmation: null,
 };
+
+export type ReadFixture = ReturnType<typeof createFixture>;
+const avatarUrl = (accountId: number) => `https://avatars.githubusercontent.com/u/${accountId}?v=4`;
+export const optionsResult = (overrides: Record<string, unknown> = {}) => {
+  const personalAccount = (overrides.personal as { account?: { accountId: number } } | undefined)
+    ?.account;
+  const avatarUrls = {
+    ...(overrides.shared === null ? {} : { shared: avatarUrl(publisher.accountId) }),
+    ...(personalAccount ? { personal: avatarUrl(personalAccount.accountId) } : {}),
+  };
+  return {
+    personal: null,
+    shared: publisher,
+    ...(Object.keys(avatarUrls).length ? { avatarUrls } : {}),
+    pendingPersonal: null,
+    latestShared: receipt,
+    ...overrides,
+  };
+};
+export const expectReply = (respond: unknown, result: unknown) =>
+  expect(respond).toHaveBeenCalledWith(true, result);
+export const expectFailure = (
+  respond: unknown,
+  detail: Record<string, unknown> = { code: "FORBIDDEN" },
+) => expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(detail));
+export function expectNoCalls(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+export function expectNoPersonalReads(fixture: ReadFixture) {
+  expectNoCalls(
+    fixture.personalConnectionStatus,
+    fixture.personalPending,
+    fixture.preparePersonalStatus,
+    fixture.personalStatus,
+    fixture.requestForSession,
+  );
+}
 
 export async function withHeldReceipt(
   fixture: ReturnType<typeof createFixture>,
@@ -150,21 +191,14 @@ function createFixture(
 ) {
   const client: GatewayClient = {
     connId: "publication-reader",
-    connect: {
-      role: "operator",
-      scopes,
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", mode: "test", platform: "test", version: "1" },
-    },
+    connect: gatewayConnect(scopes, { id: "test", mode: "test", version: "1" }),
   };
   if (profile) {
-    client.authenticatedUserProfile = {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    };
+    client.authenticatedUserProfile = gatewayProfile(
+      profile.id,
+      profile.displayName,
+      profile.updatedAt,
+    );
   }
   let connected = true;
   const publication = {

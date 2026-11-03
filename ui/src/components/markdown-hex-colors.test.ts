@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { githubReferenceOptions } from "../test-helpers/github-text-references.ts";
-import { htmlFragment } from "./markdown.test-support.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 function swatches(fragment: HTMLElement) {
   return [...fragment.querySelectorAll<HTMLImageElement>(".markdown-hex-color__swatch")];
@@ -61,6 +61,18 @@ describe("Markdown hex colors", () => {
     expect(
       swatches(htmlFragment(toSanitizedMarkdownHtml("#abc", { mode: "document" }))),
     ).toHaveLength(0);
+  });
+
+  it("keeps unresolved item references plain while preserving numeric colors", () => {
+    const source = "PR #126; issue **#1234**; pull request #123456; fixes #12345678; color #126.";
+    for (const fragment of [
+      htmlFragment(toSanitizedMarkdownHtml(source)),
+      htmlFragment(toStreamingMarkdownParts(source).join("")),
+    ]) {
+      expect(fragment.querySelector("a")).toBeNull();
+      expect(swatches(fragment).map((image) => image.parentElement?.textContent)).toEqual(["#126"]);
+      expect(fragment.textContent?.trim()).toBe(source.replaceAll("**", ""));
+    }
   });
 
   it("replaces partial streaming colors without retaining invalid prefixes", () => {

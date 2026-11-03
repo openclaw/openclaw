@@ -35,7 +35,8 @@ export function formatGitHubPublicationContent(params: {
       const participants = credit ? `\n\n## Worked on by\n\n${credit}` : "";
       const sessionUrl = params.facts.currentSessionUrl();
       const footer = sessionUrl ? `\n\n---\n[View the OpenClaw team session](${sessionUrl})` : "";
-      return `${description}${participants}\n\n<!-- openclaw-publication:${params.requestId} -->${footer}`;
+      const body = `${description}${participants}\n\n<!-- openclaw-publication:${params.requestId} -->`;
+      return `${params.facts.appendAttribution?.(body) ?? body}${footer}`;
     },
   };
 }

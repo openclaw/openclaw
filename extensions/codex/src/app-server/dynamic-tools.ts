@@ -121,6 +121,7 @@ export type CodexDynamicToolBridge = {
   specs: CodexDynamicToolSpec[];
   resultContentSourceForTool: (toolName: string) => AnyAgentTool["resultContentSource"];
   sideEffectOwnerKeyForTool: (toolName: string) => string | undefined;
+  hideFromChannelProgressForTool: (toolName: string) => boolean | undefined;
   handleToolCall: (
     params: CodexDynamicToolCallParams,
     options?: {
@@ -148,8 +149,8 @@ export type CodexDynamicToolBridge = {
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   registeredTools?: readonly CodexToolDescriptor[];
-  registeredFallbackTools?: AnyAgentTool[];
   registeredSpecs?: readonly CodexDynamicToolSpec[];
+  requireExactRegisteredDefinitions?: boolean;
   signal: AbortSignal;
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
@@ -182,15 +183,9 @@ export function createCodexDynamicToolBridge(params: {
     inheritedNames ?? new Set(registeredProjection.tools.map((entry) => entry.name));
   const finalized = finalizeCodexToolAvailability(
     availableProjection.tools.filter((entry) => registrationNames.has(entry.name)),
+    params.requireExactRegisteredDefinitions ? inheritedSpecs : undefined,
   );
   const availableTools = finalized.tools;
-  const registeredFallbackProjection = projectCodexExecutableDynamicToolSurface(
-    params.registeredFallbackTools ?? [],
-    params.hookContext,
-  );
-  const registeredFallbackTools = registeredFallbackProjection.tools.filter(
-    (entry) => registrationNames.has(entry.name) && !finalized.preparedNames.has(entry.name),
-  );
   const pluginLocalMediaTrustByToolName = new Map<string, ReadonlySet<string>>();
   for (const { name, tool } of availableTools) {
     const pluginMeta = getPluginToolMeta(tool);
@@ -203,9 +198,8 @@ export function createCodexDynamicToolBridge(params: {
     }
   }
   availableProjection.quarantinedTools.push(...finalized.quarantinedTools);
-  const toolMap = new Map(availableTools.map((entry) => [entry.name, entry]));
-  const executionToolMap = new Map(
-    [...registeredFallbackTools, ...availableTools].map((entry) => [
+  const toolMap = new Map(
+    availableTools.map((entry) => [
       entry.name,
       {
         ...entry,
@@ -228,7 +222,6 @@ export function createCodexDynamicToolBridge(params: {
     inheritedNames ?? new Set(registeredSpecTools.map((entry) => entry.name));
   const quarantinedTools = dedupeQuarantinedDynamicTools([
     ...availableProjection.quarantinedTools,
-    ...registeredFallbackProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
   ]);
   reportQuarantinedDynamicTools({
@@ -308,6 +301,8 @@ export function createCodexDynamicToolBridge(params: {
       const tool = toolMap.get(toolName)?.tool;
       return tool ? getPluginToolSideEffectOwnerKey(tool) : undefined;
     },
+    hideFromChannelProgressForTool: (toolName) =>
+      toolMap.get(toolName)?.tool.hideFromChannelProgress,
     telemetry,
     setRemoteWorkspaceFileReader: (reader) => {
       readRemoteWorkspaceFile = reader;
@@ -328,7 +323,7 @@ export function createCodexDynamicToolBridge(params: {
           toolName,
           toolCallOrdinal: options?.toolCallOrdinal,
         });
-      const toolEntry = executionToolMap.get(call.tool);
+      const toolEntry = toolMap.get(call.tool);
       if (!toolEntry) {
         const executedArguments = asNonArrayRecord(call.arguments);
         const message = registeredToolNames.has(call.tool)
@@ -704,13 +699,11 @@ export function projectCodexExecutableDynamicTools(params: {
   hookContext?: CodexDynamicToolHookContext;
 }): {
   availableTools: AnyAgentTool[];
-  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
 } {
   const projected = projectCodexExecutableDynamicToolSurface(params.tools, params.hookContext);
   const finalized = finalizeCodexToolAvailability(projected.tools);
   return {
     availableTools: finalized.tools.map((entry) => entry.tool),
-    quarantinedTools: [...projected.quarantinedTools, ...finalized.quarantinedTools],
   };
 }
 

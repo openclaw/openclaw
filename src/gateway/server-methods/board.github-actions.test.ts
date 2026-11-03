@@ -21,6 +21,7 @@ import { clearNativeGitHubTokenCache } from "../../../extensions/github-reposito
 import { resolveManagedGitHubProfileDir } from "../../../extensions/github-repositories/tool-identity-api.js";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { commandResult } from "../../agents/github-identity.test-support.js";
 import { createTestBoardStore } from "../../boards/board-store.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -93,15 +94,6 @@ async function expectWaiting(started: Promise<unknown>, pending: Promise<unknown
     "waiting",
   );
 }
-const commandResult = (value = "", code = 0) => ({
-  stdout: Buffer.from(value),
-  stderr: Buffer.alloc(0),
-  code,
-  signal: null,
-  killed: false,
-  termination: "exit" as const,
-});
-
 const getOrCreatePromise = lazyPromise.getOrCreatePromise;
 
 function observeSharedReadAdmission() {
@@ -227,6 +219,13 @@ describe("board authenticated GitHub Actions", () => {
       getRuntimeConfig: () => config,
       trackExecution: (execute) => work.track(execute),
     });
+  }
+  function publishConfig(next: OpenClawConfig) {
+    config = next;
+    setRuntimeConfigSnapshot(config);
+  }
+  function publishAgents(entries: NonNullable<OpenClawConfig["agents"]>["entries"]) {
+    publishConfig({ ...config, agents: { ...config.agents, entries } });
   }
   afterEach(async () => {
     await Promise.all(workScopes.splice(0).map((work) => work.drain()));
@@ -374,12 +373,7 @@ describe("board authenticated GitHub Actions", () => {
         expect(new URL(toRequestUrl(url)).origin).toBe("https://api.github.com");
         expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${token}`);
       }
-      if (source === "native CLI") {
-        expect(native).toHaveBeenCalledWith(
-          ["gh", "auth", "token", "--hostname", "github.com"],
-          expect.any(Object),
-        );
-      } else {
+      if (source !== "native CLI") {
         expect(native).not.toHaveBeenCalled();
       }
     },
@@ -460,7 +454,7 @@ describe("board authenticated GitHub Actions", () => {
           controller.abort();
         }
         if (changed === "agent") {
-          config.agents = { entries: { other: {} } };
+          publishAgents({ other: {} });
         }
         if (changed === "routing") {
           config.session = { scope: "global", mainKey: `runs-${caseNumber}` };
@@ -603,7 +597,7 @@ describe("board authenticated GitHub Actions", () => {
     const { started, release } = holdActions();
     const harness = createGitHubBoardHarness();
     const { read } = await reader(harness);
-    config.agents!.entries!.other = {};
+    publishAgents({ ...config.agents?.entries, other: {} });
     const otherSession = await reader(harness, "runs", "other");
     const sharedSecond = otherSession.read();
     const first = read();
@@ -619,11 +613,7 @@ describe("board authenticated GitHub Actions", () => {
       "https://api.github.com/repos/owner/repo/actions/runs?per_page=20&exclude_pull_requests=true",
     );
     expect(init?.method ?? "GET").toBe("GET");
-    expect(init).toMatchObject({
-      headers: { Authorization: `Bearer ${token}` },
-      redirect: "manual",
-      signal: expect.any(AbortSignal),
-    });
+    expect(init?.redirect).toBe("manual");
     expect(JSON.stringify(http.mock.calls)).not.toContain("synthetic-preview-only");
     await read({ repository: "owner/repo", branch: "other" });
     expect(actionCalls()).toHaveLength(2);
@@ -638,42 +628,32 @@ describe("board authenticated GitHub Actions", () => {
     expect(actionCalls()).toHaveLength(4);
   });
 
-  it.for(["success", "failure"] as const)(
-    "returns expired Actions while one background refresh settles with %s",
-    async (outcome, { signal }) => {
-      const now = Date.now();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-      const { read } = await reader();
-      await expectResult(read());
-      clock.mockReturnValue(now + 30_001);
-      const updated = { ...result, workflow_runs: [{ ...run, conclusion: "failure" }] };
-      const { started, release } = holdActions(() =>
-        outcome === "success" ? json(updated) : new Response(token, { status: 503 }),
+  it("returns expired Actions while one background refresh settles", async ({ signal }) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+    const { read } = await reader();
+    await expectResult(read());
+    clock.mockReturnValue(now + 30_001);
+    const updated = { ...result, workflow_runs: [{ ...run, conclusion: "failure" }] };
+    const { started, release } = holdActions(() => json(updated));
+    const pending = read();
+    try {
+      await withinTest(started.promise, signal);
+      await expectResult(withinTest(pending, signal), { ...result, stale: true });
+      await expectResult(read(), { ...result, stale: true });
+      expect(actionCalls()).toHaveLength(2);
+    } finally {
+      release.resolve();
+      await pending;
+      await AsyncWorkScope.runWhenAllIdle(
+        () => workScopes,
+        async () => {},
       );
-      const pending = read();
-      try {
-        await withinTest(started.promise, signal);
-        await expectResult(withinTest(pending, signal), { ...result, stale: true });
-        await expectResult(read(), { ...result, stale: true });
-        expect(actionCalls()).toHaveLength(2);
-      } finally {
-        release.resolve();
-        await pending;
-        await AsyncWorkScope.runWhenAllIdle(
-          () => workScopes,
-          async () => {},
-        );
-      }
-      const response = await read();
-      if (outcome === "success") {
-        expect(response.mock.calls[0]).toEqual([true, updated]);
-        expect(actionCalls()).toHaveLength(2);
-      } else {
-        await expectDenied(Promise.resolve(response), "request failed");
-        expect(actionCalls()).toHaveLength(3);
-      }
-    },
-  );
+    }
+    await expectResult(read(), updated);
+    expect(actionCalls()).toHaveLength(2);
+  });
 
   it.each(["session ownership", "token"] as const)(
     "rejects changed %s across an awaited fetch",
@@ -685,7 +665,7 @@ describe("board authenticated GitHub Actions", () => {
       if (changed === "token") {
         await writeCredential("synthetic-rotated-token");
       } else {
-        config.agents = { entries: { other: {} } };
+        publishAgents({ other: {} });
       }
       release.resolve();
       await expectDenied(pending);

@@ -6,7 +6,9 @@ import {
   matchesAgentLifecycleBinding,
   matchesAgentLifecycleBindingAsync,
 } from "../../agents/agent-lifecycle-registry.js";
+import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { assertRepositoryDispatchAdmission } from "../repository-dispatch.js";
 import type { RepositorySources } from "../repository-sources.js";
 import {
   resolveEnvironmentRecipe,
@@ -22,6 +24,8 @@ export type RepositoryProjectAdmissionRequest = {
   getRepositorySources?: () => RepositorySources;
   assertCurrent: () => void;
   signal?: AbortSignal;
+  readNativeCredential?: GitHubCredentialReader;
+  retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
   knownRecipe?: (
     project: RepositoryWorkerProjectSnapshot,
   ) => { setupRecipe?: string; recipe?: EnvironmentRecipe } | undefined;
@@ -75,6 +79,7 @@ export async function prepareRepositoryWorkerProjectSource(
   }
   const assertCurrent = () => {
     source.assertCurrent();
+    assertRepositoryDispatchAdmission(params.readNativeCredential, params.getConfig());
     if (!matchesAgentLifecycleBinding(params.getConfig(), agent)) {
       sourceChanged();
     }
@@ -89,6 +94,8 @@ export async function prepareRepositoryWorkerProjectSource(
   }
   assertCaller();
   const lease = await source.prepareWorker({
+    readCredential: params.readNativeCredential,
+    retainCredentialCleanup: params.retainCredentialCleanup,
     agentId: agent.agentId,
     ref: request.ref,
     baseCommit: request.baseCommit,

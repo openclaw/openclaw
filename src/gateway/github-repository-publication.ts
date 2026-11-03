@@ -19,15 +19,8 @@ import type {
   PersonalGitHubSessionActionV2,
   PreparedRepositoryPublicationStatus,
 } from "./github-personal-publication.js";
-import {
-  type PublicationSessionIdentity as SessionIdentity,
-  prepareGitHubPublicationSession,
-} from "./github-publication-availability.js";
-import {
-  exactClaimForPlacement,
-  type GitHubPublicationClaimRequestV2,
-  type GitHubPublicationSessionRequestV2,
-} from "./github-publication-coordinator-methods.js";
+import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
+import { exactClaimForPlacement } from "./github-publication-coordinator-methods.js";
 import {
   prepareCurrentPublisher,
   bindPersonalPublisher,
@@ -39,9 +32,15 @@ import {
   type NativeReceiptPublisher,
   type NativeReceiptPublisher as PreparedGitHubPublicationIdentity,
 } from "./github-publication-policy.js";
-import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import { projectGitHubPublicationResult as projectReceipt } from "./github-publication-receipt.js";
+import type { GitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import { insertRepositoryGitHubPublicationAsync } from "./github-publication-request-async.js";
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
+import type {
+  GitHubPublicationClaimRequestV2,
+  GitHubPublicationSessionRequestV2,
+  PublicationSessionIdentity as SessionIdentity,
+} from "./github-publication-session.types.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import {
   listRepositoryGitHubPublicationsAsync,
@@ -55,7 +54,10 @@ import {
   repositoryGitHubPublicationDigest,
   terminalRepositoryGitHubPublication,
 } from "./github-repository-publication-store.js";
-import { prepareRepositoryOwner } from "./github-repository-publication-workspace.js";
+import {
+  prepareRepositoryOwner,
+  type RepositoryDiskPublicationSource,
+} from "./github-repository-publication-workspace.js";
 import { matchesRepositoryGitHubPublicationClaim } from "./github-repository-publication.kernel.js";
 import type {
   RepositoryPublicationProvider,
@@ -70,9 +72,11 @@ import type {
 export function createRepositoryGitHubPublicationCoordinator(params: {
   provider: RepositoryPublicationProvider;
   placements: WorkerSessionPlacementStore;
+  environments?: RepositoryDiskPublicationSource["environments"];
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent: () => void;
   signal: AbortSignal;
+  recovery?: GitHubPublicationRecoveryBackoff;
 }) {
   const { provider } = params;
   const prepareRepositoryGitHubPublicationTarget = (
@@ -98,6 +102,10 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
   ) => bindPersonalPublisher(provider, ...args);
   const preparePersonalGitHubPublicationSelection = preparePersonalPublisher;
   const { placements, getCommittedRuntimeConfig } = params;
+  const projectGitHubPublicationResult = (row: RepositoryGitHubPublicationRow) => {
+    const result = projectReceipt(row);
+    return params.recovery?.describe(result) ?? result;
+  };
   const prepareSource = async (
     requester: Pick<GitHubPublicationRequesterPolicyV2, "prepareSource">,
     selector: Parameters<GitHubPublicationRequesterPolicyV2["prepareSource"]>[0],
@@ -121,6 +129,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     prepareSource,
     getCommittedRuntimeConfig,
     assertCurrent: params.assertCurrent,
+    disk: params.environments && { placements, environments: params.environments },
   });
   const makeRow = async (input: {
     session: SessionIdentity;
@@ -453,7 +462,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     },
     async processClaim(claim: WorkerSessionTurnClaim) {
       const results = [];
-      for (const row of (
+      const selected = (
         await listRepositoryGitHubPublicationsAsync({
           sessionId: claim.sessionId,
           ownerProfileId: null,
@@ -462,13 +471,17 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       ).filter(
         (candidate) =>
           candidate.claim_id === null || matchesRepositoryGitHubPublicationClaim(candidate, claim),
-      )) {
+      );
+      for (const row of selected) {
         await placements.prepareWorkspaceResultClaim(claim);
         results.push(
           await placements.withWorkspaceExclusion(
             row.session_id,
             async (assertOwned) =>
               await execute(row, {
+                captureRequestIds: selected
+                  .filter((entry) => !entry.checkpoint_ref)
+                  .map((entry) => entry.request_id),
                 assertCustody: () => {
                   assertOwned();
                   if (!placements.validateWorkspaceResultClaim(claim)) {
@@ -484,10 +497,13 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     ...createRepositoryGitHubPublicationRecovery({
       provider,
       placements,
+      disk: params.environments && { placements, environments: params.environments },
+      recovery: params.recovery,
       getCommittedRuntimeConfig,
       assertCurrent: params.assertCurrent,
       isExecuting: (requestId) => active.has(requestId),
-      execute: (row, assertCustody) => execute(row, { assertCustody }),
+      execute: (row, assertCustody, recoveryResult) =>
+        execute(row, { assertCustody, recoveryResult }),
     }),
     preparePersonalStatus,
     async personalStatusAsync(

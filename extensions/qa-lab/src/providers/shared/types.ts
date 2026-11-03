@@ -42,24 +42,6 @@ export type QaMockProviderServer = {
   stop(): Promise<void>;
 };
 
-type QaProviderModelParamsInput = {
-  modelRef: string;
-  fastMode?: boolean;
-  thinkingDefault?: QaThinkingLevel;
-};
-
-type QaProviderGatewayModelsInput = {
-  providerBaseUrl: string;
-  primaryModel?: string;
-  alternateModel?: string;
-  liveProviderConfigs?: Record<string, ModelProviderConfig>;
-};
-
-type QaProviderTurnTimeoutInput = {
-  modelRef: string;
-  fallbackMs: number;
-};
-
 export type QaProviderDefinition = {
   mode: QaProviderMode;
   kind: "mock" | "live";
@@ -70,9 +52,18 @@ export type QaProviderDefinition = {
   };
   defaultModel(options?: { alternate?: boolean; preferredLiveModel?: string }): string;
   usesFastModeByDefault(modelRef: string): boolean;
-  resolveModelParams(input: QaProviderModelParamsInput): Record<string, unknown>;
-  resolveTurnTimeoutMs(input: QaProviderTurnTimeoutInput): number;
-  buildGatewayModels(input: QaProviderGatewayModelsInput): {
+  resolveModelParams(input: {
+    modelRef: string;
+    fastMode?: boolean;
+    thinkingDefault?: QaThinkingLevel;
+  }): Record<string, unknown>;
+  resolveTurnTimeoutMs(input: { modelRef: string; fallbackMs: number }): number;
+  buildGatewayModels(input: {
+    providerBaseUrl: string;
+    primaryModel?: string;
+    alternateModel?: string;
+    liveProviderConfigs?: Record<string, ModelProviderConfig>;
+  }): {
     mode: "replace" | "merge";
     providers: Record<string, ModelProviderConfig>;
   } | null;

@@ -13,6 +13,7 @@ import {
 } from "../../auto-reply/command-sender-authority.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
 import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
@@ -61,6 +62,9 @@ export async function authorizeAuthenticatedProfileForMethod(params: {
   }
   if (!requiresSessionProfile && !params.requiresProfile()) {
     return null;
+  }
+  if (isArtifactPreservingStateRead()) {
+    return authenticatedProfileUnavailableError();
   }
   try {
     await sync();

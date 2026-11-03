@@ -39,12 +39,7 @@ export const noopLogger = {
   trace: () => {},
 };
 
-type CronRegressionDefaults =
-  | "scheduler"
-  | "cronEnabled"
-  | "log"
-  | "enqueueSystemEvent"
-  | "requestHeartbeat";
+type CronRegressionDefaults = "scheduler" | "cronEnabled" | "log" | "enqueueSystemEvent";
 
 export function createCronRegressionState(
   deps: Omit<CronServiceDeps, CronRegressionDefaults> &
@@ -57,7 +52,6 @@ export function createCronRegressionState(
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
     enqueueSessionEvent: vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>(),
-    requestHeartbeat: vi.fn(),
     runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });

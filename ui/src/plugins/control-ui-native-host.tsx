@@ -3,9 +3,9 @@ import type { ControlUiNativeHost } from "../../../src/plugin-sdk/control-ui-nat
 import { createOverlayAnchor } from "../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../components/overlay-lifecycle.ts";
 import { SessionGitDiff } from "../components/session-git-diff.tsx";
-import { mountSolidContent } from "../lib/dom/solid-snapshot.ts";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { mountSolidContent } from "../lib/reactive/mount-solid-content.ts";
 
 export function createControlUiNativeHost(signal: AbortSignal): ControlUiNativeHost {
   const active = () => signal.throwIfAborted();

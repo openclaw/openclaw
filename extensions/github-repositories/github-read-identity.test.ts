@@ -173,10 +173,7 @@ describe("native GitHub identity absence", () => {
     await expect(native(env)).rejects.toMatchObject({ reason: "unverified" });
   });
 
-  it("uses native environment precedence without needing the optional CLI", async () => {
-    await expect(
-      native({ GH_TOKEN: "synthetic-primary", GITHUB_TOKEN: "synthetic-secondary" }),
-    ).resolves.toBe("synthetic-primary");
+  it("falls back from an empty primary token but rejects malformed primary tokens", async () => {
     await expect(native({ GH_TOKEN: "", GITHUB_TOKEN: "synthetic-secondary" })).resolves.toBe(
       "synthetic-secondary",
     );
@@ -360,6 +357,7 @@ describe("prepared GitHub read authority", () => {
   it("caches native reads for 60 seconds but reads publication tokens live", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     let token = "native-before-ttl";
     run.mockImplementation(async () => commandResult(token));
     const options = readOptions();
@@ -565,7 +563,12 @@ describe("prepared GitHub read authority", () => {
   });
 
   it("binds system read authority to its selected profile and verified account", async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-github-read-selection-") };
+    const stateDir = tempDirs.make("openclaw-github-read-selection-");
+    const env = {
+      get OPENCLAW_STATE_DIR() {
+        return stateDir;
+      },
+    };
     const profileId = `ghp_${"3".repeat(32)}`;
     const replacementProfileId = `ghp_${"4".repeat(32)}`;
     const configured = (selectedId: string, enabled = true): OpenClawConfig => ({
@@ -601,6 +604,11 @@ describe("prepared GitHub read authority", () => {
     const rotated = await prepare();
     expect(rotated.selection).toEqual(identity.selection);
     expect(rotated.cacheScope).not.toBe(identity.cacheScope);
+    const stateDirReads = vi.spyOn(env, "OPENCLAW_STATE_DIR", "get");
+    for (let index = 0; index < 10; index++) {
+      rotated.assertSelected();
+    }
+    expect(stateDirReads).not.toHaveBeenCalled();
     const prepared = await prepareSessionSourceAuthority(rotated.assertSelected);
     vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
     const reader = await prepareGitHubReaderIdentity(

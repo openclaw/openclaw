@@ -184,11 +184,9 @@ export function getOrCreateProfileRuntime(
   assertRuntimeAdmission(state);
   const current = state.profiles.get(profile.name);
   if (current) {
-    getProfileLifecycle(current);
     return current;
   }
   const created: ProfileRuntimeState = { profile, running: null, lastTargetId: null };
-  getProfileLifecycle(created);
   state.profiles.set(profile.name, created);
   return created;
 }

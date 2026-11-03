@@ -1,11 +1,14 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { BlobsterUnsupportedRuntimeError } from "../../agents/blobster-generation-errors.js";
 import { createLlmOperatorAuthorizationError } from "../../plugins/runtime/runtime-llm-error.js";
 import { agentAvatarGenerateHandler } from "./agents-avatar.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
-const generation = vi.hoisted(() => vi.fn());
-const capture = vi.hoisted(() => vi.fn());
+const { generation, capture } = vi.hoisted(() => ({ generation: vi.fn(), capture: vi.fn() }));
 // mock-isolation: test Gateway admission and responses without model inference.
 vi.mock("../../agents/blobster-generation.js", () => ({ generateBlobsterForAgent: generation }));
 // mock-isolation: control admitted authority and its cleanup explicitly.
@@ -16,25 +19,16 @@ const preview = {
   description: "A green Blobster with a watering can.",
   svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"/>',
 };
-const cfg = { agents: { defaults: { model: { primary: "ollama/qwen3:4b-instruct" } } } };
 const operator = { profileId: "owner" };
 const release = vi.fn();
 let current = true;
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function generate(
-  params: Record<string, unknown> = { agentId: "garden", prompt: "A gardener" },
-) {
-  const respond = vi.fn();
-  await agentAvatarGenerateHandler({
-    req: { type: "req", id: "avatar-preview", method: "agents.avatar.generate" },
-    params,
-    respond,
-    context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-    client: null,
-    isWebchatConnect: () => false,
+function generate(params: Record<string, unknown> = { agentId: "garden", prompt: "A gardener" }) {
+  return callAgentHandler(agentAvatarGenerateHandler, "agents.avatar.generate", params, {
+    context: { getRuntimeConfig: () => ({}) } as GatewayRequestContext,
     hasCurrentClientAuthority: () => current,
   });
-  return respond;
 }
 
 function expectError(
@@ -51,17 +45,33 @@ beforeEach(() => {
   release.mockReset();
 });
 
-it("uses the selected agent and only the submitted description", async () => {
-  expect(await generate()).toHaveBeenCalledWith(true, preview, undefined);
-  expect(generation).toHaveBeenCalledWith({
-    cfg,
-    agentId: "garden",
-    prompt: "A gardener",
-    assertCurrent: expect.any(Function),
-    operatorAuthority: operator,
-    signal: undefined,
-  });
-  expect(release).toHaveBeenCalledOnce();
+it("registers avatar generation without loading its parser", async () => {
+  const result = await runNodeScript(
+    [
+      "--import",
+      fileURLToPath(new URL("../../../scripts/tsx.mjs", import.meta.url)),
+      "--input-type=module",
+      "--eval",
+      `import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  if (specifier === "parse5") throw new Error("Agents RPC registration loaded the avatar parser");
+  return nextResolve(specifier, context);
+} });
+const { agentAvatarGenerateHandler } = await import(${JSON.stringify(new URL("./agents-avatar.ts", import.meta.url).href)});
+assert.equal(typeof agentAvatarGenerateHandler, "function");
+console.log("avatar-handler-import-ok");`,
+    ],
+    {
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      HOME: dirs.make("agents-import-"),
+    },
+    30_000,
+  );
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain("avatar-handler-import-ok");
 });
 
 it.each([
@@ -117,6 +127,10 @@ it.each([
   async (_label, prepare, code, message) => {
     prepare();
     expectError(await generate(), { code, message });
+    expect(generation.mock.lastCall?.[0]).toMatchObject({
+      agentId: "garden",
+      prompt: "A gardener",
+    });
     expect(release).toHaveBeenCalledOnce();
   },
 );

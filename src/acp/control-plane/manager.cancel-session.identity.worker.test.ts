@@ -8,7 +8,11 @@ import {
   readDurableAcpSignals,
   withAcpCancellationFixture,
 } from "./manager.cancel-session.worker.test-support.js";
-import { createGate, startTurn } from "./manager.cancellation-locator.test-support.js";
+import {
+  createGate,
+  startTurn,
+  untilAborted,
+} from "./manager.cancellation-locator.test-support.js";
 import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 
 it.each(["owner", "lifecycle"] as const)(
@@ -21,9 +25,7 @@ it.each(["owner", "lifecycle"] as const)(
       f.runTurn.mockImplementationOnce(async function* (input) {
         signal = input.signal;
         entered.resolve();
-        await new Promise<void>((resolve) => {
-          input.signal?.addEventListener("abort", () => resolve(), { once: true });
-        });
+        await untilAborted(input.signal);
         yield { type: "done", stopReason: "cancel" };
       });
       f.getStatus.mockImplementation(async () => {

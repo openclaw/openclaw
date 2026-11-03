@@ -1,23 +1,29 @@
-import { createComponent } from "solid-js";
+import { createComponent, flush } from "solid-js";
 import { vi } from "vitest";
-import type { TestGitHubIdentity } from "../../../../extensions/github-repositories/browser/github-identity.test-support.ts";
-import { githubIdentityViewFixture } from "../../../../extensions/github-repositories/browser/github-identity.test-support.ts";
+import {
+  githubIdentityViewFixture,
+  type TestGitHubIdentity,
+} from "../../../../extensions/github-repositories/browser/github-identity.test-support.ts";
 import { GitHubIdentity } from "../../../../extensions/github-repositories/browser/github-settings.test-support.tsx";
+import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../api/types.ts";
 import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
 import type { AgentTools } from "./panels-tools-skills.tsx";
 
 type Params = Parameters<typeof AgentTools>[0] & {
   githubIdentity: Omit<TestGitHubIdentity, "dispose">;
   onOpenGitHubConnections: () => void;
-} & Pick<
-    ReturnType<Parameters<typeof AgentTools>[0]["readData"]>,
-    | "toolsCatalogLoading"
-    | "toolsCatalogError"
-    | "toolsCatalogResult"
-    | "toolsEffectiveLoading"
-    | "toolsEffectiveError"
-    | "toolsEffectiveResult"
-  >;
+  catalog: ToolsCatalogResult | null;
+  effective: ToolsEffectiveResult | null;
+};
+
+/** Reveal the groups whose tool controls a test exercises. */
+export function openToolGroups(container: HTMLElement) {
+  for (const group of container.querySelectorAll<HTMLDetailsElement>(".agent-tools-group")) {
+    group.open = true;
+    group.dispatchEvent(new Event("toggle"));
+  }
+  flush();
+}
 
 export function createBaseParams(overrides: Partial<Params> = {}): Params {
   const githubIdentity = githubIdentityViewFixture();
@@ -35,12 +41,21 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     configLoading: false,
     configSaving: false,
     configDirty: false,
-    toolsCatalogLoading: false,
-    toolsCatalogError: null,
-    toolsCatalogResult: null,
-    toolsEffectiveLoading: false,
-    toolsEffectiveError: null,
-    toolsEffectiveResult: null,
+    presentationRetired: Promise.withResolvers<void>().promise,
+    catalog: null,
+    readCatalog() {
+      return this.catalog;
+    },
+    catalogRequest: null,
+    onRetryCatalog: vi.fn(),
+    effective: null,
+    readEffective() {
+      return this.effective;
+    },
+    get effectivePreview() {
+      return this.effective;
+    },
+    effectiveRequest: null,
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: true,
     githubIdentity,
@@ -54,9 +69,32 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     onOpenGitHubConnections: vi.fn(),
     onProfileChange: () => undefined,
     onOverridesChange: () => undefined,
-    onConfigReload: () => undefined,
-    onConfigSave: () => undefined,
+    onConfigReload: async () => undefined,
+    onConfigSave: async () => undefined,
     ...overrides,
   };
   return params;
+}
+
+export function createReadToolCatalog(agentId = "main", label = "read"): ToolsCatalogResult {
+  return {
+    agentId,
+    profiles: [{ id: "full", label: "Full" }],
+    groups: [
+      {
+        id: "files",
+        label: "Files",
+        source: "core",
+        tools: [
+          {
+            id: label,
+            label,
+            description: label === "read" ? "Read file contents" : label,
+            source: "core",
+            defaultProfiles: ["full"],
+          },
+        ],
+      },
+    ],
+  };
 }

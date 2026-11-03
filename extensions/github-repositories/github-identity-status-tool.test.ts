@@ -24,7 +24,7 @@ describe("github_identity_status tool", () => {
         repositoryGrants: "unknown" as const,
       },
     });
-    const tool = createGitHubIdentityStatusTool();
+    const tool = createGitHubIdentityStatusTool({ clientCaps: ["ui-agent-github-settings"] });
 
     const result = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:status" },
@@ -40,5 +40,34 @@ describe("github_identity_status tool", () => {
       expect.objectContaining({ sessionMutationCommitGuard: expect.any(Function) }),
     );
     expect(JSON.stringify(result)).toContain("Ask the operator");
+  });
+
+  it("gives manual guidance for an older Control UI", async () => {
+    vi.spyOn(gateway, "callInProcessGatewayTool").mockResolvedValue({
+      agentId: "main",
+      selectedScope: "agent" as const,
+      selected: { scope: "agent" as const, configured: false, identity: null },
+      effective: {
+        source: "system-configured" as const,
+        credentialKind: "managed-oauth" as const,
+        credentialState: "configured_unavailable" as const,
+        account: null,
+        gitAuthor: null,
+        evidence: "none" as const,
+        accessExpiresAtMs: null,
+        refreshState: "unavailable" as const,
+        oauthScopes: [],
+        repositoryGrants: "unknown" as const,
+      },
+    });
+    const tool = createGitHubIdentityStatusTool();
+
+    const result = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:status" },
+      async () => await tool.execute("status-2", {}),
+    );
+
+    expect(JSON.stringify(result)).toContain("Settings → Agents → Tools");
+    expect(JSON.stringify(result)).not.toContain("github_identity_settings");
   });
 });

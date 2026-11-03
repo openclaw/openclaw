@@ -1,22 +1,11 @@
-import type { ResolverContext } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { createResolverContext } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { describe, expect, it } from "vitest";
 import {
-  collectRuntimeConfigAssignments,
+  collectRuntimeConfigAssignments as collect,
   secretTargetRegistryEntries,
 } from "./secret-config-contract.js";
 
 const secretRef = (id: string) => ({ source: "env", provider: "default", id }) as const;
-
-function createContext(): ResolverContext {
-  return {
-    sourceConfig: {},
-    env: {},
-    cache: {},
-    warnings: [],
-    warningKeys: new Set(),
-    assignments: [],
-  };
-}
 
 function voice(keys: Record<string, string>, mode?: "stt-tts") {
   const providers = Object.fromEntries(
@@ -30,21 +19,12 @@ function collectVoiceAssignments(
   work: ReturnType<typeof voice>,
   accountId = "Work",
 ) {
-  const context = createContext();
-  collectRuntimeConfigAssignments({
-    config: {
-      channels: {
-        discord: {
-          voice: root,
-          accounts: {
-            inherited: { enabled: true },
-            [accountId]: { enabled: true, voice: work },
-          },
-        },
-      },
-    },
-    context,
-  });
+  const context = createResolverContext({ sourceConfig: {}, env: {} });
+  const discord = {
+    voice: root,
+    accounts: { inherited: { enabled: true }, [accountId]: { enabled: true, voice: work } },
+  };
+  collect({ config: { channels: { discord } }, context });
   return context;
 }
 
@@ -67,23 +47,16 @@ describe("Discord secret target registry", () => {
       voice({ openai: "WORK_OPENAI" }),
     );
 
+    const rootPath = "channels.discord.voice.realtime.providers";
+    const workPath = "channels.discord.accounts.Work.voice.realtime.providers";
     expect(
       context.assignments
         .filter((assignment) => assignment.path.includes("voice.realtime"))
-        .map(({ ownerId, path }) => ({ ownerId, path })),
+        .map(({ ownerId, path }) => [ownerId, path]),
     ).toStrictEqual([
-      {
-        ownerId: "discord:voice:realtime:inherited:openai",
-        path: "channels.discord.voice.realtime.providers.openai.apiKey",
-      },
-      {
-        ownerId: "discord:voice:realtime:inherited:mistral",
-        path: "channels.discord.voice.realtime.providers.mistral.apiKey",
-      },
-      {
-        ownerId: "discord:voice:realtime:work:openai",
-        path: "channels.discord.accounts.Work.voice.realtime.providers.openai.apiKey",
-      },
+      ["discord:voice:realtime:inherited:openai", `${rootPath}.openai.apiKey`],
+      ["discord:voice:realtime:inherited:mistral", `${rootPath}.mistral.apiKey`],
+      ["discord:voice:realtime:work:openai", `${workPath}.openai.apiKey`],
     ]);
   });
 
@@ -95,15 +68,11 @@ describe("Discord secret target registry", () => {
     );
 
     expect(context.assignments).toStrictEqual([]);
-    expect(context.warnings).toMatchObject([
-      {
+    expect(context.warnings).toMatchObject(
+      ["channels.discord", "channels.discord.accounts.work"].map((path) => ({
         code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-        path: "channels.discord.voice.realtime.providers.openai.apiKey",
-      },
-      {
-        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-        path: "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey",
-      },
-    ]);
+        path: `${path}.voice.realtime.providers.openai.apiKey`,
+      })),
+    );
   });
 });

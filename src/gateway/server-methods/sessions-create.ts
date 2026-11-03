@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -20,6 +21,7 @@ import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { getNodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { repositoryDispatchCredentialReader } from "../repository-dispatch.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
 import { resolveSessionCreateCatalogSelectionError } from "../session-create-model-selection.js";
@@ -44,6 +46,7 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
+import { respondError } from "./response.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged, emitSessionTitleChanged } from "./session-change-event.js";
 import { registerCommittedSessionCategory } from "./session-create-category.js";
@@ -257,13 +260,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const initialTurn = resolveSessionCreateInitialTurn(p);
     if (!initialTurn) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "sessions.create attachments require usable content",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "sessions.create attachments require usable content",
       );
       return;
     }
@@ -278,13 +278,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const initialRunId = randomUUID();
     if (p.mentions?.length) {
       if (catalogId || p.incognito) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Human mentions are unavailable for this session mode. Remove the selected mentions to continue.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Human mentions are unavailable for this session mode. Remove the selected mentions to continue.",
         );
         return;
       }
@@ -322,11 +319,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
     const requestedProjectId = normalizeOptionalString(p.projectId);
-    const requestedProjectGitUrl = p.projectGitUrl;
     const projectPreparationError = validateSessionProjectPreparation({
       cwd: requestedCwd,
       execNode: requestedExecNode,
-      gitUrl: requestedProjectGitUrl,
+      gitUrl: p.projectGitUrl,
       hasInitialTurn,
       projectId: requestedProjectId,
     });
@@ -348,8 +344,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     requestedCwd = preparedCwd.value;
-    const worktreeBaseRef = normalizeOptionalString(p.worktreeBaseRef);
-    const preparedDisplayName = normalizeOptionalString(p.displayName);
     if (!authority.ensureActive()) {
       return;
     }
@@ -390,14 +384,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let preparedWorktree: PreparedGatewaySessionLifecycle | undefined;
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
     let prepareLifecycle: Parameters<typeof createGatewaySession>[0]["prepareLifecycle"];
+    // Worktree creation validates its own source; the default may exist only on a worker.
     const preparedRoot =
-      repository || emptyWorkspace || deviceFolder
+      repository || emptyWorkspace || deviceFolder || p.worktree === true
         ? undefined
         : prepareSessionCreateFilesystemRoot({
             cfg,
-            enforceSandboxContainment: Boolean(
-              sessionCwd && !requestedExecNode && p.worktree !== true,
-            ),
+            enforceSandboxContainment: Boolean(sessionCwd && !requestedExecNode),
             requestedExecNode,
             requestedProjectId,
             sessionCwd,
@@ -411,7 +404,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     sessionCwd = preparedRoot?.value.sessionCwd;
     if (repository) {
       prepareLifecycle = prepareSessionRepositoryWorkspace(repository, {
-        runSetupScript: clientScopes.includes(ADMIN_SCOPE),
+        branchPrefix: cfg.repositoryBranchPrefix,
+        runSetupScript: !requiredProfile && clientScopes.includes(ADMIN_SCOPE),
         assertCurrent: commitGuard,
       });
     }
@@ -454,7 +448,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         !emptyWorkspace &&
         !projectRoot &&
         !requestedCwd &&
-        !requestedProjectGitUrl &&
+        !p.projectGitUrl &&
         spawnRequesterSessionKey &&
         spawnRequesterSessionKey === parentSessionKey &&
         sessionCreation.actor?.type === "agent" &&
@@ -465,11 +459,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           target: lifecycleTarget,
           workspace: emptyWorkspace ? { kind: "empty" } : (projectRoot ?? requestedCwd),
           inheritParentKey: inheritParentWorktree ? spawnRequesterSessionKey : undefined,
-          projectGitUrl: requestedProjectGitUrl,
+          projectGitUrl: p.projectGitUrl,
           name: normalizeOptionalString(p.worktreeName),
-          baseRef: worktreeBaseRef,
+          baseRef: normalizeOptionalString(p.worktreeBaseRef),
           deferWorktree,
-          label: normalizeOptionalString(p.label) ?? preparedDisplayName,
+          label: normalizeOptionalString(p.label) ?? normalizeOptionalString(p.displayName),
           titleSource: buildDashboardSessionTitleSource({ message: message ?? "", attachments }),
           currentUserMessage: message,
           useRequestedTitleSelection: Boolean(requestedModel && !personalModelSelection),
@@ -496,10 +490,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let sessionSourceAccepted = false;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
-    const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
-      ADMIN_SCOPE,
-      clientScopes,
-    ).allowed;
     const catalogWait = createSessionModelCatalogWait([signal, client?.connectionSignal]);
     const waitForModelCatalog = async <T>(operation: () => Promise<T>) =>
       catalogWait.run(operation, (await operatorCapture.preparation)?.authority.signal);
@@ -511,7 +501,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       key: sessionKey,
       agentId: sessionAgentId,
       label: p.label,
-      displayName: preparedDisplayName,
+      displayName: normalizeOptionalString(p.displayName),
       category: p.category,
       ...(catalogTarget
         ? { catalogTarget: catalogTarget.target }
@@ -520,17 +510,21 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       personalAccountDefaults,
       contextWindow: p.contextWindow,
       thinkingLevel: p.thinkingLevel,
+      cyberAccessProgram: p.cyberAccessProgram,
       fastMode: p.fastMode,
       projectId: requestedProjectId,
       deviceFolder,
-      pendingProjectGitUrl: normalizeSessionProjectGitUrl(requestedProjectGitUrl),
+      pendingProjectGitUrl: normalizeSessionProjectGitUrl(p.projectGitUrl),
       repositorySourceId: repositorySelection.value?.id,
       incognito: p.incognito,
       ...(client?.connect ? { requestingOperatorScopes: clientScopes } : {}),
       ...(requestingOperatorProfileId ? { requestingOperatorProfileId } : {}),
       ...(operatorRoleActor ? { operatorRoleActor } : {}),
       visibility: p.visibility,
-      allowExistingModelSelection,
+      allowExistingModelSelection: authorizeOperatorScopesForRequiredScope(
+        ADMIN_SCOPE,
+        clientScopes,
+      ).allowed,
       parentSessionKey,
       spawnDepth: p.spawnDepth,
       ...resolveSessionCreateRootParameters(p, preparedRoot?.value),
@@ -604,11 +598,23 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         await prepareRequiredWorkerCreatedSession({
           requiredProfile,
           pendingWorktree: Boolean(preparedWorktree?.pendingWorktree),
-          requestedProjectGitUrl,
+          requestedProjectGitUrl: p.projectGitUrl,
           prepare: context.workerPlacementDispatchService?.withRequiredSession,
           session,
           assertCurrent: assertSessionCreateCurrent,
           retainDispatch: sessionMutationAuthorization?.retain,
+          readNativeCredential:
+            repository && requiredProfile
+              ? repositoryDispatchCredentialReader({
+                  sessionId: session.entry.sessionId,
+                  sessionKey: session.key,
+                  agentId: session.agentId,
+                  client,
+                  hasCurrentClientAuthority,
+                  requestDigest: sha256Hex(JSON.stringify({ requiredProfile, repository })),
+                  assertCurrent: assertSessionCreateCurrent,
+                })
+              : undefined,
           signal,
         });
         await reportCreatedVisibleSpawn(cfg, sessionCreation, session, publicRead);
@@ -670,9 +676,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           branch: preparedWorktree.worktree.branch,
         }
       : undefined;
-    const responseEntry = sessionEntryForkedFromParent(created.entry)
-      ? { ...created.entry, forkedFromParent: true as const }
-      : created.entry;
     const runStarted =
       !created.resetExisting &&
       isFreshChatSendStarted({
@@ -685,7 +688,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ok: true,
       key: created.key,
       sessionId: created.entry.sessionId,
-      entry: responseEntry,
+      entry: sessionEntryForkedFromParent(created.entry)
+        ? { ...created.entry, forkedFromParent: true as const }
+        : created.entry,
       runStarted,
       publicRead,
       ...(!created.resetExisting && runPayload ? runPayload : {}),
@@ -694,15 +699,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ...(createdWorktree ? { worktree: createdWorktree } : {}),
     });
     diagnostics?.mark("handlerExit");
-    for (const reason of [
-      created.resetExisting ? "new" : "create",
-      ...(runStarted ? ["send"] : []),
-    ]) {
-      emitSessionsChanged(context, {
-        sessionKey: created.key,
-        agentId: created.agentId,
-        reason,
-      });
+    const sessionChange = { sessionKey: created.key, agentId: created.agentId };
+    const reason = created.resetExisting ? "new" : "create";
+    emitSessionsChanged(context, { ...sessionChange, reason });
+    if (runStarted) {
+      emitSessionsChanged(context, { ...sessionChange, reason: "send" });
     }
   }),
 };

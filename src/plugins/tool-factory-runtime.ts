@@ -8,6 +8,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithTrackedCancellation } from "../shared/async-work-resources.js";
+import { bindPluginInlineViewInvocation } from "./inline-view.js";
 import { prepareMemoryAudienceRead } from "./memory-audience.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
@@ -42,21 +43,6 @@ function formatPluginToolFactoryTiming(timing: PluginToolFactoryTiming): string 
   ].join(" ");
 }
 
-function runWithPluginToolScope<T>(
-  entry: PluginToolRegistration,
-  registry: PluginRegistry,
-  run: () => T,
-): T {
-  return withPluginRuntimePluginScope(
-    {
-      pluginId: entry.pluginId,
-      pluginSource: entry.source,
-    },
-    run,
-    registry,
-  );
-}
-
 /** Callback availability is captured once; missing records must never become a fallback after removal. */
 export function bindPluginToolCallbacks(
   entry: PluginToolRegistration,
@@ -75,7 +61,7 @@ export function bindPluginToolCallbacks(
   const invoke = <T>(run: () => T, isAcceptedHandoff?: (result: unknown) => boolean): T => {
     assertPluginCurrent();
     assertInvocationCurrent?.();
-    const result = runWithPluginToolScope(entry, registry, run);
+    const result = run();
     const settle = <V>(value: V): V => {
       assertPluginCurrent();
       // Yield closes the originating invocation. Only its host-accepted acknowledgment
@@ -102,13 +88,20 @@ export function bindPluginToolCallbacks(
       if (pending) {
         await racePromiseWithAbortSignal(pending, signal);
       }
-      return runWithSessionToolHandoffSettlement((isAcceptedHandoff) =>
-        invoke(() => {
-          const execute = (executionSignal?: AbortSignal) =>
-            tool.execute(toolCallId, params, executionSignal, onUpdate);
-          return signal ? runWithTrackedCancellation(signal, execute) : execute();
-        }, isAcceptedHandoff),
+      // Cancellation retains this context after the instance call has settled.
+      const result = await withPluginRuntimePluginScope(
+        { pluginId: entry.pluginId, pluginSource: entry.source },
+        () =>
+          runWithSessionToolHandoffSettlement((isAcceptedHandoff) =>
+            invoke(() => {
+              const execute = (executionSignal?: AbortSignal) =>
+                tool.execute(toolCallId, params, executionSignal, onUpdate);
+              return signal ? runWithTrackedCancellation(signal, execute) : execute();
+            }, isAcceptedHandoff),
+          ),
+        registry,
       );
+      return bindPluginInlineViewInvocation(result, entry.pluginId, tool.name, toolCallId);
     },
     ...(prepare
       ? { prepareArguments: (args: unknown) => invoke(() => prepare.call(tool, args)) }
@@ -197,13 +190,12 @@ export function createPluginToolFactoryResolver(logError: (message: string) => v
       entry: PluginToolRegistration,
       ctx: OpenClawPluginToolContext,
       declaredNames: string[],
-      registry: PluginRegistry,
     ) {
       let resolved: ReturnType<PluginToolRegistration["factory"]> = null;
       let failed = false;
       const factoryStartedAt = Date.now();
       try {
-        resolved = runWithPluginToolScope(entry, registry, () => entry.factory(ctx));
+        resolved = entry.factory(ctx);
       } catch (err) {
         failed = true;
         // Only the config producer can confirm its diagnostic was emitted;

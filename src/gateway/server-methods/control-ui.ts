@@ -7,10 +7,12 @@ import {
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { truncateOptionalText } from "../../shared/text-truncate.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
+import { respondError } from "./response.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 type SessionPreviewSource = {
@@ -79,8 +81,20 @@ async function withControlUiSessionPreview(
   const preview = previewOwner.ok
     ? projection.readPreview({ key: sessionKey, agentId: previewOwner.agentId })
     : null;
-  if (preview !== undefined) {
-    const entryFilter = createSessionListEntryFilter({ client, cfg: previewConfig });
+  if (
+    preview !== undefined &&
+    !(
+      operatorSessionCap(client, previewConfig) === "invited" &&
+      projection.needsMembershipPreparation()
+    )
+  ) {
+    const entryFilter = createSessionListEntryFilter({
+      client,
+      cfg: previewConfig,
+      membership: previewOwner.ok
+        ? projection.readMembership({ key: sessionKey, agentId: previewOwner.agentId })
+        : undefined,
+    });
     consume(
       preview && (!entryFilter || entryFilter(preview.sessionKey, preview.entry)) ? preview : null,
     );
@@ -99,7 +113,11 @@ async function withControlUiSessionPreview(
         ? read.describe({ key: sessionKey, agentId: owner.agentId })
         : undefined;
       // Hover previews follow list visibility, including after asynchronous preparation.
-      const entryFilter = createSessionListEntryFilter({ client, cfg });
+      const entryFilter = createSessionListEntryFilter({
+        client,
+        cfg,
+        membership: record?.membership,
+      });
       if (!record || (entryFilter && !entryFilter(record.key, record.entry))) {
         consume(null);
         return;
@@ -151,11 +169,7 @@ export const controlUiHandlers: GatewayRequestHandlers = {
       ? parseControlUiLinkPreviewUrl(params.url)
       : null;
     if (!url) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid controlUi.linkPreview params"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid controlUi.linkPreview params");
       return;
     }
     const preview = await loadControlUiLinkPreview(url, isEnabled, scope);
@@ -171,11 +185,7 @@ export const controlUiHandlers: GatewayRequestHandlers = {
   }) => {
     const sessionKey = parseSessionPreviewKey(params);
     if (!sessionKey) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid controlUi.sessionPreview params"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid controlUi.sessionPreview params");
       return;
     }
     try {

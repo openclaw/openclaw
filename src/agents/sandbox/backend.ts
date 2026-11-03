@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import type { PreparedSandboxExecutionEnvironment } from "../../plugins/execution-environment-types.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
@@ -23,6 +24,7 @@ import { SandboxRuntimeRetiredError } from "./provisioning-error.js";
 import {
   assertSandboxRegistryEntryCurrent,
   completeSandboxRegistryReservation,
+  readRegisteredSandboxRuntimeIds,
   reserveSandboxRegistryEntry,
   updateRegistry,
   withSandboxRegistryEntryLock,
@@ -161,7 +163,7 @@ export async function createSandboxBackend(
   guard?: WorkspaceStateGuard,
 ): Promise<SandboxBackendHandle> {
   params.assertRuntimeCurrent?.();
-  const factory = requireSandboxBackendFactory(params.cfg.backend);
+  let factory = requireSandboxBackendFactory(params.cfg.backend);
   if (
     executionEnvironment &&
     (Object.keys(executionEnvironment.localIdentityEnv).length > 0 ||
@@ -173,7 +175,41 @@ export async function createSandboxBackend(
   ) {
     throw new Error("Plugin execution environments require the built-in Docker or Podman backend.");
   }
+  let preparedParams = params;
+  if (
+    factory !== createDockerSandboxBackend &&
+    factory !== createPodmanSandboxBackend &&
+    params.registeredRuntimeIds === undefined
+  ) {
+    using _ = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.runtime_ids");
+    const registeredRuntimeIds = await readRegisteredSandboxRuntimeIds({
+      backendId: params.cfg.backend,
+      scopeKey: params.scopeKey,
+    });
+    params.assertRuntimeCurrent?.();
+    if (registeredRuntimeIds.length > 0) {
+      preparedParams = { ...params, registeredRuntimeIds };
+    }
+    // Discovery can outlive a plugin registration; dispatch only its current factory.
+    factory = requireSandboxBackendFactory(params.cfg.backend);
+  }
+  // Built-in containers publish their complete allocation under the lifecycle lock.
+  if (factory === createDockerSandboxBackend) {
+    return await createDockerSandboxBackend(
+      preparedParams,
+      operatorAuthority,
+      executionEnvironment,
+    );
+  }
+  if (factory === createPodmanSandboxBackend) {
+    return await createPodmanSandboxBackend(
+      preparedParams,
+      operatorAuthority,
+      executionEnvironment,
+    );
+  }
   const reserveRuntimeId = resolveSandboxBackendRegistration(params.cfg.backend)?.reserveRuntimeId;
+  using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.factory");
   const toEntry = (backend: SandboxBackendHandle): SandboxRegistryEntry => ({
     containerName: backend.runtimeId,
     backendId: backend.id,
@@ -185,14 +221,8 @@ export async function createSandboxBackend(
     configLabelKind: backend.configLabelKind ?? "Image",
   });
   if (!reserveRuntimeId) {
-    // Only the built-in container owner can establish custody of its allocation.
-    // A plugin overriding the same backend ID retains its own lifecycle contract.
-    const backend =
-      factory === createDockerSandboxBackend
-        ? await createDockerSandboxBackend(params, operatorAuthority, executionEnvironment)
-        : factory === createPodmanSandboxBackend
-          ? await createPodmanSandboxBackend(params, operatorAuthority, executionEnvironment)
-          : await factory(params);
+    const backend = await factory(preparedParams);
+    phases.mark("attempt.setup.sandbox.backend.registry_publish");
     await updateRegistry(toEntry(backend), {
       ...guard,
       beforeLegacyApply: params.assertRuntimeCurrent,
@@ -201,9 +231,10 @@ export async function createSandboxBackend(
   }
   for (let attempt = 0; ; attempt++) {
     params.assertRuntimeCurrent?.();
+    phases.mark("attempt.setup.sandbox.backend.reservation");
     const reservation = await reserveSandboxRegistryEntry(
       {
-        containerName: reserveRuntimeId(params),
+        containerName: reserveRuntimeId(preparedParams),
         backendId: params.cfg.backend,
         sessionKey: params.scopeKey,
         createdAtMs: Date.now(),
@@ -214,14 +245,16 @@ export async function createSandboxBackend(
       { ...guard, beforeLegacyApply: params.assertRuntimeCurrent },
     );
     try {
+      phases.mark("attempt.setup.sandbox.backend.registry_lock_wait");
       return await withSandboxRegistryEntryLock(reservation, async () => {
+        phases.mark("attempt.setup.sandbox.backend.factory");
         const assertCurrent = () => {
           params.assertRuntimeCurrent?.();
           assertSandboxRegistryEntryCurrent(reservation);
         };
         try {
           const backend = await factory({
-            ...params,
+            ...preparedParams,
             workspaceDir: reservation.workspaceDir ?? params.workspaceDir,
             runtimeId: reservation.containerName,
             assertRuntimeCurrent: assertCurrent,
@@ -232,6 +265,7 @@ export async function createSandboxBackend(
           ) {
             throw new Error("Sandbox backend returned a runtime outside its reserved generation.");
           }
+          phases.mark("attempt.setup.sandbox.backend.reservation_complete");
           await completeSandboxRegistryReservation(
             { ...reservation, ...toEntry(backend), createdAtMs: reservation.createdAtMs },
             false,
@@ -243,6 +277,7 @@ export async function createSandboxBackend(
             error instanceof SandboxRuntimeRetiredError &&
             error.runtimeId === reservation.containerName
           ) {
+            phases.mark("attempt.setup.sandbox.backend.reservation_retire");
             await completeSandboxRegistryReservation(reservation, true, {
               ...guard,
               beforeLegacyApply: params.assertRuntimeCurrent,

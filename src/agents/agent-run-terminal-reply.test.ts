@@ -9,19 +9,16 @@ describe("prepareAgentRunTerminalReply", () => {
     {
       name: "an acknowledgement-only message",
       payload: { text: "HEARTBEAT_OK" },
-      isHeartbeatTrigger: false,
       visible: false,
     },
     {
       name: "visible text beside the acknowledgement",
       payload: { text: "HEARTBEAT_OK Everything is ready." },
-      isHeartbeatTrigger: false,
       visible: true,
     },
     {
       name: "media beside the acknowledgement",
       payload: { text: "HEARTBEAT_OK", mediaUrl: "https://example.invalid/chart.png" },
-      isHeartbeatTrigger: false,
       visible: true,
     },
     {
@@ -31,20 +28,12 @@ describe("prepareAgentRunTerminalReply", () => {
         mediaUrl: "  ",
         mediaUrls: ["  ", "https://example.invalid/chart.png"],
       },
-      isHeartbeatTrigger: false,
       visible: true,
     },
-    {
-      name: "a real heartbeat acknowledgement",
-      payload: { text: "HEARTBEAT_OK" },
-      isHeartbeatTrigger: true,
-      visible: true,
-    },
-  ])("projects $name through message presentation", ({ payload, isHeartbeatTrigger, visible }) => {
+  ])("projects $name through message presentation", ({ payload, visible }) => {
     expect(
       filterAgentRunTerminalPayloadsForPresentation({
         payloads: [payload],
-        isHeartbeatTrigger,
       }),
     ).toEqual(visible ? [payload] : []);
   });
@@ -75,6 +64,14 @@ describe("prepareAgentRunTerminalReply", () => {
     expect(prepareAgentRunTerminalReply({ rawText: ` \t${token}\n\n` })).toEqual({
       text: "",
       terminalReply: { disposition: "silent" },
+    });
+  });
+
+  it("preserves UTF-16 text exactly when retaining terminal evidence", () => {
+    const text = `Unicode 🦞 and a lone surrogate \ud800`;
+    expect(prepareAgentRunTerminalReply({ rawText: text })).toEqual({
+      text,
+      terminalReply: { disposition: "visible", text },
     });
   });
 

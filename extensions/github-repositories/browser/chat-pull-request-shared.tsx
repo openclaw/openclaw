@@ -5,7 +5,8 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "@openclaw/gateway-protocol";
-import { For, Show } from "solid-js";
+import { Errored, For, latest, Show } from "solid-js";
+import type { createPullRequestCopy } from "./chat-pull-request-copy.ts";
 import type { GitHubPublicationView } from "./github-publication-owner.ts";
 import type { PresentationValue } from "./native-context.tsx";
 import { Icon, Tooltip } from "./presentation-components.tsx";
@@ -27,6 +28,8 @@ export type ChatPullRequestsProps = {
   publication?: GitHubPublicationView;
   /** Compact row in the user-opened Details surface; actions keep their owners. */
   compact?: boolean;
+  /** Keep publication work in Environment; only completed receipts and PRs belong here. */
+  publishedOnly?: boolean;
 };
 export const STATE_LABEL_KEYS = {
   merged: "chat.pullRequests.merged",
@@ -40,6 +43,25 @@ const CHECK_ROW_LABELS = {
   running: "chat.pullRequests.checksRunning",
   skipped: "chat.pullRequests.checksSkipped",
 } as const;
+
+export function PullRequestCopyError(props: {
+  clipboard: ReturnType<typeof createPullRequestCopy>;
+}) {
+  const t = presentationTranslator();
+  return (
+    <Show when={!props.clipboard.copying()}>
+      <Errored
+        fallback={
+          <p class="chat-pr-menu__error" role="alert">
+            {t("chat.pullRequests.copyFailed")}
+          </p>
+        }
+      >
+        {latest(props.clipboard.outcome)}
+      </Errored>
+    </Show>
+  );
+}
 
 export function ChecksRows(props: {
   checks: ControlUiSessionPullRequest["checks"];

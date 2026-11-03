@@ -619,7 +619,7 @@ describe("memory storage migration", () => {
     expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 12 });
   });
 
-  it("renews long synchronous conversion work periodically and releases the callback afterward", () => {
+  it.each([0, 1_100])("spaces renewals after %i ms and releases the callback", (delay) => {
     const db = legacyDatabase();
     const insert =
       db.prepare(`INSERT INTO memory_index_chunks(id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
@@ -629,12 +629,21 @@ describe("memory storage migration", () => {
     }
     let clock = 0;
     const now = vi.spyOn(performance, "now").mockImplementation(() => (clock += 250));
-    const renewals: number[] = [];
+    const renewals: { startedAt: number; finishedAt: number }[] = [];
     try {
-      migrateMemoryIndexStorage(db, { renewAuthority: () => renewals.push(clock) });
+      migrateMemoryIndexStorage(db, {
+        renewAuthority: () => {
+          const startedAt = clock;
+          clock += delay;
+          renewals.push({ startedAt, finishedAt: clock });
+        },
+      });
       expect(renewals.length).toBeGreaterThan(1);
       expect(
-        renewals.every((instant, index) => index === 0 || instant - renewals[index - 1]! >= 1_000),
+        renewals.every(
+          (renewal, index) =>
+            index === 0 || renewal.startedAt - renewals[index - 1]!.finishedAt >= 1_000,
+        ),
       ).toBe(true);
       const count = renewals.length;
       db.prepare("SELECT openclaw_memory_embedding_from_json(?)").get("[2]");

@@ -1,11 +1,12 @@
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { attachInternalToolResultContentSource } from "../../packages/agent-core/src/internal-hooks.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
 } from "../security/external-content.js";
-import { attachInternalToolResultContentSource } from "./runtime/internal-hooks.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
 
 export {
@@ -91,10 +92,7 @@ export function readToolResultDetails(result: unknown): Record<string, unknown> 
     return undefined;
   }
   try {
-    const details = readToolErrorField(result, "details");
-    return details && typeof details === "object" && !Array.isArray(details)
-      ? (details as Record<string, unknown>)
-      : undefined;
+    return asOptionalRecord(readToolErrorField(result, "details"));
   } catch {
     return undefined;
   }

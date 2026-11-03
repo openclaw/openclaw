@@ -73,7 +73,7 @@ it.each(["settings", "publication", "pull requests", "native hovercard"] as cons
       expect(connections.manage).toBeUndefined();
       expect(hovercard.agentNotepad).toBeUndefined();
     } else {
-      expect(t("sessionHovercard.agentNotepad")).toBe("Agent Notepad");
+      expect(t("sessionHovercard.agentNotepad")).toBe("Task progress");
       expect(t("sessionHovercard.chatKinds.group")).toBe("Group chat");
       expect(t("sessionHovercard.viaAccount", { account: "work" })).toBe("Via work");
       expect(t("sessionHovercard.topicNumber", { id: "7" })).toBe("Topic 7");

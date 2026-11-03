@@ -34,7 +34,6 @@ export async function collectPluginConfigSecurityAuditFindings(
         collectConfigSecurityAuditFindings?: OpenClawPluginSecurityAuditCollector;
       }>({
         pluginRoot: plugin.rootDir,
-        pluginId: plugin.id,
         artifactBasename: "security-audit-api.js",
         origin: plugin.origin === "bundled" ? "bundled" : "global",
       });

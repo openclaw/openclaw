@@ -1,4 +1,11 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import type { ControlUiSessionAccessory } from "../../../src/plugin-sdk/control-ui.js";
+import { createInitializationContext } from "../pages/chat/chat-application-context.test-support.ts";
+import type {
+  ControlUiContributions,
+  ControlUiRegistration,
+} from "../plugins/control-ui-capability.ts";
+import { createTestControlUiPluginHost } from "../test-helpers/control-ui-plugin-host.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
 import "./session-progress-hovercard.runtime.tsx";
@@ -54,5 +61,89 @@ it("settles an empty focused preview without remounting or starving the renderer
     observer.disconnect();
     host.remove();
     await host.updateComplete;
+  }
+});
+
+it("shows an SDK-only preview through the host context and retires its withdrawn content", async () => {
+  const owner = new AbortController();
+  const listeners = new Set<() => void>();
+  let registered = true;
+  const accessory: ControlUiSessionAccessory = {
+    id: "task",
+    placement: "session-hovercard",
+    mount(container, context) {
+      const button = document.createElement("button");
+      button.textContent = "Inspect synthetic task";
+      container.append(button);
+      context.props.onPresenceChange?.(true);
+      const stopControls = context.props.registerControls?.(() => [button]);
+      return {
+        dispose() {
+          stopControls?.();
+          container.replaceChildren();
+        },
+      };
+    },
+  };
+  const context = createInitializationContext();
+  const host = createTestControlUiPluginHost(context, "fixture");
+  const registration = {
+    key: "fixture/task" as const,
+    pluginId: "fixture",
+    host,
+    signal: owner.signal,
+    value: accessory,
+  };
+  const registry: {
+    [K in keyof ControlUiContributions]: ControlUiRegistration<ControlUiContributions[K]>[];
+  } = {
+    pages: [],
+    navigation: [],
+    panels: [],
+    actions: [],
+    accessories: [registration],
+    textReferences: [],
+    widgets: [],
+    inlineViews: [],
+    replacements: [],
+  };
+  const registrations = vi
+    .spyOn(context.plugins, "registrations")
+    .mockImplementation((kind) => (registered ? registry[kind] : []));
+  const subscription = vi.spyOn(context.plugins, "subscribe").mockImplementation((listener) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  });
+  const provider = document.createElement(
+    "openclaw-session-progress-hovercard-provider",
+  ) as SessionProgressHovercardProvider;
+  provider.context = context;
+  provider.gateway = context.gateway;
+  const link = document.createElement("a");
+  link.className = "markdown-session-link";
+  link.dataset.sessionKey = "agent:main:synthetic-task";
+  link.href = "/chat/main/synthetic-task";
+  link.textContent = "Synthetic task";
+  provider.append(link);
+  document.body.append(provider);
+  try {
+    await provider.updateComplete;
+    link.focus();
+    await expect
+      .poll(() => document.querySelector(".session-progress-hovercard button")?.textContent)
+      .toBe("Inspect synthetic task");
+    expect(document.querySelector<HTMLElement>(".session-hovercard")?.hidden).toBe(false);
+    registered = false;
+    owner.abort();
+    listeners.forEach((listener) => listener());
+    flush();
+    await expect.poll(() => document.querySelector(".session-progress-hovercard")).toBeNull();
+    expect(document.activeElement).toBe(link);
+  } finally {
+    owner.abort();
+    provider.remove();
+    await provider.updateComplete;
+    registrations.mockRestore();
+    subscription.mockRestore();
   }
 });

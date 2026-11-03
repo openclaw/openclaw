@@ -1,33 +1,56 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveWhatsAppAccount } from "@openclaw/whatsapp/api.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readConfigFileSnapshot, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/health";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect, it } from "vitest";
 import { buildQaGatewayConfig } from "../../qa-gateway-config.js";
-import { buildWhatsAppQaConfig } from "./whatsapp-live.config.js";
-import { whatsappConversationScenarios } from "./whatsapp-live.scenario-implementations.conversation.js";
+import { readQaScenarioById } from "../../scenario-catalog.js";
+import {
+  applyQaSuiteGatewayConfigPatches,
+  collectQaSuiteGatewayConfigPatches,
+} from "../../suite-planning.js";
+import { groupJid } from "./runtime.test-support.js";
+import { config, scenario } from "./scenario.test-support.js";
 
 const audio = (model: string) => ({ provider: "openai", model, capabilities: ["audio" as const] });
 const gateway = { bind: "loopback", gatewayPort: 18789, gatewayToken: "test-token" } as const;
-
-it("preserves audio preflight when enabling message actions", () => {
-  const media = {
-    audio: { enabled: false },
-    models: [audio("existing-transcriber")],
-  } satisfies NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>;
-  const base: OpenClawConfig = { tools: { alsoAllow: ["browser"], media } };
-  const cfg = buildWhatsAppQaConfig(base, {
-    allowFrom: ["+15550000001"],
-    authDir: "/tmp/whatsapp-qa-auth",
-    dmPolicy: "allowlist",
-    ownerAllowFrom: ["+15550000001"],
-    overrides: { audioPreflight: true, actions: true },
-    sutAccountId: "sut",
+const account = (cfg: OpenClawConfig) => cfg.channels?.whatsapp?.accounts?.sut;
+it("adds QA capabilities without replacing existing configuration", () => {
+  const base: OpenClawConfig = {
+    commands: { ownerAllowFrom: ["telegram:existing-owner"] },
+    tools: {
+      alsoAllow: ["browser"],
+      media: { audio: { enabled: false }, models: [audio("existing-transcriber")] },
+    },
+  };
+  const original = structuredClone(base);
+  const cfg = config(
+    {
+      groupJid,
+      overrides: {
+        ...scenario("whatsapp-group-pending-history-context").configOverrides,
+        ...scenario("whatsapp-agent-message-action-react").configOverrides,
+        approvals: { exec: true, plugin: true },
+        audioPreflight: true,
+      },
+    },
+    base,
+  );
+  expect(cfg.commands?.ownerAllowFrom).toEqual(["telegram:existing-owner", "+15550000001"]);
+  expect([cfg.approvals?.exec, cfg.approvals?.plugin]).toEqual([
+    { enabled: true, mode: "session" },
+    { enabled: true, mode: "session" },
+  ]);
+  expect(account(cfg)?.allowFrom).toEqual(["+15550000001"]);
+  expect(Object.hasOwn(account(cfg) ?? {}, "execApprovals")).toBe(false);
+  expect(cfg.channels?.whatsapp).toMatchObject({
+    actions: { reactions: true },
+    reactionLevel: "minimal",
   });
-
   expect(cfg.tools).toMatchObject({
     alsoAllow: ["browser", "message"],
     media: {
@@ -35,11 +58,72 @@ it("preserves audio preflight when enabling message actions", () => {
       models: [audio("gpt-4o-transcribe"), audio("existing-transcriber")],
     },
   });
-  expect(base.tools?.media?.audio?.enabled).toBe(false);
+  const limit = cfg.channels?.whatsapp?.historyLimit ?? cfg.messages?.groupChat?.historyLimit;
+  expect(typeof limit).toBe("number");
+  expect(Number(limit)).toBeGreaterThan(0);
+  expect(account(cfg)).toMatchObject({
+    replyToMode: "all",
+    groups: { [groupJid]: { requireMention: true } },
+  });
+  expect(cfg.messages?.inbound?.byChannel?.whatsapp).toBe(0);
+  expect(cfg.messages?.groupChat?.visibleReplies).toBe("automatic");
+  expect(cfg.messages?.groupChat?.mentionPatterns).toContain("\\bopenclawqa\\b");
+  expect(cfg.plugins?.allow).toContain("whatsapp");
+  expect(base).toEqual(original);
+});
+
+it("configures a blocked group sender", () => {
+  const cfg = config({
+    allowFrom: ["+15550000000"],
+    groupJid,
+    overrides: { blockGroupSender: true, groupPolicy: "allowlist" },
+  });
+  expect(account(cfg)).toMatchObject({
+    groupPolicy: "allowlist",
+    groupAllowFrom: ["+15550000001"],
+  });
+  expect(account(cfg)?.groups).toBeUndefined();
+});
+
+it("seeds audio preflight without existing media", () => {
+  const cfg = config({ overrides: { audioPreflight: true } });
+  expect(cfg.tools).toMatchObject({
+    media: {
+      audio: { enabled: true },
+      models: [audio("gpt-4o-transcribe")],
+    },
+  });
+});
+
+it("patches effective policy for default and named accounts", () => {
+  const policies = [
+    ["access-control-dm-disabled", "dmPolicy", "disabled", "allowlist"],
+    ["access-control-dm-open", "dmPolicy", "open", "allowlist"],
+    ["access-control-group-disabled", "groupPolicy", "disabled", "open"],
+    ["access-control-group-open", "groupPolicy", "open", "disabled"],
+    ["pairing-block", "dmPolicy", "pairing", "allowlist"],
+  ] as const;
+  for (const accountId of ["default", "work"]) {
+    for (const [name, key, value, stale] of policies) {
+      const definition = readQaScenarioById("whatsapp-" + name);
+      const base = config(
+        { sutAccountId: accountId },
+        { channels: { whatsapp: { accounts: { [accountId]: { [key]: stale } } } } },
+      );
+      const cfg = applyQaSuiteGatewayConfigPatches(
+        base,
+        collectQaSuiteGatewayConfigPatches([definition], accountId),
+      ) as OpenClawConfig;
+      const effective = resolveWhatsAppAccount({ cfg, accountId });
+      expect(effective[key], definition.id + ":" + accountId).toBe(value);
+      if (value === "pairing") {
+        expect(effective.allowFrom).toEqual(["+15550000000"]);
+      }
+    }
+  }
 });
 
 async function checkBroadcast(roster: "generated" | "explicit", home: string) {
-  const groupJid = "120363000000000000@g.us";
   const workspaceDir = path.join(home, "workspace");
   const base = buildQaGatewayConfig({ ...gateway, workspaceDir });
   if (roster !== "generated") {
@@ -50,15 +134,8 @@ async function checkBroadcast(roster: "generated" | "explicit", home: string) {
     agents.entries.main = { identity: { name: "Existing" }, model: "mock-openai/custom" };
   }
   const original = structuredClone(base);
-  const cfg = buildWhatsAppQaConfig(base, {
-    allowFrom: ["*"],
-    authDir: path.join(home, "auth"),
-    dmPolicy: "open",
-    groupJid,
-    ownerAllowFrom: ["+15550000001"],
-    overrides: whatsappConversationScenarios.whatsappQaBroadcastGroupFanoutScenario.configOverrides,
-    sutAccountId: "sut",
-  });
+  const overrides = scenario("whatsapp-broadcast-group-fanout").configOverrides;
+  const cfg = config({ groupJid, overrides }, base);
 
   await fs.writeFile(path.join(home, ".openclaw", "openclaw.json"), JSON.stringify(cfg));
   const snapshot = await readConfigFileSnapshot({ pluginValidation: "core-only", observe: false });
@@ -69,13 +146,9 @@ async function checkBroadcast(roster: "generated" | "explicit", home: string) {
     ...Object.keys(original.agents?.entries ?? {}).map((id) => resolveAgentWorkspaceDir(value, id)),
   ];
   expect(placement(cfg)).toEqual(placement(original));
-  const entries = cfg.agents?.entries ?? {};
-  expect(entries).toMatchObject(original.agents?.entries ?? {});
-  expect(Object.keys(entries)).toEqual(["qa", "main", "qa-second"]);
-  expect(entries["qa-second"]).toEqual({ identity: { name: "Second WhatsApp QA" } });
+  expect(cfg.agents?.entries).toMatchObject(original.agents?.entries ?? {});
+  expect(cfg.agents?.entries).toHaveProperty("qa-second");
   expect(cfg.broadcast).toEqual({ strategy: "sequential", [groupJid]: ["main", "qa-second"] });
-  const group = cfg.channels?.whatsapp?.accounts?.sut?.groups?.[groupJid];
-  expect(group?.requireMention).toBe(true);
   expect(base).toEqual(original);
 }
 

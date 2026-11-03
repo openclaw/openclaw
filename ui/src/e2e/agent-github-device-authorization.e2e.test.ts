@@ -2,7 +2,8 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, type Locator, type Page } from "playwright/test";
 import { it } from "vitest";
-import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import { installRepositoryGateway as installMockGateway } from "../test-helpers/repository-plugin.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 const suite = createControlUiE2eSuite({
   name: "Control UI GitHub connections",
@@ -167,6 +168,18 @@ async function beginAuthorization(
   await gateway.resolveDeferred(start, { ...device, userCode });
   await visible(section, userCode);
 }
+const system = {
+  source: "system-configured",
+  credentialKind: "managed-oauth",
+  credentialState: "available",
+  account: { login: "system-octocat" },
+  gitAuthor: { name: "System Octocat", email: null },
+  evidence: "github-api",
+  accessExpiresAtMs: 1_900_000_000_000,
+  refreshState: "available",
+  oauthScopes: ["gist", "read:org", "repo", "workflow"],
+  repositoryGrants: "unknown",
+} as const;
 suite.define(() => {
   it("keeps native GitHub status compact across Profile and agent Settings without changing setup scope", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
@@ -490,5 +503,79 @@ suite.define(() => {
       await expect(section.getByText(device.userCode, { exact: true })).toHaveCount(0);
       await expect(connection(section, "personal")).toContainText("Not connected");
     });
+  });
+
+  it("copies the personal device code and connects only the signed-in reader's GitHub", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 960, width: 1280 },
+      },
+      async ({ page }) => {
+        const status = { personal: disconnected, system };
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.read"],
+          presenceUsers: [
+            { self: true, id: "11111111-1111-4111-8111-111111111111", name: "Test Person" },
+          ],
+          methodResponses: { "users.github.status": status },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/profile`);
+        const section = page.locator("#settings-profile-github-connections");
+        const personalButton = (name: string) => section.getByRole("button", { name, exact: true });
+        const personalConnection = (scope: string) =>
+          section.locator(`[data-github-connection="${scope}"]`);
+        await expect(personalConnection("system")).toContainText("@system-octocat");
+        await expect(personalButton("Change System GitHub")).toHaveCount(0);
+        await expect(personalConnection("agent")).toHaveCount(0);
+        const configReads = (await gateway.getRequests("config.get")).length;
+        const configWrites = (await gateway.getRequests("config.set")).length;
+        await personalButton("Connect My GitHub").click();
+        await expect(section.getByText("For me", { exact: true })).toBeVisible();
+        await expect(section.getByText("For the system", { exact: true })).toHaveCount(0);
+        await expect(personalButton("Use a PAT instead")).toHaveCount(0);
+        await gateway.deferNext("users.github.authorize.start");
+        await personalButton("Continue with GitHub").click();
+        expect((await gateway.waitForRequest("users.github.authorize.start")).params).toEqual({});
+        await gateway.deferNext("users.github.authorize.poll");
+        await gateway.resolveDeferred("users.github.authorize.start", device);
+        await expect(section.getByText(device.userCode, { exact: true })).toBeVisible();
+        await expect(
+          section.getByRole("link", { name: "Open github.com/login/device" }),
+        ).toHaveAttribute("href", device.verificationUri);
+        await assertDeviceCodeCopy(page, device.userCode);
+        await gateway.waitForRequest("users.github.authorize.poll");
+        await gateway.resolveDeferred("users.github.authorize.poll", {
+          status: "success",
+          personal: {
+            ...disconnected,
+            state: "connected",
+            generation: "22222222-2222-4222-8222-222222222222",
+            account: { accountId: 2, login: "personal-octocat" },
+            accessExpiresAtMs: 1_900_000_000_000,
+            refreshState: "available",
+          },
+        });
+        await expect(personalConnection("personal")).toContainText("@personal-octocat");
+        await expect(personalConnection("system")).toContainText("@system-octocat");
+        await expect(section.locator("[data-github-setup]")).toHaveCount(0);
+        await expect(personalButton("Continue with GitHub")).toHaveCount(0);
+        await gateway.setMethodResponse("users.github.status", status);
+        await personalButton("Disconnect My GitHub").click();
+        expect((await gateway.waitForRequest("users.github.disconnect")).params).toEqual({});
+        await expect(personalConnection("personal")).toContainText("Not connected");
+        await expect(section).not.toContainText("@personal-octocat");
+        expect(await gateway.getRequests("config.get")).toHaveLength(configReads);
+        expect(await gateway.getRequests("config.set")).toHaveLength(configWrites);
+        for (const method of [
+          "tools.github.authorize.start",
+          "secrets.store.set",
+          "users.prefs.set",
+        ]) {
+          expect(await gateway.getRequests(method)).toHaveLength(0);
+        }
+      },
+    );
   });
 });

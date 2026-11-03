@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import * as runtimeGuard from "../infra/runtime-guard.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { statusCommand } from "./status.command.js";
@@ -14,8 +14,9 @@ const mocks = vi.hoisted(() => ({
 }));
 const runtime = createTestRuntime();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const tty = createCliTtyMock([process.stdout]);
 const contains = (text: string) => expect.stringContaining(text);
+const expectError = (text: string) => expect(runtime.error).toHaveBeenCalledWith(contains(text));
 const repairHint = contains("nvm install 26");
 const nodeCheck = "core/doctor/node-runtime";
 
@@ -61,25 +62,20 @@ beforeEach(() => {
     status: "unsupported",
     version: "22.23.2",
   });
-  mockCliRuntime("26.8.1");
+  mockCliRuntime("26.12.1");
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
-  if (originalIsTTY) {
-    Object.defineProperty(process.stdout, "isTTY", originalIsTTY);
-  } else {
-    Reflect.deleteProperty(process.stdout, "isTTY");
-  }
+  tty.restore();
 });
 
 it.each(["invalid config", "snapshot failure"])(
   "keeps Node repair hints after %s",
   async (failure) => {
     useInvalidConfig();
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+    tty.set(true);
     mockCliRuntime("24.15.0");
     if (failure === "snapshot failure") {
       vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
@@ -99,7 +95,7 @@ it.each(["invalid config", "snapshot failure"])(
       "Node 24.15.0:",
       "nvm install 26",
     ]) {
-      expect(runtime.error).toHaveBeenCalledWith(contains(message));
+      expectError(message);
     }
     expect(runtime.error).not.toHaveBeenCalledWith(contains("undefined"));
   },
@@ -107,47 +103,30 @@ it.each(["invalid config", "snapshot failure"])(
 
 it("keeps repair guidance in JSON despite invalid config", async () => {
   useInvalidConfig();
-  mockCliRuntime("22.23.2", false);
+  mockCliRuntime("26.0.0", false);
   const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   expect(await runDoctorLintCli(runtime, { json: true })).toBe(1);
   const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-  expect(payload.findings).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ checkId: "core/doctor/final-config-validation" }),
-      expect.objectContaining({ checkId: nodeCheck, fixHint: repairHint }),
-    ]),
-  );
+  const expectFinding = (shape: object) =>
+    expect(payload.findings).toContainEqual(expect.objectContaining(shape));
+  expectFinding({ checkId: "core/doctor/final-config-validation" });
+  expectFinding({ checkId: nodeCheck, message: contains("26.0.0"), fixHint: repairHint });
+  expectFinding({ source: "gateway-service", message: contains("22.23.2"), fixHint: repairHint });
 });
 
-it("registers CLI and service Node repair findings", async () => {
-  mockCliRuntime("26.0.0", false);
-  const checks = await resolveDoctorContributionHealthChecks();
-  const check = checks.find((entry) => entry.id === nodeCheck);
-  const findings = await check?.detect({ mode: "lint", cfg: {}, runtime, env: {} });
-  expect(findings).toMatchObject([
-    { message: contains("26.0.0"), fixHint: repairHint },
-    { source: "gateway-service", message: contains("22.23.2"), fixHint: repairHint },
-  ]);
-});
-
-it.each([
-  [
-    { status: "supported", version: "24.15.0", note: "Node 24.15.0: unsupported, capability OK." },
-    "[info] Node 24.15.0:",
-    ["[warning]", "undefined"],
-  ],
-  [
-    { status: "probe-failed", error: new Error("unavailable") },
-    "could not be inspected",
-    ["is unsupported"],
-  ],
-] as const)(
-  "renders service runtime %j without a misleading diagnosis",
-  async (info, present, absent) => {
+it.each(["unsupported", "probe-failed"] as const)(
+  "renders service runtime %s without a misleading diagnosis",
+  async (status) => {
+    const unsupported = status === "unsupported";
+    const info = unsupported
+      ? { status, version: "24.22.0" }
+      : { status, error: new Error("unavailable") };
     mocks.resolveNodeRuntimeInfo.mockResolvedValue(info);
     await statusCommand({ json: true }, runtime);
-    expect(runtime.error).toHaveBeenCalledWith(contains(present));
-    for (const message of absent) {
+    expectError(
+      unsupported ? "Gateway service Node 24.22.0 is unsupported." : "could not be inspected",
+    );
+    for (const message of unsupported ? ["[info]", "undefined"] : ["is unsupported"]) {
       expect(runtime.error).not.toHaveBeenCalledWith(contains(message));
     }
   },

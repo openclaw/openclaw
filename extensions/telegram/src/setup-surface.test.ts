@@ -1,12 +1,13 @@
 import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { telegramSetupContract } from "./setup-core.js";
 import { telegramSetupDmPolicy } from "./setup-surface.helpers.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 
 describe("Telegram setup", () => {
+  afterEach(() => vi.unstubAllGlobals());
   it("enables environment credentials without authoring an inline or file token", () => {
     const input = {
       cfg: {},
@@ -19,9 +20,9 @@ describe("Telegram setup", () => {
     });
   });
   it.each([
-    { authored: undefined, expected: true },
-    { authored: false, expected: false },
-  ])("prepares wildcard mention gating with authored=$authored", async ({ authored, expected }) => {
+    [undefined, true],
+    [false, false],
+  ])("prepares wildcard mention gating with authored=%s", async (authored, expected) => {
     const telegram = {
       botToken: "tok",
       ...(authored !== undefined ? { groups: { "*": { requireMention: authored } } } : {}),
@@ -41,13 +42,12 @@ describe("Telegram setup", () => {
     { name: "configured default account", dmPolicy: "pairing", accountId: undefined },
   ] as const)("opens $name without changing root or siblings", ({ dmPolicy, accountId }) => {
     const work = { botToken: "tok-work", dmPolicy: "disabled" as const, allowFrom: ["456"] };
+    const root = { defaultAccount: "alerts", dmPolicy, allowFrom: ["123"] };
     const next = telegramSetupDmPolicy.setPolicy(
       {
         channels: {
           telegram: {
-            defaultAccount: "alerts",
-            dmPolicy,
-            allowFrom: ["123"],
+            ...root,
             accounts: { alerts: { botToken: "tok", dmPolicy: "allowlist" }, work },
           },
         },
@@ -56,8 +56,7 @@ describe("Telegram setup", () => {
       accountId,
     );
     expect(next.channels?.telegram).toMatchObject({
-      dmPolicy,
-      allowFrom: ["123"],
+      ...root,
       accounts: { alerts: { dmPolicy: "open", allowFrom: ["123", "*"] } },
     });
     expect(next.channels?.telegram?.accounts?.work).toEqual(work);
@@ -66,18 +65,13 @@ describe("Telegram setup", () => {
     const globalFetch = vi.fn().mockRejectedValue(new Error("global fetch should not be called"));
     vi.stubGlobal("fetch", globalFetch);
 
-    try {
-      const resolved = await telegramSetupWizard.allowFrom?.resolveEntries({
-        cfg: {},
-        accountId: DEFAULT_ACCOUNT_ID,
-        credentialValues: { token: "tok" },
-        entries: ["@user"],
-      });
-
-      expect(resolved).toEqual([{ input: "@user", resolved: false, id: null }]);
-      expect(globalFetch).not.toHaveBeenCalled();
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    const resolved = await telegramSetupWizard.allowFrom?.resolveEntries({
+      cfg: {},
+      accountId: DEFAULT_ACCOUNT_ID,
+      credentialValues: { token: "tok" },
+      entries: ["@user"],
+    });
+    expect(resolved).toEqual([{ input: "@user", resolved: false, id: null }]);
+    expect(globalFetch).not.toHaveBeenCalled();
   });
 });

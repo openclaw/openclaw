@@ -2,11 +2,15 @@ import { generateKeyPairSync } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { factoryGitHubClientProof } from "../../src/gateway/factory-github-proof.js";
-import { withFactoryPublicationIdentity } from "../../src/gateway/github-publication-factory-identity.js";
+import { prepareFactoryGitHubIdentity } from "../../src/gateway/factory-github-proof.js";
+import { createFactoryGitHubReadClaim } from "../../src/gateway/factory-github-proof.test-support.js";
 import { createDirectChatContext } from "../../src/gateway/server-chat.agent-events.test-helpers.js";
 import { coreGatewayHandlers } from "../../src/gateway/server-methods/core-handlers.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
+import {
+  gatewayConnect,
+  gatewayProfile,
+} from "../../src/gateway/server/client-fixtures.test-support.js";
 import { readGitHubConfig } from "./config-api.js";
 import { prepareGatewayProjectGitHubIdentity } from "./project-identity-api.js";
 import { resolveGitHubToolIdentityStatus } from "./tool-identity-api.js";
@@ -29,36 +33,15 @@ const apiBaseUrl = `https://api.${host}`;
 const admissionPath = "/__factory__/github/repository-admission";
 const admissionRequest = `GET ${admissionPath}`;
 const issueUrl = `${apiBaseUrl}/repos/example/project/issues/1`;
-const claim = {
-  purpose: "session-item-read" as const,
-  binding: {
-    kind: "session" as const,
-    agentId: "main",
-    sessionKey: "agent:main:room",
-    sessionId: "session-1",
-    lifecycleRevision: "revision-1",
-    requestDigest: "synthetic-item-digest",
-  },
-};
+const claim = createFactoryGitHubReadClaim("synthetic-item-digest");
 const permissions = { contents: "read" as const, metadata: "read" as const };
 function client(): GatewayClient {
   return {
     connId: "human-connection",
     authenticatedFactoryGitHubAccountId: 42,
     authenticatedUserId: `github:${host}:42`,
-    authenticatedUserProfile: {
-      profileId: "person-1",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
+    authenticatedUserProfile: gatewayProfile("person-1"),
+    connect: gatewayConnect(["operator.read"], { id: "cli", mode: "cli" }),
     internal: { authenticatedOperator: true },
   };
 }
@@ -113,12 +96,7 @@ function prepare(caller = client(), requestedRepository?: string) {
     assertActive,
     withCredential: (run) => {
       const credential = { claim: structuredClone(claim), assertCurrent: assertActive };
-      const actor = factoryGitHubClientProof({ client: caller, ...credential });
-      return withFactoryPublicationIdentity(
-        { ...actor, sessionKey: claim.binding.sessionKey },
-        credential,
-        run,
-      );
+      return prepareFactoryGitHubIdentity({ client: caller, ...credential }, run);
     },
   });
 }

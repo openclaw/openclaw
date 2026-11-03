@@ -71,6 +71,11 @@ access revalidation, authenticated Git-pack preparation, and checkout. These
 operations feed the existing recipe, provisioning, and workspace owners. A source
 without that adapter reports that cloud preparation is unavailable.
 
+Without `prepareGitPack`, the worker fetches an admitted public HTTPS URL
+without ambient credentials or redirects. Other transports require a source-owned
+pack. Pack installation preserves the admitted HTTPS, SSH, or SCP-style origin
+without contacting it; repository hosts and nested paths remain source-owned.
+
 `identityKey` partitions prepared content; it does not authorize access. Returned
 facts contain no account records or bearer credentials. Providers revalidate
 current access and repository identity at the supplied boundaries. The host

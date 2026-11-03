@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+  type InternalToolExecutionPreparer,
+} from "../../../packages/agent-core/src/internal-hooks.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
@@ -34,11 +39,6 @@ import {
 } from "../execution-environment.test-support.js";
 import { resolveGitHubPluginToolsFixture } from "../github-plugin-tools.test-support.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-  type InternalToolExecutionPreparer,
-} from "../runtime/internal-hooks.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
   getGatewayToolCallerIdentity,
@@ -171,7 +171,7 @@ describe("agent harness host capability", () => {
 
   it.each([
     { available: undefined, expected: [] },
-    { available: false, expected: ["github_identity_status"] },
+    { available: false, expected: ["github_identity_status", "github_publish"] },
     { available: true, expected: ["github_identity_status", "github_publish"] },
   ])(
     "captures GitHub availability independently of plugin inputs: $available",

@@ -13,6 +13,8 @@ export {
   SessionGitHubPublicationResultSchema,
   SessionGitHubPublishParamsSchema,
   SessionGitHubOptionsParamsSchema,
+  SessionGitHubReadinessParamsSchema,
+  SessionGitHubReadinessResultSchema,
   SessionGitHubOptionsResultSchema,
   SessionGitHubStatusParamsSchema,
   SessionGitHubStatusResultSchema,
