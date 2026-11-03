@@ -1,11 +1,15 @@
 {
   "id": "knowledge",
   "kind": "memory",
-  "categories": ["memory"],
+  "categories": [
+    "memory"
+  ],
   "name": "Knowledge",
   "description": "Evidence-backed knowledge, inspectable in OpenClaw.",
   "version": "0.1.0",
-  "reload": { "turnHandover": true },
+  "reload": {
+    "turnHandover": true
+  },
   "configSchema": {
     "type": "object",
     "properties": {
@@ -79,45 +83,27 @@
       },
       "recallGate": {
         "type": "object",
-        "required": ["baseUrl", "model"],
         "properties": {
           "mode": {
             "type": "string",
-            "enum": ["off", "shadow", "live"],
+            "enum": [
+              "off",
+              "shadow",
+              "live"
+            ],
             "description": "off disables the gate; shadow (default) logs what it would inject and injects nothing; live injects matched records into the user turn."
-          },
-          "api": {
-            "type": "string",
-            "enum": ["openai", "systemone"],
-            "description": "Decision endpoint protocol. openai (default) posts to {baseUrl}/chat/completions; systemone posts one choice question to {baseUrl}/systemone and reads its option probabilities."
-          },
-          "baseUrl": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500,
-            "description": "Base URL of the decision endpoint, for example http://127.0.0.1:8010/v1."
-          },
-          "model": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "Decision model id."
-          },
-          "apiKey": {
-            "type": ["string", "object"],
-            "description": "Optional bearer token for the decision endpoint; accepts a SecretRef."
           },
           "highThreshold": {
             "type": "number",
             "minimum": 0,
             "maximum": 1,
-            "description": "Score at or above which the matched page body is injected. Default 0.85."
+            "description": "Per-page relevance probability at or above which the page body is injected. Default 0.85."
           },
           "mediumThreshold": {
             "type": "number",
             "minimum": 0,
             "maximum": 1,
-            "description": "Score at or above which a one-line pointer is injected. Default 0.5."
+            "description": "Per-page relevance probability at or above which a one-line pointer is injected. Default 0.5."
           },
           "timeoutMs": {
             "type": "integer",
@@ -142,18 +128,6 @@
       }
     },
     "additionalProperties": false
-  },
-  "configContracts": {
-    "secretInputs": {
-      "paths": [{ "path": "recallGate.apiKey", "expected": "string", "ownerKind": "capability" }]
-    }
-  },
-  "uiHints": {
-    "recallGate.apiKey": {
-      "label": "Recall gate API key",
-      "help": "Optional bearer token for the decision model endpoint.",
-      "sensitive": true
-    }
   },
   "doctorContract": {
     "configRepair": true
@@ -214,43 +188,195 @@
     ]
   },
   "toolMetadata": {
-    "knowledge_annotate": { "profiles": ["coding"] },
-    "knowledge_attach": { "profiles": ["coding"] },
-    "knowledge_attach_file": { "profiles": ["coding"] },
-    "knowledge_attachment": { "profiles": ["coding"] },
-    "knowledge_chronicle_day": { "profiles": ["coding"] },
-    "knowledge_chronicle_last_seen": { "profiles": ["coding"] },
-    "knowledge_chronicle_since": { "profiles": ["coding"] },
-    "knowledge_connections": { "profiles": ["coding"] },
-    "knowledge_correct": { "profiles": ["coding"] },
-    "knowledge_create_claim": { "profiles": ["coding"] },
-    "knowledge_create_relationship": { "profiles": ["coding"] },
-    "knowledge_diagnostics": { "profiles": ["coding"] },
-    "knowledge_edit_body": { "profiles": ["coding"] },
-    "knowledge_evidence_read": { "profiles": ["coding"] },
-    "knowledge_extract_section": { "profiles": ["coding"] },
-    "knowledge_grep": { "profiles": ["coding"] },
-    "knowledge_history": { "profiles": ["coding"] },
-    "knowledge_lookup": { "profiles": ["coding"] },
-    "knowledge_merge": { "profiles": ["coding"] },
-    "knowledge_mutation": { "profiles": ["coding"] },
-    "knowledge_ontology": { "profiles": ["coding"] },
-    "knowledge_publish_batch": { "profiles": ["coding"] },
-    "knowledge_recall": { "profiles": ["coding"] },
-    "knowledge_reconcile_evidence": { "profiles": ["coding"] },
-    "knowledge_record": { "profiles": ["coding"] },
-    "knowledge_records": { "profiles": ["coding"] },
-    "knowledge_relink": { "profiles": ["coding"] },
-    "knowledge_remember": { "profiles": ["coding"] },
-    "knowledge_resume": { "profiles": ["coding"] },
-    "knowledge_revision": { "profiles": ["coding"] },
-    "knowledge_save_page": { "profiles": ["coding"] },
-    "knowledge_source_check": { "profiles": ["coding"] },
-    "knowledge_status": { "profiles": ["coding"] },
-    "knowledge_supersede": { "profiles": ["coding"] },
-    "knowledge_timeline": { "profiles": ["coding"] },
-    "knowledge_unmerge": { "profiles": ["coding"] },
-    "knowledge_verify": { "profiles": ["coding"] },
-    "knowledge_withdraw": { "profiles": ["coding"] }
+    "knowledge_annotate": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_attach": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_attach_file": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_attachment": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_chronicle_day": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_chronicle_last_seen": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_chronicle_since": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_connections": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_correct": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_create_claim": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_create_relationship": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_diagnostics": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_edit_body": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_evidence_read": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_extract_section": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_grep": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_history": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_lookup": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_merge": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_mutation": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_ontology": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_publish_batch": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_recall": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_reconcile_evidence": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_record": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_records": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_relink": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_remember": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_resume": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_revision": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_save_page": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_source_check": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_status": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_supersede": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_timeline": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_unmerge": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_verify": {
+      "profiles": [
+        "coding"
+      ]
+    },
+    "knowledge_withdraw": {
+      "profiles": [
+        "coding"
+      ]
+    }
   }
 }

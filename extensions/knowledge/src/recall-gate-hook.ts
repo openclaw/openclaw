@@ -5,6 +5,7 @@ import {
   GATE_BODY_MAX,
   renderInjection,
   type GateDecision,
+  type GateResult,
   type RecallGatePolicy,
 } from "./recall-gate.js";
 import type { Stores } from "./stores.js";
@@ -14,25 +15,28 @@ const BODY_LINES = 60;
 
 type GateRecord = {
   mode: RecallGatePolicy["mode"];
-  outcome: "injected" | "shadow" | "none" | "error";
+  outcome: "injected" | "shadow" | "none" | "unavailable" | "error";
   ms: number;
   offered?: number;
+  shortlisted?: number;
   decisions?: GateDecision[];
+  stage?: Extract<GateResult, { status: "unavailable" }>["stage"];
+  reason?: string;
   injectedChars?: number;
   error?: string;
 };
 
-/** Per user turn, asks the configured decision model which Knowledge index
+/** Per user turn, asks the owning agent's Decision model which Knowledge index
  * entries the message needs and, in live mode, prepends the matches to that
  * turn's user message. The index goes only to the decision model. Shadow mode
- * logs the decisions and injects nothing. Timeouts and errors inject nothing
- * and never fail the turn. Logs carry record IDs and scores, never message or
+ * logs the decisions and injects nothing. An agent without a Decision model,
+ * an unavailable provider, timeouts and errors inject nothing and never fail
+ * the turn. Logs carry record IDs and scores, never message or
  * record text. */
 export function registerRecallGateHook(
   api: OpenClawPluginApi,
   stores: Stores,
   policy: RecallGatePolicy,
-  fetchImpl?: typeof fetch,
 ): void {
   const log = (record: GateRecord) =>
     api.logger?.info?.(`knowledge recall gate: ${JSON.stringify(record)}`);
@@ -40,7 +44,8 @@ export function registerRecallGateHook(
     "before_prompt_build",
     async (event, ctx) => {
       // Only user turns; heartbeat, cron and other automated runs skip the gate.
-      if (ctx.trigger !== "user") {
+      const agentId = ctx.agentId;
+      if (ctx.trigger !== "user" || !agentId) {
         return undefined;
       }
       const started = performance.now();
@@ -70,14 +75,22 @@ export function registerRecallGateHook(
           runtime.client.call("gateIndex", access),
         );
         const message = event.currentUserMessage ?? event.prompt;
-        const decisions = await decide({
+        const result = await decide({
           policy,
           entries,
           message,
+          decisions: api.runtime.decisions,
+          agentId,
           signal: controller.signal,
-          ...(fetchImpl ? { fetchImpl } : {}),
+          assertCurrent: access.assertCurrent,
         });
-        const base = { mode: policy.mode, offered: entries.length, decisions };
+        if (result.status === "unavailable") {
+          const { offered, stage, reason } = result;
+          log({ mode: policy.mode, outcome: "unavailable", offered, stage, reason, ms: ms() });
+          return undefined;
+        }
+        const { offered, shortlisted, decisions } = result;
+        const base = { mode: policy.mode, offered, shortlisted, decisions };
         const hits = decisions.filter((d) => d.tier !== "low");
         if (policy.mode === "shadow" || hits.length === 0) {
           log({ ...base, outcome: hits.length ? "shadow" : "none", ms: ms() });

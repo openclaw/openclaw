@@ -165,22 +165,23 @@ receives no candidates.
 
 ## Recall gate
 
-The recall gate asks a small local decision model, per user turn, which index
-entries the message needs. It is off unless `recallGate` is configured, and it
-starts in `shadow` mode.
+The recall gate asks the owning agent's [Decision model](/concepts/decision-models),
+per user turn, which index entries the message needs. It is off unless
+`recallGate` is configured, and it starts in `shadow` mode. The gate uses the
+shared Decision runtime: the agent's `decisionModel` picks the provider and
+model, and that provider plugin owns credentials, endpoints, and limits. An
+agent without an effective `decisionModel` skips the gate.
 
 ```json5
 {
+  agents: {
+    defaults: { decisionModel: "typesafe/kev-latest" },
+  },
   plugins: {
     entries: {
       knowledge: {
         config: {
-          recallGate: {
-            mode: "shadow", // off | shadow | live
-            api: "systemone", // openai | systemone
-            baseUrl: "http://127.0.0.1:8010/v1",
-            model: "decider-4b",
-          },
+          recallGate: { mode: "shadow" }, // off | shadow | live
         },
       },
     },
@@ -188,18 +189,17 @@ starts in `shadow` mode.
 }
 ```
 
-| Key               | Default    | Meaning                                                                        |
-| ----------------- | ---------- | ------------------------------------------------------------------------------ |
-| `mode`            | `"shadow"` | `off`, `shadow` (log only), or `live` (inject into the user turn)              |
-| `api`             | `"openai"` | Endpoint protocol: `openai` or `systemone` (see below)                         |
-| `baseUrl`         | required   | Base URL; the gate calls `<baseUrl>/chat/completions` or `<baseUrl>/systemone` |
-| `model`           | required   | Model ID sent with each request                                                |
-| `apiKey`          | none       | Bearer token; accepts a [SecretRef](/gateway/secrets)                          |
-| `highThreshold`   | `0.85`     | Score at or above which the page body is injected                              |
-| `mediumThreshold` | `0.5`      | Score at or above which a one-line pointer is injected                         |
-| `timeoutMs`       | `1500`     | Whole-gate budget per turn (100–10000)                                         |
-| `maxIndexChars`   | `24000`    | Characters of index sent to the decision model; later entries are not offered  |
-| `maxCandidates`   | `5`        | Most entries scored per turn (1–10)                                            |
+The `recallGate` block is the gate's explicit opt-in; it is separate from the
+Labs Decision assistance switch, which governs core consumers.
+
+| Key               | Default    | Meaning                                                                       |
+| ----------------- | ---------- | ----------------------------------------------------------------------------- |
+| `mode`            | `"shadow"` | `off`, `shadow` (log only), or `live` (inject into the user turn)             |
+| `highThreshold`   | `0.85`     | Per-page relevance probability at or above which the page body is injected    |
+| `mediumThreshold` | `0.5`      | Per-page relevance probability at or above which a one-line pointer is added  |
+| `timeoutMs`       | `1500`     | Whole-gate budget per turn (100–10000), shared by both Decision requests      |
+| `maxIndexChars`   | `24000`    | Characters of index sent to the decision model; later entries are not offered |
+| `maxCandidates`   | `5`        | Most entries scored per turn (1–10)                                           |
 
 Each user turn in a session that reads the private partition (the same
 sessions that get the standing index):
@@ -208,47 +208,41 @@ sessions that get the standing index):
    one label line (type, title, one exact alias), most connected first. It uses
    the same label rules as the standing index, and skips titles that read like
    instructions or contain markup.
-2. The decision model receives that list and the user message, and scores the
-   entries (see the two protocols below).
-3. In `live` mode, high-score pages have their body (at most 2,000 characters)
-   prepended to the user turn, medium-score pages get a one-line pointer to
-   `knowledge_lookup`, and low scores add nothing. The whole block is at most
-   6,000 characters.
+2. **Shortlist.** When more than `maxCandidates` entries are offered, one
+   Decision request asks a `choice` question per 254 entries, each with a
+   `None of these` option, with the user message as state. Choice
+   probabilities are mutually exclusive, so they only rank the shortlist: the
+   top `maxCandidates` entries with a nonzero probability (or the provider's
+   named pick, when it returns no distribution) go on. Smaller indexes skip
+   this step and score every entry.
+3. **Score.** A second Decision request asks one independent `boolean`
+   question per shortlisted entry: would reading this page help answer the
+   message? Its `probabilityTrue` is that page's relevance, so two pages that
+   are both needed can both clear the thresholds.
+4. In `live` mode, high-tier pages have their body (at most 2,000 characters)
+   prepended to the user turn, medium-tier pages get a one-line pointer to
+   `knowledge_lookup`, and low tiers add nothing. The whole block, header
+   included, is at most 6,000 characters.
 
-Protocols:
+Details:
 
-- `systemone`: one request to `<baseUrl>/systemone` (the TypeSafe/Jev System
-  One wire format, served by decision models such as decider). The list is one
-  `choice` question per 254 entries, each with a `None of these` option, and
-  the state is the user message. An entry's score is its option probability,
-  so picking and scoring are one reading. The top `maxCandidates` entries are
-  tiered. When several entries fit, they share the probability mass, so tune
-  thresholds in `shadow` mode.
-- `openai`: a chat model replies with the numbers of the relevant entries,
-  then each pick (up to `maxCandidates`) gets a one-token yes/no request with
-  `logprobs`. Its score is P(yes) / (P(yes) + P(no)) from the top logprobs.
-  Use a chat-tuned model; a model trained on a fixed decision format (such as
-  decider) scores poorly here and should use `systemone`.
-
-The list goes only to the decision model, never to the main model's prompt.
-Injected text goes into the user turn, not the system prompt, so the cached
-prompt prefix is unchanged. The standing [Knowledge index](#knowledge-index) is
-independent of the gate and still appended to the system prompt.
-
-- `openai` only: if the endpoint returns no logprobs, or neither `yes` nor `no` is among them,
-  a yes answer counts as medium (pointer only) and anything else as low. An
-  uncalibrated answer never injects a page body.
-- On timeout, HTTP error, or any other failure the gate injects nothing, logs
-  the outcome, and the turn continues.
+- A provider that answers `true` without a probability gets the medium tier:
+  an uncalibrated answer never injects a page body.
+- The turn's memory authority is rechecked before each Decision request and
+  again before the injection is published.
+- An unavailable provider (no Decision model, overload, deadline, provider
+  error), a timeout, or any other failure injects nothing, logs the outcome,
+  and the turn continues.
 - Each turn logs one `knowledge recall gate:` info line with the mode, outcome,
-  latency, number of entries offered, and each decision's record ID, score, and
-  tier. Logs never contain message or record text.
-- The gate runs only on user-triggered turns. Ungranted conversation audiences,
-  sandboxed sessions, and agents without a provisioned store are skipped
-  without calling the endpoint.
+  latency, the number of entries actually offered and shortlisted, and each
+  decision's record ID, score, and tier, or the unavailable stage and reason.
+  Logs never contain message or record text.
+- The gate runs only on user-triggered turns with a known agent. Ungranted
+  conversation audiences, sandboxed sessions, and agents without a provisioned
+  store are skipped without a Decision request.
 
-The endpoint receives page labels and the user message. Point it only at a
-model you trust with both, such as a loopback-only local server.
+The Decision provider receives page labels and the user message. Select a
+provider you trust with both, such as a local System One or ONNX model.
 
 ## Pre-compaction memory flush
 
