@@ -247,6 +247,7 @@ export function prepareAgentRuntimeAuth(
   // Compare logical scopes so same-provider endpoint incompatibility still fails closed.
   const sessionAuthProfileId =
     profileProvider &&
+    normalizeProviderId(profileProvider) !== normalizeProviderId(input.provider) &&
     normalizeProviderId(profileProvider) !== normalizeProviderId(authProfileSelectionProvider) &&
     resolveProviderIdForAuth(profileProvider, { ...input, storedCredential: true }) !==
       resolveProviderIdForAuth(authProfileSelectionProvider, input)

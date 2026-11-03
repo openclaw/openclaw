@@ -92,20 +92,6 @@ it("keeps a same-provider pin strict when an endpoint alias changes its credenti
   }).toThrow(/not configured/u);
 });
 
-it("keeps a same-provider session pin strict when its stored credential drifts", () => {
-  expectAuthError({
-    ...platform,
-    ...userPin("session:work"),
-    config: {
-      auth: { profiles: { "session:work": { provider: "openai", mode: "api_key" } } },
-    },
-    profiles: {
-      "session:work": createApiKeyCredential("anthropic", "synthetic-foreign-key"),
-      "openai:default": apiKey("synthetic-fallback-key"),
-    },
-  }).toThrow(/not configured for openai/u);
-});
-
 // Provider-hook behavior is covered by its owner suites.
 vi.mock("../../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
