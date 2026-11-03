@@ -62,7 +62,7 @@ vi.mock("./get-reply-run-helpers.js", async (importOriginal) => ({
     }),
   }),
 }));
-// Pass-through: the real ack runs; the order of acks against commits is recorded.
+// Pass-through: the real ack and refusal run; their order against commits is recorded.
 vi.mock("../../infra/session-delivery-queue-storage.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../infra/session-delivery-queue-storage.js")>();
@@ -72,6 +72,12 @@ vi.mock("../../infra/session-delivery-queue-storage.js", async (importOriginal) 
       runner.steps.push(`ack:${args[0]}`);
       return await actual.ackSessionDelivery(...args);
     }),
+    moveSessionDeliveryToFailed: async (
+      ...args: Parameters<typeof actual.moveSessionDeliveryToFailed>
+    ) => {
+      runner.steps.push(`retire:${args[0]}`);
+      return await actual.moveSessionDeliveryToFailed(...args);
+    },
   };
 });
 // Provider plugin edge: a case makes the reasoning-mode hook throw once.
@@ -428,7 +434,7 @@ describe("managed delivery ack follows the committed user turn", () => {
     await expectDeliveredOnceAndSettled(entry, id, "RETURN-pre-run");
   });
 
-  it("retires a return whose recipient owner changes between admission and promotion", async () => {
+  it("refuses a return whose recipient owner changes between admission and promotion", async () => {
     const ownerA = { type: "human" as const, source: "unknown" as const, id: "owner-a" };
     const entry = { ...(await seedSession()), createdActor: ownerA, visibility: "shared" as const };
     await replaceSessionEntry({ storePath: storePath(), sessionKey: SESSION_KEY }, entry as never);
@@ -451,15 +457,15 @@ describe("managed delivery ack follows the committed user turn", () => {
     });
 
     // The new owner's turn gets the unbound sibling, never the stale return; the
-    // row is retired (acked as stale), not restored and not adopted.
+    // row is refused (retired unacked), not restored and not adopted.
     expect(lastPrompt()).toContain("UNBOUND-SIBLING");
     expect(lastPrompt()).not.toContain("RETURN-stale-owner");
-    expect(runner.steps).toEqual([`ack:${id}`, "commit", "adopted"]);
+    expect(runner.steps).toEqual([`retire:${id}`, "commit", "adopted"]);
     expect(await snapshot(id)).toEqual({
       pending: [],
       queued: [],
       committedReceipt: false,
-      acks: 1,
+      acks: 0,
     });
   });
 });
