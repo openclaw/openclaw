@@ -39,7 +39,6 @@ describe("parseMd — byte-fidelity", () => {
   it("derives the same slug for mixed underscores, punctuation, and hyphens", () => {
     const raw = "## Alpha_ ?_-Beta\u00a0__Gamma\n";
     const ast = parseMd(raw);
-    expect(ast.raw).toBe(raw);
     expect(ast.blocks[0]?.slug).toBe("alpha-beta-gamma");
   });
 

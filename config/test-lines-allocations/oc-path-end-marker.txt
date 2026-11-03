@@ -1,2 +1,0 @@
-# Preserve tolerant frontmatter keys after a YAML document end marker.
-1
