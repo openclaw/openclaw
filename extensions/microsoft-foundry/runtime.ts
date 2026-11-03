@@ -1,32 +1,34 @@
-// Microsoft Foundry plugin module implements runtime behavior.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   ProviderPreparedRuntimeAuth,
-  ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
 } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  asDateTimestampMs,
-  resolveDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
-import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { ensureAuthProfileStoreAsync } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getAccessTokenResultAsync } from "./cli.js";
 import {
   ANTHROPIC_MESSAGES_API,
-  type CachedTokenEntry,
   FOUNDRY_ANTHROPIC_SCOPE,
   TOKEN_REFRESH_MARGIN_MS,
   buildFoundryProviderBaseUrl,
   extractFoundryEndpoint,
-  getFoundryTokenCacheKey,
   isFoundryProviderApi,
   resolveConfiguredModelNameHint,
-} from "./shared-runtime.js";
+} from "./shared.js";
 
-const cachedTokens = new Map<string, CachedTokenEntry>();
-const refreshPromises = new Map<string, Promise<{ apiKey: string; expiresAt: number }>>();
+function getFoundryTokenCacheKey(params?: {
+  scope?: string;
+  subscriptionId?: string;
+  tenantId?: string;
+}): string {
+  return `${params?.scope ?? ""}:${params?.subscriptionId ?? ""}:${params?.tenantId ?? ""}`;
+}
+
+type FoundryToken = { apiKey: string; expiresAt: number };
+const cachedTokens = new Map<string, FoundryToken>();
+const refreshPromises = new Map<string, Promise<FoundryToken>>();
 const FOUNDRY_TOKEN_FALLBACK_LIFETIME_MS = 55 * 60 * 1000;
 // Bound settled credential material across profile generations. In-flight
 // refresh ownership remains separate so admission never evicts active work.
@@ -36,29 +38,24 @@ async function refreshEntraToken(params?: {
   scope?: string;
   subscriptionId?: string;
   tenantId?: string;
-}): Promise<{ apiKey: string; expiresAt: number }> {
+}): Promise<FoundryToken> {
   const result = await getAccessTokenResultAsync(params);
   const rawExpiry = result.expiresOn ? new Date(result.expiresOn).getTime() : Number.NaN;
-  const now = resolveDateTimestampMs(Date.now());
-  const expiresAt =
-    asDateTimestampMs(rawExpiry) ??
-    resolveExpiresAtMsFromDurationMs(FOUNDRY_TOKEN_FALLBACK_LIFETIME_MS, { nowMs: now }) ??
-    now;
+  const now = Date.now();
+  const expiresAt = asDateTimestampMs(rawExpiry) ?? now + FOUNDRY_TOKEN_FALLBACK_LIFETIME_MS;
   for (const [cacheKey, cachedToken] of cachedTokens) {
     if (cachedToken.expiresAt <= now) {
       cachedTokens.delete(cacheKey);
     }
   }
-  cachedTokens.set(getFoundryTokenCacheKey(params), {
-    token: result.accessToken,
-    expiresAt,
-  });
+  const token = { apiKey: result.accessToken, expiresAt };
+  cachedTokens.set(getFoundryTokenCacheKey(params), token);
   pruneMapToMaxSize(cachedTokens, FOUNDRY_TOKEN_CACHE_MAX_ENTRIES);
-  return { apiKey: result.accessToken, expiresAt };
+  return token;
 }
 
 export async function prepareFoundryRuntimeAuth(
-  ctx: ProviderPrepareRuntimeAuthContext,
+  ctx: Omit<ProviderPrepareRuntimeAuthContextV2, "capability">,
 ): Promise<ProviderPreparedRuntimeAuth> {
   if (ctx.apiKey !== "__entra_id_dynamic__") {
     return {
@@ -73,23 +70,16 @@ export async function prepareFoundryRuntimeAuth(
     };
   }
   try {
-    const authStore = ensureAuthProfileStore(ctx.agentDir, {
+    const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
       allowKeychainPrompt: false,
     });
     const credential = ctx.profileId ? authStore.profiles[ctx.profileId] : undefined;
     const metadata = credential?.type === "api_key" ? credential.metadata : undefined;
-    const modelId =
-      normalizeOptionalString(ctx.modelId) ??
-      normalizeOptionalString(metadata?.modelId) ??
-      ctx.modelId;
     const requestedModelId = normalizeOptionalString(ctx.modelId);
     const metadataModelId = normalizeOptionalString(metadata?.modelId);
+    const modelId = requestedModelId ?? metadataModelId ?? ctx.modelId;
     const activeModelUsesMetadata = !requestedModelId || requestedModelId === metadataModelId;
-    const activeModelNameHint = activeModelUsesMetadata ? metadata?.modelName : undefined;
-    const modelNameHint = resolveConfiguredModelNameHint(
-      modelId,
-      ctx.model.name ?? activeModelNameHint,
-    );
+    const modelNameHint = resolveConfiguredModelNameHint(modelId, ctx.model.name);
     const configuredApi = isFoundryProviderApi(ctx.model.api)
       ? ctx.model.api
       : activeModelUsesMetadata &&
@@ -111,37 +101,27 @@ export async function prepareFoundryRuntimeAuth(
       tenantId: metadata?.tenantId,
     });
     const cachedToken = cachedTokens.get(cacheKey);
-    const rawNow = Date.now();
-    const hasValidClock = asDateTimestampMs(rawNow) !== undefined;
-    const now = resolveDateTimestampMs(rawNow);
-    const refreshAfterMs =
-      resolveExpiresAtMsFromDurationMs(TOKEN_REFRESH_MARGIN_MS, { nowMs: now }) ?? now;
-    if (cachedToken && hasValidClock && cachedToken.expiresAt > refreshAfterMs) {
+    let token: FoundryToken;
+    if (cachedToken && cachedToken.expiresAt > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
       // Map insertion order is the eviction order; touch valid hits to retain active accounts.
       cachedTokens.delete(cacheKey);
       cachedTokens.set(cacheKey, cachedToken);
-      return {
-        apiKey: cachedToken.token,
-        expiresAt: cachedToken.expiresAt,
-        ...(baseUrl ? { baseUrl } : {}),
-        request: {
-          auth: { mode: "authorization-bearer" as const, token: cachedToken.token },
-        },
-      };
+      token = cachedToken;
+    } else {
+      cachedTokens.delete(cacheKey);
+      let refreshPromise = refreshPromises.get(cacheKey);
+      if (!refreshPromise) {
+        refreshPromise = refreshEntraToken({
+          scope: tokenScope,
+          subscriptionId: metadata?.subscriptionId,
+          tenantId: metadata?.tenantId,
+        }).finally(() => {
+          refreshPromises.delete(cacheKey);
+        });
+        refreshPromises.set(cacheKey, refreshPromise);
+      }
+      token = await refreshPromise;
     }
-    cachedTokens.delete(cacheKey);
-    let refreshPromise = refreshPromises.get(cacheKey);
-    if (!refreshPromise) {
-      refreshPromise = refreshEntraToken({
-        scope: tokenScope,
-        subscriptionId: metadata?.subscriptionId,
-        tenantId: metadata?.tenantId,
-      }).finally(() => {
-        refreshPromises.delete(cacheKey);
-      });
-      refreshPromises.set(cacheKey, refreshPromise);
-    }
-    const token = await refreshPromise;
     return {
       ...token,
       ...(baseUrl ? { baseUrl } : {}),

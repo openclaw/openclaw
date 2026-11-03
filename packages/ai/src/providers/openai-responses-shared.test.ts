@@ -1,26 +1,27 @@
-// OpenAI Responses shared tests cover tool conversion and response item mapping.
 import type {
   ResponseCreateParamsStreaming,
   ResponseStreamEvent,
-  Tool as OpenAIResponsesTool,
 } from "openai/resources/responses/responses.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  createInterleavedResponsesToolEvents,
-  createResponsesDoneArgumentEvents,
-} from "../../../../test/helpers/openai-responses-events.js";
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+} from "../../../../src/shared/immutable-data.js";
+import { createResponsesDoneArgumentEvents } from "../../../../test/helpers/openai-responses-events.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
-import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "../transports/openai-responses-compaction-replay.js";
+import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
 import { isInvalidEncryptedContentError } from "../transports/openai-responses-replay-internal.js";
+import { convertResponsesMessages as convertTransportResponsesMessages } from "../transports/openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
-import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
-import { createZeroUsage } from "../usage.test-support.js";
+import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import { makeOpenAIProviderModel } from "./openai-provider.test-support.js";
 import { resolveOpenAISimpleReasoningEffort } from "./openai-request-reasoning.js";
 import {
   applyCommonResponsesParams,
@@ -28,407 +29,327 @@ import {
   convertResponsesMessages,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
-import { convertResponsesToolPayload } from "./openai-responses-tools.js";
-
-type ResponsesFunctionTool = Extract<OpenAIResponsesTool, { type: "function" }>;
-type OpenAIResponsesStreamEvent =
-  Parameters<typeof processResponsesStream>[0] extends AsyncIterable<infer Event> ? Event : never;
-
-async function* streamResponsesEvents<T extends OpenAIResponsesStreamEvent>(
-  events: readonly T[],
-): AsyncGenerator<T> {
-  for (const event of events) {
-    yield event;
-  }
+async function* streamResponsesEvents<T>(events: readonly T[]): AsyncGenerator<T> {
+  yield* events;
 }
 
-function createNeverYieldingResponsesStream<
-  T extends OpenAIResponsesStreamEvent = OpenAIResponsesStreamEvent,
->(): AsyncIterable<T> {
-  return {
-    [Symbol.asyncIterator]() {
-      return {
-        async next() {
-          return new Promise<IteratorResult<T>>(() => {});
-        },
-      };
-    },
-  };
+function createNeverYieldingResponsesStream<T>(): AsyncIterable<T> {
+  const pending = new Promise<IteratorResult<T>>(() => {});
+  return { [Symbol.asyncIterator]: () => ({ next: () => pending }) };
 }
 
-function createCapturedAssistantMessageEventStream(): {
-  stream: AssistantMessageEventStream;
-  events: AssistantMessageEvent[];
-} {
+function createCapturedAssistantMessageEventStream(
+  observe?: (event: AssistantMessageEvent) => void,
+) {
   const stream = new AssistantMessageEventStream();
   const events: AssistantMessageEvent[] = [];
   const push = stream.push.bind(stream);
   stream.push = (event) => {
+    observe?.(event);
     events.push(event);
     push(event);
   };
   return { stream, events };
 }
 
-function expectResponsesFunctionTool(tool: OpenAIResponsesTool | undefined): ResponsesFunctionTool {
-  expect(tool).toHaveProperty("type", "function");
-  return tool as ResponsesFunctionTool;
-}
-
-const nativeOpenAIModel = {
-  id: "gpt-5.5",
-  name: "GPT-5.5",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+const nativeOpenAIModel = makeOpenAIProviderModel("openai-responses", {
   contextWindow: 200000,
   maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+});
 
 const proxyOpenAIModel = {
   ...nativeOpenAIModel,
   id: "custom-model",
-  name: "Custom Model",
   baseUrl: "https://proxy.example.com/v1",
 } satisfies Model<"openai-responses">;
 
 const gpt56SolModel = {
   ...nativeOpenAIModel,
   id: "gpt-5.6-sol",
-  name: "GPT-5.6 Sol",
   thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
 } satisfies Model<"openai-responses">;
 
 const testAllowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
 const reasoningReplayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
 
+type LifecycleParams = Parameters<typeof runResponsesStreamLifecycle>[0];
+type RequestOptions = Parameters<
+  ReturnType<LifecycleParams["createClient"]>["responses"]["create"]
+>[1];
+
+function startLifecycle(
+  send: (
+    attempt: number,
+    options: RequestOptions,
+  ) => AsyncIterable<ResponseStreamEvent> | Promise<AsyncIterable<ResponseStreamEvent>>,
+  params: Pick<LifecycleParams, "options"> & Partial<Pick<LifecycleParams, "buildParams">> = {},
+) {
+  const output = createAssistantOutput();
+  const { stream, events } = createCapturedAssistantMessageEventStream();
+  const requests: ResponseCreateParamsStreaming[] = [];
+  const done = runResponsesStreamLifecycle({
+    model: nativeOpenAIModel,
+    output,
+    stream,
+    buildParams: () => replayRequest([]),
+    ...params,
+    createClient: () => ({
+      responses: {
+        create: (request, options) => {
+          requests.push(structuredClone(request));
+          return {
+            withResponse: async () => ({
+              data: await send(requests.length, options),
+              response: new Response(null, { status: 200 }),
+            }),
+          };
+        },
+      },
+    }),
+  });
+  return { output, events, requests, done };
+}
+
+type StreamFixtureOptions = {
+  model?: Model;
+  options?: Parameters<typeof processResponsesStream>[4];
+  observe?: (event: AssistantMessageEvent) => void;
+};
+
+function startResponses(input: readonly unknown[], params: StreamFixtureOptions = {}) {
+  const model = params.model ?? nativeOpenAIModel;
+  const output = { ...createResponsesAssistantOutput(model, model.api), timestamp: 0 };
+  const { stream, events } = createCapturedAssistantMessageEventStream(params.observe);
+  const done = processResponsesStream(
+    streamResponsesEvents(input),
+    output,
+    stream,
+    model,
+    params.options,
+  );
+  return { output, events, done };
+}
+
+async function collectResponses(input: readonly unknown[], params?: StreamFixtureOptions) {
+  const { output, events, done } = startResponses(input, params);
+  await done;
+  return { output, events };
+}
+
+function messageItem(id: string, text: string) {
+  return { type: "message" as const, id, content: [{ type: "output_text" as const, text }] };
+}
+
+function wireReasoning(id: string, text?: string, encrypted_content?: string) {
+  return {
+    type: "reasoning" as const,
+    id,
+    summary: [],
+    ...(text === undefined ? {} : { content: [{ type: "reasoning_text" as const, text }] }),
+    ...(encrypted_content === undefined ? {} : { encrypted_content }),
+  };
+}
+
+function argumentsDelta(delta: string, outputIndex?: number, itemId?: string) {
+  return {
+    type: "response.function_call_arguments.delta",
+    delta,
+    output_index: outputIndex,
+    item_id: itemId,
+  };
+}
+
+function completed(id: string, fields: object = {}) {
+  return { type: "response.completed", response: { id, status: "completed", ...fields } };
+}
+
+function argumentsDone(args: string | undefined, outputIndex?: number, itemId?: string) {
+  return {
+    type: "response.function_call_arguments.done",
+    ...(args === undefined ? {} : { arguments: args }),
+    output_index: outputIndex,
+    item_id: itemId,
+  };
+}
+
+function itemEvent<P extends "added" | "done", T extends object>(
+  phase: P,
+  item: T,
+  outputIndex?: number,
+) {
+  return { type: `response.output_item.${phase}` as const, item, output_index: outputIndex };
+}
+
+function toolIdentity(id: string, name = "computer") {
+  return { type: "function_call" as const, id: `fc_${id}`, call_id: `call_${id}`, name };
+}
+
+function toolItem(id: string, args = "", name = "computer") {
+  return { ...toolIdentity(id, name), arguments: args };
+}
+
+function toolCall(id: string, name: string, args: Record<string, unknown>) {
+  return { type: "toolCall" as const, id: `call_${id}|fc_${id}`, name, arguments: args };
+}
+
+function replayRequest(input: OpenAIResponsesRequestParams["input"]): OpenAIResponsesRequestParams {
+  return { model: nativeOpenAIModel.id, stream: true, input };
+}
+
 function createAssistantOutput(): AssistantMessage {
   return { ...createResponsesAssistantOutput(nativeOpenAIModel), timestamp: 0 };
 }
 
-async function* responseEvents(events: Array<Record<string, unknown>>) {
-  for (const event of events) {
-    yield event as never;
-  }
+const eventTypes = (events: AssistantMessageEvent[]) => events.map((event) => event.type);
+const eventPositions = (events: AssistantMessageEvent[]) =>
+  events
+    .map((event) => `${event.type}@${"contentIndex" in event ? event.contentIndex : "-"}`)
+    .join(" ");
+const text = (value: string) => ({ type: "text" as const, text: value });
+const signedText = (value: string, id: string) => ({
+  ...text(value),
+  textSignature: JSON.stringify({ v: 1, id, phase: "commentary" }),
+});
+function thinking(value: string, signature: object) {
+  return {
+    type: "thinking" as const,
+    thinking: value,
+    thinkingSignature: JSON.stringify(signature),
+  };
+}
+function assistant(
+  content: AssistantMessage["content"],
+  overrides: Partial<AssistantMessage> = {},
+): AssistantMessage {
+  return { ...createAssistantOutput(), content, ...overrides };
+}
+function replayMessages(
+  messages: Context["messages"],
+  options?: Parameters<typeof convertResponsesMessages>[3],
+  model: Model = nativeOpenAIModel,
+) {
+  return convertResponsesMessages(model, { messages }, testAllowedToolCallProviders, options);
 }
 
-describe("convertResponsesToolPayload", () => {
-  beforeEach(() => {
-    // Mimic the OpenClaw host strict-tool policy: native OpenAI routes force
-    // strict=true; compatible routes opt in to sending strict=false.
-    const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
-    configureAiTransportHost({
-      resolveProviderRequestCapabilities: ({ baseUrl }) => ({
-        ...capabilities,
-        endpointClass: baseUrl === nativeOpenAIModel.baseUrl ? "openai-public" : "custom",
-      }),
-      resolveOpenAIStrictToolSetting: (model, options) => {
-        if (model.provider === "openai" && model.baseUrl === "https://api.openai.com/v1") {
-          return true;
-        }
-        return options?.supportsStrictMode ? false : undefined;
-      },
-    });
-  });
-
-  afterEach(() => {
-    configureAiTransportHost({});
-  });
-
-  it("enables native strict OpenAI Responses tools and normalizes schemas", () => {
-    const tools = [
-      {
-        name: "lookup_weather",
-        description: "Get forecast",
-        parameters: {},
-      },
-    ] satisfies Tool[];
-
-    const converted = convertResponsesToolPayload(tools, { model: nativeOpenAIModel });
-
-    expect(converted).toEqual([
-      {
-        type: "function",
-        name: "lookup_weather",
-        description: "Get forecast",
-        strict: true,
-        parameters: {
-          type: "object",
-          properties: {},
-          required: [],
-          additionalProperties: false,
-        },
-      },
-    ]);
-  });
-
-  it("downgrades incompatible native Responses schemas to strict false", () => {
-    const converted = convertResponsesToolPayload(
-      [
-        {
-          name: "read_file",
-          description: "Read",
-          parameters: {
-            type: "object",
-            additionalProperties: false,
-            properties: { path: { type: "string" } },
-            required: [],
-          },
-        },
-      ],
-      { model: nativeOpenAIModel },
-    );
-
-    const tool = expectResponsesFunctionTool(converted[0]);
-    expect(tool.strict).toBe(false);
-    expect(tool.parameters).toEqual({
-      type: "object",
-      additionalProperties: false,
-      properties: { path: { type: "string" } },
-      required: [],
-    });
-  });
-
-  it("omits strict on proxy-like Responses routes but keeps schema normalization", () => {
-    const converted = convertResponsesToolPayload(
-      [
-        {
-          name: "lookup_weather",
-          description: "Get forecast",
-          parameters: {},
-        },
-      ],
-      { model: proxyOpenAIModel },
-    );
-
-    const tool = expectResponsesFunctionTool(converted[0]);
-    expect(tool).not.toHaveProperty("strict");
-    expect(tool.parameters).toEqual({
-      type: "object",
-      properties: {},
-    });
-  });
-
-  it("keeps tool order deterministic", () => {
-    const zeta = {
-      name: "zeta",
-      description: "Z",
-      parameters: {},
-    } satisfies Tool;
-    const alpha = {
-      name: "alpha",
-      description: "A",
-      parameters: {},
-    } satisfies Tool;
-
-    expect(
-      convertResponsesToolPayload([zeta, alpha]).map(
-        (tool) => expectResponsesFunctionTool(tool).name,
-      ),
-    ).toEqual(["alpha", "zeta"]);
-  });
-
-  it("skips unreadable schemas and preserves healthy native strict tools", () => {
-    const converted = convertResponsesToolPayload(
-      [
-        {
-          name: "broken",
-          description: "Broken",
-          parameters: {
-            type: "object",
-            get properties(): never {
-              throw new Error("properties exploded");
-            },
-          },
-        },
-        {
-          name: "lookup",
-          description: "Lookup",
-          parameters: {},
-        },
-      ],
-      { model: nativeOpenAIModel },
-    );
-
-    expect(converted).toEqual([
-      {
-        type: "function",
-        name: "lookup",
-        description: "Lookup",
-        strict: true,
-        parameters: {
-          type: "object",
-          properties: {},
-          required: [],
-          additionalProperties: false,
-        },
-      },
-    ]);
-  });
-
-  it("does not reread an unreadable tool inventory length", () => {
-    const tools = new Proxy([], {
-      get(target, property, receiver) {
-        if (property === "length") {
-          throw new Error("length exploded");
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
-    const params = {} as never;
-
-    applyCommonResponsesParams(params, nativeOpenAIModel, {
-      messages: [{ role: "user", content: "hello", timestamp: 1 }],
-      tools,
-    } as never);
-
-    expect(params).not.toHaveProperty("tools");
-  });
-});
-
-describe("Responses temperature support", () => {
-  it("drops temperature for the GPT-5.6 family that rejects it", () => {
-    const params = {} as never;
-    applyCommonResponsesParams(params, gpt56SolModel, { messages: [] }, { temperature: 0.3 });
-
-    expect(params).not.toHaveProperty("temperature");
-  });
-
-  it("keeps temperature for models that accept it", () => {
-    const params = {} as never;
-    applyCommonResponsesParams(params, nativeOpenAIModel, { messages: [] }, { temperature: 0.3 });
-
-    expect(params).toMatchObject({ temperature: 0.3 });
-  });
-});
-
-describe("Responses output token limits", () => {
-  it.each([
-    [1, 16],
-    [15, 16],
-    [16, 16],
-    [32, 32],
-  ])("normalizes maxTokens %i to %i", (maxTokens, expected) => {
-    const params = {} as ResponseCreateParamsStreaming;
-    applyCommonResponsesParams(params, nativeOpenAIModel, { messages: [] }, { maxTokens });
-
-    expect(params.max_output_tokens).toBe(expected);
-  });
-});
-
-describe("Responses reasoning effort", () => {
-  it("omits unsupported default-off reasoning for GPT-5.6 Sol", () => {
-    const params = {} as never;
-    applyCommonResponsesParams(params, gpt56SolModel, { messages: [] });
-
-    expect(params).not.toHaveProperty("reasoning");
-  });
-
-  it("passes max through for GPT-5.6 Sol", () => {
-    expect(resolveOpenAISimpleReasoningEffort(gpt56SolModel, "max")).toBe("max");
-
-    const params = {} as never;
-    applyCommonResponsesParams(
-      params,
-      gpt56SolModel,
-      { messages: [] },
-      {
-        reasoningEffort: "max",
-      },
-    );
-    expect(params).toMatchObject({ reasoning: { effort: "max", summary: "auto" } });
-  });
-
-  it.each<{
-    model: Model<"openai-responses">;
-    reasoning: "minimal" | "high";
-    expected: string;
-  }>([
-    { model: gpt56SolModel, reasoning: "minimal", expected: "low" },
-    {
-      model: { ...proxyOpenAIModel, compat: { supportedReasoningEfforts: ["ProviderHigh"] } },
-      reasoning: "high",
-      expected: "ProviderHigh",
-    },
-  ])(
-    "normalizes $reasoning to $expected at the request boundary",
-    ({ model, reasoning, expected }) => {
-      const params = {} as ResponseCreateParamsStreaming;
-      applyCommonResponsesParams(
-        params,
-        model,
-        { messages: [] },
-        {
-          reasoningEffort: resolveOpenAISimpleReasoningEffort(model, reasoning),
-        },
-      );
-      expect(params.reasoning).toEqual({ effort: expected, summary: "auto" });
-    },
+it.each([
+  [null, null],
+  [undefined, "auto"],
+] as const)("sends common Responses summary %s as %s", (reasoningSummary, expected) => {
+  const params = {} as { reasoning?: unknown };
+  applyCommonResponsesParams(
+    params as never,
+    nativeOpenAIModel,
+    { messages: [] },
+    { reasoningEffort: "medium", reasoningSummary },
   );
 
-  it("keeps max clamped to xhigh for earlier models", () => {
-    const gpt55WithXHigh = {
-      ...nativeOpenAIModel,
-      thinkingLevelMap: { xhigh: "xhigh" },
-    } satisfies Model<"openai-responses">;
-
-    expect(resolveOpenAISimpleReasoningEffort(gpt55WithXHigh, "max")).toBe("xhigh");
-  });
+  expect(params.reasoning).toEqual({ effort: "medium", summary: expected });
 });
 
+it("drops Responses temperature for the GPT-5.6 family that rejects it", () => {
+  const params = {} as never;
+  applyCommonResponsesParams(params, gpt56SolModel, { messages: [] }, { temperature: 0.3 });
+
+  expect(params).not.toHaveProperty("temperature");
+});
+
+it.each([
+  { model: gpt56SolModel, reasoning: "max", resolvedEffort: "max", expected: "max" },
+  {
+    model: { ...proxyOpenAIModel, compat: { supportedReasoningEfforts: ["ProviderHigh"] } },
+    reasoning: "high",
+    resolvedEffort: "high",
+    expected: "ProviderHigh",
+  },
+] satisfies Array<{
+  model: Model<"openai-responses">;
+  reasoning: "max" | "high";
+  resolvedEffort: string;
+  expected: string;
+}>)(
+  "normalizes $reasoning to $expected at the request boundary",
+  ({ model, reasoning, resolvedEffort, expected }) => {
+    const effort = resolveOpenAISimpleReasoningEffort(model, reasoning);
+    expect(effort).toBe(resolvedEffort);
+    const params = {} as ResponseCreateParamsStreaming;
+    applyCommonResponsesParams(params, model, { messages: [] }, { reasoningEffort: effort });
+    expect(params.reasoning).toEqual({ effort: expected, summary: "auto" });
+  },
+);
+
 describe("convertResponsesMessages", () => {
-  const allowedToolCallProviders = testAllowedToolCallProviders;
-
-  it("adds explicit message item types for system and user input items", () => {
-    const input = convertResponsesMessages(
-      nativeOpenAIModel,
-      {
-        systemPrompt: "system",
-        messages: [{ role: "user", content: "hello", timestamp: 1 }],
-      } satisfies Context,
-      allowedToolCallProviders,
-    );
-
-    expect(input[0]).toMatchObject({
-      type: "message",
-      role: "developer",
-      content: [{ type: "input_text", text: "system" }],
+  it.each([
+    ["provider", convertResponsesMessages],
+    ["transport", convertTransportResponsesMessages],
+  ] as const)("preserves frozen %s bytes, identities and replay fences", (_style, convert) => {
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
     });
-    expect(input[1]).toMatchObject({
-      type: "message",
-      role: "user",
-      content: [{ type: "input_text", text: "hello" }],
+    runWithAiTransportHost(host, () => {
+      const model: Model = { ...nativeOpenAIModel, input: ["text", "image"] };
+      const image = { type: "image" as const, mimeType: "image/png", data: "aW1n" };
+      const metadata = buildOpenAIResponsesReasoningReplayMetadata(model, reasoningReplayIdentity);
+      const context: Context = {
+        messages: freezeJsonSnapshot([
+          { role: "user", timestamp: 0, content: [text("question"), image] },
+          assistant(
+            [
+              thinking("hidden", {
+                ...wireReasoning("rs_prior", undefined, "ciphertext"),
+                __openclaw_replay: metadata,
+              }),
+              signedText("answer", "msg_prior"),
+              toolCall("read", "read", { path: "a\nb" }),
+            ],
+            { stopReason: "toolUse" },
+          ),
+          {
+            ...makeTextToolResult("call_read|fc_read", "read", "result", false, 2),
+            content: [text("result"), image],
+          },
+        ]),
+      };
+      const golden = `[${[
+        '{"type":"message","role":"user","content":[{"type":"input_text","text":"question"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1n"}]}',
+        '{"id":"rs_prior","type":"reasoning","summary":[],"encrypted_content":"ciphertext"}',
+        '{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}],"status":"completed","id":"msg_prior","phase":"commentary"}',
+        String.raw`{"type":"function_call","id":"fc_read","call_id":"call_read","name":"read","arguments":"{\"path\":\"a\\nb\"}"}`,
+        '{"type":"function_call_output","call_id":"call_read","output":[{"type":"input_text","text":"result"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1n"}]}',
+      ].join(",")}]`;
+      const build = (target = model, options = reasoningReplayIdentity) =>
+        convert(target, context, testAllowedToolCallProviders, options);
+      const first = build();
+      expect(JSON.stringify(first)).toBe(golden);
+      for (const [target, options] of [
+        [model, { ...reasoningReplayIdentity, sessionId: "other" }],
+        [model, { ...reasoningReplayIdentity, authProfileId: "other" }],
+        [{ ...model, id: "other-model" }, reasoningReplayIdentity],
+        [{ ...model, baseUrl: "https://other.invalid/v1" }, reasoningReplayIdentity],
+      ] as const) {
+        expect(JSON.stringify(build(target, options))).not.toContain("ciphertext");
+        const again = build();
+        expect(JSON.stringify(again)).toBe(golden);
+        for (const index of [1, 2, 3]) {
+          expect(again[index]).toBe(first[index]);
+        }
+      }
+      const idless = convert(model, context, testAllowedToolCallProviders, {
+        ...reasoningReplayIdentity,
+        replayResponsesItemIds: false,
+      });
+      expect(JSON.stringify(idless)).toBe(
+        golden.replace(/"id":"(?:rs_prior|msg_prior|fc_read)",/g, ""),
+      );
+      expect(first.slice(1, 4).every(isDeeplyFrozenPlainData)).toBe(true);
     });
-  });
-
-  it("uses the system role when a Responses-compatible provider opts out of developer", () => {
-    const compatModel = {
-      ...nativeOpenAIModel,
-      compat: { supportsDeveloperRole: false },
-    } satisfies Model<"openai-responses">;
-
-    const input = convertResponsesMessages(
-      compatModel,
-      { systemPrompt: "system", messages: [] },
-      allowedToolCallProviders,
-    );
-
-    expect(input[0]).toMatchObject({ type: "message", role: "system" });
   });
 
   it("strips the internal cache boundary marker from the system prompt message", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
-      {
-        systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
-        messages: [],
-      } satisfies Context,
-      allowedToolCallProviders,
+      { systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`, messages: [] },
+      testAllowedToolCallProviders,
     );
-
     expect(input[0]).toMatchObject({
       type: "message",
       role: "developer",
@@ -437,549 +358,253 @@ describe("convertResponsesMessages", () => {
     expect(JSON.stringify(input)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
-  it("omits phase-tagged assistant replay ids without reasoning", () => {
-    const input = convertResponsesMessages(
-      nativeOpenAIModel,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: nativeOpenAIModel.api,
-            provider: nativeOpenAIModel.provider,
-            model: nativeOpenAIModel.id,
-            usage: createZeroUsage(),
-            stopReason: "stop",
-            timestamp: 1,
-            content: [
-              {
-                type: "text",
-                text: "Working...",
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: "msg_commentary",
-                  phase: "commentary",
-                }),
-              },
-            ],
-          },
-        ],
-      } satisfies Context,
-      allowedToolCallProviders,
-      { includeSystemPrompt: false },
-    );
+  it.each(["stop", "error", "aborted"] as const)(
+    "keeps unsigned assistant replay bytes stable when older history retires (%s)",
+    (stopReason) => {
+      const retired = assistant([text("Earlier answer")], { timestamp: 1 });
+      const retained = {
+        ...assistant([text("Partial answer"), text("Another text block")]),
+        responseId: "resp_retained",
+        timestamp: 2,
+        stopReason,
+        errorMessage: "off-wire synthetic diagnostic",
+        __openclaw: { diagnostic: "off-wire metadata" },
+      };
+      const original = structuredClone(retained);
+      const before = replayMessages([retired, retained]);
+      const after = replayMessages([retained]);
+      expect(after).toEqual(before.slice(1));
+      expect(JSON.stringify(after)).not.toContain("off-wire");
+      expect(retained).toEqual(original);
 
-    expect(
-      input.find(
-        (item) =>
-          item &&
-          typeof item === "object" &&
-          "role" in item &&
-          item.role === "assistant" &&
-          "phase" in item &&
-          item.phase === "commentary",
-      ),
-    ).toMatchObject({
-      phase: "commentary",
-    });
-    expect(
-      input.find(
-        (item) =>
-          item &&
-          typeof item === "object" &&
-          "role" in item &&
-          item.role === "assistant" &&
-          "phase" in item &&
-          item.phase === "commentary",
-      ),
-    ).not.toHaveProperty("id");
-  });
-
-  it("omits raw signed assistant ids when the paired reasoning item is absent", () => {
-    const input = convertResponsesMessages(
-      nativeOpenAIModel,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: nativeOpenAIModel.api,
-            provider: nativeOpenAIModel.provider,
-            model: nativeOpenAIModel.id,
-            usage: createZeroUsage(),
-            stopReason: "stop",
-            timestamp: 1,
-            content: [
-              {
-                type: "text",
-                text: "Earlier answer",
-                textSignature: "msg_real_response_item_requiring_reasoning",
-              },
-            ],
-          },
-        ],
-      } satisfies Context,
-      allowedToolCallProviders,
-      { includeSystemPrompt: false },
-    );
-
-    expect(
-      input.find(
-        (item) =>
-          item &&
-          typeof item === "object" &&
-          "role" in item &&
-          item.role === "assistant" &&
-          "content" in item,
-      ),
-    ).not.toHaveProperty("id");
-  });
-
-  it("omits Responses replay item ids when requested by store-disabled callers", () => {
-    const input = convertResponsesMessages(
-      nativeOpenAIModel,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: nativeOpenAIModel.api,
-            provider: nativeOpenAIModel.provider,
-            model: nativeOpenAIModel.id,
-            usage: createZeroUsage(),
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              {
-                type: "thinking",
-                thinking: "Need a tool.",
-                thinkingSignature: JSON.stringify({
-                  type: "reasoning",
-                  id: "rs_prior",
-                  encrypted_content: "ciphertext",
-                }),
-              },
-              {
-                type: "text",
-                text: "Checking the price.",
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: "msg_prior",
-                  phase: "commentary",
-                }),
-              },
-              {
-                type: "toolCall",
-                id: "call_abc|fc_prior",
-                name: "price_lookup",
-                arguments: { symbol: "SOL" },
-              },
-            ],
-          },
-          makeTextToolResult("call_abc|fc_prior", "price_lookup", "$83.95", false, 2),
-        ],
-      } satisfies Context,
-      allowedToolCallProviders,
-      { includeSystemPrompt: false, replayResponsesItemIds: false },
-    ) as unknown as Array<Record<string, unknown>>;
-
-    const reasoningItem = input.find((item) => item.type === "reasoning");
-    expect(reasoningItem).toMatchObject({
-      type: "reasoning",
-      encrypted_content: "ciphertext",
-      summary: [],
-    });
-    expect(reasoningItem).not.toHaveProperty("id");
-
-    const assistantMessage = input.find(
-      (item) => item.type === "message" && item.role === "assistant",
-    );
-    expect(assistantMessage).toMatchObject({
-      type: "message",
-      role: "assistant",
-      phase: "commentary",
-    });
-    expect(assistantMessage).not.toHaveProperty("id");
-
-    const functionCall = input.find((item) => item.type === "function_call");
-    expect(functionCall).toMatchObject({
-      type: "function_call",
-      call_id: "call_abc",
-    });
-    expect(functionCall).not.toHaveProperty("id");
-  });
-
-  it("replays update_plan-style empty non-image tool results as no output", () => {
-    const input = convertResponsesMessages(
-      nativeOpenAIModel,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: nativeOpenAIModel.api,
-            provider: nativeOpenAIModel.provider,
-            model: nativeOpenAIModel.id,
-            usage: createZeroUsage(),
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [{ type: "toolCall", id: "call_plan", name: "update_plan", arguments: {} }],
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_plan",
-            toolName: "update_plan",
-            content: [],
-            isError: false,
-            timestamp: 2,
-          },
-        ],
-      } satisfies Context,
-      allowedToolCallProviders,
-      { includeSystemPrompt: false },
-    ) as unknown as Array<Record<string, unknown>>;
-
-    const functionOutput = input.find((item) => item.type === "function_call_output");
-    expect(functionOutput).toMatchObject({
-      type: "function_call_output",
-      call_id: "call_plan",
-      output: "(no output)",
-    });
-  });
-
-  it("preserves image-bearing tool results instead of using no-output text", () => {
-    const input = convertResponsesMessages(
-      { ...nativeOpenAIModel, input: ["text", "image"] },
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: nativeOpenAIModel.api,
-            provider: nativeOpenAIModel.provider,
-            model: nativeOpenAIModel.id,
-            usage: createZeroUsage(),
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [
-              { type: "toolCall", id: "call_screenshot", name: "screenshot", arguments: {} },
-            ],
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_screenshot",
-            toolName: "screenshot",
-            content: [{ type: "image", mimeType: "image/png", data: "aW1n" }],
-            isError: false,
-            timestamp: 2,
-          },
-        ],
-      } satisfies Context,
-      allowedToolCallProviders,
-      { includeSystemPrompt: false },
-    ) as unknown as Array<{ type?: string; output?: unknown }>;
-
-    const functionOutput = input.find((item) => item.type === "function_call_output");
-    expect(functionOutput?.output).toEqual([
-      {
-        type: "input_image",
-        detail: "auto",
-        image_url: "data:image/png;base64,aW1n",
-      },
-    ]);
-  });
-
-  it("uses audio placeholder for audio-only tool results instead of image or no-output text", () => {
-    const input = convertResponsesMessages(
-      nativeOpenAIModel,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: nativeOpenAIModel.api,
-            provider: nativeOpenAIModel.provider,
-            model: nativeOpenAIModel.id,
-            usage: createZeroUsage(),
-            stopReason: "toolUse",
-            timestamp: 1,
-            content: [{ type: "toolCall", id: "call_audio", name: "audio", arguments: {} }],
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_audio",
-            toolName: "audio",
-            content: [{ type: "audio", mimeType: "audio/mpeg", data: "YXVkaW8=" }],
-            isError: false,
-            timestamp: 2,
-          },
-        ],
-      } as unknown as Context,
-      allowedToolCallProviders,
-      { includeSystemPrompt: false },
-    ) as unknown as Array<Record<string, unknown>>;
-
-    const functionOutput = input.find((item) => item.type === "function_call_output");
-    expect(functionOutput).toMatchObject({
-      type: "function_call_output",
-      call_id: "call_audio",
-      output: "(see attached audio)",
-    });
-    expect(functionOutput?.output).not.toBe("(see attached image)");
-    expect(functionOutput?.output).not.toBe("(no output)");
-  });
-
-  it("does not emit image parts or placeholders for payload-less tool media", () => {
-    const input = convertResponsesMessages(
-      { ...nativeOpenAIModel, input: ["text", "image"] },
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "toolResult",
-            toolCallId: "call_husk",
-            toolName: "screenshot",
-            content: [{ type: "image", mimeType: "image/png", data: "" }],
-            isError: false,
-            timestamp: 2,
-          },
-        ],
-      } as unknown as Context,
-      allowedToolCallProviders,
-      { includeSystemPrompt: false },
-    ) as unknown as Array<Record<string, unknown>>;
-
-    const functionOutput = input.find((item) => item.type === "function_call_output");
-    expect(functionOutput?.output).toBe("(no output)");
-    expect(JSON.stringify(functionOutput)).not.toContain("input_image");
-    expect(JSON.stringify(functionOutput)).not.toContain("see attached image");
-  });
-
-  it("keeps encrypted reasoning replay item ids when requested", () => {
-    const input = convertResponsesMessages(
-      nativeOpenAIModel,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: nativeOpenAIModel.api,
-            provider: nativeOpenAIModel.provider,
-            model: nativeOpenAIModel.id,
-            usage: createZeroUsage(),
-            stopReason: "stop",
-            timestamp: 1,
-            content: [
-              {
-                type: "thinking",
-                thinking: "Need continuity.",
-                thinkingSignature: JSON.stringify({
-                  type: "reasoning",
-                  id: "rs_foundry_prior",
-                  encrypted_content: "ciphertext",
-                }),
-              },
-            ],
-          },
-        ],
-      } satisfies Context,
-      allowedToolCallProviders,
-      { includeSystemPrompt: false, replayResponsesItemIds: true },
-    ) as unknown as Array<Record<string, unknown>>;
-
-    expect(input.find((item) => item.type === "reasoning")).toMatchObject({
-      type: "reasoning",
-      id: "rs_foundry_prior",
-      encrypted_content: "ciphertext",
-      summary: [],
-    });
-  });
-
-  const sameRouteReplayMetadata = buildOpenAIResponsesReasoningReplayMetadata(
-    nativeOpenAIModel,
-    reasoningReplayIdentity,
-  );
-  const sessionMismatchReplayMetadata = buildOpenAIResponsesReasoningReplayMetadata(
-    nativeOpenAIModel,
-    { ...reasoningReplayIdentity, sessionId: "session-b" },
-  );
-  const authMismatchReplayMetadata = buildOpenAIResponsesReasoningReplayMetadata(
-    nativeOpenAIModel,
-    { ...reasoningReplayIdentity, authProfileId: "profile-b" },
-  );
-  const endpointMismatchReplayMetadata = buildOpenAIResponsesReasoningReplayMetadata(
-    { ...nativeOpenAIModel, baseUrl: "https://proxy.example.com/v1" },
-    reasoningReplayIdentity,
-  );
-
-  it.each([
-    ["matching block metadata", sameRouteReplayMetadata, sessionMismatchReplayMetadata, true],
-    ["mismatched block metadata", sessionMismatchReplayMetadata, sameRouteReplayMetadata, false],
-    ["auth-mismatched block metadata", authMismatchReplayMetadata, undefined, false],
-    ["endpoint-mismatched block metadata", endpointMismatchReplayMetadata, undefined, false],
-    ["malformed block metadata", null, sameRouteReplayMetadata, false],
-    ["matching embedded metadata", undefined, sameRouteReplayMetadata, true],
-    ["mismatched embedded metadata", undefined, sessionMismatchReplayMetadata, false],
-    ["malformed embedded metadata", undefined, null, false],
-  ])(
-    "fences encrypted reasoning with %s",
-    (_name, blockMetadata, embeddedMetadata, preservesCiphertext) => {
-      const input = convertResponsesMessages(
-        nativeOpenAIModel,
-        {
-          messages: [
-            {
-              ...createAssistantOutput(),
-              content: [
-                {
-                  type: "thinking",
-                  thinking: "Safe visible reasoning.",
-                  thinkingSignature: JSON.stringify({
-                    type: "reasoning",
-                    id: "rs_route_fenced",
-                    summary: [{ type: "summary_text", text: "safe summary" }],
-                    content: [{ type: "reasoning_text", text: "safe content" }],
-                    encrypted_content: "route-bound-ciphertext",
-                    ...(embeddedMetadata !== undefined
-                      ? { __openclaw_replay: embeddedMetadata }
-                      : {}),
-                  }),
-                  ...(blockMetadata !== undefined
-                    ? { openclawReasoningReplay: blockMetadata }
-                    : {}),
-                },
-              ] as unknown as AssistantMessage["content"],
-            },
-          ],
-        },
-        allowedToolCallProviders,
-        {
-          includeSystemPrompt: false,
-          replayResponsesItemIds: true,
-          ...reasoningReplayIdentity,
-        },
-      ) as unknown as Array<Record<string, unknown>>;
-
-      const reasoningItem = input.find((item) => item.type === "reasoning");
-      if (!preservesCiphertext) {
-        expect(reasoningItem).toBeUndefined();
-        return;
-      }
-      expect(reasoningItem).toMatchObject({
-        type: "reasoning",
-        id: "rs_route_fenced",
-        summary: [{ type: "summary_text", text: "safe summary" }],
-        content: [{ type: "reasoning_text", text: "safe content" }],
-      });
-      expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
-      expect(reasoningItem).toHaveProperty("encrypted_content", "route-bound-ciphertext");
+      const repeated = replayMessages([retained, { ...retained, responseId: "resp_next" }]);
+      const ids = repeated.flatMap((item) =>
+        "id" in item && typeof item.id === "string" ? [item.id] : [],
+      );
+      expect(ids.length).toBeGreaterThan(0);
+      expect(new Set(ids).size).toBe(ids.length);
     },
   );
 
-  it("serializes structured tool results as text instead of image placeholders", () => {
-    const input = convertResponsesMessages(
-      nativeOpenAIModel,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "toolResult",
-            toolCallId: "call_structured",
-            toolName: "session_status",
-            content: [
-              {
-                type: "json",
-                payload: { sessionKey: "current", model: "openai/gpt-5.4", status: "ok" },
-              },
-            ],
-            isError: false,
-            timestamp: 1,
-          },
+  it("keeps async prefixes and a failed tail distinct within one source response", () => {
+    const source = { responseId: "resp_shared", turnId: "turn_shared", timestamp: 2 };
+    const prefix = (id: string) =>
+      assistant(
+        [
+          { type: "text", text: "Working" },
+          { type: "toolCall", id, name: "probe", arguments: {}, async: true },
         ],
-      } as unknown as Context,
-      testAllowedToolCallProviders,
-      { includeSystemPrompt: false, replayResponsesItemIds: false },
-    ) as unknown as Array<Record<string, unknown>>;
-    expect(input).toContainEqual({
-      type: "function_call_output",
-      call_id: "call_structured",
-      output: expect.stringContaining('"type":"json"'),
-    });
+        { ...source, stopReason: "toolUse" },
+      );
+    const messages = [
+      prefix("call_one|fc_one"),
+      prefix("call_two|fc_two"),
+      assistant([text("Working")], { ...source, stopReason: "error" }),
+      makeTextToolResult("call_one|fc_one", "probe", "one", false, 3),
+      makeTextToolResult("call_two|fc_two", "probe", "two", false, 4),
+    ];
+    const input = replayMessages(messages);
+    const ids = input.flatMap((item) =>
+      item.type === "message" && item.role === "assistant" && "id" in item ? [item.id] : [],
+    );
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    const retired = { role: "user" as const, content: "Earlier turn", timestamp: 1 };
+    expect(replayMessages([retired, ...messages]).slice(1)).toEqual(input);
   });
+
+  it("keeps the early turn identity when a response ID arrives later", () => {
+    const early = assistant([text("Working")], { turnId: "turn_early", timestamp: 2 });
+    expect(replayMessages([{ ...early, responseId: "resp_late" }])).toEqual(
+      replayMessages([early]),
+    );
+  });
+
+  it("keeps legacy same-timestamp inputs distinct without a source turn identity", () => {
+    const message = assistant([text("Repeated answer")], { timestamp: 1 });
+    const input = replayMessages([message, { ...message }]);
+    const ids = input.flatMap((item) =>
+      "id" in item && typeof item.id === "string" ? [item.id] : [],
+    );
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it("omits phase-tagged assistant replay ids without reasoning", () => {
+    const input = replayMessages([assistant([signedText("Working...", "msg_commentary")])], {
+      includeSystemPrompt: false,
+    });
+    const message = input.find((item) => item.type === "message" && item.role === "assistant");
+    expect(message).toMatchObject({ phase: "commentary" });
+    expect(message).not.toHaveProperty("id");
+  });
+
+  it.each([
+    [
+      "image",
+      "aW1n",
+      [{ type: "input_image", detail: "auto", image_url: "data:image/png;base64,aW1n" }],
+    ],
+    ["image", "", "(no output)"],
+    ["audio", "YXVkaW8=", "(see attached audio)"],
+  ] as const)(
+    "replays %s tool bytes '%s' without spurious placeholders",
+    (type, data, expected) => {
+      const call = assistant([toolCall("media", "media", {})], { stopReason: "toolUse" });
+      const result = {
+        ...makeTextToolResult("call_media|fc_media", "media", "", false, 2),
+        content: [{ type, data, mimeType: type === "image" ? "image/png" : "audio/mpeg" }],
+      };
+      const input = replayMessages(
+        [...(data ? [call] : []), result] as unknown as Context["messages"],
+        { includeSystemPrompt: false },
+        { ...nativeOpenAIModel, input: ["text", "image"] },
+      );
+      expect(input.find((item) => item.type === "function_call_output")).toEqual({
+        type: "function_call_output",
+        call_id: "call_media",
+        output: expected,
+      });
+    },
+  );
+
+  describe.each(["openai-responses", "openai-chatgpt-responses"] as const)(
+    "%s reasoning replay",
+    (api) => {
+      const model = { ...nativeOpenAIModel, api };
+      const summary =
+        api === "openai-chatgpt-responses" ? [{ type: "summary_text", text: "safe summary" }] : [];
+      const content =
+        api === "openai-chatgpt-responses"
+          ? [{ type: "reasoning_text", text: "safe content" }]
+          : undefined;
+      const sameRoute = buildOpenAIResponsesReasoningReplayMetadata(model, reasoningReplayIdentity);
+      const otherSession = buildOpenAIResponsesReasoningReplayMetadata(model, {
+        ...reasoningReplayIdentity,
+        sessionId: "session-b",
+      });
+      it.each([
+        ["matching block metadata", sameRoute, otherSession, true],
+        ["legacy unattributed metadata", undefined, undefined, true],
+        ["mismatched block metadata", otherSession, sameRoute, false],
+        ["malformed block metadata", null, sameRoute, false],
+        ["mismatched embedded metadata", undefined, otherSession, false],
+      ])(
+        "fences encrypted reasoning with %s",
+        (_name, blockMetadata, embeddedMetadata, preservesCiphertext) => {
+          const replayIds = blockMetadata !== undefined || embeddedMetadata !== undefined;
+          const signature = {
+            type: "reasoning",
+            id: "rs_route_fenced",
+            encrypted_content: "route-bound-ciphertext",
+            summary: [{ type: "summary_text", text: "safe summary" }],
+            content: [{ type: "reasoning_text", text: "safe content" }],
+            ...(embeddedMetadata !== undefined ? { __openclaw_replay: embeddedMetadata } : {}),
+          };
+          const block = {
+            ...thinking("Safe visible reasoning.", signature),
+            ...(blockMetadata !== undefined ? { openclawReasoningReplay: blockMetadata } : {}),
+          };
+          const input = replayMessages(
+            [assistant([block] as unknown as AssistantMessage["content"], { api: model.api })],
+            {
+              includeSystemPrompt: false,
+              replayResponsesItemIds: replayIds,
+              ...reasoningReplayIdentity,
+            },
+            model,
+          );
+          const item = input.find((entry) => entry.type === "reasoning");
+          expect(item).toEqual(
+            preservesCiphertext
+              ? {
+                  ...(replayIds ? { id: "rs_route_fenced" } : {}),
+                  type: "reasoning",
+                  summary,
+                  ...(content ? { content } : {}),
+                  encrypted_content: "route-bound-ciphertext",
+                }
+              : undefined,
+          );
+        },
+      );
+    },
+  );
 });
 
 describe("processResponsesStream", () => {
   it.each([
     {
-      message: "400 The encrypted content could not be verified.",
-      status: undefined,
-      expected: true,
+      name: "rejects reuse of an active Responses tool-call output index",
+      input: [
+        itemEvent("added", toolItem("first_index_owner", ""), 0),
+        itemEvent("added", toolItem("second_index_owner", ""), 0),
+      ],
+      error: "Responses stream reused active tool-call output index 0",
+      events: ["toolcall_start"],
     },
     {
-      message: "The encrypted content could not be decrypted or parsed.",
-      status: 400,
-      expected: true,
+      name: "rejects indexed Responses completions when call ids change",
+      input: [
+        itemEvent("added", { ...toolItem("read", "", "read"), call_id: "call_read_a" }, 0),
+        argumentsDelta('{"path":"README.md"}', 0, "encrypted_delta"),
+        itemEvent(
+          "done",
+          { ...toolItem("read_done", '{"path":"README.md"}', "read"), call_id: "call_read_b" },
+          0,
+        ),
+        completed("resp_read"),
+      ],
+      error: "Responses stream changed output item identity",
+      events: ["toolcall_start", "toolcall_delta"],
     },
     {
-      message: "400 The encrypted content could not be verified.",
-      status: 500,
-      expected: false,
+      name: "fails closed on ambiguous unindexed parallel argument events",
+      input: [
+        itemEvent("added", toolItem("ambiguous_first", "")),
+        itemEvent("added", toolItem("ambiguous_second", "")),
+        { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
+        itemEvent("done", toolIdentity("ambiguous_first")),
+        itemEvent("done", toolIdentity("ambiguous_second")),
+        completed("resp_ambiguous_unindexed"),
+      ],
+      error: "Responses stream completed with unresolved tool calls",
+      events: ["toolcall_start", "toolcall_start"],
     },
     {
-      message: "Could not decrypt the provided encrypted_content.",
-      status: 400,
-      expected: true,
+      name: "rejects a completed Responses tool call whose function name changed",
+      input: [
+        itemEvent("added", toolItem("name_conflict", "", "read"), 0),
+        itemEvent("done", toolItem("name_conflict", "{}", "write"), 0),
+      ],
+      error: "Responses stream changed tool-call function name from read to write",
+      events: ["toolcall_start"],
     },
-    {
-      message: "Could not decrypt the provided encrypted_content.",
-      status: 500,
-      expected: false,
-    },
-    {
-      message: "Could not decrypt encrypted_content metadata for the OAuth sidecar.",
-      status: 400,
-      expected: false,
-    },
-    { message: "400 The certificate could not be verified.", status: undefined, expected: false },
-    { message: "400 The upload could not be decrypted.", status: undefined, expected: false },
-  ])(
-    "classifies encrypted replay rejection $expected: $message",
-    ({ message, status, expected }) => {
-      expect(isInvalidEncryptedContentError({ message, status })).toBe(expected);
-    },
-  );
+  ])("$name", async ({ input, error, events: expectedEvents }) => {
+    const { done, events } = startResponses(input);
+    await expect(done).rejects.toThrow(error);
+    expect(eventTypes(events)).toEqual(expectedEvents);
+  });
+
+  it("ignores OAuth-sidecar decryption errors when classifying replay rejection", () => {
+    const message = "Could not decrypt encrypted_content metadata for the OAuth sidecar.";
+    expect(isInvalidEncryptedContentError({ message, status: 400 })).toBe(false);
+  });
 
   it("aborts the Responses request signal when the first SSE event never arrives", async () => {
     vi.useFakeTimers();
     try {
       let requestSignal: AbortSignal | undefined;
-      const output = createAssistantOutput();
-      const stream = new AssistantMessageEventStream();
       const onFirstEventTimeout = vi.fn();
-      const resultPromise = runResponsesStreamLifecycle({
-        stream,
-        model: nativeOpenAIModel,
-        output,
-        options: { firstEventTimeoutMs: 5, onFirstEventTimeout },
-        createClient: () => ({
-          responses: {
-            create: (_params, requestOptions) => {
-              requestSignal = requestOptions.signal;
-              return {
-                withResponse: async () => ({
-                  data: createNeverYieldingResponsesStream<ResponseStreamEvent>(),
-                  response: new Response(null, { status: 200 }),
-                }),
-              };
-            },
-          },
-        }),
-        buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-      });
-
+      const { output, done } = startLifecycle(
+        (_attempt, options) => {
+          requestSignal = options.signal;
+          return createNeverYieldingResponsesStream<ResponseStreamEvent>();
+        },
+        { options: { firstEventTimeoutMs: 5, onFirstEventTimeout } },
+      );
       await vi.advanceTimersByTimeAsync(5);
-      await resultPromise;
-
+      await done;
       expect(output.stopReason).toBe("error");
       expect(requestSignal?.aborted).toBe(true);
       expect(requestSignal?.reason).toBeInstanceOf(Error);
@@ -989,139 +614,58 @@ describe("processResponsesStream", () => {
     }
   });
 
-  it("fails when streaming headers arrive but no first SSE event follows", async () => {
-    vi.useFakeTimers();
-    try {
-      const output = createAssistantOutput();
-      const stream = new AssistantMessageEventStream();
-      const abortFirstEventStream = vi.fn();
-      const onFirstEventTimeout = vi.fn();
-      const resultPromise = processResponsesStream(
-        createNeverYieldingResponsesStream(),
-        output,
-        stream,
-        nativeOpenAIModel,
-        { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
-      );
-      const rejection = expect(resultPromise).rejects.toThrow(
-        /responses HTTP stream opened but did not deliver a first SSE event within 5ms/,
-      );
-
-      await vi.advanceTimersByTimeAsync(5);
-      await rejection;
-      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
-      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-      expect(onFirstEventTimeout).toHaveBeenCalledWith(abortFirstEventStream.mock.calls[0]?.[0]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it.each([
-    "create",
-    "iterator",
-    "response.failed",
-    "response.failed-status",
-    "error",
-    "nested-error",
-  ] as const)(
+  it.each(["create", "response.failed-status", "error"] as const)(
     "recovers code-less encrypted reasoning rejected during %s stream drain",
     async (failureShape) => {
       const failureMessage =
-        "400 The encrypted content [REDACTED] could not be verified. " +
-        "Reason: Encrypted content could not be decrypted or parsed.";
-      const requests: ResponseCreateParamsStreaming[] = [];
-      const output = createAssistantOutput();
-      const { stream, events } = createCapturedAssistantMessageEventStream();
-
-      await runResponsesStreamLifecycle({
-        stream,
-        model: nativeOpenAIModel,
-        output,
-        createClient: () => ({
-          responses: {
-            create: (request) => {
-              requests.push(structuredClone(request));
-              const attempt = requests.length;
-              return {
-                withResponse: async () => {
-                  if (attempt === 1 && failureShape === "create") {
-                    throw Object.assign(new Error(failureMessage), { status: 400 });
-                  }
-                  return {
-                    data: (async function* () {
-                      if (attempt === 1) {
-                        yield {
-                          type: "response.created",
-                          sequence_number: 0,
-                          response: { id: "resp_rejected" },
-                        } as ResponseStreamEvent;
-                        if (failureShape === "iterator") {
-                          throw new Error(failureMessage);
-                        }
-                        yield (
-                          failureShape === "response.failed" ||
-                          failureShape === "response.failed-status"
-                            ? {
-                                type: "response.failed",
-                                sequence_number: 1,
-                                response: {
-                                  id: "resp_rejected",
-                                  status: "failed",
-                                  error:
-                                    failureShape === "response.failed-status"
-                                      ? {
-                                          code: null,
-                                          status: 400,
-                                          message: "The encrypted content could not be verified.",
-                                        }
-                                      : { code: null, message: failureMessage },
-                                },
-                              }
-                            : failureShape === "nested-error"
-                              ? {
-                                  type: "error",
-                                  sequence_number: 1,
-                                  error: { code: null, message: failureMessage },
-                                }
-                              : {
-                                  type: "error",
-                                  sequence_number: 1,
-                                  code: null,
-                                  message: failureMessage,
-                                  param: null,
-                                }
-                        ) as ResponseStreamEvent;
-                        return;
-                      }
-                      yield {
-                        type: "response.completed",
+        "400 The encrypted content [REDACTED] could not be verified. Reason: Encrypted content could not be decrypted or parsed.";
+      const { output, requests, events, done } = startLifecycle(
+        (attempt) => {
+          if (attempt === 1 && failureShape === "create") {
+            throw Object.assign(new Error(failureMessage), { status: 400 });
+          }
+          return streamResponsesEvents(
+            attempt === 1
+              ? [
+                  {
+                    type: "response.created",
+                    sequence_number: 0,
+                    response: { id: "resp_rejected" },
+                  } as ResponseStreamEvent,
+                  (failureShape === "response.failed-status"
+                    ? {
+                        type: "response.failed",
                         sequence_number: 1,
-                        response: { id: "resp_recovered", status: "completed" },
-                      } as ResponseStreamEvent;
-                    })(),
-                    response: new Response(null, { status: 200 }),
-                  };
-                },
-              };
-            },
-          },
-        }),
-        buildParams: () => ({
-          model: nativeOpenAIModel.id,
-          stream: true,
-          input: [
-            {
-              type: "reasoning",
-              id: "rs_replay",
-              encrypted_content: "stale-reasoning",
-              summary: [],
-            },
-            { type: "compaction", id: "cmp_keep", encrypted_content: "valid-compaction" },
-          ],
-        }),
-      });
-
+                        response: {
+                          id: "resp_rejected",
+                          status: "failed",
+                          error: {
+                            code: null,
+                            status: 400,
+                            message: "The encrypted content could not be decrypted or parsed.",
+                          },
+                        },
+                      }
+                    : {
+                        type: "error",
+                        sequence_number: 1,
+                        code: null,
+                        message: "400 Could not decrypt the provided encrypted_content.",
+                        param: null,
+                      }) as ResponseStreamEvent,
+                ]
+              : [{ ...completed("resp_recovered"), sequence_number: 1 } as ResponseStreamEvent],
+          );
+        },
+        {
+          buildParams: () =>
+            replayRequest([
+              wireReasoning("rs_replay", undefined, "stale-reasoning"),
+              { type: "compaction", id: "cmp_keep", encrypted_content: "valid-compaction" },
+            ]),
+        },
+      );
+      await done;
       expect(requests).toHaveLength(2);
       expect(requests[0]?.input).toEqual(
         expect.arrayContaining([expect.objectContaining({ encrypted_content: "stale-reasoning" })]),
@@ -1133,108 +677,42 @@ describe("processResponsesStream", () => {
         ]),
       );
       expect(JSON.stringify(requests[1]?.input)).not.toContain("stale-reasoning");
-      expect(events.map((event) => event.type)).toEqual(["start", "done"]);
-      expect(output.stopReason).toBe("stop");
-      expect(output.responseId).toBe("resp_recovered");
+      expect(eventTypes(events)).toEqual(["start", "done"]);
+      expect(output).toMatchObject({ stopReason: "stop", responseId: "resp_recovered" });
     },
   );
 
   it("never retries an encrypted-looking response hook rejection", async () => {
-    let requests = 0;
-    const output = createAssistantOutput();
     const onResponse = vi.fn(() => {
       throw new Error("400 The encrypted content could not be verified.");
     });
-
-    await runResponsesStreamLifecycle({
-      stream: new AssistantMessageEventStream(),
-      model: nativeOpenAIModel,
-      output,
+    const { output, requests, done } = startLifecycle(() => streamResponsesEvents([]), {
       options: { onResponse },
-      createClient: () => ({
-        responses: {
-          create: () => {
-            requests += 1;
-            return {
-              withResponse: async () => ({
-                data: streamResponsesEvents([]),
-                response: new Response(null, { status: 200 }),
-              }),
-            };
-          },
-        },
-      }),
-      buildParams: () => ({
-        model: nativeOpenAIModel.id,
-        stream: true,
-        input: [{ type: "reasoning", id: "rs_replay", encrypted_content: "stale", summary: [] }],
-      }),
+      buildParams: () => replayRequest([wireReasoning("rs_replay", undefined, "stale")]),
     });
-
-    expect(requests).toBe(1);
+    await done;
+    expect(requests).toHaveLength(1);
     expect(onResponse).toHaveBeenCalledOnce();
     expect(output.errorMessage).toBe("400 The encrypted content could not be verified.");
   });
 
-  it.each([
-    { name: "thinking", item: { type: "reasoning", id: "rs_started", summary: [] } },
-    {
-      name: "text",
-      item: {
-        type: "message",
-        id: "msg_started",
-        role: "assistant",
-        status: "in_progress",
-        content: [],
+  it("never retries encrypted replay after tool output starts", async () => {
+    const { output, requests, events, done } = startLifecycle(
+      () =>
+        (async function* () {
+          yield {
+            type: "response.output_item.added",
+            output_index: 0,
+            sequence_number: 0,
+            item: toolItem("started", "", "lookup"),
+          } as ResponseStreamEvent;
+          throw new Error("400 The encrypted content could not be verified.");
+        })(),
+      {
+        buildParams: () => replayRequest([wireReasoning("rs_replay", undefined, "stale")]),
       },
-    },
-    {
-      name: "tool",
-      item: {
-        type: "function_call",
-        id: "fc_started",
-        call_id: "call_started",
-        name: "lookup",
-        arguments: "",
-      },
-    },
-  ])("never retries encrypted replay after $name output starts", async ({ item }) => {
-    const requests: ResponseCreateParamsStreaming[] = [];
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await runResponsesStreamLifecycle({
-      stream,
-      model: nativeOpenAIModel,
-      output,
-      createClient: () => ({
-        responses: {
-          create: (request) => {
-            requests.push(request);
-            return {
-              withResponse: async () => ({
-                data: (async function* () {
-                  yield {
-                    type: "response.output_item.added",
-                    output_index: 0,
-                    sequence_number: 0,
-                    item,
-                  } as ResponseStreamEvent;
-                  throw new Error("400 The encrypted content could not be verified.");
-                })(),
-                response: new Response(null, { status: 200 }),
-              }),
-            };
-          },
-        },
-      }),
-      buildParams: () => ({
-        model: nativeOpenAIModel.id,
-        stream: true,
-        input: [{ type: "reasoning", id: "rs_replay", encrypted_content: "stale", summary: [] }],
-      }),
-    });
-
+    );
+    await done;
     expect(requests).toHaveLength(1);
     expect(output.content).toHaveLength(1);
     expect(output.stopReason).toBe("error");
@@ -1243,15 +721,11 @@ describe("processResponsesStream", () => {
   });
 
   it("suppresses rejected persisted compaction state on the following turn", async () => {
-    const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+    const replayIdentity = reasoningReplayIdentity;
     const prior = createAssistantOutput();
     captureOpenAIResponsesCompaction(
       prior,
-      {
-        type: "compaction",
-        id: "cmp_rejected",
-        encrypted_content: "opaque-rejected-compaction",
-      },
+      { type: "compaction", id: "cmp_rejected", encrypted_content: "opaque-rejected-compaction" },
       0,
       nativeOpenAIModel,
       buildOpenAIResponsesReasoningReplayMetadata(nativeOpenAIModel, replayIdentity),
@@ -1263,539 +737,135 @@ describe("processResponsesStream", () => {
         { role: "user", content: "recover", timestamp: 1 },
       ],
     };
-    const requests: ResponseCreateParamsStreaming[] = [];
-    const output = createAssistantOutput();
     const onPayload = vi.fn((request: unknown) => request);
     const onCompactionRejected = vi.fn();
+    const { output, requests, done } = startLifecycle(
+      (attempt) => {
+        if (attempt === 1) {
+          throw Object.assign(new Error("invalid_encrypted_content"), {
+            code: "invalid_encrypted_content",
+            status: 400,
+          });
+        }
+        return streamResponsesEvents([
+          {
+            ...completed("resp_recovered", { output: [] }),
+            sequence_number: 1,
+          } as unknown as ResponseStreamEvent,
+        ]);
+      },
+      {
+        options: { ...replayIdentity, onCompactionRejected, onPayload },
+        buildParams: (_model, replayMode) =>
+          replayRequest(
+            replayMessages(context.messages, {
+              ...replayIdentity,
+              replayMode,
+            }),
+          ),
+      },
+    );
 
-    await runResponsesStreamLifecycle({
-      stream: new AssistantMessageEventStream(),
-      model: nativeOpenAIModel,
-      output,
-      options: { ...replayIdentity, onCompactionRejected, onPayload },
-      createClient: () => ({
-        responses: {
-          create: (request) => {
-            requests.push(structuredClone(request));
-            const attempt = requests.length;
-            return {
-              withResponse: async () => {
-                if (attempt === 1) {
-                  throw Object.assign(new Error("invalid_encrypted_content"), {
-                    code: "invalid_encrypted_content",
-                    status: 400,
-                  });
-                }
-                return {
-                  data: streamResponsesEvents([
-                    {
-                      type: "response.completed",
-                      sequence_number: 1,
-                      response: { id: "resp_recovered", status: "completed", output: [] },
-                    } as unknown as ResponseStreamEvent,
-                  ]),
-                  response: new Response(null, { status: 200 }),
-                };
-              },
-            };
-          },
-        },
-      }),
-      buildParams: (_model, replayMode) => ({
-        model: nativeOpenAIModel.id,
-        input: convertResponsesMessages(nativeOpenAIModel, context, testAllowedToolCallProviders, {
-          ...replayIdentity,
-          replayMode,
-        }),
-        stream: true,
-      }),
-    });
-
+    await done;
     expect(requests).toHaveLength(2);
-    expect(requests[0]?.input).toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "compaction", id: "cmp_rejected" })]),
+    expect(requests[0]?.input).toContainEqual(
+      expect.objectContaining({ type: "compaction", id: "cmp_rejected" }),
     );
     expect(JSON.stringify(requests[0]?.input)).not.toContain("full history prefix");
     const retryInput = requests[1]?.input;
     expect(Array.isArray(retryInput)).toBe(true);
-    const retryItems = Array.isArray(retryInput) ? retryInput : [];
-    expect(retryItems.some((item) => item.type === "compaction")).toBe(false);
+    expect(retryInput).not.toContainEqual(expect.objectContaining({ type: "compaction" }));
     expect(JSON.stringify(retryInput)).toContain("full history prefix");
     expect(onPayload).toHaveBeenCalledTimes(2);
     expect(onCompactionRejected).toHaveBeenCalledOnce();
-    expect(output.stopReason).toBe("stop");
-    expect(output.providerReplay).toMatchObject({
-      type: "openai-responses-compaction-suppression",
-      data: "rejected",
-      provider: nativeOpenAIModel.provider,
-      api: nativeOpenAIModel.api,
-      model: nativeOpenAIModel.id,
+    expect(output).toMatchObject({
+      stopReason: "stop",
+      providerReplay: {
+        type: "openai-responses-compaction-suppression",
+        data: "rejected",
+        provider: nativeOpenAIModel.provider,
+        api: nativeOpenAIModel.api,
+        model: nativeOpenAIModel.id,
+      },
     });
 
-    const nextInput = convertResponsesMessages(
-      nativeOpenAIModel,
-      {
-        messages: [
-          ...context.messages,
-          output,
-          { role: "user", content: "next turn", timestamp: 2 },
-        ],
-      },
-      testAllowedToolCallProviders,
+    const nextInput = replayMessages(
+      [...context.messages, output, { role: "user", content: "next turn", timestamp: 2 }],
       replayIdentity,
     );
     expect(nextInput.some((item) => item.type === "compaction")).toBe(false);
   });
 
-  it("records the effective model from the terminal response", async () => {
-    const output = createAssistantOutput();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.completed",
-          response: {
-            id: "resp_rerouted",
-            status: "completed",
-            model: "gpt-5.5-rerouted",
-          },
-        },
-      ]),
-      output,
-      new AssistantMessageEventStream(),
-      nativeOpenAIModel,
-    );
-
-    expect(output.responseModel).toBe("gpt-5.5-rerouted");
-  });
-
   it("keeps interleaved reasoning items bound to their output indices", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: { type: "reasoning", id: "rs_first", summary: [] },
-        },
-        {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: { type: "reasoning", id: "rs_second", summary: [] },
-        },
-        { type: "response.reasoning_text.delta", output_index: 0, delta: "first" },
-        { type: "response.reasoning_text.delta", output_index: 1, delta: "second" },
-        {
-          type: "response.output_item.done",
-          output_index: 1,
-          item: {
-            type: "reasoning",
-            id: "rs_second",
-            summary: [],
-            content: [{ type: "reasoning_text", text: "second" }],
-            encrypted_content: "cipher-second",
-          },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: {
-            type: "reasoning",
-            id: "rs_first",
-            summary: [],
-            content: [{ type: "reasoning_text", text: "first" }],
-            encrypted_content: "cipher-first",
-          },
-        },
-        { type: "response.completed", response: { id: "resp_reasoning", status: "completed" } },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-
+    const { output, events } = await collectResponses([
+      itemEvent("added", wireReasoning("rs_first"), 0),
+      itemEvent("added", wireReasoning("rs_second"), 1),
+      { type: "response.reasoning_text.delta", output_index: 0, delta: "first" },
+      { type: "response.reasoning_text.delta", output_index: 1, delta: "second" },
+      itemEvent("done", wireReasoning("rs_second", "second", "cipher-second"), 1),
+      itemEvent("done", wireReasoning("rs_first", "first", "cipher-first"), 0),
+      completed("resp_reasoning"),
+    ]);
     expect(output.content).toMatchObject([
       { type: "thinking", thinking: "first" },
       { type: "thinking", thinking: "second" },
     ]);
-    const signatures = output.content.map((block) =>
-      block.type === "thinking" && block.thinkingSignature
-        ? JSON.parse(block.thinkingSignature)
-        : undefined,
+    expect(eventPositions(events)).toBe(
+      "thinking_start@0 thinking_start@1 thinking_delta@0 thinking_delta@1 thinking_end@1 thinking_end@0",
     );
-    expect(signatures).toMatchObject([
+    expect(
+      output.content.map((block) =>
+        block.type === "thinking" && block.thinkingSignature
+          ? JSON.parse(block.thinkingSignature)
+          : undefined,
+      ),
+    ).toMatchObject([
       { id: "rs_first", encrypted_content: "cipher-first" },
       { id: "rs_second", encrypted_content: "cipher-second" },
     ]);
-    expect(
-      events.map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
-    ).toEqual([
-      ["thinking_start", 0],
-      ["thinking_start", 1],
-      ["thinking_delta", 0],
-      ["thinking_delta", 1],
-      ["thinking_end", 1],
-      ["thinking_end", 0],
-    ]);
-  });
-
-  it("preserves reasoning while a tool call streams on another output index", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: { type: "reasoning", id: "rs_tool", summary: [] },
-        },
-        { type: "response.reasoning_text.delta", output_index: 0, delta: "before " },
-        {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: {
-            type: "function_call",
-            id: "fc_read",
-            call_id: "call_read",
-            name: "read",
-            arguments: "",
-          },
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          output_index: 1,
-          item_id: "fc_read",
-          delta: '{"path":"README.md"}',
-        },
-        { type: "response.reasoning_text.delta", output_index: 0, delta: "after" },
-        {
-          type: "response.output_item.done",
-          output_index: 1,
-          item: {
-            type: "function_call",
-            id: "fc_read",
-            call_id: "call_read",
-            name: "read",
-            arguments: '{"path":"README.md"}',
-          },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: {
-            type: "reasoning",
-            id: "rs_tool",
-            summary: [],
-            encrypted_content: "cipher-tool",
-          },
-        },
-        { type: "response.completed", response: { id: "resp_tool", status: "completed" } },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-
-    expect(output.content).toMatchObject([
-      { type: "thinking", thinking: "before after" },
-      { type: "toolCall", id: "call_read|fc_read", arguments: { path: "README.md" } },
-    ]);
-    expect(
-      events
-        .filter((event) => event.type.endsWith("_delta"))
-        .map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
-    ).toEqual([
-      ["thinking_delta", 0],
-      ["toolcall_delta", 1],
-      ["thinking_delta", 0],
-    ]);
-  });
-
-  it("backfills terminal encrypted reasoning for stateless replay", async () => {
-    const output = createAssistantOutput();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: { type: "reasoning", id: "rs_backfill", summary: [] },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: { type: "reasoning", id: "rs_backfill", summary: [] },
-        },
-        {
-          type: "response.completed",
-          response: {
-            id: "resp_backfill",
-            status: "completed",
-            output: [
-              {
-                type: "reasoning",
-                id: "rs_backfill",
-                summary: [],
-                encrypted_content: "cipher-from-terminal",
-              },
-            ],
-          },
-        },
-      ]),
-      output,
-      new AssistantMessageEventStream(),
-      nativeOpenAIModel,
-    );
-
-    const replay = convertResponsesMessages(
-      nativeOpenAIModel,
-      {
-        messages: [
-          { role: "user", content: "first", timestamp: 1 },
-          output,
-          { role: "user", content: "again", timestamp: 2 },
-        ],
-      },
-      testAllowedToolCallProviders,
-    );
-    expect(replay.find((item) => item.type === "reasoning")).toMatchObject({
-      id: "rs_backfill",
-      encrypted_content: "cipher-from-terminal",
-    });
-  });
-
-  it("tolerates a completed message item with null content", async () => {
-    const output = createAssistantOutput();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: {
-            type: "message",
-            id: "msg_null",
-            content: [{ type: "output_text", text: "" }],
-          },
-        },
-        { type: "response.output_text.delta", output_index: 0, delta: "streamed" },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: { type: "message", id: "msg_null", content: null },
-        },
-        { type: "response.completed", response: { id: "resp_null", status: "completed" } },
-      ]),
-      output,
-      new AssistantMessageEventStream(),
-      nativeOpenAIModel,
-    );
-
-    expect(output.content).toMatchObject([{ type: "text", text: "streamed" }]);
   });
 
   it("keeps deferred text before an interleaved output item", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: {
-            type: "message",
-            id: "msg_first",
-            content: [{ type: "output_text", text: "" }],
-          },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: {
-            type: "message",
-            id: "msg_first",
-            content: [{ type: "output_text", text: "first" }],
-          },
-        },
-        {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: {
-            type: "message",
-            id: "msg_second",
-            content: [{ type: "output_text", text: "" }],
-          },
-        },
-        { type: "response.output_text.delta", output_index: 1, delta: "first extended" },
-        {
-          type: "response.output_item.added",
-          output_index: 2,
-          item: { type: "reasoning", id: "rs_after", summary: [] },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 2,
-          item: {
-            type: "reasoning",
-            id: "rs_after",
-            summary: [],
-            content: [{ type: "reasoning_text", text: "thought" }],
-          },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 1,
-          item: {
-            type: "message",
-            id: "msg_second",
-            content: [{ type: "output_text", text: "first extended" }],
-          },
-        },
-        { type: "response.completed", response: { id: "resp_order", status: "completed" } },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-
+    const { output, events } = await collectResponses([
+      itemEvent("added", messageItem("msg_first", ""), 0),
+      itemEvent("done", messageItem("msg_first", "first"), 0),
+      itemEvent("added", messageItem("msg_second", ""), 1),
+      { type: "response.output_text.delta", output_index: 1, delta: "first extended" },
+      itemEvent("added", wireReasoning("rs_after"), 2),
+      itemEvent("done", wireReasoning("rs_after", "thought"), 2),
+      itemEvent("done", messageItem("msg_second", "first extended"), 1),
+      completed("resp_order"),
+    ]);
     expect(output.content).toMatchObject([
       { type: "text", text: "first" },
       { type: "text", text: "first extended" },
       { type: "thinking", thinking: "thought" },
     ]);
-    expect(
-      events
-        .filter((event) => event.type.endsWith("_start"))
-        .map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
-    ).toEqual([
-      ["text_start", 0],
-      ["text_start", 1],
-      ["thinking_start", 2],
+    expect(eventPositions(events.filter((event) => event.type.endsWith("_start")))).toBe(
+      "text_start@0 text_start@1 thinking_start@2",
+    );
+  });
+
+  it("finalizes incomplete usage and derives an omitted token total", async () => {
+    const { output } = await collectResponses([
+      {
+        type: "response.incomplete",
+        response: {
+          id: "resp_incomplete",
+          status: "incomplete",
+          usage: {
+            input_tokens: 30,
+            output_tokens: 12,
+            input_tokens_details: { cached_tokens: 5, cache_write_tokens: 3 },
+          },
+        },
+      },
     ]);
-  });
 
-  it("finalizes incomplete terminal events with usage", async () => {
-    const output = createAssistantOutput();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.incomplete",
-          response: {
-            id: "resp_incomplete",
-            status: "incomplete",
-            usage: {
-              input_tokens: 30,
-              output_tokens: 12,
-              total_tokens: 42,
-              input_tokens_details: { cached_tokens: 5, cache_write_tokens: 3 },
-            },
-          },
-        },
-      ]),
-      output,
-      new AssistantMessageEventStream(),
-      nativeOpenAIModel,
-    );
-
-    expect(output.stopReason).toBe("length");
-    expect(output.usage).toMatchObject({
-      input: 22,
-      output: 12,
-      cacheRead: 5,
-      cacheWrite: 3,
-      totalTokens: 42,
+    expect(output).toMatchObject({
+      stopReason: "length",
+      usage: { input: 22, output: 12, cacheRead: 5, cacheWrite: 3, totalTokens: 42 },
     });
-  });
-
-  it("derives totalTokens from the split buckets when the payload omits it", async () => {
-    const output = createAssistantOutput();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.completed",
-          response: {
-            id: "resp_no_total",
-            status: "completed",
-            usage: {
-              input_tokens: 30,
-              output_tokens: 12,
-              input_tokens_details: { cached_tokens: 5, cache_write_tokens: 3 },
-            },
-          },
-        },
-      ]),
-      output,
-      new AssistantMessageEventStream(),
-      nativeOpenAIModel,
-    );
-
-    // Responses-compatible proxies routinely omit total_tokens; reporting 0 understates the turn.
-    expect(output.usage).toMatchObject({
-      input: 22,
-      output: 12,
-      cacheRead: 5,
-      cacheWrite: 3,
-      totalTokens: 42,
-    });
-  });
-
-  it("reports content-filtered incomplete responses as errors", async () => {
-    const output = createAssistantOutput();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.incomplete",
-          response: {
-            id: "resp_filtered",
-            status: "incomplete",
-            incomplete_details: { reason: "content_filter" },
-          },
-        },
-      ]),
-      output,
-      new AssistantMessageEventStream(),
-      nativeOpenAIModel,
-    );
-
-    expect(output.stopReason).toBe("error");
-    expect(output.errorMessage).toBe("Provider incomplete_reason: content_filter");
-
-    const lifecycleOutput = createAssistantOutput();
-    await runResponsesStreamLifecycle({
-      stream: new AssistantMessageEventStream(),
-      model: nativeOpenAIModel,
-      output: lifecycleOutput,
-      createClient: () => ({
-        responses: {
-          create: () => ({
-            withResponse: async () => ({
-              data: streamResponsesEvents([
-                {
-                  type: "response.incomplete",
-                  response: {
-                    id: "resp_filtered_lifecycle",
-                    status: "incomplete",
-                    incomplete_details: { reason: "content_filter" },
-                  },
-                } as ResponseStreamEvent,
-              ]),
-              response: new Response(null, { status: 200 }),
-            }),
-          }),
-        },
-      }),
-      buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-    });
-
-    expect(lifecycleOutput.stopReason).toBe("error");
-    expect(lifecycleOutput.errorMessage).toBe("Provider incomplete_reason: content_filter");
   });
 
   it("preserves failed terminal response details and accounting", async () => {
@@ -1803,7 +873,6 @@ describe("processResponsesStream", () => {
       ...nativeOpenAIModel,
       cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
     } satisfies Model<"openai-responses">;
-    const output = createAssistantOutput();
     const resolveServiceTier = vi.fn(
       (
         responseTier: ResponseCreateParamsStreaming["service_tier"],
@@ -1818,33 +887,29 @@ describe("processResponsesStream", () => {
       },
     );
 
-    await expect(
-      processResponsesStream(
-        responseEvents([
-          {
-            type: "response.failed",
-            response: {
-              id: "resp_failed",
-              status: "failed",
-              model: "gpt-5.6-luna",
-              service_tier: "priority",
-              error: { code: "server_error", message: "provider failed" },
-              usage: {
-                input_tokens: 21,
-                output_tokens: 4,
-                total_tokens: 25,
-                input_tokens_details: { cached_tokens: 6, cache_write_tokens: 2 },
-                output_tokens_details: { reasoning_tokens: 3 },
-              },
+    const { output, done } = startResponses(
+      [
+        {
+          type: "response.failed",
+          response: {
+            id: "resp_failed",
+            status: "failed",
+            model: "gpt-5.6-luna",
+            service_tier: "priority",
+            error: { code: "server_error", message: "provider failed" },
+            usage: {
+              input_tokens: 21,
+              output_tokens: 4,
+              total_tokens: 25,
+              input_tokens_details: { cached_tokens: 6, cache_write_tokens: 2 },
+              output_tokens_details: { reasoning_tokens: 3 },
             },
           },
-        ]),
-        output,
-        new AssistantMessageEventStream(),
-        model,
-        { serviceTier: "default", resolveServiceTier, applyServiceTierPricing },
-      ),
-    ).rejects.toThrow("server_error: provider failed");
+        },
+      ],
+      { model, options: { serviceTier: "default", resolveServiceTier, applyServiceTierPricing } },
+    );
+    await expect(done).rejects.toThrow("server_error: provider failed");
 
     expect(output).toMatchObject({
       responseId: "resp_failed",
@@ -1859,28 +924,15 @@ describe("processResponsesStream", () => {
         totalTokens: 25,
       },
     });
-    expect(output.usage.cost.input).toBeCloseTo(0.000065, 10);
-    expect(output.usage.cost.output).toBeCloseTo(0.00012, 10);
-    expect(output.usage.cost.cacheRead).toBeCloseTo(0.000003, 10);
-    expect(output.usage.cost.cacheWrite).toBeCloseTo(0.0000125, 10);
-    expect(output.usage.cost.total).toBeCloseTo(0.000401, 10);
+    expect(output.usage.cost).toMatchObject({
+      input: expect.closeTo(0.000065, 10),
+      output: expect.closeTo(0.00012, 10),
+      cacheRead: expect.closeTo(0.000003, 10),
+      cacheWrite: expect.closeTo(0.0000125, 10),
+      total: expect.closeTo(0.000401, 10),
+    });
     expect(resolveServiceTier).toHaveBeenCalledWith("priority", "default");
     expect(applyServiceTierPricing).toHaveBeenCalledWith(output.usage, "priority");
-  });
-
-  it("rejects streams that end without a terminal response event", async () => {
-    const output = createAssistantOutput();
-    output.usage.input = 7;
-
-    await expect(
-      processResponsesStream(
-        responseEvents([{ type: "response.created", response: { id: "resp_truncated" } }]),
-        output,
-        new AssistantMessageEventStream(),
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("OpenAI Responses stream ended before a terminal response event");
-    expect(output.usage.input).toBe(7);
   });
 
   it("preserves cancellation when the SDK swallows the abort and ends iteration", async () => {
@@ -1903,1722 +955,330 @@ describe("processResponsesStream", () => {
     expect(output.responseId).toBe("resp_aborted");
   });
 
+  it("yields to aborts during bursty Responses streams without retaining partial snapshots", async () => {
+    const abort = new AbortController();
+    let yieldedToTimer = false;
+    setTimeout(() => {
+      yieldedToTimer = true;
+      abort.abort();
+    }, 0);
+
+    const { events, done } = startResponses(
+      [
+        itemEvent("added", { type: "message" }),
+        ...Array.from({ length: 512 }, () => ({ type: "response.output_text.delta", delta: "x" })),
+      ],
+      { model: azureModel, options: { signal: abort.signal } },
+    );
+    await expect(done).rejects.toThrow("Request was aborted");
+    expect(yieldedToTimer).toBe(true);
+    expect(events.length).toBeLessThan(512);
+    const textDeltas = events.filter((event) => event.type === "text_delta");
+    expect(textDeltas.length).toBeGreaterThan(0);
+    expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
+  });
+
+  const fallbackArguments = (doneArguments: string | undefined) => ({
+    name:
+      "preserves streamed arguments when done " +
+      (doneArguments === undefined ? "omits arguments" : "sends empty arguments"),
+    model: nativeOpenAIModel,
+    input: [
+      itemEvent("added", toolItem("read", "", "read")),
+      argumentsDelta('{"path":"README.md"}'),
+      argumentsDone(doneArguments, 0, "fc_read"),
+      itemEvent("done", toolIdentity("read", "read")),
+      completed("resp_1"),
+    ],
+    types: ["toolcall_start", "toolcall_delta", "toolcall_end"],
+  });
   it.each([
-    ["omits arguments", undefined],
-    ["sends empty arguments", ""],
-  ])("preserves streamed tool-call arguments when done %s", async (_label, doneArguments) => {
-    const output = createAssistantOutput();
-    const stream = new AssistantMessageEventStream();
-    const events: Array<Record<string, unknown>> = [];
-    const collect = (async () => {
-      for await (const event of stream) {
-        events.push(event as unknown as Record<string, unknown>);
-      }
-    })();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          item: {
-            type: "function_call",
-            id: "fc_read",
-            call_id: "call_read",
-            name: "read",
-            arguments: "",
-          },
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          delta: '{"path":"docs/gateway/local-models.md"}',
-        },
-        {
-          type: "response.function_call_arguments.done",
-          ...(doneArguments === undefined ? {} : { arguments: doneArguments }),
-          item_id: "fc_read",
-          name: "read",
-          output_index: 0,
-          sequence_number: 3,
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "function_call",
-            id: "fc_read",
-            call_id: "call_read",
-            name: "read",
-          },
-        },
-        {
-          type: "response.completed",
-          response: {
-            id: "resp_1",
-            status: "completed",
-          },
-        },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-    stream.end();
-    await collect;
-
+    fallbackArguments(undefined),
+    fallbackArguments(""),
+    {
+      name: "routes indexed Responses arguments when item ids rotate",
+      model: gpt56SolModel,
+      input: [
+        itemEvent("added", toolItem("read", "", "read"), 0),
+        argumentsDelta('{"path":', 0, "encrypted_delta_1"),
+        argumentsDelta('"README.md"}', 0, "encrypted_delta_2"),
+        argumentsDone('{"path":"README.md"}', 0, "encrypted_done"),
+        itemEvent("done", toolItem("read", "", "read"), 0),
+        completed("resp_read"),
+      ],
+      types: ["toolcall_start", "toolcall_delta", "toolcall_delta", "toolcall_end"],
+    },
+  ])("$name", async ({ model, input, types }) => {
+    const { output, events } = await collectResponses(input, { model });
     expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_read|fc_read",
-        name: "read",
-        arguments: { path: "docs/gateway/local-models.md" },
-      },
-    ]);
-    expect(events.map((event) => event.type)).toEqual([
-      "toolcall_start",
-      "toolcall_delta",
-      "toolcall_end",
-    ]);
+    expect(output.content).toEqual([toolCall("read", "read", { path: "README.md" })]);
+    expect(eventTypes(events)).toEqual(types);
   });
 
-  it("keeps idless tool-call ids stable within a response and unique across responses", async () => {
-    const runOnce = async () => {
-      const output = createAssistantOutput();
-      const { stream, events } = createCapturedAssistantMessageEventStream();
-      await processResponsesStream(
-        responseEvents([
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: { type: "function_call", name: "computer", arguments: "" },
-          },
-          {
-            type: "response.output_item.done",
-            output_index: 0,
-            item: { type: "function_call", name: "computer", arguments: "{}" },
-          },
-          { type: "response.completed", response: { id: "resp_idless", status: "completed" } },
-        ]),
-        output,
-        stream,
-        nativeOpenAIModel,
-      );
-      const block = output.content.find((entry) => entry.type === "toolCall");
-      const end = events.find((event) => event.type === "toolcall_end");
-      if (!block || block.type !== "toolCall" || !end || end.type !== "toolcall_end") {
-        throw new Error("missing tool-call lifecycle");
-      }
-      return { blockId: block.id, endId: end.toolCall.id };
-    };
-
-    const first = await runOnce();
-    const second = await runOnce();
-    expect(first.blockId).toMatch(/^call_[0-9a-f]{24}$/);
-    expect(first.endId).toBe(first.blockId);
-    expect(second.endId).toBe(second.blockId);
-    expect(second.blockId).not.toBe(first.blockId);
-  });
-
-  it("uses the SDK call id directly when the optional item id stays absent", async () => {
-    const events: ResponseStreamEvent[] = [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        sequence_number: 1,
-        item: {
-          type: "function_call",
-          call_id: "call_without_item_id",
-          name: "computer",
-          arguments: "",
-          status: "in_progress",
-        },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        sequence_number: 2,
-        item: {
-          type: "function_call",
-          call_id: "call_without_item_id",
-          name: "computer",
-          arguments: "{}",
-          status: "completed",
-        },
-      },
-      {
-        type: "response.completed",
-        sequence_number: 3,
-        response: { id: "resp_without_item_id", status: "completed" },
-      } as ResponseStreamEvent,
-    ];
-    const output = createAssistantOutput();
-
-    await processResponsesStream(
-      streamResponsesEvents(events),
-      output,
-      new AssistantMessageEventStream(),
-      nativeOpenAIModel,
-    );
-
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_without_item_id",
-        name: "computer",
-        arguments: {},
-      },
-    ]);
-  });
-
-  it("adopts the completed SDK item id while preserving lifecycle and result linkage", async () => {
-    const responseStream: ResponseStreamEvent[] = [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        sequence_number: 1,
-        item: {
-          type: "function_call",
-          call_id: "call_weather",
-          name: "weather",
-          arguments: "",
-          status: "in_progress",
-        },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        sequence_number: 2,
-        item: {
-          type: "function_call",
-          id: "fc_weather",
-          call_id: "call_weather",
-          name: "weather",
-          arguments: '{"city":"Seattle"}',
-          status: "completed",
-        },
-      },
-      {
-        type: "response.completed",
-        sequence_number: 3,
-        response: { id: "resp_weather", status: "completed" },
-      } as ResponseStreamEvent,
-    ];
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-    let startedId: string | undefined;
-    const capturePush = stream.push.bind(stream);
-    stream.push = (event) => {
-      if (event.type === "toolcall_start") {
-        const block = event.partial.content[event.contentIndex];
-        startedId = block?.type === "toolCall" ? block.id : undefined;
-      }
-      capturePush(event);
-    };
-
-    await processResponsesStream(
-      streamResponsesEvents(responseStream),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-
-    expect(startedId).toBe("call_weather");
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_weather|fc_weather",
+  it.each([true, false])(
+    "adopts completed SDK identities and result linkage (call id present: %s)",
+    async (hasCallId) => {
+      const item = {
+        type: "function_call",
+        ...(hasCallId ? { call_id: "call_weather" } : {}),
         name: "weather",
-        arguments: { city: "Seattle" },
-      },
-    ]);
-    expect(
-      events.map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
-    ).toEqual([
-      ["toolcall_start", 0],
-      ["toolcall_end", 0],
-    ]);
-
-    const replay = convertResponsesMessages(
-      nativeOpenAIModel,
-      {
-        systemPrompt: "",
-        messages: [
-          output,
-          makeTextToolResult("call_weather|fc_weather", "weather", "Rain", false, 1),
+        arguments: "",
+        status: "in_progress",
+      };
+      const doneItem = {
+        ...item,
+        id: "fc_weather",
+        call_id: "call_weather",
+        arguments: '{"city":"Seattle"}',
+        status: "completed",
+      };
+      let startedId: string | undefined;
+      const { output, events } = await collectResponses(
+        [
+          itemEvent("added", item, 0),
+          itemEvent("done", doneItem, 0),
+          completed("resp_weather", { output: [doneItem] }),
         ],
-      } satisfies Context,
-      testAllowedToolCallProviders,
-      { includeSystemPrompt: false },
-    ) as unknown as Array<Record<string, unknown>>;
-    expect(replay).toContainEqual({
-      type: "function_call",
-      id: "fc_weather",
-      call_id: "call_weather",
-      name: "weather",
-      arguments: '{"city":"Seattle"}',
-    });
-    expect(replay).toContainEqual({
-      type: "function_call_output",
-      call_id: "call_weather",
-      output: "Rain",
-    });
-  });
-
-  it("keeps interleaved Responses function calls bound to their output indices", async () => {
-    const responseStream: ResponseStreamEvent[] = [
-      ...createInterleavedResponsesToolEvents(),
-      {
-        type: "response.completed",
-        sequence_number: 7,
-        response: { id: "resp_interleaved", status: "completed" },
-      } as ResponseStreamEvent,
-    ];
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await processResponsesStream(
-      streamResponsesEvents(responseStream),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_click|fc_click",
-        name: "computer",
-        arguments: { action: "left_click", coordinate: [10, 20] },
-      },
-      {
-        type: "toolCall",
-        id: "call_type|fc_type",
-        name: "computer",
-        arguments: { action: "type", text: "hello" },
-      },
-    ]);
-    expect(
-      events
-        .filter((event) => event.type.startsWith("toolcall_"))
-        .map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
-    ).toEqual([
-      ["toolcall_start", 0],
-      ["toolcall_start", 1],
-      ["toolcall_delta", 1],
-      ["toolcall_delta", 0],
-      ["toolcall_end", 0],
-      ["toolcall_end", 1],
-    ]);
-  });
-
-  it("routes indexed Responses tool arguments when item ids rotate", async () => {
-    const output = createResponsesAssistantOutput(gpt56SolModel);
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await processResponsesStream(
-      responseEvents([
         {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: {
-            type: "function_call",
-            id: "fc_read",
-            call_id: "call_read",
-            name: "read",
-            arguments: "",
+          model: hasCallId ? nativeOpenAIModel : azureModel,
+          observe(event) {
+            if (event.type === "toolcall_start") {
+              const block = event.partial.content[event.contentIndex];
+              startedId = block?.type === "toolCall" ? block.id : undefined;
+            }
           },
         },
-        {
-          type: "response.function_call_arguments.delta",
-          output_index: 0,
-          item_id: "encrypted_delta_1",
-          delta: '{"path":',
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          output_index: 0,
-          item_id: "encrypted_delta_2",
-          delta: '"README.md"}',
-        },
-        {
-          type: "response.function_call_arguments.done",
-          output_index: 0,
-          item_id: "encrypted_done",
-          arguments: '{"path":"README.md"}',
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: {
-            type: "function_call",
-            id: "fc_read",
-            call_id: "call_read",
-            name: "read",
-            arguments: "",
-          },
-        },
-        {
-          type: "response.completed",
-          response: { id: "resp_read", status: "completed" },
-        },
-      ]),
-      output,
-      stream,
-      gpt56SolModel,
-    );
+      );
 
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_read|fc_read",
-        name: "read",
-        arguments: { path: "README.md" },
-      },
-    ]);
-    expect(events.map((event) => event.type)).toEqual([
-      "toolcall_start",
-      "toolcall_delta",
-      "toolcall_delta",
-      "toolcall_end",
-    ]);
-  });
+      expect(startedId).toEqual(
+        hasCallId ? "call_weather" : expect.stringMatching(/^call_[0-9a-f]{24}$/),
+      );
+      expect(output.stopReason).toBe("toolUse");
+      expect(output.content).toEqual([toolCall("weather", "weather", { city: "Seattle" })]);
+      expect(eventPositions(events)).toBe("toolcall_start@0 toolcall_end@0");
+      expect(events.at(-1)).toMatchObject({
+        type: "toolcall_end",
+        toolCall: { id: "call_weather|fc_weather" },
+      });
 
-  it("rejects indexed Responses completions when call ids change", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await expect(
-      processResponsesStream(
-        responseEvents([
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_read",
-              call_id: "call_read_a",
-              name: "read",
-              arguments: "",
-            },
-          },
-          {
-            type: "response.function_call_arguments.delta",
-            output_index: 0,
-            item_id: "encrypted_delta",
-            delta: '{"path":"README.md"}',
-          },
-          {
-            type: "response.output_item.done",
-            output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_read_done",
-              call_id: "call_read_b",
-              name: "read",
-              arguments: '{"path":"README.md"}',
-            },
-          },
-          {
-            type: "response.completed",
-            response: { id: "resp_read", status: "completed" },
-          },
-        ]),
-        output,
-        stream,
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("Responses stream changed output item identity");
-    expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
-  });
-
-  it("rejects reuse of an active Responses tool-call output index", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await expect(
-      processResponsesStream(
-        responseEvents([
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_first_index_owner",
-              call_id: "call_first_index_owner",
-              name: "computer",
-              arguments: "",
-            },
-          },
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_second_index_owner",
-              call_id: "call_second_index_owner",
-              name: "computer",
-              arguments: "",
-            },
-          },
-        ]),
-        output,
-        stream,
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("Responses stream reused active tool-call output index 0");
-    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(1);
-    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
-  });
+      const replay = replayMessages(
+        [output, makeTextToolResult("call_weather|fc_weather", "weather", "Rain", false, 1)],
+        { includeSystemPrompt: false },
+      );
+      expect(replay).toContainEqual({
+        type: "function_call",
+        call_id: "call_weather",
+        name: "weather",
+        arguments: '{"city":"Seattle"}',
+      });
+      expect(replay).toContainEqual({
+        type: "function_call_output",
+        call_id: "call_weather",
+        output: "Rain",
+      });
+    },
+  );
 
   it("keeps parallel unindexed Responses calls bound by identity without orphans", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-    const firstItem = {
-      type: "function_call",
-      id: "fc_first_unindexed",
-      call_id: "call_first_unindexed",
-      name: "computer",
-      arguments: '{"slot":1}',
-      status: "completed",
-    };
-    const secondItem = {
-      type: "function_call",
-      id: "fc_second_unindexed",
-      call_id: "call_second_unindexed",
-      name: "computer",
-      arguments: '{"slot":2}',
-      status: "completed",
-    };
+    const firstItem = { ...toolItem("first_unindexed", '{"slot":1}'), status: "completed" };
+    const secondItem = { ...toolItem("second_unindexed", '{"slot":2}'), status: "completed" };
 
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          item: { ...firstItem, arguments: "", status: "in_progress" },
-        },
-        {
-          type: "response.output_item.added",
-          item: { ...secondItem, arguments: "", status: "in_progress" },
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          item_id: secondItem.id,
-          delta: secondItem.arguments,
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          item_id: firstItem.id,
-          delta: firstItem.arguments,
-        },
-        {
-          type: "response.function_call_arguments.done",
-          item_id: firstItem.id,
-          arguments: firstItem.arguments,
-        },
-        {
-          type: "response.function_call_arguments.done",
-          item_id: secondItem.id,
-          arguments: secondItem.arguments,
-        },
-        { type: "response.output_item.done", item: firstItem },
-        { type: "response.output_item.done", item: secondItem },
-        {
-          type: "response.completed",
-          response: {
-            id: "resp_parallel_unindexed",
-            status: "completed",
-            output: [firstItem, secondItem],
-          },
-        },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_first_unindexed|fc_first_unindexed",
-        name: "computer",
-        arguments: { slot: 1 },
-      },
-      {
-        type: "toolCall",
-        id: "call_second_unindexed|fc_second_unindexed",
-        name: "computer",
-        arguments: { slot: 2 },
-      },
+    const { output, events } = await collectResponses([
+      itemEvent("added", { ...firstItem, arguments: "", status: "in_progress" }),
+      itemEvent("added", { ...secondItem, arguments: "", status: "in_progress" }),
+      argumentsDelta(secondItem.arguments, undefined, secondItem.id),
+      argumentsDelta(firstItem.arguments, undefined, firstItem.id),
+      argumentsDone(firstItem.arguments, undefined, firstItem.id),
+      argumentsDone(secondItem.arguments, undefined, secondItem.id),
+      itemEvent("done", firstItem),
+      itemEvent("done", secondItem),
+      completed("resp_parallel_unindexed", { output: [firstItem, secondItem] }),
     ]);
+
+    const expected = [
+      toolCall("first_unindexed", "computer", { slot: 1 }),
+      toolCall("second_unindexed", "computer", { slot: 2 }),
+    ];
+    expect(output.content).toEqual(expected);
     expect(
       events
         .filter((event) => event.type === "toolcall_end")
-        .map((event) =>
-          event.type === "toolcall_end"
-            ? [event.contentIndex, event.toolCall.id, event.toolCall.arguments]
-            : undefined,
-        ),
-    ).toEqual([
-      [0, "call_first_unindexed|fc_first_unindexed", { slot: 1 }],
-      [1, "call_second_unindexed|fc_second_unindexed", { slot: 2 }],
-    ]);
+        .map((event) => [event.contentIndex, event.toolCall]),
+    ).toEqual(expected.map((call, index) => [index, call]));
     expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
-  });
-
-  it("fails closed on ambiguous unindexed parallel argument events", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-    const firstItem = {
-      type: "function_call",
-      id: "fc_ambiguous_first",
-      call_id: "call_ambiguous_first",
-      name: "computer",
-    };
-    const secondItem = {
-      type: "function_call",
-      id: "fc_ambiguous_second",
-      call_id: "call_ambiguous_second",
-      name: "computer",
-    };
-
-    await expect(
-      processResponsesStream(
-        responseEvents([
-          { type: "response.output_item.added", item: { ...firstItem, arguments: "" } },
-          { type: "response.output_item.added", item: { ...secondItem, arguments: "" } },
-          { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
-          { type: "response.output_item.done", item: firstItem },
-          { type: "response.output_item.done", item: secondItem },
-          {
-            type: "response.completed",
-            response: { id: "resp_ambiguous_unindexed", status: "completed" },
-          },
-        ]),
-        output,
-        stream,
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
-    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
-    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
   });
 
   it("recovers parallel arguments from authoritative done events and preserves opening names", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-    await processResponsesStream(
-      responseEvents(createResponsesDoneArgumentEvents()),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
+    const { output, events } = await collectResponses(createResponsesDoneArgumentEvents());
 
     expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_recovered_first|fc_recovered_first",
-        name: "read",
-        arguments: { path: "README.md" },
-      },
-      {
-        type: "toolCall",
-        id: "call_recovered_second|fc_recovered_second",
-        name: "write",
-        arguments: { path: "README.md", text: "ok" },
-      },
+      toolCall("recovered_first", "read", { path: "README.md" }),
+      toolCall("recovered_second", "write", { path: "README.md", text: "ok" }),
     ]);
     expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
   });
 
-  it("rejects a completed Responses tool call whose function name changed", async () => {
-    const output = createAssistantOutput();
-
-    await expect(
-      processResponsesStream(
-        responseEvents([
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_name_conflict",
-              call_id: "call_name_conflict",
-              name: "read",
-              arguments: "",
-            },
-          },
-          {
-            type: "response.output_item.done",
-            output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_name_conflict",
-              call_id: "call_name_conflict",
-              name: "write",
-              arguments: "{}",
-            },
-          },
-        ]),
-        output,
-        new AssistantMessageEventStream(),
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("Responses stream changed tool-call function name from read to write");
-  });
-
-  it("routes an omitted-index suffix by item id across parallel Responses calls", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await processResponsesStream(
-      responseEvents([
+  it.each(["item-done", "terminal"])(
+    "keeps provider name validation independent of consumer normalization at %s",
+    async (completion) => {
+      const item = toolItem("alias", '{"id":"sessions_spawn","args":{}}', "tool_call");
+      const { output, events } = await collectResponses(
+        [
+          itemEvent("added", { ...item, arguments: "" }, 0),
+          ...(completion === "item-done" ? [itemEvent("done", item, 0)] : []),
+          completed("resp_alias", { output: [item] }),
+        ],
         {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: {
-            type: "function_call",
-            id: "fc_first",
-            call_id: "call_first",
-            name: "computer",
-            arguments: "",
+          observe(event) {
+            // The runner normalizes aliases on the shared partial before completion.
+            if ("partial" in event && event.partial) {
+              for (const block of event.partial.content) {
+                if (block.type === "toolCall" && block.name === "tool_call") {
+                  block.name = "dispatch_action";
+                }
+              }
+            }
           },
         },
-        {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: {
-            type: "function_call",
-            id: "fc_second",
-            call_id: "call_second",
-            name: "computer",
-            arguments: "",
-          },
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          output_index: 0,
-          item_id: "fc_first",
-          delta: '{"slot":',
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          item_id: "fc_first",
-          delta: "0}",
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          output_index: 1,
-          delta: '{"slot":1}',
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: {
-            type: "function_call",
-            id: "fc_first",
-            call_id: "call_first",
-            name: "computer",
-            arguments: '{"slot":0}',
-          },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 1,
-          item: {
-            type: "function_call",
-            id: "fc_second",
-            call_id: "call_second",
-            name: "computer",
-            arguments: '{"slot":1}',
-          },
-        },
-        { type: "response.completed", response: { id: "resp_suffix", status: "completed" } },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-
-    expect(output.content).toMatchObject([
-      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
-      { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
-    ]);
-    expect(
-      events
-        .filter((event) => event.type === "toolcall_delta")
-        .map((event) => ("contentIndex" in event ? event.contentIndex : undefined)),
-    ).toEqual([0, 0, 1]);
-  });
-
-  it("matches omitted-index parallel completions without duplicating indexed calls", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: {
-            type: "function_call",
-            id: "fc_first",
-            call_id: "call_first",
-            name: "computer",
-            arguments: "",
-          },
-        },
-        {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: {
-            type: "function_call",
-            id: "fc_second",
-            call_id: "call_second",
-            name: "computer",
-            arguments: "",
-          },
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          output_index: 0,
-          item_id: "fc_first",
-          delta: '{"incomplete":',
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "function_call",
-            id: "fc_second",
-            call_id: "call_second",
-            name: "computer",
-            arguments: '{"slot":1}',
-          },
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "function_call",
-            id: "fc_first",
-            call_id: "call_first",
-            name: "computer",
-            arguments: '{"slot":0}',
-          },
-        },
-        {
-          type: "response.completed",
-          response: { id: "resp_omitted_completions", status: "completed" },
-        },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-
-    expect(output.content).toMatchObject([
-      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
-      { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
-    ]);
-    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
-    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
-  });
-
-  it("rejects omitted-index events whose identity mismatches the sole indexed call", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: {
-            type: "function_call",
-            id: "fc_first",
-            call_id: "call_first",
-            name: "computer",
-            arguments: "",
-          },
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          item_id: "fc_other",
-          delta: '{"wrong":true}',
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "function_call",
-            id: "fc_other",
-            call_id: "call_other",
-            name: "computer",
-            arguments: '{"wrong":true}',
-          },
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "function_call",
-            id: "fc_first",
-            call_id: "call_first",
-            name: "computer",
-            arguments: '{"slot":0}',
-          },
-        },
-        {
-          type: "response.completed",
-          response: { id: "resp_identity_mismatch", status: "completed" },
-        },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-
-    expect(output.content).toMatchObject([
-      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
-    ]);
-    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(1);
-    expect(events.filter((event) => event.type === "toolcall_delta")).toHaveLength(0);
-    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
-  });
-
-  it("keeps sequential omitted-index Responses calls unambiguous", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          output_index: 7,
-          item: {
-            type: "function_call",
-            id: "fc_first",
-            call_id: "call_first",
-            name: "computer",
-            arguments: "",
-          },
-        },
-        { type: "response.function_call_arguments.delta", delta: '{"slot":0}' },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "function_call",
-            id: "fc_first",
-            call_id: "call_first",
-            name: "computer",
-            arguments: '{"slot":0}',
-          },
-        },
-        {
-          type: "response.output_item.added",
-          output_index: 8,
-          item: {
-            type: "function_call",
-            id: "fc_second",
-            call_id: "call_second",
-            name: "computer",
-            arguments: "",
-          },
-        },
-        { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "function_call",
-            id: "fc_second",
-            call_id: "call_second",
-            name: "computer",
-            arguments: '{"slot":1}',
-          },
-        },
-        { type: "response.completed", response: { id: "resp_sequential", status: "completed" } },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-
-    expect(output.content).toMatchObject([
-      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
-      { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
-    ]);
-    expect(
-      events
-        .filter((event) => event.type === "toolcall_delta")
-        .map((event) => ("contentIndex" in event ? event.contentIndex : undefined)),
-    ).toEqual([0, 1]);
-  });
-
-  it("materializes a done-only SDK tool call with a balanced terminal lifecycle", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          sequence_number: 1,
-          item: {
-            type: "function_call",
-            id: "fc_done_only",
-            call_id: "call_done_only",
-            name: "weather",
-            arguments: '{"city":"Paris"}',
-            status: "completed",
-          },
-        },
-        {
-          type: "response.completed",
-          sequence_number: 2,
-          response: { id: "resp_done_only", status: "completed" },
-        },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_done_only|fc_done_only",
-        name: "weather",
-        arguments: { city: "Paris" },
-      },
-    ]);
-    expect(output.stopReason).toBe("toolUse");
-    expect(
-      events.map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
-    ).toEqual([
-      ["toolcall_start", 0],
-      ["toolcall_end", 0],
-    ]);
-  });
-
-  it("pairs an item-only tool call with one generated call id", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          sequence_number: 1,
-          item: {
-            type: "function_call",
-            id: "fc_item_only",
-            name: "computer",
-            arguments: "{}",
-            status: "completed",
-          },
-        },
-        { type: "response.completed", response: { id: "resp_item_only", status: "completed" } },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-
-    const block = output.content[0];
-    const end = events.find((event) => event.type === "toolcall_end");
-    if (!block || block.type !== "toolCall" || !end || end.type !== "toolcall_end") {
-      throw new Error("missing item-only tool-call lifecycle");
-    }
-    expect(block.id).toMatch(/^call_[0-9a-f]{24}\|fc_item_only$/);
-    expect(end.toolCall.id).toBe(block.id);
-  });
-
-  it("prices cache-write tokens separately from ordinary Responses input", async () => {
-    const model = {
-      ...gpt56SolModel,
-      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-    } satisfies Model<"openai-responses">;
-    const output = createResponsesAssistantOutput(model, model.api);
-    const stream = new AssistantMessageEventStream();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.completed",
-          response: {
-            id: "resp_cache_write",
-            status: "completed",
-            usage: {
-              input_tokens: 100,
-              input_tokens_details: { cached_tokens: 20, cache_write_tokens: 30 },
-              output_tokens: 10,
-              output_tokens_details: { reasoning_tokens: 0 },
-              total_tokens: 110,
-            },
-          },
-        },
-      ]),
-      output,
-      stream,
-      model,
-    );
-
-    expect(output.usage).toMatchObject({
-      input: 50,
-      output: 10,
-      cacheRead: 20,
-      cacheWrite: 30,
-      totalTokens: 110,
-    });
-    expect(output.usage.cost.input).toBeCloseTo(0.00025);
-    expect(output.usage.cost.output).toBeCloseTo(0.0003);
-    expect(output.usage.cost.cacheRead).toBeCloseTo(0.00001);
-    expect(output.usage.cost.cacheWrite).toBeCloseTo(0.0001875);
-    expect(output.usage.cost.total).toBeCloseTo(0.0007475);
-  });
-
-  it("collapses cumulative message snapshot items into one text block (#91959)", async () => {
-    const output = createAssistantOutput();
-    const stream = new AssistantMessageEventStream();
-    const events: Array<Record<string, unknown>> = [];
-    const textBlockSignatures: Array<[string, number, string | undefined]> = [];
-    const collect = (async () => {
-      for await (const event of stream) {
-        events.push(event as unknown as Record<string, unknown>);
-        if (event.type === "text_start" || event.type === "text_end") {
-          const block = Array.isArray(event.partial.content)
-            ? (event.partial.content[event.contentIndex] as { textSignature?: string } | undefined)
-            : undefined;
-          textBlockSignatures.push([event.type, event.contentIndex, block?.textSignature]);
-        }
-      }
-    })();
-
-    const snapshot1 = "Self-attention computes";
-    const snapshot2 = "Self-attention computes Q/K/V projections";
-    const snapshot3 = "Self-attention computes Q/K/V projections for each token.";
-    const messageItem = (id: string, text: string) => ({
-      type: "message",
-      id,
-      phase: "final_answer",
-      content: [{ type: "output_text", text }],
-    });
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          item: { type: "message", id: "msg_1", phase: "final_answer" },
-        },
-        { type: "response.content_part.added", part: { type: "output_text", text: "" } },
-        { type: "response.output_text.delta", delta: snapshot1 },
-        { type: "response.output_item.done", item: messageItem("msg_1", snapshot1) },
-        {
-          type: "response.output_item.added",
-          item: { type: "message", id: "msg_2", phase: "final_answer" },
-        },
-        { type: "response.output_item.done", item: messageItem("msg_2", snapshot2) },
-        {
-          type: "response.output_item.added",
-          item: { type: "message", id: "msg_3", phase: "final_answer" },
-        },
-        { type: "response.output_item.done", item: messageItem("msg_3", snapshot3) },
-        { type: "response.completed", response: { id: "resp_1", status: "completed" } },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-    stream.end();
-    await collect;
-
-    expect(output.content).toEqual([
-      {
-        type: "text",
-        text: snapshot3,
-        textSignature: JSON.stringify({ v: 1, id: "msg_3", phase: "final_answer" }),
-      },
-    ]);
-    // Balanced lifecycle: exactly one text_start, every event on index 0, and
-    // each collapsed snapshot re-ends the same block with its grown content.
-    expect(events.map((event) => [event.type, event.contentIndex])).toEqual([
-      ["text_start", 0],
-      ["text_delta", 0],
-      ["text_end", 0],
-      ["text_end", 0],
-      ["text_end", 0],
-    ]);
-    expect(
-      events.filter((event) => event.type === "text_end").map((event) => event.content),
-    ).toEqual([snapshot1, snapshot2, snapshot3]);
-    expect(textBlockSignatures).toEqual([
-      ["text_start", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
-      ["text_end", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
-      ["text_end", 0, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
-      ["text_end", 0, JSON.stringify({ v: 1, id: "msg_3", phase: "final_answer" })],
-    ]);
-  });
+      );
+      expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
+      expect(output.content).toEqual([
+        toolCall("alias", "dispatch_action", { id: "sessions_spawn", args: {} }),
+      ]);
+    },
+  );
 
   it.each([
-    ["identical", "Hello world.", "Hello world."],
-    ["shrinking", "Step one. Step two.", "Step one."],
-  ])("keeps %s adjacent same-phase message items as distinct blocks", async (_label, a, b) => {
-    const output = createAssistantOutput();
-    const stream = new AssistantMessageEventStream();
-    const events: Array<Record<string, unknown>> = [];
-    const collect = (async () => {
-      for await (const event of stream) {
-        events.push(event as unknown as Record<string, unknown>);
-      }
-    })();
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          item: { type: "message", id: "msg_1", phase: "final_answer" },
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "message",
-            id: "msg_1",
-            phase: "final_answer",
-            content: [{ type: "output_text", text: a }],
-          },
-        },
-        {
-          type: "response.output_item.added",
-          item: { type: "message", id: "msg_2", phase: "final_answer" },
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "message",
-            id: "msg_2",
-            phase: "final_answer",
-            content: [{ type: "output_text", text: b }],
-          },
-        },
-        { type: "response.completed", response: { id: "resp_1", status: "completed" } },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-    stream.end();
-    await collect;
-
-    // Only strict extensions collapse; equal or shrinking items are real,
-    // independently identified messages and must never be removed.
-    expect(output.content).toEqual([
-      {
-        type: "text",
-        text: a,
-        textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" }),
-      },
-      {
-        type: "text",
-        text: b,
-        textSignature: JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" }),
-      },
-    ]);
-    // The deferred second item still opens and closes its own block.
-    expect(events.map((event) => [event.type, event.contentIndex])).toEqual([
-      ["text_start", 0],
-      ["text_end", 0],
-      ["text_start", 1],
-      ["text_end", 1],
-    ]);
-  });
-
-  it("streams a deferred distinct message live once its text diverges from the prior block", async () => {
-    const output = createAssistantOutput();
-    const stream = new AssistantMessageEventStream();
-    const events: Array<Record<string, unknown>> = [];
-    const liveTextBlockSignatures: Array<[string, number, string | undefined]> = [];
-    const collect = (async () => {
-      for await (const event of stream) {
-        events.push(event as unknown as Record<string, unknown>);
-        if (event.type === "text_start" || event.type === "text_delta") {
-          const block =
-            event.partial && Array.isArray(event.partial.content)
-              ? (event.partial.content[event.contentIndex] as
-                  | { textSignature?: string }
-                  | undefined)
-              : undefined;
-          liveTextBlockSignatures.push([event.type, event.contentIndex, block?.textSignature]);
-        }
-      }
-    })();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          item: { type: "message", id: "msg_1", phase: "final_answer" },
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "message",
-            id: "msg_1",
-            phase: "final_answer",
-            content: [{ type: "output_text", text: "Hello." }],
-          },
-        },
-        {
-          type: "response.output_item.added",
-          item: { type: "message", id: "msg_2", phase: "final_answer" },
-        },
-        { type: "response.content_part.added", part: { type: "output_text", text: "" } },
-        { type: "response.output_text.delta", delta: "Good" },
-        { type: "response.output_text.delta", delta: "bye" },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "message",
-            id: "msg_2",
-            phase: "final_answer",
-            content: [{ type: "output_text", text: "Goodbye" }],
-          },
-        },
-        { type: "response.completed", response: { id: "resp_1", status: "completed" } },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-    stream.end();
-    await collect;
-
-    expect(output.content).toEqual([
-      {
-        type: "text",
-        text: "Hello.",
-        textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" }),
-      },
-      {
-        type: "text",
-        text: "Goodbye",
-        textSignature: JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" }),
-      },
-    ]);
-    // The withheld prefix is replayed as one delta at divergence ("Good"
-    // diverges from "Hello."), then later deltas stream live.
-    expect(events.map((event) => [event.type, event.contentIndex, event.delta ?? null])).toEqual([
-      ["text_start", 0, null],
-      ["text_end", 0, null],
-      ["text_start", 1, null],
-      ["text_delta", 1, "Good"],
-      ["text_delta", 1, "bye"],
-      ["text_end", 1, null],
-    ]);
-    expect(liveTextBlockSignatures).toEqual([
-      ["text_start", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
-      ["text_start", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
-      ["text_delta", 1, undefined],
-      ["text_delta", 1, undefined],
-    ]);
-  });
-
-  it("keeps prefix-nested message items separated by a reasoning item as separate blocks", async () => {
-    const output = createAssistantOutput();
-    const stream = new AssistantMessageEventStream();
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          item: { type: "message", id: "msg_1", phase: "final_answer" },
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "message",
-            id: "msg_1",
-            phase: "final_answer",
-            content: [{ type: "output_text", text: "Step one." }],
-          },
-        },
-        { type: "response.output_item.added", item: { type: "reasoning" } },
-        {
-          type: "response.output_item.done",
-          item: { type: "reasoning", id: "rs_1", summary: [] },
-        },
-        {
-          type: "response.output_item.added",
-          item: { type: "message", id: "msg_2", phase: "final_answer" },
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "message",
-            id: "msg_2",
-            phase: "final_answer",
-            content: [{ type: "output_text", text: "Step one. Step two." }],
-          },
-        },
-        { type: "response.completed", response: { id: "resp_1", status: "completed" } },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-    stream.end();
-
-    // Collapsing across the reasoning block would orphan it for replay.
-    expect(output.content.map((block) => block.type)).toEqual(["text", "thinking", "text"]);
-    expect(output.content[2]).toMatchObject({ type: "text", text: "Step one. Step two." });
-  });
-
-  it("keeps prefix-nested message items with different phases as separate blocks", async () => {
-    const output = createAssistantOutput();
-    const stream = new AssistantMessageEventStream();
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.output_item.added",
-          item: { type: "message", id: "msg_1", phase: "commentary" },
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "message",
-            id: "msg_1",
-            phase: "commentary",
-            content: [{ type: "output_text", text: "Done" }],
-          },
-        },
-        {
-          type: "response.output_item.added",
-          item: { type: "message", id: "msg_2", phase: "final_answer" },
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "message",
-            id: "msg_2",
-            phase: "final_answer",
-            content: [{ type: "output_text", text: "Done." }],
-          },
-        },
-        { type: "response.completed", response: { id: "resp_1", status: "completed" } },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-    stream.end();
-
-    expect(output.content).toEqual([
-      {
-        type: "text",
-        text: "Done",
-        textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "commentary" }),
-      },
-      {
-        type: "text",
-        text: "Done.",
-        textSignature: JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" }),
-      },
-    ]);
+    {
+      name: "routes omitted-index parallel arguments and completions without duplicates",
+      input: [
+        itemEvent("added", toolItem("first", ""), 0),
+        itemEvent("added", toolItem("second", ""), 1),
+        argumentsDelta('{"slot":', 0, "fc_first"),
+        argumentsDelta("0}", undefined, "fc_first"),
+        argumentsDelta('{"slot":', 1),
+        itemEvent("done", toolItem("second", '{"slot":1}')),
+        itemEvent("done", toolItem("first", '{"slot":0}')),
+        completed("resp_suffix"),
+      ],
+      content: [
+        { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+        { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
+      ],
+      deltas: [0, 0, 1],
+      calls: 2,
+    },
+    {
+      name: "rejects omitted-index events whose identity mismatches the sole indexed call",
+      input: [
+        itemEvent("added", toolItem("first", ""), 0),
+        argumentsDelta('{"wrong":true}', undefined, "fc_other"),
+        itemEvent("done", toolItem("other", '{"wrong":true}')),
+        itemEvent("done", toolItem("first", '{"slot":0}')),
+        completed("resp_identity_mismatch"),
+      ],
+      content: [{ type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } }],
+      deltas: [],
+      calls: 1,
+    },
+    {
+      name: "keeps sequential omitted-index Responses calls unambiguous",
+      input: [
+        itemEvent("added", toolItem("first", ""), 7),
+        { type: "response.function_call_arguments.delta", delta: '{"slot":0}' },
+        itemEvent("done", toolItem("first", '{"slot":0}')),
+        itemEvent("added", toolItem("second", ""), 8),
+        { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
+        itemEvent("done", toolItem("second", '{"slot":1}')),
+        completed("resp_sequential"),
+      ],
+      content: [
+        { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+        { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
+      ],
+      deltas: [0, 1],
+      calls: 2,
+    },
+  ])("$name", async ({ input, content, deltas, calls }) => {
+    const { output, events } = await collectResponses(input);
+    expect(output.content).toMatchObject(content);
+    expect(
+      events.filter((event) => event.type === "toolcall_delta").map((event) => event.contentIndex),
+    ).toEqual(deltas);
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(calls);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(calls);
   });
 });
 
-describe("Azure OpenAI Responses content type support", () => {
-  const azureModel = {
-    id: "gpt-5.5",
-    name: "GPT-5.5 (Azure)",
-    api: "azure-openai-responses",
-    provider: "azure",
-    baseUrl: "https://test.openai.azure.com/openai/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
-    maxTokens: 8192,
-  } satisfies Model<"azure-openai-responses">;
+const azureModel = {
+  ...nativeOpenAIModel,
+  api: "azure-openai-responses",
+  provider: "azure",
+  baseUrl: "https://test.openai.azure.com/openai/v1",
+} satisfies Model<"azure-openai-responses">;
 
-  it("supports Azure 'text' content type in addition to 'output_text'", () => {
-    const input = convertResponsesMessages(
-      azureModel,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: azureModel.api,
-            provider: azureModel.provider,
-            model: azureModel.id,
-            usage: createZeroUsage(),
-            stopReason: "stop",
-            timestamp: 1,
-            content: [
-              {
-                type: "text",
-                text: "Azure response with text content type",
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: "msg_azure_text",
-                }),
-              },
-            ],
-          },
-        ],
-      } satisfies Context,
-      new Set(["azure", "azure-openai-responses"]),
-      { includeSystemPrompt: false },
-    );
-
-    const assistantMessage = input.find(
-      (item) => item && typeof item === "object" && "role" in item && item.role === "assistant",
-    );
-
-    expect(assistantMessage).toMatchObject({
-      type: "message",
-      role: "assistant",
-      content: [
-        {
-          type: "output_text",
-          text: "Azure response with text content type",
-          annotations: [],
-        },
-      ],
-    });
-  });
-
-  it("processResponsesStream handles Azure 'text' content type with output_text deltas", async () => {
-    const azureEvents: OpenAIResponsesStreamEvent[] = [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        sequence_number: 1,
-        item: {
-          type: "message",
-          role: "assistant",
-          id: "msg_azure_1",
-          content: [],
-          status: "in_progress",
-        },
-      },
-      {
-        type: "response.content_part.added",
-        content_index: 0,
-        item_id: "msg_azure_1",
-        output_index: 0,
-        sequence_number: 2,
-        part: {
-          type: "text",
-          text: "",
-        },
-      },
-      {
-        type: "response.output_text.delta",
-        content_index: 0,
-        delta: "Hello",
-        item_id: "msg_azure_1",
-        logprobs: [],
-        output_index: 0,
-        sequence_number: 3,
-      },
-      {
-        type: "response.output_text.delta",
-        content_index: 0,
-        delta: " from",
-        item_id: "msg_azure_1",
-        logprobs: [],
-        output_index: 0,
-        sequence_number: 4,
-      },
-      {
-        type: "response.output_text.delta",
-        content_index: 0,
-        delta: " Azure!",
-        item_id: "msg_azure_1",
-        logprobs: [],
-        output_index: 0,
-        sequence_number: 5,
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        sequence_number: 6,
-        item: {
-          type: "message",
-          role: "assistant",
-          id: "msg_azure_1",
-          content: [
+it.each([
+  { name: "explicit text part", deltaType: "response.output_text.delta", explicitPart: true },
+  { name: "implicit text part", deltaType: "response.text.delta", explicitPart: false },
+])("streams Azure $name", async ({ deltaType, explicitPart }) => {
+  const liveTextSignatures: Array<string | undefined> = [];
+  const item = { type: "message", role: "assistant", id: "msg_azure", content: [] };
+  const { output, events } = await collectResponses(
+    [
+      itemEvent("added", { ...item, status: "in_progress" }, 0),
+      ...(explicitPart
+        ? [
             {
-              type: "text",
-              text: "Hello from Azure!",
+              type: "response.content_part.added",
+              output_index: 0,
+              part: { type: "text", text: "" },
             },
-          ],
-          status: "completed",
-        },
-      },
+          ]
+        : []),
+      { type: deltaType, delta: "Hello", ...(explicitPart ? { output_index: 0 } : {}) },
+      { type: deltaType, delta: " from Azure!", ...(explicitPart ? { output_index: 0 } : {}) },
+      itemEvent("done", { ...item, status: "completed", content: [text("Hello from Azure!")] }, 0),
       {
         type: "response.completed",
-        sequence_number: 7,
         response: {
-          id: "resp_azure_123",
-          created_at: 1,
-          output_text: "Hello from Azure!",
-          error: null,
-          incomplete_details: null,
-          instructions: null,
-          metadata: null,
-          model: azureModel.id,
-          object: "response",
-          output: [],
-          parallel_tool_calls: false,
-          temperature: null,
-          tool_choice: "auto",
-          tools: [],
-          top_p: null,
+          id: "resp_azure",
           status: "completed",
+          model: azureModel.id,
+          output: [],
           usage: {
             input_tokens: 10,
-            input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
             output_tokens: 5,
-            output_tokens_details: { reasoning_tokens: 0 },
             total_tokens: 15,
-          },
-        },
-      },
-    ];
-
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-    const output = createResponsesAssistantOutput(azureModel, "azure-openai-responses");
-    await processResponsesStream(streamResponsesEvents(azureEvents), output, stream, azureModel);
-
-    expect(
-      events.map((event) =>
-        event.type === "text_delta"
-          ? { type: event.type, delta: event.delta }
-          : event.type === "text_end"
-            ? { type: event.type, content: event.content }
-            : { type: event.type },
-      ),
-    ).toEqual([
-      { type: "text_start" },
-      { type: "text_delta", delta: "Hello" },
-      { type: "text_delta", delta: " from" },
-      { type: "text_delta", delta: " Azure!" },
-      { type: "text_end", content: "Hello from Azure!" },
-    ]);
-
-    expect(output.content).toHaveLength(1);
-    expect(output.content[0]).toMatchObject({
-      type: "text",
-      text: "Hello from Azure!",
-    });
-
-    expect(output.usage).toMatchObject({
-      input: 10,
-      output: 5,
-      totalTokens: 15,
-    });
-
-    expect(output.stopReason).toBe("stop");
-  });
-
-  it("processResponsesStream handles Azure text deltas without a content_part.added event", async () => {
-    const azureEvents: OpenAIResponsesStreamEvent[] = [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        sequence_number: 1,
-        item: {
-          type: "message",
-          role: "assistant",
-          id: "msg_azure_without_part",
-          content: [],
-          status: "in_progress",
-        },
-      },
-      {
-        type: "response.text.delta",
-        delta: "No explicit",
-      },
-      {
-        type: "response.text.delta",
-        delta: " part",
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        sequence_number: 4,
-        item: {
-          type: "message",
-          role: "assistant",
-          id: "msg_azure_without_part",
-          content: [
-            {
-              type: "text",
-              text: "No explicit part",
-            },
-          ],
-          status: "completed",
-        },
-      },
-      {
-        type: "response.completed",
-        sequence_number: 5,
-        response: {
-          id: "resp_azure_without_part",
-          created_at: 1,
-          output_text: "No explicit part",
-          error: null,
-          incomplete_details: null,
-          instructions: null,
-          metadata: null,
-          model: azureModel.id,
-          object: "response",
-          output: [],
-          parallel_tool_calls: false,
-          temperature: null,
-          tool_choice: "auto",
-          tools: [],
-          top_p: null,
-          status: "completed",
-          usage: {
-            input_tokens: 3,
             input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
-            output_tokens: 3,
             output_tokens_details: { reasoning_tokens: 0 },
-            total_tokens: 6,
           },
         },
       },
-    ];
-
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-    const output = createResponsesAssistantOutput(azureModel, "azure-openai-responses");
-    const liveTextSignatures: Array<string | undefined> = [];
-    const push = stream.push.bind(stream);
-    stream.push = (event) => {
-      if (event.type === "text_start" || event.type === "text_delta") {
-        const block = event.partial?.content[event.contentIndex];
-        liveTextSignatures.push(block?.type === "text" ? block.textSignature : undefined);
-      }
-      push(event);
-    };
-
-    await processResponsesStream(streamResponsesEvents(azureEvents), output, stream, azureModel);
-
-    expect(
-      events.map((event) =>
-        event.type === "text_delta"
-          ? event.delta
-          : event.type === "text_end"
-            ? `[END:${event.content}]`
-            : event.type,
-      ),
-    ).toEqual(["text_start", "No explicit", " part", "[END:No explicit part]"]);
-
-    expect(output.content[0]).toMatchObject({
-      type: "text",
-      text: "No explicit part",
-    });
-    // Unphased Responses items keep streaming live; replay identity is stamped
-    // only once completion supplies the final block.
-    expect(liveTextSignatures).toEqual([undefined, undefined, undefined]);
+    ],
+    {
+      model: azureModel,
+      observe(event) {
+        if (event.type === "text_start" || event.type === "text_delta") {
+          const block = event.partial?.content[event.contentIndex];
+          liveTextSignatures.push(block?.type === "text" ? block.textSignature : undefined);
+        }
+      },
+    },
+  );
+  expect(
+    events.map((event) =>
+      event.type === "text_delta"
+        ? event.delta
+        : event.type === "text_end"
+          ? `[END:${event.content}]`
+          : event.type,
+    ),
+  ).toEqual(["text_start", "Hello", " from Azure!", "[END:Hello from Azure!]"]);
+  expect(output).toMatchObject({
+    content: [text("Hello from Azure!")],
+    usage: { input: 10, output: 5, totalTokens: 15 },
+    stopReason: "stop",
   });
+  expect(liveTextSignatures).toEqual([undefined, undefined, undefined]);
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

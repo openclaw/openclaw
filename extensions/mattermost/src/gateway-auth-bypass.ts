@@ -1,55 +1,4 @@
-// Mattermost plugin module implements gateway auth bypass behavior.
-import {
-  asOptionalRecord,
-  normalizeOptionalString as readTrimmedString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-
-const DEFAULT_SLASH_CALLBACK_PATH = "/api/channels/mattermost/command";
-
-type MattermostSlashCommandConfigInput = {
-  callbackPath?: unknown;
-  callbackUrl?: unknown;
-};
-
-type MattermostAccountConfigInput = {
-  commands?: MattermostSlashCommandConfigInput;
-};
-
-type MattermostConfigInput = MattermostAccountConfigInput & {
-  accounts?: Record<string, unknown>;
-};
-
-function normalizeCallbackPath(value: unknown): string {
-  const trimmed = readTrimmedString(value);
-  if (!trimmed) {
-    return DEFAULT_SLASH_CALLBACK_PATH;
-  }
-  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-}
-
-function readMattermostCommands(value: unknown): MattermostSlashCommandConfigInput | undefined {
-  return asOptionalRecord(value) as MattermostSlashCommandConfigInput | undefined;
-}
-
-function isMattermostBypassPath(path: string): boolean {
-  return path === DEFAULT_SLASH_CALLBACK_PATH || path.startsWith("/api/channels/mattermost/");
-}
-
-function collectMattermostSlashCallbackPaths(raw?: MattermostSlashCommandConfigInput): string[] {
-  const paths = new Set<string>([normalizeCallbackPath(raw?.callbackPath)]);
-  const callbackUrl = readTrimmedString(raw?.callbackUrl);
-  if (callbackUrl) {
-    try {
-      const pathname = new URL(callbackUrl).pathname;
-      if (pathname) {
-        paths.add(pathname);
-      }
-    } catch {
-      // Keep the normalized callback path when the configured URL is invalid.
-    }
-  }
-  return [...paths];
-}
+import { collectMattermostCallbackPaths } from "./mattermost/callback-host.js";
 
 // Params shape is the core gateway-auth artifact contract: core invokes the
 // public `gateway-auth-api.js` export as `resolveGatewayAuthBypassPaths({ cfg })`
@@ -58,29 +7,7 @@ function collectMattermostSlashCallbackPaths(raw?: MattermostSlashCommandConfigI
 export function resolveMattermostGatewayAuthBypassPaths(params: {
   cfg: { channels?: Record<string, unknown> };
 }): string[] {
-  const channels = params.cfg.channels;
-  const base =
-    channels?.mattermost && typeof channels.mattermost === "object"
-      ? (channels.mattermost as MattermostConfigInput)
-      : undefined;
-  const callbackPaths = new Set(
-    collectMattermostSlashCallbackPaths(readMattermostCommands(base?.commands)).filter(
-      isMattermostBypassPath,
-    ),
+  return collectMattermostCallbackPaths(params.cfg.channels?.mattermost).filter((path) =>
+    path.startsWith("/api/channels/mattermost/"),
   );
-  const accounts = base?.accounts ?? {};
-  for (const account of Object.values(accounts)) {
-    const accountConfig =
-      account && typeof account === "object" && !Array.isArray(account)
-        ? (account as MattermostAccountConfigInput)
-        : undefined;
-    for (const path of collectMattermostSlashCallbackPaths(
-      readMattermostCommands(accountConfig?.commands),
-    )) {
-      if (isMattermostBypassPath(path)) {
-        callbackPaths.add(path);
-      }
-    }
-  }
-  return [...callbackPaths];
 }

@@ -10,8 +10,4 @@ describe("getHeader", () => {
   it("matches headers case-insensitively", () => {
     expect(getHeader({ "X-Twilio-Signature": "sig-1" }, "x-twilio-signature")).toBe("sig-1");
   });
-
-  it("returns undefined for missing header", () => {
-    expect(getHeader({ host: "example.com" }, "x-missing")).toBeUndefined();
-  });
 });

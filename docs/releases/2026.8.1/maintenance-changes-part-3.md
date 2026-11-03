@@ -641,7 +641,7 @@ Maintenance changes 1,505 to 2,256 of 6,016. See [Maintainer and Internal Change
 - Share durable inbound-delivery monitoring across six channels [#111214](https://github.com/openclaw/openclaw/pull/111214)
 - Add Telegram MCP App Funnel proof infrastructure [#111238](https://github.com/openclaw/openclaw/pull/111238)
 - Consolidate durable ingress monitoring across six channels [#111249](https://github.com/openclaw/openclaw/pull/111249)
-- Make the Mintlify anchor audit reach documentation checks [#111265](https://github.com/openclaw/openclaw/pull/111265)
+- Make the published anchor audit reach documentation checks [#111265](https://github.com/openclaw/openclaw/pull/111265)
 - Streamline PR landing validation and CI recovery [#111287](https://github.com/openclaw/openclaw/pull/111287)
 - Enforce the Plugin SDK API baseline in CI [#111289](https://github.com/openclaw/openclaw/pull/111289)
 - Reuse hosted CI after content-identical rebases [#111335](https://github.com/openclaw/openclaw/pull/111335)

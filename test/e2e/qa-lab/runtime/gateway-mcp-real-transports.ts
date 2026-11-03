@@ -6,8 +6,8 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   QA_EVIDENCE_FILENAME,
@@ -24,6 +24,7 @@ import { runGatewaySmoke } from "../../../../scripts/dev/gateway-smoke.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { withFixturePlugin } from "./fixture-plugin-config.ts";
 import { createMcpClientTempState } from "./mcp-client-temp-state.fixture.ts";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.ts";
 
@@ -192,27 +193,6 @@ module.exports = {
   };
 }
 
-function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawConfig {
-  const existingPaths = config.plugins?.load?.paths ?? [];
-  const existingAllow = config.plugins?.allow ?? [];
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      enabled: true,
-      allow: [...new Set([...existingAllow, FIXTURE_PLUGIN_ID])],
-      load: {
-        ...config.plugins?.load,
-        paths: [...new Set([...existingPaths, pluginDir])],
-      },
-      entries: {
-        ...config.plugins?.entries,
-        [FIXTURE_PLUGIN_ID]: { enabled: true },
-      },
-    },
-  };
-}
-
 function resolveChannelMcpInvocation(params: {
   gatewayToken: string;
   gatewayUrl: string;
@@ -335,7 +315,6 @@ async function runMcpPluginToolsClientProof(params: {
         name: FIXTURE_TOOL_NAME,
         arguments: { query: "ORBIT-9 codename", maxResults: 3 },
       },
-      undefined,
       { timeout: MCP_PLUGIN_TOOLS_REQUEST_TIMEOUT_MS },
     ),
   );
@@ -497,7 +476,10 @@ async function connectChannelMcpClient(params: {
     stderr: "pipe",
   });
   transport.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-  const client = new Client({ name: "qa-gateway-mcp-client", version: "1.0.0" });
+  const client = new Client(
+    { name: "qa-gateway-mcp-client", version: "1.0.0" },
+    { versionNegotiation: { mode: "legacy" } },
+  );
   let connectTimeout: NodeJS.Timeout | undefined;
   try {
     await Promise.race([
@@ -561,6 +543,7 @@ async function runGatewaySmokeProof(options: ProducerOptions): Promise<string> {
   try {
     const gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,
@@ -618,11 +601,12 @@ async function runMcpGatewayStartupRetryProof(options: ProducerOptions): Promise
     };
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,
       onListening,
-      mutateConfig: (config) => withFixturePlugin(config, fixture.pluginDir),
+      mutateConfig: (config) => withFixturePlugin(config, fixture.pluginDir, FIXTURE_PLUGIN_ID),
     });
     if (!proxy || !mcp) {
       throw new Error("MCP client was not started by the Gateway before-spawn hook");
@@ -705,7 +689,7 @@ async function runMcpGatewayStartupRetryProof(options: ProducerOptions): Promise
 
 async function writePluginToolsConfig(root: string, pluginDir: string) {
   const configPath = path.join(root, "openclaw.json");
-  const config = withFixturePlugin({} as OpenClawConfig, pluginDir);
+  const config = withFixturePlugin({} as OpenClawConfig, pluginDir, FIXTURE_PLUGIN_ID);
   await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   return configPath;
 }
@@ -733,7 +717,10 @@ async function runMcpPluginToolsProof(options: ProducerOptions): Promise<string>
     stderr: "pipe",
   });
   transport.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-  const client = new Client({ name: "qa-plugin-tools-client", version: "1.0.0" });
+  const client = new Client(
+    { name: "qa-plugin-tools-client", version: "1.0.0" },
+    { versionNegotiation: { mode: "legacy" } },
+  );
   let details = "";
   let proofError: Error | undefined;
   try {

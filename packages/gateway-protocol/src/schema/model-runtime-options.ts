@@ -3,9 +3,20 @@ import { closedObject } from "./closed-object.js";
 import { WorkerExecutionModeSchema } from "./environments.js";
 import { NonEmptyString } from "./primitives.js";
 
+/** Where a completion runs: the built-in HTTP runtime, a CLI backend, or a plugin harness. */
+export const GatewayCompletionRouteSchema = closedObject({
+  id: NonEmptyString,
+  kind: Type.Union([Type.Literal("api"), Type.Literal("cli"), Type.Literal("harness")]),
+  /** Operator-facing runtime name, e.g. "Claude CLI" or "OpenAI Codex". */
+  label: NonEmptyString,
+});
+
 export const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
+  workspaceEnvironment: Type.Optional(
+    closedObject({ kind: Type.Literal("provider-hosted"), label: NonEmptyString }),
+  ),
   cloudPlacementSupported: Type.Optional(Type.Boolean()),
   cloudPlacementExecutionMode: Type.Optional(WorkerExecutionModeSchema),
   devicePlacement: Type.Optional(

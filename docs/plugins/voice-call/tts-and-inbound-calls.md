@@ -191,10 +191,16 @@ extracts speech text defensively:
 
 - Ignores payloads marked as reasoning/error content.
 - Parses direct JSON, fenced JSON, or inline `"spoken"` keys.
+- Joins recoverable inline `"spoken"` fields in order. If any declared field cannot be recovered, the whole reply uses the plain-text fallback instead of silently dropping a segment.
 - Falls back to plain text and removes likely planning/meta lead-in paragraphs.
 
 This keeps spoken playback focused on caller-facing text and avoids leaking
 planning text into audio.
+
+If response generation fails or times out before delivering speech, Voice Call
+attempts a short spoken apology through the configured TTS path and keeps the
+call open for another question. Error details are never spoken. An explicit
+`{"spoken":""}` response remains silent.
 
 ### Conversation startup behavior
 
@@ -228,6 +234,11 @@ The reaper runs every 30 seconds and only ends calls that have no
 (`speaking`/`listening`) state, so answered conversations are never reaped
 by this timer; `maxDurationSeconds` (default 300) is the separate cap that
 ends answered calls that run too long.
+
+The Gateway service owns the reaper schedule and joins pending provider hangups
+before closing its call manager. Missed checks coalesce while provider hangups
+are pending. Standalone CLI calls bind to their existing executable CLI owner,
+which stays active until the call runtime closes.
 
 For notify-style flows where carriers can be slow to deliver ring/answer
 webhooks, raise `staleCallReaperSeconds` past the default so slow-but-normal

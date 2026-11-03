@@ -11,7 +11,6 @@ enum CritterIconRenderer {
     private struct Canvas {
         let w: CGFloat
         let h: CGFloat
-        let stepX: CGFloat
         let stepY: CGFloat
         let snapX: (CGFloat) -> CGFloat
         let snapY: (CGFloat) -> CGFloat
@@ -110,12 +109,6 @@ enum CritterIconRenderer {
         }
     }
 
-    private struct FaceOptions {
-        let blink: CGFloat
-        let eyesClosedLines: Bool
-        let happyEyes: Bool
-    }
-
     static func makeIcon(
         blink: CGFloat,
         legWiggle: CGFloat = 0,
@@ -126,7 +119,20 @@ enum CritterIconRenderer {
         happyEyes: Bool = false,
         badge: Badge? = nil) -> NSImage
     {
-        guard let rep = self.makeBitmapRep() else {
+        // Force a 36×36px backing store (2× for the 18pt logical canvas) so the menu bar icon stays crisp on Retina.
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 36,
+            pixelsHigh: 36,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bitmapFormat: [],
+            bytesPerRow: 0,
+            bitsPerPixel: 0)
+        else {
             return NSImage(size: self.size)
         }
         rep.size = self.size
@@ -150,11 +156,12 @@ enum CritterIconRenderer {
             antennaDroop: antennaDroop)
 
         self.drawBody(in: canvas, geometry: geometry)
-        let face = FaceOptions(
+        self.drawFace(
+            in: canvas,
+            geometry: geometry,
             blink: blink,
             eyesClosedLines: eyesClosedLines,
             happyEyes: happyEyes)
-        self.drawFace(in: canvas, geometry: geometry, options: face)
 
         if let badge {
             self.drawBadge(badge, canvas: canvas)
@@ -164,24 +171,6 @@ enum CritterIconRenderer {
         image.addRepresentation(rep)
         image.isTemplate = true
         return image
-    }
-
-    private static func makeBitmapRep() -> NSBitmapImageRep? {
-        // Force a 36×36px backing store (2× for the 18pt logical canvas) so the menu bar icon stays crisp on Retina.
-        let pixelsWide = 36
-        let pixelsHigh = 36
-        return NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: pixelsWide,
-            pixelsHigh: pixelsHigh,
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bitmapFormat: [],
-            bytesPerRow: 0,
-            bitsPerPixel: 0)
     }
 
     private static func makeCanvas(for rep: NSBitmapImageRep, context: NSGraphicsContext) -> Canvas {
@@ -196,7 +185,6 @@ enum CritterIconRenderer {
         return Canvas(
             w: w,
             h: h,
-            stepX: stepX,
             stepY: stepY,
             snapX: snapX,
             snapY: snapY,
@@ -251,7 +239,9 @@ enum CritterIconRenderer {
     private static func drawFace(
         in canvas: Canvas,
         geometry: Geometry,
-        options: FaceOptions)
+        blink: CGFloat,
+        eyesClosedLines: Bool,
+        happyEyes: Bool)
     {
         let ctx = canvas.context
         let leftCenter = CGPoint(x: canvas.w / 2 - geometry.eyeOffset, y: geometry.eyeY)
@@ -260,7 +250,7 @@ enum CritterIconRenderer {
         ctx.saveGState()
         ctx.setBlendMode(.clear)
 
-        if options.happyEyes || options.eyesClosedLines {
+        if happyEyes || eyesClosedLines {
             // Curved lids: happy "∩ ∩" for celebrations, sleepy "⌣ ⌣" while dozing.
             let radius = geometry.eyeSize.width * 0.62
             let lineWidth = max(canvas.stepY * 2, geometry.eyeSize.height * 0.34)
@@ -269,15 +259,15 @@ enum CritterIconRenderer {
             for center in [leftCenter, rightCenter] {
                 let arcCenter = CGPoint(
                     x: center.x,
-                    y: center.y + (options.happyEyes ? -radius * 0.4 : radius * 0.55))
+                    y: center.y + (happyEyes ? -radius * 0.4 : radius * 0.55))
                 let path = CGMutablePath()
                 // Counterclockwise sweeps the short arc in this y-up context:
                 // top half for "∩", bottom half for "⌣".
                 path.addArc(
                     center: arcCenter,
                     radius: radius,
-                    startAngle: options.happyEyes ? .pi * 0.12 : .pi * 1.12,
-                    endAngle: options.happyEyes ? .pi * 0.88 : .pi * 1.88,
+                    startAngle: happyEyes ? .pi * 0.12 : .pi * 1.12,
+                    endAngle: happyEyes ? .pi * 0.88 : .pi * 1.88,
                     clockwise: false)
                 ctx.addPath(path)
             }
@@ -288,7 +278,7 @@ enum CritterIconRenderer {
         }
 
         // Blink squeezes the eye toward a soft line so the face never vanishes mid-blink.
-        let eyeOpen = max(0.22, 1 - options.blink)
+        let eyeOpen = max(0.22, 1 - blink)
         let eyeH = geometry.eyeSize.height * eyeOpen
         for center in [leftCenter, rightCenter] {
             ctx.addEllipse(in: CGRect(

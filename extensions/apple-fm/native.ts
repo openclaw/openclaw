@@ -9,13 +9,6 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
 
-export type AppleFmFacts = {
-  available: boolean;
-  reason?: string;
-  modelName: string;
-  contextWindow: number;
-};
-
 type NativeOptions = { signal?: AbortSignal; env?: NodeJS.ProcessEnv };
 const SETUP_REQUIRED = "Run Apple Foundation Models setup again to build its native helper.";
 const infoSchema = z.object({
@@ -24,6 +17,7 @@ const infoSchema = z.object({
   modelName: z.string(),
   contextWindow: z.number().int().nonnegative(),
 });
+export type AppleFmFacts = z.infer<typeof infoSchema>;
 const resultSchema = z.object({
   text: z.string(),
   toolCalls: z.array(
@@ -133,14 +127,19 @@ export function createAppleFmNative(pluginRoot: string) {
       signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
     };
     try {
-      await compileHelper(temporary, probeOptions);
+      // Discovery only runs `info`; swiftc -O made cold setup detection several times slower.
+      await compileHelper(temporary, probeOptions, "-Onone");
       return infoSchema.parse(await invoke(temporary, ["info"], "", probeOptions));
     } finally {
       await fs.rm(directory, { recursive: true, force: true });
     }
   }
 
-  async function compileHelper(temporary: string, options: NativeOptions): Promise<void> {
+  async function compileHelper(
+    temporary: string,
+    options: NativeOptions,
+    optimization: "-O" | "-Onone",
+  ): Promise<void> {
     options.signal?.throwIfAborted();
     const developerTools = await runCommandBuffered(["/usr/bin/xcode-select", "-p"], {
       input: "",
@@ -162,7 +161,7 @@ export function createAppleFmNative(pluginRoot: string) {
         "macosx",
         "swiftc",
         "-parse-as-library",
-        "-O",
+        optimization,
         "-target",
         "arm64-apple-macos27.0",
         SOURCE,
@@ -200,7 +199,7 @@ export function createAppleFmNative(pluginRoot: string) {
       const directory = await fs.mkdtemp(path.join(path.dirname(command), "build-"));
       const temporary = path.join(directory, "helper");
       try {
-        await compileHelper(temporary, options);
+        await compileHelper(temporary, options, "-O");
         await fs.chmod(temporary, 0o700);
         options.signal?.throwIfAborted();
         await fs.rename(temporary, command);

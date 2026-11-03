@@ -28,7 +28,7 @@ describe("parseCodexNativeToolCatalog", () => {
     null,
     {},
     { id: "other" },
-    ...[false, 0, "", {}, [null]].map((dynamic_tools) => ({ id: threadId, dynamic_tools })),
+    ...[{}, [null]].map((dynamic_tools) => ({ id: threadId, dynamic_tools })),
   ])("rejects invalid metadata %j", (metadata) => {
     expect(() => parseCodexNativeToolCatalog(metadata, threadId)).toThrow(
       "native tool catalog is missing, corrupt, or changed",

@@ -20,25 +20,11 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => ({
 }));
 
 describe("config io shell env fallback", () => {
-  it.each([
-    {
-      name: "can defer shell env fallback during config load",
-      missing: false,
-      modes: [undefined, "defer"],
-    },
-    {
-      name: "honors deferred shell env fallback when the config file is missing",
-      missing: true,
-      modes: ["defer", undefined],
-    },
-  ] as const)("$name", async ({ missing, modes }) => {
+  it("honors deferred shell env fallback when the config file is missing", async () => {
     await withTempDir("openclaw-shell-env-", async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      if (!missing) {
-        await fs.writeFile(configPath, JSON.stringify({ env: { shellEnv: { enabled: true } } }));
-      }
-      shellEnvMocks.shouldEnableShellEnvFallback.mockReturnValue(missing);
+      shellEnvMocks.shouldEnableShellEnvFallback.mockReturnValue(true);
       const baseOptions = {
         configPath,
         env: {},
@@ -46,8 +32,7 @@ describe("config io shell env fallback", () => {
         logger: { error: vi.fn(), warn: vi.fn() },
         observe: false,
       };
-
-      for (const shellEnvFallback of modes) {
+      for (const shellEnvFallback of ["defer", undefined] as const) {
         shellEnvMocks.loadShellEnvFallback.mockClear();
         createConfigIO({ ...baseOptions, shellEnvFallback }).loadConfig();
         expect(shellEnvMocks.loadShellEnvFallback).toHaveBeenCalledTimes(

@@ -1,4 +1,8 @@
-import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import type {
+  OpenClawPluginNodeHostCommandContext,
+  OpenClawPluginNodeWorkspaceLease,
+} from "../plugins/types.node-host.js";
 
 /** Retain invocation-bound workspace capabilities until command handling settles. */
 export async function withNodeHostPluginInvocation<T>(
@@ -16,6 +20,35 @@ export async function withNodeHostPluginInvocation<T>(
   const acquireManagedWorkspace = context?.acquireManagedWorkspace;
   const acquireManagedWorkspaceAsync = context?.acquireManagedWorkspaceAsync;
   let pluginInvocationActive = true;
+  const assertCurrent = (requestedSessionKey: string) => {
+    if (
+      !pluginInvocationActive ||
+      signal?.aborted ||
+      !sessionKey ||
+      requestedSessionKey !== sessionKey
+    ) {
+      throw new Error("node placement workspace invocation authority is closed");
+    }
+  };
+  const bindWorkspace = (workspace: OpenClawPluginNodeWorkspaceLease, key: string) => {
+    const environment = workspace.processEnvironment;
+    return environment
+      ? {
+          ...workspace,
+          processEnvironment: {
+            prepare: (env: NodeJS.ProcessEnv) => {
+              assertCurrent(key);
+              return environment.prepare(env);
+            },
+            assertCurrent: () => {
+              assertCurrent(key);
+              environment.assertCurrent();
+            },
+            redactOutput: environment.redactOutput,
+          },
+        }
+      : workspace;
+  };
   const invokeContext =
     context && (sessionKey || signal || acquireManagedWorkspace || acquireManagedWorkspaceAsync)
       ? {
@@ -28,21 +61,11 @@ export async function withNodeHostPluginInvocation<T>(
                   request: Parameters<typeof acquireManagedWorkspaceAsync>[0],
                 ) => {
                   const captured = { ...request };
-                  const assertCurrent = () => {
-                    if (
-                      !pluginInvocationActive ||
-                      signal?.aborted ||
-                      !sessionKey ||
-                      captured.sessionKey !== sessionKey
-                    ) {
-                      throw new Error("node placement workspace invocation authority is closed");
-                    }
-                  };
-                  assertCurrent();
+                  assertCurrent(captured.sessionKey);
                   const workspace = await acquireManagedWorkspaceAsync(captured);
                   try {
-                    assertCurrent();
-                    return workspace;
+                    assertCurrent(captured.sessionKey);
+                    return bindWorkspace(workspace, captured.sessionKey);
                   } catch (error) {
                     workspace.release();
                     throw error;
@@ -55,15 +78,13 @@ export async function withNodeHostPluginInvocation<T>(
                 acquireManagedWorkspace: (
                   request: Parameters<typeof acquireManagedWorkspace>[0],
                 ) => {
-                  if (
-                    !pluginInvocationActive ||
-                    signal?.aborted ||
-                    !sessionKey ||
-                    request.sessionKey !== sessionKey
-                  ) {
-                    throw new Error("node placement workspace invocation authority is closed");
-                  }
-                  return acquireManagedWorkspace(request);
+                  warnPluginSdkDeprecation({
+                    family: "node-host-sync-workspace",
+                    method: "OpenClawPluginNodeHostCommandContext.acquireManagedWorkspace",
+                    replacement: "await context.acquireManagedWorkspaceAsync()",
+                  });
+                  assertCurrent(request.sessionKey);
+                  return bindWorkspace(acquireManagedWorkspace(request), request.sessionKey);
                 },
               }
             : {}),

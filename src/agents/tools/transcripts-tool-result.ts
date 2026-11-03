@@ -1,17 +1,13 @@
 import type { stopTranscriptCapture } from "../../transcripts/capture-operations.js";
 import { formatTranscriptAccountId, type startTranscripts } from "../../transcripts/capture.js";
 import { transcriptSessionSelector } from "../../transcripts/store.js";
+import { textResult } from "./tool-results.js";
 
 export function toolText(text: string, details?: Record<string, unknown> & { selector?: string }) {
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: details?.selector ? `${text}\nSelector: ${details.selector}` : text,
-      },
-    ],
-    details: details ?? {},
-  };
+  return textResult(
+    details?.selector ? `${text}\nSelector: ${details.selector}` : text,
+    details ?? {},
+  );
 }
 
 export function transcriptStartToolResult(result: Awaited<ReturnType<typeof startTranscripts>>) {

@@ -1,7 +1,9 @@
-// QA Lab Matrix destructive E2EE state-loss helpers.
-import { access, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -9,7 +11,18 @@ import {
 import { loadMatrixQaE2eeRuntime } from "../substrate/e2ee-client.js";
 import { requestMatrixJson } from "../substrate/request.js";
 import type { MatrixQaCliRuntime } from "./scenario-runtime-e2ee-destructive-recovery.js";
-import { findFilesByName } from "./scenario-runtime-find-files.js";
+import { findMatrixStateDatabases } from "./scenario-runtime-find-files.js";
+
+function withMatrixQaStateStore<T>(
+  options: OpenKeyedStoreOptions,
+  run: (store: PluginStateSyncKeyedStore<unknown>) => T,
+): T {
+  try {
+    return run(createPluginStateSyncKeyedStoreForTests<unknown>("matrix", options));
+  } finally {
+    resetPluginStateStoreForTests();
+  }
+}
 
 async function findMatrixQaCliAccountRoot(params: {
   deviceId: string;
@@ -17,110 +30,48 @@ async function findMatrixQaCliAccountRoot(params: {
   userId: string;
 }) {
   const storageMetadataRuntime = await loadMatrixQaE2eeRuntime();
-  const sqlitePaths = await findFilesByName({
-    filename: "openclaw.sqlite",
-    rootDir: params.runtime.stateDir,
-    maxDepth: 10,
-  });
-  const legacyMetadataPaths = await findFilesByName({
-    filename: "storage-meta.json",
-    rootDir: params.runtime.stateDir,
-    maxDepth: 10,
-  });
-  // Current account metadata lives in account-local SQLite. Keep legacy JSON
-  // discovery for older tagged fixtures without making it the canonical path.
-  const accountRoots = new Set(
-    sqlitePaths
-      .filter((sqlitePath) => path.basename(path.dirname(sqlitePath)) === "state")
-      .map((sqlitePath) => path.dirname(path.dirname(sqlitePath))),
-  );
-  for (const metadataPath of legacyMetadataPaths) {
-    accountRoots.add(path.dirname(metadataPath));
-  }
-  for (const accountRoot of [...accountRoots].toSorted()) {
-    let metadata: { deviceId?: unknown; userId?: unknown } | null = null;
+  const sqlitePaths = await findMatrixStateDatabases(params.runtime.stateDir);
+  for (const sqlitePath of sqlitePaths) {
+    if (path.basename(path.dirname(sqlitePath)) !== "state") {
+      continue;
+    }
+    const accountRoot = path.dirname(path.dirname(sqlitePath));
+    let metadata: { deviceId?: unknown; userId?: unknown } | null;
     try {
-      await access(path.join(accountRoot, "state", "openclaw.sqlite"));
-      try {
-        const store = createPluginStateSyncKeyedStoreForTests<unknown>(
-          "matrix",
-          storageMetadataRuntime.openMatrixStorageMetaStoreOptions(accountRoot),
-        );
-        metadata = storageMetadataRuntime.normalizeMatrixStorageMetadata(store.lookup("current"));
-      } finally {
-        resetPluginStateStoreForTests();
-      }
+      metadata = withMatrixQaStateStore(
+        storageMetadataRuntime.openMatrixStorageMetaStoreOptions(accountRoot),
+        (store) => storageMetadataRuntime.normalizeMatrixStorageMetadata(store.lookup("current")),
+      );
     } catch {
-      // Fall through to the legacy sidecar for pre-SQLite fixtures.
+      continue;
     }
-    if (!metadata) {
-      try {
-        metadata = JSON.parse(
-          await readFile(path.join(accountRoot, "storage-meta.json"), "utf8"),
-        ) as {
-          deviceId?: unknown;
-          userId?: unknown;
-        };
-      } catch {
-        continue;
-      }
-    }
-    if (metadata.userId === params.userId && metadata.deviceId === params.deviceId) {
+    if (metadata?.userId === params.userId && metadata.deviceId === params.deviceId) {
       return accountRoot;
     }
   }
   throw new Error(`Matrix CLI account storage root was not created for ${params.userId}`);
 }
 
-function readMatrixQaCliRecoveryKeyState(options: OpenKeyedStoreOptions): unknown {
-  try {
-    return createPluginStateSyncKeyedStoreForTests<unknown>("matrix", options).lookup("current");
-  } finally {
-    resetPluginStateStoreForTests();
-  }
-}
-
-function writeMatrixQaCliRecoveryKeyState(params: {
-  options: OpenKeyedStoreOptions;
-  recoveryKeyState: unknown;
-}): void {
-  try {
-    createPluginStateSyncKeyedStoreForTests<unknown>("matrix", params.options).register(
-      "current",
-      params.recoveryKeyState,
-    );
-  } finally {
-    resetPluginStateStoreForTests();
-  }
-}
-
 export async function mutateMatrixQaCliStateLoss(params: {
   deviceId: string;
-  preserveRecoveryKey: boolean;
   runtime: Pick<MatrixQaCliRuntime, "stateDir">;
   userId: string;
 }) {
   const accountRoot = await findMatrixQaCliAccountRoot(params);
   const matrixRuntime = await loadMatrixQaE2eeRuntime();
   const recoveryKeyStoreOptions = matrixRuntime.openMatrixRecoveryKeyStoreOptions(accountRoot);
-  let recoveryKeyPreserved = false;
-  let recoveryKeyState: unknown = null;
-  if (params.preserveRecoveryKey) {
-    recoveryKeyState = readMatrixQaCliRecoveryKeyState(recoveryKeyStoreOptions);
-    if (!recoveryKeyState) {
-      throw new Error("Matrix CLI recovery key state was not created");
-    }
-    recoveryKeyPreserved = true;
+  const recoveryKeyState = withMatrixQaStateStore(recoveryKeyStoreOptions, (store) =>
+    store.lookup("current"),
+  );
+  if (!recoveryKeyState) {
+    throw new Error("Matrix CLI recovery key state was not created");
   }
   await rm(accountRoot, { force: true, recursive: true });
-  if (recoveryKeyState) {
-    await mkdir(accountRoot, { recursive: true });
-    writeMatrixQaCliRecoveryKeyState({ options: recoveryKeyStoreOptions, recoveryKeyState });
-  }
-  return {
-    accountRoot,
-    recoveryKeyPreserved,
-  };
+  await mkdir(accountRoot, { recursive: true });
+  withMatrixQaStateStore(recoveryKeyStoreOptions, (store) =>
+    store.register("current", recoveryKeyState),
+  );
+  return accountRoot;
 }
 
 export async function corruptMatrixQaCliIdbSnapshot(params: {
@@ -130,11 +81,8 @@ export async function corruptMatrixQaCliIdbSnapshot(params: {
 }) {
   const accountRoot = await findMatrixQaCliAccountRoot(params);
   const matrixRuntime = await loadMatrixQaE2eeRuntime();
-  try {
-    createPluginStateSyncKeyedStoreForTests<unknown>(
-      "matrix",
-      matrixRuntime.openMatrixIdbSnapshotStoreOptions(accountRoot),
-    ).register("current:meta", {
+  withMatrixQaStateStore(matrixRuntime.openMatrixIdbSnapshotStoreOptions(accountRoot), (store) =>
+    store.register("current:meta", {
       kind: "meta",
       version: 1,
       generation: "corrupt",
@@ -142,10 +90,8 @@ export async function corruptMatrixQaCliIdbSnapshot(params: {
       digest: "corrupt",
       databaseCount: 1,
       persistedAt: new Date().toISOString(),
-    });
-  } finally {
-    resetPluginStateStoreForTests();
-  }
+    }),
+  );
   return "matrix/idb-snapshot/current:meta";
 }
 
@@ -158,7 +104,6 @@ export async function deleteMatrixQaServerRoomKeyBackup(params: {
     accessToken: params.accessToken,
     baseUrl: params.baseUrl,
     endpoint: `/_matrix/client/v3/room_keys/version/${encodeURIComponent(params.version)}`,
-    fetchImpl: fetch,
     method: "DELETE",
     okStatuses: [200, 404],
   });

@@ -1,9 +1,20 @@
-// Imessage test support covers dm history plugin behavior.
 import { resolveEnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import type { IMessageRpcClient } from "../client.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
+
+const sender = "+15555550123";
+const historyRow = (id: number, guid: string, text: string, minute: string, fromMe = false) => ({
+  id,
+  guid,
+  text,
+  chat_id: 44,
+  sender: fromMe ? null : sender,
+  is_from_me: fromMe,
+  is_group: false,
+  created_at: `2026-05-25T12:${minute}:00.000Z`,
+});
 
 describe("resolveIMessageDmHistoryLimit", () => {
   it("uses per-DM history overrides before the provider default", () => {
@@ -11,18 +22,16 @@ describe("resolveIMessageDmHistoryLimit", () => {
       resolveIMessageDmHistoryLimit({
         config: {
           dmHistoryLimit: 5,
-          dms: {
-            "+15555550123": { historyLimit: 2 },
-          },
+          dms: { [sender]: { historyLimit: 2 } },
         },
         sender: "+1 (555) 555-0123",
-        senderNormalized: "+15555550123",
+        senderNormalized: sender,
       }),
     ).toBe(2);
   });
 
   it("defaults to disabled when no iMessage DM history limit is configured", () => {
-    expect(resolveIMessageDmHistoryLimit({ config: {}, sender: "+15555550123" })).toBe(0);
+    expect(resolveIMessageDmHistoryLimit({ config: {}, sender })).toBe(0);
   });
 });
 
@@ -30,51 +39,16 @@ describe("resolveIMessageDmHistoryContext", () => {
   it("fetches decoded imsg history rows and excludes the current message", async () => {
     const request = vi.fn(async () => ({
       messages: [
-        {
-          id: 8,
-          guid: "previous-in",
-          chat_id: 44,
-          sender: "+15555550123",
-          is_from_me: false,
-          text: "earlier inbound",
-          created_at: "2026-05-25T12:00:00.000Z",
-          is_group: false,
-        },
-        {
-          id: 9,
-          guid: "previous-out",
-          chat_id: 44,
-          sender: null,
-          is_from_me: true,
-          text: "earlier outbound",
-          created_at: "2026-05-25T12:01:00.000Z",
-          is_group: false,
-        },
-        {
-          id: 10,
-          guid: "current",
-          chat_id: 44,
-          sender: "+15555550123",
-          is_from_me: false,
-          text: "current",
-          created_at: "2026-05-25T12:02:00.000Z",
-          is_group: false,
-        },
+        historyRow(8, "previous-in", "earlier inbound", "00"),
+        historyRow(9, "previous-out", "earlier outbound", "01", true),
+        historyRow(10, "current", "current", "02"),
       ],
     }));
 
     const context = await resolveIMessageDmHistoryContext({
       client: { request } as unknown as IMessageRpcClient,
-      message: {
-        id: 10,
-        guid: "current",
-        chat_id: 44,
-        sender: "+15555550123",
-        text: "current",
-        is_from_me: false,
-        is_group: false,
-      },
-      senderNormalized: "+15555550123",
+      message: { ...historyRow(10, "current", "current", "02"), sender },
+      senderNormalized: sender,
       limit: 2,
       envelopeOptions: resolveEnvelopeFormatOptions({} as OpenClawConfig),
     });
@@ -86,7 +60,7 @@ describe("resolveIMessageDmHistoryContext", () => {
     );
     expect(context.inboundHistory).toEqual([
       {
-        sender: "+15555550123",
+        sender,
         body: "earlier inbound",
         timestamp: Date.parse("2026-05-25T12:00:00.000Z"),
       },

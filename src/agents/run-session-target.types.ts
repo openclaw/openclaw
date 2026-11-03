@@ -10,3 +10,8 @@ export type AgentRunSessionTarget = {
   /** Internal durable writer claim installed after session-lane admission. */
   expectedWriterRunId?: string;
 };
+
+export type BoundAgentRunSessionTarget = Required<
+  Pick<AgentRunSessionTarget, "agentId" | "sessionId" | "sessionKey" | "storePath">
+> &
+  Pick<AgentRunSessionTarget, "expectedLifecycleRevision" | "expectedWriterRunId">;

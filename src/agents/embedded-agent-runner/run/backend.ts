@@ -1,13 +1,6 @@
-/**
- * Dispatches embedded attempts to native harness or OpenClaw backend execution.
- */
 import { mergeAcceptedSessionSpawnsForRun } from "../../accepted-session-spawn.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
-import {
-  runAgentHarnessAttempt,
-  runAgentHarnessSettledTurnFinalization,
-} from "../../harness/selection.js";
-import type { AgentHarness } from "../../harness/types.js";
+import { runAgentHarnessAttempt } from "../../harness/selection.js";
 import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { copyCoreTtsAttemptResultProvenance } from "../../tools/tts-tool-result-provenance.js";
 import { prepareAgentWorkspaceAttachments } from "../../workspace-access.js";
@@ -27,9 +20,6 @@ export function resolveRuntimeModelAttempt(
     : undefined;
 }
 
-/**
- * Backend bridge for executing one embedded-agent attempt through the selected harness.
- */
 export async function runEmbeddedAttemptWithBackend(
   params: EmbeddedRunAttemptParams,
   nativeSessionRuntime?: Parameters<typeof runAgentHarnessAttempt>[1],
@@ -56,14 +46,17 @@ export async function runEmbeddedAttemptWithBackend(
       params.hostCapabilities?.assertActive();
     },
   });
+  const preparedParams = attachmentMedia?.length
+    ? { ...params, inputAttachmentMedia: attachmentMedia }
+    : params;
   const result = await runAgentHarnessAttempt(
     attachmentNote
       ? {
-          ...params,
+          ...preparedParams,
           prompt: `${params.prompt}\n\n${attachmentNote}`,
           transcriptPrompt: params.transcriptPrompt ?? params.prompt,
         }
-      : params,
+      : preparedParams,
     nativeSessionRuntime,
   );
   // Only the logical run can settle its full child batch after all retries.
@@ -92,13 +85,4 @@ export async function runEmbeddedAttemptWithBackend(
         }
       : {}),
   });
-}
-
-/** Runs one operation-specific settled-turn finalization through the selected harness. */
-export async function runEmbeddedSettledTurnFinalizationWithBackend(
-  params: EmbeddedRunAttemptParams,
-  settledAttempt: EmbeddedRunAttemptResult,
-  harness: AgentHarness,
-) {
-  return runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness);
 }

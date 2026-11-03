@@ -1,42 +1,12 @@
-import {
-  readHelperResults,
-  type FaceTimeHelperPeer,
-  type FaceTimeHelperSocketServer,
-  type HelperActionResult,
-} from "./helper-rpc.js";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { DIAL_BUNDLES, readHelperResults, type HelperActionResult } from "./helper-results.js";
+import type { FaceTimeHelperPeer, FaceTimeHelperSocketServer } from "./helper-rpc.js";
 import { retainFaceTimeDialCallUUID, type PendingFaceTimeDial } from "./outbound-call.js";
 import type { ActiveFaceTimeCall } from "./runtime-state.js";
 
-export const OUTBOUND_DIAL_HELPER_BUNDLES = new Set([
-  "com.apple.FaceTime",
-  "com.apple.FaceTime.FTConversationService",
-]);
-
 function readHelperPeers(result: HelperActionResult): FaceTimeHelperPeer[] {
-  const peers: FaceTimeHelperPeer[] = [];
-  for (const entry of readHelperResults(result)) {
-    const peer = entry.helperPeer;
-    if (
-      peer &&
-      typeof peer === "object" &&
-      "processId" in peer &&
-      "bundleIdentifier" in peer &&
-      "connectionGeneration" in peer &&
-      "processStartedAtMs" in peer &&
-      typeof peer.processId === "number" &&
-      typeof peer.bundleIdentifier === "string" &&
-      typeof peer.connectionGeneration === "number" &&
-      typeof peer.processStartedAtMs === "number"
-    ) {
-      peers.push({
-        bundleIdentifier: peer.bundleIdentifier,
-        processId: peer.processId,
-        processStartedAtMs: peer.processStartedAtMs,
-        connectionGeneration: peer.connectionGeneration,
-      });
-    }
-  }
-  return peers;
+  return readHelperResults(result).flatMap((entry) => (entry.helperPeer ? [entry.helperPeer] : []));
 }
 
 export function retainHelperResultPeers(
@@ -62,7 +32,7 @@ export function retainOutboundDialHelperPeers(
       continue;
     }
     for (const peer of readHelperPeers(entry)) {
-      if (OUTBOUND_DIAL_HELPER_BUNDLES.has(peer.bundleIdentifier)) {
+      if (DIAL_BUNDLES.has(peer.bundleIdentifier)) {
         peers.set(peer.processId, peer);
       }
     }
@@ -71,30 +41,18 @@ export function retainOutboundDialHelperPeers(
 
 export function readOutboundCallUUID(result: HelperActionResult): string | undefined {
   return readHelperResults(result)
-    .map((entry) =>
-      typeof entry.call_uuid === "string" && entry.call_uuid.trim()
-        ? entry.call_uuid.trim()
-        : undefined,
-    )
+    .map((entry) => normalizeOptionalString(entry.call_uuid))
     .find((value) => Boolean(value));
 }
 
 export function readOutboundProxyIdentifier(result: HelperActionResult): string | undefined {
   return readHelperResults(result)
-    .map((entry) =>
-      typeof entry.proxy_identifier === "string" && entry.proxy_identifier.trim()
-        ? entry.proxy_identifier.trim()
-        : undefined,
-    )
+    .map((entry) => normalizeOptionalString(entry.proxy_identifier))
     .find((value) => Boolean(value));
 }
 
 export function hasDialHelperConfirmation(results: HelperActionResult[]): boolean {
-  return results.some(
-    (entry) =>
-      typeof entry.helperBundleIdentifier === "string" &&
-      OUTBOUND_DIAL_HELPER_BUNDLES.has(entry.helperBundleIdentifier),
-  );
+  return results.some((entry) => DIAL_BUNDLES.has(entry.helperBundleIdentifier ?? ""));
 }
 
 function hasDefinitiveDialHelperAbsence(
@@ -174,8 +132,7 @@ export async function reconcilePendingFaceTimeCarrier(params: {
     ) {
       return;
     }
-    const topologyGeneration =
-      typeof result.topologyGeneration === "number" ? result.topologyGeneration : undefined;
+    const topologyGeneration = result.topologyGeneration;
     const completeAbsence = hasDefinitiveDialHelperAbsence(result, params.peers.keys());
     if (
       completeAbsence &&
@@ -189,9 +146,7 @@ export async function reconcilePendingFaceTimeCarrier(params: {
     previousAbsentTopology = completeAbsence ? topologyGeneration : undefined;
     previousAbsenceCurrent = completeAbsence ? isSnapshotCurrent : undefined;
     if (attempt + 1 < OUTBOUND_RECONCILE_ATTEMPTS) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, OUTBOUND_RECONCILE_INTERVAL_MS);
-      });
+      await sleep(OUTBOUND_RECONCILE_INTERVAL_MS);
     }
   }
 }

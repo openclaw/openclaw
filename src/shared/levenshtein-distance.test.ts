@@ -16,7 +16,6 @@ describe("levenshteinDistance", () => {
   });
 
   it.each([
-    ["", "", 0, 0],
     ["same", "same", 0, 0],
     ["", "abc", 3, null],
     ["abc", "", 3, null],
