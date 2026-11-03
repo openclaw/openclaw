@@ -1371,9 +1371,7 @@ describe("Claude session catalog", () => {
     await listPage({}, home);
     watches.arm();
     await listPage({}, home);
-    expect((await listPage({}, home)).sessions).toMatchObject([
-      { threadId: sessionId },
-    ]);
+    expect((await listPage({}, home)).sessions).toMatchObject([{ threadId: sessionId }]);
 
     // The watch misses the transcript deletion, so an incremental scan would leave a ghost entry.
     await fs.rm(transcriptPath);
