@@ -25,7 +25,10 @@
                   "type": "string"
                 },
                 "encoding": {
-                  "enum": ["utf8", "base64"],
+                  "enum": [
+                    "utf8",
+                    "base64"
+                  ],
                   "type": "string"
                 },
                 "mimeType": {
@@ -35,7 +38,10 @@
                   "type": "string"
                 }
               },
-              "required": ["name", "content"],
+              "required": [
+                "name",
+                "content"
+              ],
               "type": "object"
             },
             "maxItems": 50,
@@ -43,17 +49,25 @@
           },
           "cleanup": {
             "description": "Hidden session cleanup; delete snapshots and removes its managed worktree through session cleanup. visible=true always keeps the session.",
-            "enum": ["delete", "keep"],
+            "enum": [
+              "delete",
+              "keep"
+            ],
             "type": "string"
           },
           "completionTarget": {
             "description": "parent: return results in a private requester turn; no automatic channel delivery. After sessions_yield, answer under the conversation's normal reply rules (NO_REPLY stays silent). Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
-            "enum": ["parent"],
+            "enum": [
+              "parent"
+            ],
             "type": "string"
           },
           "context": {
             "description": "Native: explicit context=\"isolated\" starts clean; context=\"fork\" copies requester transcript and requires the same agent. Omitted context follows configured threadBindings.defaultSpawnContext policy (fork by default) with thread=true; without a thread it is isolated.",
-            "enum": ["isolated", "fork"],
+            "enum": [
+              "isolated",
+              "fork"
+            ],
             "type": "string"
           },
           "cwd": {
@@ -93,7 +107,10 @@
           },
           "mode": {
             "description": "\"run\" one-shot; \"session\" persistent/thread-bound. Visible sessions accept only omitted/default \"run\" and remain persistent.",
-            "enum": ["run", "session"],
+            "enum": [
+              "run",
+              "session"
+            ],
             "type": "string"
           },
           "model": {
@@ -110,7 +127,9 @@
                     "type": "string"
                   }
                 },
-                "required": ["kind"],
+                "required": [
+                  "kind"
+                ],
                 "type": "object"
               },
               {
@@ -137,7 +156,10 @@
                     "type": "string"
                   }
                 },
-                "required": ["kind", "profileId"],
+                "required": [
+                  "kind",
+                  "profileId"
+                ],
                 "type": "object"
               }
             ],
@@ -154,7 +176,9 @@
           },
           "runtime": {
             "description": "Runtime; visible=true and managed worktrees require \"subagent\".",
-            "enum": ["subagent"],
+            "enum": [
+              "subagent"
+            ],
             "type": "string"
           },
           "runTimeoutSeconds": {
@@ -164,7 +188,10 @@
           },
           "sandbox": {
             "description": "\"inherit\" parent sandbox policy; \"require\" fails unless child is sandboxed.",
-            "enum": ["inherit", "require"],
+            "enum": [
+              "inherit",
+              "require"
+            ],
             "type": "string"
           },
           "task": {
@@ -203,7 +230,9 @@
             "type": "string"
           }
         },
-        "required": ["task"],
+        "required": [
+          "task"
+        ],
         "type": "object"
       },
       "name": "sessions_spawn",
