@@ -28,7 +28,7 @@ describe("ClawHub plugin branding metadata", () => {
       );
       expect(fetchImpl).toHaveBeenCalledOnce();
       const [url, request] = fetchImpl.mock.calls[0] as unknown as [URL, RequestInit];
-      expect(url.href).toBe("https://clawhub.ai/api/v1/packages/%40acme%2Fcalendar");
+      expect(String(url)).toBe("https://clawhub.ai/api/v1/packages/%40acme%2Fcalendar");
       expect(new Headers(request.headers).has("Authorization")).toBe(false);
     },
   );
@@ -38,8 +38,9 @@ describe("ClawHub plugin branding metadata", () => {
       fetchClawHubPluginIconUrls({
         packageName,
         skipAuth: true,
-        fetchImpl: async () =>
+        fetchImpl: vi.fn(async () =>
           Response.json({ package: { ...packageMetadata, name: "@other/calendar" } }),
+        ),
       }),
     ).rejects.toThrow("changed the requested package identity");
   });

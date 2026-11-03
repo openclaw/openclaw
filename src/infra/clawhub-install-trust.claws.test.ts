@@ -50,10 +50,10 @@ describe("ClawHub Claw trust", () => {
       version,
       expectedClawArtifact,
       baseUrl: "https://clawhub.example",
-      fetchImpl: async (input) => {
+      fetchImpl: vi.fn(async (input) => {
         requestedUrl = input instanceof Request ? input.url : String(input);
         return securityResponse("claw");
-      },
+      }),
     });
 
     expect(result).toMatchObject({
@@ -70,8 +70,9 @@ describe("ClawHub Claw trust", () => {
       subject,
       version,
       expectedClawArtifact,
-      fetchImpl: async () =>
+      fetchImpl: vi.fn(async () =>
         securityResponse("claw", false, "benign", {}, { artifactSha256: "b".repeat(64) }),
+      ),
     });
 
     expect(result).toMatchObject({ ok: false, code: "clawhub_security_unavailable" });
@@ -81,7 +82,7 @@ describe("ClawHub Claw trust", () => {
     const result = await checkClawHubPackageTrust({
       subject,
       version,
-      fetchImpl: async () => securityResponse("claw"),
+      fetchImpl: vi.fn(async () => securityResponse("claw")),
     });
 
     expect(result).toMatchObject({ ok: false, code: "clawhub_security_unavailable" });
@@ -93,15 +94,17 @@ describe("ClawHub Claw trust", () => {
       subject,
       version,
       expectedClawArtifact: selectedArtifact,
-      fetchImpl: async () =>
+      fetchImpl: vi.fn(async () =>
         securityResponse("claw", false, "benign", {}, { npmShasum: selectedArtifact.npmShasum }),
+      ),
     });
     const mismatched = await checkClawHubPackageTrust({
       subject,
       version,
       expectedClawArtifact: selectedArtifact,
-      fetchImpl: async () =>
+      fetchImpl: vi.fn(async () =>
         securityResponse("claw", false, "benign", {}, { npmShasum: "b".repeat(40) }),
+      ),
     });
 
     expect(matching.ok).toBe(true);
@@ -119,7 +122,7 @@ describe("ClawHub Claw trust", () => {
       subject,
       version,
       expectedClawArtifact,
-      fetchImpl: async () => securityResponse("claw", false, "benign", {}, releaseOverrides),
+      fetchImpl: vi.fn(async () => securityResponse("claw", false, "benign", {}, releaseOverrides)),
     });
 
     expect(result).toMatchObject({ ok: false, code: "clawhub_security_unavailable" });
@@ -130,7 +133,7 @@ describe("ClawHub Claw trust", () => {
       subject,
       version,
       expectedClawArtifact,
-      fetchImpl: async () => securityResponse("code-plugin"),
+      fetchImpl: vi.fn(async () => securityResponse("code-plugin")),
     });
 
     expect(result).toMatchObject({ ok: false, code: "clawhub_security_unavailable" });
@@ -142,7 +145,7 @@ describe("ClawHub Claw trust", () => {
       subject,
       version,
       expectedClawArtifact,
-      fetchImpl: async () => securityResponse("claw", true),
+      fetchImpl: vi.fn(async () => securityResponse("claw", true)),
       confirmInstall: (warning) => {
         observedWarning = warning;
         return false;
@@ -171,7 +174,7 @@ describe("ClawHub Claw trust", () => {
         subject,
         version,
         expectedClawArtifact,
-        fetchImpl: async () => securityResponse("claw", false, verdict),
+        fetchImpl: vi.fn(async () => securityResponse("claw", false, verdict)),
         logger,
       });
 
@@ -196,12 +199,13 @@ describe("ClawHub Claw trust", () => {
         subject,
         version,
         expectedClawArtifact,
-        fetchImpl: async () =>
+        fetchImpl: vi.fn(async () =>
           securityResponse("claw", false, "benign", {
             scanStatus: state,
             reasons: [`scan:${state}`],
             [state]: true,
           }),
+        ),
       });
 
       expect(result).toMatchObject({

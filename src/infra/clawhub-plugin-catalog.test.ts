@@ -139,10 +139,10 @@ describe("ClawHub plugin catalog client", () => {
       },
       async () => {
         const authorization: Array<string | null> = [];
-        const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+        const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
           authorization.push(new Headers(init?.headers).get("authorization"));
           return jsonResponse({ items: [remotePlugin], categories: [remoteCategory] });
-        };
+        });
         await read({ fetchImpl });
         await read({ fetchImpl, skipAuth: false });
         await read({ fetchImpl, token: "explicit-test-token" });
@@ -214,7 +214,7 @@ describe("ClawHub plugin catalog client", () => {
   it("rejects ambiguous registry category priorities", async () => {
     await expect(
       fetchClawHubPluginCategories({
-        fetchImpl: async () =>
+        fetchImpl: vi.fn(async () =>
           jsonResponse({
             categories: [
               {
@@ -223,6 +223,7 @@ describe("ClawHub plugin catalog client", () => {
               },
             ],
           }),
+        ),
       }),
     ).rejects.toThrow("duplicate or invalid pinned package");
   });
@@ -357,7 +358,7 @@ describe("ClawHub plugin catalog client", () => {
     await expect(
       fetchClawHubPluginCategories({
         baseUrl: "https://example.com",
-        fetchImpl: async () => jsonResponse({ categories: [category] }),
+        fetchImpl: vi.fn(async () => jsonResponse({ categories: [category] })),
       }),
     ).resolves.toEqual([category]);
   });

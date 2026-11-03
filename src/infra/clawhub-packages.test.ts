@@ -1,5 +1,5 @@
 // Verifies ClawHub package metadata, security, and artifact resolver APIs.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   fetchClawHubPackageArtifact,
   fetchClawHubPackageSecurity,
@@ -47,10 +47,10 @@ describe("clawhub packages", () => {
         family: "claw",
         isOfficial: true,
         limit: 1,
-        fetchImpl: async (input) => {
+        fetchImpl: vi.fn(async (input) => {
           requestedUrl = input instanceof Request ? input.url : String(input);
           return jsonResponse({ results: [] });
-        },
+        }),
       }),
     ).resolves.toEqual([]);
     expect(new URL(requestedUrl).pathname).toBe("/api/v1/packages/search");
@@ -95,10 +95,10 @@ describe("clawhub packages", () => {
     await expect(
       fetchClawHubPackageArtifact({
         ...packageSelector,
-        fetchImpl: async (input) => {
+        fetchImpl: vi.fn(async (input) => {
           requestedUrl = input instanceof Request ? input.url : String(input);
           return jsonResponse(report);
-        },
+        }),
       }),
     ).resolves.toEqual(report);
     expect(new URL(requestedUrl).pathname).toBe(
@@ -111,10 +111,10 @@ describe("clawhub packages", () => {
     await expect(
       fetchClawHubPackageSecurity({
         ...packageSelector,
-        fetchImpl: async (input) => {
+        fetchImpl: vi.fn(async (input) => {
           requestedUrl = input instanceof Request ? input.url : String(input);
           return jsonResponse(securityReport);
-        },
+        }),
       }),
     ).resolves.toEqual({
       ...securityReport,
@@ -136,8 +136,9 @@ describe("clawhub packages", () => {
     await expect(
       fetchClawHubPackageSecurity({
         ...packageSelector,
-        fetchImpl: async () =>
+        fetchImpl: vi.fn(async () =>
           jsonResponse({ trust: { ...securityReport.trust, reasons: "clean", stale: false } }),
+        ),
       }),
     ).rejects.toThrow("expected reasons to be a string array");
   });
@@ -146,11 +147,12 @@ describe("clawhub packages", () => {
     await expect(
       fetchClawHubPackageSecurity({
         ...packageSelector,
-        fetchImpl: async () =>
+        fetchImpl: vi.fn(async () =>
           jsonResponse({
             securityAuditUrl: securityReport.securityAuditUrl,
             trust: { blockedFromDownload: false, reasons: [], pending: false, stale: false },
           }),
+        ),
       }),
     ).rejects.toThrow("expected overview to be a non-empty string");
   });

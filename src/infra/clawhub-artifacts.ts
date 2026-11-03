@@ -240,6 +240,7 @@ export async function downloadClawHubGitHubSkillArchive(params: {
     {
       ...params,
       url: downloadUrl.toString(),
+      baseUrl,
       skipAuth: true,
     },
     `GitHub source archive for ${params.repo}@${params.commit}`,

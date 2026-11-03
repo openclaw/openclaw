@@ -15,6 +15,8 @@ import {
   readResponseTextSnippet,
   readResponseWithLimit,
 } from "./http-body.js";
+import { fetchWithSsrFGuard, withTrustedEnvProxyGuardedFetchMode } from "./net/fetch-guard.js";
+import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "./net/ssrf.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
@@ -241,11 +243,17 @@ async function requestClawHub(params: ClawHubRequestParams) {
       }
     };
     try {
-      const response = await (params.fetchImpl ?? fetch)(url, {
-        ...init,
-        signal: controller.signal,
-      });
-      return { response, url, hasToken: Boolean(token), releaseDeadline };
+      const { response, release } = await fetchWithSsrFGuard(
+        withTrustedEnvProxyGuardedFetchMode({
+          url: url.toString(),
+          fetchImpl: params.fetchImpl,
+          init,
+          signal: controller.signal,
+          policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(resolveClawHubBaseUrl(params.baseUrl)),
+          auditContext: "clawhub",
+        }),
+      );
+      return { response, url, hasToken: Boolean(token), releaseDeadline, release };
     } catch (error) {
       releaseDeadline();
       throw error;
@@ -258,9 +266,10 @@ async function requestClawHub(params: ClawHubRequestParams) {
     return await request();
   }
   return await retryClawHubRead(request, {
-    disposeRetry: async ({ response, releaseDeadline }) => {
+    disposeRetry: async ({ response, releaseDeadline, release }) => {
       releaseDeadline();
       await cancelUnreadResponseBody(response);
+      await release();
     },
   });
 }
@@ -276,6 +285,7 @@ export async function withClawHubResponse<T>(
   } finally {
     result.releaseDeadline();
     await cancelUnreadResponseBody(result.response);
+    await result.release();
   }
 }
 

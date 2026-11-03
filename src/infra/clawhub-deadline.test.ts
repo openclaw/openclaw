@@ -12,7 +12,7 @@ function createResponseSource(params: { status: number; headersAfterMs?: number 
   }>();
   const aborted = vi.fn();
   const cancelled = vi.fn();
-  const fetchImpl: ClawHubFetch = async (_input, init) => {
+  const fetchImpl: ClawHubFetch = vi.fn(async (_input, init) => {
     const signal = init?.signal;
     if (!signal) {
       throw new Error("ClawHub fetch must supply its request signal");
@@ -59,7 +59,7 @@ function createResponseSource(params: { status: number; headersAfterMs?: number 
       statusText: params.status === 400 ? "Bad Request" : undefined,
       headers: { "Retry-After": "0" },
     });
-  };
+  });
   return { fetchImpl, connected: connected.promise, aborted, cancelled };
 }
 

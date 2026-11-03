@@ -20,7 +20,7 @@ describe("clawhub skills", () => {
   });
 
   it("rejects skill icons outside the configured hosted-icon route", async () => {
-    const fetchImpl: typeof fetch = async () =>
+    const fetchImpl: typeof fetch = vi.fn(async () =>
       Response.json({
         results: [
           {
@@ -42,7 +42,8 @@ describe("clawhub skills", () => {
             icon: "https://registry.example/icon.png",
           },
         ],
-      });
+      }),
+    );
 
     await expect(
       searchClawHubSkills({ query: "icons", baseUrl: "https://registry.example", fetchImpl }),
@@ -52,7 +53,7 @@ describe("clawhub skills", () => {
   it("keeps each search result on its own source and marks which ones are install-only", async () => {
     // Shape copied from a live https://clawhub.ai/api/v1/search response: the origin of a result
     // arrives under `install`, never as a flat `installRef`.
-    const fetchImpl: typeof fetch = async () =>
+    const fetchImpl: typeof fetch = vi.fn(async () =>
       Response.json({
         results: [
           {
@@ -88,7 +89,8 @@ describe("clawhub skills", () => {
             install: { kind: "github", reference: "openclaw/github-backed" },
           },
         ],
-      });
+      }),
+    );
 
     await expect(
       searchClawHubSkills({ query: "email", baseUrl: "https://registry.example", fetchImpl }).then(
@@ -114,7 +116,7 @@ describe("clawhub skills", () => {
   });
 
   it("drops rows whose source or reference cannot be identified", async () => {
-    const fetchImpl: typeof fetch = async () =>
+    const fetchImpl: typeof fetch = vi.fn(async () =>
       Response.json({
         results: [
           // External row without its own reference: publishing it under `@acme/weather` would
@@ -162,7 +164,8 @@ describe("clawhub skills", () => {
             install: { kind: "clawhub", reference: "acme/keep" },
           },
         ],
-      });
+      }),
+    );
 
     await expect(
       searchClawHubSkills({
@@ -180,7 +183,7 @@ describe("clawhub skills", () => {
       cursor: "skillcat:next",
       officialOnly: true,
       limit: 25,
-      fetchImpl: async (input) => {
+      fetchImpl: vi.fn(async (input) => {
         requestedUrl = new URL(input instanceof Request ? input.url : String(input));
         return Response.json({
           items: [true, false, undefined].map((isOfficial, index) => ({
@@ -194,7 +197,7 @@ describe("clawhub skills", () => {
           })),
           nextCursor: "skillcat:following",
         });
-      },
+      }),
     });
 
     expect(requestedUrl?.pathname).toBe("/api/v1/packages");
@@ -219,7 +222,7 @@ describe("clawhub skills", () => {
       baseUrl: "https://registry.example",
       feed: "trending",
       cursor: "snapshot:next",
-      fetchImpl: async (input) => {
+      fetchImpl: vi.fn(async (input) => {
         requestedUrl = new URL(input instanceof Request ? input.url : String(input));
         return Response.json({
           items: [
@@ -235,7 +238,7 @@ describe("clawhub skills", () => {
           ],
           nextCursor: null,
         });
-      },
+      }),
     });
     expect(requestedUrl?.pathname).toBe("/api/v1/trending");
     expect(Object.fromEntries(requestedUrl!.searchParams)).toEqual({
@@ -258,7 +261,7 @@ describe("clawhub skills", () => {
 
   it("searches listing metadata and resolves trending publisher badges to the listing flag", async () => {
     const requestedUrls: URL[] = [];
-    const fetchImpl: typeof fetch = async (input) => {
+    const fetchImpl: typeof fetch = vi.fn(async (input) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       requestedUrls.push(url);
       const listing = {
@@ -290,7 +293,7 @@ describe("clawhub skills", () => {
         ],
         nextCursor: "snapshot:next",
       });
-    };
+    });
     await expect(
       fetchClawHubSkillCatalog({ query: "weather", officialOnly: true, fetchImpl }),
     ).resolves.toMatchObject({
@@ -315,12 +318,13 @@ describe("clawhub skills", () => {
     await expect(
       fetchClawHubSkillCatalog({
         feed: "trending",
-        fetchImpl: async (input) =>
+        fetchImpl: vi.fn(async (input) =>
           (input instanceof Request ? input.url : String(input)).includes(
             "/api/v1/packages/weather",
           )
             ? Response.json({ package: null })
             : fetchImpl(input),
+        ),
       }),
     ).rejects.toThrow("Malformed ClawHub skill listing");
   });
@@ -330,7 +334,7 @@ describe("clawhub skills", () => {
     async (mismatch) => {
       const result = await fetchClawHubSkillCatalog({
         feed: "trending",
-        fetchImpl: async (input) => {
+        fetchImpl: vi.fn(async (input) => {
           const url = new URL(input instanceof Request ? input.url : String(input));
           if (url.pathname === "/api/v1/packages/weather") {
             return Response.json({
@@ -356,7 +360,7 @@ describe("clawhub skills", () => {
               },
             ],
           });
-        },
+        }),
       });
       expect(result.items).toMatchObject([{ installRef: "@alice/weather", official: undefined }]);
     },
@@ -365,14 +369,14 @@ describe("clawhub skills", () => {
   it("rejects malformed catalog envelopes and unsupported search pagination", async () => {
     for (const response of [{}, { items: null }, { items: [null] }, { items: [], nextCursor: 1 }]) {
       await expect(
-        fetchClawHubSkillCatalog({ fetchImpl: async () => Response.json(response) }),
+        fetchClawHubSkillCatalog({ fetchImpl: vi.fn(async () => Response.json(response)) }),
       ).rejects.toThrow("Malformed ClawHub");
     }
     await expect(fetchClawHubSkillCatalog({ query: "email", cursor: "next" })).rejects.toThrow(
       "does not support a cursor",
     );
     await expect(
-      fetchClawHubSkillCatalog({ query: "email", fetchImpl: async () => Response.json({}) }),
+      fetchClawHubSkillCatalog({ query: "email", fetchImpl: vi.fn(async () => Response.json({})) }),
     ).rejects.toThrow("Malformed ClawHub");
   });
 
@@ -423,11 +427,11 @@ describe("clawhub skills", () => {
       version: "a".repeat(40),
       requestedReference: "skills-sh:openclaw/skills/weather",
       trustState: "not-scanned-by-clawhub",
-      fetchImpl: async (_input, init) => {
+      fetchImpl: vi.fn(async (_input, init) => {
         expect(typeof init?.body).toBe("string");
         body = JSON.parse(init?.body as string);
         return new Response(null, { status: 200 });
-      },
+      }),
     });
 
     expect(body).toMatchObject({
@@ -460,7 +464,7 @@ describe("clawhub skills", () => {
       fetchClawHubSkillDetail({
         slug: "weather",
         ownerHandle: "demo-owner",
-        fetchImpl: async (input) => {
+        fetchImpl: vi.fn(async (input) => {
           requestedUrl =
             input instanceof Request
               ? input.url
@@ -476,7 +480,7 @@ describe("clawhub skills", () => {
               updatedAt: 2,
             },
           });
-        },
+        }),
       }),
     ).resolves.toMatchObject({
       skill: {
@@ -497,7 +501,7 @@ describe("clawhub skills", () => {
     await fetchClawHubSkillInstallResolution({
       slug: "weather",
       requestedReference: reference,
-      fetchImpl: async (input) => {
+      fetchImpl: vi.fn(async (input) => {
         requestedUrl =
           input instanceof Request
             ? input.url
@@ -517,7 +521,7 @@ describe("clawhub skills", () => {
             sourceUrl: "https://github.com/openclaw/skills",
           },
         });
-      },
+      }),
     });
 
     const url = new URL(requestedUrl);
@@ -536,7 +540,7 @@ describe("clawhub skills", () => {
         ownerHandle: "demo-owner",
         version: "1.0.0",
         skipAuth: true,
-        fetchImpl: async (input, init) => {
+        fetchImpl: vi.fn(async (input, init) => {
           requestedUrl =
             input instanceof Request
               ? input.url
@@ -558,7 +562,7 @@ describe("clawhub skills", () => {
             security: {},
             signature: {},
           });
-        },
+        }),
       }),
     ).resolves.toMatchObject({ schema: "clawhub.skill.verify.v1" });
 
@@ -591,7 +595,7 @@ describe("clawhub skills", () => {
     await expect(
       fetchClawHubSkillSecurityVerdicts({
         items: [{ slug: "agentreceipt", ownerHandle: "openclaw", version: "1.2.3" }],
-        fetchImpl: async (input, init) => {
+        fetchImpl: vi.fn(async (input, init) => {
           requestedUrl =
             input instanceof Request
               ? input.url
@@ -600,7 +604,7 @@ describe("clawhub skills", () => {
                 : String(input);
           requestedInit = init;
           return Response.json(envelope);
-        },
+        }),
       }),
     ).resolves.toEqual(envelope);
 
@@ -622,7 +626,7 @@ describe("clawhub skills", () => {
       fetchClawHubSkillCard({
         slug: "agentreceipt",
         tag: "latest",
-        fetchImpl: async (input) => {
+        fetchImpl: vi.fn(async (input) => {
           requestedUrl =
             input instanceof Request
               ? input.url
@@ -633,7 +637,7 @@ describe("clawhub skills", () => {
             status: 200,
             headers: { "content-type": "text/markdown; charset=utf-8" },
           });
-        },
+        }),
       }),
     ).resolves.toBe("# Agent Receipt\n\nVerified by ClawHub.\n");
 
@@ -650,7 +654,7 @@ describe("clawhub skills", () => {
       fetchClawHubSkillCard({
         url: "https://cards.example.test/generated/agentreceipt.md",
         baseUrl: "https://clawhub.ai",
-        fetchImpl: async (input) => {
+        fetchImpl: vi.fn(async (input) => {
           requestedUrl =
             input instanceof Request
               ? input.url
@@ -661,7 +665,7 @@ describe("clawhub skills", () => {
             status: 200,
             headers: { "content-type": "text/markdown; charset=utf-8" },
           });
-        },
+        }),
       }),
     ).resolves.toBe("# Agent Receipt\n");
 
@@ -672,7 +676,7 @@ describe("clawhub skills", () => {
     await expect(
       fetchClawHubSkillCard({
         slug: "agentreceipt",
-        fetchImpl: async () => new Response("card missing", { status: 404 }),
+        fetchImpl: vi.fn(async () => new Response("card missing", { status: 404 })),
       }),
     ).rejects.toThrow("ClawHub /api/v1/skills/agentreceipt/card failed (404): card missing");
   });
@@ -681,7 +685,7 @@ describe("clawhub skills", () => {
     await expect(
       fetchClawHubSkillCard({
         slug: "agentreceipt",
-        fetchImpl: async () => new Response("x".repeat(256 * 1024 + 1)),
+        fetchImpl: vi.fn(async () => new Response("x".repeat(256 * 1024 + 1))),
       }),
     ).rejects.toThrow(
       "ClawHub skill card for agentreceipt exceeded 262144 bytes (262145 bytes received)",
