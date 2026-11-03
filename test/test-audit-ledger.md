@@ -152,21 +152,30 @@ implied by the exact four-entry audit-context projection of the same mock call
 array. Keep all ten physical declarations/twelve registered cases, every input,
 table row and all other assertions. Preserve the separate fetch count, policy,
 receipt, cancellation and payload checks. Production and shared test-line scalar
-stay unchanged; one fewer test line.
+are unchanged; one fewer test line.
 
 The complete selected suite, voice-send owner and determining client/retry,
 request/endpoint, receipt, response, media and workspace/support boundaries are
 source-qualified. Relevant history, caller edges, metadata and send siblings,
-and static routing were inspected. The proposed actual owner fault changes the
-upload negotiation audit context; it has not been executed.
+and static routing were inspected.
 
-Untouched official baseline, original/candidate owner-fault controls, exact byte
-restoration, clean candidate, all seven removal phases, focused checks, fresh
-review, published proof and CI remain pending. Static Discord discovery is not
-execution. This is public voice-send proof with mocked media/guarded-fetch and
-local loopback timeout rows. Their fixed250ms fixture budget does not prove
-configured timeout enforcement. No live Discord, native encoder, actual SSRF
-policy or model-tool verdict is claimed.
+Untouched official extension-discord baseline and clean candidate pass all
+twelve without skips. An actual voice-send owner fault changes the upload
+negotiation audit context; both original and candidate fail only the retained
+exact projection keeper, with eleven other passes each. Temporary owner/test
+bytes are restored exactly before the clean run.
+
+All seven removal phases completed. Only the production scan and production
+export-wrapper phase fail; both reproduce the same unused Doctor memory-
+provenance export on exact original sources. Full-tree exports, both unused-file
+phases and script exports pass. No passing phase was repeated or finding
+suppressed. Focused extension checks pass; normal hooks, fresh review, published
+proof and CI are separately recorded.
+
+This exercises public voice-send with mocked media/guarded-fetch and local
+loopback timeout rows. Their fixed250ms fixture budget does not prove configured
+timeout enforcement. No live Discord, native encoder, actual SSRF policy or
+model-tool verdict is claimed.
 
 ## Completed source review
 
