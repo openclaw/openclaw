@@ -251,7 +251,7 @@ try {
         foreach ($brand in @('llama-app','ollama')) { foreach ($theme in @('Light','Dark')) { foreach ($step in @('note','text','confirm')) {
             $state='provider-'+$brand+'-'+$step+'-'+$theme
             $nameReceipt=Get-Content (Join-Path $frames ($state+'.dialog-uia.json')) -Raw | ConvertFrom-Json
-            if ($nameReceipt.schema -cne 'owned-native-dialog-name-v1' -or $nameReceipt.state -cne $state -or $nameReceipt.status -cne 'name-verified' -or
+            if ($nameReceipt.schema -cne 'owned-native-dialog-name-v1' -or $nameReceipt.providerGeometryContract -cne 'rendered-in-native-in-measured-slot-physical-pixels' -or $nameReceipt.state -cne $state -or $nameReceipt.status -cne 'name-verified' -or
                 !$nameReceipt.openedObserved -or $nameReceipt.expectedName -cne ('Provider '+$step) -or $nameReceipt.selected.Name -cne $nameReceipt.expectedName -or
                 $nameReceipt.selected.Role -cne 'ControlType.Window' -or $nameReceipt.selected.ClassName -cne 'Popup' -or !$nameReceipt.selected.IsModal -or $nameReceipt.selected.IsOffscreen -or
                 $nameReceipt.selected.ProcessId -ne $nameReceipt.ProcessId -or $nameReceipt.selected.RuntimeId.Count -eq 0 -or

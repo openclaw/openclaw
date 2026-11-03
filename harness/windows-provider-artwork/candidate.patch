@@ -541,10 +541,10 @@ index b0c2c59..7d41779 100644
          FrameworkElement requiredContent)
      {
 diff --git a/tests/OpenClaw.Tray.UITests/OnboardingNativeProof.cs b/tests/OpenClaw.Tray.UITests/OnboardingNativeProof.cs
-index 3e52394..3be1dde 100644
+index 3e52394..af4cd21 100644
 --- a/tests/OpenClaw.Tray.UITests/OnboardingNativeProof.cs
 +++ b/tests/OpenClaw.Tray.UITests/OnboardingNativeProof.cs
-@@ -707,6 +707,207 @@ internal static class OnboardingNativeProof
+@@ -707,6 +707,214 @@ internal static class OnboardingNativeProof
      private sealed record NativeLabelEvidence(string Expected, string ActualName, string ControlType,
          double Left, double Top, double Width, double Height, string Status);
 
@@ -564,7 +564,7 @@ index 3e52394..3be1dde 100644
 +        {
 +            var json = JsonSerializer.Serialize(new
 +            {
-+                schema = "owned-native-dialog-name-v1", state, status, expectedName, openedObserved,
++                schema = "owned-native-dialog-name-v1", providerGeometryContract = "rendered-in-native-in-measured-slot-physical-pixels", state, status, expectedName, openedObserved,
 +                binding.Hwnd, binding.ProcessId, binding.ThreadId, binding.Title, binding.Provider,
 +                binding.WindowBounds, binding.ContentBounds, binding.RenderedProviderBounds, binding.ProviderLayoutSlotInParent, binding.ProviderLayoutSlotBounds,
 +                referenceContract = "microsoft-ui-xaml 948461c2d0c93bce2e9c039ec28b4a25976afede: ContentDialog projects Name to PopupAutomationPeer; class Popup, Window role",
@@ -602,7 +602,10 @@ index 3e52394..3be1dde 100644
 +            binding.WindowBounds.Contains(bounds) && bounds.Contains(binding.ContentBounds) && bounds.Contains(binding.RenderedProviderBounds) &&
 +            bounds.Contains(binding.ProviderLayoutSlotBounds) &&
 +            node.TextChildren.Any(text => text.ProcessId == binding.ProcessId && !text.IsOffscreen &&
-+                text.Name == binding.Provider && text.Bounds is { } providerBounds && providerBounds.SamePhysical(binding.ProviderLayoutSlotBounds) &&
++                // TextBlock ActualWidth is text metrics; UIA encloses the arranged visual, not the full pre-alignment slot.
++                // Require the real provider's visible extent inside its native box, itself inside its measured slot.
++                text.Name == binding.Provider && text.Bounds is { } providerBounds &&
++                providerBounds.ContainsPhysical(binding.RenderedProviderBounds) && binding.ProviderLayoutSlotBounds.ContainsPhysical(providerBounds) &&
 +                observed.Nodes.Any(providerNode => providerNode.RuntimeId.SequenceEqual(text.RuntimeId) &&
 +                    providerNode.ProcessId == binding.ProcessId && providerNode.Role == "ControlType.Text" &&
 +                    providerNode.ClassName == "TextBlock" && providerNode.AutomationId == "ProviderName" && !providerNode.IsOffscreen)) &&
@@ -737,11 +740,15 @@ index 3e52394..3be1dde 100644
 +            double.IsFinite(Bottom) && Right > Left && Bottom > Top;
 +        internal bool Contains(NativeDialogBounds other) => other.PositiveFinite && other.Left >= Left && other.Top >= Top &&
 +            other.Right <= Right && other.Bottom <= Bottom;
-+        internal bool SamePhysical(NativeDialogBounds other) =>
-+            NativeProofLayout.PhysicalEdge(Left, 1) == NativeProofLayout.PhysicalEdge(other.Left, 1) &&
-+            NativeProofLayout.PhysicalEdge(Top, 1) == NativeProofLayout.PhysicalEdge(other.Top, 1) &&
-+            NativeProofLayout.PhysicalEdge(Right, 1) == NativeProofLayout.PhysicalEdge(other.Right, 1) &&
-+            NativeProofLayout.PhysicalEdge(Bottom, 1) == NativeProofLayout.PhysicalEdge(other.Bottom, 1);
++        internal bool ContainsPhysical(NativeDialogBounds other) => PositiveFinite && other.PositiveFinite &&
++            NativeProofLayout.PhysicalEdge(Right, 1) > NativeProofLayout.PhysicalEdge(Left, 1) &&
++            NativeProofLayout.PhysicalEdge(Bottom, 1) > NativeProofLayout.PhysicalEdge(Top, 1) &&
++            NativeProofLayout.PhysicalEdge(other.Right, 1) > NativeProofLayout.PhysicalEdge(other.Left, 1) &&
++            NativeProofLayout.PhysicalEdge(other.Bottom, 1) > NativeProofLayout.PhysicalEdge(other.Top, 1) &&
++            NativeProofLayout.PhysicalEdge(other.Left, 1) >= NativeProofLayout.PhysicalEdge(Left, 1) &&
++            NativeProofLayout.PhysicalEdge(other.Top, 1) >= NativeProofLayout.PhysicalEdge(Top, 1) &&
++            NativeProofLayout.PhysicalEdge(other.Right, 1) <= NativeProofLayout.PhysicalEdge(Right, 1) &&
++            NativeProofLayout.PhysicalEdge(other.Bottom, 1) <= NativeProofLayout.PhysicalEdge(Bottom, 1);
 +        internal static NativeDialogBounds? From(System.Windows.Rect rect)
 +        {
 +            var result = new NativeDialogBounds(rect.Left, rect.Top, rect.Right, rect.Bottom);

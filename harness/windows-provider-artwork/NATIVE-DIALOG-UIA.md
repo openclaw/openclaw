@@ -1,3 +1,7 @@
+# Current assertion contract
+
+Read PROVIDER-CONTAINMENT-CONTRACT.md. Superseded exact-provider-rectangle/equality claims below are historical source context, NOT current acceptance. Native WINDOW identity/name/role constraints remain unchanged.
+
 # Current geometry amendment
 
 Read PROVIDER-LAYOUT-SLOT.md: the native ProviderName rectangle now must match the ACTUAL measured allocation slot, with rendered extent preserved separately. All role/name/ownership constraints below remain unchanged. Exact current base51db6b22db1988ba44b2c3cc34e5219e8482a5a2.

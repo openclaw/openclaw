@@ -1,10 +1,10 @@
 {
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
   "baseTree": "eab5a16b2c6b57a741c7a1a22f830f737592d1ee",
-  "candidateTree": "89e9012ee2346da3ccb2304af61f1b85e01949dc",
-  "priorCandidateTree": "1d14a8f660666d85e606620ca9bdd2f152dba42c",
+  "candidateTree": "c49960f7bf554b0954beebccc9f36d91f936b411",
+  "priorCandidateTree": "89e9012ee2346da3ccb2304af61f1b85e01949dc",
   "priorCandidatePatchSha256": "6194060d067b8858d832ab17951c0f518bc0750f9f6b26e807b744947bd3dc7e",
-  "patchSha256": "2ffa4e4cffde2127349bfd6a1d8d5e36204bb4cea35f5c8106943fb938e1c3f7",
+  "patchSha256": "7efdb6ae045a40f8d61560d0d1a9f4da12841349a9b5ebf0e877273897377958",
   "changedFiles": [
     {
       "path": "docs/PROVIDER_ARTWORK.md",
@@ -65,9 +65,9 @@
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingNativeProof.cs",
       "beforeSha256": "ee3cfce10129b857848acc7ecc982bc03826eaa5101a3da562174a5a32d1ec52",
-      "afterSha256": "9a3f8d490372f4e5515c5939dfb88627d83ca6d02965b496df89ee6ec67b7dac",
-      "bytes": 70533,
-      "afterBlob": "3be1dde9a958919a46eb7bec13fc6d57af9a4652"
+      "afterSha256": "a89cc562a325f85a61925e96bf435753662252ad6edb8df0bf5ac034836f0e6e",
+      "bytes": 71407,
+      "afterBlob": "af4cd21aacfb7043e47401b38cb0c73f65bfa854"
     }
   ],
   "sourceFiles": [
@@ -8245,7 +8245,7 @@
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingNativeProof.cs",
-      "sha256": "9a3f8d490372f4e5515c5939dfb88627d83ca6d02965b496df89ee6ec67b7dac"
+      "sha256": "a89cc562a325f85a61925e96bf435753662252ad6edb8df0bf5ac034836f0e6e"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingNativeProofTests.cs",
@@ -8434,7 +8434,7 @@
   ],
   "count": 2090,
   "sourceCommit": "NOT_CREATED",
-  "canonicalChangeFromPrior": "Only native UIA geometry owner now records actual parent-space layout slot plus physical allocated/rendered bounds; all other eight canonical source files unchanged",
-  "AfterProofTree": "817942ea657733b20e3c8549958196e41f7a0bbf",
+  "canonicalChangeFromPrior": "Only native UIA provider geometry contract corrected: rendered extent within native accessibility bounds within measured slot, rounded physical semantics; all other eight source files unchanged",
+  "AfterProofTree": "32dff90773ea4513a3c56b72c9ba0aa9311adf7e",
   "BeforeProofTree": "50de4508d71a67ed2fb44ad9d1cdf56781d4d4a2"
 }
