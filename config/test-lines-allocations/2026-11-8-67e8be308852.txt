@@ -1,0 +1,5 @@
+6
+# LOCAL 2026.11.8 row 170; source 67e8be30885254b307a38d3a7dbbd7f2d57c8b11.
+# Startup SIGINT/SIGTERM handlers abort permission prompts and terminate/reap the directly owned child during initialize/new-session. One termination promise and first signal code are retained; handlers are removed after startup and existing interactive lifecycle remains separate.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
