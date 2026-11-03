@@ -1,11 +1,13 @@
 // Client-side trigger script loading for cron create/edit commands.
 import { createReadStream } from "node:fs";
+import { addAbortSignal, Readable } from "node:stream";
 import {
   readByteStreamWithLimit,
   type ReadByteStreamWithLimitOptions,
 } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { isErrno } from "../../infra/errno.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { CronCliError } from "./cron-cli-error.js";
 
 const MAX_CRON_TRIGGER_SCRIPT_BYTES = 65_536;
@@ -23,9 +25,16 @@ async function readCronInput(
   stdin: AsyncIterable<unknown> | undefined,
   options: ReadByteStreamWithLimitOptions,
 ): Promise<Buffer> {
-  const stream = source === "-" ? (stdin ?? process.stdin) : createReadStream(source);
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
+  let stream = source === "-" ? (stdin ?? process.stdin) : createReadStream(source);
+  if (signal) {
+    stream = addAbortSignal(signal, stream instanceof Readable ? stream : Readable.from(stream));
+  }
   try {
-    return await readByteStreamWithLimit(stream, options);
+    const bytes = await readByteStreamWithLimit(stream, options);
+    signal?.throwIfAborted();
+    return bytes;
   } catch (error) {
     // Filesystem read failures are operator input errors; byte-stream contract
     // violations and other unexpected exceptions keep their original identity.

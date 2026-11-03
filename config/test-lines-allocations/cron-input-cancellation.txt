@@ -1,0 +1,2 @@
+29
+# Pending script, trigger, and scratch input cancellation without an EOF or real timer.

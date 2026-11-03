@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { defaultRuntime } from "../../runtime.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { ExpectedCliError } from "../expected-cli-error.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 
@@ -368,6 +369,34 @@ async function rejectAdd(options: Record<string, string | true>, message: string
 }
 
 describe("cron trigger CLI options", () => {
+  it.each([
+    ["Trigger script", readCronTriggerScript],
+    ["Script payload", readCronPayloadScript],
+    ["Cron scratch", readCronScratchContent],
+  ] as const)("cancels pending %s stdin without waiting for EOF", async (_label, read) => {
+    vi.useFakeTimers();
+    const scope = new AsyncWorkScope();
+    const started = vi.fn();
+    const stdin = new Readable({ read: started });
+    const settled = vi.fn();
+    const reading = scope.run(() => read("-", { stdin }));
+    void reading.then(settled, settled);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(started).toHaveBeenCalled();
+      scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ name: "AbortError" }),
+      );
+      expect(stdin.destroyed).toBe(true);
+    } finally {
+      stdin.destroy();
+      await reading.catch(() => {});
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     ["Trigger script", readCronTriggerScript],
     ["Script payload", readCronPayloadScript],

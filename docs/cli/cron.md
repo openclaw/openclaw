@@ -30,6 +30,8 @@ retain their device authentication and pairing requirements.
 
 Ctrl-C or SIGTERM cancels a pending `list` or `show` read without printing a late
 result or failure document. The CLI exits with status 130 or 143, respectively.
+Local script and scratch input reads also stop on interruption before sending
+their mutation.
 An `add` or `edit` mutation already sent to the Gateway still waits for its
 receipt during cleanup and reports any failure; interrupting does not undo it.
 
