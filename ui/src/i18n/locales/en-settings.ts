@@ -706,6 +706,7 @@ const enSettings = {
       unavailable: "Unavailable",
     },
     loading: "Checking search configuration…",
+    statusNotReady: "Search settings are not ready. Refresh and try again.",
     offline: "Connect to the Gateway to configure search.",
     readOnly: "An administrator can change search settings and credentials.",
     setup: "Provider setup",
