@@ -8,6 +8,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { MISTRAL_MODEL_TRANSPORT_PATCH } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asFiniteNumberInRange,
   asOptionalRecord,
@@ -317,6 +318,9 @@ function buildRoutedModel(
   // Service catalog facts win over inherited native defaults.
   const compat = {
     ...nativeFacts?.compat,
+    ...(provider.id === "mistral" && api === "openai-completions"
+      ? { ...MISTRAL_MODEL_TRANSPORT_PATCH, supportsReasoningEffort: false }
+      : {}),
     ...(supportedReasoningEfforts
       ? { supportsReasoningEffort: true, supportedReasoningEfforts }
       : {}),
