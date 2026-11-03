@@ -203,7 +203,7 @@ it("keeps encoded filename hashes distinct from native and wiki fragments", () =
   const scan: ScanResult = { records, ontology: null, sources: [], issues: [], checkedAt: "" };
   expect(
     connections(scan, { id: "hash", direction: "backlinks" }).connections.map(
-      ({ record }) => record.id,
+      ({ record: linkedRecord }) => linkedRecord.id,
     ),
   ).toEqual(["source"]);
 });
