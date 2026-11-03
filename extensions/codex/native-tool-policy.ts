@@ -30,6 +30,7 @@ export const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
   "session_status",
   "progress_card",
   "skill_workshop",
+  "skill_library",
   "image_generate",
   "music_generate",
   "video_generate",

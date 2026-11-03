@@ -470,12 +470,14 @@ function settleSqliteTransactionSync<T>(
     }
   };
   let commitStarted = false;
+  const operationLabel = options?.operationLabel || captureSqliteReaderOwner()?.operation;
+  const hydration = operationLabel?.startsWith("sessions.transcript-hydration.") === true;
   let statementTiming: ReturnType<ReturnType<typeof startSqliteStatementTiming>> | undefined;
   try {
     // Share admitted schema inside rollback protection unless the source fence already owns it.
     const stopStatementTiming =
-      options?.operationLabel === "session.lifecycle.delete"
-        ? startSqliteStatementTiming()
+      operationLabel === "session.lifecycle.delete" || hydration
+        ? startSqliteStatementTiming(hydration)
         : undefined;
     let result: T;
     try {
@@ -519,6 +521,10 @@ function settleSqliteTransactionSync<T>(
         (options?.logger ?? transactionLog).warn("slow SQLite transaction hold", {
           async: false,
           callbackKind: "application-transaction",
+          isMainThread,
+          mode,
+          pid: process.pid,
+          threadId,
           ...transactionDiagnosticLabels(db, options),
           ...(timing?.holdContext
             ? { context: { ...options?.diagnosticContext, ...timing.holdContext } }
@@ -531,9 +537,15 @@ function settleSqliteTransactionSync<T>(
             sqlMs,
             ...(statementTiming
               ? {
-                  statementExecutionMs: statementTiming.totalMs,
+                  statementExecutionMs: Math.round(statementTiming.totalMs * 100) / 100,
                   // Residual includes JS, preparation, GC and scheduling; neither field is CPU time.
-                  callbackOtherMs: Math.max(0, sqlMs - statementTiming.totalMs),
+                  callbackOtherMs:
+                    Math.round(Math.max(0, sqlMs - statementTiming.totalMs) * 100) / 100,
+                  // Overlaps statement/other wall time; never subtract GC from both.
+                  callbackGcMs:
+                    statementTiming.callbackGcMs === undefined
+                      ? undefined
+                      : Math.round(statementTiming.callbackGcMs * 100) / 100,
                 }
               : {}),
             hostAdmissionWaitMs,
@@ -541,10 +553,6 @@ function settleSqliteTransactionSync<T>(
             commitMs,
           },
           ...(statementTiming ? { statementTiming: statementTiming.summarize() } : {}),
-          isMainThread,
-          mode,
-          pid: process.pid,
-          threadId,
           thresholdMs: options?.slowTransactionHoldMs ?? DEFAULT_SLOW_TRANSACTION_HOLD_MS,
         });
       }

@@ -189,10 +189,6 @@ suite.define(() => {
       await expectPressed(
         textSizeSection.locator(".settings-text-scale__btn", { hasText: "110%" }),
       );
-      await expectText(languageRow, "Default: System");
-      await expectText(themeSection, "Default: Claw");
-      await expectText(colorModeRow, "Default: System");
-      await expectText(textSizeSection, "Default: 100%");
       await expectAttribute(page.locator("html"), "data-theme-mode", "dark");
 
       const resets = [
@@ -227,7 +223,7 @@ suite.define(() => {
       await gateway.waitForRequest("config.get");
       await expectDefaults(page);
       for (const section of [languageRow, themeSection, colorModeRow, textSizeSection]) {
-        await expect.poll(() => section.textContent()).not.toContain("Using default:");
+        await expect.poll(() => section.textContent()).not.toContain("Default:");
       }
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
       await expectAttribute(page.locator("html"), "data-theme-mode", "dark");
@@ -338,7 +334,7 @@ suite.define(() => {
       });
       await openAppearance(page, gateway);
       const themeSection = page.locator("#settings-appearance-theme");
-      const themeDescription = themeSection.locator(":scope > .settings-section__desc");
+      const themeDescription = themeSection.locator(":scope > .settings-section__scope");
       await themeSection.locator(".settings-theme-card--claw").click();
       await expectPressed(themeCard(page, "claw"));
       await expectText(themeDescription, "Stored in this browser only");
@@ -355,8 +351,6 @@ suite.define(() => {
 
       await themeSection.locator(".settings-theme-card--knot").click();
       await expectPressed(themeCard(page, "knot"));
-      await expectText(themeDescription, "Default: Claw");
-      await expectText(themeDescription, "Stored in this browser only", true);
       await page.waitForTimeout(100);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
@@ -544,7 +538,7 @@ suite.define(() => {
         // The generic UI prefs form must not re-render it as a bare text box.
         await page.getByRole("tab", { name: "UI", exact: true }).click();
         const panel = page.locator("#config-section-panel");
-        await expect.poll(() => panel.textContent()).toContain("Prefs");
+        await expect.poll(() => panel.locator(".settings-row").count()).toBeGreaterThan(0);
         expect(await panel.locator('input[aria-label="Locale"]').count()).toBe(0);
         expect(await panel.locator('input[aria-label="Interface language"]').count()).toBe(0);
       },
