@@ -201,10 +201,12 @@ export type ReplyOperation = {
   readonly staleExpiryReason?: ReplyOperationStaleReason;
   /**
    * Semantic cause a stuck-session recovery acted on when it aborted the embedded
-   * run (e.g. `blocked_tool_call`). Recorded by the recovery runtime on this
-   * controller-owned operation before cron finalization reads it, so the cause needs
-   * no separate diagnostic-owned store or instance-identity lookup. Absent when
-   * recovery did not abort the run or supplied no classification.
+   * run (e.g. `blocked_tool_call`). Recorded by the controller's authoritative
+   * stall-stop path (expireOwner -> abortForStall) before the abort commits, so
+   * both the watchdog-timer-driven and diagnostics-triggered stops carry it into
+   * cron finalization; diagnostics supplies the precise cause when available, and
+   * the controller falls back to the watchdog decision reason otherwise. Absent
+   * when recovery did not abort the run or supplied no classification.
    */
   recoveryClassification?: string;
   readonly startedAtMs: number;

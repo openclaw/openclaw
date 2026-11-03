@@ -90,6 +90,9 @@ export async function recoverStuckDiagnosticSession(
       // Surface the semantic cause on the controller-owned operation so cron run
       // finalization can include it in both the run history and the chat alert,
       // instead of a cause-free literal. No separate diagnostic-owned store needed.
+      // The controller's authoritative stall-stop path (expireOwner -> abortForStall)
+      // already records a mechanical fallback before the abort commits; this overwrites
+      // it with the precise semantic cause supplied by diagnostics when available.
       operation.recoveryClassification = recoveryReason;
     }
     return reportOutcome(outcome);
