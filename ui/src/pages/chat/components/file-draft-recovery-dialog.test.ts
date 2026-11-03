@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-
 import { within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../../i18n/index.ts";
@@ -11,10 +10,11 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { reviewFileDrafts } from "./file-draft-recovery-dialog-loading.tsx";
 
 type FileDraft = Parameters<typeof reviewFileDrafts>[0][number];
-
 const clipboard = vi.hoisted(() => ({ copy: vi.fn() }));
-vi.mock("../../../lib/clipboard.ts", () => ({ copyToClipboard: clipboard.copy }));
-
+vi.mock("../../../lib/clipboard.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/clipboard.ts")>()),
+  copyToClipboard: clipboard.copy,
+}));
 let restoreDialog: () => void;
 beforeEach(async () => {
   await i18n.setLocale("en");
