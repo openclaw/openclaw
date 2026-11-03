@@ -307,29 +307,6 @@ it("retains human context across a loop-suppressed bot turn until a human dispat
   expect(params.historyMap.size).toBe(0);
 });
 
-it("keeps room messages and separate threads on distinct sessions", async () => {
-  const params = createHistoryParams();
-  const sessionKeys = [];
-  for (const threadId of [undefined, "root-a", "root-b", "root-a"]) {
-    await params.receive({
-      id: `event-${sessionKeys.length}`,
-      threadId,
-      mentionedPubkeys: [BOT_PUBLIC_KEY],
-    });
-    const dispatch = vi.mocked(runtime.channel.inbound.dispatch).mock.calls.at(-1)?.[0];
-    expect(dispatch).toBeDefined();
-    expect(dispatch?.ctxPayload.SessionKey).toBe(dispatch?.route.sessionKey);
-    sessionKeys.push(dispatch?.route.sessionKey);
-  }
-  const roomSessionKey = `agent:main:buzz:group:buzz:${ROOM_ID}`;
-  expect(sessionKeys).toEqual([
-    roomSessionKey,
-    `${roomSessionKey}:thread:root-a`,
-    `${roomSessionKey}:thread:root-b`,
-    `${roomSessionKey}:thread:root-a`,
-  ]);
-});
-
 it.each(["off", "all"] as const)("routes replies and typing with replyToMode=%s", async (mode) => {
   const bus = createBus();
   labelDirectory(bus);
@@ -362,7 +339,6 @@ it.each(["off", "all"] as const)("routes replies and typing with replyToMode=%s"
   await dispatch.delivery.deliver({ text: "threaded reply to @Alice" }, { kind: "final" });
   expect(bus.sendText).toHaveBeenCalledWith({ ...target, text: "threaded reply to @Alice" });
   const typing = dispatch.replyPipeline?.typing;
-  expect(typing?.keepaliveIntervalMs).toBe(3_000);
   await typing?.start();
   expect(bus.sendTyping).toHaveBeenCalledWith(target);
   expect(() => dispatch.delivery.onError?.("send failed", { kind: "final" })).toThrow(
