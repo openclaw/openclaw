@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSessionFilePathCore,
   resolveSessionStorePathCore,
@@ -12,6 +12,7 @@ import {
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -55,6 +56,21 @@ describe("resolveSessionFilePath cross-root reroot", () => {
 });
 
 describe("resolveStorePath", () => {
+  it.each([".openclaw", "custom-state"])(
+    "anchors a relative session.store to %s when the Gateway cwd is home",
+    (stateDirectory) => {
+      const home = path.join(path.parse(process.cwd()).root, "gateway-home");
+      const stateDir = path.join(home, stateDirectory);
+      const cfg = { session: { store: "agents/{agentId}/sessions/sessions.json" } };
+      const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
+      vi.spyOn(process, "cwd").mockReturnValue(home);
+
+      expect(resolveSessionStorePathCore(cfg.session.store, { agentId: "main", env })).toBe(
+        path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+      );
+    },
+  );
+
   it("resolves a fixed literal path without an agent owner", () => {
     const fixed = path.join(path.parse(process.cwd()).root, "shared", "sessions.json");
     expect(resolveSessionStorePathCore(fixed)).toBe(path.resolve(fixed));

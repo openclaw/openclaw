@@ -372,19 +372,24 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
     },
   );
 
-  it("reads transcripts within the retained-snapshot limit inside the batch transaction and larger ones after it, keeping entry order", async () => {
+  it("reads one bounded transcript snapshot at a time and larger ones in slices, keeping entry order", async () => {
     const first = await seedSession();
     const { storePath } = first.scope;
     const second = await seedSession({ storePath, tag: "two" }, LARGE_ROWS);
     const third = await seedSession({ storePath, tag: "three" });
     const largeSize = readTranscriptStatsSync(second.scope).sizeBytes;
     expect(largeSize).toBeGreaterThan(4 * MIB);
-    // The large transcript fits one slice, so it takes exactly one transaction after the batch.
+    // Each source gets its own snapshot; the large transcript adds one deferred slice.
     sliceBudget.bytes = 2 * largeSize;
     const results = await prepareSessionMemoryEntries(
       [first, second, third].map(({ scope }) => memoryEntry(scope)),
     );
-    expect(transactionLog.entries).toEqual(["transaction", "transaction"]);
+    expect(transactionLog.entries).toEqual([
+      "transaction",
+      "transaction",
+      "transaction",
+      "transaction",
+    ]);
     expect(results.map((result) => entryContent(result)?.includes(`${MARKER} short two`))).toEqual([
       false,
       true,

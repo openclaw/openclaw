@@ -84,7 +84,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     }
   }
   const references = new Map<string, RecoveryArtifactReference[]>();
-  const manifestPaths: string[] = [];
+  let manifestPaths: string[] = [];
   const artifacts: RecoveryCleanupArtifact[] = [];
   const protectUnmanifested = (filePath: string, bytes: number, reason: string) => {
     artifacts.push({ path: filePath, runs: [], bytes, outcome: "protected", reason });
@@ -100,7 +100,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       reason: "manifest-directory-alias",
     });
   } else {
-    manifestPaths.push(...listSessionSqliteMigrationManifestPaths(params.env));
+    manifestPaths = listSessionSqliteMigrationManifestPaths(params.env);
     for (const manifestPath of manifestPaths) {
       const stat = statMigrationPath(manifestPath);
       const manifest =

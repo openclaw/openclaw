@@ -16,6 +16,7 @@ import {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { applySessionActorAppend } from "./session-actor-append.worker.js";
+import { initializeSessionActorContextStats } from "./session-actor-context-stats.worker.js";
 import type { SessionActorAppend, SessionActorTarget } from "./session-actor-contract.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import {
@@ -469,6 +470,7 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
     expect(retainedReads.counts.newer).toBe(0);
     expect(retainedReads.counts.parents).toBe(0);
     expect(retainedReads.counts.projection).toBe(0);
+    initializeSessionActorContextStats(database, state);
     expect(committed.kind).toBe("metadata");
     if (committed.kind !== "metadata") {
       throw new Error("Expected prepared metadata append");

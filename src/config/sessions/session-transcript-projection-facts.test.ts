@@ -1,11 +1,13 @@
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   readSqliteDatabaseScopedWriteToken,
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { appendSqliteTrajectoryRuntimeEventsWithWriter } from "../../trajectory/runtime-store.sqlite.js";
@@ -41,6 +43,7 @@ import { withSessionTranscriptProjectionReceipt } from "./session-transcript-pro
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: These owner transactions do not exercise background entry maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -101,16 +104,19 @@ function fixture(initialEvents: TranscriptEvent[] = [user, assistant]) {
   const receipt = (
     state: SessionActorStoredState = hydrate(),
   ): SessionTranscriptProjectionReceipt => {
-    const facts = projectSessionActorHotState(state).transcript.projection;
-    if (!facts) {
-      throw new Error("Hydrated actor did not publish projection facts");
-    }
+    const {
+      projection: facts,
+      contextStats,
+      version,
+    } = projectSessionActorHotState(state).transcript;
     return {
       path: database.path,
       sessionId: scope.sessionId,
       writeScopes,
       writeToken: token(),
       facts,
+      contextStats,
+      contextStatsVersion: version,
     };
   };
   const read = (facts?: SessionTranscriptProjectionReceipt) =>
@@ -339,7 +345,7 @@ it("invalidates exact rewrites and dirty/rebuilt projections even when the lates
     if (rewritten.kind !== "value") {
       throw new Error("Exact rewrite left the projection unavailable");
     }
-    expect(rewritten.value.version.generation).not.toBe(retained.facts.generation);
+    expect(rewritten.value.version.generation).not.toBe(retained.facts?.generation);
     const beforeDirty = f.receipt();
     f.write(() => {
       markSessionTranscriptIndexDirtyInTransaction(f.database.db, f.scope.sessionId);
@@ -421,7 +427,7 @@ it("covers the first append after hydrating an empty actor", async () => {
     const actor = f.hydrate();
     f.write(() => withSessionActorTransactionState(f.database, actor, () => f.append([user])));
     const receipt = f.receipt(actor);
-    expect(receipt.facts.contextMetadata).toBeUndefined();
+    expect(receipt.facts?.contextMetadata).toBeUndefined();
     expect(
       withSessionTranscriptProjectionReceipt(receipt, () =>
         readSessionTranscriptBoundedActiveContextCore(f.scope, {
@@ -481,6 +487,94 @@ it("preserves bounded context and accounting with compact committed receipts", a
   });
 });
 
+it("matches compact accounting to the native snapshot while a writer advances", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const events = Array.from({ length: 600 }, (_, index) =>
+      messageEvent(`user-${index}`, index ? `user-${index - 1}` : null, {
+        role: "user",
+        content: `message ${index}`,
+      }),
+    );
+    const f = fixture(events);
+    const actor = f.hydrate();
+    expect(actor.transcript.complete).toBe(false);
+    const beforeBytes = events.reduce(
+      (sum, event) => sum + Buffer.byteLength(JSON.stringify(event)) + 1,
+      0,
+    );
+    const opened = openOpenClawAgentDatabaseReadOnly({ agentId: "main", path: f.database.path });
+    assert(opened.found);
+    const reader = opened.database;
+    const read = (receipt?: SessionTranscriptProjectionReceipt) =>
+      withSessionTranscriptProjectionReceipt(receipt, () =>
+        readCurrentProjectionSnapshot(reader, f.scope, (projection) =>
+          readSessionTranscriptAccountingFromProjection(projection, {
+            includeByteSize: true,
+            includeUsage: false,
+          }),
+        ),
+      );
+    let receipt: SessionTranscriptProjectionReceipt | undefined;
+    const rewritten = {
+      ...events[0]!,
+      message: {
+        role: "user",
+        content: "message 0",
+        __openclaw: { steerTargetRunId: "synthetic-run" },
+      },
+    };
+    const afterBytes =
+      beforeBytes +
+      Buffer.byteLength(JSON.stringify(rewritten)) -
+      Buffer.byteLength(JSON.stringify(events[0]));
+    try {
+      runSqliteReadSnapshotSync(reader.db, () => {
+        expect(read()).toMatchObject({ kind: "value", value: { byteSize: beforeBytes } });
+        f.write(() =>
+          rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
+            {
+              seq: 0,
+              expectedEventJson: JSON.stringify(events[0]),
+              event: rewritten,
+            },
+          ]),
+        );
+        const current = f.receipt();
+        receipt = { ...current, facts: undefined, entrySessionKey: undefined, contextOnly: true };
+        expect(current.contextStatsVersion?.generation).toBe(
+          actor.hot.transcript.version.generation,
+        );
+        expect(current.contextStatsVersion?.rawSeq).toBe(actor.hot.transcript.version.rawSeq);
+        expect(current.contextStatsVersion?.updatedAt).not.toBe(
+          actor.hot.transcript.version.updatedAt,
+        );
+        // A live token cannot certify a newer receipt against this already-pinned snapshot.
+        expect(read(receipt)).toMatchObject({ kind: "value", value: { byteSize: beforeBytes } });
+      });
+      const observed = trackSqliteStatementExecutions(f.database.db, ["aggregate"], (sql) =>
+        sql.includes('as "size_bytes"') && sql.includes("SUM(") ? "aggregate" : null,
+      );
+      try {
+        expect(
+          withSessionTranscriptProjectionReceipt(receipt, () =>
+            readCurrentProjectionSnapshot(f.database, f.scope, (projection) =>
+              readSessionTranscriptAccountingFromProjection(projection, {
+                includeByteSize: true,
+                includeUsage: false,
+              }),
+            ),
+          ),
+        ).toMatchObject({ kind: "value", value: { eventCount: 600, byteSize: afterBytes } });
+        expect(observed.counts.aggregate).toBe(0);
+      } finally {
+        observed.restore();
+      }
+    } finally {
+      reader.close();
+    }
+  });
+});
+
 it("keeps stored header bytes, event limits and admitted-turn fences in the covered reader", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const header = { type: "session", version: 3, id: "header", cwd: "/synthetic/é" };
@@ -498,7 +592,7 @@ it("keeps stored header bytes, event limits and admitted-turn fences in the cove
       truncated: true,
     });
     expect(() => read(headerBytes - 1)).toThrow("header exceeds");
-    if (!receipt.facts.generation) {
+    if (!receipt.facts?.generation) {
       throw new Error("Transcript fixture requires a generation");
     }
     const fence = {

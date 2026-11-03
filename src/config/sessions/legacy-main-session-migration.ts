@@ -397,7 +397,7 @@ async function migrateLegacyMainSessionKeysInternal(
           legacyAgentId,
           mode: params.mode,
         });
-        base.warnings.push(...resolved.warnings);
+        base.warnings = resolved.warnings;
         rowsMayExist =
           resolved.unreadable.length > 0 ||
           resolved.jsonPaths.length > 0 ||

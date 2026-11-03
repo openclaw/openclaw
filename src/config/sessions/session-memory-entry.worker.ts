@@ -1,9 +1,11 @@
+import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { projectSessionEntryRecord } from "../../../packages/memory-host-sdk/src/host/session-entry-projection.js";
 import {
   buildSessionEntryInProcess,
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   readTranscriptExportSnapshotFromDatabase,
@@ -37,107 +39,102 @@ export async function prepareSessionMemoryEntry(request: SessionEntryWorkerInput
 
 export async function prepareSessionMemoryEntries(
   entries: SessionEntriesWorkerInput["entries"],
+  publish?: (
+    index: number,
+    value: SessionTranscriptWorkerValues["session-entries"]["entries"][number],
+  ) => Promise<void>,
 ): Promise<SessionTranscriptWorkerValues["session-entries"]["entries"]> {
-  const prepared: (Snapshot | null | "cold")[] = entries.map(() => null);
-  const sliced = new Map<
-    number,
-    {
-      options: Parameters<typeof readTranscriptExportSnapshotFromDatabase>[3];
-      batchHead: Snapshot;
-    }
-  >();
-  const groups = new Map<
-    string,
-    { index: number; resolved: ReturnType<typeof resolveSqliteTranscriptReadScope> }[]
-  >();
-  for (const [index, { options }] of entries.entries()) {
-    const resolved = resolveSqliteTranscriptReadScope(options);
-    const key = JSON.stringify([resolved.databaseAgentId ?? resolved.agentId, resolved.path]);
-    const group = groups.get(key) ?? [];
-    group.push({ index, resolved });
-    groups.set(key, group);
-  }
-  for (const group of groups.values()) {
-    withOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        runSqliteReadSnapshotSync(
-          database.db,
-          () => {
-            for (const { index, resolved } of group) {
-              const request = entries[index]!;
-              const previous = snapshots.get(snapshotKey(request));
-              try {
-                const options = {
-                  projectEvent: projectSessionEntryRecord,
-                  previous:
-                    previous?.generation != null && previous.throughSeq !== undefined
-                      ? {
-                          events: previous.events,
-                          generation: previous.generation,
-                          throughSeq: previous.throughSeq,
-                        }
-                      : null,
-                };
-                const snapshot = runWithSessionTranscriptReadFence(request.admission, () =>
-                  readTranscriptExportSnapshotFromDatabase(
-                    database,
-                    resolved,
-                    request.options,
-                    options,
-                    { deferAboveBytes: MAX_SNAPSHOT_BYTES },
-                  ),
-                );
-                if (snapshot.deferred) {
-                  sliced.set(index, { options, batchHead: snapshot });
-                } else {
-                  prepared[index] = snapshot;
-                }
-              } catch (error) {
-                if (!(error instanceof SessionTranscriptColdError)) {
-                  throw error;
-                }
-                prepared[index] = "cold";
-              }
+  const results: SessionTranscriptWorkerValues["session-entries"]["entries"] = [];
+  // Export one admitted snapshot at a time. The host acknowledges its rendered value
+  // before another transcript enters this worker's bounded heap.
+  for (const [index, request] of entries.entries()) {
+    const resolved = resolveSqliteTranscriptReadScope(request.options);
+    const previous = snapshots.get(snapshotKey(request));
+    const options = {
+      projectEvent: projectSessionEntryRecord,
+      previous:
+        previous?.generation != null && previous.throughSeq !== undefined
+          ? {
+              events: previous.events,
+              generation: previous.generation,
+              throughSeq: previous.throughSeq,
             }
-          },
-          { operationLabel: "session transcript export batch" },
-        ),
-      toDatabaseOptions(group[0]!.resolved),
-    );
-  }
-  // Large transcripts are never retained by the cache; decode them after the batch releases.
-  for (const [index, { options, batchHead }] of sliced) {
-    const request = entries[index]!;
+          : null,
+    };
+    let snapshot: Snapshot | null | "cold";
     try {
-      prepared[index] = runWithSessionTranscriptReadFence(
-        request.admission,
-        () => readTranscriptExportSnapshotReadOnlySync(request.options, options, batchHead) ?? null,
+      const read = withOpenClawAgentDatabaseReadOnly(
+        (database) =>
+          runSqliteReadSnapshotSync(
+            database.db,
+            () =>
+              runWithSessionTranscriptReadFence(request.admission, () =>
+                readTranscriptExportSnapshotFromDatabase(
+                  database,
+                  resolved,
+                  request.options,
+                  options,
+                  { deferAboveBytes: MAX_SNAPSHOT_BYTES },
+                ),
+              ),
+            { operationLabel: "session transcript export" },
+          ),
+        toDatabaseOptions(resolved),
       );
+      snapshot = read.found ? read.value : null;
+      if (snapshot?.deferred) {
+        const batchHead = snapshot;
+        snapshot = runWithSessionTranscriptReadFence(
+          request.admission,
+          () =>
+            readTranscriptExportSnapshotReadOnlySync(request.options, options, batchHead) ?? null,
+        );
+      }
     } catch (error) {
       if (!(error instanceof SessionTranscriptColdError)) {
         throw error;
       }
-      prepared[index] = "cold";
+      snapshot = "cold";
     }
-  }
-  return Promise.all(
-    entries.map(async (request, index) => {
-      const snapshot = prepared[index]!;
-      if (snapshot === "cold") {
-        return { cold: true as const };
-      }
+    let value: SessionTranscriptWorkerValues["session-entries"]["entries"][number];
+    if (snapshot === "cold") {
+      value = { cold: true };
+    } else {
       retainSnapshot(snapshotKey(request), snapshot);
       const entry = snapshot
         ? await buildSessionEntryInProcess(request.absPath, request.options, snapshot)
         : null;
-      return {
+      value = {
         entry,
-        resetRecallCutoff: entry
-          ? readSessionEntryResetRecallCutoff(entry)
-          : { state: "absent" as const },
+        resetRecallCutoff: entry ? readSessionEntryResetRecallCutoff(entry) : { state: "absent" },
       };
-    }),
-  );
+    }
+    if (publish) {
+      await publish(index, value);
+    } else {
+      results[index] = value;
+    }
+  }
+  return results;
+}
+
+/** The dispatcher delegates acknowledged delivery to the export owner. */
+export async function deliverSessionMemoryEntries(
+  entries: SessionEntriesWorkerInput["entries"],
+  channel: WorkerTaskChannel | undefined,
+  control: WorkerTaskControl,
+): Promise<SessionTranscriptWorkerValues["session-entries"]> {
+  if (!channel) {
+    throw new Error("Session exports require their host delivery channel");
+  }
+  channel.consumeInput();
+  await prepareSessionMemoryEntries(entries, async (index, value) => {
+    control.throwIfCancelled();
+    const response = await channel.request({ kind: "session-entries", index, value });
+    response.consumed();
+    control.throwIfCancelled();
+  });
+  return { entries: [] };
 }
 
 function snapshotKey({ options }: SessionEntriesWorkerInput["entries"][number]) {

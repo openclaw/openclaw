@@ -4,6 +4,10 @@ import { toStringifiedError } from "@openclaw/normalization-core/error-coercion"
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { observeWorkerMessage } from "../../infra/worker-message-metrics.js";
+import {
+  decodeNativeWorkerFailure,
+  type NativeWorkerFailure,
+} from "../../infra/worker-native-error.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -27,7 +31,7 @@ export type SqliteCanonicalValidationTaskMessage = {
 };
 export type SqliteCanonicalValidationTaskResult =
   | { status: "closed" }
-  | { status: "failed"; error: string };
+  | { status: "failed"; error: NativeWorkerFailure };
 export type CanonicalWorkerPool = {
   pool: WorkerTaskPool<SqliteCanonicalValidationWorkerTask, SqliteCanonicalValidationTaskResult>;
   closed: boolean;
@@ -70,7 +74,7 @@ export async function withSqliteCanonicalValidationWorkerPool<T>(
       validateResult: (result) => {
         // Failed mutation/close replies retire the native slot before rejecting its task.
         if (result.status !== "closed") {
-          throw new Error(result.error);
+          throw decodeNativeWorkerFailure(result.error);
         }
       },
     }),

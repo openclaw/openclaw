@@ -92,42 +92,49 @@ describe("sessions cleanup --fix-missing", () => {
     });
   });
 
-  it("preserves readable session state when a later transcript row is malformed", async () => {
-    const sessionKey = "agent:main:malformed-after-message";
-    const sessionId = "malformed-after-message";
-    const scope = { sessionKey, sessionId, storePath };
-    await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-    appendTranscriptMessageSync(scope, {
-      eventId: "readable-user-message",
-      message: { role: "user", content: [{ type: "text", text: "keep this conversation" }] },
-    });
-    appendTranscriptEventSync(scope, { type: "proof", id: "row-to-corrupt" });
+  it.each([true, false])(
+    "preserves session state when a transcript row is malformed (message=%s)",
+    async (readableMessage) => {
+      const sessionKey = "agent:main:malformed-after-message";
+      const sessionId = "malformed-after-message";
+      const scope = { sessionKey, sessionId, storePath };
+      await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+      if (readableMessage) {
+        appendTranscriptMessageSync(scope, {
+          eventId: "readable-user-message",
+          message: { role: "user", content: [{ type: "text", text: "keep this conversation" }] },
+        });
+      }
+      appendTranscriptEventSync(scope, { type: "proof", id: "row-to-corrupt" });
 
-    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
-    if (!sqlitePath) {
-      throw new Error("expected SQLite session store");
-    }
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath });
-    database.db
-      .prepare(
-        `UPDATE transcript_events
+      const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "main",
+      }).path;
+      if (!sqlitePath) {
+        throw new Error("expected SQLite session store");
+      }
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath });
+      database.db
+        .prepare(
+          `UPDATE transcript_events
          SET event_json = '{malformed'
          WHERE session_id = ? AND seq = (
            SELECT MAX(seq) FROM transcript_events WHERE session_id = ?
          )`,
-      )
-      .run(sessionId, sessionId);
+        )
+        .run(sessionId, sessionId);
 
-    const result = await runSessionsCleanup({
-      cfg: {},
-      opts: { enforce: true, fixMissing: true },
-      targets: [{ agentId: "main", storePath }],
-    });
+      const result = await runSessionsCleanup({
+        cfg: {},
+        opts: { enforce: true, fixMissing: true },
+        targets: [{ agentId: "main", storePath }],
+      });
 
-    expect(result.appliedSummaries[0]?.missing).toBe(0);
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId });
-    expect(listDeletedArchives(path.dirname(storePath))).toEqual([]);
-  });
+      expect(result.appliedSummaries[0]?.missing).toBe(0);
+      expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId });
+      expect(listDeletedArchives(path.dirname(storePath))).toEqual([]);
+    },
+  );
 
   it("recreates every derived file from pending canonical archives after commit", async () => {
     const sessionIds = Array.from({ length: 6 }, (_, index) => `pending-export-${index}`);

@@ -94,3 +94,14 @@ export function initializeReplacementTranscript(
     });
   }
 }
+
+export async function loadAgentEntryDeletionOperations() {
+  const deletion = await import("../config/sessions/session-entry-deletion.worker.js");
+  return {
+    "session.lifecycle.deletePlan": deletion.planSessionDeletionInAgentWorker,
+    "session.lifecycle.delete": deletion.deleteSessionEntryInAgentWorker,
+  } satisfies Handlers;
+}
+
+export type AgentTranscriptOperations = Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
+  Awaited<ReturnType<typeof loadAgentEntryDeletionOperations>>;

@@ -239,6 +239,43 @@ function gateFirstCertificationPerTask() {
   };
 }
 
+it("preserves native lock classification after canonical worker cleanup", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { agentIds, cfg } = seedFleet(state.env);
+    const agentId = agentIds[0]!;
+    const pathname = openOpenClawAgentDatabase({ agentId, env: state.env }).path;
+    closeOpenClawAgentDatabasesForTest(state.env.OPENCLAW_STATE_DIR);
+    const preload = state.path("canonical-lock.cjs");
+    writeFileSync(
+      preload,
+      `
+      const { DatabaseSync } = require('node:sqlite');
+      const exec = DatabaseSync.prototype.exec;
+      DatabaseSync.prototype.exec = function(sql) {
+        if (this.location() === ${JSON.stringify(pathname)} && /^\\s*BEGIN\\b/i.test(sql)) {
+          throw Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_ERROR', errcode: 5 });
+        }
+        return exec.call(this, sql);
+      };
+      `,
+    );
+    observer.beforeCreate = (_filename, options) => ({
+      ...options,
+      execArgv: [...(options.execArgv ?? []), "--require", preload],
+    });
+    await expect(
+      runSessionStartupMigration({
+        cfg,
+        env: state.env,
+        agentIds: new Set([agentId]),
+        log: { info: vi.fn(), warn: vi.fn() },
+      }),
+    ).rejects.toMatchObject({ errcode: 5 });
+    expect([...observer.workers].every((worker) => worker.threadId === -1)).toBe(true);
+    expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
+  });
+});
+
 it("reuses two workers while closing each database task before runtime handoff", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { agentIds, cfg } = seedFleet(state.env);

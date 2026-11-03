@@ -29,7 +29,7 @@ import {
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
-import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
+import * as replacementWorker from "./session-accessor.sqlite-replacement-worker.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 
 const archiveHook = vi.hoisted(() => ({ afterMaterialize: undefined as (() => void) | undefined }));
@@ -213,49 +213,56 @@ function observeColdAdmission(
     return Promise.all([work, hostRelease.promise]).then(() => undefined);
   });
   if (mode === "historical-check") {
-    const withWorker = reclamationWorker.withSqliteReclamationWorker;
-    vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
-      (options, claim, run, assertCurrent, signal) =>
+    const withWorker = replacementWorker.withSessionEntryWorker;
+    vi.spyOn(replacementWorker, "withSessionEntryWorker").mockImplementation(
+      (
+        options,
+        identity,
+        assertCurrent,
+        run,
+        onCommit,
+        retainedExecution,
+        signal,
+        preparation,
+        onTransaction,
+        onAdmission,
+        releaseSource,
+        operationMode,
+        expectedCreationIdentity,
+      ) =>
         withWorker(
           options,
-          claim,
-          async (worker) => {
-            const execute = worker.run.bind(worker);
-            const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
-              if (
-                !probe.armed ||
-                probe.held ||
-                params.plan.databaseOptions.path !== probe.databasePath ||
-                params.plan.kind !== "deletion-plan" ||
-                params.plan.planning.operation !== "check"
-              ) {
-                return execute(params);
+          identity,
+          assertCurrent,
+          async (execution, source, context) => {
+            const prepare = execution.prepare.bind(execution);
+            const spy = vi.spyOn(execution, "prepare").mockImplementation(async (...args) => {
+              await prepare(...args);
+              if (probe.armed && !probe.held && options.path === probe.databasePath) {
+                probe.held = true;
+                entered.resolve();
+                await hostRelease.promise;
               }
-              return execute({
-                ...params,
-                withWriteAdmission: (performWrite, diagnostics) =>
-                  params.withWriteAdmission(async (...admissionArgs) => {
-                    const [refusal] = admissionArgs;
-                    if (!refusal && !probe.held) {
-                      probe.held = true;
-                      entered.resolve();
-                      await hostRelease.promise;
-                    }
-                    return performWrite(...admissionArgs);
-                  }, diagnostics),
-              });
             });
             try {
-              return await run(worker);
+              return await run(execution, source, context);
             } finally {
               spy.mockRestore();
             }
           },
-          assertCurrent,
+          onCommit,
+          retainedExecution,
           signal,
+          preparation,
+          onTransaction,
+          onAdmission,
+          releaseSource,
+          operationMode,
+          expectedCreationIdentity,
         ),
     );
   }
+
   return {
     entered,
     release,

@@ -21,7 +21,7 @@ import { readTrajectoryRuntimeRetentionLease } from "../trajectory/runtime-reten
 import type { AgentDatabaseMaintenanceOperations } from "./openclaw-agent-execution-maintenance.js";
 import {
   initializeReplacementTranscript,
-  type loadAgentTranscriptOperations,
+  type AgentTranscriptOperations,
   type TranscriptInitialization,
 } from "./openclaw-agent-execution-transcript.worker.js";
 import type { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
@@ -703,7 +703,7 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
   Awaited<ReturnType<typeof loadSessionRowBackfillOperations>> &
     Awaited<ReturnType<typeof loadUsageCacheOperations>> &
     Awaited<ReturnType<typeof loadAgentVoiceSessionOperations>> &
-    Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
+    AgentTranscriptOperations &
     Awaited<ReturnType<typeof loadAgentTranscriptReadOperations>> &
     Awaited<ReturnType<typeof loadAgentReplacementOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &

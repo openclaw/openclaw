@@ -5,7 +5,10 @@ import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWatermark,
 } from "./session-transcript-context-version.types.js";
-import type { SessionTranscriptProjectionFacts } from "./session-transcript-projection-facts.types.js";
+import type {
+  SessionTranscriptContextStats,
+  SessionTranscriptProjectionFacts,
+} from "./session-transcript-projection-facts.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -63,6 +66,7 @@ export type SessionActorHotState = {
   transcript: {
     /** Durable projection postimage; omitted by adapters without SQLite projections. */
     projection?: SessionTranscriptProjectionFacts;
+    contextStats?: SessionTranscriptContextStats;
     watermark: SessionTranscriptWatermark;
     version: SessionTranscriptContextVersion;
     /** Empty anchors prove absence only when this exact projection is resident. */

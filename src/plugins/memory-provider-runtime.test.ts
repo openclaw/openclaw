@@ -461,6 +461,25 @@ describe("provider-neutral memory resolver", () => {
     }
   });
 
+  it.each([false, true])("reports semantic index completeness=%s", async (complete) => {
+    const oldManager = manager();
+    vi.spyOn(oldManager, "status").mockReturnValue({
+      backend: "builtin",
+      provider: "test",
+      vector: { enabled: true, index: { state: complete ? "complete" : "incomplete" } },
+    });
+    state.capability.runtime = legacy(oldManager);
+    const bound = (await open()).provider!;
+    try {
+      expect((await bound.search({ query: "remember" })).coverage).toBe(
+        complete ? "complete" : "partial",
+      );
+      expect((await bound.health()).status).toBe(complete ? "ready" : "degraded");
+    } finally {
+      await bound.close();
+    }
+  });
+
   it.each(["search", "readFile"] as const)(
     "rejects a legacy manager missing %s",
     async (method) => {

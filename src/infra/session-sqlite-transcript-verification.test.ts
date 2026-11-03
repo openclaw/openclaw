@@ -97,3 +97,60 @@ it("verifies legacy media without accepting changed events or rewriting history"
     expect(loadTranscriptEventsSync(scope)).toEqual(stored);
   });
 });
+
+it("verifies Doctor-normalized inbound headings without rewriting history", async () => {
+  await withOpenClawTestState({ label: "verify-inbound-headings" }, async (state) => {
+    const sessionId = "inbound-headings";
+    const header = { type: "session", id: sessionId, version: 3 };
+    const headingMessage = (normalized: boolean, suffix = "") => ({
+      type: "message",
+      id: "m1",
+      parentId: null,
+      message: {
+        role: "user",
+        content:
+          (normalized
+            ? 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"chat_type":"direct"}\n```\nQuestion'
+            : 'Conversation info (untrusted metadata):\n```json\n{"chat_type":"direct"}\n```\nQuestion') +
+          suffix,
+      },
+    });
+    const write = (event: unknown) =>
+      state.writeText("source.jsonl", `${JSON.stringify(header)}\n${JSON.stringify(event)}\n`);
+    // SQLite holds the Doctor-normalized heading; the retained JSONL keeps the legacy label.
+    const filename = await write(headingMessage(true));
+    const scope = {
+      agentId: "main",
+      env: state.env,
+      sessionId,
+      sessionKey: "agent:main:main",
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    await importSqliteSessionRows({
+      ...scope,
+      entry: { sessionId, updatedAt: 1 },
+      readTranscriptEvents: createTranscriptEventReader(filename, sessionId),
+    });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const source = { path: filename, sessionId, originalPath: filename };
+    const stored = loadTranscriptEventsSync(scope);
+    await write(headingMessage(false));
+    const original = fs.readFileSync(filename, "utf8");
+    for (const mode of ["ordered", "contained", "appendable"] as const) {
+      expect(verifyTranscriptEvents(database.db, source, mode)).toEqual({
+        events: 2,
+        missingEvents: 0,
+        sqliteEvents: 2,
+      });
+    }
+    expect(fs.readFileSync(filename, "utf8")).toBe(original);
+
+    await write(headingMessage(false, "!"));
+    expect(verifyTranscriptEvents(database.db, source, "ordered")).toBeUndefined();
+    expect(verifyTranscriptEvents(database.db, source, "contained")).toBeUndefined();
+    expect(() => verifyTranscriptEvents(database.db, source, "appendable")).toThrow(
+      "Legacy event m1 conflicts with the SQLite event of the same identity",
+    );
+    expect(loadTranscriptEventsSync(scope)).toEqual(stored);
+  });
+});

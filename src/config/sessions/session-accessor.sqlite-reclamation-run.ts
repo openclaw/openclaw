@@ -13,6 +13,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -41,10 +42,7 @@ import {
 import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker-lifetime.js";
 import { withSqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
 import type { SqliteReclamationClaim } from "./session-accessor.sqlite-reclamation-worker.types.js";
-import {
-  reclaimSqliteSessionInTransaction,
-  resolveSessionReclamationDatabaseOptions,
-} from "./session-accessor.sqlite-reclamation.js";
+import { reclaimSqliteSessionInTransaction } from "./session-accessor.sqlite-reclamation.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   runExclusiveSqliteSessionWrite,
@@ -95,20 +93,22 @@ export async function runSessionDeletionPlanning(
       diagnostics,
     );
   }
-  const result = await runSqliteSessionReclamation({
-    diagnostics,
-    assertCommitAllowed: assertCurrent,
-    plan: {
-      kind: "deletion-plan",
-      databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
-      materializedPlans: [],
-      planning,
+  return await withSessionEntryWorker(
+    { ...databaseOptions, path: resolved.path ?? resolveOpenClawAgentSqlitePath(databaseOptions) },
+    undefined,
+    assertCurrent,
+    async (execution, source) => {
+      await execution.prepare(source);
+      const result = await execution.runExisting(source, (worker) =>
+        worker.execute({ type: "session.lifecycle.deletePlan", input: planning }),
+      );
+      assertCurrent();
+      if (!result) {
+        throw new Error("SQLite session deletion planning lost its database");
+      }
+      return result;
     },
-  });
-  if (result.kind !== "deletion-plan") {
-    throw new Error(`SQLite session deletion planning returned ${result.kind}`);
-  }
-  return result.value;
+  );
 }
 
 export async function runSqliteSessionReclamation(params: {

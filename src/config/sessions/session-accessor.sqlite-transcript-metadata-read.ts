@@ -73,6 +73,7 @@ export function hasSessionTranscriptMessageInDatabase(
 export function findTranscriptEventInRows(
   rows: Iterable<{ event_json: string }>,
   match: (event: TranscriptEvent) => boolean,
+  malformed: "skip" | "throw" = "skip",
 ): { event: TranscriptEvent } | undefined {
   for (const row of rows) {
     try {
@@ -80,8 +81,12 @@ export function findTranscriptEventInRows(
       if (match(event)) {
         return { event };
       }
-    } catch {
-      // Malformed rows are skipped, matching transcript index tolerance.
+    } catch (error) {
+      // Malformed rows are skipped, matching transcript index tolerance, unless the
+      // caller must prove absence.
+      if (malformed === "throw") {
+        throw error;
+      }
     }
   }
   return undefined;

@@ -184,7 +184,7 @@ describe("conversation directory write admission", () => {
       };
       const config = {
         ...fixture.config,
-        session: { store: path.relative(process.cwd(), fixture.storePath) },
+        session: { store: path.basename(fixture.storePath) },
       };
       const result = runGatewayConversationList(
         { config, agentId: fixture.agentId, channel: "reef", limit: 10 },

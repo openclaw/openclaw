@@ -1,6 +1,7 @@
 /** Shared read-only proof that retained transcript events exist in canonical SQLite. */
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLegacyInboundContextLabelsJson } from "../config/sessions/legacy-inbound-context-labels.js";
 import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { canonicalizeTranscriptEventMedia } from "../config/sessions/transcript-event-media.js";
@@ -25,7 +26,15 @@ export function verifyTranscriptEvents(
       false,
       readTranscriptFingerprint(source.path),
       source.originalPath,
-    )((event) => stage.append(0, seq++, JSON.stringify(canonicalizeTranscriptEventMedia(event))));
+    )((event) =>
+      stage.append(
+        0,
+        seq++,
+        normalizeLegacyInboundContextLabelsJson(
+          JSON.stringify(canonicalizeTranscriptEventMedia(event)),
+        ),
+      ),
+    );
     const repair = stage.repairLegacyTranscript(0, mode !== "ordered");
     if (mode === "ordered") {
       // Receipt adoption retains its original order and branch-repair contract.
@@ -52,14 +61,15 @@ export function verifyTranscriptEvents(
           .where("session_id", "=", source.sessionId)
           .orderBy("seq", "asc"),
       )) {
+        const eventJson = normalizeLegacyInboundContextLabelsJson(event.event_json);
         if (mode !== "ordered") {
-          stage.addSeen(event.event_json);
-          const entry: unknown = JSON.parse(event.event_json);
+          stage.addSeen(eventJson);
+          const entry: unknown = JSON.parse(eventJson);
           if (isRecord(entry) && typeof entry.id === "string") {
             stage.addSeen(`id\0${entry.id}`);
           }
         }
-        if (!expected.done && event.event_json === expected.value.eventJson) {
+        if (!expected.done && eventJson === expected.value.eventJson) {
           expected = sourceRows.next();
           if (expected.done) {
             break;

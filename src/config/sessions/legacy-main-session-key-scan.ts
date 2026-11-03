@@ -231,7 +231,9 @@ export function prepareComparisonClaimsFromStores(params: {
         if (result.operation !== "comparison-claims") {
           throw new Error("Legacy claim scan returned another retirement operation");
         }
-        claims.push(...result.claims.map((claim) => ({ store, claim })));
+        for (const claim of result.claims) {
+          claims.push({ store, claim });
+        }
       } catch (error) {
         unreadable(store, error);
       }

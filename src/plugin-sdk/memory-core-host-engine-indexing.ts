@@ -1,6 +1,7 @@
 // Immutable preparation workers use pure helpers without loading providers or store writers.
 export {
   chunkMarkdown,
+  createMarkdownChunker,
   remapChunkLines,
   type MemoryChunk,
 } from "../../packages/memory-host-sdk/src/host/markdown-chunks.js";

@@ -358,34 +358,50 @@ describe("memory actor history", () => {
     expect(messageIds(media.messages)).toEqual(["large"]);
   });
 
-  it("bounds recent history and refuses unbounded pages whose combined raw payload exceeds the cap", async () => {
-    const content = "x".repeat(3 * 1024 * 1024);
-    const { storage } = await fixture([
-      message("first", null, "user", content),
-      message("second", "first", "assistant", content),
-      message("third", "second", "user", content),
-    ]);
-    const recent = await storage.read(
-      {
-        type: "session.history.recent",
-        input: { options: { maxMessages: 3, maxBytes: 16 * 1024 * 1024 } },
-      },
-      authority,
-    );
-    expect(messageIds(recent.messages)).toEqual(["second", "third"]);
-    const reads: SessionActorMemoryHistoryQuery[] = [
-      { type: "session.history.page", input: { options: { offset: 0, maxMessages: 3 } } },
-      {
-        type: "session.history.around-id",
-        input: { options: { messageId: "second", maxMessages: 3 } },
-      },
-    ];
-    for (const query of reads) {
-      expect(() => storage.readCurrent(query, authority)).toThrow(
+  it.each([3, 5])(
+    "bounds %i MiB anchor history while preserving directional progress",
+    async (size) => {
+      const content = "x".repeat(size * 1024 * 1024);
+      const { storage } = await fixture([
+        message("first", null, "user", content),
+        message("second", "first", "assistant", content),
+        message("third", "second", "user", content),
+      ]);
+      const recent = await storage.read(
+        {
+          type: "session.history.recent",
+          input: { options: { maxMessages: 3, maxBytes: 16 * 1024 * 1024 } },
+        },
+        authority,
+      );
+      expect(messageIds(recent.messages)).toEqual(size === 3 ? ["second", "third"] : ["third"]);
+      const offsetPage: SessionActorMemoryHistoryQuery = {
+        type: "session.history.page",
+        input: { options: { offset: 0, maxMessages: 3 } },
+      };
+      expect(() => storage.readCurrent(offsetPage, authority)).toThrow(
         "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
       );
-    }
-  });
+      for (const [direction, messageId, excludeAnchor, expected, offset] of [
+        ["older", "third", false, size === 3 ? ["second", "third"] : ["third"], 0],
+        ["newer", "first", false, size === 3 ? ["first", "second"] : ["first"], size === 3 ? 1 : 2],
+        [undefined, "second", false, size === 3 ? ["first", "second"] : ["second"], 1],
+        ["older", "third", true, size === 3 ? ["first", "second"] : ["second"], 1],
+        ["newer", "first", true, size === 3 ? ["second", "third"] : ["second"], size === 3 ? 0 : 1],
+      ] as const) {
+        const page = await storage.read(
+          {
+            type: "session.history.around-id",
+            input: { options: { messageId, maxMessages: 3, direction, excludeAnchor } },
+          },
+          authority,
+        );
+        expect(page).toMatchObject({ found: true, hasOverreadContext: false, offset });
+        expect(messageIds(page.messages)).toEqual(expected);
+        expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThan(8 * 1024 * 1024);
+      }
+    },
+  );
 
   it("retains historical sessionId windows across rotation and removes them with the logical session", async () => {
     const { storage, acquire } = await fixture([message("old", null, "user", "Preserved history")]);

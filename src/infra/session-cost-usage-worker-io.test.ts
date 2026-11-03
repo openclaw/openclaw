@@ -479,18 +479,16 @@ ${fixtureReceiptWorkerClientSource(receipts.broadcastName).replace(
   'const { BroadcastChannel: FixtureReceiptBroadcastChannel } = require("node:worker_threads");',
 )}
 if (!isMainThread) {
-  const compressed = Buffer.from(${JSON.stringify(encoded.bytes.toString("base64"))}, "base64");
-  const decompress = zlib.zstdDecompressSync;
-  zlib.zstdDecompressSync = function(bytes, ...args) {
-    if (!Buffer.from(bytes).equals(compressed)) return Reflect.apply(decompress, this, [bytes, ...args]);
+  const decompress = zlib.createZstdDecompress;
+  Object.defineProperty(zlib, "createZstdDecompress", { configurable: true, value: function(...args) {
     fs.writeFileSync(${JSON.stringify(entered)}, String(threadId));
     sendReceipt(${JSON.stringify(entered)}, "entered");
     const release = new Int32Array(getEnvironmentData(${JSON.stringify(entered)}));
     while (Atomics.load(release, 0) === 0) Atomics.wait(release, 0, 0);
-    const result = Reflect.apply(decompress, this, [bytes, ...args]);
+    const result = Reflect.apply(decompress, this, args);
     fs.writeFileSync(${JSON.stringify(completed)}, "complete");
     return result;
-  };
+  }});
   require("node:module").syncBuiltinESMExports();
 }
 `,
@@ -571,7 +569,7 @@ if (!isMainThread) {
     } finally {
       setEnvironmentData(entered, undefined);
       await fs.rm(archive, { force: true });
-      expect(() => materializeSessionArchiveForRead(archive)).toThrow(/ENOENT/);
+      await expect(materializeSessionArchiveForRead(archive)).rejects.toThrow(/ENOENT/);
     }
   }, 20_000);
 

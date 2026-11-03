@@ -12,18 +12,12 @@ import {
 } from "../../infra/sqlite-database-admission.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { advanceCliHistoryBoundaryInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
-import type {
-  TranscriptEvent,
-  TranscriptMessageAppendOptions,
-} from "./session-accessor.sqlite-contract.js";
+import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { preserveSessionEntryCacheAcrossWrite } from "./session-accessor.sqlite-entry-cache.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   createTranscriptIdentityReader,
-  findAssistantTranscriptEventInDatabase,
   readEventTimestamp,
-  readTranscriptEventId,
-  readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -35,7 +29,6 @@ import {
   createTranscriptIdentityInserter,
   readIdempotencyKeyOwner,
   readTranscriptEventIdentity,
-  readTranscriptMessageByIdentity,
 } from "./session-accessor.sqlite-transcript-identity.js";
 import {
   advanceTranscriptMutationAtInTransaction,
@@ -49,6 +42,10 @@ import {
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  appendSessionActorContextStats,
+  rewriteSessionActorContextStats,
+} from "./session-actor-context-metadata.js";
 import {
   readSessionActorTransactionState,
   writableSessionActorMap,
@@ -76,8 +73,8 @@ import {
   createTranscriptEventInserter,
   createTranscriptPayloadUpdater,
   prepareTranscriptPayload,
-  readTranscriptStorageEncoding,
   transcriptEventJsonSql,
+  transcriptSerializedBytes,
 } from "./transcript-payload.js";
 
 /** Inserts exact transcript rows without mutating the forward-only projection. */
@@ -198,7 +195,7 @@ export function appendTranscriptEventInTransaction(
       const eventJson =
         options.eventJson ??
         withoutSqliteDatabaseWriteScope(database.db, () => JSON.stringify(persistedEvent));
-      const utf8Bytes = Buffer.byteLength(eventJson) + 1;
+      const serializedBytes = transcriptSerializedBytes(database.db, eventJson);
       let projectionNeedsRebuild = false;
       preserveSessionEntryCacheAcrossWrite(database, () => {
         insertEvent({
@@ -215,7 +212,7 @@ export function appendTranscriptEventInTransaction(
           actor.transcript.payloads = writableSessionActorMap(actor.transcript.payloads);
           actor.transcript.payloads.set(seq, {
             event: stored,
-            serializedBytes: utf8Bytes,
+            serializedBytes,
           });
           actor.transcript.navigation = writableSessionActorNavigation(actor.transcript.navigation);
           const navigation = projectSessionModelContextNavigation({
@@ -235,6 +232,15 @@ export function appendTranscriptEventInTransaction(
           eventId: identity?.eventId ?? null,
           createdAt,
         });
+        if (actor) {
+          appendSessionActorContextStats(
+            actor,
+            seq,
+            persistedEvent,
+            serializedBytes,
+            projectionNeedsRebuild,
+          );
+        }
       });
       if (projectionNeedsRebuild) {
         withoutSqliteDatabaseWriteScope(database.db, () => options.onProjectionReconcileNeeded?.());
@@ -303,13 +309,7 @@ export function appendTranscriptEventInTransaction(
       }
       cursor.rowTranscript = projectionNeedsRebuild
         ? undefined
-        : projectSessionRowTranscriptFields(
-            persistedEvent,
-            readTranscriptStorageEncoding(database.db) === "UTF-8"
-              ? utf8Bytes
-              : Buffer.byteLength(eventJson, "utf16le") + 1,
-            seq,
-          );
+        : projectSessionRowTranscriptFields(persistedEvent, serializedBytes, seq);
       if (options.touchMutation !== false) {
         preserveSessionEntryCacheAcrossWrite(database, () => {
           touchTranscriptMutationInTransaction(
@@ -625,6 +625,7 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
             throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
           }
         }
+        rewriteSessionActorContextStats(database, resolved, rewrites, projectionUnchanged);
         // Correlation and identical prompt captures preserve admitted input; other
         // payload rewrites still invalidate admissions and cursors.
         const generation = admissionUnchanged
@@ -652,7 +653,7 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
           rows: rewrites.map((row) => ({
             rawSeq: row.seq,
             event: JSON.parse(row.eventJson),
-            serializedBytes: Buffer.byteLength(row.eventJson, "utf8") + 1,
+            serializedBytes: transcriptSerializedBytes(database.db, row.eventJson),
           })),
         },
         run,
@@ -701,26 +702,6 @@ export function updateSqliteTranscriptEventJsonInTransaction(
       readTranscriptMutationStateInTransaction(database, sessionId).updatedAt,
     );
   });
-}
-
-export function readTranscriptMessageByScopedIdempotencyKey(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  scope: ResolvedTranscriptScope,
-  idempotencyKey: string,
-  lookup: TranscriptMessageAppendOptions<unknown>["idempotencyLookup"],
-): { messageId: string; message: unknown } | undefined {
-  if (lookup !== "scan-assistant") {
-    const identity = readIdempotencyKeyOwner(database, scope.sessionId, idempotencyKey);
-    return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
-  }
-  const found = findAssistantTranscriptEventInDatabase(database, scope.sessionId, idempotencyKey);
-  if (!found) {
-    return undefined;
-  }
-  const message = readTranscriptEventMessage(found.event);
-  return message
-    ? { messageId: readTranscriptEventId(found.event) ?? idempotencyKey, message }
-    : undefined;
 }
 
 export function sanitizeTranscriptMessageForStorage<TMessage>(message: TMessage): TMessage {

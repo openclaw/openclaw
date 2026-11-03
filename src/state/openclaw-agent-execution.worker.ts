@@ -84,6 +84,7 @@ import {
 import { readAgentDatabaseRequestPreparation } from "./openclaw-agent-execution-preparation.js";
 import {
   loadAgentTranscriptOperations,
+  loadAgentEntryDeletionOperations,
   prepareAgentTranscript,
 } from "./openclaw-agent-execution-transcript.worker.js";
 import { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
@@ -423,6 +424,8 @@ function openAgentDatabaseBackend(
     "session.turn.commit": loadAgentCompoundOperations,
     "session.lifecycle.reset": loadAgentCompoundOperations,
     "session.lifecycle.project": loadAgentCompoundOperations,
+    "session.lifecycle.deletePlan": loadAgentEntryDeletionOperations,
+    "session.lifecycle.delete": loadAgentEntryDeletionOperations,
     "session.agentPurge.prepare": loadAgentPurgeOperations,
     "session.agentPurge.commit": loadAgentPurgeOperations,
     "session.maintenance.finalize": loadAgentMaintenanceFinalizationOperations,

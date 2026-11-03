@@ -17,6 +17,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readConversationDeliveryStateForTest } from "../../gateway/conversation-delivery.test-support.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
@@ -441,7 +442,7 @@ describe("conversation turn capture", () => {
   it("retains a relative configured store when the working directory changes during correlation", async () => {
     const setup = await setupReefConversation();
     const cfg = {
-      session: { store: path.relative(process.cwd(), setup.storePath) },
+      session: { store: path.relative(resolveStateDir(), setup.storePath) },
     } as OpenClawConfig;
     const movedDirectory = tempDirs.make("capture-moved-cwd-");
     vi.useFakeTimers();

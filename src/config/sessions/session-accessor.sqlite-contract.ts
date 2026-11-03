@@ -73,7 +73,6 @@ export type SqliteSessionReclamationDiagnostics = {
   kind?:
     | "archive-publish-prepare"
     | "archive-publish-record"
-    | "deletion-plan"
     | "entry"
     | "lifecycle-artifacts"
     | "lifecycle-projection-plan"

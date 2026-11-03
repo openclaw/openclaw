@@ -334,6 +334,9 @@ Archive discovery uses the selected store, recorded transcript paths, and agent
 directories. The pre-agent `~/.openclaw/sessions/` directory is no longer an
 implicit fallback; explicitly configured paths still work.
 
+State directories reached through symlinks are supported for SQLite session deletion,
+transcript archiving, and retained cron history reads.
+
 The session rows in the per-agent SQLite database keep separate lifecycle
 timestamps:
 

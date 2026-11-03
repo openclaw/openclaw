@@ -237,6 +237,8 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
     Gateway retention waits for deferred agent database startup preparation before its first sweep, logging the wait as an intentional deferral. Retention continues even when scheduled execution is disabled.
 
+    The seven-day session registry sweep retains an expired run parent while it has a non-archived descendant, including through archived intermediate sessions or another agent's store. If a non-deleted agent's store is unavailable or held for recovery, pruning defers across healthy stores and retries every minute because that store may still contain a live descendant. This preserves the parent communication policy for `sessions_send`; it does not restore parents deleted before this fix.
+
     After each registry sweep, the Gateway waits until the next candidate expiry or a committed cron-session or store-topology change. Empty, unchanged registries do not need periodic reads. Protected expired sessions and failed sweeps retry every minute; run-history recovery keeps its existing minute cadence.
 
     Per-agent session stores also retain their next cron-run expiry, so empty or unexpired stores do not require reads on every maintenance tick. Committed cron-run changes refresh that deadline; busy sessions and failed session-store sweeps retry after five minutes.

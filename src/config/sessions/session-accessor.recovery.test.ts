@@ -14,6 +14,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
+  runOpenClawAgentWriteTransaction,
   closeOpenClawAgentDatabaseByPathAsync,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
@@ -27,9 +28,17 @@ import {
 } from "./session-accessor.js";
 import { readSessionTranscriptMessageEventPage } from "./session-accessor.sqlite-active-events.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
+import {
+  readTranscriptEventAtSeqSync,
+  readTranscriptStatsSync,
+} from "./session-accessor.sqlite-read.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
+import {
+  createTranscriptEventInserter,
+  prepareTranscriptPayloadForReuse,
+} from "./transcript-payload.js";
 import type { InternalSessionEntry } from "./types.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-recovery-");
@@ -85,10 +94,107 @@ async function createFixture() {
       },
     ],
   );
-  return { root, sourceKey, sourceSessionId, storePath, successorKey };
+  const scope = (sessionKey = sourceKey) => ({ agentId: "main", storePath, sessionKey });
+  const recoveryParams = () => ({
+    agentId: "main",
+    storePath,
+    expected: {
+      cycleId: "cycle-1",
+      revision: 4,
+      sessionId: sourceSessionId,
+      pluginOwnerId: "codex",
+    },
+    sourceTarget: { canonicalKey: sourceKey, storeKeys: [sourceKey] },
+    successorTarget: { canonicalKey: successorKey, storeKeys: [successorKey] },
+    successorEntry: {
+      sessionId: "successor-session",
+      updatedAt: 20,
+      spawnDepth: 0,
+      label: "Recovered session",
+    },
+  });
+  return { root, sourceKey, sourceSessionId, storePath, successorKey, scope, recoveryParams };
 }
 
 describe("recoverSessionEntryFromRestartTombstone", () => {
+  it("recovers complete compressed history exceeding the production worker heap", async () => {
+    const fixture = await createFixture();
+    const source = { ...fixture.scope(), sessionId: "source-session" };
+    await waitForSessionTranscriptIndexReconcilesInStateDir(fixture.root);
+    const payload = "x".repeat(1024 * 1024);
+    const count = 544;
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        const event = { type: "custom", customType: "large-recovery", data: payload };
+        const eventJson = JSON.stringify(event);
+        // Reuse compression during setup; each stored event still decodes independently.
+        const preparedPayload = prepareTranscriptPayloadForReuse(database.db, eventJson, event);
+        const insert = createTranscriptEventInserter(database.db, source.sessionId);
+        for (let seq = 4; seq < count + 4; seq++) {
+          insert({ seq, eventJson, preparedPayload, createdAt: seq });
+        }
+      },
+      toDatabaseOptions(resolveSqliteReadScope(source)),
+    );
+    expect(readTranscriptStatsSync(source).sizeBytes).toBeGreaterThan(512 * 1024 * 1024);
+
+    await expect(
+      recoverSessionEntryFromRestartTombstone(fixture.recoveryParams()),
+    ).resolves.toMatchObject({ status: "created" });
+    const successor = { ...fixture.scope(fixture.successorKey), sessionId: "successor-session" };
+    expect(readTranscriptStatsSync(successor).eventCount).toBe(count + 4);
+    expect(readTranscriptEventAtSeqSync(successor, 1)?.event).toMatchObject({ id: "user-1" });
+    expect(readTranscriptEventAtSeqSync(successor, count + 3)?.event).toEqual({
+      type: "custom",
+      customType: "large-recovery",
+      data: payload,
+    });
+    expect(loadSessionEntry(fixture.scope())?.mainRestartRecovery?.tombstone).toMatchObject({
+      recoveredSessionId: successor.sessionId,
+      recoveredSessionKey: fixture.successorKey,
+    });
+  });
+
+  it("rolls back a flushed copy on malformed history and releases the reader for retry", async () => {
+    const fixture = await createFixture();
+    const source = { ...fixture.scope(), sessionId: "source-session" };
+    const original = await loadTranscriptEvents(source);
+    await waitForSessionTranscriptIndexReconcilesInStateDir(fixture.root);
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        const insert = createTranscriptEventInserter(database.db, source.sessionId);
+        insert({
+          seq: 4,
+          eventJson: JSON.stringify({ type: "custom", data: "x".repeat(1024 * 1024) }),
+          createdAt: 4,
+        });
+        insert({ seq: 5, eventJson: "{", createdAt: 5 });
+      },
+      toDatabaseOptions(resolveSqliteReadScope(source)),
+    );
+
+    await expect(recoverSessionEntryFromRestartTombstone(fixture.recoveryParams())).rejects.toThrow(
+      /JSON/,
+    );
+    expect(loadSessionEntry(fixture.scope())).toMatchObject({
+      pinnedAt: 5,
+      mainRestartRecovery: { revision: 4 },
+    });
+    expect(loadSessionEntry(fixture.scope())?.archivedAt).toBeUndefined();
+    expect(loadSessionEntry(fixture.scope(fixture.successorKey))).toBeUndefined();
+    expect(
+      readTranscriptStatsSync({
+        ...fixture.scope(fixture.successorKey),
+        sessionId: "successor-session",
+      }).eventCount,
+    ).toBe(0);
+
+    await replaceTranscriptEvents(source, original);
+    await expect(
+      recoverSessionEntryFromRestartTombstone(fixture.recoveryParams()),
+    ).resolves.toMatchObject({ status: "created" });
+  });
+
   it("clones and publishes the atomic archived successor transition without host SQLite", async () => {
     const fixture = await createFixture();
     await waitForSessionTranscriptIndexReconcilesInStateDir(fixture.root);

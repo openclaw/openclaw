@@ -220,14 +220,14 @@ it.each([false, true])(
   },
 );
 
-it("captures config, environment, cwd and placement identity before discovery yields", async () => {
+it("captures config, state directory and placement identity before discovery yields", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const store = path.relative(process.cwd(), state.statePath("captured.sqlite"));
+    const store = "captured.sqlite";
     const cfg: OpenClawConfig = { session: { store } };
     setRuntimeConfigSnapshot(cfg, cfg);
     const subject = await placement();
     replaceSessionEntrySync(
-      { ...subject, storePath: store },
+      { ...subject, storePath: state.statePath(store) },
       { sessionId: subject.sessionId, updatedAt: 1 },
     );
     const gate = pauseRegistry();

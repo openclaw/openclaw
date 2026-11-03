@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -34,7 +34,8 @@ import {
 } from "./openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 
-const roots = useAutoCleanupTempDirTracker(afterEach);
+// Keep fixture inodes alive for the process-wide startup FTS repair latch.
+const roots = useAutoCleanupTempDirTracker(afterAll);
 
 function openRawDatabase(pathname: string, options: { readOnly?: boolean } = {}) {
   return new DatabaseSync(pathname, options);

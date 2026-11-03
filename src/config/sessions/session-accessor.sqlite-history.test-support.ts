@@ -24,7 +24,10 @@ import { readVisibleTranscriptStats } from "./session-accessor.sqlite-reset-wind
 import { createTranscriptEventInserter } from "./transcript-payload.js";
 
 export function readActiveTranscriptStats(scope: SessionTranscriptReadScope) {
-  return withCurrentProjectionSnapshot(scope, readVisibleTranscriptStats);
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const { eventCount, sizeBytes } = readVisibleTranscriptStats(projection);
+    return { eventCount, sizeBytes };
+  });
 }
 
 export function withRecentActiveTranscriptEvents<T>(

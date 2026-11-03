@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   resolveHistoryAnchorPageRange,
@@ -156,7 +157,7 @@ export class ArchivedTranscriptReader {
     if (this.scope.exactArchivePath) {
       const exactPath = this.scope.exactArchivePath;
       if ((await fs.promises.stat(exactPath).catch(() => null))?.isFile()) {
-        return materializeSessionArchiveForRead(exactPath);
+        return await materializeSessionArchiveForRead(exactPath);
       }
       return null;
     }
@@ -171,8 +172,11 @@ export class ArchivedTranscriptReader {
         continue;
       }
       try {
-        return materializeSessionArchiveForRead(archivePath);
-      } catch {
+        return await materializeSessionArchiveForRead(archivePath);
+      } catch (error) {
+        if (hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
+          throw error;
+        }
         continue;
       }
     }
@@ -418,8 +422,11 @@ export class ArchivedTranscriptReader {
     for (const archivePath of candidates) {
       let filePath: string;
       try {
-        filePath = materializeSessionArchiveForRead(archivePath);
-      } catch {
+        filePath = await materializeSessionArchiveForRead(archivePath);
+      } catch (error) {
+        if (hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
+          throw error;
+        }
         // Try the next valid retained generation.
         continue;
       }

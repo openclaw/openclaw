@@ -59,6 +59,21 @@ afterEach(async () => {
 });
 
 describe("agent database admission", () => {
+  it("reports exhausted lock admission without recommending database repair", () => {
+    const refusal = createAgentDatabaseInspectionRefusal({
+      agentId: "worker",
+      paths: ["/synthetic/openclaw-agent.sqlite"],
+      reason: "database is locked",
+      cause: Object.assign(new Error("database is locked"), { errcode: 5 }),
+    });
+    expect(refusal).toMatchObject({
+      code: "agent-database-inspection-failed",
+      reason: "database locked by another process",
+      repairHint: expect.stringContaining("restart the Gateway to retry admission"),
+    });
+    expect(refusal.repairHint).not.toContain("doctor --fix");
+  });
+
   it.each([
     [21, "per-agent"],
     [OPENCLAW_AGENT_SCHEMA_VERSION + 1, "per-agent"],

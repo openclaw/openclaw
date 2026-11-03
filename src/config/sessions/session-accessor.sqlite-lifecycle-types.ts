@@ -253,10 +253,6 @@ export type SqliteSessionReclamationPlan =
       input: ProjectedLifecycleCommitInput;
     })
   | (SessionReclamationPlanBase & {
-      kind: "deletion-plan";
-      planning: SessionDeletionPlanningOperation;
-    })
-  | (SessionReclamationPlanBase & {
       kind: "archive-publish-prepare";
       archiveDirectory: string;
       requested: readonly Pick<TranscriptArchivePublishPlan, "sessionId" | "generation">[];
@@ -305,7 +301,6 @@ export type SqliteArchiveReclamationPlan = Exclude<
 export type SqliteSessionReclamationResult =
   | { kind: "lifecycle-projection-plan"; value: ProjectedLifecycleMutation }
   | { kind: "lifecycle-projection-commit"; value: ProjectedLifecycleCommitResult }
-  | { kind: "deletion-plan"; value: SessionDeletionPlanningResult }
   | { kind: "archive-publish-prepare"; value: TranscriptArchivePublishPlan[] }
   | { kind: "archive-publish-record"; value: true }
   | { kind: "maintenance-pages"; value: SqliteWalReclamationResult }

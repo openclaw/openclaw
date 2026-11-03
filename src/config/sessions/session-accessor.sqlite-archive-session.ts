@@ -3,6 +3,8 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { markWorkerRetirement } from "../../infra/worker-cpu.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
@@ -23,9 +25,19 @@ type ArchiveConnection = {
   worker: Worker;
   exited: Promise<void>;
   didExit: boolean;
+  idleTimer?: NodeJS.Timeout;
   failure?: Error;
   retiring?: Promise<void>;
 };
+
+// An idle carrier keeps its loaded heap; release it once archive work stops.
+const ARCHIVE_WORKER_IDLE_MS = 5 * 60_000;
+function clearIdle(connection: ArchiveConnection | undefined): void {
+  if (connection) {
+    clearTimeout(connection.idleTimer);
+    connection.idleTimer = undefined;
+  }
+}
 
 const sessions = resolveGlobalSingleton<{
   context: AsyncLocalStorage<ArchiveSession>;
@@ -46,9 +58,12 @@ export async function withSqliteTranscriptArchiveSession<T>(
   }
   const session = new ArchiveSession(options);
   try {
-    return await sessions.context.run(session, run);
-  } finally {
+    const result = await sessions.context.run(session, run);
+    await session.release();
+    return result;
+  } catch (error) {
     await session.close();
+    throw error;
   }
 }
 
@@ -70,6 +85,7 @@ class ArchiveSession {
   private connection?: ArchiveConnection;
   private dispatched?: Promise<SqliteArchiveSessionResponse>;
   private revoked = false;
+  private released = false;
 
   constructor(options: OpenClawAgentDatabaseOptions) {
     const env = { ...(options.env ?? process.env) };
@@ -107,6 +123,7 @@ class ArchiveSession {
   matches(options: OpenClawAgentDatabaseOptions): boolean {
     return (
       !this.revoked &&
+      !this.released &&
       this.options.agentId === normalizeAgentId(options.agentId) &&
       this.options.path === resolveOpenClawAgentSqlitePath(options) &&
       this.state.databasePath ===
@@ -115,7 +132,7 @@ class ArchiveSession {
   }
 
   assertCurrent(): void {
-    if (this.revoked) {
+    if (this.revoked || this.released) {
       throw new Error("SQLite archive session was revoked");
     }
     this.state.assertCurrent();
@@ -135,10 +152,14 @@ class ArchiveSession {
     ) {
       throw new Error("SQLite archive request changed its captured database owner");
     }
+    // Only actual archive work renews the idle deadline.
+    clearIdle(this.connection);
     // The FIFO leaves no native handles in the idle worker; transfer execution, not authority.
     const previous = sessions.warm;
     if (previous && previous !== this) {
+      clearIdle(previous.connection);
       if (
+        !previous.revoked &&
         previous.options.env.OPENCLAW_STATE_DIR === this.options.env.OPENCLAW_STATE_DIR &&
         !previous.connection?.retiring &&
         !previous.connection?.failure &&
@@ -150,12 +171,16 @@ class ArchiveSession {
       } else {
         await previous.retire();
       }
+      if (previous.released) {
+        await previous.close();
+      }
     }
     this.assertCurrent();
     await this.connection?.retiring;
     this.assertCurrent();
     const connection = (this.connection ??= this.start(createWorker));
     sessions.warm = this;
+    connection.worker.ref();
     const dispatched = new Promise<SqliteArchiveSessionResponse>((resolve, reject) => {
       const cleanup = () => {
         connection.worker.off("message", receive);
@@ -203,6 +228,7 @@ class ArchiveSession {
       if (this.dispatched === dispatched) {
         this.dispatched = undefined;
       }
+      this.armIdle(connection);
     }
     // A publication error can conceal a failed native close. Exit is the fallback proof.
     if (result.type === "published" && result.results.some((entry) => entry.error !== undefined)) {
@@ -210,6 +236,33 @@ class ArchiveSession {
     }
     this.assertCurrent();
     return result;
+  }
+
+  private armIdle(connection: ArchiveConnection): void {
+    if (
+      connection.idleTimer ||
+      this.connection !== connection ||
+      connection.retiring ||
+      connection.didExit ||
+      connection.failure
+    ) {
+      return;
+    }
+    // Detach from the archive scope so retirement never runs as that scope's work.
+    connection.idleTimer = runInDetachedAsyncContext(() =>
+      setTimeout(() => {
+        connection.idleTimer = undefined;
+        if (this.connection !== connection) {
+          return;
+        }
+        markWorkerRetirement(connection.worker, "idle_timeout");
+        // An open scope remains usable; its next request starts a fresh worker.
+        void (this.released ? this.close() : this.retire()).catch((error: unknown) => {
+          process.emitWarning(`SQLite archive worker retirement failed: ${String(error)}`);
+        });
+      }, ARCHIVE_WORKER_IDLE_MS),
+    );
+    connection.idleTimer.unref();
   }
 
   private start(createWorker: (data: object) => Worker): ArchiveConnection {
@@ -228,6 +281,7 @@ class ArchiveSession {
     });
     connection.exited = new Promise((resolve) => {
       worker.once("exit", (code) => {
+        clearIdle(connection);
         connection.didExit = true;
         if (code !== 0) {
           connection.failure ??= new Error(`SQLite archive Worker exited with code ${code}`);
@@ -243,9 +297,11 @@ class ArchiveSession {
     if (!connection) {
       return Promise.resolve();
     }
+    clearIdle(connection);
     return (connection.retiring ??= (async () => {
       // Queued requests own no native work and will refuse at FIFO admission.
       await this.dispatched?.catch(() => {});
+      connection.worker.ref();
       if (!connection.didExit) {
         try {
           connection.worker.postMessage({ type: "close" }, []);
@@ -262,6 +318,23 @@ class ArchiveSession {
         sessions.warm = undefined;
       }
     })());
+  }
+
+  async release(): Promise<void> {
+    this.released = true;
+    // Successful replies have closed every native handle. Keep only the FIFO's idle carrier.
+    const connection = this.connection;
+    if (
+      connection &&
+      !this.revoked &&
+      !connection.retiring &&
+      !connection.didExit &&
+      !connection.failure
+    ) {
+      connection.worker.unref();
+      return;
+    }
+    await this.close();
   }
 
   async close(): Promise<void> {

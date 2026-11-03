@@ -196,7 +196,7 @@ describe("runSessionRegistryMaintenance", () => {
   );
 
   it.each(["missing", "reconstructed"])(
-    "preserves stores held by %s deletion history while continuing eligible retention",
+    "defers registry pruning while stores are held by %s deletion history",
     async (history) => {
       await withMaintenanceState(async (state) => {
         const mainStorePath = path.join(state.sessionsDir("main"), "sessions.json");
@@ -218,7 +218,8 @@ describe("runSessionRegistryMaintenance", () => {
         const summary = await runSessionRegistryMaintenance({ apply: true });
 
         expect(summary).toMatchObject({
-          pruned: history === "missing" ? 0 : 1,
+          pruned: 0,
+          skippedReason: "session child inventory incomplete",
           skippedStores: history === "missing" ? 2 : 1,
           stores: expect.arrayContaining([
             {
@@ -237,7 +238,7 @@ describe("runSessionRegistryMaintenance", () => {
         ).toBeDefined();
         expect(
           loadSessionEntry({ sessionKey: mainKey, storePath: mainStorePath }) !== undefined,
-        ).toBe(history === "missing");
+        ).toBe(true);
       });
     },
   );

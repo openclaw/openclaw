@@ -63,6 +63,29 @@ function createEntryFixture(env: NodeJS.ProcessEnv) {
   return { database, scope };
 }
 
+it("hydrates only selected entries in a worker listing", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const { database, scope } = createEntryFixture(env);
+    for (let index = 0; index < 32; index++) {
+      writeSessionEntry(database, `agent:main:unrelated-${index}`, {
+        sessionId: `unrelated-${index}`,
+        updatedAt: 1,
+      });
+    }
+    using parsed = vi.spyOn(JSON, "parse");
+    const result = readSessionEntryList({
+      kind: "session-entry-list",
+      database: { agentId: database.agentId, path: database.path },
+      scope: { ...scope, sessionKeys: [scope.sessionKey], projection: "full" },
+    });
+    expect(result.entries).toMatchObject([
+      { sessionKey: scope.sessionKey, entry: { sessionId: "original", updatedAt: 1 } },
+    ]);
+    expect(
+      parsed.mock.calls.filter(([json]) => json.includes('"sessionId":"unrelated-')),
+    ).toHaveLength(0);
+  }));
+
 it("reuses listing revisions without payload scans and invalidates sibling edits and reopened readers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
