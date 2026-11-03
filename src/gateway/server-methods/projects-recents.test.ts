@@ -41,20 +41,34 @@ function expectRecents(
   expect(result?.payload).toHaveProperty("recents", recents);
 }
 
-test("folder recents deduplicate normalized nodes without merging different runners", async () => {
-  const candidates = [" node-a ", "node-a", "node-b", " ", undefined].map((execNode, index) => ({
-    key: `agent:main:folder-${index}`,
-    agentId: "main",
-    entry: { sessionId: `folder-${index}`, updatedAt: index, spawnedCwd: "/work/app", execNode },
-  }));
-  const usedSessions = new Set<string>();
-  expect(await listProjectRecents(candidates, [], usedSessions)).toEqual([
-    { kind: "folder", folder: "/work/app", displayName: "app", execNode: "node-a" },
-    { kind: "folder", folder: "/work/app", displayName: "app", execNode: "node-b" },
-    { kind: "folder", folder: "/work/app", displayName: "app" },
-  ]);
-  expect([...usedSessions]).toEqual([0, 2, 3].map((index) => `agent:main:folder-${index}`));
-});
+test.each([undefined, "workspace", "registered", "cloned"] as const)(
+  "folder recents preserve different runners beside %s projects",
+  async (source) => {
+    const project = source
+      ? {
+          id: "local-app",
+          repoRoot: "/work/app",
+          displayName: "Local app",
+          source,
+          agentId: "main",
+        }
+      : undefined;
+    const candidates = [" node-a ", "node-a", "node-b", " ", undefined].map((execNode, index) => ({
+      key: `agent:main:folder-${index}`,
+      agentId: "main",
+      entry: { sessionId: `folder-${index}`, updatedAt: index, execCwd: "/work/app", execNode },
+    }));
+    const usedSessions = new Set<string>();
+    expect(await listProjectRecents(candidates, project ? [project] : [], usedSessions)).toEqual([
+      { kind: "folder", folder: "/work/app", displayName: "app", execNode: "node-a" },
+      { kind: "folder", folder: "/work/app", displayName: "app", execNode: "node-b" },
+      project
+        ? { kind: "project", projectId: project.id, displayName: project.displayName }
+        : { kind: "folder", folder: "/work/app", displayName: "app" },
+    ]);
+    expect([...usedSessions]).toEqual([0, 2, 3].map((index) => `agent:main:folder-${index}`));
+  },
+);
 
 test("projects.list returns only the caller's deterministic resolved recents", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });

@@ -100,14 +100,14 @@ export async function listProjectRecents(
       const spawnedCwd = normalizeOptionalString(entry.spawnedCwd);
       const execCwd = normalizeOptionalString(entry.execCwd);
       const folder = worktreeRoot ?? spawnedCwd ?? execCwd;
+      const execNode = normalizeOptionalString(entry.execNode);
       let project = explicitProject;
-      if (!project && folder) {
+      if (!project && folder && !execNode) {
         const agentId = parseAgentSessionKey(sessionKey)?.agentId;
         const indexed = (pathProjects ??= indexPathProjects(projects));
         const workspace = indexed.byAgent.get(agentId);
         project = workspace?.repoRoot === folder ? workspace : indexed.byPath.get(folder);
       }
-      const execNode = project || !folder ? undefined : normalizeOptionalString(entry.execNode);
       const key = project
         ? `project:${project.id}`
         : folder
