@@ -109,11 +109,6 @@ export async function loginOpenAICodexOAuth(params: {
   const spin = prompter.progress("Starting OAuth flow...");
   let progressActive = true;
   let manualEntryOffered = false;
-  const updateProgress = (message: string) => {
-    if (progressActive) {
-      spin.update(message);
-    }
-  };
   const stopProgress = (message?: string) => {
     if (progressActive) {
       progressActive = false;
