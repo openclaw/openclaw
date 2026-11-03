@@ -11,7 +11,7 @@ const suite = createControlUiE2eSuite({ name: "Private 1Password inline approval
 const sessionKey = "agent:main:approval-proof";
 const appLink = "onepassword://grant-brokered-access?synthetic-private-proof";
 const summary =
-  "1Password approval requested for the-internet.herokuapp.com. Open the approval card in OpenClaw’s Control UI.";
+  "1Password approval requested for the-internet.herokuapp.com. Approve it in OpenClaw.";
 const metadata = {
   goal: "Sign in to the demo site to check your account.",
   entries: [
@@ -88,6 +88,11 @@ suite.define(() => {
           await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
           await view.getByRole("heading", { name: "Approve sign-in" }).waitFor();
           expect(await view.locator("a").count()).toBe(0);
+          const cardHeight = () =>
+            view
+              .locator(".onepassword-approval")
+              .evaluate((card) => card.getBoundingClientRect().height);
+          const loadingHeight = await cardHeight();
           await capture("loading");
           await expect
             .poll(async () => (await gateway.getRequests("onepassword.autofill.approval")).length)
@@ -105,6 +110,13 @@ suite.define(() => {
           expect((await page.locator(".chat-bubble").allTextContents()).join("\n")).not.toContain(
             appLink,
           );
+          const readyHeight = await cardHeight();
+          expect(Math.abs(readyHeight - loadingHeight)).toBeLessThanOrEqual(2);
+          expect(
+            await view
+              .locator(".onepassword-approval__eyebrow, .onepassword-approval__private")
+              .count(),
+          ).toBe(0);
           await capture("ready");
           const colors = await page.evaluate(
             resolveRenderedColors,
@@ -174,6 +186,7 @@ suite.define(() => {
               .locator(".onepassword-approval__pulse")
               .evaluate((element) => getComputedStyle(element).animationName),
           ).toBe("none");
+          expect(Math.abs((await cardHeight()) - readyHeight)).toBeLessThanOrEqual(2);
           await capture("waiting");
           await expect
             .poll(async () => (await gateway.getRequests("onepassword.autofill.approval")).length)
@@ -187,11 +200,11 @@ suite.define(() => {
           await capture("approved");
           expect(await view.locator("a").count()).toBe(0);
           for (const [state, title] of [
-            ["denied", "You’re in control. Sign-in wasn’t approved."],
+            ["denied", "Sign-in not approved"],
             ["settling", "Checking your decision"],
-            ["expired", "The approval window closed"],
-            ["unavailable", "This approval link is no longer available"],
-            ["failed", "Sign-in didn’t go through"],
+            ["expired", "Approval expired"],
+            ["unavailable", "Approval link unavailable"],
+            ["failed", "Sign-in failed"],
             ["device_unavailable", "Open this on a computer with 1Password"],
           ]) {
             await page.reload();
@@ -212,9 +225,12 @@ suite.define(() => {
                 : { ...metadata, state },
             );
             if (state === "device_unavailable") {
-              await view.getByRole("button", { name: "1Password isn’t on this computer" }).click();
+              await view.getByRole("button", { name: "Don’t have 1Password here?" }).click();
             }
             await view.getByText(title!, { exact: true }).waitFor();
+            if (state === "settling") {
+              expect(Math.abs((await cardHeight()) - readyHeight)).toBeLessThanOrEqual(2);
+            }
             await capture(state!);
             expect(await view.locator("a").count()).toBe(0);
           }

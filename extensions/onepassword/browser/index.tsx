@@ -13,7 +13,9 @@ type ApprovalContext = Parameters<
 >[1];
 
 /** A quiet, theme-native glyph; the 1Password mark itself is never altered. */
-function Glyph(props: { kind: "globe" | "check" | "clock" | "lock" | "arrow" }) {
+function Glyph(props: {
+  kind: "globe" | "check" | "clock" | "denied" | "warning" | "monitor" | "refresh" | "arrow";
+}) {
   return (
     <svg
       width="20"
@@ -37,9 +39,19 @@ function Glyph(props: { kind: "globe" | "check" | "clock" | "lock" | "arrow" }) 
         <circle cx="12" cy="12" r="9" />
         <path d="M12 7v5l3 2" />
       </Show>
-      <Show when={props.kind === "lock"}>
-        <rect x="5" y="10" width="14" height="11" rx="3" />
-        <path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" />
+      <Show when={props.kind === "denied"}>
+        <circle cx="12" cy="12" r="10" />
+        <path d="m15 9-6 6m0-6 6 6" />
+      </Show>
+      <Show when={props.kind === "warning"}>
+        <path d="m10.3 3.9-8.1 14a2 2 0 0 0 1.7 3h16.2a2 2 0 0 0 1.7-3l-8.1-14a2 2 0 0 0-3.4 0ZM12 9v4m0 4h.01" />
+      </Show>
+      <Show when={props.kind === "monitor"}>
+        <rect x="2" y="3" width="20" height="14" rx="2" />
+        <path d="M8 21h8m-4-4v4" />
+      </Show>
+      <Show when={props.kind === "refresh"}>
+        <path d="M3 11a9 9 0 0 1 15.4-6.4L21 7m0-5v5h-5M21 13a9 9 0 0 1-15.4 6.4L3 17m5 0H3v5" />
       </Show>
       <Show when={props.kind === "arrow"}>
         <path d="M5 12h14m-5-5 5 5-5 5" />
@@ -171,7 +183,10 @@ export function mountApproval(
     setSnapshot({ ...snapshot(), appLink: undefined, state: "device_unavailable" });
   };
   const waiting = () => snapshot().state === "pending" && snapshot().openedAt !== undefined;
-  const active = () => snapshot().state === "pending" || snapshot().state === "loading";
+  const active = () =>
+    snapshot().state === "pending" ||
+    snapshot().state === "loading" ||
+    snapshot().state === "settling";
   const approved = () => snapshot().state === "resolved";
   const seconds = () => Math.max(0, Math.ceil(((snapshot().deadline ?? now()) - now()) / 1000));
   const countdown = () =>
@@ -188,43 +203,55 @@ export function mountApproval(
       };
     }
     switch (snapshot().state) {
-      case "settling":
-        return {
-          title: "Checking your decision",
-          detail: "The 1Password prompt has closed. Finishing the approval check.",
-        };
       case "denied":
       case "rejected":
         return {
-          title: "You’re in control. Sign-in wasn’t approved.",
-          detail: "Nothing was shared. The agent will ask again if needed.",
+          title: "Sign-in not approved",
+          detail: "Nothing was shared. The agent will ask again if it needs this.",
         };
       case "expired":
         return {
-          title: "The approval window closed",
-          detail: "The prompt has timed out. Ask the agent for a new request.",
+          title: "Approval expired",
+          detail: "Ask the agent for a new approval request.",
         };
       case "unavailable":
         return {
-          title: "This approval link is no longer available",
-          detail: "It may have expired or the Gateway restarted. Ask the agent for a new request.",
+          title: "Approval link unavailable",
+          detail: "Ask the agent for a new approval request.",
         };
       case "failed":
         return {
-          title: "Sign-in didn’t go through",
-          detail: "Ask the agent to try a new approval request when you’re ready.",
+          title: "Sign-in failed",
+          detail: "Ask the agent for a new approval request.",
         };
       case "device_unavailable":
         return {
           title: "Open this on a computer with 1Password",
-          detail:
-            "Approval needs the 1Password app on this computer. The agent can ask again when you’re ready.",
+          detail: "The 1Password app is required. Ask the agent again from that computer.",
         };
       default:
         return {
-          title: "We couldn’t load this approval",
+          title: "Couldn’t load approval",
           detail: "Check your connection and owner access. Ask the agent for a new request.",
         };
+    }
+  };
+  // Icons follow the host's stroke vocabulary, owned locally because the SDK exposes no icon component.
+  const outcomeIcon = () => {
+    switch (snapshot().state) {
+      case "resolved":
+        return "check";
+      case "denied":
+      case "rejected":
+        return "denied";
+      case "expired":
+        return "clock";
+      case "device_unavailable":
+        return "monitor";
+      case "unavailable":
+        return "refresh";
+      default:
+        return "warning";
     }
   };
   const dispose = render(
@@ -235,6 +262,8 @@ export function mountApproval(
           {
             "onepassword-approval--complete": !active(),
             "onepassword-approval--approved": approved(),
+            "onepassword-approval--warning":
+              snapshot().state === "failed" || snapshot().state === "error",
           },
         ]}
         aria-label="1Password approval"
@@ -244,7 +273,7 @@ export function mountApproval(
           fallback={
             <div class="onepassword-approval__outcome" role="status" aria-live="polite">
               <span class="onepassword-approval__result-icon">
-                <Glyph kind={approved() ? "check" : "clock"} />
+                <Glyph kind={outcomeIcon()} />
               </span>
               <div>
                 <h3>{outcome().title}</h3>
@@ -259,12 +288,8 @@ export function mountApproval(
               <img src={brandMark} alt="" width="44" height="44" />
             </div>
             <div class="onepassword-approval__heading">
-              <span class="onepassword-approval__eyebrow">1Password</span>
               <h3>Approve sign-in</h3>
             </div>
-            <span class="onepassword-approval__private" title="Passwords stay in 1Password">
-              <Glyph kind="lock" />
-            </span>
           </header>
           <p class="onepassword-approval__goal">
             {snapshot().goal ?? "Choose which logins OpenClaw can use for this task."}
@@ -298,13 +323,28 @@ export function mountApproval(
             </For>
           </div>
           <Show
-            when={snapshot().state !== "loading"}
+            when={snapshot().state !== "loading" && snapshot().state !== "settling"}
             fallback={
               <div class="onepassword-approval__actions">
-                <div class="onepassword-approval__skeleton-action" aria-hidden="true" />
-                <p class="onepassword-approval__caption" role="status">
-                  Preparing your private approval…
-                </p>
+                <Show
+                  when={snapshot().state === "settling"}
+                  fallback={
+                    <>
+                      <div class="onepassword-approval__skeleton-action" aria-hidden="true" />
+                      <p class="onepassword-approval__caption" role="status">
+                        Preparing approval…
+                      </p>
+                    </>
+                  }
+                >
+                  <div class="onepassword-approval__settling" role="status" aria-live="polite">
+                    <span class="onepassword-approval__pulse" aria-hidden="true" />
+                    <div>
+                      <strong>Checking your decision</strong>
+                      <p>Finishing the approval check.</p>
+                    </div>
+                  </div>
+                </Show>
               </div>
             }
           >
@@ -341,19 +381,15 @@ export function mountApproval(
                     {countdown()}
                   </span>
                 </div>
-                <div class="onepassword-approval__waiting-detail">
-                  <span>The prompt closes after 2 minutes.</span>
+                <div class="onepassword-approval__waiting-actions">
                   <a href={snapshot().appLink} onClick={() => void refresh("opened")}>
                     Open again
                   </a>
+                  <span aria-hidden="true">·</span>
+                  <button type="button" onClick={unavailableHere}>
+                    Don’t have 1Password here?
+                  </button>
                 </div>
-                <button
-                  class="onepassword-approval__device-help"
-                  type="button"
-                  onClick={unavailableHere}
-                >
-                  1Password isn’t on this computer
-                </button>
               </div>
             </Show>
           </Show>
