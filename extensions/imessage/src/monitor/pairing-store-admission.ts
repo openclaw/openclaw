@@ -65,7 +65,7 @@ async function isIMessagePairingStoreRequired(
       kind: "direct",
       id: normalizeIMessageHandle(sender),
     },
-    dmPolicy,
+    dmPolicy: dmPolicy as "open" | "allowlist" | "disabled" | "pairing",
     allowFrom,
     command: false,
   });
