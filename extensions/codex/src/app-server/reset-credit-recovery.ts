@@ -190,6 +190,12 @@ export async function recoverWithEarnedCodexReset(params: {
    */
   /** Atomically owns a durable attempt for this profile or refuses the claim. */
   claim: (profileId: string, maxPer24Hours: number) => Promise<CodexResetClaim>;
+  /**
+   * Optional bounded shared-result waiter supplied by the durable owner. A
+   * "settled" hint never grants auth; the full authorized chain is rechecked.
+   */
+  waitForPending?: (signal?: AbortSignal) =>
+    Promise<"settled" | "uncertain" | "timeout" | "aborted">;
   /** Must revalidate selection, account identity, and credential generation. */
   assertCurrent: (profileId: string) => Promise<void>;
   readLimits: (profileId: string, signal?: AbortSignal) => Promise<unknown>;
@@ -251,6 +257,26 @@ export async function recoverWithEarnedCodexReset(params: {
     return { status: "uncertain" };
   }
   if (claim.status !== "owned") {
+    if (claim.status === "busy" && params.waitForPending) {
+      try {
+        const waited = await params.waitForPending(params.signal);
+        if (waited === "uncertain") {
+          return { status: "uncertain" };
+        }
+        if (waited === "settled" && !params.signal?.aborted) {
+          const available = await checkedAvailable();
+          if (available) {
+            return { status: "available", profileId: available };
+          }
+          const refreshed = await scanAllowedProfiles(params);
+          if (refreshed.status === "available") {
+            return { status: "available", profileId: refreshed.profileId };
+          }
+        }
+      } catch {
+        return { status: "uncertain" };
+      }
+    }
     return { status: claim.status };
   }
   if (!claim.attemptId.trim() || !claim.idempotencyKey.trim()) {
