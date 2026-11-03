@@ -158,6 +158,7 @@ it("retains the accepted chat target through successive compactions during prepa
       });
     let primaryFailure: unknown;
     let failed = false;
+    const cleanupFailures = new Set<unknown>();
     try {
       // The queued compaction precedes this chat input in the same mailbox.
       successorInput = reserveSessionControllerSource(sessionKey, {
@@ -247,9 +248,7 @@ it("retains the accepted chat target through successive compactions during prepa
     } catch (error) {
       primaryFailure = error;
       failed = true;
-      throw error;
     } finally {
-      const cleanupFailures = new Set<unknown>();
       const release = (finish: () => void) => {
         try {
           finish();
@@ -277,15 +276,15 @@ it("retains the accepted chat target through successive compactions during prepa
       release(() => holdPreparation.mockRestore());
       release(() => holdRuntimePlugins.mockRestore());
       release(() => observeChatDispatch.mockRestore());
-      if (failed) {
-        cleanupFailures.delete(primaryFailure);
-      }
-      if (cleanupFailures.size) {
-        const errors = [...(failed ? [primaryFailure] : []), ...cleanupFailures];
-        throw errors.length === 1
-          ? errors[0]
-          : new AggregateError(errors, "chat fixture cleanup failed");
-      }
+    }
+    if (failed) {
+      cleanupFailures.delete(primaryFailure);
+    }
+    const errors = [...(failed ? [primaryFailure] : []), ...cleanupFailures];
+    if (errors.length) {
+      throw errors.length === 1
+        ? errors[0]
+        : new AggregateError(errors, "chat fixture cleanup failed");
     }
   });
 });
