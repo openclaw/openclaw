@@ -1128,6 +1128,7 @@ export class RealtimeCallHandler {
       },
       onEvent: (event) => {
         if (event.direction === "client" && event.type === "session.continuity.reset") {
+          audioController.finishGreeting();
           // Clear current playback and cancel consult work on a provider reset.
           const turnId = harness.talk.activeTurnId;
           const owner = nativeConsultOwner;
@@ -1176,6 +1177,7 @@ export class RealtimeCallHandler {
         }
       },
       onResponseDone: (outcome) => {
+        audioController.finishGreeting();
         if (outcome.status === "failed" || outcome.status === "incomplete") {
           console.warn(`[voice-call] realtime response ${outcome.status}: ${outcome.message}`);
         }
@@ -1266,7 +1268,12 @@ export class RealtimeCallHandler {
         return;
       }
       outboundGreeting.noteInputAudio(audio);
-      if (outboundGreeting.isBlocked() || hostSpeech.isActive()) {
+      // Withhold overlapping input so neither local nor provider VAD cuts off the opening.
+      if (
+        outboundGreeting.isBlocked() ||
+        hostSpeech.isActive() ||
+        audioController.isGreetingPlaying()
+      ) {
         return;
       }
       const inputRms = calculateMulawRms(audio);
