@@ -234,7 +234,7 @@ suite.define(() => {
       has: wilfredDevices.page.getByText("This browser", { exact: true }),
     });
     await deviceEntry.waitFor();
-    await deviceEntry.locator("details.device-entry__details > summary").click();
+    await deviceEntry.locator("summary").click();
     const revokeButton = deviceEntry.getByRole("button", { name: "Revoke", exact: true });
     await revokeButton.waitFor({ state: "visible" });
     await revokeButton.scrollIntoViewIfNeeded();
@@ -258,6 +258,8 @@ suite.define(() => {
     expect(readConnectAuth(wilfredAfterRevoke.connect)).toBeUndefined();
 
     // Rotate last: Escape also exits Settings behind the reveal dialog.
+    // The pages opened since then leave this one in the background, where clicks can stall.
+    await wilfredDevices.page.bringToFront();
     await deviceEntry.getByRole("button", { name: "Rotate", exact: true }).click();
     const rotateReveal = wilfredDevices.page.locator("openclaw-modal-dialog");
     await rotateReveal.getByText("New operator token").waitFor();
