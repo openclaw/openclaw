@@ -635,7 +635,7 @@ describe("AppSidebar viewer presence", () => {
       [...(sessionFacepile?.querySelectorAll("openclaw-tooltip") ?? [])].map(
         (tooltip) => (tooltip as HTMLElement & { content?: string }).content,
       ),
-    ).toEqual(["Alice", "bob@example.test", "Carol\nDave\nErin\nFrank"]);
+    ).toEqual(["Alice", "Person", "Carol\nDave\nErin\nFrank"]);
 
     const identityCard = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
     expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(

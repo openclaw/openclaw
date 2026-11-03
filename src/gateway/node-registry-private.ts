@@ -21,7 +21,7 @@ import {
 } from "../infra/node-runner-inventory.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
-import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
+import { prepareNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
 import type { NodePairingLeaseResolution } from "./node-registry-pairing.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
@@ -211,7 +211,7 @@ async function invokeNodeRegistryCore(
     command: params.command,
     params: params.params,
   });
-  const payload = buildNodeInvokeRequest({
+  const { payload, workTimeoutLimit } = prepareNodeInvokeRequest({
     id: requestId,
     nodeId: params.nodeId,
     command: params.command,
@@ -302,7 +302,7 @@ async function invokeNodeRegistryCore(
           }
           // Keep the precise monotonic budget for Gateway timers, but satisfy the integer
           // node-event contract without turning a sub-millisecond budget into "unbounded".
-          payload.timeoutMs = Math.ceil(timeoutMs);
+          payload.timeoutMs = Math.min(Math.ceil(timeoutMs), workTimeoutLimit);
         }
         const result = new Promise<NodeInvokeResult>((resolve, reject) => {
           const pending: PendingInvoke = {

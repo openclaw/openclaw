@@ -51,8 +51,15 @@ Gateway-side call policy or hooks.
 For a remote server protected by OAuth, supply an externally obtained bearer
 token through the `Authorization` header, as in `internalApi`. The node host
 skips server entries that request an OpenClaw-managed OAuth flow by setting
-`auth: "oauth"` or an `oauth` block. Both execution routes use the same headless MCP client,
-which has no handler for interactive server prompts (`elicitation/create`).
+`auth: "oauth"` or an `oauth` block.
+
+A node-hosted tool can ask the user a question during a call. Enable
+`mcp.apps.enabled` on the node and Gateway and restart both. The Gateway shows
+the form or URL prompt in the session that called the tool. The node returns
+the answer to the MCP server and continues the original call. During a same-node
+call only the question and answer go through the Gateway. The node rejects
+a prompt if overlapping calls make its requester ambiguous. See [MCP Apps](/cli/mcp/apps)
+for the Gateway listener and reverse proxy settings.
 
 Current node hosts declare the built-in `mcp.tools.call.v1` command family during
 their initial pairing even when no MCP server is configured. A node paired on an

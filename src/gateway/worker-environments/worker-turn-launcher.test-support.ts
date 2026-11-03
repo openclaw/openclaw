@@ -1,15 +1,17 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
+import * as elicitation from "../../agents/mcp-client-elicitation.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../../agents/tool-catalog.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readTranscriptStorageRows } from "../../config/sessions/session-accessor.sqlite-read.js";
@@ -605,6 +607,21 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     modelHasVision: true,
     config,
   };
+}
+
+export function mockWorkerMcpQuestionAnswer(input: ReturnType<typeof turn>) {
+  return vi
+    .spyOn(elicitation, "createMcpClientElicitationHandler")
+    .mockImplementation(({ assertCurrent }) => async () => {
+      assertCurrent();
+      expect(getGatewayToolCallerIdentity()).toMatchObject({
+        sessionKey: input.sessionKey,
+        agentId: input.agentId,
+        turnSourceThreadId: input.currentThreadTs,
+        workerTurnClaim: { runId: input.runId },
+      });
+      return { action: "accept" };
+    });
 }
 
 export async function withWorkerCompactionAdoption<T>(

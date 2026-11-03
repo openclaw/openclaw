@@ -123,6 +123,7 @@ describe("node worker idle retention", () => {
     expect(call).toHaveBeenCalledExactlyOnceWith({
       server: "fixture",
       tool: "lookup",
+      elicitationId: "allowed",
       arguments: { key: "chosen" },
       signal: expect.any(AbortSignal),
     });

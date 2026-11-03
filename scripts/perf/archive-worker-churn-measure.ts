@@ -31,6 +31,7 @@ import { parseArgs } from "node:util";
 import type { SessionLifecycleArchivedTranscript } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { OpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -234,12 +235,7 @@ let sampledMainBytes: number | null = null;
 let measurementEnd: ReturnType<typeof process.memoryUsage> | undefined;
 try {
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   loop.enable();
   for (let iteration = 0; iteration < iterations; iteration++) {

@@ -123,6 +123,7 @@ export function createNodeWorkerMcpTurn(
             await session.callMcpTool({
               server: tool.server,
               tool: tool.tool,
+              elicitationId: tool.id,
               arguments: frame.arguments,
               signal: AbortSignal.any([lifetime.signal, session.signal, controller.signal]),
             }),

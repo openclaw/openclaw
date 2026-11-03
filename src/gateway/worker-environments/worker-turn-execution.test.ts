@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -37,16 +38,21 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
+import { createNodeSession } from "../node-invoke-plugin-policy.test-helpers.js";
 import {
   replaceConnectedNodePluginTools,
   removeConnectedNodePluginTools,
 } from "../node-plugin-tool-snapshot.js";
+import { NodeRegistry } from "../node-registry.js";
+import { createGatewayRequestContext } from "../server-request-context.js";
+import { makeContextParams } from "../server-request-context.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -61,6 +67,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
+  mockWorkerMcpQuestionAnswer,
   openSessionManager,
   readWorkerTurnTranscriptStorageRows,
   root,
@@ -416,10 +423,11 @@ describe("worker turn execution", () => {
     },
   );
 
-  it.each(["local", "legacy", "completion-handoff"] as const)(
+  it.each(["local", "local-without-questions", "legacy", "completion-handoff"] as const)(
     "grants only the admitted same-node MCP tool to a capable placement (%s)",
     async (scenario) => {
       const supported = scenario !== "legacy";
+      const local = scenario === "local" || scenario === "local-without-questions";
       await seedActivePlacement();
       const environment = attachedEnvironment();
       environment.nodeDeviceId = "local-node";
@@ -447,7 +455,36 @@ describe("worker turn execution", () => {
         });
       }
       const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
-      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async () => {
+      const node = createNodeSession({ nodeId: "local-node" });
+      const nodeRegistry = new NodeRegistry();
+      vi.spyOn(nodeRegistry, "get").mockImplementation((id) =>
+        id === node.nodeId ? node : undefined,
+      );
+      const gateway = createGatewayRequestContext(makeContextParams({ nodeRegistry }));
+      const input = turn("admit-local-mcp");
+      const admitted = await input.preparedRunAdmission.admit("worker", environment.environmentId);
+      bindGatewayContextResolver(admitted, () => gateway);
+      const ask = (id: string) =>
+        nodeRegistry.mcpElicitation.receive(
+          node,
+          {
+            id,
+            requestId: randomUUID(),
+            params: { message: "Continue?", requestedSchema: { type: "object", properties: {} } },
+          },
+          async () => true,
+        );
+      const register = vi.spyOn(nodeRegistry.mcpElicitation, "register");
+      const userInput = mockWorkerMcpQuestionAnswer(input);
+      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
+        const grant = plan.assignment.toolAuthority.mcpTools?.[0];
+        if (grant && scenario === "local") {
+          await expect(ask(grant.id)).resolves.toEqual({ action: "accept" });
+          vi.spyOn(placements, "isWorkerTurnToolAuthorized").mockReturnValueOnce(false);
+          await expect(ask(grant.id)).rejects.toThrow("lost its turn authority");
+        } else if (grant) {
+          await expect(ask(grant.id)).rejects.toThrow("grant is unavailable");
+        }
         throw new WorkerRunnerCapacityError();
       });
       const provider = turnProvider({
@@ -456,7 +493,6 @@ describe("worker turn execution", () => {
         startTunnel: async () =>
           unusedTunnel({ launchTurn, supportsLocalMcp: async () => supported }),
       });
-      const input = turn("admit-local-mcp");
       const handoff = scenario === "completion-handoff";
       const child = { sessionKey: "agent:main:subagent:child", sessionId: "child-session" };
       if (handoff) {
@@ -497,6 +533,7 @@ describe("worker turn execution", () => {
             toolsAllow: ["local_search", "local_action", "remote_search"],
             config: {
               ...input.config,
+              mcp: { apps: { enabled: scenario !== "local-without-questions" } },
               tools: {
                 profile: "full",
                 gatewayPolicy: {
@@ -514,15 +551,18 @@ describe("worker turn execution", () => {
           "local_search",
           "remote_search",
         ]);
-        expect(toolAuthority.allowedToolNames).toEqual(
-          scenario === "local" ? ["local_search"] : [],
-        );
+        expect(toolAuthority.allowedToolNames).toEqual(local ? ["local_search"] : []);
         expect(toolAuthority.mcpTools).toEqual(
-          scenario === "local"
+          local
             ? [{ id: expect.any(String), server: "workspace", tool: "local_search" }]
             : undefined,
         );
+        expect(register).toHaveBeenCalledTimes(scenario === "local" ? 1 : 0);
+        if (toolAuthority.mcpTools?.[0]) {
+          await expect(ask(toolAuthority.mcpTools[0].id)).rejects.toThrow("grant is unavailable");
+        }
       } finally {
+        userInput.mockRestore();
         input.preparedRunAdmission.close();
         removeConnectedNodePluginTools("local-node");
         removeConnectedNodePluginTools("other-node");

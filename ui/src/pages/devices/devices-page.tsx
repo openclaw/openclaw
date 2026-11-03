@@ -14,9 +14,8 @@ import {
   hasOperatorReadAccess,
 } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { readPresenceEntries } from "../../app/user-profile.ts";
-import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
+import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -204,11 +203,9 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       view.state === dataState &&
       view.gateway === context.gateway &&
       view.epoch === gatewayBinding.readEpoch(),
-    read: (kind) => (kind === "bindings" ? configRead : approvalsSnapshot),
-    run: (kind) =>
-      kind === "bindings"
-        ? context.runtimeConfig.save()
-        : runPageTask((pageState) => saveExecApprovals(pageState, resolveExecApprovalsTarget())),
+    read: () => approvalsSnapshot,
+    run: () =>
+      runPageTask((pageState) => saveExecApprovals(pageState, resolveExecApprovalsTarget())),
     publish: () => publishData(),
   });
   const { scope: inventoryScope, read: inventoryRead } = createDeviceInventoryRead({
@@ -399,7 +396,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       dataState.execApprovalsSnapshot = null;
       dataState.execApprovalsForm = null;
       dataState.execApprovalsDirty = false;
-      dataState.execApprovalsSelectedAgent = null;
+      dataState.execApprovalsError = null;
+      dataState.execApprovalsSavedNotice = false;
     }
   }
 
@@ -582,8 +580,11 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     devices.execApprovalsSnapshot = null;
     devices.execApprovalsForm = null;
     devices.execApprovalsDirty = false;
-    devices.execApprovalsSelectedAgent = null;
+    devices.execApprovalsError = null;
     publishData();
+    if (kind === "gateway" || nodeId) {
+      refreshExecApprovals();
+    }
   }
 
   function resolveExecApprovalsTarget(): ExecApprovalsTarget {
@@ -647,14 +648,14 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       configForm: bindingConfig(config),
       configLoading: config.configLoading,
       configSaving: config.configSaving,
-      configDirty: config.configFormDirty,
       configFormMode: config.configFormMode,
       execApprovalsLoading: devices.execApprovalsLoading,
       execApprovalsSaving: devices.execApprovalsSaving,
       execApprovalsDirty: devices.execApprovalsDirty,
       execApprovalsSnapshot: approvalsSnapshot(),
       execApprovalsForm: devices.execApprovalsForm,
-      execApprovalsSelectedAgent: devices.execApprovalsSelectedAgent,
+      execApprovalsError: devices.execApprovalsError,
+      execApprovalsSavedNotice: devices.execApprovalsSavedNotice,
       execApprovalsTarget,
       execApprovalsTargetNodeId,
       onDevicePairSetupOpen: () => {
@@ -688,17 +689,12 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       onLoadExecApprovals: refreshExecApprovals,
       onBindDefault: (nodeId) => policyActions.bindNode(nodeId),
       onBindAgent: (agentId, nodeId) => policyActions.bindNode(nodeId, agentId),
-      onSaveBindings: () => void policyActions.save("bindings"),
       onExecApprovalsTargetChange: (kind, nodeId) => void changeExecApprovalsTarget(kind, nodeId),
-      onExecApprovalsSelectAgent: (agentId) => {
-        devices.execApprovalsSelectedAgent = agentId;
-        publishData();
-      },
       onExecApprovalsPatch: (path, value) =>
         runAdminTask((pageState) => updateExecApprovalsFormValue(pageState, path, value)),
       onExecApprovalsRemove: (path) =>
         runAdminTask((pageState) => removeExecApprovalsFormValue(pageState, path)),
-      onSaveExecApprovals: () => void policyActions.save("approvals"),
+      onSaveExecApprovals: () => void policyActions.save(),
     };
   }
 
@@ -710,22 +706,19 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   );
   return (
     <openclaw-devices-page>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <h1 class="page-title">{titleForRoute("devices", t)}</h1>
-            <div class="page-subtitle">
-              {subtitleForRoute("devices", t)}{" "}
-              <LearnMoreLink url={"https://docs.openclaw.ai/nodes"} />
-            </div>
-          </div>
-        </section>
-      </ShellLayoutBoundary>
+      <SettingsPageHeader
+        title={titleForRoute("devices", t)}
+        subtitle={
+          <>
+            {subtitleForRoute("devices", t)}{" "}
+            <LearnMoreLink url={"https://docs.openclaw.ai/nodes"} />
+          </>
+        }
+      />
       <SettingsWorkspace>
         <DevicesView
           {...view()}
           inventorySaving={inventoryActions.saving()}
-          configSaving={policyActions.configSaving() || view().configSaving}
           execApprovalsSaving={policyActions.approvalsSaving() || view().execApprovalsSaving}
         />
       </SettingsWorkspace>

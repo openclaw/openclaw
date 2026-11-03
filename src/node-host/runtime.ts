@@ -405,6 +405,7 @@ export async function prepareNodeHostRuntime(params?: {
       const startup = commandAllowlist
         ? Promise.resolve(undefined)
         : startNodeHostMcpManager(config.nodeHost?.mcp?.servers, {
+            ...(config.mcp?.apps?.enabled === true ? { elicitationClient: client } : {}),
             signal: mcpAbort.signal,
             onDescriptorsChanged: () => {
               if (!closing && manager) {

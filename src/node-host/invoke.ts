@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { z } from "zod";
 import { validateSystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import {
   McpSdkCompatibilityError,
@@ -677,9 +678,11 @@ function decodeMcpToolsCallParams(raw?: string | null) {
   if (value.arguments !== undefined && !isRecord(value.arguments)) {
     throw new Error("INVALID_REQUEST: arguments must be an object");
   }
+  const elicitationId = z.uuid().optional().parse(value.elicitationId);
   return {
     server,
     tool,
+    ...(elicitationId ? { elicitationId } : {}),
     ...(value.arguments ? { arguments: value.arguments } : {}),
   };
 }

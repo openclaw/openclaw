@@ -8,12 +8,21 @@ import {
 import { hasBeforeToolCallPolicy } from "../../agents/agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../../agents/agent-tools.js";
 import { isGatewayToolAllowedWithoutAction } from "../../agents/gateway-tool-policy.js";
+import { createMcpClientElicitationHandler } from "../../agents/mcp-client-elicitation.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logInfo } from "../../logger.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import { getGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import type { WorkerToolAuthority } from "../../worker/launch-descriptor.js";
+import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { assertWorkerTurnInputAdmitted } from "./placement-turn-claim-events.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
+import type { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
+import type { prepareWorkerAgentRuntimeIdentity } from "./worker-turn-payload.js";
 
 export async function resolveLocalMcpNodeId(
   { nodeDeviceId: nodeId }: { nodeDeviceId?: string | null },
@@ -63,12 +72,104 @@ export function retainWorkerTurnTools(
   });
 }
 
-export function collectWorkerMcpGrants(surface: WorkerToolSurface) {
-  return surface.tools.flatMap(({ id, execution, plugin }) =>
-    execution === "placement" && plugin?.mcp?.node
-      ? [{ id, server: plugin.mcp.serverName, tool: plugin.mcp.toolName }]
-      : [],
+type WorkerLaunchToolSetup = Pick<
+  Awaited<ReturnType<typeof prepareWorkerAgentRuntimeIdentity>>,
+  "admittedRunContext" | "capability" | "runtimeIdentity" | "assertActive"
+> & {
+  surface: WorkerToolSurface;
+  localMcpNodeId?: string;
+  exec: WorkerToolAuthority["exec"];
+  connectionIdentity: WorkerConnectionIdentity;
+  placements: WorkerSessionPlacementStore;
+  questionsEnabled: boolean;
+  assertToolSurfaceCurrent: () => void;
+  assertTurnInputCurrent: () => void;
+  preparedComputer: Awaited<ReturnType<typeof prepareWorkerDesktopLaunchPlan>>["preparedComputer"];
+  isAuthorized: () => boolean;
+  signal: AbortSignal;
+  mcpQuestions: DisposableStack;
+};
+
+export async function prepareWorkerLaunchTools(params: WorkerLaunchToolSetup) {
+  const { surface, runtimeIdentity } = params;
+  const allowedToolNames = surface.tools.map((tool) => tool.definition.name);
+  await params.placements.authorizeWorkerTurnTools(
+    runtimeIdentity.workerTurnClaim,
+    allowedToolNames,
+    params.assertTurnInputCurrent,
   );
+  if (allowedToolNames.includes("computer")) {
+    params.preparedComputer?.bind(runtimeIdentity.operationalRunInstance, {
+      authority: runtimeIdentity.approvalAuthority,
+      assertCurrent: params.assertActive,
+    });
+  }
+  return { allowedToolNames, issueLaunchAuthority: () => issueWorkerLaunchToolAuthority(params) };
+}
+
+/** Issue grants only after turn input and replay admission have passed. */
+function issueWorkerLaunchToolAuthority(params: WorkerLaunchToolSetup): WorkerToolAuthority {
+  const { localMcpNodeId, capability, runtimeIdentity, surface } = params;
+  const resolveGatewayContext = getGatewayContextResolver(params.admittedRunContext);
+  const gateway = params.questionsEnabled && localMcpNodeId ? resolveGatewayContext?.() : undefined;
+  const node = localMcpNodeId && gateway?.nodeRegistry.get(localMcpNodeId);
+  const mcpTools: NonNullable<WorkerToolAuthority["mcpTools"]> = [];
+  for (const { id, definition, execution, plugin } of surface.tools) {
+    const mcp = plugin?.mcp;
+    if (execution !== "placement" || !mcp?.node) {
+      continue;
+    }
+    mcpTools.push({ id, server: mcp.serverName, tool: mcp.toolName });
+    if (!gateway || !node || node.nodeId !== mcp.node.id) {
+      continue;
+    }
+    const assertCurrent = () => {
+      params.assertToolSurfaceCurrent();
+      assertWorkerTurnInputAdmitted(params.connectionIdentity);
+      if (
+        !params.isAuthorized() ||
+        resolveGatewayContext?.() !== gateway ||
+        !params.placements.isWorkerTurnToolAuthorized(
+          runtimeIdentity.workerTurnClaim,
+          definition.name,
+        )
+      ) {
+        throw new Error("Worker MCP question lost its turn authority");
+      }
+    };
+    const elicit = createMcpClientElicitationHandler({
+      agentId: runtimeIdentity.agentId,
+      sessionKey: runtimeIdentity.sessionKey,
+      assertCurrent,
+    });
+    params.mcpQuestions.defer(
+      gateway.nodeRegistry.mcpElicitation.register({
+        id,
+        node,
+        signal: params.signal,
+        handle: (request) =>
+          capability.run((owner) =>
+            withGatewayToolCallerIdentity(
+              {
+                ...owner,
+                ...runtimeIdentity,
+                receiptAuthority: assertCurrent,
+                gatewayContextResolver: resolveGatewayContext,
+                workerTurnExecutionIdentityCapability: capability,
+              },
+              () => elicit(request),
+            ),
+          ),
+      }),
+    );
+  }
+  return {
+    exec: params.exec,
+    ...(mcpTools.length && { mcpTools }),
+    allowedToolNames: surface.tools
+      .filter((tool) => tool.execution === "placement")
+      .map((tool) => tool.definition.name),
+  };
 }
 
 export function filterWorkerPlacementTools(

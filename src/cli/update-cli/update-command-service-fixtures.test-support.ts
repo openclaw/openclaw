@@ -6,6 +6,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 
 export type InstallRootTransitionFixture = {
   root: string;
+  serviceNodeRunner: string;
   run: NonNullable<UpdateCommandOptions["run"]>;
   mocks: {
     running: boolean;

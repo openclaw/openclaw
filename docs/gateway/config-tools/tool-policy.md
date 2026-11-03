@@ -31,12 +31,12 @@ The agent's **Tools** settings include run-dependent tools such as
 also adds explicit denies for them. Their catalog rows do not bypass the GitHub
 workspace and identity checks or the meeting transcript caller checks.
 
-| Profile     | Includes                                                                                                                                                                                                                                                                              |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status`, `gateway` (maintenance only)                                                                                                                                                                                                                                        |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `gateway` (maintenance only), `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `view_image`, `image_generate`, `music_generate`, `video_generate`         |
-| `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `gateway` (maintenance only), `ask_user` |
-| `full`      | No core profile filtering; selects optional plugin tools too                                                                                                                                                                                                                          |
+| Profile     | Includes                                                                                                                                                                                                                                                                                       |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status`, `gateway` (maintenance only)                                                                                                                                                                                                                                                 |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `gateway` (maintenance only), `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `skill_library`, `view_image`, `image_generate`, `music_generate`, `video_generate` |
+| `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `gateway` (maintenance only), `ask_user`          |
+| `full`      | No core profile filtering; selects optional plugin tools too                                                                                                                                                                                                                                   |
 
 `coding` and `messaging` also include the [theme tool](/tools/theme) and implicitly
 allow `bundle-mcp` (configured MCP servers).
@@ -80,7 +80,7 @@ whether the tool is available. Subagent and non-owner restrictions still apply.
 | `group:automation` | `automations` (`cron` alias), `gateway`, `plugins`, `openclaw`                                                                                                                                                                                           |
 | `group:messaging`  | `message`                                                                                                                                                                                                                                                |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
-| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`                                                                                                                                                   |
+| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `skill_library`                                                                                                                                  |
 | `group:media`      | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`, `pdf`                                                                                                                                                                         |
 | `group:openclaw`   | All built-in tools above except `read`/`write`/`edit`/`apply_patch`/`exec`/`process`/`canvas` (excludes plugin tools)                                                                                                                                    |
 | `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                                                                                                                                                             |
@@ -212,6 +212,15 @@ Gateway policy surfaces. Doctor preserves patterns such as `image*` that may
 still match other tools and adds `view_image` when the pattern no longer covers
 inspection. Patterns that already cover both names, such as `*` or `*image*`,
 remain unchanged.
+
+Personal-library authoring uses its own `skill_library` tool, separate from
+`skill_workshop`. Once, for a config written before the split, `openclaw doctor --fix`
+adds `skill_library` beside `skill_workshop` in allow, `alsoAllow`, and deny lists so
+the policy keeps covering personal authoring. Patterns that already cover both names
+remain unchanged. A `tools.gatewayPolicy` that allowed `skill_workshop` gains
+`skill_library` with only the personal-library actions its `skill_workshop` action list
+permitted. Doctor then records `meta.migrations.skillLibraryToolSplit: true`, which config
+writes also record, and never changes tool policy for the split again.
 
 ## `tools.gatewayPolicy`
 

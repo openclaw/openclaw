@@ -77,7 +77,8 @@ describe("config form scalar integrity", () => {
       value: { runtime: { enabled: false } },
       onPatch: vi.fn(),
     });
-    expect(container.textContent).toContain("Controls runtime processing. Default: true");
+    expect(container.textContent).toContain("Controls runtime processing.");
+    expect(container.textContent).not.toContain("Default: true");
   });
 
   it.each(["text", "number"] as const)(
@@ -188,8 +189,8 @@ describe("config form scalar integrity", () => {
       onPatch,
       onRemove,
     });
-    expect(container.textContent).toContain("Default: 3");
-    expect(container.textContent).toContain("Controls retry attempts. Default: 3");
+    expect(container.textContent).toContain("Controls retry attempts.");
+    expect(container.textContent).not.toContain("Default: 3");
     const numberInput = expectElement(
       container.querySelector<HTMLInputElement>("input[type='number']"),
       "number input",
@@ -212,9 +213,9 @@ describe("config form scalar integrity", () => {
       container.querySelector<HTMLSelectElement>("select"),
       "default-aware select",
     );
-    expect(container.textContent).toContain("Default: balanced");
-    expect(select.options[0]?.textContent?.trim()).toBe("Default: balanced");
-    expect(select.selectedOptions[0]?.textContent?.trim()).toBe("fast");
+    expect(container.textContent).toContain("Default: Balanced");
+    expect(select.options[0]?.textContent?.trim()).toBe("Default: Balanced");
+    expect(select.selectedOptions[0]?.textContent?.trim()).toBe("Fast");
     select.value = "__unset__";
     select.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onRemove).toHaveBeenCalledWith(["mode"]);
@@ -233,7 +234,7 @@ describe("config form scalar integrity", () => {
         container.querySelector<HTMLSelectElement>("select"),
         "inherited select",
       ).selectedOptions[0]?.textContent?.trim(),
-    ).toBe("Default: balanced");
+    ).toBe("Default: Balanced");
   });
 
   it("does not commit a clear while a number input holds partial numeric text", () => {
@@ -384,15 +385,9 @@ describe("config form scalar integrity", () => {
       );
       expect(input.value).not.toContain("__OPENCLAW_REDACTED__");
       expect(input.readOnly).toBe(true);
-      if (maskSensitive) {
-        expect(input.placeholder).toBe("••••••••");
-      }
-      const eye = expectElement(
-        container.querySelector<HTMLButtonElement>(".settings-secret__toggle"),
-        "stored secret reveal toggle",
-      );
-      expect(eye.disabled).toBe(true);
-      expect(eye.getAttribute("aria-label")).toBe("This editor cannot reveal the stored value.");
+      expect(input.placeholder).toBe("••••••••");
+      // Nothing can reveal it, so no control offers to.
+      expect(container.querySelector(".settings-secret__toggle")).toBeNull();
     },
   );
 
