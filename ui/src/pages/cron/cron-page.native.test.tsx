@@ -231,3 +231,41 @@ it.each(["replacement", "reconnect"] as const)(
     }
   },
 );
+
+it("retires a pending refresh on Gateway replacement", async () => {
+  const original = createCronViewJob("refresh-owner", { name: "Original Gateway" });
+  const replacement = { ...original, name: "Current Gateway" };
+  const status = createDeferred<unknown>();
+  const fallback = createRequest();
+  let hold = false;
+  const request = cronRpc({
+    "cron.list": () => cronListResponse([original]),
+    "cron.status": () => (hold ? status.promise : fallback("cron.status")),
+  });
+  const { page, gateway } = mountCronPage(request);
+  try {
+    await waitForSolid(() =>
+      expect(page.querySelector<HTMLButtonElement>(".cron-refresh")?.disabled).toBe(false),
+    );
+    const reads = callsFor(request, "cron.status").length;
+    hold = true;
+    page.querySelector<HTMLButtonElement>(".cron-refresh")!.click();
+    await waitForSolid(() =>
+      expect(callsFor(request, "cron.status").length).toBeGreaterThan(reads),
+    );
+    const next = cronRpc({ "cron.list": () => cronListResponse([replacement]) });
+    gateway.emitSnapshot({ client: createTestGatewayClient(next), phase: "connected" });
+    await waitForSolid(() => {
+      expect(row(page, "refresh-owner")).not.toBeNull();
+      expect(row(page, "refresh-owner")!.textContent).toContain("Current Gateway");
+      expect(page.querySelector<HTMLButtonElement>(".cron-refresh")?.disabled).toBe(false);
+    });
+    status.resolve(fallback("cron.status"));
+    await page.settle();
+    expect(row(page, "refresh-owner")).not.toBeNull();
+    expect(row(page, "refresh-owner")!.textContent).toContain("Current Gateway");
+  } finally {
+    status.resolve(fallback("cron.status"));
+    page.remove();
+  }
+});

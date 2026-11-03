@@ -12,6 +12,8 @@ import {
   releaseSessionSourceAuthorities,
 } from "../config/sessions/session-source-authority.js";
 import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-store-identity.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
@@ -47,6 +49,25 @@ import {
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
 
+/** An explicit non-human assignment must not fall back to a former human creator. */
+export function resolveSessionSystemTurnProfileId(
+  entry: Pick<SessionEntry, "owner" | "createdActor"> | undefined,
+): string | undefined {
+  const actor = entry?.owner
+    ? entry.owner.actor
+    : entry?.createdActor?.type === "human" && entry.createdActor.source === "profile"
+      ? entry.createdActor
+      : undefined;
+  if (actor?.type !== "human") {
+    return undefined;
+  }
+  const profileId = actor.id?.trim();
+  if (!profileId) {
+    throw new Error("Session owner has no current profile identity");
+  }
+  return profileId;
+}
+
 /** Admit a new input as a recorded person using only that person's current grants. */
 export async function prepareSessionPrincipalRunAuthority(
   params: Parameters<typeof prepareSessionPrincipalRunAccess>[0],
@@ -76,6 +97,8 @@ async function prepareSessionPrincipalRunAccess(params: {
   sessionKey: string;
   sessionId: string;
   storePath?: string;
+  /** System turns retain the session's principal, rather than an explicit input sender. */
+  sessionPrincipal?: true;
   assertCurrent?: () => void;
 }) {
   params.assertCurrent?.();
@@ -87,17 +110,8 @@ async function prepareSessionPrincipalRunAccess(params: {
     sharing?.release?.();
     identity.release();
   };
-  const readRole = () => {
-    const profile = identity.readCurrentProfile();
-    return resolveOperatorRolePolicyForAssignment(
-      params.profileId,
-      profile.assignedRole,
-      getConfig(),
-      profile.githubLogin ?? null,
-    );
-  };
   const readScopes = () => {
-    identity.readCurrentProfile();
+    const profile = identity.readCurrentProfile();
     // The recorded principal must itself remain the Gateway owner; this is never a fallback.
     if (params.profileId === GATEWAY_OWNER_PROFILE_ID) {
       if (readResidentGatewayOwnerProfile(ownerProfilePath)?.id !== params.profileId) {
@@ -105,7 +119,12 @@ async function prepareSessionPrincipalRunAccess(params: {
       }
       return ["operator.admin"];
     }
-    const scopes = readRole()?.scopes;
+    const scopes = resolveOperatorRolePolicyForAssignment(
+      params.profileId,
+      profile.assignedRole,
+      getConfig(),
+      profile.githubLogin ?? null,
+    )?.scopes;
     if (!scopes || resolveMissingOperatorScope(["operator.sessions.write"], scopes) !== null) {
       throw new Error("Session principal has no current run authority.");
     }
@@ -134,7 +153,7 @@ async function prepareSessionPrincipalRunAccess(params: {
       params.assertCurrent?.();
       access?.signal.throwIfAborted();
       access?.assertCurrent();
-      identity.readCurrentFacts();
+      // readScopes validates the retained identity before consuming its current role.
       if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
         throw new Error("Session principal has no current run authority.");
       }
@@ -150,6 +169,8 @@ async function prepareSessionPrincipalRunAccess(params: {
           !target ||
           target.agentId !== params.agentId ||
           target.entry.archivedAt !== undefined ||
+          (params.sessionPrincipal &&
+            resolveSessionSystemTurnProfileId(target.entry) !== params.profileId) ||
           (params.storePath !== undefined &&
             target.storePath !== params.storePath &&
             !sameSessionTranscriptStorePath(params.storePath, target.readSource?.path))
@@ -240,7 +261,9 @@ export async function resolveSessionMutationAuthorizationAsync(
     return resolveSessionMutationAuthorization(params);
   }
   const cfg = params.context.getRuntimeConfig();
+  using phases = observeDiagnosticsTimelinePhases("sessionAuthority.profiles");
   const preparedProfiles = await prepareSessionSharingProfiles(params.client);
+  phases.mark("sessionAuthority.targets");
   const reads: Array<{ release: () => void }> = [];
   const creationReleases: Array<() => void> = [];
   let active = true;
@@ -353,6 +376,7 @@ export async function resolveSessionMutationAuthorizationAsync(
     };
     const projection =
       params.method === "sessions.describe" ? getSessionRowProjection(params.context) : undefined;
+    phases.mark("sessionAuthority.policy");
     const result = projection
       ? await withReadySessionRows(
           projection,
@@ -402,6 +426,12 @@ export async function resolveSessionMutationAuthorizationAsync(
           }
         },
         retain,
+        retainForRun: () => ({
+          // Published facts stay live without repeating history preparation or transport admission.
+          assertCurrent: () =>
+            (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)(),
+          release: retain(),
+        }),
         release: () => {
           if (!transferred) {
             releaseRequest();

@@ -113,7 +113,8 @@ suite.define(() => {
       const filesResponse = { agentId: "main", workspace };
       const readOnlyConfig = {
         ...operatorConfig,
-        skills: { workshop: { autonomous: { mode: "auto" } } },
+        plugins: { entries: { "skill-workshop": { config: { autonomous: { mode: "auto" } } } } },
+        meta: { migrations: { skillWorkshopPlugin: true } },
       };
       const gateway = await installMockGateway(page, {
         featureMethods: [
@@ -190,13 +191,15 @@ suite.define(() => {
       await gateway.waitForRequest("agents.list");
       await selectAgent(page.locator(".settings-sidebar__agent openclaw-agent-select"), "Reviewer");
       await page.locator("#agents-tab-overview").click();
-      const setDefault = page.getByRole("button", { name: "Set Default", exact: true });
+      await page.locator(".agents-page-menu__trigger").click();
+      const setDefault = page.getByRole("menuitem", { name: "Set Default", exact: true });
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
+      await setDefault.click({ force: true });
+      await page.keyboard.press("Escape");
       await expectAgentCreationDenied(page, gateway);
 
       const identityName = page.locator(".agent-identity-editor__fields input").first();
       await expect.poll(() => identityName.isDisabled()).toBe(true);
-      await setDefault.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
       await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
@@ -287,11 +290,13 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgent(page.locator(".settings-sidebar__agent openclaw-agent-select"), "Reviewer");
-      const setDefault = page.getByRole("button", { name: "Set Default", exact: true });
+      await page.locator(".agents-page-menu__trigger").click();
+      const setDefault = page.getByRole("menuitem", { name: "Set Default", exact: true });
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
+      await setDefault.click({ force: true });
+      await page.keyboard.press("Escape");
       await expectAgentCreationDenied(page, gateway);
 
-      await setDefault.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
       await page.goto(`${suite.server.baseUrl}skills`);

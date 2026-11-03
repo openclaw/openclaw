@@ -143,6 +143,9 @@ waits until its last lease expires.
 Lease expiry does not erase evidence that a send already started. Those entries
 still require reconciliation before replay, and an unreplaced owner can record a
 late result without authorizing another send.
+The same rule applies when heartbeat renewal fails: new sends stop, but a concrete
+receipt from an already-started send can settle its unchanged claim. A replacement
+claim still rejects the old producer, and a partial batch remains with recovery.
 
 ## Related
 

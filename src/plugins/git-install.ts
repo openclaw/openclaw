@@ -29,22 +29,18 @@ import {
   preflightPluginGitInstallPolicy,
   type InstallSafetyOverrides,
 } from "./install-security-scan.js";
-import { ensureInstallTargetAvailableForMode, loadPluginInstallRuntime } from "./install-shared.js";
+import {
+  ensureInstallTargetAvailableForMode,
+  loadPluginInstallRuntime,
+  reportBlockedPluginInstall,
+} from "./install-shared.js";
 import {
   attachPluginInstallTransaction,
   resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentHandler, PluginInstallLogger } from "./install-types.js";
-import {
-  installPluginFromInstalledPackageDir,
-  PLUGIN_INSTALL_ERROR_CODE,
-  type InstallPluginResult,
-} from "./install.js";
-import {
-  emitPluginAuditSecurityEvent,
-  emitPluginInstallSecurityEvent,
-  pluginAuditOutcomeForReason,
-} from "./security-events.js";
+import { installPluginFromInstalledPackageDir, type InstallPluginResult } from "./install.js";
+import { emitPluginInstallSecurityEvent } from "./security-events.js";
 
 const GIT_SPEC_PREFIX = "git:";
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
@@ -300,26 +296,12 @@ export async function installPluginFromGitSpec(
       sourcePath: repoDir,
     });
     if (preflight?.blocked) {
-      const reason =
-        preflight.blocked.code === "security_scan_failed"
-          ? "security_scan_failed"
-          : "security_scan_blocked";
-      emitPluginAuditSecurityEvent({
-        outcome: pluginAuditOutcomeForReason(reason),
-        reason,
+      return reportBlockedPluginInstall({
+        blocked: { reason: preflight.blocked.reason, code: preflight.blocked.code },
         pluginId: params.expectedPluginId,
         mode: effectiveMode,
         sourceFamily: "git",
       });
-      return {
-        ok: false,
-        error: preflight.blocked.reason,
-        ...(preflight.blocked.code === "security_scan_failed"
-          ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED }
-          : preflight.blocked.code === "security_scan_blocked"
-            ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED }
-            : {}),
-      };
     }
 
     if (!params.dryRun) {

@@ -139,8 +139,13 @@ export function renderRuntimeCoordinationFailureCopy(code: string | undefined): 
   return copy ? `⚠️ ${copy}` : undefined;
 }
 
+type FailureCopyOptions = {
+  /** Include a diagnostic excerpt when no specialized format guidance matches. */
+  includeRawFormatDetails?: boolean;
+};
+
 /** Preserve the rejection diagnostic without publishing the surrounding response body. */
-export function renderFormatErrorCopy(raw: string): string {
+export function renderFormatErrorCopy(raw: string, options?: FailureCopyOptions): string {
   const trimmed = raw.trim();
   const normalized =
     extractErrorHttpStatus(trimmed)?.rest ?? trimmed.replace(ERROR_PREFIX_RE, "").trim();
@@ -187,6 +192,9 @@ export function renderFormatErrorCopy(raw: string): string {
         }
       }
     }
+    if (options?.includeRawFormatDetails === false) {
+      return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+    }
     // Redact before truncation so a clipped credential cannot escape matching.
     const detail = redactSensitiveText(candidate, { mode: "tools" })
       .replace(/[\p{Cc}\p{Cf}\s]+/gu, " ")
@@ -204,6 +212,7 @@ export function renderFormatErrorCopy(raw: string): string {
 export function renderAssistantFormatFailureCopy(
   message: { errorMessage?: unknown; errorBody?: unknown; errorType?: unknown },
   reason?: FailoverReason | null,
+  options?: FailureCopyOptions,
 ): string | undefined {
   for (const [isBody, raw] of [
     [true, message.errorBody],
@@ -229,7 +238,7 @@ export function renderAssistantFormatFailureCopy(
     ) {
       continue;
     }
-    const copy = renderFormatErrorCopy(raw);
+    const copy = renderFormatErrorCopy(raw, options);
     if (copy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT) {
       return copy;
     }
@@ -264,13 +273,16 @@ export function renderModelLoadFailureCopy(message: {
 }
 
 /** Classify saved error facts without loading providers or publishing their raw diagnostics. */
-export function renderRecordedAssistantFailureCopy(message: {
-  model?: unknown;
-  errorMessage?: unknown;
-  errorBody?: unknown;
-  errorCode?: unknown;
-  errorType?: unknown;
-}): string | undefined {
+export function renderRecordedAssistantFailureCopy(
+  message: {
+    model?: unknown;
+    errorMessage?: unknown;
+    errorBody?: unknown;
+    errorCode?: unknown;
+    errorType?: unknown;
+  },
+  options?: FailureCopyOptions,
+): string | undefined {
   const modelLoadCopy = renderModelLoadFailureCopy(message);
   if (modelLoadCopy) {
     return modelLoadCopy;
@@ -314,7 +326,7 @@ export function renderRecordedAssistantFailureCopy(message: {
   }
   const formatCopy =
     !classification?.reason || classification.reason === "format"
-      ? renderAssistantFormatFailureCopy(message, classification?.reason)
+      ? renderAssistantFormatFailureCopy(message, classification?.reason, options)
       : undefined;
   if (formatCopy) {
     return formatCopy;

@@ -1,3 +1,4 @@
+import { formatErrorMessage, readErrorName } from "@openclaw/normalization-core/error-coercion";
 import {
   attachInternalToolExecutionPreparer,
   copyInternalToolResultState,
@@ -41,10 +42,11 @@ import { readNodePermissionError } from "./node-permission-error.js";
 import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { ToolInputError } from "./tool-input-error.js";
 import { readToolOperatorHint } from "./tool-operator-hint.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
-import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
+import { jsonResult, payloadTextResult } from "./tools/tool-results.js";
 
 function captureSourceInvocationGuard(tool: AnyAgentTool, signal?: AbortSignal): () => void {
   const assertCurrent = captureAgentToolSourceExecutionGuard(signal);
@@ -115,7 +117,11 @@ async function executeAdaptedToolOperation(params: {
     const operatorHint = described.operatorHint ? ` ${described.operatorHint}` : "";
     // Operator-only: the hint names containment configuration and stays out of the
     // model-visible result below.
-    logError(`[tools] ${params.normalizedToolName} failed:${operatorHint}`);
+    const name = readErrorName(err);
+    const diagnostic = formatErrorMessage(err, { includeCode: true });
+    logError(
+      `[tools] ${params.normalizedToolName} failed: ${name ? `${name}: ` : ""}${diagnostic}${operatorHint}`,
+    );
     const result = buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,

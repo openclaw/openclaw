@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { getCurrentSessionControllerOwner } from "../sessions/session-controller.context.js";
 import {
   agentCommand,
@@ -133,6 +134,7 @@ describe("agentCommand embedded maintenance", () => {
       const startedAt = Date.now();
       let now = startedAt;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const monotonicClock = vi.spyOn(performance, "now").mockImplementation(() => now - startedAt);
       const sessionId = `maintenance-budget-${foregroundMs}`;
       const sessionKey = `agent:main:explicit:${sessionId}`;
       const text = "completed foreground answer";
@@ -167,12 +169,45 @@ describe("agentCommand embedded maintenance", () => {
       } finally {
         await waitForSessionMaintenance(sessionKey);
         clock.mockRestore();
+        monotonicClock.mockRestore();
       }
     },
   );
 
+  it("keeps the maintenance allowance when the wall clock steps back", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const sessionId = "maintenance-clock-rewind";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    let flushTimeout: number | undefined;
+    let compactionTimeout: number | undefined;
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      params.onSuccessfulAuthProfile?.({});
+      await vi.advanceTimersByTimeAsync(400);
+      return makeEmbeddedResult(sessionId, "answer after clock rewind");
+    });
+    state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
+      flushTimeout = params.followupRun.run.timeoutMs;
+      vi.setSystemTime(Date.now() - 600_000);
+      await vi.advanceTimersByTimeAsync(200);
+      return { sessionEntry: params.sessionEntry, outcome: "completed" };
+    });
+    state.runSessionCompactionIfNeededMock.mockImplementationOnce(async (params) => {
+      compactionTimeout = params.followupRun.run.timeoutMs;
+      return params.sessionEntry;
+    });
+    try {
+      await agentCommand({ message: "continue", sessionId, sessionKey, timeout: "1" });
+      await waitForSessionMaintenance(sessionKey);
+      expect(flushTimeout).toBe(600);
+      expect(compactionTimeout).toBe(400);
+    } finally {
+      await waitForSessionMaintenance(sessionKey);
+      vi.useRealTimers();
+    }
+  });
+
   it("drains expired maintenance without changing the completed reply", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const sessionId = "maintenance-expiry";
     const successorSessionId = "maintenance-expiry-successor";
     const sessionKey = `agent:main:explicit:${sessionId}`;
@@ -266,8 +301,10 @@ describe("agentCommand embedded maintenance", () => {
   });
 
   it("preserves unlimited command maintenance after a long foreground turn", async () => {
-    let now = Date.now();
+    const startedAt = Date.now();
+    let now = startedAt;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const monotonicClock = vi.spyOn(performance, "now").mockImplementation(() => now - startedAt);
     const sessionId = "maintenance-unlimited";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     let flushTimeout: number | undefined;
@@ -300,6 +337,7 @@ describe("agentCommand embedded maintenance", () => {
     } finally {
       await waitForSessionMaintenance(sessionKey);
       clock.mockRestore();
+      monotonicClock.mockRestore();
     }
   });
 
@@ -460,10 +498,12 @@ describe("agentCommand embedded maintenance", () => {
     ).toHaveLength(1);
     expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
     expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionEntry: expect.objectContaining({ totalTokens: 904_869 }) }),
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({ totalTokens: lastCallUsage.total }),
+      }),
     );
     expect(storedBeforeMaintenance).toMatchObject({
-      totalTokens: 904_869,
+      totalTokens: lastCallUsage.total,
       inputTokens: lastCallUsage.input,
       outputTokens: lastCallUsage.output,
       cacheRead: lastCallUsage.cacheRead,
@@ -575,7 +615,7 @@ describe("agentCommand embedded maintenance", () => {
             compactionCount: 7,
             totalTokens: 777,
             totalTokensFresh: true,
-            totalTokensVersion: 1,
+            totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
           }));
         }
         const entry = loadSessionEntry(target);
@@ -785,7 +825,7 @@ describe("agentCommand embedded maintenance", () => {
       const sessionId = `${runner}-background-failure-${expiry}`;
       const sessionKey = `agent:main:explicit:${sessionId}`;
       if (expiry) {
-        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       }
       try {
         state.runAgentAttemptMock.mockImplementationOnce(async (params) => {

@@ -258,7 +258,7 @@ suite.define(() => {
         const composerDisabled = await chatComposer.isDisabled();
         await failedGroup.waitFor({ state: "visible" });
         await pollLocatorText(pane.locator(".chat-working-indicator")).toContain("Reconnecting");
-        expect(await pane.locator(".agent-chat__welcome").count()).toBe(0);
+        expect(await pane.locator(".agent-chat__welcome, .agent-chat__empty").count()).toBe(0);
         const outbox = pane.locator(".chat-queue__item");
         await outbox.getByText("later ordinary turn", { exact: true }).waitFor();
         await outbox.getByText("Waiting for reconnect", { exact: true }).waitFor();
@@ -306,7 +306,7 @@ suite.define(() => {
             "later ordinary turn",
           );
           await pane.getByRole("status", { name: "Loading chat", exact: true }).waitFor();
-          expect(await pane.locator(".agent-chat__welcome").count()).toBe(0);
+          expect(await pane.locator(".agent-chat__welcome, .agent-chat__empty").count()).toBe(0);
           expect(await pane.locator(".chat-topbar-notices .chat-error").count()).toBe(0);
 
           await page.evaluate(() =>

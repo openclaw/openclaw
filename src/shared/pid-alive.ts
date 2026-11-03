@@ -130,18 +130,21 @@ export function isPidDefinitelyDead(pid: number): boolean {
   if (!isValidPid(pid)) {
     return true;
   }
+  let missing = false;
   try {
     process.kill(pid, 0);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH" && !(process.platform === "win32" && code === "EPERM")) {
       return false;
     }
-    const native = readNativeLiveness(pid);
-    // Without native visibility facts, FreeBSD ESRCH can still mean a hidden PID.
-    return native === undefined ? process.platform !== "freebsd" : !native;
+    missing = code === "ESRCH";
   }
   const native = readNativeLiveness(pid);
-  return native === undefined ? isExitedLinuxProcess(pid) : !native;
+  // Windows EPERM needs native exit evidence; FreeBSD ESRCH may hide a live PID.
+  return native === undefined
+    ? (missing && process.platform !== "freebsd") || isExitedLinuxProcess(pid)
+    : !native;
 }
 
 function getDarwinProcessStartTime(

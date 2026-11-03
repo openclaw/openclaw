@@ -420,21 +420,15 @@ export async function switchChatModel(
       });
       if (nextValue && nextValue !== currentValue && nextRuntime?.local !== true && hasHistory) {
         const { showConfirmDialog } = await import("../../components/confirm-dialog.ts");
-        const displayLookup = buildCatalogDisplayLookup(host.chatModelCatalog);
-        const currentEntry = host.chatModelCatalog.find(
-          (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === currentValue,
-        );
+        const nextLabel =
+          nextEntry?.name.trim() ||
+          formatCatalogChatModelDisplayFromLookup(
+            nextValue,
+            buildCatalogDisplayLookup(host.chatModelCatalog),
+          );
         const confirmed = await showConfirmDialog({
-          title: t("chat.modelControls.switchTitle", {
-            new:
-              nextEntry?.name.trim() ||
-              formatCatalogChatModelDisplayFromLookup(nextValue, displayLookup),
-          }),
-          message: t("chat.modelControls.switchWarning", {
-            current:
-              currentEntry?.name.trim() ||
-              formatCatalogChatModelDisplayFromLookup(currentValue, displayLookup),
-          }),
+          title: t("chat.modelControls.switchTitle", { new: nextLabel }),
+          message: t("chat.modelControls.switchWarning", { new: nextLabel }),
           confirmLabel: t("chat.modelControls.switchConfirm"),
           skipPreference: {
             label: t("chat.modelControls.dontAskAgain"),

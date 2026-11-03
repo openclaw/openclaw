@@ -70,6 +70,10 @@ describe("openclaw tool", () => {
     expect(tool.catalogMode).toBe("direct-only");
     expect(tool.description).toContain("Direct chat: exact user approval, then approved=true.");
     expect(tool.description).toContain("host applies session permission policy");
+    expect(tool.description).toMatch(/Gateway-bound.*live runtime application/);
+    expect(tool.description).toMatch(/without.*runtime callback.*restartRequired/);
+    expect(tool.description).toContain("observed browser activation");
+    expect(tool.description).not.toContain("Backend activation requires Gateway restart");
   });
 
   it("runs read actions immediately", async () => {
@@ -158,7 +162,7 @@ describe("openclaw tool", () => {
       secret,
     });
     expect(toolText(result)).toContain("needs-approval");
-    expect(toolText(result)).not.toContain(secret);
+    expect(toolText(result)).not.toContain(secret.trim());
     expect(proposalRef.operation).toEqual({
       kind: "config-set-ref",
       path: "models.providers.openai.apiKey",

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveSessionArchiveReadPath } from "../config/sessions/archive-compression.js";
 import {
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
@@ -173,6 +174,15 @@ type UsageCostSqliteEntry = Pick<
   "kind" | "sourcePath" | "sessionId" | "mtimeMs"
 >;
 
+/** Cache identity is independent of whether this refresh needs the transcript's bytes. */
+export function resolveUsageCostTranscriptSourcePath(
+  source: UsageCostJsonlSource | UsageCostSqliteEntry,
+): string {
+  return source.kind === "sqlite"
+    ? source.sourcePath
+    : resolveSessionArchiveReadPath(source.sourcePath, source.stats);
+}
+
 export async function listUsageCountedTranscriptSources(
   agentId: string,
   params: {
@@ -249,11 +259,40 @@ export async function listUsageCountedTranscriptStats(
   } & UsageCostCollectionAccess,
 ): Promise<UsageCostTranscriptFile[]> {
   const sources = await listUsageCountedTranscriptSources(agentId, params);
+  return materializeUsageCostTranscriptSources(sources, params);
+}
+
+/** Expand only the metadata sources selected by the refresh owner. */
+export async function readUsageCostTranscriptSourceStats(
+  sources: readonly (UsageCostJsonlSource | UsageCostSqliteEntry)[],
+  access: UsageCostCollectionAccess,
+): Promise<UsageCostTranscriptFile[]> {
+  const sqliteFiles = await readUsageCostSqliteFiles(
+    sources
+      .filter((source) => source.kind === "sqlite")
+      // SQLite metadata sources are formatted by this collection's discovery owner.
+      .map((source) => parseSqliteSessionFileMarker(source.sourcePath)!),
+    access,
+  );
+  let sqliteIndex = 0;
+  return materializeUsageCostTranscriptSources(
+    sources.map((source) => (source.kind === "sqlite" ? sqliteFiles[sqliteIndex++] : source)),
+    access,
+  );
+}
+
+async function materializeUsageCostTranscriptSources(
+  sources: readonly (UsageCostTranscriptSource | undefined)[],
+  access: UsageCostCollectionAccess,
+): Promise<UsageCostTranscriptFile[]> {
   // Discovery and SQLite precedence need only metadata; expand archives only for readers.
   const { firstError, hasError, results } = await runTasksWithConcurrency({
     tasks: sources.map((source) => async (): Promise<UsageCostTranscriptFile | undefined> => {
+      if (!source) {
+        return undefined;
+      }
       try {
-        return await materializeUsageCostTranscriptSource(source, params);
+        return await materializeUsageCostTranscriptSource(source, access);
       } catch (error) {
         return ignoreMissingPath(error);
       }
@@ -288,7 +327,7 @@ async function resolveUsageCostTranscriptSource(
   }
 }
 
-export async function resolveUsageCostTranscriptSources(
+async function resolveUsageCostTranscriptSources(
   sessionFiles: readonly string[],
   access: UsageCostCollectionAccess,
 ): Promise<Array<UsageCostTranscriptSource | undefined>> {

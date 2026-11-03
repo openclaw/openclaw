@@ -1,4 +1,4 @@
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import { nativeRuntime } from "../../test-helpers/chat-model.ts";
@@ -14,6 +14,7 @@ import {
   mountPlacement as renderPlace,
   placementDevice,
 } from "./placement.test-support.ts";
+import { replaceBrowserPreference } from "./preferences.ts";
 const modelRef = "openai/hosted-model";
 const createSelection = { message: "hello", visibility: "normal" as const };
 const model: ModelCatalogEntry = {
@@ -27,9 +28,13 @@ const model: ModelCatalogEntry = {
 const agent = { id: "main", model: { primary: modelRef } };
 const preferred = { model: modelRef, agentRuntime: "agentsapi" };
 const managed = managedModelControls();
+beforeEach(() => {
+  replaceBrowserPreference("ws://gateway.example", "main", {});
+});
 afterEach(() => {
   managed.reset();
   vi.restoreAllMocks();
+  replaceBrowserPreference("ws://gateway.example", "main", {});
 });
 function modelControl(context: Parameters<typeof renderControl>[1]) {
   const control = managed.make(() => {});
@@ -93,6 +98,20 @@ it("uses model-picker changes and configured defaults as the environment authori
   control.load(context, "other", true, { agent: { ...agent, id: "other" }, preference: preferred });
   await vi.waitFor(() => expect(control.resolveAgentRuntime()?.id).toBe("agentsapi"));
   expect(control.modelForSubmission()).toBe(modelRef);
+});
+it("returns to the Gateway's implicit host runtime without pinning it", async () => {
+  const implicitHost = {
+    ...model,
+    agentRuntime: { ...nativeRuntime(), source: "implicit" as const },
+  };
+  const { context } = contextWith([implicitHost]);
+  const { control, find } = modelControl(context);
+  control.load(context, "main", true, { agent });
+  await waitForModelControl(control, context, "main", agent);
+  find("model-runtime", "agentsapi")!.click();
+  expect(control.selectHostEnvironment()).toBe(true);
+  expect(control.agentRuntime).toBeUndefined();
+  expect(control.resolveAgentRuntime()?.id).toBe("openclaw");
 });
 it("retains the explicit API-key account through hosted selection and rejects a late unavailable account preview", async () => {
   const api = modelAccount("api", "API account", "api_key");

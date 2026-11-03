@@ -16,6 +16,14 @@ reports that Doctor finished with plugin load errors. When an updater invokes
 Doctor, the same failures remain recorded warnings so an otherwise safe update
 can continue; rerun Doctor after resolving the reported cause.
 
+`--fix` (alias `--repair`) and `--yes` authorize safe migrations with closed or
+piped stdin, including with `--non-interactive`; a PTY is not required. Ambiguous
+ownership changes still need an operator decision. If config cannot be parsed or
+the database target cannot be resolved, Doctor exits `2` and names the blocker;
+no state migrations ran. Invalid config or required migrations left deferred at
+final validation exit `1`, with the rejected paths and next steps. A successful
+run with no pending work can still exit `0`.
+
 The CLI drains its shared-state database workers before exiting. Scripted callers
 must still check the process exit status: `Doctor complete.` records completion
 of the checks, but a subsequent crash remains a failed candidate-Doctor step
@@ -31,7 +39,16 @@ maintenance custody.
 
 SIGINT and SIGTERM cancel Doctor's preparation before it stops a Gateway or
 starts repairs. If repair already owns state, Doctor settles its admitted work
-and restores any service it stopped before exiting.
+and restores any service it stopped before exiting. Startup cancellation also
+aborts package-file reads and stops and joins prerequisite subprocesses. Doctor
+closes its owned resources, records the signal exit status, and lets Node exit
+naturally so V8 can finish worker cleanup safely.
+
+Before maintenance begins, package-root discovery, source-config loading, and
+Tailscale prerequisite inspection each have a 60-second asynchronous wait limit.
+A timeout names the phase and recommends `OPENCLAW_DEBUG=1 openclaw doctor --lint`
+and a Node diagnostic report. These limits cannot interrupt synchronous native I/O;
+capture a report on the affected host when the event loop itself is blocked.
 
 If a native SQLite snapshot request fails, Doctor exits with an error even when
 an optional check defers its work. Resolve the reported snapshot or filesystem
@@ -154,8 +171,11 @@ including profiles that were offline during the update. Preparation keeps existi
 identities and pairing tokens and captures a backup before retiring their old storage.
 Native clients can invoke the same operation with
 `openclaw doctor --client-credentials --repair --non-interactive`. This command only
-prepares the selected root's client credentials and required source schema. It does not
-run health checks or control services. Add `--json` for a completion report.
+prepares the selected root's client credentials, required source schema, and pending
+local service-runtime intent migration. Runtime pins retain their exact stored values;
+conflicting migration inputs stop preparation before the native app can select an old
+Gateway runtime against newer state. It does not run health checks or control
+services. Add `--json` for a completion report.
 
 If a replacement host retains PostgreSQL state but loses `client/credentials.sqlite`,
 restore the matching credential backup when available. Without a backup, run:
@@ -326,7 +346,7 @@ openclaw channels status --probe
 | `--replace-model <json>`        | With `--fix` or `--repair`, explicitly replace a retiring Daybreak alias with a specific OpenAI model and Access program. Repeat for both aliases; see below.                                                                                         |
 | `--force`                       | Allow aggressive repair choices. Alone, remains guided; with `--fix`, `--repair`, or `--yes`, uses the same policy-refresh and installation-drift rules.                                                                                              |
 | `--non-interactive`             | Run without prompts; safe automatic migrations still apply. Combine with `--fix`, `--repair`, or `--yes` to enter repair maintenance.                                                                                                                 |
-| `--client-credentials`          | Prepare only client credentials and their required source schema. Requires `--repair` or `--fix` with `--non-interactive`; optionally accepts `--json`.                                                                                               |
+| `--client-credentials`          | Prepare client credentials, their required source schema, and pending local service-runtime intent migration. Requires `--repair` or `--fix` with `--non-interactive`; optionally accepts `--json`.                                                   |
 | `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                                                               |
 | `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                                                                         |
 | `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                                                                   |
@@ -392,6 +412,18 @@ may request browser profile access. See [browser setup](/tools/browser/setup) an
 [browser troubleshooting](/tools/browser/troubleshooting).
 
 ### Auth migration recovery
+
+Doctor leaves a `models.json` key untouched instead of importing it when the
+shared auth store already provides an effective profile for that provider. The
+warning names the provider and shared profile. This preserves read-through auth
+without creating an agent-local credential that takes precedence over it.
+
+If an existing agent-local `<provider>:models-json` profile takes precedence over
+shared auth, Doctor preserves both credentials and reports the exact
+`openclaw models auth logout <profile-id> --agent <agent-id> --yes` command. Confirm
+the shared account is the one you want before running it. A profile name alone
+does not prove Doctor created the credential, so Doctor does not remove it
+automatically.
 
 Auth imports retain their original warning receipts and recovery copies. The
 final summary distinguishes the remaining work:

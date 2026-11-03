@@ -7,7 +7,6 @@ import type {
   ReplyOperation,
   Effect,
   SessionWorkRun,
-  SessionControllerMailboxClaim,
   CapturedSessionControllerEffect,
   SessionControllerInput,
 } from "./session-controller.contracts.js";
@@ -99,41 +98,6 @@ export function captureSessionWorkRunInterruptions(params: {
       },
     ];
   });
-}
-
-export function getCompetingSessionWorkAdmissionRelease(params: {
-  scope: string;
-  identities: Iterable<string | undefined>;
-  owner?: symbol;
-  excludePendingOwner?: symbol;
-  beforeClaim?: SessionControllerMailboxClaim;
-}) {
-  const current = ownerContext.getStore();
-  const effects = [...selectedEffects([targetFrom(params)])].filter((effect) => {
-    const input = effect.sourceInput;
-    const claim = params.beforeClaim;
-    // The selector already belongs to this claim. Unclaimed live sources on
-    // that mailbox can only run afterward; their preparation is not prior work.
-    if (
-      claim &&
-      input &&
-      input.mailbox === claim.mailbox &&
-      (claim.inputs.includes(input) ||
-        (!input.claim && !input.retirementRequested && input.phase !== "consumed"))
-    ) {
-      return false;
-    }
-    return (
-      !current?.effects.has(effect) &&
-      (params.owner === undefined || effect.owner === params.owner) &&
-      (!params.excludePendingOwner ||
-        effect.owner !== params.excludePendingOwner ||
-        effect.phase === "acquired")
-    );
-  });
-  return effects.length
-    ? Promise.all(effects.map((effect) => effect.ref.released)).then(() => undefined)
-    : undefined;
 }
 
 export function getTerminalSessionWorkAdmissionRelease(params: {

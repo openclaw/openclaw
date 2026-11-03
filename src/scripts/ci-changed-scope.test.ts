@@ -8,7 +8,6 @@ import { writeFixtureFiles as writeFiles } from "../../test/scripts/z0632-fixtur
 
 const {
   detectChangedScope,
-  detectInstallSmokeScope,
   detectNodeFastScope,
   isNodeTestDataOnlyPath,
   listChangedPaths,
@@ -49,8 +48,7 @@ it("rejects missing CI diff refs", () => {
 });
 
 function expectedScope(enabled = "") {
-  const lanes =
-    "Node Macos MacosNode IosBuild Android Windows SkillsPython ChangedSmoke ControlUiI18n UiTests";
+  const lanes = "Node Macos MacosNode IosBuild Android Windows SkillsPython ControlUiI18n UiTests";
   return Object.fromEntries(
     lanes.split(" ").map((lane) => [`run${lane}`, enabled.split(" ").includes(lane)]),
   );
@@ -66,6 +64,7 @@ it.each<[string | string[], string, boolean?]>([
   [["docs/ci.md", "docs/docs.json", "README.md"], ""],
   [["src/config/defaults.ts", "docs/docs.json"], "Node"],
   [".crabbox.yaml", "Node"],
+  ["config/test-lines-allocations/regression.txt", "Node"],
   ["src/skills/runtime/refresh.ts", "Node MacosNode Windows"],
   [".github/actions/setup-android-toolchain/action.yml", "Node Android"],
   ["apps/macos/Sources/Foo.swift", "Macos MacosNode"],
@@ -83,14 +82,11 @@ it.each<[string | string[], string, boolean?]>([
   ["scripts/lib/ci-test-runtime.mts", "Node UiTests"],
   ["scripts/ci-xcodebuild.py", "Node IosBuild"],
   ["scripts/ci-xcodebuild.py.bak", "Node"],
-  ["scripts/install.ps1", "Node Windows ChangedSmoke"],
-  ["scripts/install.sh", "Node ChangedSmoke"],
-  [".github/workflows/install-smoke.yml", "Node ChangedSmoke"],
-  ["src/plugins/loader.ts", "Node ChangedSmoke"],
-  [
-    "packages/gateway-protocol/src/schema/messages.ts",
-    "Node ChangedSmoke Macos MacosNode IosBuild Android",
-  ],
+  ["scripts/install.ps1", "Node Windows"],
+  ["scripts/install.sh", "Node"],
+  [".github/workflows/install-smoke.yml", "Node"],
+  ["src/plugins/loader.ts", "Node"],
+  ["packages/gateway-protocol/src/schema/messages.ts", "Node Macos MacosNode IosBuild Android"],
   ["src/plugins/loader.test.ts", "Node"],
   ["scripts/install-simslim.sh", "Node IosBuild", true],
   ["scripts/install-simslim.sh.bak", "Node", false],
@@ -111,18 +107,6 @@ it.each([
   ["src/wizard/i18n/locales/helpers/format.ts", false],
 ] as const)("classifies data-only inputs: %s", (file, dataOnly) => {
   expect(isNodeTestDataOnlyPath(file)).toBe(dataOnly);
-});
-
-it.each<[string[], boolean, boolean]>([
-  [[], true, true],
-  [["docs/ci.md"], false, false],
-  [["scripts/install.sh"], true, true],
-  [["extensions/matrix/package.json"], true, false],
-  [["src/plugins/loader.ts"], true, false],
-  [["src/plugins/loader.test.ts"], false, false],
-  [["extensions/matrix/index.ts"], false, false],
-])("splits install smoke for %j", (paths, runFastInstallSmoke, runFullInstallSmoke) => {
-  expect(detectInstallSmokeScope(paths)).toEqual({ runFastInstallSmoke, runFullInstallSmoke });
 });
 
 it.each<[string[], string]>([
@@ -244,7 +228,7 @@ it.each<[string, string, keyof typeof manifests | "missing", string | null, stri
 
     const output = parseGitHubOutput(fs.readFileSync(outputPath, "utf8"));
     const flags =
-      "run_android run_android_screenshots run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_ios_screenshots run_macos run_macos_node run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
+      "run_android run_android_screenshots run_control_ui_i18n run_ios_build run_ios_screenshots run_macos run_macos_node run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
         " ",
       );
     const enabled = failSafe

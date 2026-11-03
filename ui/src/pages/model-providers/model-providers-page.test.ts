@@ -386,7 +386,7 @@ describe("ModelProvidersPage agent scope", () => {
       await updatePickers(page.renderRoot);
       const fallback = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
         (select) =>
-          select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback Model",
+          select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback model",
       );
       expect(fallback).toBeDefined();
       expect(page.querySelector(".model-providers__defaults")?.textContent).toContain(
@@ -567,6 +567,40 @@ describe("ModelProvidersPage agent scope", () => {
     expect(
       [...form!.querySelectorAll('[role="status"]')].map((message) => message.textContent?.trim()),
     ).toEqual(["Provider anthropic added.", "config.get failed after provider add"]);
+  });
+
+  it.each([
+    ["another provider fails", "ready", undefined],
+    ["the added provider fails", "unavailable", "More models could not be discovered."],
+  ] as const)("provider-add feedback warns only when %s", async (_case, ownStatus, warning) => {
+    const { context, runtimeConfig, request } = createHarness("main");
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method) =>
+      method === "models.list"
+        ? {
+            models: [],
+            refreshFailed: true,
+            providerOutcomes: [
+              { provider: "anthropic", status: ownStatus },
+              { provider: "ollama", status: "unavailable" },
+            ],
+          }
+        : originalRequest(method),
+    );
+    const page = appendPage(context);
+    await waitForProviders(page);
+    await openApiKeyProvider(page, "anthropic");
+    page.view.props.onAddProviderKeyChange("new-provider-key");
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>("[data-models-key-dialog] button.primary")!.click();
+    await runtimeConfig.runExternalMutation.mock.results[0]!.value;
+    await drainPageUpdates(page);
+
+    expect(page.view.props.messages.add).toEqual({
+      kind: "success",
+      text: "Provider anthropic added.",
+      ...(warning ? { warning } : {}),
+    });
   });
 
   it("keeps a newer global-model draft after an agent switch and earlier save", async () => {
@@ -933,5 +967,6 @@ it("applies provider navigation without replacing an edited search during revali
   page.routeData = { ...routeData, provider: "minimax-portal" };
   await waitForSolid(() => expect(search()?.value).toBe("minimax"));
   page.routeData = { ...routeData, provider: "" };
-  await waitForSolid(() => expect(search()?.value).toBe(""));
+  // Setup with nothing connected and nothing typed has no list to filter.
+  await waitForSolid(() => expect(search()?.value ?? "").toBe(""));
 });

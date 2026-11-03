@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Message, Usage } from "openclaw/plugin-sdk/llm";
+import type { TrajectoryEvent } from "./types.js";
 
 const zeroCounts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const emptyUsage: Usage = { ...zeroCounts, totalTokens: 0, cost: { ...zeroCounts, total: 0 } };
@@ -104,3 +105,55 @@ export const toolCallSessionEntries = (
 ];
 
 export const writeToolCallSessionFile = sessionWriter(toolCallSessionEntries);
+
+export function readEvents(outputDir: string): TrajectoryEvent[] {
+  return fs
+    .readFileSync(path.join(outputDir, "events.jsonl"), "utf8")
+    .trim()
+    .split(/\r?\n/u)
+    .map((line) => JSON.parse(line) as TrajectoryEvent);
+}
+
+export function createRuntimeEvent(
+  type: string,
+  overrides: Partial<TrajectoryEvent> = {},
+): TrajectoryEvent {
+  return {
+    traceSchema: "openclaw-trajectory",
+    schemaVersion: 1,
+    traceId: "session-1",
+    source: "runtime",
+    type,
+    ts: "2026-04-22T08:00:00.000Z",
+    seq: 1,
+    sessionId: "session-1",
+    ...overrides,
+  };
+}
+
+export function runtimeAttemptEvents(
+  rows: ReadonlyArray<readonly [type: string, runId: string, data?: Record<string, unknown>]>,
+): TrajectoryEvent[] {
+  return rows.map(([type, runId, data], index) =>
+    createRuntimeEvent(type, {
+      seq: index + 1,
+      sourceSeq: index + 1,
+      runId,
+      ...(data ? { data } : {}),
+    }),
+  );
+}
+
+export function runtimeSeries(
+  rows: Array<[string, Record<string, unknown>, number?, Partial<TrajectoryEvent>?]>,
+) {
+  return rows.map(([type, data, seconds, overrides], index) =>
+    createRuntimeEvent(type, {
+      data,
+      ts: new Date(Date.parse("2026-04-22T08:00:00Z") + (seconds ?? index) * 1000).toISOString(),
+      seq: index + 1,
+      sourceSeq: index + 1,
+      ...overrides,
+    }),
+  );
+}

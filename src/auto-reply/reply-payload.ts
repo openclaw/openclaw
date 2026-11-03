@@ -23,6 +23,7 @@ export type {
 
 export type ReplyMediaFailureCode =
   | "file-not-found"
+  | "file-too-large"
   | "unsupported-format"
   | "delivery-failed"
   | "invalid-reference";
@@ -106,6 +107,7 @@ export type ReplyDeliveryContext = {
 
 const REPLY_MEDIA_FAILURE_MESSAGES: Record<ReplyMediaFailureCode, string> = {
   "file-not-found": "File not found. Check the path and try again.",
+  "file-too-large": "Too large to attach. Look for this file in Files.",
   "unsupported-format": "Rejected by the local attachment allowlist. Send a supported file type.",
   "delivery-failed": "Delivery failed. Try sending this file again.",
   "invalid-reference":
@@ -258,10 +260,14 @@ export type ReplyPayloadMetadata = {
   blockSourceText?: string;
   /** UTF-16 source range represented by this block within one assistant message. */
   blockSourceRange?: readonly [start: number, end: number];
+  /** An authored line break continues an already accepted source text block. */
+  streamedSourceBoundary?: true;
   /** Live source receipts retained until final text recovery settles. */
   blockReplySources?: readonly BlockReplySource[];
   /** Persisted assistant speech facts; never serialized into channel payloads. */
   tts?: AssistantDeliveryTtsFacts;
+  /** The streaming cleaner already classified directive syntax with preceding code context. */
+  ttsDirectivesParsed?: true;
   /** Structured message-tool speech is an explicit request, independent of auto-TTS mode. */
   ttsExplicit?: true;
   /** Original runtime MEDIA references used to identify the persisted assistant row. */

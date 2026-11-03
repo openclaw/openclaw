@@ -44,7 +44,11 @@ function gatewayWithSnapshot(client: GatewayBrowserClient | null, connected: boo
     phase: connected ? "connected" : "stopped",
     sessionKey: "main",
   });
-  return { snapshot, subscribe: () => () => undefined } as unknown as ApplicationContext["gateway"];
+  return {
+    snapshot,
+    subscribe: () => () => undefined,
+    subscribeEvents: () => () => undefined,
+  } as unknown as ApplicationContext["gateway"];
 }
 
 function requestGateway(request: Request) {

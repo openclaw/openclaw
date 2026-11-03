@@ -24,10 +24,6 @@ function observeMarkdownOwnership() {
   };
 }
 
-function streamXml(source: string, size = CHUNK) {
-  return streamChunks(source, size, createTextProjection([xmlFilter()]));
-}
-
 const jsxAnswer = (sections: number) =>
   "```jsx\n<div><p>{items.length < 3 ? <b>Few</b> : <i>Many</i>}</p></div>\n```\n".repeat(sections);
 
@@ -47,7 +43,7 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
     const probe = vi.spyOn(String.prototype, method);
     let characters = 0;
     try {
-      const streamed = streamXml(source);
+      const streamed = streamChunks(source, CHUNK, createTextProjection([xmlFilter()]));
       expect(streamed.text).toBe(source);
       expect(streamed.delivered).toBe(source);
       characters = probe.mock.calls.reduce((total, [first, end], index) => {
@@ -68,10 +64,14 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
   });
 
   const literalFence = "```text\n<think>literal code</think>\n```\nOrdinary prose follows.\n\n";
+  const inlineComparisons = "The guard uses `min` and `max`, so `a < b` returns false. ".repeat(
+    300,
+  );
   it.each([
     ["JSX", jsxAnswer(20), CHUNK, false],
     ["multiline HTML", htmlAnswer(16_000), CHUNK, false],
     ["single-line HTML", htmlAnswer(16_000, false), CHUNK, false],
+    ["inline-code comparisons", inlineComparisons, CHUNK, false],
     [
       "a fenced tool-call example",
       `\`\`\`xml\n<tool_call>{"path":"a.ts"}</tool_call>\n\`\`\`\n\n${htmlAnswer(16_000)}`,
@@ -180,7 +180,7 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
     // Backticks in a fence info string cannot protect its payload.
     ["malformed fence", `\`\`\`jsx \`code\`\n${call}\nDone.`, CHUNK],
   ] as const)("strips a call after %s", (label, source, size) => {
-    const projection = streamXml(source, size);
+    const projection = streamChunks(source, size, createTextProjection([xmlFilter()]));
     expect(projection.text).toBe(stripToolCallXmlTags(source));
     if (label === "split name") {
       expect(projection.text).toBe("Before.\n\nAfter.");
