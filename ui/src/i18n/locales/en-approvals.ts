@@ -112,10 +112,7 @@ const enApprovals = {
     revoke: "Revoke",
     revoking: "Revoking…",
     columns: {
-      automation: "Automation",
-      command: "Command",
       uses: "Uses",
-      state: "State",
     },
   },
   approvalHistory: {

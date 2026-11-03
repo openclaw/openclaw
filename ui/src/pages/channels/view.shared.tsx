@@ -115,7 +115,7 @@ export function booleanChannelFact(
 }
 
 /** Status kind for boolean facts: dot signals on, quiet dot signals off. */
-export function boolStatusKind(value: boolean | null | undefined): ChannelStatusKind {
+function boolStatusKind(value: boolean | null | undefined): ChannelStatusKind {
   return value === true ? "ok" : "muted";
 }
 
