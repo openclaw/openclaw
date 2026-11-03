@@ -8,7 +8,8 @@ description: "Crabbox and Blacksmith Testbox remote testing: isolation, cross-pl
 - Deliberate remote proof: follow [proof policy](../openclaw-testing/SKILL.md#proof-policy).
   Prefer bounded local proof on a qualified, available host. Expensive or
   platform-specific work can use remote capacity. Queued: stop owned allocation;
-  use PR CI or a safe local scope and report uncovered requirements.
+  use PR CI or a safe local scope and report uncovered requirements. Required build
+  unavailable before publication: use the testing skill's draft/CI proof policy.
 - Never wait on queues or chain provider fallbacks.
 
 Backends:

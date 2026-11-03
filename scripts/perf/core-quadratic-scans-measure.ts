@@ -14,6 +14,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { ShortTermRecallStore } from "../../extensions/memory-core/src/short-term-promotion-types.js";
 import { createPluginManifestRecordFixture } from "../../src/plugins/plugin-metadata.test-support.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -177,12 +178,7 @@ const observer = new PerformanceObserver((list) => {
 });
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 4096);
 } else {
   observer.observe({ entryTypes: ["gc"] });
 }

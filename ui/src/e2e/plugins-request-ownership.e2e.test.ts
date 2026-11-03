@@ -185,7 +185,7 @@ suite.define(() => {
         .locator(".plugins-settings-breadcrumb")
         .getByRole("link", { name: "Workboard", exact: true })
         .click();
-      const rows = page.locator(".plugin-capability__copy > strong");
+      const rows = page.locator(".plugin-capabilities .settings-row__title");
       await expect.poll(() => rows.allTextContents()).toEqual(["Current skill"]);
 
       await gateway.resolveDeferred(

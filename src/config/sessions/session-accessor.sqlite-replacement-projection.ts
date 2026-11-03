@@ -71,6 +71,7 @@ export type SessionEntryCanonicalReplacement = SessionEntryReplacement & {
 };
 
 type ReplacementProjectionOptions = {
+  creationOperation?: SessionEntryReplacementCommit["creationOperation"];
   fieldPatch?: SessionEntryReplacementCommit["fieldPatch"];
   onCommittedEntries?: SessionEntryWorkerLifecycle["onCommittedEntries"];
   retainedExecution?: OpenClawAgentDatabaseExecution;
@@ -502,6 +503,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               },
             );
             const input: SessionEntryReplacementCommit = {
+              creationOperation: params.creationOperation,
               fieldPatch: params.fieldPatch,
               expectedRows,
               labelOwnerKeys,

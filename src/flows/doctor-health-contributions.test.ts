@@ -138,7 +138,6 @@ const mocks = vi.hoisted(() => ({
   ),
   note: vi.fn(),
   loadModelCatalog: vi.fn(async () => []),
-  findModelCatalogEntry: vi.fn(() => ({ contextTokens: 200_000 })),
   getModelRefStatus: vi.fn(() => ({ allowed: true, inCatalog: true, key: "openai/gpt-5.5" })),
   resolveConfiguredModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
@@ -455,10 +454,6 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
-}));
-
-vi.mock("../agents/model-catalog.js", () => ({
-  findModelCatalogEntry: mocks.findModelCatalogEntry,
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
