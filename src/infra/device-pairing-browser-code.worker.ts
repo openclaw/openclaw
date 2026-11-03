@@ -7,6 +7,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 import { deferSqlitePostCommitPublication } from "./sqlite-post-commit.js";
 
 type BrowserRequestDatabase = Pick<OpenClawStateKyselyDatabase, "device_pairing_browser_requests">;
@@ -109,7 +110,7 @@ export function startBrowserPairRequestInWorker(
       .select((eb) => eb.fn.countAll<number>().as("count"))
       .where("status", "=", "pending"),
   );
-  if (Number(pendingCount?.count ?? 0) >= input.maxPending) {
+  if (sqliteNumber(pendingCount?.count ?? 0) >= input.maxPending) {
     return { status: "capacity" as const };
   }
   const code = input.codeCandidates.find((candidate) => !selectRequest(db, "code", candidate));
