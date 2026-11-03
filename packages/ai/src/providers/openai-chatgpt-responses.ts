@@ -260,6 +260,12 @@ export const streamOpenAICodexResponses: StreamFunction<
       const observePromptEgress = createResponsesPromptEgressObserver(options, context);
       // Without a session id, each WebSocket request gets independent affinity.
       const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
+      // The ChatGPT backend routes prompt-cache reuse by the session_id header, not by the
+      // body prompt_cache_key, so an explicit cache key must also own the header.
+      const cacheAffinityId =
+        (options?.cacheRetention === "none"
+          ? undefined
+          : clampOpenAIPromptCacheKey(options?.promptCacheKey)) ?? sessionId;
       requestTimeoutMs = clampPositiveTimerTimeoutMs(options?.timeoutMs);
       requestTimeoutSignal = options?.signal;
       if (requestTimeoutMs !== undefined) {
@@ -347,6 +353,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               buildCodexWebSocketHeaders(
                 buildBaseCodexHeaders(modelHeaders, optionHeaders, accountId, apiKey),
                 sessionId || createCodexRequestId(),
+                cacheAffinityId,
               ),
           });
         } catch (error) {
@@ -480,6 +487,7 @@ export const streamOpenAICodexResponses: StreamFunction<
           accountId,
           apiKey,
           sessionId,
+          cacheAffinityId,
         );
         const bodyJson = JSON.stringify(activeAttempt.request);
         const canCompressSseBody =
@@ -1380,14 +1388,17 @@ function buildSSEHeaders(
   accountId: string,
   token: string,
   sessionId?: string,
+  cacheAffinityId: string | undefined = sessionId,
 ): Headers {
   const headers = buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token);
   headers.set("OpenAI-Beta", "responses=experimental");
   headers.set("accept", "text/event-stream");
   headers.set("content-type", "application/json");
 
+  if (cacheAffinityId) {
+    headers.set("session_id", cacheAffinityId);
+  }
   if (sessionId) {
-    headers.set("session_id", sessionId);
     headers.set("x-client-request-id", sessionId);
   }
 
