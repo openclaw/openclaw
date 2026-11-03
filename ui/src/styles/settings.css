@@ -1545,6 +1545,11 @@ textarea.settings-input {
   user-select: all;
 }
 
+/* Who a connection acts as is what the row is read for; the rest of the line explains it. */
+.github-connection__login {
+  color: var(--text-strong);
+}
+
 .shell--embed-settings {
   --settings-control-height: 44px;
 
