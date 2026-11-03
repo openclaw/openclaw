@@ -29,6 +29,7 @@ const hello = {
   policy: { hasMultipleSessionSharingIdentities: true },
   auth: { role: "operator", scopes: ["operator.read"] },
 } satisfies NonNullable<ApplicationGatewaySnapshot["hello"]>;
+// mock-isolation: reload confirmations resolve without mounting the shared dialog.
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 beforeEach(() => i18n.setLocale("en"));
 afterEach(() => {

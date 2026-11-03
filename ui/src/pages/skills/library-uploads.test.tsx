@@ -21,6 +21,7 @@ import { createSkillLibrary, type SkillLibraryModel } from "./library-state.ts";
 import { SkillLibrary, SkillLibraryDialogs } from "./library-view.tsx";
 import { connectedGateway, libraryEntry, libraryList, requestFor } from "./skills.test-support.ts";
 
+// mock-isolation: removal confirmations resolve without mounting the shared dialog.
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 registerSkillsBrowserEnglish();
 
