@@ -6,6 +6,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { askBrandLabel } from "../../components/theme-brand-label.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatDateMs } from "../../lib/format.ts";
@@ -15,7 +16,7 @@ import type {
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { pluginCapabilityIcons } from "./capability-icons.tsx";
+import { pluginCapabilityPaths } from "./capability-icons.ts";
 import { formatCompactCount } from "./catalog-results.tsx";
 import { ExtensionIcon } from "./extension-icons.tsx";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.tsx";
@@ -408,10 +409,14 @@ function renderPluginDeclaredCapabilities(
 ): JSX.Element {
   return renderPluginCapabilitySection(
     t("pluginsPage.detailCapabilities"),
-    Object.entries(pluginCapabilityIcons)
+    Object.entries(pluginCapabilityPaths)
       .filter(([family]) => contracts?.[family]?.length)
-      .map(([family, icon]) => ({
-        icon,
+      .map(([family, path]) => ({
+        icon: () => (
+          <StrokeIcon aria-hidden="true">
+            <path d={path} />
+          </StrokeIcon>
+        ),
         name: t(`pluginsPage.capabilityFamilies.${family}.name`),
         description: t(`pluginsPage.capabilityFamilies.${family}.description`),
       })),
