@@ -43,6 +43,7 @@ const CODE_KEYS: Record<string, string> = {
   audience_mismatch: "errorVerification",
   not_an_owner: "errorNotOwner",
   limit_reached: "errorLimitReached",
+  caps_escalation: "errorCapsEscalation",
   missing_capability: "errorNotOwner",
   conflicting_rotation: "frozenAlert",
   root_reused: "errorRecoveryReused",

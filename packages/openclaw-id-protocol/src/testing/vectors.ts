@@ -276,7 +276,10 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       claw_id: VECTOR_CLAW_ID,
       seq: 2,
       binding_seq: 1,
-      owner_device_keys: [pub("device-1"), pub("device-2")],
+      owner_devices: [
+        { device_pub: pub("device-1"), caps: [...allCaps].toSorted() },
+        { device_pub: pub("device-2"), caps: [...allCaps].toSorted() },
+      ].toSorted((a, b) => a.device_pub.localeCompare(b.device_pub)),
       owner_peer_keys: [iroh("device-1"), iroh("device-2")],
       members: [{ account_id: "acct_bob", role: "operator", peer_keys: [iroh("invitee")] }],
       issued_at: VECTOR_ISSUED_AT,
@@ -445,7 +448,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
         name: "certificate grants caps its signer lacks",
         verifier: "owner",
         statement: escalation,
-        expected_error: "missing_capability",
+        expected_error: "caps_escalation",
       },
       {
         name: "snapshot not signed by K_gw",

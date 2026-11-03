@@ -206,5 +206,6 @@ match `code` only.
 - Should `getDescriptor` be readable without a session (invite links before sign-in)? v1:
   user auth required.
 - Device mail for `owners`: Discovery decides "is an owner device" from the snapshot's
-  `owner_peer_keys` and its own device bindings; withholding it only delays enrollment.
+  `owner_peer_keys` (or `owner_devices` and their caps for a certificate reader) and its own
+  device bindings; withholding it only delays enrollment.
 - Claw retirement (spike threat-model backlog 4) is not specified yet.

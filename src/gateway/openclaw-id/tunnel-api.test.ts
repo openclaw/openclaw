@@ -79,7 +79,9 @@ describe("OpenClaw ID tunnel API", () => {
     expect(status).toBe(200);
     expect(body).toMatchObject({ claw_id: claw.clawId, seq: 1, root_epoch: 1 });
     expect(body.binding.type).toBe("ServerBinding");
-    expect(body.owner_devices).toEqual([{ cert: claw.cert, approved_by: "root" }]);
+    expect(body.owner_devices).toEqual([
+      { cert: claw.cert, caps: claw.cert.body.caps, approved_by: "root" },
+    ]);
   });
 
   it("does not show membership to a device that is not an owner device", async () => {
@@ -106,8 +108,8 @@ describe("OpenClaw ID tunnel API", () => {
     const view = await call(newPeer, "GET", "membership");
     expect(view.body.owner_devices).toEqual(
       expect.arrayContaining([
-        { cert: claw.cert, approved_by: "root" },
-        { cert, approved_by: expect.stringMatching(/^fp:/) },
+        { cert: claw.cert, caps: claw.cert.body.caps, approved_by: "root" },
+        { cert, caps: cert.body.caps, approved_by: expect.stringMatching(/^fp:/) },
       ]),
     );
   });

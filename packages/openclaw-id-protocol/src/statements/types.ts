@@ -147,6 +147,9 @@ export type RootRotationBody = {
   issued_at: UnixSeconds;
 };
 
+/** One owner device in a snapshot: its key D and the capabilities the Gateway granted it. */
+export type SnapshotOwnerDevice = { device_pub: Ed25519PublicKey; caps: OwnerCapability[] };
+
 /** One member entry in a snapshot. */
 export type SnapshotMember = { account_id: string; role: MemberRole; peer_keys: IrohEndpointKey[] };
 
@@ -158,8 +161,11 @@ export type MembershipSnapshotBody = {
   claw_id: string;
   seq: number;
   binding_seq: number;
-  /** Device keys D of the current owner devices. */
-  owner_device_keys: Ed25519PublicKey[];
+  /**
+   * The current owner devices with their granted capabilities. Readers outside the claw take
+   * an owner device's capabilities from here, never from a certificate a browser presents.
+   */
+  owner_devices: SnapshotOwnerDevice[];
   /** Owner device peer keys the relay should admit. */
   owner_peer_keys: IrohEndpointKey[];
   members: SnapshotMember[];

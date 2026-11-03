@@ -418,14 +418,14 @@ describe("removal publication (allowlist)", () => {
     const { claw, discovery, retry, advance } = await registeredClaw();
     await retry.start();
     await advance(0);
-    expect(discovery.mirror.snapshot?.body.owner_device_keys).toEqual([
-      formatEd25519PublicKey(claw.device.publicKey),
+    expect(discovery.mirror.snapshot?.body.owner_devices).toEqual([
+      { device_pub: formatEd25519PublicKey(claw.device.publicKey), caps: expect.any(Array) },
     ]);
     expect((await claw.authority.submit(await revocationOfD1(claw), "mailbox")).ok).toBe(true);
     expect(claw.authority.current()).not.toHaveProperty("revocations");
     await retry.request();
     expect(discovery.mirror.snapshot?.body).not.toHaveProperty("revoked");
-    expect(discovery.mirror.snapshot?.body.owner_device_keys).toEqual([]);
+    expect(discovery.mirror.snapshot?.body.owner_devices).toEqual([]);
     expect(discovery.mirror.snapshot?.body.owner_peer_keys).toEqual([]);
     expect(publicationPending(claw.authority.current())).toBe(false);
   });

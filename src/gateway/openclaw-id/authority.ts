@@ -28,6 +28,7 @@ import {
   type KeyFingerprint,
   parseStatement,
   registerInvite,
+  type OwnerCapability,
   type OwnerKeyRegenerationPreparation,
   type SignedStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
@@ -183,9 +184,10 @@ function emptyRecord(clawId: string): StoredClaw {
   };
 }
 
-/** An owner device as the owner's own devices see it: certificate and who approved it. */
+/** An owner device as the owner's own devices see it: certificate, granted caps and approver. */
 export type OwnerDeviceView = {
   cert: SignedStatement<"OwnerDeviceCert">;
+  caps: OwnerCapability[];
   approved_by: "root" | KeyFingerprint;
 };
 
@@ -649,6 +651,7 @@ export function createOpenClawIdAuthority(
         binding: current.binding,
         owner_devices: owners.map((device): OwnerDeviceView => ({
           cert: device.cert,
+          caps: device.caps,
           approved_by: device.approved_by,
         })),
         members: Object.entries(state.members).map(([account_id, member]) => ({

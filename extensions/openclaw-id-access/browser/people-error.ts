@@ -30,6 +30,8 @@ const MESSAGES: Readonly<Record<string, string>> = {
     "This access approval expired. Refresh this page and review the current access before continuing.",
   not_an_owner:
     "This browser's owner access was removed. Use another approved owner browser or your recovery kit.",
+  caps_escalation:
+    "This browser can't give another device more owner permissions than it has. Use your recovery kit to grant them.",
   limit_reached:
     "This claw has reached its limit for people or devices. Remove one to add another.",
   not_yet_valid:

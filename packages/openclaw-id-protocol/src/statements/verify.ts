@@ -43,6 +43,7 @@ export type VerifyErrorCode =
   | "not_an_owner"
   | "wrong_epoch"
   | "missing_capability"
+  | "caps_escalation"
   | "not_yet_valid"
   | "root_mismatch"
   | "conflicting_rotation"
@@ -146,7 +147,7 @@ export async function verifyOwnerStatement<T extends OwnerSignedType>(
     // SAFETY: SignedStatement is not a discriminated union; `type` fixes the body.
     const granted = (statement as SignedStatement<"OwnerDeviceCert">).body.caps;
     if (!granted.every((cap) => caps.includes(cap))) {
-      return failure("missing_capability", "certificate grants more than its signer holds");
+      return failure("caps_escalation", "certificate grants capabilities its signer does not hold");
     }
   }
   return {

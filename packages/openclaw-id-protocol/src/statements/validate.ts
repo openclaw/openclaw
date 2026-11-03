@@ -232,7 +232,7 @@ const BODIES: Record<StatementType, Check> = {
     claw_id: clawId,
     seq: nonNegative,
     binding_seq: positive,
-    owner_device_keys: list(ed25519Key),
+    owner_devices: list(object({ device_pub: ed25519Key, caps: list(oneOf(OWNER_CAPABILITIES)) })),
     owner_peer_keys: list(irohKey),
     members: list(object({ account_id: nonEmptyText, role, peer_keys: list(irohKey) })),
     issued_at: seconds,

@@ -1,5 +1,5 @@
 // Upgrading a claw record written before the allowlist model: history is dropped, each
-// owner device records who approved it, and the record republishes.
+// owner device records who approved it and its granted caps, and the record republishes.
 import { describe, expect, it } from "vitest";
 import {
   fingerprint,
@@ -86,6 +86,27 @@ describe("allowlist upgrade", () => {
     expect(upgraded.authority!.owner_devices[secondFp]!.cert).not.toHaveProperty("chain");
     expect(upgraded.authority!.members.acct_bob!.last_seen[member]).toBeTypeOf("number");
     expect(await store.read()).toEqual(upgraded);
+  });
+
+  it("gives allowlist records without granted caps the caps of their stored certificate", async () => {
+    const claw = await linkedClaw();
+    const current = claw.authority.current()!;
+    const state = current.authority!;
+    const d1Fp = await fingerprint(formatEd25519PublicKey(claw.device.publicKey));
+    const { caps: _caps, ...device } = state.owner_devices[d1Fp]!;
+    const older = {
+      ...current,
+      authority: { ...state, owner_devices: { [d1Fp]: device } },
+      discovery: { ...current.discovery, publish_pending: false },
+    } as unknown as StoredClaw;
+    expect(needsAllowlistUpgrade(older)).toBe(true);
+    const store = memoryStore();
+    await store.write(older);
+    const upgraded = (await createOpenClawIdAuthority(store).load())!;
+    expect(upgraded.authority!.owner_devices[d1Fp]!.caps).toEqual(device.cert.body.caps);
+    expect(upgraded.authority!.owner_devices[d1Fp]!.approved_by).toBe(device.approved_by);
+    expect(upgraded.discovery.publish_pending).toBe(true);
+    expect(needsAllowlistUpgrade(upgraded)).toBe(false);
   });
 
   it("leaves a current record alone", async () => {

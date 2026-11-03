@@ -2,7 +2,8 @@
 // kept certificate chains, a growing `revoked` fingerprint list and the owner-signed
 // Revocations published to Discovery. The allowlist keeps current state only, so the
 // upgrade drops that history, records who approved each owner device and starts every
-// inactivity clock at the upgrade.
+// inactivity clock at the upgrade. Records from before granted capabilities were stored
+// take each owner device's caps from its stored certificate.
 import {
   fingerprint,
   type AuthorityState,
@@ -27,7 +28,10 @@ type LegacyClaw = Omit<StoredClaw, "authority"> & {
   discovery: StoredClaw["discovery"] & { published_revocations?: number };
 };
 
-/** True when `record` was written before the allowlist model and must be upgraded. */
+/**
+ * True when `record` was written before the allowlist model, or before owner devices carried
+ * their granted caps, and must be upgraded.
+ */
 export function needsAllowlistUpgrade(record: StoredClaw): boolean {
   // SAFETY: a stored record is either current or the legacy shape; only optional fields differ.
   const legacy = record as unknown as LegacyClaw;
@@ -38,7 +42,8 @@ export function needsAllowlistUpgrade(record: StoredClaw): boolean {
     (legacy.authority !== null &&
       ("revoked" in legacy.authority ||
         Object.values(legacy.authority.owner_devices).some(
-          (device) => device.approved_by === undefined || "chain" in device.cert,
+          (device) =>
+            device.approved_by === undefined || device.caps === undefined || "chain" in device.cert,
         ) ||
         Object.values(legacy.authority.members).some((member) => member.last_seen === undefined)))
   );
@@ -68,6 +73,7 @@ async function upgradeOwnerDevices(
     // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
     devices[fp as KeyFingerprint] = {
       cert,
+      caps: device.caps ?? [...cert.body.caps],
       approved_by:
         device.approved_by ??
         (cert.signer === authority.anchor.root_pub ? "root" : await fingerprint(cert.signer)),

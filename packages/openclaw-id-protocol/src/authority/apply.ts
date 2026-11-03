@@ -335,8 +335,9 @@ function addMember(
   );
 }
 
-// The certificate's signer must be R or a current owner device with approve_device; the
-// Gateway records it as approved_by. At most MAX_OWNER_DEVICES devices are listed.
+// The certificate's signer must be R or a current owner device with approve_device, and an
+// owner device may grant only caps it holds (R may grant any); the Gateway records the
+// granted caps and the signer as approved_by. At most MAX_OWNER_DEVICES devices are listed.
 async function addOwnerDevice(
   state: AuthorityState,
   cert: SignedStatement<"OwnerDeviceCert">,
@@ -364,6 +365,19 @@ async function addOwnerDevice(
   }
   const fp = await fingerprint(cert.body.device_pub);
   const existing = state.owner_devices[fp];
+  // verifyOwnerStatement already held the grant within the signing device's recorded caps.
+  // Re-adding a listed device through an owner device never raises what it already holds.
+  if (
+    existing &&
+    verified.authority.kind !== "root" &&
+    !cert.body.caps.every((cap) => existing.caps.includes(cap))
+  ) {
+    return refuse(
+      state,
+      "caps_escalation",
+      "re-adding an owner device cannot raise its capabilities; only the recovery kit can",
+    );
+  }
   if (!existing && Object.keys(state.owner_devices).length >= MAX_OWNER_DEVICES) {
     return refuse(
       state,
@@ -373,6 +387,7 @@ async function addOwnerDevice(
   }
   const record: OwnerDeviceRecord = {
     cert,
+    caps: [...cert.body.caps],
     approved_by: verified.authority.kind === "root" ? "root" : await fingerprint(cert.signer),
     last_seen: context.now,
   };

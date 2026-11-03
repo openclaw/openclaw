@@ -257,7 +257,9 @@ describe("snapshot", () => {
     const removed = await apply(world.state, await revocation(world.device2, world.device1));
     const body = snapshotBody(removed.state, 1, WORLD_NOW);
     expect(body).not.toHaveProperty("revoked");
-    expect(body.owner_device_keys).toEqual([world.device1.pub]);
+    expect(body.owner_devices).toEqual([
+      { device_pub: world.device1.pub, caps: [...world.cert1.body.caps].toSorted() },
+    ]);
     expect(body.owner_peer_keys).toEqual([world.device1.peer]);
     const signed = await signStatement("MembershipSnapshot", body, world.gateway.signer);
     expect(parseStatement(signed, "MembershipSnapshot")).toMatchObject({ ok: true });

@@ -51,7 +51,7 @@ async function world() {
         claw_id,
         seq,
         binding_seq,
-        owner_device_keys: [],
+        owner_devices: [],
         owner_peer_keys: [],
         members: [],
         issued_at: opts.issued_at ?? now - 60,
