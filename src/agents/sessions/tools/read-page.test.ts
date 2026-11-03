@@ -30,7 +30,9 @@ describe("read page truncation cause", () => {
     });
 
     expect(result.details.kind).toBe("truncated");
-    if (result.details.kind !== "truncated") return;
+    if (result.details.kind !== "truncated") {
+      return;
+    }
     expect(result.details.truncation.truncatedBy).toBe("budget");
     expect(result.text).toContain("model budget");
     expect(result.text).not.toContain("50KB");
@@ -42,7 +44,9 @@ describe("read page truncation cause", () => {
     const result = page({ content: "a".repeat(60_000), totalLines: 1 });
 
     expect(result.details.kind).toBe("truncated");
-    if (result.details.kind !== "truncated") return;
+    if (result.details.kind !== "truncated") {
+      return;
+    }
     expect(result.details.truncation.truncatedBy).toBe("bytes");
     expect(result.text).toContain("50.0KB limit");
     expect(result.text).not.toContain("model budget");
@@ -58,7 +62,9 @@ describe("read page truncation cause", () => {
     });
 
     expect(result.details.kind).toBe("truncated");
-    if (result.details.kind !== "truncated") return;
+    if (result.details.kind !== "truncated") {
+      return;
+    }
     expect(result.details.truncation.truncatedBy).toBe("lines");
   });
 
