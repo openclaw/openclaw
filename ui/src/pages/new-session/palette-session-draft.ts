@@ -562,6 +562,7 @@ export class PaletteSessionDraft {
       }
     };
     showToast({
+      severity: result.initialRun.status === "rejected" ? "error" : undefined,
       message: `${resolveSessionDisplayName(result.key, row)}: ${status}`,
       actionLabel: t("sessionsView.openSession"),
       onAction: openSession,

@@ -186,7 +186,10 @@ it("retains dirty workspace content when the close confirmation cannot open", as
   expect(readFileDraft(file)?.content).toBe("Unsaved notes");
   expect(save).not.toHaveBeenCalled();
   expect(discard).not.toHaveBeenCalled();
-  expect(showToast).toHaveBeenCalledWith({ message: "Close dialog unavailable" });
+  expect(showToast).toHaveBeenCalledWith({
+    severity: "error",
+    message: "Close dialog unavailable",
+  });
 });
 
 it("keeps reload blocked and retries retained-draft review after preparation failure", async () => {
@@ -200,7 +203,10 @@ it("keeps reload blocked and retries retained-draft review after preparation fai
   expect(toast?.onAction).toBeDefined();
   toast!.onAction!();
   await waitForSolid(() =>
-    expect(showToast).toHaveBeenCalledWith({ message: "Draft review unavailable" }),
+    expect(showToast).toHaveBeenCalledWith({
+      severity: "error",
+      message: "Draft review unavailable",
+    }),
   );
   expect(readFileDraft(file)?.content).toBe("Unsaved notes");
   expect(canReloadControlUiDocument()).toBe(false);
