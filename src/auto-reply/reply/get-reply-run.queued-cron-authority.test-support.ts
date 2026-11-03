@@ -32,12 +32,10 @@ import {
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
 import type { runPreparedReply } from "./get-reply-run.js";
+import { registerQueuedCronFinalEffectCases } from "./get-reply-run.queued-cron-final-effect.test-support.js";
 import { createInboundBody, createSessionBody, ownerParams } from "./get-reply-run.test-support.js";
-import { enqueueFollowupRun, scheduleFollowupDrain, type FollowupRun } from "./queue.js";
-import { clearFollowupQueueForTest, createQueueSettings } from "./queue.test-helpers.js";
-import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
-import { resolveFollowupAbortSignal } from "./queue/types.js";
+import { collectQueuedInputs } from "./queue.collection.test-support.js";
+import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
 
 type OwnerFixture = Parameters<Parameters<typeof withAdminIngress>[0]>[0];
 type Turn = ReturnType<typeof createFollowupTurnTestTurn>;
@@ -48,6 +46,7 @@ export function registerQueuedCronAuthorityCases(harness: {
 }) {
   const state = getFollowupTurnTestState();
   beforeEach(resetFollowupTurnTestState);
+  registerQueuedCronFinalEffectCases({ captureSource, execute, collectQueuedInputs });
 
   type SourceOptions = Partial<Parameters<typeof runPreparedReply>[0]>;
   type OwnerContext = Awaited<ReturnType<OwnerFixture["context"]>>;
@@ -671,47 +670,6 @@ export function registerQueuedCronAuthorityCases(harness: {
       });
     });
   });
-
-  async function collectQueuedInputs(
-    inputs: FollowupRun[],
-    count = 1,
-    beforeDrain?: () => void,
-    onRun?: (queued: FollowupRun) => Promise<void>,
-    settings: Parameters<typeof createQueueSettings>[0] = {},
-  ) {
-    const key = "queued-owner-" + crypto.randomUUID();
-    const errors: unknown[] = [];
-    const result: FollowupRun[] = [];
-    try {
-      for (const input of inputs) {
-        expect(
-          enqueueFollowupRun(key, input, createQueueSettings(settings), "none", undefined, false),
-        ).toBe(true);
-      }
-      beforeDrain?.();
-      scheduleFollowupDrain(key, async (queued) => {
-        result.push(queued);
-        try {
-          if (!resolveFollowupAbortSignal(queued)?.aborted) {
-            await admitFollowupRunLifecycle(queued);
-          }
-          await onRun?.(queued);
-        } catch (error) {
-          errors.push(error);
-        }
-      });
-      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined(), {
-        timeout: 10_000,
-      });
-      if (errors.length > 0) {
-        throw errors[0];
-      }
-      expect(result).toHaveLength(count);
-      return result;
-    } finally {
-      clearFollowupQueueForTest(key);
-    }
-  }
 
   function wireRoundTrip<T>(value: T): T {
     // This intentionally models a wire roundtrip, which cannot retain host capabilities.
