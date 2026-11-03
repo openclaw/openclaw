@@ -135,6 +135,23 @@ describe("Codex reset-credit worker-backed SQLite compare-and-apply ledger", () 
     expect(await rotated.claim("openai:first", 1)).toEqual({ status: "uncertain" });
   });
 
+  it("lets a bounded waiter join one shared result and supports cancellation", async () => {
+    const store = fakeSqliteCas();
+    const ledger = factory(store, Date.now);
+    const claim = await ledger.claim("openai:first", 1);
+    if (claim.status !== "owned") {
+      throw new Error("test expected owned claim");
+    }
+    const joined = ledger.waitForPending({ timeoutMs: 1_000, pollMs: 10 });
+    await ledger.settle("openai:first", claim.attemptId, "restored");
+    expect(await joined).toBe("settled");
+    const controller = new AbortController();
+    controller.abort();
+    expect(await ledger.waitForPending({
+      timeoutMs: 1_000, signal: controller.signal,
+    })).toBe("aborted");
+  });
+
   it("refuses corrupted persistent state instead of resetting spent history", async () => {
     const store = fakeSqliteCas();
     store.setCorrupted();
