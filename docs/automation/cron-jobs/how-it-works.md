@@ -40,6 +40,7 @@ How the Gateway scheduler runs a job, what it keeps between runs, and how a repe
     - Structured execution-denial metadata (including node-host `UNAVAILABLE` wrappers whose nested error starts with `SYSTEM_RUN_DENIED` or `INVALID_REQUEST`) is recognized so a blocked command is not reported as a green run, while ordinary assistant prose is not mistaken for a denial.
     - Run-level agent failures count as job errors even with no reply payload, so model/provider failures increment error counters and trigger failure notifications instead of clearing the job as successful.
     - When a job hits `timeoutSeconds`, the scheduler aborts the run and gives it a short cleanup window. If it does not drain, Gateway-owned cleanup force-clears that run's session ownership before the scheduler records the timeout, so queued chat work is not stuck behind a stale processing session.
+    - Required preflight memory checkpoints and compaction count as active work, not stalled runner setup. They keep the same per-run wall-clock deadline.
     - Setup/startup stalls get a phase-specific timeout (for example `cron: isolated agent setup timed out before runner start` or `cron: isolated agent run stalled before execution start (last phase: context-engine)`). These watchdogs cover embedded and CLI-backed providers even before their external CLI process starts, and are capped independently of long `timeoutSeconds` values so cold-start/auth/context failures surface quickly.
 
   </Accordion>
