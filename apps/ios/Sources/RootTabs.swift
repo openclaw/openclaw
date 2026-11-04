@@ -313,6 +313,7 @@ struct RootTabs: View {
                 .id(self.selectedSidebarDestination.id)
         case .sessions:
             CommandSessionsScreen(
+                dashboardModel: self.sidebarModel,
                 headerSidebarAction: self.sidebarHeaderAction,
                 openChat: { self.selectSidebarDestination(.chat) })
         case .files:
