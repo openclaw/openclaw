@@ -4,7 +4,7 @@ public enum GatewayPersonalIdentityIntent: Sendable, Equatable {
     case bind(bindingId: String)
     case use(bindingId: String, profileId: String, gatewayId: String)
 
-    func signed(at issuedAtMs: Int64) -> SignedGatewayPersonalIdentityIntent {
+    public func signed(at issuedAtMs: Int64) -> SignedGatewayPersonalIdentityIntent {
         switch self {
         case let .bind(bindingId):
             .init(phase: .bind, bindingId: bindingId, profileId: nil, gatewayId: nil, issuedAtMs: issuedAtMs)
@@ -22,7 +22,7 @@ public struct SignedGatewayPersonalIdentityIntent: Sendable, Equatable {
     let gatewayId: String?
     let issuedAtMs: Int64
 
-    var wireValue: [String: AnyCodable] {
+    public var wireValue: [String: AnyCodable] {
         var value: [String: AnyCodable] = [
             "mode": AnyCodable("personal-identity"),
             "provider": AnyCodable("tailscale"),

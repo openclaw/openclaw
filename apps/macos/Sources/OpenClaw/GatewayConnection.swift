@@ -99,6 +99,7 @@ actor GatewayConnection: Observable {
         fileprivate let token: String?
         fileprivate let password: String?
         let tls: GatewayTLSRoute?
+        let enablesPrimaryPersonalIdentity: Bool
         let deviceAuthGatewayID: String?
         let browserSession: GatewayBrowserSession?
         let activationOwnershipFingerprint: String?
@@ -115,6 +116,7 @@ actor GatewayConnection: Observable {
             self.token = endpoint.config.token
             self.password = endpoint.config.password
             self.tls = endpoint.tls
+            self.enablesPrimaryPersonalIdentity = endpoint.enablesPrimaryPersonalIdentity
             self.deviceAuthGatewayID = endpoint.deviceAuthGatewayID
             self.browserSession = endpoint.browserSession
             self.activationOwnershipFingerprint = GatewayConnection.activationOwnershipFingerprint(
@@ -132,6 +134,7 @@ actor GatewayConnection: Observable {
             self.authority == endpoint.routeAuthority &&
                 self.matches(config: endpoint.config) &&
                 GatewayTLSRoute.hasSameConnectionIdentity(self.tls, endpoint.tls) &&
+                self.enablesPrimaryPersonalIdentity == endpoint.enablesPrimaryPersonalIdentity &&
                 self.deviceAuthGatewayID == endpoint.deviceAuthGatewayID &&
                 self.browserSession == endpoint.browserSession
         }
@@ -237,6 +240,7 @@ actor GatewayConnection: Observable {
     private struct ConfiguredConnection {
         let client: GatewayChannelActor
         var endpoint: EndpointSnapshot
+        let personalIdentity: GatewayPersonalIdentityIntent?
         let tlsMetadataProvider: (any GatewayTLSRouteMetadataProviding)?
         let shutdownGeneration: UInt64
         let activationBindingKey: SymmetricKey?
@@ -987,6 +991,12 @@ extension GatewayConnection {
         self.configuredConnection?.tlsMetadataProvider?.effectiveTLSFingerprintSHA256
     }
 
+    func personalIdentityIntent(ifCurrentServerLease lease: ServerLease) async throws -> GatewayPersonalIdentityIntent? {
+        guard await self.isCurrentServerLease(lease), self.serverLeaseMatchesCurrentState(lease)
+        else { throw CancellationError() }
+        return self.configuredConnection?.personalIdentity
+    }
+
     func authSource() async -> GatewayAuthSource? {
         guard let connection = self.configuredConnection else { return nil }
         return await connection.client.authSource()
@@ -1113,6 +1123,7 @@ extension GatewayConnection {
         self.configuredConnection = ConfiguredConnection(
             client: client,
             endpoint: endpoint,
+            personalIdentity: personalIdentity,
             tlsMetadataProvider: sessionBox?.session as? GatewayTLSRouteMetadataProviding,
             shutdownGeneration: shutdownGeneration,
             activationBindingKey: activationBindingKey)

@@ -20,6 +20,7 @@ export type NativeGatewayAuthorization = {
     | { token: string; deviceToken?: never; password?: never }
     | { password: string; token?: never; deviceToken?: never };
   device: NonNullable<ConnectParams["device"]>;
+  personalIdentity?: ConnectParams["personalIdentity"];
 };
 
 export type NativeGatewayConnectAuth = (challenge: {
@@ -72,6 +73,7 @@ function readAuthorization(
   const client = isRecord(result.client) ? result.client : {};
   const device = isRecord(result.device) ? result.device : {};
   const auth = isRecord(result.auth) ? result.auth : {};
+  const personal = result.personalIdentity;
   const id = normalizeGatewayClientId(typeof client.id === "string" ? client.id : undefined);
   const mode = normalizeGatewayClientMode(
     typeof client.mode === "string" ? client.mode : undefined,
@@ -90,6 +92,24 @@ function readAuthorization(
   ) {
     throw new Error("The app returned an invalid Gateway authorization. Reconnect in the app.");
   }
+  if (
+    personal !== undefined &&
+    (!isRecord(personal) ||
+      personal.mode !== "personal-identity" ||
+      personal.provider !== "tailscale" ||
+      personal.phase !== "use" ||
+      typeof personal.bindingId !== "string" ||
+      !personal.bindingId ||
+      personal.bindingId.length > 128 ||
+      typeof personal.profileId !== "string" ||
+      !personal.profileId ||
+      typeof personal.gatewayId !== "string" ||
+      !personal.gatewayId ||
+      personal.gatewayId.length > 128 ||
+      personal.issuedAtMs !== challenge.signedAt)
+  ) {
+    throw new Error("The app returned an invalid Gateway authorization. Reconnect in the app.");
+  }
   return {
     client: {
       id,
@@ -101,6 +121,19 @@ function readAuthorization(
     },
     scopes: result.scopes,
     auth: readNativeCredential(auth),
+    ...(isRecord(personal)
+      ? {
+          personalIdentity: {
+            mode: "personal-identity" as const,
+            provider: "tailscale" as const,
+            phase: "use" as const,
+            bindingId: personal.bindingId as string,
+            profileId: personal.profileId as string,
+            gatewayId: personal.gatewayId as string,
+            issuedAtMs: challenge.signedAt,
+          },
+        }
+      : {}),
     device: {
       id: device.id,
       publicKey: device.publicKey,

@@ -95,6 +95,7 @@ extension DashboardManager {
         }
 
         if mode == .local {
+            guard !AppDefaults.standard.bool(forKey: "gateway.primary.personalIdentityEnabled") else { return nil }
             return try? GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: false)
         }
 
