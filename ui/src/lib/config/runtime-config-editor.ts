@@ -16,6 +16,7 @@ import {
   type ConfigMethod,
 } from "./config-gateway-operations.ts";
 import { canEnsureConfigRead } from "./config-gateway-read.ts";
+import { createConfigSavedNotice } from "./config-saved-notice.ts";
 import {
   agentConfigEntry,
   clearConfigRequestVersions,
@@ -51,7 +52,7 @@ export function createRuntimeConfigEditor(
     !state.configApplying &&
     !writes.hasUnacknowledgedDraftWrite();
   const stopReloadGuard = registerControlUiReloadGuard(canReload, () =>
-    showToast({ message: t("configView.reloadBlocked") }),
+    showToast({ severity: "error", message: t("configView.reloadBlocked") }),
   );
   // Browser reloads and tab closes bypass the managed guard; the draft lives only in memory.
   const stopBeforeUnload =
@@ -72,10 +73,12 @@ export function createRuntimeConfigEditor(
     if (disposed) {
       return;
     }
+    savedNotice.sync();
     for (const listener of listeners) {
       listener(state);
     }
   };
+  const savedNotice = createConfigSavedNotice(state, publish);
   // Bootstrap changes update the capability's fallback config before views read it.
   const stopBootstrap = bootstrap?.subscribe(publish);
   const run = async <T>(task: () => Promise<T>, loadKey?: "config" | "schema"): Promise<T> => {
@@ -254,6 +257,7 @@ export function createRuntimeConfigEditor(
       stopBootstrap?.();
       stopReloadGuard();
       stopBeforeUnload?.();
+      savedNotice.dispose();
       disposed = true;
       writes.dispose();
       listeners.clear();

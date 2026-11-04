@@ -34,7 +34,7 @@ context, and canonical agent/session key. A replacement Gateway must not inherit
 the previous recovery identity. Preserve physical session ID, cursor, and history
 metadata; display names and host aliases cannot establish identity.
 
-Mark the early preview **Saved conversation · reconnecting** and keep it inert:
+Mark the early preview **Reconnecting… · Saved conversation** and keep it inert:
 no sends, approvals, plugin execution, or authenticated media fetches. Normal
 owners may resume existing offline drafting/queuing after mounting; live effects
 still require current Gateway authority. Render through normal sanitization;
@@ -90,8 +90,8 @@ History requests use a cursor that has already arrived, but never wait for
 IndexedDB. A live response retires pending snapshot publication before applying
 its own rows, preserving the existing reconciliation and identity checks.
 
-The header labels retained content as **Saved conversation** alongside connection
-status until live history is available. Remote media and active transcript content
+The floating connection status labels retained content as **Saved conversation**
+alongside connection status until live history is available. Remote media and active transcript content
 wait for the live connection and any pending route validation. Local drafts keep
 their existing image previews and persistence.
 

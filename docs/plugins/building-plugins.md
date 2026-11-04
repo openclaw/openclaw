@@ -462,7 +462,7 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 
 1. Watch [openclaw/openclaw](https://github.com/openclaw/openclaw/releases) releases (`Watch` > `Releases`). Beta tags look like `v2026.3.N-beta.1`. You can also follow [@openclaw](https://x.com/openclaw) on X for release announcements.
 2. Test your plugin against the beta tag as soon as it appears. The window before stable is typically only a few hours.
-3. Post in your plugin's thread in the `plugin-forum` Discord channel ([discord.gg/clawd](https://discord.gg/clawd)) after testing, with either `all good` or what broke. Create a thread if you do not have one yet.
+3. Post in your plugin's thread in the `plugin-forum` Discord channel ([OpenClaw Discord](https://openclaw.ai/discord?from=docs-plugins-building-plugins)) after testing, with either `all good` or what broke. Create a thread if you do not have one yet.
 4. If something breaks, open or update an issue titled `Beta blocker: <plugin-name> - <summary>` and apply the `beta-blocker` label. Link the issue in your thread.
 5. Open a PR to `main` titled `fix(<plugin-id>): beta blocker - <summary>` and link the issue in both the PR and your Discord thread. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation. Blockers with a PR get merged; blockers without one might ship anyway.
 6. Silence means green. Missing the window usually means your fix lands in the next cycle.

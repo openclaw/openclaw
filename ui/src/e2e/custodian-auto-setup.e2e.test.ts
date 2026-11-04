@@ -143,7 +143,7 @@ suite.define(() => {
       const gateway = await install(page, { deferredMethods: ["openclaw.setup.auto"] });
       await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
       const card = page.locator(".custodian-setup");
-      const connecting = card.getByRole("heading", { name: "Connecting your AI..." });
+      const connecting = card.getByRole("heading", { name: "Connecting your AI…" });
       await connecting.waitFor();
       expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
       await capture(page, "pending-automatic-setup", card, [connecting]);
@@ -226,7 +226,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
       const card = page.locator(".custodian-setup");
       const signIn = card.getByRole("button", {
-        name: reuse ? "Use a separate login" : "Sign in with ChatGPT",
+        name: reuse ? "Sign in separately" : "Sign in with ChatGPT",
       });
       await signIn.waitFor();
       const sharedNotice = card.getByText(
@@ -259,7 +259,7 @@ suite.define(() => {
       const selected = card.getByRole("heading", { name: /Using Codex/ });
       await selected.waitFor();
       await sharedNotice.waitFor({ state: "detached" });
-      expect(await card.getByRole("button", { name: "Use a separate login" }).count()).toBe(0);
+      expect(await card.getByRole("button", { name: "Sign in separately" }).count()).toBe(0);
       if (reuse) {
         await capture(page, "separate-codex-login", card, [selected]);
       }

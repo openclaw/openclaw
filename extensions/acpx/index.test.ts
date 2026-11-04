@@ -145,7 +145,7 @@ describe("acpx plugin", () => {
   });
 
   it("detects native programs and applies current enable settings without starting the runtime", async () => {
-    for (const command of ["npx", "opencode", "qwen", "pi-acp", "copilot", "grok"]) {
+    for (const command of ["npx", "opencode", "qwen", "pi-acp", "copilot", "grok", "qodercli"]) {
       nativePrograms.add(command);
     }
     let config: OpenClawPluginApi["config"] = { acp: { allowedAgents: ["codex"] } };
@@ -199,6 +199,13 @@ describe("acpx plugin", () => {
           installation: "installed",
           enabled: true,
         },
+        {
+          id: "qoder",
+          name: "Qoder",
+          runtimeId: "acp-qoder",
+          installation: "installed",
+          enabled: true,
+        },
       ]),
     );
     const opencode = getHarness("opencode");
@@ -222,6 +229,7 @@ describe("acpx plugin", () => {
         kilocode: false,
         copilot: false,
         "grok-build": false,
+        qoder: false,
       },
       agents: { qwen: { command: "npx qwen" } },
     };
@@ -240,6 +248,14 @@ describe("acpx plugin", () => {
     await expect(
       getHarness("grok-build").loadModelCatalog(catalogInput(undefined, config)),
     ).resolves.toEqual({ entries: [] });
+    expect(disabled).toHaveProperty(
+      "agents",
+      expect.arrayContaining([expect.objectContaining({ id: "qoder", enabled: false })]),
+    );
+    await expect(
+      getHarness("qoder").loadModelCatalog(catalogInput(undefined, config)),
+    ).resolves.toEqual({ entries: [] });
+    expect(inspectAgentModels).not.toHaveBeenCalled();
     expect(config.acp?.allowedAgents).toEqual(["codex"]);
     expect(createServiceMock).not.toHaveBeenCalled();
   });
@@ -248,6 +264,7 @@ describe("acpx plugin", () => {
     { agent: "opencode", provider: "acp-opencode", lifecycle: "enabled" },
     { agent: "opencode", provider: "acp-opencode", lifecycle: "disposed" },
     { agent: "grok-build", provider: "acp-grok-build", lifecycle: "enabled" },
+    { agent: "qoder", provider: "acp-qoder", lifecycle: "enabled" },
   ] as const)(
     "inspects $agent's real native catalog without runtime state when $lifecycle",
     async ({ agent, provider, lifecycle }, { signal }) => {

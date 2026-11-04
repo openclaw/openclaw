@@ -40,6 +40,7 @@ import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { git } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
+import { copyProvisionedPaths } from "./provisioned-copy.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
 import * as provisionedSnapshots from "./provisioned-snapshot-store.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
@@ -235,7 +236,7 @@ describe("ManagedWorktreeService provisioned state", () => {
     ).toHaveLength(0);
     expect(
       stats.mock.calls.filter(([target]) => target === path.join(dependencies, "settings.local")),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     expect(await fs.readFile(path.join(destination, ".env.local"), "utf8")).toBe(
       "destination-owned\n",
     );
@@ -248,7 +249,72 @@ describe("ManagedWorktreeService provisioned state", () => {
         ? Promise.reject(unreadable)
         : lstat(target, options),
     );
-    await expect(provisionIncludedFiles(repo, destination)).resolves.toEqual([]);
+    await expect(
+      copyProvisionedPaths(repo, destination, ["dependencies/package/settings.local"], {}),
+    ).resolves.toEqual([]);
+  });
+
+  it("snapshots user work without storing provisioned dependency bytes", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "node_modules/\n.env.local\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "node_modules/\n.env.local\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "include dependencies and local configuration");
+    const dependencyPaths = ["node_modules/pkg/data", "packages/app/node_modules/pkg/data"];
+    for (const relative of dependencyPaths) {
+      await fs.mkdir(path.dirname(path.join(repo, relative)), { recursive: true });
+      await fs.writeFile(path.join(repo, relative), Buffer.alloc(2 * 1024 * 1024, 42));
+    }
+    await fs.writeFile(path.join(repo, ".env.local"), "synthetic original\n");
+    const created = await service.create({
+      repoRoot: repo,
+      name: "dependency-snapshot",
+      baseRef: "HEAD",
+    });
+    expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([
+      ".env.local",
+      ...dependencyPaths,
+    ]);
+    await fs.writeFile(path.join(created.path, "README.md"), "tracked edit\n");
+    await fs.writeFile(path.join(created.path, "user.txt"), "untracked work\n");
+    await fs.writeFile(
+      path.join(created.path, "node_modules/pkg/user.txt"),
+      "tracked dependency edit\n",
+    );
+    await git(created.path, "add", "-f", "node_modules/pkg/user.txt");
+    await fs.writeFile(path.join(created.path, ".env.local"), "synthetic edited\n");
+    const removed = await service.remove({
+      id: created.id,
+      reason: "dependency snapshot regression",
+    });
+    expect(removed.removed).toBe(true);
+    expect(await getRegistryWorktreeProvisionedState(env, created.id)).toEqual([
+      expect.objectContaining({ path: ".env.local", chunks: 1 }),
+    ]);
+    for (const relative of dependencyPaths) {
+      expect(
+        await getRegistryWorktreeProvisionedChunk(env, {
+          worktreeId: created.id,
+          path: relative,
+          chunkIndex: 0,
+        }),
+      ).toBeUndefined();
+    }
+    const restored = await service.restore({ id: created.id });
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("tracked edit\n");
+    expect(await fs.readFile(path.join(restored.path, "user.txt"), "utf8")).toBe(
+      "untracked work\n",
+    );
+    expect(await fs.readFile(path.join(restored.path, "node_modules/pkg/user.txt"), "utf8")).toBe(
+      "tracked dependency edit\n",
+    );
+    expect(await fs.readFile(path.join(restored.path, ".env.local"), "utf8")).toBe(
+      "synthetic edited\n",
+    );
+    for (const relative of dependencyPaths) {
+      await expect(fs.stat(path.join(restored.path, relative))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
   });
 
   it("preserves modification times when provisioning prepared build inputs and outputs", async () => {

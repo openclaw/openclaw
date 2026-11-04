@@ -17,7 +17,7 @@ describe("applyMemoryWikiMutation", () => {
   it.each([false, true])(
     "persists metadata, indexes and human blocks (update: %s)",
     async (update) => {
-      const { config, page, read } = await createVault();
+      const { config, write, read } = await createVault();
       const kind = update ? "entity" : "synthesis";
       const title = update ? "Alpha" : synthesisInput.title;
       const id = update ? "entity.alpha" : "synthesis.alpha-synthesis";
@@ -43,11 +43,9 @@ describe("applyMemoryWikiMutation", () => {
         questions: ["Is Alpha still active?"],
       };
       if (update) {
-        await page(
-          target,
-          { pageType: kind, id, title, sourceIds: ["source.old"], confidence: 0.3 },
-          "# Alpha\n\n## Notes\n<!-- openclaw:human:start -->\nkeep this note\n<!-- openclaw:human:end -->\n",
-        );
+        const original =
+          "---\n# provenance: imported from the OKF export\npageType: entity\nid: entity.alpha\ntitle: Alpha\nsourceIds: [source.old]\nconfidence: 0.3\nbuild: 00123\nbig: 12345678901234567890\ntags:\n  - alpha # team tag\n---\n\n# Alpha\n\n## Notes\n<!-- openclaw:human:start -->\nkeep this note\n<!-- openclaw:human:end -->\n";
+        await write(target, original);
       }
       const result = await mutate(config, {
         ...(update
@@ -61,7 +59,8 @@ describe("applyMemoryWikiMutation", () => {
         pageId: id,
         compile: { pageCounts: { [kind]: 1 } },
       });
-      const parsed = parseWikiMarkdown(await read(target));
+      const raw = await read(target);
+      const parsed = parseWikiMarkdown(raw);
       expect(parsed.frontmatter).toMatchObject({
         pageType: kind,
         id,
@@ -76,6 +75,10 @@ describe("applyMemoryWikiMutation", () => {
         update ? "[Alpha](alpha.md)" : "[Alpha Synthesis](syntheses/alpha-synthesis.md)",
       );
       if (update) {
+        expect(raw).toContain("# provenance: imported from the OKF export\n");
+        expect(raw).toContain(
+          "build: 00123\nbig: 12345678901234567890\ntags:\n  - alpha # team tag\n",
+        );
         expect(parsed.frontmatter).not.toHaveProperty("confidence");
         expect(parsed.body).toContain("keep this note");
       } else {
@@ -107,13 +110,8 @@ describe("applyMemoryWikiMutation", () => {
     const target = "syntheses/conflicted.md";
     const original = "---\n" + frontmatter + "\n---\n\n# Conflicted\n\nKeep this body.";
     await write(target, original);
-    await expect(
-      mutate(config, {
-        op: "create_synthesis",
-        ...synthesisInput,
-        title: "Conflicted",
-      }),
-    ).rejects.toThrow(error);
+    const mutation = { op: "create_synthesis", ...synthesisInput, title: "Conflicted" };
+    await expect(mutate(config, mutation)).rejects.toThrow(error);
     await expect(read(target)).resolves.toBe(original);
   });
 

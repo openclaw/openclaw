@@ -29,6 +29,7 @@ import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
@@ -91,7 +92,7 @@ export function ListView(props: CronProps) {
         <Errored
           fallback={(error, reset) => (
             <div class="cron-error-banner" role="alert">
-              {String(error())}
+              {formatUiError(error())}
               <button
                 class="btn btn--sm"
                 onClick={() => {

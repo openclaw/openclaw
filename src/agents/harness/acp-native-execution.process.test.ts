@@ -118,6 +118,16 @@ async function peerStates(directory: string): Promise<PeerState[]> {
 it.each([
   ["opencode", "OpenCode", { tools: { profile: "messaging" } }],
   ["grok-build", "Grok Build", { tools: { profile: "coding" } }],
+  [
+    "qoder",
+    "Qoder",
+    {
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["group:fs", "group:runtime", "group:web", "group:media"],
+      },
+    },
+  ],
 ] satisfies Array<[string, string, OpenClawConfig]>)(
   "rejects %s's restricted native capabilities before effects",
   async (agent, label, config) => {
@@ -143,6 +153,7 @@ it.each([
 it.each([
   ["kilocode", { tools: { profile: "coding", alsoAllow: ["message"] } }],
   ["grok-build", { tools: { profile: "coding", alsoAllow: ["pdf"] } }],
+  ["qoder", { tools: { profile: "full" } }],
 ] satisfies Array<[string, OpenClawConfig]>)(
   "admits %s's allowed native capabilities and commits its transcript",
   async (agent, config) => {
