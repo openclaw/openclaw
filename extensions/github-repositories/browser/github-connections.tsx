@@ -334,7 +334,11 @@ export function GitHubConnections(props: {
                   request={view().canAdmin ? systemView() : personalView()}
                 />,
                 view().systemIdentity?.account?.login,
-                t("githubConnections.systemUse"),
+                t(
+                  view().systemIdentity?.credentialKind === "app-installation"
+                    ? "agentTools.githubKindAppInstallation"
+                    : "githubConnections.systemUse",
+                ),
               )}
               control={
                 view().canAdmin ? (

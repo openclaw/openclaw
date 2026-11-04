@@ -542,3 +542,22 @@ it("opens setup under the connection it changes, with that connection's own acti
   ui.button("Close").click();
   await waitForFast(() => expect(ui.query("[data-github-setup]")).toBeNull());
 });
+
+it("labels a read-only App installation without promising command execution or publication", async () => {
+  const ui = mount(
+    ["operator.admin"],
+    "owner",
+    statusRequest({
+      ...system,
+      credentialKind: "app-installation",
+      account: { login: "reader[bot]" },
+      refreshState: "not_applicable",
+    }),
+  );
+  await ui.waitText(["@reader[bot]"]);
+  expectText(
+    ui.row("system"),
+    ["GitHub App installation"],
+    ["Agent commands, dashboards, publishing"],
+  );
+});
