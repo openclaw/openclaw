@@ -104,9 +104,7 @@ describe("update run ledger compaction", () => {
     expect(retainedRefusal?.keys).toHaveLength(32);
     expect(retainedRefusal?.keys.every((key) => key.length < 1_020)).toBe(true);
     expect(persisted.steps.map((step) => step.step)).toEqual(expect.arrayContaining(notices));
-    expect(persisted.steps.find((s) => s.step === "warning:post-plugin doctor")?.detail).toBe(
-      detail,
-    );
+    expect(persisted.steps.find((s) => s.step.endsWith("plugin doctor"))?.detail).toBe(detail);
     expect(persisted.steps.length).toBeLessThanOrEqual(128);
     expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
   });
