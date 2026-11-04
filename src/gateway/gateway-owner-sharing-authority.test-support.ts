@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { assert, expect } from "vitest";
+import { expect } from "vitest";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";

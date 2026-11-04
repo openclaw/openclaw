@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { assert, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import {
   createOpenAiResponsesModelConfig,

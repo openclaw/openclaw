@@ -1,4 +1,5 @@
-import { assert, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import { expect, it } from "vitest";
 import { isLiveTestEnabled } from "../agents/live-test-config.js";
 import { proveOwnerSharingThroughCli } from "./gateway-owner-sharing-authority.test-support.js";
 import { sessionKey } from "./server-methods/sessions-github-read.test-support.js";

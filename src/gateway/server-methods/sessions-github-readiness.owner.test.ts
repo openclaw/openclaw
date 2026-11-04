@@ -1,4 +1,5 @@
-import { afterEach, assert, expect, it, vi } from "vitest";
+import assert from "node:assert/strict";
+import { afterEach, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
