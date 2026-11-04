@@ -283,6 +283,7 @@ export const SessionGitHubPublicationFailedSchema = closedObject({
     "not_github",
     "no_changes",
     "push_rejected",
+    "workflow_changes_forbidden",
     "github_rejected",
     "unavailable",
   ]),

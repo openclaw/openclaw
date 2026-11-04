@@ -55,8 +55,10 @@ const createFixture = async (baseFiles: Record<string, string> = {}, requestedRe
 };
 const rejected = {
   status: "failed",
-  code: "github_rejected",
-  nextAction: expect.stringContaining("Ask a maintainer"),
+  code: "workflow_changes_forbidden",
+  nextAction: expect.stringMatching(
+    /Ask a maintainer.*contributor-owned fork.*exclude workflow edits/u,
+  ),
 };
 const writes = () => mocks.runCommand.mock.calls.filter(([args]) => args.includes("POST"));
 const treeReads = () =>

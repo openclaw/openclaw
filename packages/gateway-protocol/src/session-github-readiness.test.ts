@@ -14,6 +14,7 @@ it.each([
     headCommit: "a".repeat(40),
   },
   { status: "failed", code: "unavailable" },
+  { status: "failed", code: "workflow_changes_forbidden" },
 ])("closes the $status readiness receipt in source and compiled validation", (fields) => {
   const receipt = { requestId: "existing-request", ...fields };
   const result = {

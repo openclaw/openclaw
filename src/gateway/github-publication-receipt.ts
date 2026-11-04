@@ -48,8 +48,7 @@ export function assertReadableSharedGitHubPublication(
     !["requested", "publishing", "published", "failed"].includes(row.status) ||
     (row.status === "published" &&
       (!row.pull_request_url || !row.repository || !row.branch || !row.head_commit)) ||
-    (row.status === "failed" &&
-      (!row.error_code || !PUBLICATION_FAILURE_CODES.has(row.error_code) || !row.next_action))
+    (row.status === "failed" && (!row.error_code || !row.next_action))
   ) {
     throw new Error("Shared GitHub publication receipt is corrupt.");
   }
