@@ -193,7 +193,7 @@ export class ContinuationForest {
   readonly stopped = new Map<string, string>();
   readonly adoptions: Adoption[] = [];
   readonly adoptionCounts = new Map<string, number>();
-  /** Every block a head adopted (adopt()), with its room and time. */
+  /** Every block a head adopted, with its room and time. */
   readonly adoptedBlocks: Array<{ sessionKey: string; text: string; at: number }> = [];
   readonly wakes: Array<{ sessionKey: string; deliveryIds: readonly string[] }> = [];
   /** Durable rows a head's turn adopted and acknowledged. */
@@ -226,7 +226,11 @@ export class ContinuationForest {
   readonly runners = new Map<string, AnnexElection[]>();
   /** Rooms whose turns run the real reply owner (runsRealReplyOwner). */
   readonly realReplyRooms = new Set<string>();
-  /** The turns their provider ran, in order: who took each (a wake's election, or a user). */
+  /**
+   * The turns their provider ran, in order: who took each (a wake's election, or a user). The
+   * oracle counts what the world's own turns adopt; what a real reply owner's turn drains it does
+   * not see.
+   */
   readonly providerTurns: Array<{ sessionKey: string; who: string; at: number }> = [];
   /** The Gateway dies as the work dispatcher writes this wake's `mark` (crashMidWake). */
   dying: { flowId: string; mark: WorkMark; died: () => void } | undefined;
@@ -778,24 +782,12 @@ export class ContinuationForest {
       deliveries: adoption.managedDeliveries.values(),
       persistedMessage: { __openclaw: { sessionDeliveryAckIds: ackIds } },
     });
-    const adopted = this.adopt(
-      sessionKey,
-      adoption.blocks.map((block) => block.text),
-    );
-    this.time("turnMs", started);
-    return adopted;
-  }
-
-  /**
-   * A head's turn took these texts into its prompt: the world's own turns their adopted blocks, a
-   * real reply owner's turn its whole prompt (from its provider). Returns the reports among them.
-   */
-  adopt(sessionKey: string, texts: readonly string[]): number {
     const head = this.head(sessionKey) ?? "missing";
+    this.time("turnMs", started);
     let count = 0;
-    for (const text of texts) {
-      this.adoptedBlocks.push({ sessionKey, text, at: Date.now() });
-      for (const match of text.matchAll(REPORT_TAG)) {
+    for (const block of adoption.blocks) {
+      this.adoptedBlocks.push({ sessionKey, text: block.text, at: Date.now() });
+      for (const match of block.text.matchAll(REPORT_TAG)) {
         this.noteAdoption(sessionKey, match[1]!, head);
         count += 1;
       }
