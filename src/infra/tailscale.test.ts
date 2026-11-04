@@ -226,12 +226,9 @@ describe("tailscale helpers", () => {
       expect(info).toHaveBeenCalledTimes(1);
     });
   });
-
   it.runIf(process.platform !== "win32").each([
     ["password", 18791, /sudo: a password is required[\s\S]*sudo tailscale set --operator=\$USER/],
     ["conflict", 18789, "ownership OpenClaw cannot prove; it was not modified"],
-    // Tailscaled prints this after a restart; it must reach the sudo fallback like the
-    // other permission wordings instead of failing the managed Serve claim.
     ["must-be-root", 18791, /sudo: a password is required/],
   ] as const)("preserves %s diagnostics", async (mode, port, diagnostic) => {
     useTailscaleSudoFixture(mode);
