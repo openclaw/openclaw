@@ -95,7 +95,10 @@ export function TextSection(
                           label: t("configView.appearance.fonts.themeDefault"),
                           description: t("configView.appearance.fonts.themeFace", {
                             theme: props.presentedTheme.label,
-                            face: TYPEFACES[face()].label,
+                            face:
+                              face() === "system"
+                                ? t("configView.appearance.fonts.system")
+                                : TYPEFACES[face()].label,
                           }),
                           labelStyle: `font-family: ${TYPEFACES[face()].stack}`,
                         },

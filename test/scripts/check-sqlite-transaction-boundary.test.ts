@@ -59,6 +59,23 @@ it("rejects local async function references passed as callbacks", () => {
   ]);
 });
 
+it.each([
+  "runPostgresTransactionSync",
+  "runSqliteReservedTransactionSync",
+  "runSqliteDeferredTransactionSync",
+  "runSqliteReadSnapshotSync",
+  "runSqliteSingleStatementSync",
+  "runSqliteWorkerTransactionSync",
+])("rejects async callbacks through %s, including aliases and references", (name) => {
+  check(`
+        import { ${name} as transact } from "./transaction.js";
+        async function writeRows() {}
+        ${name}(db, async () => undefined);
+        transact(db, writeRows);
+        ${name}(db, () => 42);
+      `).toEqual([asyncCallback(4, name), asyncCallback(5, name)]);
+});
+
 it("tracks aliases of synchronous transaction imports", () => {
   check(`
         import { runSqliteImmediateTransactionSync as transact } from "./sqlite-transaction.js";
@@ -69,6 +86,7 @@ it("tracks aliases of synchronous transaction imports", () => {
 it("allows asynchronous preparation followed by a synchronous commit callback", () => {
   check(`
         const prepared = await prepareMutation();
+        await runSqliteImmediateTransaction(db, async () => () => apply(prepared));
         runOpenClawAgentWriteTransaction((database) => {
           validate(database, prepared.expected);
           apply(database, prepared.patch);
