@@ -216,6 +216,71 @@ it("retries an unclaimed or proven rolled-back creation at the same key, but nev
   await retry.complete(() => {});
 });
 
+it("upgrades a persisted owned snapshot through refresh, release, and one destination", async () => {
+  const { store, keyedStore, close } = await persistentBeamTestStore();
+  const releases: Array<() => void> = [];
+  try {
+    // Pre-handoff receivers stored owned snapshots without generation or binding fields.
+    const upload = sampleUpload();
+    const original = {
+      ...upload,
+      publisherProfileId: "original-publisher",
+      uploaderProfileId: "original-publisher",
+      createdAt: 50,
+      receivedAt: 100,
+    };
+    await keyedStore.register(upload.beamId, original);
+    const catalog = createBeamSessionCatalog(store);
+    const params = {
+      hostId: "gateway",
+      threadId: upload.beamId,
+      agentId: "main",
+      assertCurrent() {},
+    };
+    expect((await catalog.list({ agentId: "main" }))[0]?.sessions[0]).toMatchObject({
+      threadId: upload.beamId,
+      canContinue: false,
+    });
+    expect((await catalog.read(params)).items).toHaveLength(upload.items.length);
+    expect(await catalog.resolveGatewayConversation!(params)).toBeUndefined();
+    await expect(catalog.copyToGatewaySession!(params)).rejects.toThrow("source still owns");
+    expect(await keyedStore.lookup(upload.beamId)).toEqual(original);
+
+    const receipt = {
+      ...staffReceipt(200),
+      publisher: { kind: "guest" as const, profileId: "original-publisher" },
+    };
+    const published = await store.upload(upload, receipt);
+    expect(published).toMatchObject({ kind: "published", applied: true, id: expect.any(String) });
+    const refreshed = (await store.get(upload.beamId))!;
+    expect(refreshed).toMatchObject({
+      ...original,
+      receivedAt: 200,
+      publicationId: expect.any(String),
+    });
+    expect(await store.upload({ ...upload, handoffId: refreshed.publicationId }, receipt)).toEqual({
+      kind: "handoff",
+      id: refreshed.publicationId,
+      accepted: true,
+    });
+    const first = (await catalog.copyToGatewaySession!(params)).continuation!;
+    releases.push(first.release);
+    expect(await first.beginCreate(() => {})).toBe(true);
+    await first.complete(() => {});
+    const reopened = (await createBeamSessionCatalog(store).copyToGatewaySession!(params))
+      .continuation!;
+    releases.push(reopened.release);
+    expect(reopened.reservedNow).toBe(false);
+    expect(reopened.sessionKey).toBe(first.sessionKey);
+    expect((await store.get(upload.beamId))?.createdAt).toBe(original.createdAt);
+  } finally {
+    for (const release of releases) {
+      release();
+    }
+    await close();
+  }
+});
+
 it.each(["complete", "rollback"] as const)(
   "settles an exact %s claim after snapshot removal without restoring it",
   async (action) => {

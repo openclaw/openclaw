@@ -34,14 +34,13 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
 
   protected async continueCatalogSession(key: CatalogSessionKey) {
     const scope = this.captureConnectionScope();
-    const state = scope?.state;
-    const client = scope?.client;
-    const draft = state?.chatMessage.trim() ?? "";
     // Attachments count as composed content: an image-only continuation must
     // send, not silently no-op while the send button looks live.
-    if (!scope || !state || !client || !this.history.catalogSession?.canContinue) {
+    if (!scope || !this.history.catalogSession?.canContinue) {
       return;
     }
+    const { state, client } = scope;
+    const draft = state.chatMessage.trim();
     const attachments = cloneChatAttachmentsForIndependentOwner(state.chatAttachments);
     if (!draft && attachments.length === 0) {
       return;
@@ -59,16 +58,6 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       state.sessionKey === sourceSessionKey &&
       resolveChatAgentId(state) === sourceAgentId;
     state.chatSending = true;
-    const releaseStaleContinuation = () => {
-      if (this.activeCatalogContinuation !== continuation) {
-        return;
-      }
-      this.activeCatalogContinuation = null;
-      if (state.chatSendingScopeKey != null || !state.chatSending) {
-        return;
-      }
-      state.chatSending = false;
-    };
     try {
       const { continueCapturedCatalogSession } =
         await import("./chat-pane-catalog-continuation.runtime.ts");
@@ -91,7 +80,12 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     } finally {
       // Loading and handoff can yield to a newer continuation or scoped send.
       // Only the captured token may release its own unscoped sending flag.
-      releaseStaleContinuation();
+      if (this.activeCatalogContinuation === continuation) {
+        this.activeCatalogContinuation = null;
+        if (state.chatSendingScopeKey == null && state.chatSending) {
+          state.chatSending = false;
+        }
+      }
     }
   }
 
