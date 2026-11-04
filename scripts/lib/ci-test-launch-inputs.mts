@@ -53,18 +53,29 @@ export function writeCiTestLaunchInputs(options: {
     }
     const baseRevision = git("rev-parse", "--verify", `${base}^{commit}`).trim();
     const baseTree = git("rev-parse", "--verify", `${base}^{tree}`).trim();
-    const fields = git("diff", "--name-status", "-z", "--find-renames", baseRevision, revision, "--")
-      .split("\0");
+    const fields = git(
+      "diff",
+      "--name-status",
+      "-z",
+      "--find-renames",
+      baseRevision,
+      revision,
+      "--",
+    ).split("\0");
     if (fields.pop() !== "") {
       throw new Error("Incomplete comparison diff");
     }
     const changes: Change[] = [];
-    for (let index = 0; index < fields.length; ) {
+    for (let index = 0; index < fields.length;) {
       const status = fields[index++] ?? "";
       const first = fields[index++] ?? "";
       const renamed = /^R\d{1,3}$/.test(status);
       const file = renamed ? (fields[index++] ?? "") : first;
-      if (!/^(?:[ADMTUXB]|R\d{1,3})$/.test(status) || !isObservationPath(first) || !isObservationPath(file)) {
+      if (
+        !/^(?:[ADMTUXB]|R\d{1,3})$/.test(status) ||
+        !isObservationPath(first) ||
+        !isObservationPath(file)
+      ) {
         throw new Error("Invalid comparison path");
       }
       changes.push({ status, path: file, ...(renamed ? { previousPath: first } : {}) });
@@ -88,7 +99,11 @@ export function writeCiTestLaunchInputs(options: {
     recordedAt: new Date().toISOString(),
     source,
     comparison,
-    selection: { runtime: options.runtime, argsDigest: hash(JSON.stringify(options.args)), includes },
+    selection: {
+      runtime: options.runtime,
+      argsDigest: hash(JSON.stringify(options.args)),
+      includes,
+    },
     mode: "shadow",
     fallbackReasons: [...new Set(fallbackReasons)],
   };

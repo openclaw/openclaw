@@ -71,7 +71,17 @@ describe("CI observation export", () => {
     };
     const commit = () => {
       git("add", ".");
-      git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture");
+      git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        "fixture",
+      );
     };
     try {
       git("init", "-q");
@@ -82,22 +92,41 @@ describe("CI observation export", () => {
       renameSync(path.join(root, "before.ts"), path.join(root, "after\tname.ts"));
       rmSync(path.join(root, "deleted.ts"));
       commit();
-      const options = { directory, repositoryRoot: root, runtime: "node", args: ["config.ts"], env: { CHECKOUT_BASE_SHA: base, GITHUB_SHA: "f".repeat(40) } };
+      const options = {
+        directory,
+        repositoryRoot: root,
+        runtime: "node",
+        args: ["config.ts"],
+        env: { CHECKOUT_BASE_SHA: base, GITHUB_SHA: "f".repeat(40) },
+      };
       const read = () => JSON.parse(readFileSync(path.join(directory, "launch.json"), "utf8"));
       writeCiTestLaunchInputs(options);
       expect(read()).toMatchObject({
-        source: { revision: git("rev-parse", "HEAD"), tree: git("rev-parse", "HEAD^{tree}"), clean: true },
-        comparison: { revision: base, changes: [
-          { status: "R100", path: "after\tname.ts", previousPath: "before.ts" },
-          { status: "D", path: "deleted.ts" },
-        ] },
+        source: {
+          revision: git("rev-parse", "HEAD"),
+          tree: git("rev-parse", "HEAD^{tree}"),
+          clean: true,
+        },
+        comparison: {
+          revision: base,
+          changes: [
+            { status: "R100", path: "after\tname.ts", previousPath: "before.ts" },
+            { status: "D", path: "deleted.ts" },
+          ],
+        },
         fallbackReasons: ["no-prior-snapshot"],
       });
       writeFileSync(path.join(root, "untracked.ts"), "export {};");
       writeCiTestLaunchInputs(options);
-      expect(read()).toMatchObject({ source: { clean: false }, fallbackReasons: ["no-prior-snapshot", "dirty-checkout"] });
+      expect(read()).toMatchObject({
+        source: { clean: false },
+        fallbackReasons: ["no-prior-snapshot", "dirty-checkout"],
+      });
       writeCiTestLaunchInputs({ ...options, env: {} });
-      expect(read()).toMatchObject({ comparison: null, fallbackReasons: expect.arrayContaining(["comparison-unavailable"]) });
+      expect(read()).toMatchObject({
+        comparison: null,
+        fallbackReasons: expect.arrayContaining(["comparison-unavailable"]),
+      });
       expect(readFileSync(path.join(directory, "launch.json"), "utf8")).not.toContain(directory);
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -117,8 +146,16 @@ describe("CI observation export", () => {
         const configuration = { pool: "forks", isolate: false };
         writeFileSync(configFile, "export default {};");
         writeFileSync(includeFile, file.file);
-        writeCiTestLaunchInputs({ directory, repositoryRoot: process.cwd(), runtime: "bun", args: [], env: {} });
-        const launchHash = createHash("sha256").update(readFileSync(path.join(directory, "launch.json"))).digest("hex");
+        writeCiTestLaunchInputs({
+          directory,
+          repositoryRoot: process.cwd(),
+          runtime: "bun",
+          args: [],
+          env: {},
+        });
+        const launchHash = createHash("sha256")
+          .update(readFileSync(path.join(directory, "launch.json")))
+          .digest("hex");
         const capture = createCiTestObservationCapture({
           repositoryRoot: process.cwd(),
           cacheDirectory,
