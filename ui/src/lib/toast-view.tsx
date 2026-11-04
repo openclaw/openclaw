@@ -108,13 +108,15 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
   const lane = (): ToastLane => props.entry.lane;
   const dismiss = (reason: "action" | "dismiss") => props.owner.dismiss(props.entry.id, reason);
   const content = createMemo(() => toast().message);
+  const hasAction = () => Boolean(toast().actionLabel && toast().onAction);
   const [singleRow, setSingleRow] = createSignal(false);
   let contentElement!: HTMLDivElement;
   let bodyElement!: HTMLDivElement;
   let messageElement!: HTMLSpanElement;
+  let actionElement: HTMLAnchorElement | HTMLButtonElement | undefined;
   onSettled(() => {
     const measure = () => {
-      const action = contentElement.querySelector<HTMLElement>(".app-toast__action");
+      const action = hasAction() ? actionElement : undefined;
       const titleHeight = messageElement.offsetHeight;
       // Measure the contents, not the card: padding must not feed back into the
       // decision, and collapsed stack cards borrow the newest card's height.
@@ -159,7 +161,7 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
           "app-toast--error": toast().severity === "error",
           "app-toast--progress": toast().severity === "progress",
           "app-toast--avatar": Boolean(toast().avatar),
-          "app-toast--action": Boolean(toast().actionLabel && toast().onAction),
+          "app-toast--action": hasAction(),
           "app-toast--single-row": !copy().description && singleRow(),
         },
       ]}
@@ -238,9 +240,10 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
             <span class="app-toast__description">{formatUiExternalText(copy().description)}</span>
           ) : undefined}
         </div>
-        {toast().actionLabel && toast().onAction ? (
+        {hasAction() ? (
           toast().actionHref ? (
             <a
+              ref={(element) => (actionElement = element)}
               class={["app-toast__action", { "app-toast__action--primary": toast().actionPrimary }]}
               href={toast().actionHref}
               onClick={(event) => {
@@ -257,6 +260,7 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
             </a>
           ) : (
             <button
+              ref={(element) => (actionElement = element)}
               type="button"
               class={["app-toast__action", { "app-toast__action--primary": toast().actionPrimary }]}
               onClick={() => {
