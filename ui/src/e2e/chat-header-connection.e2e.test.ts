@@ -179,7 +179,12 @@ suite.define(() => {
               onTop: hit !== null && element.contains(hit),
               lanesBelow:
                 lanes.length > 0 &&
-                lanes.every((lane) => lane.getBoundingClientRect().top >= indicator.bottom),
+                lanes.every(
+                  (lane) =>
+                    lane.getBoundingClientRect().top +
+                      Number.parseFloat(getComputedStyle(lane).paddingTop) >=
+                    indicator.bottom,
+                ),
             };
           }),
         ).toEqual({ belowHeader: true, centerOffset: 0, onTop: true, lanesBelow: true });

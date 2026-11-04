@@ -18,10 +18,7 @@ openclaw-chat-details[mobile] {
 /* Notices and suggestions share the gutter; Details lives in the pane header. */
 .chat-gutter-stack--details {
   width: calc(100% - 28px);
-  max-height: calc(
-    100cqh - var(--chat-mobile-pane-header-height, 0px) - var(--chat-floating-status-offset, 0px) -
-      20px
-  );
+  max-height: calc(100cqh - var(--chat-mobile-pane-header-height, 0px) - 20px);
   grid-template-rows: auto minmax(0, 1fr);
 }
 

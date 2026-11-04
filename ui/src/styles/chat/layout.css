@@ -428,9 +428,7 @@ openclaw-pending-session-create {
 .chat-topbar-notices {
   position: absolute;
   z-index: 24;
-  top: calc(
-    var(--chat-mobile-pane-header-height, 0px) + var(--chat-floating-status-offset, 0px) + 8px
-  );
+  top: calc(var(--chat-mobile-pane-header-height, 0px) + 8px);
   left: 50%;
   display: flex;
   align-items: center;
@@ -440,6 +438,12 @@ openclaw-pending-session-create {
   max-width: min(34rem, calc(100% - 104px));
   transform: translateX(-50%);
   pointer-events: none;
+}
+
+/* Clear the floating connection indicator without extending the bounded gutter. */
+.sidebar-region:has(> .sidebar-region__header .chat-pane__connection)
+  :is(.chat-gutter-stack, .chat-main__conversation-column > .chat-topbar-notices) {
+  padding-top: 38px;
 }
 
 .chat-topbar-notices:empty {
@@ -1612,9 +1616,7 @@ openclaw-chat-video-player {
 .chat-gutter-stack {
   position: absolute;
   z-index: 24;
-  top: calc(
-    var(--chat-mobile-pane-header-height, 0px) + var(--chat-floating-status-offset, 0px) + 10px
-  );
+  top: calc(var(--chat-mobile-pane-header-height, 0px) + 10px);
   right: 14px;
   display: grid;
   width: min(450px, calc(100% - 28px));

@@ -410,17 +410,6 @@ div.chat-thread:where(.chat-thread--annotations) {
   justify-self: stretch;
 }
 
-.chat-pane__connection-slot {
-  /* Zero intrinsic width keeps feedback out of header sizing; the indicator floats below. */
-  flex: 1 1 0;
-  width: 0;
-}
-
-/* Pane notices and suggestions start below the floating connection indicator. */
-.sidebar-region:has(> .sidebar-region__header .chat-pane__connection) {
-  --chat-floating-status-offset: 38px;
-}
-
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__identity-actions {
   display: flex;
   flex: 0 0 auto;
@@ -655,11 +644,10 @@ div.chat-thread:where(.chat-thread--annotations) {
     align-items: center;
     gap: 16px;
     height: 30px;
-    max-width: min(34rem, calc(100% - 24px));
+    max-width: calc(100% - 24px);
     padding-inline: 10px;
     border-radius: var(--radius-full);
     background: color-mix(in srgb, var(--warn) 12%, var(--popover));
-    box-shadow: var(--shadow-sm);
     color: var(--warn);
     transform: translateX(-50%);
     font-size: 12px;
@@ -677,10 +665,6 @@ div.chat-thread:where(.chat-thread--annotations) {
     display: inline-flex;
     width: 16px;
     height: 16px;
-  }
-
-  & .chat-pane__connection-icon--busy {
-    animation: btn-spinner-spin 900ms linear infinite;
   }
 
   & .chat-pane__connection-retry {
@@ -704,12 +688,6 @@ div.chat-thread:where(.chat-thread--annotations) {
     width: 1px;
     height: 12px;
     background: color-mix(in srgb, var(--muted) 35%, transparent);
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    & .chat-pane__connection-icon--busy {
-      animation: none;
-    }
   }
 }
 
