@@ -341,8 +341,8 @@ it.each([
       expect.soft(rowElement(sidebar, child.key)?.textContent).toContain(fresh.label);
       expect.soft(sidebar.findSidebarHovercardRowByKey(child.key)).toMatchObject(fresh);
       expect(
-        childToggle(sidebar)?.classList.contains("sidebar-child-session-toggle--running"),
-      ).toBe(true);
+        rowElement(sidebar, child.key)?.querySelector(".session-glyph--running"),
+      ).not.toBeNull();
       expect(sessions.state.result).toBe(primary);
     } finally {
       unsubscribe();

@@ -75,7 +75,7 @@ suite.define(() => {
         await expect.poll(() => new URL(page.url()).pathname).toMatch(/^\/chat(?:\/|$)/u);
         await workboard.hover();
         const newConversation = sidebar.getByRole("link", {
-          name: "New conversation",
+          name: "New session",
           exact: true,
         });
         if (!(await sidebar.locator(".sidebar-session-toolbar").isVisible())) {

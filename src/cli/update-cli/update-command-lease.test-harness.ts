@@ -175,6 +175,7 @@ async function prepareCandidateDoctorRuntime(): Promise<void> {
     [
       runtimeProcessEntrypoints.updateMigratedFinalize,
       runtimeProcessEntrypoints.workerNativeLifecycle,
+      runtimeProcessEntrypoints.spawnBroker,
       runtimeProcessEntrypoints.sqliteWriterAdmission,
       runtimeProcessEntrypoints.sqliteStore,
       runtimeProcessEntrypoints.sqliteIntegrity,
@@ -360,7 +361,16 @@ export function expectDoctorDiagnostics(): void {
 export function expectSuccess(lane: Lane, doctorExpected = true): void {
   expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   const result = reportedResult(lane);
-  expect(result, JSON.stringify(result, null, 2)).toMatchObject(
+  const phases = vi
+    .mocked(defaultRuntime.error)
+    .mock.calls.flat()
+    .filter((value): value is string => typeof value === "string")
+    .flatMap((value) => value.split("\n"))
+    .filter((line) => line.startsWith("doctor fixture phase: "))
+    .slice(-32)
+    .join("\n")
+    .slice(-4096);
+  expect(result, `${JSON.stringify(result, null, 2)}\n${phases}`).toMatchObject(
     lane === "resume"
       ? { status: "ok" }
       : { status: "ok", postUpdate: { plugins: { status: "ok" } } },

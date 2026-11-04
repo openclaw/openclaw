@@ -137,11 +137,8 @@
   height: 36px;
 }
 
-/* Hub-tab strip (shared hub-tabs.css owns the tab look); here the active
-   underline stands alone, with no track and no scrollbar. */
+/* Hub-tab strip (shared hub-tabs.css owns the tab look); here without a scrollbar. */
 .sidebar-issues-panel__tabs.hub-tabs {
-  --track-color: transparent;
-
   display: flex;
   flex: none;
   gap: 20px;
@@ -407,6 +404,12 @@ footer.sidebar-issues-panel__mentions-note {
 .sidebar-issues-panel .sidebar-issues-panel__action--primary:hover,
 .sidebar-issues-panel .sidebar-update-card__review--primary:hover {
   background: var(--primary-hover);
+  color: var(--primary-foreground);
+}
+
+.sidebar-issues-panel .sidebar-issues-panel__action--primary:active,
+.sidebar-issues-panel .sidebar-update-card__review--primary:active {
+  background: var(--primary-active);
   color: var(--primary-foreground);
 }
 

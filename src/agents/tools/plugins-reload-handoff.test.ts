@@ -7,9 +7,12 @@ import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-regis
 import * as events from "../../auto-reply/reply/session-event-handoff.js";
 import {
   configureEventState,
+  openEventToolHost,
   runEventFixture,
   startEmbeddedTurn,
 } from "../../auto-reply/reply/session-event.test-support.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/outbound.types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -28,13 +31,23 @@ import * as exec from "../../infra/exec-request-context.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { resolveMemoryAudienceFromEntry } from "../../plugins/memory-audience.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureCanonicalGatewayOwnerProfile } from "../../state/user-profile-writes.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   prepareSystemAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
@@ -775,6 +788,202 @@ it.for([
         operation.complete();
         await Promise.allSettled([receipt?.settled]);
         resetSystemEventsForTest();
+      }
+    });
+  },
+);
+
+it.for([
+  { id: "idle", busy: false },
+  { id: "queued behind another run", busy: true },
+] as const)(
+  "keeps a Control UI reload resume internal: $id",
+  async ({ busy }, { signal, onTestFinished }) => {
+    await runEventFixture("reload-resume-route", onTestFinished, async (state) => {
+      const registry = captureActivePluginRegistrySnapshot();
+      const sessionKey = "agent:main:reload-route-composed";
+      const sessionId = "reload-route-composed-session";
+      const scope = { agentId: "main", sessionKey };
+      const storeScope = resolveSessionStorePathCore(undefined, { agentId: "main" });
+      const config = await configureEventState(state);
+      const current = expectDefined(registry.activeRegistry, "active plugin registry");
+      const sendText = vi
+        .fn<NonNullable<ChannelOutboundAdapter["sendText"]>>()
+        .mockResolvedValue({ channel: "telegram", messageId: "resume-route-message" });
+      const channels = createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram" }),
+            messaging: {
+              normalizeTarget: (raw) => raw,
+              targetResolver: { looksLikeId: (raw) => raw === "999" },
+            },
+            outbound: { deliveryMode: "direct", sendText },
+          } satisfies ChannelPlugin,
+        },
+      ]);
+      setActivePluginRegistry({
+        ...current,
+        channels: [
+          ...current.channels.filter((entry) => entry.plugin.id !== "telegram"),
+          ...channels.channels,
+        ],
+        channelSetups: [
+          ...current.channelSetups.filter((entry) => entry.plugin.id !== "telegram"),
+          ...channels.channelSetups,
+        ],
+      });
+      await replaceSessionEntry(scope, {
+        sessionId,
+        chatType: "direct",
+        permissionMode: "full",
+        queueDebounceMs: 0,
+        updatedAt: 1,
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "999" },
+        }),
+      });
+      const cleanup = createDeferredCore();
+      const enqueued = createDeferredCore<EventReceipt>();
+      const dispatched = createDeferredCore<unknown>();
+      const enqueue = events.enqueueSessionEventForHost;
+      let blocker: ReturnType<typeof runningOperation> | undefined;
+      vi.spyOn(events, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+        if (busy && !blocker) {
+          try {
+            blocker = runningOperation(sessionKey, sessionId, storeScope);
+            blocker.attachBackend({
+              kind: "embedded",
+              runId: "reload-route-busy",
+              cancel: () => {},
+            });
+          } catch (error) {
+            enqueued.reject(error);
+            throw error;
+          }
+        }
+        const receipt = enqueue(text, options);
+        enqueued.resolve(receipt);
+        return receipt;
+      });
+      let messageProvider: unknown;
+      let messageTo: unknown;
+      let originatingChannel: unknown;
+      let chatType: unknown;
+      let implicitSendResult: unknown;
+      const dispatchRuntime = await import("../../auto-reply/dispatch.js");
+      const dispatch = dispatchRuntime.dispatchInboundMessageWithRoutedChannelDispatcher;
+      vi.spyOn(
+        dispatchRuntime,
+        "dispatchInboundMessageWithRoutedChannelDispatcher",
+      ).mockImplementation((input) => {
+        originatingChannel = input.ctx.OriginatingChannel;
+        chatType = input.ctx.ChatType;
+        const result = dispatch(input);
+        void result.then(
+          ({ deferredToActiveRun }) => dispatched.resolve(deferredToActiveRun),
+          (error: unknown) => dispatched.reject(error),
+        );
+        return result;
+      });
+      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+        messageProvider = params.messageProvider;
+        messageTo = params.messageTo;
+        const { tools, close } = await openEventToolHost(params, "reload resume", {
+          includeOpenClawTools: true,
+        });
+        try {
+          const message = expectDefined(
+            tools.find((tool) => tool.name === "message"),
+            "message tool",
+          );
+          try {
+            implicitSendResult = await message.execute("implicit-send", {
+              action: "send",
+              message: "This must stay in the session.",
+            });
+          } catch (error) {
+            implicitSendResult = error instanceof Error ? error.message : String(error);
+          }
+          return {
+            payloads: [{ text: "Reload resume stayed in the session." }],
+            meta: { durationMs: 1 },
+          };
+        } finally {
+          close();
+        }
+      });
+      const operation = runningOperation(sessionKey, sessionId, storeScope);
+      operation.attachBackend({ kind: "embedded", runId: "reload-route-source", cancel: () => {} });
+      const endpoint = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
+        respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
+      });
+      const context = createContext(
+        [["plugins.reload", "operator.admin", "plugins", endpoint]],
+        () => config,
+      );
+      context.resolveGatewayContext = () => context;
+      let receipt: EventReceipt | undefined;
+      try {
+        await withPluginRuntimeGatewayRequestScope(
+          { context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+          () =>
+            withOperatorToolGatewayAuthority(
+              { scopes: ["operator.admin"], operatorRoleActor: { kind: "system" } },
+              () =>
+                exec.withExecRequestTurn(
+                  { identity: { ...scope, sessionId, runId: "reload-route-source" } },
+                  () =>
+                    withGatewayToolCallerIdentity(
+                      { ...scope, turnSourceChannel: "webchat", turnSourceTo: sessionKey },
+                      () =>
+                        withSessionControllerOwner(operation, async () => {
+                          const result = await createPluginsTool({
+                            sessionId,
+                            runId: "reload-route-source",
+                            onYield: () => operation.completeWithAfterClearBarrier(cleanup.promise),
+                          }).execute("reload-route-composed", request);
+                          expect(result.details).toMatchObject({ status: "started" });
+                        }),
+                    ),
+                ),
+            ),
+        );
+        cleanup.resolve();
+        receipt = await withinTest(enqueued.promise, signal);
+        if (busy) {
+          await expect(withinTest(receipt.accepted, signal)).resolves.toEqual({ ok: true });
+          expect(await withinTest(dispatched.promise, signal)).toBe("followup");
+          expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+          expect(sendText).not.toHaveBeenCalled();
+          expectDefined(blocker, "active run").complete();
+        }
+        const outcome = await withinTest(receipt.settled, signal);
+        expect(sendText.mock.calls).toEqual([]);
+        expect(outcome).toMatchObject({
+          status: "completed",
+          delivered: false,
+        });
+        expect(implicitSendResult).toContain(
+          "Action send requires a target. This turn has no current conversation",
+        );
+        expect(messageProvider).toBe("webchat");
+        if (busy) {
+          expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+          expect(outcome).toMatchObject({ executionStarted: true });
+          expect(messageTo).toBeUndefined();
+        }
+        expect(originatingChannel).toBe("webchat");
+        expect(chatType).toBeUndefined();
+      } finally {
+        cleanup.resolve();
+        blocker?.complete();
+        operation.complete();
+        await Promise.allSettled([receipt?.settled]);
+        resetSystemEventsForTest();
+        restoreActivePluginRegistrySnapshot(registry);
       }
     });
   },

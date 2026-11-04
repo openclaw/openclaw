@@ -657,8 +657,8 @@ export class GatewayBrowserClient {
         code: "NOT_PAIRED",
         message:
           decision === "rejected"
-            ? "This browser's access request was declined."
-            : "This browser's access request expired.",
+            ? "This browser’s access request was declined."
+            : "This browser’s access request expired.",
         details: {
           code:
             decision === "rejected"
