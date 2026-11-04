@@ -30,7 +30,15 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { admitStateSchemaFacts } from "./openclaw-state-db-schema-version.js";
 import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
-import { statePostgresRuntime as runtime } from "./postgres-schema.generated/runtime.js";
+import { createStatePostgresRuntime } from "./postgres-schema.generated/runtime.js";
+
+let postgresRuntime: ReturnType<typeof createStatePostgresRuntime> | undefined;
+let postgresFragments: PostgresSchemaFragment[] | undefined;
+
+function getPostgresRuntime() {
+  // SQLite owners import this module too; construct PostgreSQL data only on that engine path.
+  return (postgresRuntime ??= createStatePostgresRuntime());
+}
 
 const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
@@ -75,6 +83,7 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   const tables = new Set(
     facts.catalog.filter((fact) => fact.kind === "table").map((fact) => fact.table),
   );
+  const runtime = getPostgresRuntime();
   const absent = new Set(
     runtime.fragments.flatMap((fragment) =>
       fragment.tables.some((table) => tables.has(table)) ? [] : fragment.tables,
@@ -122,20 +131,26 @@ export const stateEngineSchema = {
   id: "state",
   version: OPENCLAW_STATE_SCHEMA_VERSION,
   sqlite: "",
-  postgres: runtime.eagerSql,
-  postgresFragments: runtime.fragments.map((fragment): PostgresSchemaFragment => {
-    const { activation } = fragment;
-    if (activation !== "first-use" && activation !== "version-additive") {
-      throw new Error(`Unknown PostgreSQL state fragment activation: ${activation}`);
-    }
-    return {
-      id: fragment.id,
-      tables: fragment.tables,
-      sql: fragment.sql,
-      dependencies: fragment.dependencies,
-      activation,
-    };
-  }),
+  get postgres() {
+    return getPostgresRuntime().eagerSql;
+  },
+  get postgresFragments() {
+    return (postgresFragments ??= getPostgresRuntime().fragments.map(
+      (fragment): PostgresSchemaFragment => {
+        const { activation } = fragment;
+        if (activation !== "first-use" && activation !== "version-additive") {
+          throw new Error(`Unknown PostgreSQL state fragment activation: ${activation}`);
+        }
+        return {
+          id: fragment.id,
+          tables: fragment.tables,
+          sql: fragment.sql,
+          dependencies: fragment.dependencies,
+          activation,
+        };
+      },
+    ));
+  },
 };
 
 export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: string): void {
@@ -143,6 +158,7 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
   if (!facts) {
     throw new Error(`Missing PostgreSQL state admission. ${recovery}`);
   }
+  const runtime = getPostgresRuntime();
   const fragment = runtime.fragments.find((item) => item.tables.includes(table));
   if (!fragment) {
     throw new Error(`No PostgreSQL state fragment owns ${table}`);

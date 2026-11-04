@@ -9,7 +9,9 @@ import {
   pendingPromotion,
 } from "../../scripts/generate-postgres-schema.mts";
 import { catalog as readCatalog, portTables } from "../../scripts/lib/postgres-schema-catalog.mts";
+import { expectedPostgresCatalog } from "../../src/infra/database-engine/postgres-catalog.js";
 import { listOpenClawStateFeatureSchemas } from "../../src/state/openclaw-state-feature-schema.js";
+import { createStatePostgresRuntime } from "../../src/state/postgres-schema.generated/runtime.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -35,6 +37,18 @@ function verifiedFixture(sql: string, verify: (db: DatabaseSync) => void) {
 }
 
 describe("PostgreSQL schema generation", () => {
+  it("constructs runtime data with unchanged canonical SQL, fragment order, and catalog", async () => {
+    const { files, report } = await generatePostgresSchemas(root);
+    expect(createStatePostgresRuntime()).toEqual({
+      eagerSql: files["state.postgres.sql"],
+      fragments: report.fragments.map(({ file, ...fragment }) => ({
+        ...fragment,
+        sql: files[file],
+      })),
+      expectedCatalog: expectedPostgresCatalog(report.catalogs.state!),
+    });
+  });
+
   it("preserves all agent relational objects and declares search separately", async () => {
     const { files, report } = await generatePostgresSchemas(root);
     const agent = report.catalogs.agent!;
