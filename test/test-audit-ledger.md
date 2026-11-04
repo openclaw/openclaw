@@ -201,19 +201,26 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `592a02fbe297`: qualify returned-state custody in
-`test/e2e/qa-lab/plugins/node-gateway-fixture.ts`. The unchanged fixture acquires
-isolated filesystem/environment state before awaiting a port claim outside its
-cleanup protection. Current source and owner inspection establish the gap;
-actual rejection, cleanup, environment and temporary-root observations remain
-pending. No observed runtime leak, support finding credit or repair is claimed.
-The separate Canvas caller retains its one declaration/case and all assertions.
+Pinned main `592a02fbe297`: protect returned-state custody in
+`test/e2e/qa-lab/plugins/node-gateway-fixture.ts`. Port acquisition now runs inside
+its existing cleanup protection. Registry capture remains after successful
+acquisition, and restoration runs only when that capture exists. Claim transfer
+and the remaining cleanup order stay intact; production is unchanged.
 
-This ledger-only prerequisite allows native dependency qualification before any
-fixture edit. The planned proof uses the real fixture and returned state, one
-sentinel acquisition rejection, observations before diagnostic cleanup, and an
-exact-state safety finally. It must start no Gateway and restore its environment
-and temporary root. Production and the fixture remain byte-identical to the pin.
+The same temporary native E2E probe injects one acquisition rejection into the
+real fixture. Original: the exact error returns with cleanup uncalled, environment
+still applied and temporary root present. Candidate: cleanup runs once, the
+environment is restored and root absent before diagnostic cleanup. Both preserve
+the error identity and start no Gateway; configuration and body callbacks remain
+unreached. The proof-owned safety finally restores both versions. This proves
+returned-state cleanup ordering, not real port exhaustion or a persistent-process
+leak. The temporary probe is removed; all consumer declarations/assertions and
+production bytes remain. The separate Canvas caller retains its one case; its
+Gateway happy path was not run. The helper grows by two support lines with zero
+counted test-line growth. Typed lint, format, ledger MDX, whitespace and the
+ratchet pass. E2E types fail on the unchanged duplicate `closeSessionTitle` key
+in `ui/src/i18n/locales/en-terminal.ts`; the original helper reproduces the same
+TS1117 error. Fresh review and exact-head CI remain pending.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
