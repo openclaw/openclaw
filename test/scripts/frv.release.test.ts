@@ -194,7 +194,7 @@ function runProtectedFrv(
   writeFileSync(
     gh,
     `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync("calls.jsonl", JSON.stringify(args) + "\\n");
 const fail = (message, code) => { console.error(message); process.exit(code); };
@@ -632,7 +632,8 @@ ${clockStep ? `let ticks = 0; const now = Date.now(); Date.now = () => now + tic
   writeFileSync(
     gh,
     `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
+import { join } from "node:path";
 const args = process.argv.slice(2);
 fs.appendFileSync("calls.jsonl", JSON.stringify(args) + "\\n");
 const reject = () => { console.error("unplanned or mutating request"); process.exit(23); };
@@ -641,7 +642,7 @@ if (legacy && args[0] === "run" && args[1] === "download" && args[2] === "77") {
   const name = args[args.indexOf("--name") + 1];
   if (name !== "full-release-execution-plan-77" && !name.startsWith("full-release-decision-77-")) reject();
   const decision = name.startsWith("full-release-decision-");
-  fs.copyFileSync(decision ? "legacy-decision.json" : "legacy-plan.json", require("node:path").join(args[args.indexOf("--dir") + 1], decision ? "full-release-decision.json" : "full-release-execution-plan.json"));
+  fs.copyFileSync(decision ? "legacy-decision.json" : "legacy-plan.json", join(args[args.indexOf("--dir") + 1], decision ? "full-release-decision.json" : "full-release-execution-plan.json"));
   process.exit(0);
 }
 if (args[0] !== "api" || (!legacy && (!args.includes("GET") || !args.includes("github.com"))) || !args.includes("Cache-Control: max-age=0")) reject();

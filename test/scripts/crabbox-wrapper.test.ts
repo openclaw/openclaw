@@ -23,6 +23,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { constants as osConstants, homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -51,6 +52,7 @@ const invocationLogTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const artifactTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const dependencyTempDirs = useAutoCleanupTempDirTracker(afterAll);
 const repoRoot = process.cwd();
+const require = createRequire(import.meta.url);
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
 const bundledOutputPaths = new Set<string>();
@@ -353,7 +355,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         "  printf '%s\\000\\000' \"$PWD\"",
         "  exit 0",
         "fi",
-        `exec node ${shellQuote(nodePath)} "$@"`,
+        `exec ${shellQuote(nodePath)} "$@"`,
       ].join("\n"),
     );
   }
@@ -444,12 +446,14 @@ function writeShellCommand(commandPath: string, script: string): void {
 }
 
 function writeNodeCommand(commandPath: string, script: string): void {
-  writeFileSync(commandPath, `#!/usr/bin/env node\n${script.trimStart()}\n`, "utf8");
+  const sourcePath = `${commandPath}.cjs`;
+  writeFileSync(sourcePath, `${script.trimStart()}\n`, "utf8");
   if (process.platform === "win32") {
-    const shim = windowsNodeCmdShim(path.basename(commandPath));
+    const shim = windowsNodeCmdShim(path.basename(sourcePath));
     writeFileSync(`${commandPath}.cmd`, shim, "utf8");
+  } else {
+    writeShellCommand(commandPath, `exec node ${shellQuote(sourcePath)} "$@"`);
   }
-  chmodSync(commandPath, 0o755);
 }
 
 function makeFakeGit(
@@ -506,10 +510,7 @@ process.exit(response.status ?? 0);`;
       ].join("\n");
     });
     writeNodeCommand(nodePath, script);
-    writeShellCommand(
-      gitPath,
-      `${responseCases.join("\n")}\nexec node ${shellQuote(nodePath)} "$@"`,
-    );
+    writeShellCommand(gitPath, `${responseCases.join("\n")}\nexec ${shellQuote(nodePath)} "$@"`);
   }
   fakeGitBinDirs.set(key, binDir);
   return binDir;
@@ -1715,6 +1716,16 @@ describe("scripts/crabbox-wrapper", () => {
       target: "node22",
       plugins: [
         {
+          name: "fs-safe-source-owner",
+          setup(builder) {
+            // Relocated fixtures keep the parser beside its package-owned WASM asset.
+            builder.onResolve({ filter: /^@openclaw\/fs-safe(?:\/|$)/ }, (args) => ({
+              path: pathToFileURL(require.resolve(args.path)).href,
+              external: true,
+            }));
+          },
+        },
+        {
           name: "canonical-state-schemas",
           setup(builder) {
             // Relocated fixtures need the same embedded SQL as production bundles.
@@ -1831,11 +1842,11 @@ describe("scripts/crabbox-wrapper", () => {
       mkdirSync(path.dirname(candidate));
       writeShellCommand(
         candidate,
-        `OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG=${shellQuote(candidateLog)} exec node ${shellQuote(fake)} "$@"`,
+        `OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG=${shellQuote(candidateLog)} exec ${shellQuote(fake)} "$@"`,
       );
       writeShellCommand(
         managed,
-        `unset OPENCLAW_FAKE_CRABBOX_VERSION\nexec node ${shellQuote(fake)} "$@"`,
+        `unset OPENCLAW_FAKE_CRABBOX_VERSION\nexec ${shellQuote(fake)} "$@"`,
       );
       const log = makeInvocationLog();
       const options = {

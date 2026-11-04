@@ -3014,7 +3014,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           testNodeExecPath +
           "\n" +
           String.raw`
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "-v") { console.log("fixture"); process.exit(0); }
 const log = process.env.RECIPE_LOG;
@@ -4718,9 +4718,9 @@ test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
       writeFileSync(
         path.join(binDir, "security"),
         `#!${process.execPath}
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 const args = process.argv.slice(2);
 assert.notEqual(process.env.HOME, ${JSON.stringify(root)});
 assert.equal(path.dirname(args.at(-1)), path.join(process.env.HOME, 'Library/Keychains'));
