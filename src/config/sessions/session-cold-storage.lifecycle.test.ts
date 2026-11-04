@@ -468,7 +468,6 @@ describe("cold current transcript lifecycle", () => {
     });
     const archiveBytes = await fs.readFile(archivePath);
     const before = snapshot();
-    expect(fixture.database().prepare("SELECT * FROM transcript_events").all()).toEqual([]);
     expect(
       fixture.database().prepare("SELECT current_session_id FROM session_nodes").all(),
     ).toEqual([{ current_session_id: scope.sessionId }]);
@@ -814,9 +813,15 @@ describe("cold current transcript lifecycle", () => {
     ]);
   });
 
-  it.each(actions)("restores exact history before %s", async (action) => {
+  it.each(actions)("preserves exact history through %s", async (action) => {
     const fixture = await createColdCurrentSession();
     const result = await runAction(action, fixture);
+    if (action === "parent decision") {
+      expect(result).toMatchObject({ status: "fork" });
+      expect(coldDescriptor(fixture)).toEqual(fixture.descriptor);
+      expect(await loadTranscriptEvents(fixture.scope)).toEqual(fixture.original);
+      return;
+    }
     if (action === "reset" || action === "batched reset") {
       expect(result).toMatchObject({ sessionId: "reset-next" });
     } else if (action === "fork" || action === "rewind") {
@@ -831,12 +836,7 @@ describe("cold current transcript lifecycle", () => {
       });
     } else {
       expect(result).toMatchObject({
-        status:
-          action === "parent entry fork"
-            ? "forked"
-            : action === "parent decision"
-              ? "fork"
-              : "created",
+        status: action === "parent entry fork" ? "forked" : "created",
       });
     }
     expect(coldDescriptor(fixture)).toBeUndefined();

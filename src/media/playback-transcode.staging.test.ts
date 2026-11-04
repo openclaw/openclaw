@@ -96,7 +96,9 @@ it("passes every staged input byte to ffmpeg before publishing the rendition", a
   runFfmpeg.mockImplementationOnce(async (args: string[]) => {
     inputPath = args[args.indexOf("-i") + 1];
     expect(inputPath).toBeDefined();
-    expect(await fs.readFile(inputPath!), "complete staged ffmpeg input").toEqual(contents);
+    expect((await fs.readFile(inputPath!)).equals(contents), "complete staged ffmpeg input").toBe(
+      true,
+    );
     await fs.writeFile(args.at(-1) ?? "", "normalized-audio");
     return "";
   });

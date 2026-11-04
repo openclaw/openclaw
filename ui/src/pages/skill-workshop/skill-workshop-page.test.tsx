@@ -238,7 +238,9 @@ it.each([
 ])("sets learning mode $mode (accepted: $accepted)", async ({ accepted, label, mode }) => {
   const patch = createDeferredCore<boolean>();
   const runtimeConfig = createRuntimeConfigStub({
-    sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+    sourceConfig: {
+      plugins: { entries: { "skill-workshop": { config: { autonomous: { mode: "auto" } } } } },
+    },
     patch: vi.fn(() => patch.promise),
   });
   runtimeConfig.state.lastError = "Mode update refused";
@@ -250,7 +252,9 @@ it.each([
   await waitForSolid(() =>
     expect(button(page, label, true)?.getAttribute("aria-disabled")).toBe("true"),
   );
-  expect(runtimeConfig.patch.mock.lastCall?.[0].raw.skills.workshop.autonomous.mode).toBe(mode);
+  expect(runtimeConfig.patch.mock.lastCall?.[0].raw).toEqual({
+    plugins: { entries: { "skill-workshop": { config: { autonomous: { mode } } } } },
+  });
   patch.resolve(accepted);
   if (accepted) {
     await waitForSolid(() => expect(runtimeConfig.refresh).toHaveBeenCalled());

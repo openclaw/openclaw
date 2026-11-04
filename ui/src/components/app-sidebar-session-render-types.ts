@@ -146,18 +146,11 @@ export interface SessionListHost {
   showMoreChildren(sessionKey: string): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;
-  /** Unadmitted New session handoff; presentation only, never a saved selection. */
-  pendingSessionCreate():
-    | Readonly<{
-        creation: Readonly<{ sessionKey: string }>;
-        displayName?: string;
-        category?: string;
-      }>
-    | undefined;
   readNewSessionAccess(): SessionMethodAccess;
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;
   setVisibleSessionLimit(sectionId: string, limit: number): void;
+  resetVisibleSessionLimit(sectionId: string): void;
   clearSessionSelection(): void;
 }
 

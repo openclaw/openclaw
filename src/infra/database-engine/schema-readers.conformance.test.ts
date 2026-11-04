@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { listAuditEvents } from "../../audit/audit-event-store.js";
-import { readAllClawCronRefsInDatabase } from "../../claws/cron-records.js";
 import { writeRepairJournal } from "../../commands/doctor-session-incognito-key-repair-state.js";
 import { repairReservedIncognitoSessionKeys } from "../../commands/doctor-session-incognito-key-repair.js";
 import { sessionSqlFixture } from "../../commands/doctor-session-sqlite.sql.test-support.js";
@@ -10,6 +9,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
+import { readAllTemplateCronRefsInDatabase } from "../../templates/cron-records.js";
 import { installDatabaseProcessRole, withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
@@ -58,7 +58,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       });
     });
 
-    it("returns persisted Claw cron ownership from its admitted store", () => {
+    it("returns persisted Template cron ownership from its admitted store", () => {
       const job = {
         id: "synthetic-job",
         schedule: { cron: "0 8 * * *" },
@@ -67,14 +67,14 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       };
       withEngineStoreAdmission(() =>
         runOpenClawStateWriteTransaction(({ db }) => {
-          sessionSqlFixture(db)`INSERT INTO claw_cron_refs
+          sessionSqlFixture(db)`INSERT INTO template_cron_refs
             (agent_id, manifest_id, declaration_key, schema_version, scheduler_job_id, status, job_json, error, created_at_ms, updated_at_ms)
-            VALUES ('main', 'synthetic-claw', 'synthetic-declaration', 'openclaw.clawCronRef.v1', 'synthetic-scheduler', 'complete', ${JSON.stringify(job)}, NULL, 10, 20)`.run();
+            VALUES ('main', 'synthetic-claw', 'synthetic-declaration', 'openclaw.templateCronRef.v1', 'synthetic-scheduler', 'complete', ${JSON.stringify(job)}, NULL, 10, 20)`.run();
         }),
       );
       expect(
         withEngineStoreAdmission(() =>
-          readAllClawCronRefsInDatabase(openOpenClawStateDatabase().db),
+          readAllTemplateCronRefsInDatabase(openOpenClawStateDatabase().db),
         ),
       ).toMatchObject([
         {

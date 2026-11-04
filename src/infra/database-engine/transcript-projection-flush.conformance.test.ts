@@ -11,7 +11,7 @@ import {
   reconcileSessionTranscriptIndexInTransaction,
 } from "../../config/sessions/session-transcript-index.js";
 import { searchSessionTranscriptsReadOnlySync } from "../../config/sessions/session-transcript-search.js";
-import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "../../config/sessions/session-turn.types.js";
 import {
   createTranscriptEventInserter,
@@ -239,7 +239,9 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
               type: "session.actor.acceptInput",
               input: {
                 ...input,
-                expectedState: buildRestartRecoveryExpectedState(admit(() => f.read()).entry!),
+                expectedState: buildSessionTranscriptTurnExpectedState(
+                  admit(() => f.read()).entry!,
+                ),
                 lifecycle: {},
               },
             }

@@ -187,12 +187,9 @@ it.each([
   "runtime-canonical-models",
   "config-rejected",
   "absent-default",
-  "consent-all",
-  "consent-keep",
-  "consent-legacy-all",
-  "consent-legacy-keep",
-  "consent-legacy-set-default-all",
-  "consent-legacy-set-default-keep",
+  "access",
+  "access-legacy",
+  "access-legacy-set-default",
 ])("uses fresh authentication for %s with the gateway stopped", async (selection) => {
   const mergedModels = selection === "concurrent-models" || selection === "stale-models";
   const modelConflict = selection === "conflicting-models";
@@ -294,7 +291,7 @@ it.each([
                     result.configPatch = { gateway: { port: -1 } };
                   } else if (${JSON.stringify(selection)} === "absent-default") {
                     result.configPatch = patchDefaults({ model: "authstore-proof/recommended" });
-                  } else if (${JSON.stringify(selection.startsWith("consent-"))}) {
+                  } else if (${JSON.stringify(selection.startsWith("access"))}) {
                     result.configPatch = patchDefaults({ modelPolicy: { allow: ["authstore-proof/*"] }, models: { "authstore-proof/recommended": {} } });
                   }
                   return result;
@@ -316,10 +313,10 @@ it.each([
     };
     const defaults: Defaults =
       selection === "absent-default" ? {} : { model: { primary: "other-proof/existing" } };
-    if (selection.startsWith("consent-")) {
+    if (selection.startsWith("access")) {
       Object.assign(
         defaults,
-        selection.includes("-legacy-")
+        selection.startsWith("access-legacy")
           ? { models: { "existing-model": {} } }
           : { modelPolicy: { allow: ["other-proof/existing"] } },
       );
@@ -380,9 +377,8 @@ it.each([
       throw new Error("Unexpected interactive prompt in explicit fixture login");
     };
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    let consentAsked = false;
     const force = selection === "force";
-    const setDefault = selection === "set-default" || selection.includes("-set-default-");
+    const setDefault = selection === "set-default" || selection.endsWith("-set-default");
     const credentialOnly = selection === "credential-only" || selection === "revoked-after-save";
     const login = runModelsAuthLoginFlowCore({
       provider,
@@ -406,24 +402,7 @@ it.each([
       ...(selection === "runtime-canonical-models" ? {} : { config }),
       runtime,
       prompter: createWizardPrompter({
-        select: async (prompt) => {
-          if (!selection.startsWith("consent-")) {
-            return unexpectedPrompt();
-          }
-          expect(loadPersistedAuthProfileStore()?.profiles[freshId]).toEqual(fresh);
-          expect(prompt.options.map((option) => option.label)).toEqual([
-            "Show all Auth store proof models",
-            "Keep current restrictions",
-          ]);
-          const answer = prompt.options.find(
-            (option) => option.value === (selection.endsWith("all") ? "all" : "keep"),
-          );
-          if (!answer) {
-            throw new Error("Model access choice missing");
-          }
-          consentAsked = true;
-          return answer.value;
-        },
+        select: unexpectedPrompt,
         text: unexpectedPrompt,
         confirm: unexpectedPrompt,
       }),
@@ -438,21 +417,22 @@ it.each([
       await login;
     }
     const savedConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-    if (selection.startsWith("consent-")) {
-      expect(consentAsked).toBe(true);
-      if (selection.includes("-legacy-")) {
-        expect(savedConfig.agents.defaults.models).toEqual(
-          selection.endsWith("all")
-            ? { "existing-model": {}, "authstore-proof/*": {} }
-            : { "existing-model": {} },
-        );
+    if (selection.startsWith("access")) {
+      // Saved credentials add the provider wildcard; plugin defaults cannot widen restrictions.
+      if (selection.startsWith("access-legacy")) {
+        expect(savedConfig.agents.defaults.models).toEqual({
+          "existing-model": {},
+          "authstore-proof/*": {},
+        });
       } else {
-        expect(savedConfig.agents.defaults.modelPolicy.allow).toEqual(
-          selection === "consent-all"
-            ? ["other-proof/existing", "authstore-proof/*"]
-            : ["other-proof/existing"],
-        );
+        expect(savedConfig.agents.defaults.modelPolicy.allow).toEqual([
+          "other-proof/existing",
+          "authstore-proof/*",
+        ]);
       }
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("Added authstore-proof/* to allowed models."),
+      );
     }
     expect(savedConfig.agents.defaults.model?.primary).toBe(
       setDefault

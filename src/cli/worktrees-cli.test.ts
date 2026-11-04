@@ -14,15 +14,12 @@ afterEach(() => {
   resetConfigRuntimeState();
 });
 
-function createProgram() {
+async function run(args: string[]) {
   const program = new Command().name("openclaw").exitOverride();
   program.configureOutput({ writeErr: () => undefined });
   registerWorktreesCli(program);
-  return program;
+  return program.parseAsync(["worktrees", ...args], { from: "user" });
 }
-
-const run = (args: string[]) =>
-  createProgram().parseAsync(["worktrees", ...args], { from: "user" });
 const admission = { signal: expect.any(AbortSignal), commitGuard: expect.any(Function) };
 const owner = ManagedWorktreeService.prototype;
 const muteOutput = (json = true) =>
@@ -75,17 +72,18 @@ describe("worktrees cli", () => {
     });
   });
   it.each([
-    ["--exact-state", "/missing-request", "--force"],
-    ["--exact-state", "/missing-request", "--if-lossless"],
-    ["--if-lossless", "--force"],
-  ])("rejects conflicting removal policies %j before reading or mutating", async (...flags) => {
+    ["remove", "--exact-state", "/missing-request", "--force"],
+    ["remove", "--exact-state", "/missing-request", "--if-lossless"],
+    ["remove", "--if-lossless", "--force"],
+    ["remove", "--exact-state", "."],
+    ["restore", "--recover-exact-state", "."],
+  ])("rejects invalid %s requests before mutation", async (command, ...flags) => {
     const remove = vi.spyOn(owner, "remove");
     const lossless = vi.spyOn(owner, "removeIfLossless");
-    await expect(run(["remove", "worktree-id", ...flags])).rejects.toThrow(
-      "cannot be used with option",
-    );
-    expect(remove).not.toHaveBeenCalled();
-    expect(lossless).not.toHaveBeenCalled();
+    const restore = vi.spyOn(owner, "restore");
+    const error = flags.includes(".") ? /regular.*file/ : "cannot be used with option";
+    await expect(run([command, "worktree-id", ...flags])).rejects.toThrow(error);
+    expect([remove, lossless, restore].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
   });
 
   it("leaves missing source profile values to Commander and performs no creation", async () => {

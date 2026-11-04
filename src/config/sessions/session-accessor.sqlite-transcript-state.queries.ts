@@ -9,8 +9,12 @@ import {
   getSessionKysely,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope-helpers.js";
+import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
+import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
+import type { TranscriptWindowUpdate } from "./session-transcript-index-postgres.js";
 import { selectSessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { foldedSessionKeyAliasCandidates, normalizeStoreSessionKey } from "./store-entry.js";
+import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
 export const transcriptMutationStateQuery = createSqliteQueryCache((database: EngineConnection) => {
   const db = getSessionKysely(database);
@@ -71,6 +75,7 @@ export type TranscriptSessionRootRow = Awaited<
 export function selectTranscriptAppendState(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
+  withLatestIdentity = false,
 ) {
   return selectTranscriptSessionRoot(database, scope)
     .leftJoin(
@@ -81,6 +86,17 @@ export function selectTranscriptAppendState(
     .leftJoin(
       selectSessionTranscriptProjectionState(database.db, scope.sessionId).as("projection"),
       (join) => join.onTrue(),
+    )
+    .$if(withLatestIdentity, (query) =>
+      query
+        .leftJoin(
+          selectTranscriptAppendParentIdentity(database, scope.sessionId).as("append_parent"),
+          (join) => join.onTrue(),
+        )
+        .select([
+          "append_parent.event_type as append_parent_event_type",
+          "append_parent.event_json as append_parent_event_json",
+        ]),
     )
     .select([
       "window.row_transcript_json",
@@ -109,4 +125,76 @@ export function selectTranscriptAppendState(
         )
         .as("cold"),
     ]);
+}
+
+/** The append-state read can carry this same latest-identity probe under its writer lock. */
+export function selectTranscriptAppendParentIdentity(
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
+  sessionId: string,
+) {
+  return getSessionKysely(database.db)
+    .selectFrom("transcript_event_identities as ti")
+    .innerJoin("transcript_events as te", (join) =>
+      join.onRef("te.session_id", "=", "ti.session_id").onRef("te.seq", "=", "ti.seq"),
+    )
+    .select([
+      "ti.event_type",
+      projectTranscriptNavigationSql(
+        database.db,
+        transcriptEventNavigationSql(database.db, "te"),
+      ).as("event_json"),
+    ])
+    .where("ti.session_id", "=", sessionId)
+    .orderBy("ti.seq", "desc")
+    .limit(1);
+}
+
+export function returningTranscriptMutationAuthority(
+  update: TranscriptWindowUpdate,
+  sessionId: string,
+) {
+  return update
+    .returning((eb) => [
+      "session_id as sessionId",
+      "session_key as sessionKey",
+      "transcript_updated_at as updatedAt",
+      eb
+        .selectFrom("transcript_rewrite_watermarks")
+        .select("generation")
+        .where("session_id", "=", sessionId)
+        .as("generation"),
+      eb.fn
+        .coalesce(
+          eb
+            .selectFrom("session_transcript_cold_archives")
+            .select("last_seq")
+            .where("session_id", "=", sessionId),
+          eb
+            .selectFrom("transcript_events")
+            .select((inner) => inner.fn.max<number | null>("seq").as("seq"))
+            .where("session_id", "=", sessionId),
+        )
+        .as("rawSeq"),
+      eb
+        .selectFrom("session_transcript_index_state")
+        .select("leaf_event_id")
+        .where("session_id", "=", sessionId)
+        .as("leafEventId"),
+      eb
+        .selectFrom("session_transcript_index_state")
+        .select("indexed_seq")
+        .where("session_id", "=", sessionId)
+        .as("indexedSeq"),
+      eb
+        .selectFrom("session_transcript_index_state")
+        .select("active_message_count")
+        .where("session_id", "=", sessionId)
+        .as("activeMessageCount"),
+      eb
+        .selectFrom("session_transcript_index_state")
+        .select("needs_rebuild")
+        .where("session_id", "=", sessionId)
+        .as("needsRebuild"),
+    ])
+    .$assertType<SessionTranscriptAuthority>();
 }

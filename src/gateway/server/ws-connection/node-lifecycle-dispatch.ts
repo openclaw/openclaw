@@ -1,4 +1,5 @@
 import { raceWithTimeout } from "../../../../packages/retry/src/index.js";
+import { monotonicNow } from "../../../shared/monotonic-time.js";
 
 const NODE_LIFECYCLE_METHODS = new Set(["node.invoke.progress", "node.invoke.result"]);
 
@@ -32,9 +33,9 @@ export class GatewayNodeLifecycleDispatchTracker {
   }
 
   async drain(timeoutMs = NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS): Promise<boolean> {
-    const deadlineAt = Date.now() + Math.max(0, timeoutMs);
+    const deadlineAt = monotonicNow() + Math.max(0, timeoutMs);
     while (this.active.size > 0) {
-      const remainingMs = deadlineAt - Date.now();
+      const remainingMs = deadlineAt - monotonicNow();
       if (remainingMs <= 0) {
         return false;
       }

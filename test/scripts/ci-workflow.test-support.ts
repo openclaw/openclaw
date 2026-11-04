@@ -1,7 +1,12 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import {
+  spawnSync,
+  type SpawnOptions,
+  type SpawnSyncOptions,
+  type SpawnSyncOptionsWithStringEncoding,
+} from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import path from "node:path";
+import path, { matchesGlob } from "node:path";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
@@ -63,6 +68,18 @@ export type WorkflowStep = {
   with?: Record<string, unknown>;
   "working-directory"?: string;
 };
+
+export function acceptsWorkflowPaths(patterns: readonly string[], files: readonly string[]) {
+  return files.some((file) =>
+    patterns.reduce(
+      (selected, pattern) =>
+        pattern.startsWith("!")
+          ? selected && !matchesGlob(file, pattern.slice(1))
+          : selected || matchesGlob(file, pattern),
+      false,
+    ),
+  );
+}
 
 export const readCiWorkflow = () => readWorkflow(".github/workflows/ci.yml");
 
@@ -149,11 +166,13 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
   }
   // Actions permits dashes in property names; preserve quoted literals while
   // translating those accesses for the JavaScript fixture evaluator.
-  const evaluableSource = source.replace(
-    /'(?:[^']|'')*'|\.([A-Za-z_][\w-]*)/gu,
-    (token: string, property: string | undefined) =>
-      property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
-  );
+  const evaluableSource = source
+    .replaceAll("needs.*.result", "Object.values(needs).map(need => need.result)")
+    .replace(
+      /'(?:[^']|'')*'|\.([A-Za-z_][\w-]*)/gu,
+      (token: string, property: string | undefined) =>
+        property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
+    );
   return runInNewContext(evaluableSource, {
     always: () => true,
     success: () => !context.failed && !context.cancelled,
@@ -237,6 +256,9 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
       ...context.steps,
     },
     needs: {
+      ...Object.fromEntries(
+        Object.entries(context.jobResults ?? {}).map(([name, result]) => [name, { result }]),
+      ),
       "build-artifacts": {
         result: context.jobResults?.["build-artifacts"] ?? "success",
         outputs: {},
@@ -314,11 +336,57 @@ export function evaluateWorkflowCondition(
 
 export const quoteShell = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
 
+const WORKFLOW_COMMAND_TIMEOUT_MS = 30_000;
+
+export function runWorkflowCommand(
+  command: string,
+  args: string[],
+  options: Omit<SpawnSyncOptions, "encoding" | "killSignal"> = {},
+) {
+  // System Bash avoids Darwin's pipe-backed heredoc deadlocks. Explicit paths
+  // from resolveWorkflowBash still preserve Linux fixtures' Bash 5 semantics.
+  const executable = process.platform === "darwin" && command === "bash" ? "/bin/bash" : command;
+  const timeout = options.timeout ?? WORKFLOW_COMMAND_TIMEOUT_MS;
+  // Node shares detached handling between spawn and spawnSync; its types expose it on spawn only.
+  const childOptions = {
+    ...options,
+    encoding: "utf8",
+    timeout,
+    detached: process.platform !== "win32",
+    // Synchronous fixture children must terminate even if they ignore SIGTERM.
+    killSignal: "SIGKILL",
+  } satisfies SpawnSyncOptionsWithStringEncoding & Pick<SpawnOptions, "detached">;
+  const result = spawnSync(executable, args, childOptions);
+  const error: NodeJS.ErrnoException | undefined = result.error;
+  if (error) {
+    if (process.platform !== "win32" && result.pid > 0) {
+      try {
+        // Killing a timed-out shell alone leaves its stalled descendants running.
+        process.kill(-result.pid, "SIGKILL");
+      } catch {
+        // The group is already gone when the command had no surviving children.
+      }
+    }
+    const reason = error.code === "ETIMEDOUT" ? `timed out after ${timeout} ms` : error.message;
+    throw new Error(
+      `Workflow fixture command ${reason}: ${[executable, ...args].map(quoteShell).join(" ")}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
+      { cause: error },
+    );
+  }
+  return result;
+}
+
 let linuxWorkflowBash: string | undefined;
 
 export function runWorkflowShellScript(
   script: string,
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; linuxWorkflow?: boolean; tempDir?: string },
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    linuxWorkflow?: boolean;
+    tempDir?: string;
+    timeout?: number;
+  },
 ) {
   const { linuxWorkflow, tempDir, ...spawnOptions } = options;
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-workflow-shell-"));
@@ -355,9 +423,8 @@ export function runWorkflowShellScript(
       linuxWorkflow && process.platform === "darwin"
         ? (linuxWorkflowBash ??= resolveWorkflowBash())
         : "bash";
-    return spawnSync(bash, [scriptPath], {
+    return runWorkflowCommand(bash, [scriptPath], {
       ...spawnOptions,
-      encoding: "utf8",
       // Child caches and temporary artifacts share the fixture's cleanup owner.
       // Inheriting a huge host tsx cache makes startup depend on unrelated runs.
       env: {
@@ -395,11 +462,21 @@ export function readWorkflow(filePath: string) {
 export function readTrackedText(relativePath: string): string {
   return existsSync(relativePath)
     ? readFileSync(relativePath, "utf8")
-    : execFileSync("git", ["show", `:${relativePath}`], { encoding: "utf8" });
+    : execGit(process.cwd(), ["show", `:${relativePath}`]);
+}
+
+function execGit(cwd: string, args: string[]): string {
+  const result = runWorkflowCommand("git", args, { cwd });
+  if (result.status !== 0) {
+    throw new Error(
+      `Workflow fixture command failed (${result.status ?? result.signal}): git ${args.map(quoteShell).join(" ")}\n${result.stdout}${result.stderr}`,
+    );
+  }
+  return result.stdout;
 }
 
 export function runGit(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  return execGit(cwd, args).trim();
 }
 
 export function writeExecutable(filePath: string, lines: string[]): void {

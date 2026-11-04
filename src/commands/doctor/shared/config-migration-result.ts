@@ -38,6 +38,8 @@ export type DoctorConfigPreflightOptions = {
   preparePluginMetadataSnapshot?: boolean;
   /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
   doctorOnlyStateMigrations?: boolean;
+  /** Unattended diagnostics inspect plugin packages without downloading or replacing them. */
+  deferPluginPackageRepair?: boolean;
 };
 
 export type DoctorConfigPreflightResult = {
@@ -64,6 +66,8 @@ export type DoctorConfigPreflightResult = {
   postSessionPluginMigrationPlanBound?: boolean;
   /** Config whose pre-session state migrations completed without unresolved work. */
   preflightLegacyStateConfig?: OpenClawConfig;
+  configChanged?: boolean;
+  stateMigrationUnsettled?: boolean;
 };
 
 /** Keep migrated selectors with Doctor's model-policy owner until billing facts are captured. */

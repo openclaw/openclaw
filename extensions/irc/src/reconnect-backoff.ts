@@ -18,10 +18,10 @@ export function createIrcReconnectBackoff() {
   let connectedAt: number | undefined;
   return {
     markConnected: () => {
-      connectedAt = Date.now();
+      connectedAt = performance.now();
     },
     nextDelayMs: () => {
-      if (connectedAt !== undefined && Date.now() - connectedAt >= IRC_RECONNECT_STABLE_MS) {
+      if (connectedAt !== undefined && performance.now() - connectedAt >= IRC_RECONNECT_STABLE_MS) {
         attempt = 0;
       }
       // The next delay is owed to whichever connection ends now; a failed connect attempt must

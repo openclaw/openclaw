@@ -1,6 +1,8 @@
-import type { Model } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createGoogleGenerativeAiTransportStreamFn } from "./transport-stream.js";
+// Prepare worker-backed SDK fixtures before the timed first-stream lifecycle cases.
+import "openclaw/plugin-sdk/provider-transport-runtime";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeProviderModel } from "../../packages/ai/src/providers/provider-model.test-support.js";
+import { buildGoogleProvider } from "./provider-registration.js";
 
 const { guardedFetch } = vi.hoisted(() => ({ guardedFetch: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal) => ({
@@ -31,36 +33,31 @@ function response(events: readonly unknown[], cancel = vi.fn(), open = false) {
     { headers: { "content-type": "text/event-stream" } },
   );
 }
-async function run(signal: AbortSignal, id = "gemini-2.5-pro") {
-  const model: Model<"google-generative-ai"> = {
-    id,
-    name: id,
-    provider: "google",
-    api: "google-generative-ai",
+async function startStream(signal: AbortSignal, id = "gemini-2.5-pro") {
+  const model = makeProviderModel("google-generative-ai", "google", id, {
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 8192,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  };
-  const stream = await createGoogleGenerativeAiTransportStreamFn()(
+  });
+  const streamFn = buildGoogleProvider().createStreamFn?.({
+    provider: model.provider,
+    modelId: model.id,
+    model,
+  });
+  assert(streamFn, "Google registration must provide its stream");
+  return streamFn(
     model,
     { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
     { apiKey: "fixture-key-1", signal },
   );
-  return stream.result();
 }
 async function advanceResponse(ms: number, id: string, expected: object = completedResponse) {
   const controller = new AbortController();
   const completed = vi.fn();
-  const pending = run(controller.signal, id).then(completed);
+  const pending = (await startStream(controller.signal, id)).result().then(completed);
   await vi.advanceTimersByTimeAsync(ms);
   const result = completed.mock.calls[0]?.[0];
   controller.abort();
   await pending;
   expect(result).toMatchObject(expected);
-  return result;
 }
 
 describe("Google stream lifecycle", () => {
@@ -102,7 +99,8 @@ describe("Google stream lifecycle", () => {
     guardedFetch
       .mockResolvedValueOnce(response([quotaError]))
       .mockResolvedValueOnce(response([terminal, "[DONE]"]));
-    const result = await run(new AbortController().signal);
+    const stream = await startStream(new AbortController().signal);
+    const result = await stream.result();
     expect(result).toMatchObject(completedResponse);
     expect(
       guardedFetch.mock.calls.map(([, init]) => new Headers(init.headers).get("x-goog-api-key")),

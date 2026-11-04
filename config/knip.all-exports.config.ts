@@ -51,6 +51,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
   "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
   "test/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
+  // The isolated live steering launcher is invoked directly by its documented command.
+  "test/helpers/run-quiet-steering-live.mts!",
   // The PR artifact Vitest suite launches this standalone Node regression by path.
   "test/scripts/pr-review-artifacts.node.mjs!",
   // The Gateway profiler tests launch these subprocess fixtures through a computed path.

@@ -94,11 +94,19 @@ describe("jsdom native API boundary", () => {
     form.append("label", "synthetic");
     form.append("file", file);
     const multipart = new Request("https://example.test/", { method: "POST", body: form });
-    const decoded = await multipart.formData();
-    expect(decoded.get("label")).toBe("synthetic");
-    const part = decoded.get("file");
-    expect(part).toMatchObject({ name: "report.bin", type: "application/octet-stream" });
-    expect(await new Response(part).text()).toBe("exact file bytes");
+    // Node's native multipart decoder reads the jsdom File global.
+    const boundary = multipart.headers.get("content-type")?.match(/boundary=(.+)$/u)?.[1];
+    expect(boundary).toBeTruthy();
+    expect(await multipart.text()).toBe(
+      `--${boundary}\r\n` +
+        'Content-Disposition: form-data; name="label"\r\n\r\n' +
+        "synthetic\r\n" +
+        `--${boundary}\r\n` +
+        'Content-Disposition: form-data; name="file"; filename="report.bin"\r\n' +
+        "Content-Type: application/octet-stream\r\n\r\n" +
+        "exact file bytes\r\n" +
+        `--${boundary}--\r\n`,
+    );
   });
 
   it("keeps the DOM FileReader and File brands paired", async () => {

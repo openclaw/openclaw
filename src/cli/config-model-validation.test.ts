@@ -39,9 +39,7 @@ describe("config model validation", () => {
   it("rejects an auth-qualified malformed primary before runtime resolution", async () => {
     const primary = "provider/@work";
     const result = await checkTouchedTextModelRefs({
-      config: {
-        agents: { defaults: { model: { primary } } },
-      },
+      config: modelConfig({ primary }),
       touchedPaths: [["agents", "defaults", "model", "primary"]],
       resolveModelRef,
     });
@@ -56,9 +54,7 @@ describe("config model validation", () => {
 
   it("reports resolver setup failures without claiming refs were checked", async () => {
     const result = await checkTouchedTextModelRefs({
-      config: {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
-      },
+      config: modelConfig({ primary: "openai/gpt-5.4-mini" }),
       touchedPaths: [["agents", "defaults", "model", "primary"]],
       createModelRefResolver: async () => {
         throw new Error("catalog unavailable");
@@ -78,16 +74,7 @@ describe("config model validation", () => {
     );
 
     const result = await checkTouchedTextModelRefs({
-      config: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "missing/primary",
-              fallbacks: ["missing/fallback"],
-            },
-          },
-        },
-      },
+      config: modelConfig({ primary: "missing/primary", fallbacks: ["missing/fallback"] }),
       touchedPaths: [["agents", "defaults", "model"]],
       resolveModelRef: rejectModelRef,
     });
@@ -283,26 +270,19 @@ describe("config model validation", () => {
   });
 
   it("validates defaults newly inherited after removing an agent model override", async () => {
+    const defaults = {
+      model: { primary: "provider-a/default", fallbacks: ["provider-a/backup"] },
+    };
     const result = await checkTouchedTextModelRefs({
       config: {
         agents: {
-          defaults: {
-            model: {
-              primary: "provider-a/default",
-              fallbacks: ["provider-a/backup"],
-            },
-          },
+          defaults,
           entries: { ops: {} },
         },
       },
       previousConfig: {
         agents: {
-          defaults: {
-            model: {
-              primary: "provider-a/default",
-              fallbacks: ["provider-a/backup"],
-            },
-          },
+          defaults,
           entries: { ops: { model: "provider-b/override" } },
         },
       },
@@ -365,32 +345,22 @@ function modelConfig(model: { primary?: string; fallbacks?: string[] }): OpenCla
 }
 
 describe("config model validation env handling", () => {
-  it.each(["defaults"] as const)(
-    "reports a new %s placeholder without exposing its expanded value",
-    async (source) => {
-      const resolveModelRef = vi.fn(async () => "Unknown model: private-provider/private-model");
-      const result = await checkTouchedTextModelRefsRaw({
-        config:
-          source === "defaults"
-            ? modelConfig({ primary: "${MODEL_REF}" })
-            : { agents: { entries: { ops: { model: "${MODEL_REF}" } } } },
-        previousConfig: { agents: { entries: { ops: {} } } },
-        touchedPaths: [
-          source === "defaults"
-            ? ["agents", "defaults", "model", "primary"]
-            : ["agents", "entries", "ops", "model"],
-        ],
-        env: { MODEL_REF: "private-provider/private-model@work" },
-        redactDependencyValues: true,
-        resolveModelRef,
-      });
-      expect(result.errors).toEqual([expect.stringContaining('model reference "${MODEL_REF}"')]);
-      expect(result.errors).toEqual([
-        expect.stringContaining("Unable to resolve authored model reference"),
-      ]);
-      expect(result.errors.join("\n")).not.toContain("private-provider");
-    },
-  );
+  it("reports a new defaults placeholder without exposing its expanded value", async () => {
+    const resolveModelRef = vi.fn(async () => "Unknown model: private-provider/private-model");
+    const result = await checkTouchedTextModelRefsRaw({
+      config: modelConfig({ primary: "${MODEL_REF}" }),
+      previousConfig: { agents: { entries: { ops: {} } } },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      env: { MODEL_REF: "private-provider/private-model@work" },
+      redactDependencyValues: true,
+      resolveModelRef,
+    });
+    expect(result.errors).toEqual([expect.stringContaining('model reference "${MODEL_REF}"')]);
+    expect(result.errors).toEqual([
+      expect.stringContaining("Unable to resolve authored model reference"),
+    ]);
+    expect(result.errors.join("\n")).not.toContain("private-provider");
+  });
 
   it("redacts provider details inherited indirectly from an expanded primary", async () => {
     const resolveModelRef = vi.fn(async ({ ref }: ResolverInput) =>

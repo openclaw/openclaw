@@ -127,27 +127,22 @@ function participantWorker(
 
 describe("SQLite session participants", () => {
   it("measures cold participant capacity and warm contribution reads", async () => {
-    for (let sample = 0; sample < 5; sample++) {
-      const scope = {
-        agentId: "main",
-        env: state.env,
-        sessionKey: `agent:main:capacity-measure-${sample}`,
-      };
-      await upsertSessionEntryCore(scope, { sessionId: `capacity-${sample}`, updatedAt: 1 });
-      const database = openOpenClawAgentDatabase(scope);
-      using reads = trackReads(
-        database,
-        "capacity",
-        (sql) =>
-          sql.startsWith('select count(*) as "count"') && sql.includes('"session_participants"'),
-      );
-      expect(contribute(scope, remote("sender"), 10)).toBe("inserted");
+    const scope = await makeSession("capacity-measure");
+    const database = openOpenClawAgentDatabase(scope);
+    using reads = trackReads(
+      database,
+      "capacity",
+      (sql) =>
+        sql.startsWith('select count(*) as "count"') && sql.includes('"session_participants"'),
+    );
+    for (const [promptedAt, result] of [
+      [10, "inserted"],
+      [20, "updated"],
+    ] as const) {
+      expect(contribute(scope, remote("sender"), promptedAt)).toBe(result);
       expect(reads.counts).toEqual({ capacity: 0 });
-      expect(contribute(scope, remote("sender"), 20)).toBe("updated");
-      expect(reads.counts).toEqual({ capacity: 0 });
-
-      expect(readParticipants(scope)).toEqual([aggregate(remote("sender"), 2, 10, 20)]);
     }
+    expect(readParticipants(scope)).toEqual([aggregate(remote("sender"), 2, 10, 20)]);
   });
 
   it.each(["local", "foreign"])(
@@ -284,24 +279,17 @@ describe("SQLite session participants", () => {
   );
 
   it("reinstalls participant tracking after first-use schema rollback and immediate retry", async () => {
-    const scope = { agentId: "main", env: state.env };
-    const target = { ...scope, sessionKey: "agent:main:target" };
-    const sibling = { ...scope, sessionKey: "agent:main:sibling" };
-    for (const entryScope of [target, sibling]) {
-      await upsertSessionEntryCore(entryScope, {
-        sessionId: entryScope.sessionKey,
-        updatedAt: 1,
-      });
-    }
-    const database = openOpenClawAgentDatabase(scope);
+    const target = await makeSession("target");
+    const sibling = await makeSession("sibling");
+    const database = openOpenClawAgentDatabase(target);
     database.db.exec("DROP TABLE session_participants");
-    const read = () => listSessionEntriesCore({ ...scope, projection: "list" });
+    const read = () => listSessionEntriesCore({ ...target, projection: "list" });
     read();
     expect(() =>
       runOpenClawAgentWriteTransaction(() => {
         contribute(target, profile("a"), 10);
         throw new Error("rollback schema");
-      }, scope),
+      }, target),
     ).toThrow("rollback schema");
     // Retry before a cache read can observe the rolled-back schema version.
     contribute(target, profile("a"), 10);
@@ -324,18 +312,13 @@ describe("SQLite session participants", () => {
       if (mutation === "external-participant") {
         vi.useFakeTimers({ toFake: ["setImmediate"] });
       }
-      const scope = { agentId: "main", env: state.env };
-      const target = { ...scope, sessionKey: "agent:main:target" };
-      const sibling = { ...scope, sessionKey: "agent:main:sibling" };
+      const target = await makeSession("target");
+      const sibling = await makeSession("sibling");
       for (const entryScope of [target, sibling]) {
-        await upsertSessionEntryCore(entryScope, {
-          sessionId: entryScope.sessionKey,
-          updatedAt: 1,
-        });
         contribute(entryScope, profile("a"), 10);
       }
-      const database = openOpenClawAgentDatabase(scope);
-      const read = () => listSessionEntriesCore({ ...scope, projection: "list" });
+      const database = openOpenClawAgentDatabase(target);
+      const read = () => listSessionEntriesCore({ ...target, projection: "list" });
       read();
       const mutate = (db: DatabaseSync) => {
         if (mutation === "session-before") {
@@ -365,7 +348,7 @@ describe("SQLite session participants", () => {
         if (mutation === "participant-after") {
           mutate(requireNativeSqliteDatabase(db.db));
         }
-      }, scope);
+      }, target);
       expect(readParticipants(target)).toHaveLength(write === "inserted-target" ? 2 : 1);
       if (mutation === "session-before") {
         expect(read().find((row) => row.sessionKey === sibling.sessionKey)?.entry.label).toBe(
@@ -616,14 +599,13 @@ describe("SQLite session participants", () => {
   it.each([false, true])(
     "updates a merged profile at the admission bound using resident native aliases (canonical row: %s)",
     async (hasCanonicalRow) => {
-      const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:merged-full" };
+      const scope = await makeSession("merged-full");
       const old = ensureProfileForEmail("old@example.test", { env: state.env });
       const other = ensureProfileForEmail("other@example.test", { env: state.env });
       const current = ensureProfileForEmail("current@example.test", { env: state.env });
       using _ = {
         [Symbol.dispose]: (await prepareUserProfileCatalog({ env: state.env })).release,
       };
-      await upsertSessionEntryCore(scope, { sessionId: "merged-full", updatedAt: 1 });
       contribute(scope, profile(old.id), 10);
       contribute(scope, profile(other.id), 10);
       if (hasCanonicalRow) {
@@ -748,17 +730,9 @@ describe("SQLite session participants", () => {
   });
 
   it("merges alias contributions with current destination writes and unknown timestamps", async () => {
-    const makeScope = (name: string) => ({
-      agentId: "main",
-      env: state.env,
-      sessionKey: `agent:main:${name}`,
-    });
-    const canonical = makeScope("canonical");
-    const first = makeScope("first-alias");
-    const second = makeScope("second-alias");
-    for (const scope of [canonical, first, second]) {
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionKey, updatedAt: 1 });
-    }
+    const canonical = await makeSession("canonical");
+    const first = await makeSession("first-alias");
+    const second = await makeSession("second-alias");
     contribute(canonical, profile("shared"), 20);
     contribute(first, profile("shared"), 10);
     contribute(first, profile("shared"), 30);
@@ -771,19 +745,13 @@ describe("SQLite session participants", () => {
       sql.includes('from "session_participants"'),
     );
     runOpenClawAgentWriteTransaction(() => {
-      copySessionNodeArtifactsForRepair(
-        database,
-        database,
+      // The second transfer consumes the aggregate written earlier in this transaction.
+      for (const keys of [
         [canonical.sessionKey, first.sessionKey, second.sessionKey],
-        canonical.sessionKey,
-      );
-      // A second transfer must consume the aggregate written earlier in this transaction.
-      copySessionNodeArtifactsForRepair(
-        database,
-        database,
         [first.sessionKey],
-        canonical.sessionKey,
-      );
+      ]) {
+        copySessionNodeArtifactsForRepair(database, database, keys, canonical.sessionKey);
+      }
     }, canonical);
     expect(reads.counts.participants).toBe(2);
 
@@ -802,18 +770,14 @@ describe("SQLite session participants", () => {
     contribute(sourceScope, profile("profile-0"), 30);
     const source = openOpenClawAgentDatabase({ agentId: "source", env: state.env });
     const target = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    copySessionNodeArtifactsForRepair(
-      source,
-      target,
-      [sourceScope.sessionKey],
-      targetScope.sessionKey,
-    );
-    copySessionNodeArtifactsForRepair(
-      source,
-      target,
-      [sourceScope.sessionKey],
-      targetScope.sessionKey,
-    );
+    for (let attempt = 0; attempt < 2; attempt++) {
+      copySessionNodeArtifactsForRepair(
+        source,
+        target,
+        [sourceScope.sessionKey],
+        targetScope.sessionKey,
+      );
+    }
     const rows = readParticipants(targetScope) ?? [];
     expect(rows).toHaveLength(64);
     expect(

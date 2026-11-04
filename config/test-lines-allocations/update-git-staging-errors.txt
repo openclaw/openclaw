@@ -1,0 +1,2 @@
+# Preserve staging and cleanup diagnostics through the Git update entry point.
+31

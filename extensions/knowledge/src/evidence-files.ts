@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Evidence } from "./model.js";
 import { PublicationFiles } from "./publication-files.js";
 
@@ -75,6 +76,7 @@ export function inspectEvidence(root: string, e: Evidence, previewChars = 0) {
     let used = 0,
       line = 1,
       excerpt = "",
+      previewComplete = previewChars === 0,
       excerptChars = 0,
       tail = "",
       found = !e.quote,
@@ -85,8 +87,10 @@ export function inspectEvidence(root: string, e: Evidence, previewChars = 0) {
         return;
       }
       excerptChars += s.length;
-      if (excerpt.length < previewChars) {
-        excerpt += s.slice(0, previewChars - excerpt.length);
+      if (!previewComplete) {
+        const piece = truncateUtf16Safe(s, previewChars - excerpt.length);
+        excerpt += piece;
+        previewComplete = piece.length < s.length || excerpt.length === previewChars;
       }
       if (e.quote && !found) {
         const part = tail + s;
@@ -238,6 +242,8 @@ export class EvidenceInspector {
       const failure = error instanceof Error ? error : new Error(String(error));
       // Only verdicts about the bytes are reusable; I/O failures are retried.
       if (settled && DETERMINISTIC.test(failure.message)) {
+        // Lazy Error stacks retain this inspector and its request-scoped file contents.
+        failure.stack = String(failure.stack);
         this.verified.set(key, { stamp, outcome: failure });
       } else {
         this.verified.delete(key);
@@ -293,7 +299,7 @@ export class EvidenceInspector {
     if (e.quote && !cited.includes(e.quote)) {
       throw new Error("Evidence locator does not match");
     }
-    const excerpt = cited.slice(0, previewChars);
+    const excerpt = truncateUtf16Safe(cited, previewChars);
     return {
       size: file.size,
       sha256: file.sha256,
