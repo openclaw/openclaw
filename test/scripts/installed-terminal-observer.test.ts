@@ -94,6 +94,113 @@ function terminalOutputFixture() {
   };
 }
 
+it("binds healthy publication to the exact settled candidate and parent", () => {
+  const healthy = () => {
+    const f = terminalOutputFixture();
+    f.spec.fault = false;
+    f.result.code = 0;
+    f.rows.splice(f.rows.indexOf(f.fault), 1);
+    f.publish(f.candidateStdout);
+    return f;
+  };
+  const f = healthy();
+  assertInstalledTerminalOutput(f.rows, f.spec, f.result);
+  f.rows.push({ event: "stdout", pid: 10, thread: 8, time: "1", bytes: "" });
+  const bytes = Buffer.from(f.result.stdout);
+  f.parentOutput.bytes = bytes.subarray(0, 17).toString("base64");
+  f.rows.push({ ...f.parentOutput, time: "51", bytes: bytes.subarray(17).toString("base64") });
+  assertInstalledTerminalOutput(f.rows, f.spec, f.result);
+
+  const invalid: [string, (value: ReturnType<typeof healthy>) => void][] = [
+    [
+      "exit failure",
+      (value) => {
+        value.result.code = 1;
+      },
+    ],
+    [
+      "changed version",
+      (value) => {
+        const output = JSON.parse(value.candidateStdout);
+        output.after.version = "stale";
+        value.publish(`${JSON.stringify(output)}\n`);
+      },
+    ],
+    [
+      "extra bytes",
+      (value) => {
+        value.publish(`${value.candidateStdout} `);
+      },
+    ],
+    [
+      "missing capture",
+      (value) => {
+        value.parentOutput.bytes = "";
+      },
+    ],
+    [
+      "early publication",
+      (value) => {
+        value.parentOutput.time = "29";
+      },
+    ],
+    [
+      "Worker publication",
+      (value) => {
+        value.parentOutput.thread = 8;
+      },
+    ],
+    [
+      "foreign publication",
+      (value) => {
+        value.rows.push({ event: "spawn", pid: 10, child: 12 });
+        value.rows.push({
+          ...value.parentOutput,
+          pid: 12,
+          bytes: Buffer.from("extra").toString("base64"),
+        });
+      },
+    ],
+    [
+      "closure after success",
+      (value) => {
+        const closed = value.rows.find((row) => row.event === "worker-closed");
+        assert(closed);
+        closed.time = "31";
+      },
+    ],
+    [
+      "wrong candidate child",
+      (value) => {
+        const success = value.rows.find((row) => row.event === "candidate-success");
+        assert(success);
+        success.child = 12;
+      },
+    ],
+  ];
+  for (const key of ["root", "runId"] as const) {
+    invalid.push([
+      `stale candidate ${key}`,
+      (value) => {
+        const closed = value.rows.find((row) => row.event === "worker-closed");
+        assert(closed);
+        const output = JSON.parse(value.candidateStdout);
+        output[key] = "stale";
+        closed.stdout = `${JSON.stringify(output)}\n`;
+        value.publish(String(closed.stdout));
+      },
+    ]);
+  }
+  for (const [label, mutate] of invalid) {
+    const value = healthy();
+    mutate(value);
+    expect(
+      () => assertInstalledTerminalOutput(value.rows, value.spec, value.result),
+      label,
+    ).toThrow();
+  }
+});
+
 it("validates terminal output as one settled parent error without replaying candidate success", () => {
   const f = terminalOutputFixture();
   assertInstalledTerminalOutput(f.rows, f.spec, f.result);

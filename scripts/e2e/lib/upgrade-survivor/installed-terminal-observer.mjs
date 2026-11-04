@@ -1794,13 +1794,40 @@ export function assertInstalledTerminalOutput(rows, spec, result) {
   const closed = only("worker-closed");
   const candidateResult = JSON.parse(closed.stdout);
   assert.equal(candidateResult.status, "ok");
-  if (!spec.fault) {
-    assert.equal(result.code, 0);
-    assert.equal(JSON.parse(result.stdout).status, "ok");
-    return;
-  }
   const handoff = only("handoff");
   const success = only("candidate-success");
+  const all = installedTerminalDescendants(rows, result.pid);
+  const candidate = installedTerminalDescendants(rows, handoff.child);
+  const outputs = rows.filter(
+    (row) => row.event === "stdout" && all.has(row.pid) && !candidate.has(row.pid),
+  );
+  const bytes = (events) => Buffer.concat(events.map((row) => Buffer.from(row.bytes, "base64")));
+  if (!spec.fault) {
+    assert.equal(result.code, 0);
+    // The terminal owner forwards the candidate bytes only after settlement.
+    // A separate successful row cannot qualify stale or prematurely emitted stdout.
+    assert.equal(result.stdout, closed.stdout, "Healthy stdout changed candidate bytes");
+    assert.equal(candidateResult.root, spec.root);
+    assert.equal(candidateResult.runId, success.response.terminalRunId);
+    assert.equal(closed.pid, handoff.pid);
+    assert.equal(success.pid, handoff.pid);
+    assert.equal(closed.child, handoff.child);
+    assert.equal(success.child, handoff.child);
+    assert(BigInt(closed.time) < BigInt(success.time));
+    assert.deepEqual(
+      bytes(outputs.filter((row) => row.pid === handoff.pid)),
+      Buffer.from(result.stdout),
+      "Healthy parent stdout capture mismatch",
+    );
+    for (const row of outputs) {
+      if (Buffer.from(row.bytes, "base64").length) {
+        assert.equal(row.pid, handoff.pid, "Foreign predecessor published healthy output");
+        assert.equal(row.thread, 0);
+        assert(BigInt(row.time) > BigInt(success.time), "Healthy output preceded settlement");
+      }
+    }
+    return;
+  }
   const fault = only("launcher-replaced");
   assert.equal(fault.pid, handoff.pid);
   assert.equal(fault.thread, 0);
@@ -1814,12 +1841,6 @@ export function assertInstalledTerminalOutput(rows, spec, result) {
       ),
     );
   assert(refusal, "Missing exact package backup cleanup refusal");
-  const all = installedTerminalDescendants(rows, result.pid);
-  const candidate = installedTerminalDescendants(rows, handoff.child);
-  const outputs = rows.filter(
-    (row) => row.event === "stdout" && all.has(row.pid) && !candidate.has(row.pid),
-  );
-  const bytes = (events) => Buffer.concat(events.map((row) => Buffer.from(row.bytes, "base64")));
   const leaked = bytes(outputs).includes(Buffer.from(closed.stdout));
   if (spec.historical) {
     assert(leaked, "Historical driver did not expose the original early-publication failure");
