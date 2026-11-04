@@ -90,11 +90,6 @@ export type PendingContinuationIdleRetry = {
   armedAt: number;
 };
 
-export type PendingContinuationTurnStart = { startedAt: number; runId: string };
-
-/** The terminal notice a work record owes its session. */
-export type ContinuationWorkTerminalNotice = "retry-exhausted" | "turn-interrupted";
-
 export type PendingContinuationWork = {
   sessionKey: string;
   hop: number;
@@ -128,11 +123,11 @@ export type PendingContinuationWork = {
   // confirmed delivered; the consume read-guard refuses to re-drive it.
   succeeded?: { point: "optimal"; durability: "durable" };
   // The durable turn-start fence (see schema): the wake's turn may have started under `runId`.
-  turnStart?: PendingContinuationTurnStart;
+  turnStart?: { startedAt: number; runId: string };
   // F1: durable pending-notice obligation. PRESENT means the record
   // terminalized but the agent has not yet been told; the value names the
   // notice owed (see work-store `toNoticeWork`).
-  terminalNoticePending?: ContinuationWorkTerminalNotice;
+  terminalNoticePending?: "retry-exhausted" | "turn-interrupted";
   /** Custody record ID (RFC §5.4.5 keeps `record_id = flow_id`). */
   flowId?: string;
   expectedRevision?: number;

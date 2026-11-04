@@ -468,7 +468,7 @@ describe("controls", () => {
       const { recordId, dueAt } = await elect();
       vi.setSystemTime(dueAt + 1);
       const [claimed] = await consumePendingWork(KEY);
-      await accessor.assignSessionOwner(scope, {
+      accessor.assignSessionOwner(scope, {
         owner: ownerB,
         assignedBy: ownerA,
         assignedAt: 3,

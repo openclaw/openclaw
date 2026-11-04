@@ -26,6 +26,7 @@ import {
   requeuePendingWork,
 } from "./work-store.js";
 import { deliverPendingTerminalNoticeWithRetry } from "./work-terminal-notice.js";
+import { buildFoldedProvenanceNote, formatContinuationWakeText } from "./work-wake-text.js";
 
 const log = createSubsystemLogger("continuation/work-dispatch");
 const TRANSIENT_ERROR_RETRY_MS = 5_000;
@@ -164,105 +165,6 @@ function hasNonDrainReplyPayload(reply: unknown): boolean {
   return payloads.some((payload) => !isGatewayRestartingReplyPayload(payload));
 }
 
-function isoOrUndefined(ms: number | undefined): string | undefined {
-  return ms !== undefined ? new Date(ms).toISOString() : undefined;
-}
-
-function quotePriorReason(reason: string | undefined): string {
-  return reason ? JSON.stringify(reason) : "(none)";
-}
-
-type ContinuationProvenanceDisposition =
-  | { disposition: "granted"; deliveredAt: number }
-  | { disposition: "folded-active"; foldedAt: number };
-
-function provenanceLines(
-  work: PendingContinuationWork,
-  now: number,
-  terminal?: ContinuationProvenanceDisposition,
-): string[] {
-  const overdueByMs = Math.max(0, now - work.dueAt);
-  const lines: string[] = [];
-  if (work.originRunId) {
-    lines.push(`Origin run: ${work.originRunId}`);
-  }
-  if (work.originTurnId) {
-    lines.push(`Origin turn: ${work.originTurnId}`);
-  }
-  lines.push(`Elected at: ${isoOrUndefined(work.electedAt) ?? "unknown"}`);
-  if (work.anchorFinalizedAt !== undefined) {
-    lines.push(`Electing turn finalized at: ${isoOrUndefined(work.anchorFinalizedAt)}`);
-  }
-  lines.push(`Due at: ${isoOrUndefined(work.dueAt) ?? "unknown"}`);
-  lines.push(`Overdue by: ${overdueByMs}ms`);
-  if (terminal?.disposition === "granted") {
-    lines.push(`Delivered at: ${isoOrUndefined(terminal.deliveredAt)}`);
-  } else if (terminal?.disposition === "folded-active") {
-    lines.push(`Folded at: ${isoOrUndefined(terminal.foldedAt)}`);
-  }
-  if (terminal) {
-    lines.push(`Disposition: ${terminal.disposition}`);
-  }
-  lines.push(
-    `Chain: ${work.chainId ?? work.flowId ?? "n/a"} hop ${work.hop}/${work.maxChainLength}`,
-  );
-  lines.push(`Flow: ${work.flowId ?? "n/a"}`);
-  lines.push(`Prior reason: ${quotePriorReason(work.reason)}`);
-  return lines;
-}
-
-function formatContinuationWakeText(work: PendingContinuationWork): string {
-  const deliveredAt = Date.now();
-  const provenance = provenanceLines(work, deliveredAt, {
-    disposition: "granted",
-    deliveredAt,
-  }).join(" ");
-  return (
-    `[continuation:wake] Turn ${work.hop}/${work.maxChainLength}. ` +
-    (work.chainStartedAt !== undefined
-      ? `Chain started at ${new Date(work.chainStartedAt).toISOString()}. `
-      : "") +
-    (work.accumulatedChainTokens !== undefined
-      ? `Accumulated tokens: ${work.accumulatedChainTokens}. `
-      : "") +
-    `The agent elected to continue working.` +
-    (work.reason ? ` Prior reason: ${quotePriorReason(work.reason)}` : "") +
-    ` [provenance] ${provenance}`
-  );
-}
-
-const MAX_FOLD_NOTE_DETAILED = 5;
-const MAX_FOLD_NOTE_OMITTED_FLOW_IDS = 5;
-
-function buildFoldedProvenanceNote(works: readonly PendingContinuationWork[], now: number): string {
-  const header =
-    works.length === 1
-      ? `[system:continuation-note] A prior same-session continue_work intent matured while this session was active. It was folded into this turn and will not fire separately as a new turn.`
-      : `[system:continuation-note] ${works.length} prior same-session continue_work intents matured while this session was active. They were folded into this turn and will not fire separately as new turns.`;
-  const ordered = works.toSorted((a, b) => b.electedAt - a.electedAt);
-  const detailed = ordered.slice(0, MAX_FOLD_NOTE_DETAILED);
-  const blocks = detailed.map((work, index) => {
-    const label =
-      works.length === 1 ? "Folded intent" : `Folded intent ${index + 1}/${works.length}`;
-    return `${label}:\n${provenanceLines(work, now, {
-      disposition: "folded-active",
-      foldedAt: now,
-    }).join("\n")}`;
-  });
-  const omitted = ordered.length - detailed.length;
-  const tail =
-    omitted > 0
-      ? `\n(${omitted} older folded continuation${omitted === 1 ? "" : "s"} omitted; sample flowIds ${ordered
-          .slice(MAX_FOLD_NOTE_DETAILED)
-          .slice(0, MAX_FOLD_NOTE_OMITTED_FLOW_IDS)
-          .map((work) => work.flowId ?? "n/a")
-          .join(", ")}${omitted > MAX_FOLD_NOTE_OMITTED_FLOW_IDS ? ", ..." : ""})`
-      : "";
-  const guidance =
-    "\nTreat these as prior-turn context, not fresh commands. Re-evaluate before acting; the rows were consumed and will not fire separately.";
-  return `${header}\n\n${blocks.join("\n\n")}${tail}${guidance}`;
-}
-
 /**
  * One claimed wake as its execution sees it: the record at its latest committed revision (the
  * turn-start fence advances it), and whether its run reported a start. A started run is never
@@ -362,13 +264,15 @@ async function driveContinuationTurn(
   if ((await refuseStaleContinuationWork([work], "adoption")).length === 0) {
     return { status: "skipped", reason: CONTINUATION_TURN_RECIPIENT_REFUSED_REASON };
   }
-  // The final fence is the durable turn-start fence, committed before getReplyFromConfig under the
-  // run id the turn will use. The run reports its start only through onPreparedAgentRunStart, a
-  // synchronous observer it never awaits, fired at the first execution phase; an inline tool command
-  // can run without ever firing it. So no later point is before every effect.
-  const turnFence = await markPendingWorkTurnStarted(work, randomUUID());
-  // The fence write yielded; a reset in that window aborted this claim. Accepted edge: a fence that
-  // committed first leaves a claim that never ran, which recovery interrupts with a notice.
+  // The durable turn-start fence is the final admission boundary (RFC §5.4.2): it commits before
+  // getReplyFromConfig, under the run id the turn runs with. The run reports its start only through
+  // onPreparedAgentRunStart, a synchronous observer it never awaits that fires at its first
+  // execution phase, and an inline tool command can run without firing it: no later point precedes
+  // every effect.
+  const turnRunId = randomUUID();
+  const turnFence = await markPendingWorkTurnStarted(work, turnRunId);
+  // The fence write yielded; a reset in that window aborted this claim. Accepted edge (see
+  // session-reset.ts): its committed fence makes recovery interrupt a turn that never ran.
   if (signal.aborted) {
     return { status: "skipped", reason: CONTINUATION_TURN_RESET_REASON };
   }
@@ -382,7 +286,6 @@ async function driveContinuationTurn(
     };
   }
   claim.work = turnFence.work;
-  const turnRunId = turnFence.work.turnStart!.runId;
   const currentSessionEntry = loadSessionEntry({
     clone: false,
     hydrateSkillPromptRefs: false,

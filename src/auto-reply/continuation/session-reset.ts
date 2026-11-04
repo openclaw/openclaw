@@ -56,7 +56,8 @@ type SessionContinuationBoundary = "head" | "session";
  * before dispatch, handed off, or interrupted). A wake already driving a turn belongs to the
  * replaced head, and a post-compaction shard needs a rebind rule before it may outlive the
  * context that staged it. Accepted edge: a wake claimed between this read and the reset's claim
- * abort stays `running` and is re-driven by running-recovery a minute later.
+ * abort stays `running`; running-recovery re-drives it a minute later, or interrupts it with a
+ * notice if its turn-start fence had committed (at most once, RFC §5.4.2).
  */
 function survivesHeadSwap(record: ContinuationRecord): boolean {
   return record.kind === "delegate" || (record.kind === "work" && record.status === "queued");

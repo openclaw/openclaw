@@ -46,7 +46,7 @@ const log = createSubsystemLogger("continuation/work-terminal-notice");
 export const CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE =
   "[system:continuation-warning] continue_work permanently failed after exhausting its retries; the scheduled follow-up turn will not run. Reissue continue_work if the work is still needed.";
 
-export const CONTINUATION_WORK_TURN_INTERRUPTED_NOTICE_TAG = "[continuation:work-turn-interrupted]";
+const CONTINUATION_WORK_TURN_INTERRUPTED_NOTICE_TAG = "[continuation:work-turn-interrupted]";
 
 /**
  * The notice a record owes. A wake whose turn started but whose delivery was never confirmed is
