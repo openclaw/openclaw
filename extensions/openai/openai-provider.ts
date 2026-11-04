@@ -2,6 +2,8 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-markers";
+import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildFamilyForwardCompatModel,
@@ -559,15 +561,10 @@ export function buildOpenAIProvider(): ProviderPlugin {
         if (auth.preparationFailed) {
           return null;
         }
-        const [
-          { resolveApiKeyForProvider, resolveProviderAuthProfileMetadataAsync },
-          { isNonSecretApiKeyMarker },
-        ] = await Promise.all([
-          import("openclaw/plugin-sdk/provider-auth-runtime"),
-          import("openclaw/plugin-sdk/provider-auth"),
-        ]);
         let runtimeAuth: Awaited<ReturnType<typeof resolveApiKeyForProvider>> | undefined;
         if (auth.profileId || auth.mode === "none") {
+          const { resolveApiKeyForProvider } =
+            await import("openclaw/plugin-sdk/provider-auth-runtime");
           try {
             runtimeAuth = await resolveApiKeyForProvider({
               provider: PROVIDER_ID,
@@ -586,6 +583,8 @@ export function buildOpenAIProvider(): ProviderPlugin {
           }
         }
         if (runtimeAuth && isCodexCatalogAuthMode(runtimeAuth.mode) && runtimeAuth.apiKey) {
+          const { resolveProviderAuthProfileMetadataAsync } =
+            await import("openclaw/plugin-sdk/provider-auth-runtime");
           const metadata = await resolveProviderAuthProfileMetadataAsync({
             provider: PROVIDER_ID,
             cfg: ctx.config,
