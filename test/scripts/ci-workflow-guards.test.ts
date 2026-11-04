@@ -2399,7 +2399,29 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           name,
         ).toEqual(releaseRunnerGroup ? { group: releaseRunnerGroup, labels: expected } : expected);
       }
-      expect(ciValue("check-additional-shard", "timeout-minutes", context)).toBe(30);
+      expect(
+        ciValue("check-additional-shard", "runs-on", {
+          ...context,
+          dispatchId: "",
+          releaseGate: true,
+          validationTier: "full",
+        }),
+      ).toBe(context.matrix.runner);
+      const timeouts: Array<[Partial<Parameters<typeof evaluateWorkflowExpression>[1]>, number]> = [
+        [{}, 30],
+        [{ dispatchId: "", releaseGate: true, validationTier: "full" }, 30],
+        [{ dispatchId: "" }, 60],
+        [{ dispatchId: "", releaseGate: true, validationTier: "main" }, 60],
+        [{ runAttempt: 2 }, 60],
+        [{ repository: "contributor/openclaw" }, 60],
+        [{ eventName: "push" }, 60],
+      ];
+      for (const [overrides, expected] of timeouts) {
+        expect(
+          ciValue("check-additional-shard", "timeout-minutes", { ...context, ...overrides }),
+          JSON.stringify(overrides),
+        ).toBe(expected);
+      }
     },
   );
 
