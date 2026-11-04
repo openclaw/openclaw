@@ -91,7 +91,10 @@ it.each(["native inference", "payload preparation"])(
       signal: abort.signal,
       onPayload:
         phase === "payload preparation"
-          ? () => new Promise<undefined>(() => queueMicrotask(() => abort.abort()))
+          ? () => {
+              queueMicrotask(() => abort.abort());
+              return Promise.withResolvers<undefined>().promise;
+            }
           : undefined,
     });
     expect(await stream.result()).toMatchObject({ stopReason: "aborted", content: [] });

@@ -475,7 +475,10 @@ describe("createOllamaStreamFn thinking events", () => {
     const controller = new AbortController();
     const stream = startMockStream([], {
       signal: controller.signal,
-      onPayload: () => new Promise<undefined>(() => queueMicrotask(() => controller.abort())),
+      onPayload: () => {
+        queueMicrotask(() => controller.abort());
+        return Promise.withResolvers<undefined>().promise;
+      },
     });
     expect((await readEvents(stream)).at(-1)).toMatchObject({ type: "error", reason: "aborted" });
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
@@ -552,7 +555,7 @@ const hiddenReasoning = {
 type ThinkLevel = "off" | "high" | "max";
 type ThinkValue = string | boolean | undefined;
 
-describe("native Ollama direct completion reasoning", () => {
+describe("native Ollama reasoning", () => {
   it.each([
     ["explicit off", {}, "off", false],
     ["omitted reasoning", {}, undefined, undefined],
@@ -618,6 +621,24 @@ describe("native Ollama direct completion reasoning", () => {
       }
     }
   });
+  it.each<[Partial<ProviderRuntimeModel>, ThinkLevel | undefined, ThinkValue]>([
+    [{}, "off", "low"],
+    [{ id: "glm-5.3-flash" }, "off", "low"],
+    [{ ...local, id: "glm-5.3:cloud" }, "off", "low"],
+    [{ params: { think: false } }, "off", "low"],
+    [{ ...local, id: "qwen3:32b", params: { thinking: "medium" } }, "off", "medium"],
+    [{ params: { think: false }, reasoning: false }, "high", "low"],
+    [{ ...hiddenReasoning, thinkingLevelMap: { off: "true", high: "true" } }, "high", true],
+    [{}, "high", "high"],
+    [{ id: "glm-5.2" }, "off", false],
+    [{ ...local, id: "glm-5.3:q4_K_M" }, "off", false],
+    [{ params: { think: false } }, undefined, "low"],
+    [{ ...hiddenReasoning, thinkingLevelMap: { off: "true" } }, undefined, true],
+    [{ id: "glm-5.2", params: { think: false } }, undefined, false],
+    [{}, undefined, undefined],
+  ])("completion %j at %s sends %s", async (model, level, think) => {
+    expect((await sentThinking(model, level)).think).toBe(think);
+  });
 });
 
 async function sentThinking(
@@ -656,32 +677,6 @@ async function sentThinking(
   expect(body.options).not.toHaveProperty("think");
   return { url: fetchWithSsrFGuardMock.mock.calls[0]?.[0].url, think: body.think };
 }
-
-describe("Ollama mandatory thinking", () => {
-  it.each<[Partial<ProviderRuntimeModel>, ThinkLevel, ThinkValue]>([
-    [{}, "off", "low"],
-    [{ id: "glm-5.3-flash" }, "off", "low"],
-    [{ ...local, id: "glm-5.3:cloud" }, "off", "low"],
-    [{ params: { think: false } }, "off", "low"],
-    [{ ...local, id: "qwen3:32b", params: { thinking: "medium" } }, "off", "medium"],
-    [{ params: { think: false }, reasoning: false }, "high", "low"],
-    [{ ...hiddenReasoning, thinkingLevelMap: { off: "true", high: "true" } }, "high", true],
-    [{}, "high", "high"],
-    [{ id: "glm-5.2" }, "off", false],
-    [{ ...local, id: "glm-5.3:q4_K_M" }, "off", false],
-  ])("agent turn %j at %s sends %s", async (model, level, think) => {
-    expect((await sentThinking(model, level)).think).toBe(think);
-  });
-
-  it.each<[Partial<ProviderRuntimeModel>, ThinkValue]>([
-    [{ params: { think: false } }, "low"],
-    [{ ...hiddenReasoning, thinkingLevelMap: { off: "true" } }, true],
-    [{ id: "glm-5.2", params: { think: false } }, false],
-    [{}, undefined],
-  ])("direct completion %j sends %s", async (model, think) => {
-    expect((await sentThinking(model)).think).toBe(think);
-  });
-});
 
 describe.each(["runtime", "configured"] as const)("%s maximum thinking", (source) => {
   const cloud = "https://ollama.com";

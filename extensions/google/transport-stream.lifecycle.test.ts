@@ -90,11 +90,10 @@ describe("Google stream lifecycle", () => {
 
   it("aborts before dispatch while the payload hook is pending", async () => {
     const controller = new AbortController();
-    const stream = await startStream(
-      controller.signal,
-      undefined,
-      () => new Promise<undefined>(() => queueMicrotask(() => controller.abort())),
-    );
+    const stream = await startStream(controller.signal, undefined, () => {
+      queueMicrotask(() => controller.abort());
+      return Promise.withResolvers<undefined>().promise;
+    });
     await expect(stream.result()).resolves.toMatchObject({ stopReason: "aborted" });
     expect(guardedFetch).not.toHaveBeenCalled();
   });
@@ -106,8 +105,7 @@ describe("Google stream lifecycle", () => {
       .mockResolvedValueOnce(response([quotaError]))
       .mockResolvedValueOnce(response([terminal, "[DONE]"]));
     const stream = await startStream(new AbortController().signal);
-    const result = await stream.result();
-    expect(result).toMatchObject(completedResponse);
+    expect(await stream.result()).toMatchObject(completedResponse);
     expect(
       guardedFetch.mock.calls.map(([, init]) => new Headers(init.headers).get("x-goog-api-key")),
     ).toEqual(["fixture-key-1", "fixture-key-2"]);
@@ -118,19 +116,14 @@ describe("Google stream lifecycle", () => {
     vi.useFakeTimers();
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     const cancel = vi.fn();
+    const emptyFrames = [
+      { usageMetadata: { promptTokenCount: 10 } },
+      { candidates: [{ finishReason: "" }] },
+      { candidates: [{ finishReason: "FINISH_REASON_UNSPECIFIED" }] },
+      { candidates: [{ content: { parts: [{ text: "" }] } }] },
+    ];
     guardedFetch
-      .mockResolvedValueOnce(
-        response(
-          [
-            { usageMetadata: { promptTokenCount: 10 } },
-            { candidates: [{ finishReason: "" }] },
-            { candidates: [{ finishReason: "FINISH_REASON_UNSPECIFIED" }] },
-            { candidates: [{ content: { parts: [{ text: "" }] } }] },
-          ],
-          cancel,
-          true,
-        ),
-      )
+      .mockResolvedValueOnce(response(emptyFrames, cancel, true))
       .mockResolvedValueOnce(response([terminal, "[DONE]"]));
     await advanceResponse(11, "gemini-3.1-pro-preview");
     expect(cancel).toHaveBeenCalledOnce();
