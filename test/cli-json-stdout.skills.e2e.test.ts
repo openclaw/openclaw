@@ -53,7 +53,7 @@ describe("cli json stdout contract", () => {
         await writeJson(configPath, { gateway: { mode: "remote" } });
       }
       const source = [
-        'globalThis.fetch = async () => new Response("offline fixture", { status: 400 });',
+        'globalThis.fetch = Object.assign(async () => new Response("offline fixture", { status: 400 }), { mock: {} });',
         ...("explicitGateway" in testCase
           ? [
               'import net from "node:net";',
@@ -105,7 +105,9 @@ describe("cli json stdout contract", () => {
       assert(syntaxError instanceof SyntaxError);
       const result = runIsolatedCli(tempHome, ["skills", "search", "fixture"], {
         env: { OPENCLAW_DEBUG: testCase.debug },
-        source: ['globalThis.fetch = async () => new Response("not-json", { status: 200 });'],
+        source: [
+          'globalThis.fetch = Object.assign(async () => new Response("not-json", { status: 200 }), { mock: {} });',
+        ],
       });
 
       expect(result.status, result.stderr).toBe(1);

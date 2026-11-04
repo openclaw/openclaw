@@ -23,6 +23,8 @@ type ModelAccountsSnapshot = {
 export type ModelAccountsTargetSource = {
   read: () => ModelAccountsSnapshot;
   subscribe: (listener: () => void) => () => void;
+  /** The page's Refresh covers the inventory, so the section has no refresh of its own. */
+  subscribeRefresh?: (listener: () => void) => () => void;
 };
 
 export type ModelAccountsProps = {

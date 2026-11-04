@@ -1265,7 +1265,7 @@ describe("host-hook fixture plugin contract", () => {
       (storePath) => ({
         session: { store: storePath },
         plugins: {
-          entries: { "policy-blocked-injector": { hooks: { allowPromptInjection: false } } },
+          entries: { "policy-blocked-injector": { hooks: { allowPromptModification: false } } },
         },
       }),
     );

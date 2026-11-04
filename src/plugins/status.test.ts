@@ -129,7 +129,7 @@ describe("plugin status reports", () => {
         google: {
           enabled: true,
           hooks: {
-            allowPromptInjection: false,
+            allowPromptModification: false,
             allowConversationAccess: true,
             timeoutMs: 1700,
             timeouts: { gateway_stop: 1300 },

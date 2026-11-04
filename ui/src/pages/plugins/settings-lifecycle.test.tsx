@@ -1,5 +1,3 @@
-/* @vitest-environment jsdom */
-
 import { createSignal, flush } from "solid-js";
 import { beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
@@ -160,20 +158,22 @@ it("gives inherited host permissions the setting menu and preserves read-only va
     onAskSetting: vi.fn(),
     hostControlsSchema: objectSchema({
       hooks: objectSchema({
-        allowPromptInjection: { type: "boolean" },
+        allowPromptModification: { type: "boolean" },
       }),
     }),
   });
   await Promise.resolve();
   flush();
-  const row = setting(container, "hooks.allowPromptInjection");
+  const row = setting(container, "hooks.allowPromptModification");
+  expect(row.textContent).toContain("add or change the context and instructions sent to the model");
+  expect(row.textContent).toContain("Only allow this for plugins you trust.");
   expect(row.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true);
   expect(row.querySelector('[data-value="reset"]')?.hasAttribute("disabled")).toBe(true);
   await selectSettingAction(row, "ask");
   const hooksPath = ["plugins", "entries", "workboard", "hooks"];
-  const path = [...hooksPath, "allowPromptInjection"];
+  const path = [...hooksPath, "allowPromptModification"];
   expect(props.onAskSetting).toHaveBeenCalledWith(
-    expect.objectContaining({ path, value: true, label: "Add context to prompts" }),
+    expect.objectContaining({ path, value: true, label: "Modify prompts" }),
   );
   row.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
   expect(props.onConfigPatch).toHaveBeenCalledWith(path, false);
@@ -181,7 +181,7 @@ it("gives inherited host permissions the setting menu and preserves read-only va
   const { container: readOnly } = mount({ ...props, canEditConfig: false });
   await Promise.resolve();
   flush();
-  const readOnlyInput = setting(readOnly, "hooks.allowPromptInjection").querySelector("input")!;
+  const readOnlyInput = setting(readOnly, "hooks.allowPromptModification").querySelector("input")!;
   expect(readOnlyInput.disabled).toBe(true);
   readOnlyInput.click();
   expect(props.onConfigPatch).not.toHaveBeenCalled();
@@ -206,7 +206,7 @@ it("shows selected capabilities without a catalog", () => {
   const titles = [...container.querySelectorAll(".plugin-capabilities h2")].map(
     (heading) => heading.textContent,
   );
-  expect(titles).toEqual(["Capabilities2", "Tools1"]);
+  expect(titles).toEqual(["Capabilities", "Extensions", "Tools"]);
   expect(container.textContent).toContain("Text to speech");
   expect(container.textContent).toContain("Pages");
   expect(container.textContent).not.toMatch(/speechProviders:|sibling-|Video generation/);

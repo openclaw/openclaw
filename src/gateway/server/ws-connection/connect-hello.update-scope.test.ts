@@ -165,6 +165,37 @@ function makeState(role: "operator" | "node", scopes: string[]) {
   };
 }
 
+describe("sendGatewayHello running Gateway exposure", () => {
+  const gatewayExposure = { bindHost: "0.0.0.0", tailscaleMode: "off" } as const;
+
+  it("advertises what the process runs with to admins, not what config says", async () => {
+    const context = makeContext("operator", ["operator.admin"]);
+    await sendGatewayHello(
+      { ...context, handler: { ...context.handler, gatewayExposure } } as never,
+      { ...makeState("operator", ["operator.admin"]), resolvedAuth: { mode: "password" } } as never,
+      {},
+    );
+    expect(helloSnapshot(context)).toMatchObject({
+      authMode: "password",
+      bindHost: "0.0.0.0",
+      tailscaleMode: "off",
+    });
+  });
+
+  it("keeps it from clients without admin scope", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+    await sendGatewayHello(
+      { ...context, handler: { ...context.handler, gatewayExposure } } as never,
+      makeState("operator", ["operator.read"]) as never,
+      {},
+    );
+    const snapshot = helloSnapshot(context);
+    expect(snapshot?.authMode).toBeUndefined();
+    expect(snapshot?.bindHost).toBeUndefined();
+    expect(snapshot?.tailscaleMode).toBeUndefined();
+  });
+});
+
 function helloPayload(context: ReturnType<typeof makeContext>) {
   const response = context.sendFrame.mock.calls.at(0)?.at(0) as { payload?: HelloOk } | undefined;
   return response?.payload;
