@@ -209,7 +209,7 @@ describe("cloud target menu", () => {
     expect(enabled?.disabled).toBe(false);
     expect(enabled?.getAttribute("aria-disabled")).toBe(global ? "true" : null);
     expect(enabled?.getAttribute("aria-description")).toBe(
-      `Cloud worker provider: static-ssh${global ? `, ${reason}` : ""}`,
+      `Cloud provider: static-ssh${global ? `, ${reason}` : ""}`,
     );
   });
 });
