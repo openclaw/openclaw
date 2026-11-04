@@ -6,6 +6,7 @@ import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runti
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { resolveUiSessionRowAgentId } from "../../lib/sessions/session-key.ts";
@@ -140,7 +141,7 @@ export async function reclaimChatPanePlacement(params: {
         }
         params.publishError(error);
         showToast({
-          message: error instanceof Error ? error.message : String(error),
+          message: formatUiError(error),
           severity: "error",
         });
         // A refresh failure must not offer to repeat a successful stop.
