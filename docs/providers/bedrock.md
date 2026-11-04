@@ -139,6 +139,40 @@ Choose your preferred auth method and follow the setup steps.
   </Tab>
 </Tabs>
 
+## Account for scheduled runs
+
+Scheduled automations record the account each run uses. Bedrock keeps no stored
+credential, so its account is declared in config instead:
+
+```json5
+{
+  auth: {
+    profiles: {
+      "amazon-bedrock:aws-sdk": { provider: "amazon-bedrock", mode: "aws-sdk" },
+    },
+  },
+  models: { providers: { "amazon-bedrock": { auth: "aws-sdk" } } },
+}
+```
+
+`openclaw models auth login --provider amazon-bedrock` (choice **Amazon Bedrock
+(AWS credentials)**) writes both entries, and `openclaw doctor --fix` adds the
+profile to a config that already sets `auth: "aws-sdk"`. No AWS credentials are
+stored: every request still resolves through the default chain.
+
+With the account declared, `openclaw doctor --fix` records
+`amazon-bedrock:aws-sdk` on existing automations that have none, and new
+automations can select it explicitly:
+
+```bash
+openclaw automations edit <jobId> \
+  --model 'amazon-bedrock/us.anthropic.claude-opus-4-6-v1@amazon-bedrock:aws-sdk'
+```
+
+Until an automation records an account, its runs are refused with `Automation
+has no recorded inference account`. Interactive turns are unaffected and keep
+using `auth: "aws-sdk"` on its own.
+
 ## Automatic model discovery
 
 OpenClaw can automatically discover Bedrock models that support **streaming**

@@ -451,7 +451,9 @@ Personal pins keep the existing same-provider failover policy: ordered shared ac
 
 ## Config-only auth routes
 
-`auth.profiles` entries with `mode: "aws-sdk"` are routing metadata, not stored credentials. They are valid when the target provider uses `models.providers.<id>.auth: "aws-sdk"`, the route the plugin-owned Amazon Bedrock setup writes. These profile ids may appear in `auth.order` and session overrides even when no matching entry exists in the credential store.
+`auth.profiles` entries with `mode: "aws-sdk"` are routing metadata, not stored credentials. They are valid when the target provider uses `models.providers.<id>.auth: "aws-sdk"`, the route the plugin-owned Amazon Bedrock setup writes as `amazon-bedrock:aws-sdk`. These profile ids may appear in `auth.order` and session overrides even when no matching entry exists in the credential store.
+
+Such a declaration is also the account a scheduled run records: with no stored row to observe, the authorization identifies the declaration itself, so removing it from config retires the automation's recorded account. `openclaw doctor --fix` declares the profile for a config that only sets `auth: "aws-sdk"` and then records `model@amazon-bedrock:aws-sdk` on automations that have no account. An AWS SDK route with no declared account stays unbound, and its scheduled runs remain refused.
 
 Do not write `type: "aws-sdk"` into the credential store; stored credentials are only `api_key`, `token`, or `oauth`. If a legacy `auth-profiles.json` has such a marker, `openclaw doctor --fix` moves it to `auth.profiles` and removes the marker from the store.
 
