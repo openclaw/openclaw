@@ -7,6 +7,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-operator-authority.types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import {
@@ -142,7 +143,8 @@ export function projectOperatorModelRead<
     ...(result.defaults && policy ? { defaults: policy.defaults(result.defaults) } : {}),
     ...(result.metadata && policy ? { metadata: policy.metadata(result.metadata) } : {}),
     ...(result.sessionInfo ? { sessionInfo: presentation.session(result.sessionInfo) } : {}),
-    ...(result.messages
+    // Access-only metadata filtering must not decode and re-encode unchanged history.
+    ...(result.messages && presentation.restrictsModels
       ? {
           messages: (result.messages instanceof SerializedJsonArray
             ? result.messages.materialize()
@@ -222,6 +224,20 @@ export function prepareOperatorModelPolicyPresentation(params: {
       );
     }
     return visible;
+  };
+  const projectUtilitySelection = (result: ModelsListResult) => {
+    const selection = result.utilityModel;
+    if (!selection?.modelRef) {
+      return selection;
+    }
+    const { model, profile } = splitTrailingAuthProfile(selection.modelRef);
+    const disclosedProfileId =
+      result.accountSelection?.kind === "automatic"
+        ? undefined
+        : result.accountSelection?.authProfileId;
+    return profile && profile !== disclosedProfileId
+      ? { ...selection, modelRef: model }
+      : selection;
   };
   const hidden = (provider: unknown, model: unknown) =>
     policy !== undefined &&
@@ -323,6 +339,7 @@ export function prepareOperatorModelPolicyPresentation(params: {
           catalog: (result: ModelsListResult): ModelsListResult => ({
             ...result,
             models: filterModels(result.models),
+            ...(result.utilityModel ? { utilityModel: projectUtilitySelection(result) } : {}),
             ...(result.decisionModels
               ? { decisionModels: filterModels(result.decisionModels) }
               : {}),
@@ -402,6 +419,11 @@ export function prepareOperatorModelPolicyPresentation(params: {
       };
       return {
         catalog(result: ModelsListResult): ModelsListResult {
+          const { utilityModel: selectedUtilityModel, ...catalogResult } = result;
+          const visibleUtilitySelection =
+            !selectedUtilityModel?.modelRef || allowedReference(selectedUtilityModel.modelRef)
+              ? projectUtilitySelection(result)
+              : undefined;
           const models = filterModels(result.models);
           const decisionModels = result.decisionModels && filterModels(result.decisionModels);
           const utilityModel = result.defaultModels?.automaticUtilityModel
@@ -437,8 +459,9 @@ export function prepareOperatorModelPolicyPresentation(params: {
               visibleProviders.has(provider) && (!profileId || profileId === disclosedProfileId),
           );
           return {
-            ...result,
+            ...catalogResult,
             models,
+            ...(visibleUtilitySelection ? { utilityModel: visibleUtilitySelection } : {}),
             modelSelectionPolicy,
             pendingProviders: (result.pendingProviders ?? []).filter((provider) =>
               visibleProviders.has(provider),

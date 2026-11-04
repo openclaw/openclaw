@@ -11,6 +11,7 @@ import { constants as fsConstants, promises as fs } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { inferKind } from "./oc-path/dispatch.js";
 import { OcPathEditError } from "./oc-path/edit-error.js";
 import { findOcPaths } from "./oc-path/find.js";
@@ -72,7 +73,7 @@ function emitError(mode: OutputMode, message: string, code = "ERR"): void {
     );
     return;
   }
-  process.stderr.write(`${code}: ${scrubbed}\n`);
+  process.stderr.write(terminalText`${code}: ${scrubbed}\n`);
 }
 
 function tryParse(pathStr: string, mode: OutputMode): OcPath | null {
@@ -170,17 +171,18 @@ function resolveFsPath(path: OcPath, options: PathCommandOptions): string {
   return resolvePath(options.cwd ?? process.cwd(), path.file);
 }
 
+// Inspection summaries are terminal text; emit and dry-run preserve source bytes.
 function formatMatchHuman(match: OcMatch): string {
   if (match.kind === "leaf") {
-    return `leaf @ L${match.line}: ${JSON.stringify(match.valueText)} (${match.leafType})`;
+    return terminalText`leaf @ L${match.line}: ${JSON.stringify(match.valueText)} (${match.leafType})`;
   }
   if (match.kind === "node") {
-    return `node @ L${match.line} [${match.descriptor}]`;
+    return terminalText`node @ L${match.line} [${match.descriptor}]`;
   }
   if (match.kind === "insertion-point") {
-    return `insertion-point @ L${match.line} [${match.container}]`;
+    return terminalText`insertion-point @ L${match.line} [${match.container}]`;
   }
-  return `root @ L${match.line}`;
+  return terminalText`root @ L${match.line}`;
 }
 
 function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {
@@ -266,7 +268,7 @@ export function registerPathCli(program: Command): void {
       throw err;
     }
     if (match === null) {
-      emit(mode, { resolved: false, ocPath: pathStr }, () => `not found: ${pathStr}`);
+      emit(mode, { resolved: false, ocPath: pathStr }, () => terminalText`not found: ${pathStr}`);
       process.exitCode = 1;
       return;
     }
@@ -309,12 +311,13 @@ export function registerPathCli(program: Command): void {
       },
       () => {
         if (matches.length === 0) {
-          return `0 matches for ${patternStr}`;
+          return terminalText`0 matches for ${patternStr}`;
         }
         const plural = matches.length === 1 ? "" : "es";
-        const lines = [`${matches.length} match${plural} for ${patternStr}:`];
+        const lines = [terminalText`${matches.length} match${plural} for ${patternStr}:`];
         for (const m of matches) {
-          lines.push(`  ${formatOcPath(m.path)}  →  ${formatMatchHuman(m.match)}`);
+          const displayPath = terminalText`${formatOcPath(m.path)}`;
+          lines.push(`  ${displayPath}  →  ${formatMatchHuman(m.match)}`);
         }
         return lines.join("\n");
       },
@@ -363,7 +366,8 @@ export function registerPathCli(program: Command): void {
         emit(
           mode,
           { ok: false, reason: err.reason, detail },
-          () => `set failed: ${err.reason}${detail !== undefined ? ` — ${detail}` : ""}`,
+          () =>
+            terminalText`set failed: ${err.reason}${detail !== undefined ? ` — ${detail}` : ""}`,
         );
         process.exitCode = 1;
         return;
@@ -387,8 +391,8 @@ export function registerPathCli(program: Command): void {
         { ok: true, dryRun: true, bytes: newBytes, ...(diff !== undefined ? { diff } : {}) },
         () =>
           diff !== undefined
-            ? diff || `--dry-run: no byte changes for ${fsPath}`
-            : `--dry-run: would write ${byteLength} bytes to ${fsPath}\n${newBytes}`,
+            ? diff || terminalText`--dry-run: no byte changes for ${fsPath}`
+            : `${terminalText`--dry-run: would write ${byteLength} bytes to ${fsPath}`}\n${newBytes}`,
       );
       return;
     }
@@ -396,7 +400,7 @@ export function registerPathCli(program: Command): void {
     emit(
       mode,
       { ok: true, dryRun: false, bytesWritten: byteLength, fsPath },
-      () => `wrote ${byteLength} bytes to ${fsPath}`,
+      () => terminalText`wrote ${byteLength} bytes to ${fsPath}`,
     );
   });
 
@@ -419,18 +423,21 @@ export function registerPathCli(program: Command): void {
             structure: ocPath,
           },
           () => {
-            const lines = [`valid: ${pathStr}`, `  file:    ${ocPath.file}`];
+            const lines = [
+              terminalText`valid: ${pathStr}`,
+              terminalText`  file:    ${ocPath.file}`,
+            ];
             if (ocPath.section !== undefined) {
-              lines.push(`  section: ${ocPath.section}`);
+              lines.push(terminalText`  section: ${ocPath.section}`);
             }
             if (ocPath.item !== undefined) {
-              lines.push(`  item:    ${ocPath.item}`);
+              lines.push(terminalText`  item:    ${ocPath.item}`);
             }
             if (ocPath.field !== undefined) {
-              lines.push(`  field:   ${ocPath.field}`);
+              lines.push(terminalText`  field:   ${ocPath.field}`);
             }
             if (ocPath.session !== undefined) {
-              lines.push(`  session: ${ocPath.session}`);
+              lines.push(terminalText`  session: ${ocPath.session}`);
             }
             return lines.join("\n");
           },
@@ -440,7 +447,7 @@ export function registerPathCli(program: Command): void {
           emit(
             mode,
             { valid: false, code: err.code, message: err.message },
-            () => `INVALID: ${err.code}: ${err.message}`,
+            () => terminalText`INVALID: ${err.code}: ${err.message}`,
           );
           process.exitCode = 1;
           return;

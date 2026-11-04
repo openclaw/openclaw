@@ -2,13 +2,13 @@ import {
   buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
   buildUiPresentationPrompt,
-  buildSkillWorkshopPromptSection,
+  listToolPromptGuidance,
   resolveMainSessionDelegationMode,
-  SKILL_WORKSHOP_TOOL_NAME,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { deniesCodexNativeDelegation } from "../../native-tool-policy.js";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
@@ -30,6 +30,7 @@ export type CodexThreadPromptContext = Pick<
   | "disableMessageTool"
   | "delegationCapability"
   | "pluginHarnessToolPolicyRestricted"
+  | "pluginHarnessToolPolicySafeDeniedTools"
   | "requireWorkspaceOnly"
   | "toolsAllow"
   | "sourceReplyDeliveryMode"
@@ -152,6 +153,7 @@ export function buildDeveloperInstructions(
     options.nativeCodeModeEnabled !== false &&
     params.delegationCapability !== "host_only" &&
     params.pluginHarnessToolPolicyRestricted !== true &&
+    !deniesCodexNativeDelegation(params.pluginHarnessToolPolicySafeDeniedTools) &&
     params.requireWorkspaceOnly !== true &&
     !isCodexResponsesOAuthRun(params) &&
     !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
@@ -173,9 +175,7 @@ export function buildDeveloperInstructions(
           .join(", ")}.`
       : undefined,
     deferredToolDiscoveryGuidance,
-    toolNames.has(SKILL_WORKSHOP_TOOL_NAME)
-      ? buildSkillWorkshopPromptSection().join("\n")
-      : undefined,
+    listToolPromptGuidance(toolNames.keys()).join("\n\n"),
     // Deferred native tools still need discovery. Inherited dynamic schemas do
     // not give native children OpenClaw executors, so choose that owner up front.
     nativeDelegationAvailable

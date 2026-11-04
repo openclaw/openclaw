@@ -24,6 +24,7 @@ import {
 } from "../../app/server-prefs.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
+import { mockDocumentVisibility } from "../../test-helpers/mock-cleanup.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { preserveDocumentStyle } from "../../test-helpers/preserve-document-style.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -201,13 +202,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("distinguishes explicit values that equal the defaults", () => {
-  const config = { browser: { enabled: true }, tools: { profile: "full" } };
+it("reads the browser and tool settings from config", () => {
+  const config = { browser: { enabled: false }, tools: { profile: "full" } };
   expect(extractQuickSettingsSecurity(config)).toMatchObject({
-    browserEnabled: true,
-    browserEnabledOverridden: true,
+    browserEnabled: false,
     toolProfile: "full",
-    toolProfileOverridden: true,
   });
 });
 
@@ -245,7 +244,7 @@ it("renders Web Push registration publications and dispatches Unsubscribe withou
   });
   const { container } = mountConfigPage(context, { pageId: "notifications" });
   expect(container.textContent).toContain("Checking");
-  expect(container.textContent).toContain("Not requested");
+  expect(buttonNamed(container, "Enable notifications").disabled).toBe(false);
 
   snapshot.loading = true;
   publishConfigSource(webPush);
@@ -271,7 +270,7 @@ it("renders Web Push registration publications and dispatches Unsubscribe withou
   snapshot.loading = false;
   snapshot.preferences = { durableIdentity: true, user, device, effective: { ...user, ...device } };
   publishConfigSource(webPush);
-  expect(container.textContent).toContain("Granted");
+  expect(buttonNamed(container, "Send test").disabled).toBe(false);
   expect(container.textContent).toContain("Subscribed");
   expect(container.textContent).not.toContain("Checking");
   expect(
@@ -412,11 +411,9 @@ it("uses the committed snapshot for both display and reset while the form draft 
 
   const themeSection = await waitForSolid(() => {
     const section = container.querySelector<HTMLElement>("#settings-appearance-theme");
-    expect(section?.textContent).toContain("Default: Claw");
+    expect(section?.textContent).toContain("Synced across your devices");
     return section!;
   });
-  expect(themeSection?.textContent).toContain("Synced across your devices");
-  expect(themeSection?.textContent).not.toContain("Default: Knot");
   expect(themeSection?.textContent).not.toContain("Stored in this browser only");
 
   themeSection?.querySelector<HTMLButtonElement>(".settings-theme-card--claw")?.click();
@@ -677,45 +674,35 @@ it.each(["notifications", "usage"] as const)(
   },
 );
 
-it("updates mobile pairing eligibility when connection and admin access are published", () => {
-  const openDevicePairSetup = vi.fn();
+it("sends Privacy & security rows to the pages that own them", () => {
+  const navigate = vi.fn();
+  const context = configContext({ navigate });
+  const view = mountConfigPage(context, { pageId: "security" });
+  const rows = [...view.container.querySelectorAll<HTMLButtonElement>("button.settings-row--nav")];
+  for (const row of rows) {
+    row.click();
+  }
+  expect(navigate.mock.calls.map(([route]) => route)).toEqual([
+    "infrastructure",
+    "infrastructure",
+    "devices",
+    "devices",
+    "approvals",
+  ]);
+});
+
+it("publishes the running Gateway's auth mode as it changes", () => {
   const context = configContext({
     gateway: { snapshot: { phase: "disconnected", hello: null, client: null } },
     runtimeConfig: { state: { connected: false } },
-    overlays: { openDevicePairSetup },
   });
   const view = mountConfigPage(context, { pageId: "security" });
-  const pairingButton = view.container.querySelector<HTMLButtonElement>(
-    ".security-page button.btn",
-  )!;
-  expect(pairingButton.disabled).toBe(true);
+  const mode = () => view.container.querySelector(".settings-row__control")?.textContent?.trim();
+  expect(mode()).toBe("Unknown");
 
-  context.runtimeConfig.state.connected = true;
-  Object.assign(context.gateway.snapshot, {
-    phase: "connected",
-    hello: { auth: auth() },
-  });
+  Object.assign(context.gateway.snapshot, { hello: { snapshot: { authMode: "password" } } });
   publishConfigSource(context.runtimeConfig);
-  expect(pairingButton.disabled).toBe(false);
-  pairingButton.click();
-  expect(openDevicePairSetup).toHaveBeenCalledOnce();
-
-  Object.assign(context.gateway.snapshot, {
-    hello: { auth: auth(["operator.read"]) },
-  });
-  publishConfigSource(context.gateway);
-  expect(pairingButton.disabled).toBe(true);
-  pairingButton.click();
-  expect(openDevicePairSetup).toHaveBeenCalledOnce();
-
-  Object.assign(context.gateway.snapshot, {
-    hello: { auth: auth() },
-  });
-  publishConfigSource(context.gateway);
-  expect(pairingButton.disabled).toBe(false);
-  context.runtimeConfig.state.connected = false;
-  publishConfigSource(context.runtimeConfig);
-  expect(pairingButton.disabled).toBe(true);
+  expect(mode()).toBe("Password");
 });
 
 it.each([
@@ -798,6 +785,57 @@ it("retires an update status receipt when the page leaves and re-enters", async 
   await waitForSolid(() => expect(status()).toContain("Current update status"));
 });
 
+it.each(["countdown", "waiting-for-idle"] as const)(
+  "parks the %s clock while hidden and catches up when visible",
+  async (state) => {
+    vi.useFakeTimers({ now: 1_000, toFake: ["Date", "setInterval", "clearInterval"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const show = mockDocumentVisibility();
+    const context = configContext({
+      gateway: connectedGateway([]),
+      overlays: {
+        snapshot: {
+          updateSchedule: {
+            channel: "stable",
+            autoEnabled: true,
+            campaign: {
+              id: "campaign-1",
+              state,
+              announcedAtMs: 0,
+              updatedAtMs: 0,
+              applyAtMs: 60_000,
+              forceAtMs: 60_000,
+            },
+          },
+        },
+      },
+    });
+    const view = mountConfigPage(context, { pageId: "updates" });
+    const label = () => view.container.querySelector('[role="timer"]')?.textContent;
+    await waitForSolid(() => expect(label()).toContain("0:59"));
+    await vi.advanceTimersByTimeAsync(1_000);
+    flush();
+    expect(label()).toContain("0:58");
+
+    show("hidden");
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    flush();
+    expect(label()).toContain("0:58");
+    show("visible");
+    flush();
+    expect(label()).toContain("0:48");
+    expect(vi.getTimerCount()).toBe(1);
+    publishConfigSource(context.overlays);
+    expect(vi.getTimerCount()).toBe(1);
+    view.update({ pageId: "advanced" });
+    expect(vi.getTimerCount()).toBe(0);
+    view.dispose();
+  },
+);
+
 it("routes update policy edits through the configuration owner", () => {
   const patchForm = vi.fn();
   const context = configContext({
@@ -876,7 +914,7 @@ it("loads replacement sources and clears sensitive reveal state", async () => {
   viewState.revealedSensitivePaths.add("gateway.auth.token");
   state.configProps().onViewStateChange();
   flush();
-  Object.assign(context, { runtimeConfig: second });
+  completeConfigContext(Object.assign(context, { runtimeConfig: second }));
   publishConfigSource(context.gateway);
   await waitForSolid(() => expect(second.ensureSchemaLoaded).toHaveBeenCalledOnce());
 

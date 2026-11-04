@@ -174,6 +174,7 @@ export async function finalizeCronCompletionAnnouncement(params: {
                 deliveryAttemptFence: params.deliveryAttemptFence,
               },
             }),
+        onDeliveryReceipt: (receipt) => (delivery.receipts ??= []).push(receipt),
         onDeliveryAttempt: (reachedRecipient) => {
           mayHaveReachedRecipient ||= reachedRecipient;
         },

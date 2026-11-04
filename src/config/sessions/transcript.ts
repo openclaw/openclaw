@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -14,7 +15,7 @@ import {
 } from "../../routing/session-key.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
 import type { ModelFallbackNotice } from "../../shared/model-fallback-notice.js";
-import type { SkillWorkshopChangeNotice } from "../../shared/skill-workshop-change-notice.js";
+import type { PluginNotice } from "../../shared/plugin-notice.js";
 import {
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
   OPENCLAW_DELIVERY_MIRROR_MODEL,
@@ -71,6 +72,8 @@ import {
 } from "./transcript-mirror.js";
 import type {
   ReadRecentSessionConversationTextOptions,
+  ReadRecentSessionConversationTurnOptions,
+  SessionRecentConversationTurn,
   SessionRecentConversationText,
 } from "./transcript-recent-text.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
@@ -109,7 +112,7 @@ type InternalSessionTranscriptDeliveryMirror =
   | {
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
     }
-  | SkillWorkshopChangeNotice
+  | PluginNotice
   | ModelFallbackNotice;
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
@@ -155,8 +158,8 @@ function parseAssistantTranscriptText(line: string): LatestAssistantTranscriptTe
 async function readRecentUserAssistantTextFromSqliteTranscript(
   scope: SessionTranscriptReadScope,
   assertCurrent: () => void,
-  options: ReadRecentSessionConversationTextOptions = {},
-): Promise<SessionRecentConversationText[]> {
+  options: ReadRecentSessionConversationTurnOptions = {},
+): Promise<SessionRecentConversationTurn[]> {
   try {
     const { readRecentSessionConversationTextAsync } =
       await import("../../gateway/session-transcript-readers.js");
@@ -174,9 +177,17 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
   }
 }
 
-export async function readRecentUserAssistantTextForSession(
+export function readRecentUserAssistantTextForSession(
   params: ReadRecentSessionConversationTextParams,
 ): Promise<SessionRecentConversationText[]> {
+  return readRecentUserAssistantTurnsForSession(params, false);
+}
+
+/** Internal channel reconciliation projection; the SDK reader above stays text-only. */
+export async function readRecentUserAssistantTurnsForSession(
+  params: ReadRecentSessionConversationTextParams,
+  includeTurnIdentity = true,
+): Promise<SessionRecentConversationTurn[]> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return [];
@@ -212,7 +223,7 @@ export async function readRecentUserAssistantTextForSession(
           env: owner.scope?.env,
         },
         owner.assertCurrent,
-        params,
+        { ...params, includeTurnIdentity },
       );
       owner.assertCurrent();
       return result;
@@ -272,6 +283,7 @@ type SessionTranscriptAssistantAppendOptions = {
   beforeMessageWrite?: AssistantBeforeMessageWrite;
   assertCurrent?: () => void;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
+  contextFreeCommand?: true;
   /** Delivered command exchanges are replayable conversation, not delivery bookkeeping. */
   command?: { text: string; idempotencyKey: string };
 };
@@ -442,6 +454,17 @@ async function appendExactAssistantMessageWithSource(
     ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
   const message = {
     ...params.message,
+    ...(params.contextFreeCommand
+      ? {
+          excludeFromContext: true,
+          __openclaw: {
+            ...asOptionalRecord(
+              "__openclaw" in params.message ? params.message["__openclaw"] : undefined,
+            ),
+            contextFreeCommand: true,
+          },
+        }
+      : {}),
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   } as Parameters<SessionManager["appendMessage"]>[0];
   const preparedUnkeyedMessage =
@@ -502,6 +525,9 @@ async function appendExactAssistantMessageWithSource(
                 content: [{ type: "text" as const, text: params.command.text }],
                 timestamp: Date.now(),
                 idempotencyKey: params.command.idempotencyKey,
+                ...(params.contextFreeCommand
+                  ? { excludeFromContext: true, __openclaw: { contextFreeCommand: true } }
+                  : {}),
               },
               idempotencyLookup: "scan" as const,
             },

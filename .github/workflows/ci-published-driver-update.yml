@@ -125,6 +125,15 @@ jobs:
             exit 1
           fi
           exit "$cell_exit"
+      - name: Update published baseline under native systemd
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          # The native planner defaults to the published 2026.10.9 regression
+          # baseline. Reuse the exact candidate already checksum-verified above.
+          sudo "$(command -v node)" scripts/e2e/lib/upgrade-survivor/native-systemd.mjs \
+            "$PWD/.artifacts/published-driver-package/openclaw-candidate.tgz" \
+            "$PWD/.artifacts/published-driver-update/native-systemd"
       - name: Preserve synthetic update diagnostics
         if: always()
         timeout-minutes: 1

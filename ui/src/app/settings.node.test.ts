@@ -13,6 +13,7 @@ import {
 } from "../test-helpers/settings-node.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
+import { isNativeMobileHost, setNativeControlHost } from "./native-web-chrome.ts";
 import { applyServerUiPrefs, resolveServerUiPrefState } from "./server-prefs-reconcile.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
 import { backgroundPreferenceStorageKey, saveBackgroundPreference } from "./settings-background.ts";
@@ -42,8 +43,30 @@ describe("resolveApplicationStartupSettings", () => {
   });
 
   afterEach(() => {
+    setNativeControlHost(false);
     vi.unstubAllGlobals();
   });
+
+  it.each(["injected", "message-port"])(
+    "retains native presentation provenance after %s startup",
+    (transport) => {
+      vi.stubGlobal("navigator", { userAgent: "Android", platform: "Linux armv8l" });
+      const gatewayUrl = "wss://gateway.example";
+      if (transport === "injected") {
+        window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl, token: "synthetic-token" };
+      }
+      resolveApplicationStartupSettings(makeUiSettings(gatewayUrl), {
+        pathname: "/chat",
+        search: "",
+        hash:
+          transport === "message-port"
+            ? `#nativeControlAuth=${encodeURIComponent(gatewayUrl)}`
+            : "",
+      });
+      expect(window["__OPENCLAW_NATIVE_CONTROL_AUTH__"]).toBeUndefined();
+      expect(isNativeMobileHost()).toBe(true);
+    },
+  );
 
   it("clears a cached shared token when the native dashboard selects browser identity", () => {
     const gatewayUrl = "wss://gateway.example";

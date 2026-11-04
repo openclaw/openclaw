@@ -211,9 +211,13 @@ export function captureConfigReadEnvMutation<T>(
   }
 }
 
+/**
+ * Windows snapshots preserve case-insensitive access through a non-cloneable Proxy.
+ * Do not pass them to structuredClone or worker postMessage; capture plain facts instead.
+ * Session storage uses captureSessionTranscriptStorageEnvironment for this boundary.
+ */
 export function cloneEnvWithPlatformSemantics(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   let cloned: NodeJS.ProcessEnv = { ...fsSafeEnvInput(env) };
-  // A plain spread loses Windows process.env's case-insensitive lookup and assignment semantics.
   if (process.platform === "win32") {
     cloned = new Proxy(cloned, {
       deleteProperty(target, property) {

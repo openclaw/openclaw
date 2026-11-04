@@ -144,6 +144,7 @@ export function createSessionLifecyclePublisher(
             ? {
                 prepareSessionProjection: prepareSessionEventProjection(projection, read, {
                   ancestors,
+                  reuseEnvelope: true,
                 }),
               }
             : {}),

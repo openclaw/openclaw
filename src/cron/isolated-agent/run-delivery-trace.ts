@@ -144,6 +144,7 @@ export function buildCronDeliveryTrace(params: {
   sourceDeliveryOutcome: SourceDeliveryOutcome;
   fallbackUsed: boolean;
   delivered?: boolean;
+  receipts?: CronDeliveryTrace["receipts"];
 }): CronDeliveryTrace {
   // Trace both intended and resolved targets so run logs can explain fallback
   // delivery without leaking provider-specific raw routing internals.
@@ -167,6 +168,7 @@ export function buildCronDeliveryTrace(params: {
     intended,
     ...(resolved ? { resolved } : {}),
     ...(messageToolSentTo.length > 0 ? { messageToolSentTo } : {}),
+    ...(params.receipts?.length ? { receipts: params.receipts } : {}),
     fallbackUsed: params.fallbackUsed,
     delivered: params.delivered,
   };

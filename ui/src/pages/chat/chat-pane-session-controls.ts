@@ -5,6 +5,7 @@ import { registerModelControlsEnglish } from "../../i18n/locales/en-model-contro
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import {
   readSessionMethodAccess,
+  readSessionMethodScopeAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -86,6 +87,12 @@ export function readChatPaneMutationAccess(
       session,
     });
   return {
+    composeScope: readSessionMethodScopeAccess(snapshot.hello?.auth, {
+      method: "chat.send",
+      requiredScope: "operator.write",
+      sessionScope: true,
+      session,
+    }),
     model: scopedPatchAccess({ model: null }),
     effort: scopedPatchAccess({ thinkingLevel: null }),
     contextWindow: readSessionMethodAccess(snapshot, {
@@ -223,10 +230,16 @@ export function renderChatPaneComposerControls(params: {
           ...settingsPreview,
         }
       : selectedSession;
+  const acceptedHistory = getAcceptedChatHistorySession(state);
+  const hasAcceptedHistory = Boolean(
+    acceptedHistory && acceptedHistory.sessionId === expectedSessionId,
+  );
+  // Background history refreshes must not interrupt gestures for the accepted session.
+  const historyLoading = state.chatLoading && !hasAcceptedHistory;
   const sessionReady =
     state.connected &&
     selectedSession &&
-    (!state.sessions.state.resultCached || getAcceptedChatHistorySession(state));
+    (!state.sessions.state.resultCached || hasAcceptedHistory);
   const snapshot =
     sessionReady && state.chatModelCatalogInitialized
       ? undefined
@@ -253,7 +266,7 @@ export function renderChatPaneComposerControls(params: {
               !state.connected ||
               !accountModel ||
               selectedSession?.modelSelectionLocked === true ||
-              state.chatLoading ||
+              historyLoading ||
               state.chatSending ||
               Boolean(state.chatRunId) ||
               state.chatStream !== null ||
@@ -269,7 +282,7 @@ export function renderChatPaneComposerControls(params: {
         agentDefaultModel,
         connected: state.connected,
         gatewayAvailable: Boolean(state.client),
-        loading: state.chatLoading,
+        loading: historyLoading,
         modelCatalog: state.chatModelCatalog,
         modelCatalogState,
         modelOverrides: state.sessions.state.modelOverrides,
@@ -411,9 +424,10 @@ export function renderChatPaneComposerControls(params: {
             throw new Error("Session capability is unavailable");
           }
           if (patched.listRefreshError && ownsOutcome()) {
-            state.chatError = state.lastError = t("chat.permissionControls.refreshFailed", {
-              error: patched.listRefreshError,
-            });
+            state.setRecoverableChatError(
+              t("chat.permissionControls.refreshFailed"),
+              patched.listRefreshError,
+            );
           }
         } catch (error) {
           if (!ownsRoute() || !ownsOutcome()) {
@@ -431,9 +445,7 @@ export function renderChatPaneComposerControls(params: {
             change = { ...change, retainWhileCurrent };
             selection.pending = change;
           }
-          state.chatError = state.lastError = t("chat.permissionControls.updateFailed", {
-            error: String(error),
-          });
+          state.setRecoverableChatError(t("chat.permissionControls.updateFailed"), error);
         } finally {
           if (ownsOutcome()) {
             selection.outcome = undefined;

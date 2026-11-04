@@ -1,6 +1,4 @@
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
@@ -60,7 +58,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -68,6 +66,7 @@ import {
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+import { registerSessionsSendReceiptRetentionTests } from "./openclaw-tools.sessions-send-receipt-retention.test-support.js";
 import {
   deliveredRequesterReply,
   endChildRun,
@@ -98,7 +97,6 @@ import * as sendDelivery from "./tools/sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let settleRootWork: ReturnType<typeof observeRootWork>;
 
 async function settleSessionWork() {
@@ -288,7 +286,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await settleSessionWork();
   resetGatewayWorkAdmission();
-  closeOpenClawStateDatabaseForTest();
   await state.cleanup();
 });
 
@@ -657,6 +654,21 @@ describe("child followups", () => {
   });
 });
 
+registerSessionsSendReceiptRetentionTests({
+  config,
+  callGatewayMock,
+  calls,
+  writeEntry,
+  writeFinal,
+  sendTool,
+  yieldTool,
+  requesterCalls,
+  settlePair,
+  settleSessionWork,
+  releaseAndObserve,
+  cleanupFollowup,
+});
+
 it("yields two watched followups when the first settles during yield preparation", async () => {
   const requesterSessionKey = "agent:main:dashboard:race-parent";
   const childSessionKey = "agent:main:dashboard:race-child";
@@ -850,7 +862,8 @@ it.each(["requester", "target"])(
     const metadataRead = await vi.importActual<
       typeof import("../acp/runtime/session-meta-readonly.js")
     >("../acp/runtime/session-meta-readonly.js");
-    const databasePath = path.join(tempDirs.make("sessions-send-acp-binding-"), "openclaw.sqlite");
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const databasePath = database.path;
     const peerKey = "agent:main:main";
     const reusedKey = "agent:main:dashboard:reused-acp";
     const requesterKey = direction === "requester" ? reusedKey : peerKey;
@@ -904,6 +917,10 @@ it.each(["requester", "target"])(
         delivery: { status: "skipped" },
       });
     }
+    // Retire the native handle before state.cleanup removes the fixture directory.
+    expect(database.db.isOpen).toBe(true);
+    await state.restoreEnv();
+    expect(database.db.isOpen).toBe(false);
   },
 );
 

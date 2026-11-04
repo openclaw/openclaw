@@ -47,6 +47,7 @@ For the full key index and the other top-level config domains, see [Configuratio
           sessions: { others: "write" }, // none | view | suggest | write
           agents: ["roboclaw"],
           scopes: ["operator.read", "operator.write", "operator.approvals"],
+          workerProfiles: ["development"], // optional: explicit dispatch of own sessions only
         },
         guest: {
           sessions: { others: "view" },
@@ -62,7 +63,7 @@ For the full key index and the other top-level config domains, see [Configuratio
     controlUi: {
       enabled: true,
       basePath: "/openclaw",
-      // experimental: { customPlugins: false }, // Labs: native UI from user-installed plugins
+      // experimental: { customPlugins: false }, // Advanced opt-out: native UI from user-installed plugins
       // environment: { label: "edge", color: "amber" },
       // communityInvite: true, // show the dismissible sidebar Community card
       // root: "dist/control-ui",
@@ -182,8 +183,8 @@ For the full key index and the other top-level config domains, see [Configuratio
   `OPENCLAW_GATEWAY_PASSWORD`, and set `gateway.auth.mode` to `password`. Then
   run `openclaw config set gateway.tailscale.mode funnel`, followed by
   `openclaw config unset gateway.tailscale.preserveFunnel`. Default `false`.
-- `controlUi.experimental.customPlugins`: allow native browser UI from user-installed plugins, including local development plugins. Default: `false`. Enable through **Settings → Labs → Custom plugin UI** or set this boolean to `true`. Native UI runs with the signed-in operator's Gateway authority, so enable it only for trusted plugins. Native UI from enabled bundled plugins remains available with the setting off; backend plugin APIs, ordinary plugin loading, sandboxed dashboard widgets, and MCP Apps are unaffected. Changes hot-apply and refresh plugin views in connected browser tabs. After disabling it, reload tabs to clear plugin JavaScript that already ran. See [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui).
-- `controlUi.experimental.claws`: enable official ClawHub starter discovery and Add in Agents, Gateway catalog/Add methods, and local CLI Add. Default: `false`. Enable through **Settings → Labs → Claws** or set this boolean to `true`. Add creates an ordinary agent and installs its requirements; repeating Add creates another agent. Turning the switch off blocks new Add operations, while existing agents keep running. An Add already admitted before the switch changes can finish safely. See [Claws](/cli/claws).
+- `controlUi.experimental.customPlugins`: allow native browser UI from enabled user-installed plugins, including local development plugins. Default: `true`, with no Labs switch. This existing key remains an advanced opt-out: explicit `false` values stay off on upgrade; omission and `true` allow native UI. Native UI runs with each signed-in viewer’s Gateway authority, so install only trusted plugins. Enabled bundled views, backend operations, sandboxed dashboard widgets, and MCP Apps are unaffected by the opt-out. Changes hot-apply and refresh connected browser tabs. After disabling, reload tabs to clear JavaScript that already ran. See [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui).
+- `controlUi.experimental.templates`: enable official ClawHub starter discovery and Add in Templates, Gateway catalog/Add methods, and local CLI Add. Default: `false`. Enable through **Settings → Labs → Templates** or set this boolean to `true`. Add creates an ordinary agent and installs its requirements; repeating Add creates another agent. Turning the switch off blocks new Add operations, while existing agents keep running. An Add already admitted before the switch changes can finish safely. See [Templates](/cli/templates).
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway browser connections. When omitted, defaults to `gateway.publicOrigin` if configured. An explicit list, including `[]`, replaces this default. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.environment`: optional visual identity for distinguishing Gateway environments. Set `{ label: "edge", color: "amber" }` to show a matching top stripe, agent-avatar ring, environment pills, browser-title suffix, and tinted favicon. `label` is trimmed and must contain 1–24 characters. `color` must be `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, or `gray`. The label and color are visible before sign-in; omit the setting to keep the default appearance unchanged.
 - `controlUi.newSessionModelDefaults`: `"last-used"` (default) restores remembered new-session model, runtime, and reasoning choices. Set `"configured"` to start fresh drafts with the selected agent’s configured defaults instead. Applies to `/new` and the command palette in the UI served by this Gateway, after browser refresh or reconnect. Explicit choices remain editable and survive reload with the current unsent draft; submitting that draft retires its choices so the next fresh draft uses configured defaults. Existing conversations are untouched. Workspace, placement, and Fast Mode preferences are preserved; stored preferences are not deleted. Configure the desired model and `thinkingDefault` on the agent (or `agents.defaults`); this setting does not force a particular model or reasoning level.

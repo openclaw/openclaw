@@ -20,6 +20,31 @@ import {
 } from "./ops.gateway.test-support.js";
 import type { CronServiceDeps } from "./state.js";
 
+// A booted Gateway serves cron.add from its published model catalog owner. This fixture has no
+// Gateway lifecycle, so without one every add cold-builds a read-only model runtime before
+// reaching validation, which can outlast the in-process request timeout on hosted Node.
+vi.mock("../isolated-agent/model-selection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../isolated-agent/model-selection.js")>();
+  const { resolveAgentWorkspaceDir, resolveEffectiveAgentDir } =
+    await import("../../agents/agent-scope-config.js");
+  const { createPluginMetadataSnapshotFixture } =
+    await import("../../plugins/plugin-metadata.test-support.js");
+  return {
+    ...actual,
+    resolveCronModelSelectionOwner: async ({
+      cfg,
+      agentId = "main",
+    }: Parameters<typeof actual.resolveCronModelSelectionOwner>[0]) => ({
+      agentId,
+      agentDir: resolveEffectiveAgentDir(cfg, agentId),
+      workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+      config: cfg,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      modelCatalog: { entries: [], routeVariants: [] },
+    }),
+  };
+});
+
 type CallerClosure = "revoked" | "aborted";
 type CallerFixture = CronGatewayFixture & {
   closeCaller: (closure: CallerClosure) => void;
@@ -128,7 +153,7 @@ describe("Cron mutation outcomes through the in-process router", () => {
   });
 
   it.each(["execute", "revoke", "abort", "stop"] as const)(
-    "retains caller cleanup only through accepted manual admission: %s",
+    "releases caller cleanup without waiting for an accepted manual payload: %s",
     async (outcome) => {
       await withCronGateway(async (fixture) => {
         const now = Date.now();
@@ -171,7 +196,7 @@ describe("Cron mutation outcomes through the in-process router", () => {
           }
           releaseBlocker.resolve();
           await blocker;
-          if (outcome === "execute") {
+          if (outcome !== "stop") {
             await payloadStarted.promise;
             // Admission is finished: cleanup must not wait for the separately
             // owned automation payload, which can itself wait on caller work.
@@ -182,10 +207,8 @@ describe("Cron mutation outcomes through the in-process router", () => {
           releasePayload.resolve();
           const terminal = await fixture.finished(job.id);
           await cleanupFinished.promise;
-          expect(terminal.status).toBe(outcome === "execute" ? "ok" : "skipped");
-          if (outcome !== "execute") {
-            expect(targetCalls()).toHaveLength(0);
-          }
+          expect(terminal.status).toBe(outcome === "stop" ? "skipped" : "ok");
+          expect(targetCalls()).toHaveLength(outcome === "stop" ? 0 : 1);
           expect(releaseResources).toHaveBeenCalledOnce();
           expect((await readJob(fixture, job.id))?.state.queuedAtMs).toBeUndefined();
         } finally {
@@ -330,11 +353,11 @@ describe("Cron mutation outcomes through the in-process router", () => {
         if (accepted) {
           await expect(fixture.finished(job.id)).resolves.toMatchObject({
             jobId: job.id,
-            status: "skipped",
-            error: expect.stringMatching(/authority.*no longer active/i),
+            status: "ok",
+            error: undefined,
           });
         }
-        expect(targetCalls()).toHaveLength(0);
+        expect(targetCalls()).toHaveLength(accepted ? 1 : 0);
         expect((await readJob(fixture, job.id))?.state.queuedAtMs).toBeUndefined();
       });
     },

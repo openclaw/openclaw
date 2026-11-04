@@ -2,12 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { acquireFileLockSyncWithRetry } from "./file-lock-sync.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
 import {
   assertManagedHandoffPath,
   assertSameManagedHandoffPath,
   assertManagedUpdateLeaseDatabaseIdentity,
   leaseQueries,
+  HANDOFF_BUSY_TIMEOUT_MS,
   type LeaseTable,
   type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
@@ -26,32 +28,25 @@ export async function recoverManagedUpdateLeaseJournal(params: {
     throw new Error("Managed update journal recovery requires its original installation key.");
   }
   assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
-  const [{ acquireFileLock }, { prepareSqliteRollbackRecovery }] = await Promise.all([
-    import("./file-lock.js"),
-    import("./sqlite-rollback-recovery.js"),
-  ]);
+  const { prepareSqliteRollbackRecovery } = await import("./sqlite-rollback-recovery.js");
   assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
-  const lock = await acquireFileLock(existingIdentity.databasePath, {
-    retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
-    stale: 30_000,
-    staleRecovery: "remove-if-definitely-stale",
+  const lockPath = `${existingIdentity.databasePath}.lock`;
+  const release = acquireFileLockSyncWithRetry(existingIdentity.databasePath, {
+    timeoutMs: HANDOFF_BUSY_TIMEOUT_MS,
+    phase: "managed-handoff:journal-recovery",
   });
   let active = true;
   try {
-    const lockIdentity = fs.lstatSync(lock.lockPath, { bigint: true });
+    const lockIdentity = fs.lstatSync(lockPath, { bigint: true });
     assertManagedHandoffPath(lockIdentity, "file");
-    const lockBytes = fs.readFileSync(lock.lockPath);
+    const lockBytes = fs.readFileSync(lockPath);
     const assertBootstrap = () => {
       if (!active) {
         throw new Error("Managed update journal bootstrap authority has closed.");
       }
       assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
-      assertSameManagedHandoffPath(
-        fs.lstatSync(lock.lockPath, { bigint: true }),
-        lockIdentity,
-        "file",
-      );
-      if (!fs.readFileSync(lock.lockPath).equals(lockBytes)) {
+      assertSameManagedHandoffPath(fs.lstatSync(lockPath, { bigint: true }), lockIdentity, "file");
+      if (!fs.readFileSync(lockPath).equals(lockBytes)) {
         throw new Error("Managed update journal bootstrap lock changed.");
       }
     };
@@ -180,6 +175,6 @@ export async function recoverManagedUpdateLeaseJournal(params: {
     });
   } finally {
     active = false;
-    await lock.release();
+    release();
   }
 }
