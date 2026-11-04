@@ -55,6 +55,9 @@ Archived sessions keep earlier messages and recorded failures readable in the
 transcript. Past run failures do not show a recovery banner above the archived
 composer; unarchive the session to continue the conversation.
 
+Commentary written alongside tool calls stays in place as its own row, and those
+calls join the activity group that follows it instead of appearing as separate rows.
+
 Tool activity shows a tool-specific icon beside its purpose or details instead of
 repeating the tool name. When no distinct purpose or detail is available, the row
 shows the tool label instead of leaving the text blank. Activity summaries stay
