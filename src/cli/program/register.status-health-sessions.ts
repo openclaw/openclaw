@@ -452,6 +452,115 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       },
     );
 
+  const processesCmd = sessionsCmd
+    .command("processes")
+    .description("List or stop background exec processes for a session via the Gateway");
+  processesCmd.enablePositionalOptions();
+
+  addSessionsGatewayOptions(processesCmd.command("list <key>"))
+    .option("--port <port>", "Local Gateway port")
+    .description("List observed background processes for a session")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            'openclaw sessions processes list "agent:main:main" --json',
+            "List running/completed exec children for one session.",
+          ],
+          [
+            'openclaw sessions processes list "agent:main:main" --agent main --url ws://127.0.0.1:18789 --token $TOKEN --json',
+            "Target an explicit Gateway.",
+          ],
+        ])}\n\n${theme.muted(
+          "Backed by sessions.processes.list (operator.read). Use stop with --session-id and --instance from this output.",
+        )}`,
+    )
+    .action(async (key: string, opts, command) => {
+      const parentOpts = command.parent?.parent?.opts() as SessionsListCliOptions | undefined; // SAFETY: Commander parent opts match SessionsListCliOptions when present.
+      rejectUnsupportedSessionsParentOptions(
+        "processes list",
+        parentOpts,
+        ["store", "allAgents", "active", "limit", "verbose"],
+        "process observation uses Gateway session keys and ignores session-list filters",
+      );
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsProcessesListCommand } =
+          await import("../../commands/sessions-processes.js");
+        await sessionsProcessesListCommand(
+          {
+            key,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent, // SAFETY: Commander optional string flag.
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url: opts.url as string | undefined, // SAFETY: Gateway client option is string | undefined.
+            port: opts.port as string | undefined, // SAFETY: Gateway client option is string | undefined.
+            token: opts.token as string | undefined, // SAFETY: Gateway client option is string | undefined.
+            password: opts.password as string | undefined, // SAFETY: Gateway client option is string | undefined.
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  addSessionsGatewayOptions(processesCmd.command("stop <key> <processId>"))
+    .option("--port <port>", "Local Gateway port")
+    .description("Stop one observed background process for a session")
+    .requiredOption(
+      "--session-id <sessionId>",
+      "Session id from processes list (refuses when the conversation changed)",
+    )
+    .requiredOption("--instance <instanceId>", "Process instance id from processes list")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            'openclaw sessions processes stop "agent:main:main" proc-1 --session-id sess-1 --instance inst-1 --json',
+            "Stop one process using ids from processes list.",
+          ],
+        ])}\n\n${theme.muted(
+          "Backed by sessions.processes.stop (operator.write). Requires --session-id and --instance from the matching list response.",
+        )}`,
+    )
+    .action(async (key: string, processId: string, opts, command) => {
+      const parentOpts = command.parent?.parent?.opts() as SessionsListCliOptions | undefined; // SAFETY: Commander parent opts match SessionsListCliOptions when present.
+      rejectUnsupportedSessionsParentOptions(
+        "processes stop",
+        parentOpts,
+        ["store", "allAgents", "active", "limit", "verbose"],
+        "process observation uses Gateway session keys and ignores session-list filters",
+      );
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsProcessesStopCommand } =
+          await import("../../commands/sessions-processes.js");
+        await sessionsProcessesStopCommand(
+          {
+            key,
+            processId,
+            sessionId: String(opts.sessionId),
+            instanceId: String(opts.instance),
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent, // SAFETY: Commander optional string flag.
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url: opts.url as string | undefined, // SAFETY: Gateway client option is string | undefined.
+            port: opts.port as string | undefined, // SAFETY: Gateway client option is string | undefined.
+            token: opts.token as string | undefined, // SAFETY: Gateway client option is string | undefined.
+            password: opts.password as string | undefined, // SAFETY: Gateway client option is string | undefined.
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
   addSessionsGatewayOptions(sessionsCmd.command("compact <key>"))
     .description("Compact a stored session transcript via the running gateway")
     .option(
