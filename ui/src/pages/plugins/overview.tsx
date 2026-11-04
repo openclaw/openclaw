@@ -50,7 +50,13 @@ function renderPluginSecurityAudit(status: string, auditUrl: string | null | und
         <span title={t("pluginsPage.detailSecurityAudit")}>{<Icon name="info" />}</span>
       </h2>
       <div class="plugin-catalog-detail__security-score">
-        <strong>{tone === "pass" ? "Clean" : tone === "warning" ? "Review" : status}</strong>
+        <strong>
+          {tone === "pass"
+            ? t("pluginsPage.auditClean")
+            : tone === "warning"
+              ? t("pluginsPage.auditReview")
+              : status}
+        </strong>
         <For each={[0, 1, 2]}>
           {(index) => <span class={{ "is-filled": index < bars }} aria-hidden="true" />}
         </For>
