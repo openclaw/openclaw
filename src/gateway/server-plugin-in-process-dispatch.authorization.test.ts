@@ -12,6 +12,10 @@ import {
   getOwnedSessionTranscriptActor,
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
+import {
+  captureGuardedFetchRequestAuthority,
+  withGuardedFetchRequestAuthority,
+} from "../infra/net/fetch-request-authority.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readGlobalSingleton } from "../shared/global-singleton.js";
@@ -127,7 +131,7 @@ describe("typed in-process agent authorization", () => {
   });
 
   it.each([false, true])(
-    "launches a different session without the caller's transcript writer (tool authority: %s)",
+    "launches a different session without the caller's transcript writer or request fence (tool authority: %s)",
     async (toolAuthority) => {
       const database = { agentId: "main", path: "/synthetic/launch-transcript" };
       const owner = createMemorySessionActorOwner(database);
@@ -152,17 +156,23 @@ describe("typed in-process agent authorization", () => {
       startTurn.mockImplementation(async ({ io }) => {
         await Promise.resolve();
         expect(getOwnedSessionTranscriptActor(launchedTarget)).toBeUndefined();
+        // A cron-root caller's request fence closes when its run ends; the launch outlives it.
+        expect(captureGuardedFetchRequestAuthority()).toBeUndefined();
         io.emitAcceptance([true, result, undefined]);
       });
       const launch = () =>
-        dispatchGatewayMethodInProcess(
-          "agent",
-          {
-            message: "Run in another session",
-            idempotencyKey: result.runId,
-            sessionKey: launchedTarget.sessionKey,
-          },
-          { forceSyntheticClient: true, resolveGatewayContext: () => context },
+        withGuardedFetchRequestAuthority(
+          () => {},
+          () =>
+            dispatchGatewayMethodInProcess(
+              "agent",
+              {
+                message: "Run in another session",
+                idempotencyKey: result.runId,
+                sessionKey: launchedTarget.sessionKey,
+              },
+              { forceSyntheticClient: true, resolveGatewayContext: () => context },
+            ),
         );
       try {
         await withOwnedSessionTranscriptWrites(

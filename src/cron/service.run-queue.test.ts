@@ -8,6 +8,10 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import {
+  captureGuardedFetchRequestAuthority,
+  withGuardedFetchRequestAuthority,
+} from "../infra/net/fetch-request-authority.js";
+import {
   createAgentDatabaseInspectionRefusal,
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
@@ -497,6 +501,28 @@ it.for(["complete", "cancel", "lost-result"] as const)(
     }
   },
 );
+
+it("starts a manual run outside its caller's request fence", async () => {
+  const job = commandJob("fenced-caller");
+  let fence: unknown = "not run";
+  const { cron } = service(await storeJobs([job]), {
+    runCommandJob: vi.fn(async () => {
+      fence = captureGuardedFetchRequestAuthority();
+      return { status: "ok" as const };
+    }),
+  });
+  try {
+    await cron.start();
+    // A cron-root caller's fence ends with its own run; the job it starts keeps its own.
+    await withGuardedFetchRequestAuthority(
+      () => {},
+      () => cron.run(job.id, "force"),
+    );
+    expect(fence).toBeUndefined();
+  } finally {
+    await stopServices(cron);
+  }
+});
 
 it("keeps owned running work out of recovery and queue database polling", async ({ signal }) => {
   const job = commandJob("owned-running");
