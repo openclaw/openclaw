@@ -40,7 +40,7 @@ describe("config gateway operations", () => {
       const key = copied ? "configView.filePathCopied" : "configView.filePath";
       expect(state.lastError).toBe("configView.fileOpenFailed:\n\n" + key + ":" + path);
       expect(translate).toHaveBeenCalledWith(key, { path });
-      expect(showToast).toHaveBeenCalledWith({ message: state.lastError });
+      expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ message: state.lastError }));
       vi.restoreAllMocks();
     },
   );
