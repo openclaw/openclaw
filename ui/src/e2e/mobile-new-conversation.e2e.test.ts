@@ -277,7 +277,7 @@ suite.define(() => {
       await header.waitFor();
       expect(await page.locator(".topbar").isVisible()).toBe(false);
       // The draft bar carries no visible title; it stays named for assistive tech.
-      expect(await header.locator(".mobile-header__title").count()).toBe(0);
+      expect(await header.locator(".mobile-header__title").isVisible()).toBe(false);
       expect(await header.getAttribute("aria-label")).toBe("New session");
 
       // Everything the top bar offered stays one tap away.

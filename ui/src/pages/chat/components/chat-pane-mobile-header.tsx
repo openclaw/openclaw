@@ -23,8 +23,6 @@ export function ChatPaneMobileHeader(props: {
   onHeaderRef?: (element: HTMLElement) => void | (() => void);
   title: string;
   titlePending: boolean;
-  /** Keeps `title` as the header's accessible name without painting the title row. */
-  titleHidden?: boolean;
   /** Mobile ProjectCrumb: menu, full accessible name and overflow fade. */
   project?: Element;
   publicAccess?: Pick<ChatSessionSharingProps, "state">;
@@ -84,26 +82,24 @@ export function ChatPaneMobileHeader(props: {
       <div
         class={["mobile-header__identity", { "mobile-header__identity--title-only": !project() }]}
       >
-        <Show when={!props.titleHidden}>
-          <div class="mobile-header__title-row">
-            <button
-              type="button"
-              class="mobile-header__title"
-              aria-label={`${props.title} — ${t("chat.details")}`}
-              disabled={!props.onOpenDetails}
-              onClick={(event) => props.onOpenDetails?.(event.currentTarget)}
-            >
-              <span class="mobile-header__title-text" ref={titleOverflow}>
-                <Show when={!props.titlePending} fallback={<SessionTitlePlaceholder />}>
-                  {props.title}
-                </Show>
-              </span>
-            </button>
-            <Show when={props.publicAccess}>
-              {(access) => <ChatSessionPublicIndicator {...access()} mobile />}
-            </Show>
-          </div>
-        </Show>
+        <div class="mobile-header__title-row">
+          <button
+            type="button"
+            class="mobile-header__title"
+            aria-label={`${props.title} — ${t("chat.details")}`}
+            disabled={!props.onOpenDetails}
+            onClick={(event) => props.onOpenDetails?.(event.currentTarget)}
+          >
+            <span class="mobile-header__title-text" ref={titleOverflow}>
+              <Show when={!props.titlePending} fallback={<SessionTitlePlaceholder />}>
+                {props.title}
+              </Show>
+            </span>
+          </button>
+          <Show when={props.publicAccess}>
+            {(access) => <ChatSessionPublicIndicator {...access()} mobile />}
+          </Show>
+        </div>
         <Show when={project()}>
           <div class="mobile-header__project">{project()}</div>
         </Show>
