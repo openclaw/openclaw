@@ -306,6 +306,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/run-attempt.context-budget.test.ts",
   "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
   "extensions/codex/src/app-server/run-attempt.restricted-context-continuity.test.ts",
+  "extensions/codex/src/app-server/run-attempt.startup-bootstrap.test.ts",
   "extensions/codex/src/app-server/run-attempt.context-engine-overflow.test.ts",
   "extensions/codex/src/app-server/run-attempt.history-seed.test.ts",
   "extensions/codex/src/app-server/run-attempt.continuity-media.test.ts",

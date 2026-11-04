@@ -35,7 +35,7 @@ import {
 } from "./rpc-error.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { getCurrentSharedClientEntry } from "./shared-client-lifecycle.js";
-import { buildContextEngineBinding } from "./thread-context-engine.js";
+import { buildContextEngineBinding, withDeliveredContextEngine } from "./thread-context-engine.js";
 import {
   fingerprintCodexThreadConfig,
   readActiveCodexTurnIdsFromResume,
@@ -657,7 +657,7 @@ export async function startFreshCodexThread(
   };
   if (!preserveExistingBinding) {
     const nextBinding: CodexAppServerThreadBinding = {
-      ...startedBinding,
+      ...withDeliveredContextEngine(startedBinding, params.historyBootstrapItems),
       webSearchThreadConfigFingerprint,
       nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
     };

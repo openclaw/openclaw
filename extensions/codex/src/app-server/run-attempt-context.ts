@@ -229,6 +229,8 @@ export async function prepareCodexAttemptContext(
     promptContextRange: CodexProjectedContextRange | undefined;
     developerInstructions: string;
     contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
+    /** Rendered bootstrap text; its presence in accepted turn input proves delivery. */
+    contextEngineBootstrapPrompt: string | undefined;
     historyBootstrapItems:
       | JsonValue[]
       | ((assertCurrent: () => void) => Promise<JsonValue[]>)
@@ -240,6 +242,7 @@ export async function prepareCodexAttemptContext(
     promptContextRange: undefined,
     developerInstructions: baseDeveloperInstructions,
     contextEngineProjection: undefined,
+    contextEngineBootstrapPrompt: undefined,
     historyBootstrapItems: undefined,
     historyDeltaItems: undefined,
     // Set by the no-engine continuity appliers; gates calibration recording so a

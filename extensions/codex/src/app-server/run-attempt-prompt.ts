@@ -283,6 +283,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       if (history.promptState.historyBootstrapItems !== undefined) {
         contextImageGroups = [];
       }
+      // Only a prompt-rendered bootstrap proves delivery once the native turn accepts it.
+      promptState.contextEngineBootstrapPrompt =
+        contextEngineProjection &&
+        projectionDecision.project &&
+        history.promptState.historyBootstrapItems === undefined
+          ? projection.promptText
+          : undefined;
     } catch (assembleErr) {
       if (
         assembleErr instanceof CodexContextAttachmentError ||
@@ -568,6 +575,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       const projection = await preparedBootstrapProjection();
       assertProjectionCurrent();
       contextImageGroups = projection.imageGroups ?? [];
+      promptState.contextEngineBootstrapPrompt = projection.promptText;
       promptState.promptText = projection.promptText;
       promptState.promptContextRange = projection.promptContextRange;
       contextEngineBootstrapPromptApplied = true;
