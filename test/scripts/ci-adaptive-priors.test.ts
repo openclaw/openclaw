@@ -196,7 +196,10 @@ describe("adaptive CI prior restore", () => {
     ["divergent history", { comparison: { merge_base_commit: { sha: "c".repeat(40) } } }],
     ["wrong comparison base", { comparison: { base_commit: { sha: "c".repeat(40) } } }],
     ["behind comparison", { comparison: { status: "behind", behind_by: 1 } }],
-    ["saturated comparison", { comparison: { files: Array(300).fill({ filename: "src/a.ts" }) } }],
+    [
+      "saturated comparison",
+      { comparison: { files: Array.from({ length: 300 }, () => ({ filename: "src/a.ts" })) } },
+    ],
     ["incomplete rename", { comparison: { files: [{ filename: "src/a.ts", status: "renamed" }] } }],
     ["invalid comparison path", { comparison: { files: [{ filename: "../outside.ts" }] } }],
   ] as const)("discards a prior with invalid %s", async (_name, options) => {

@@ -66,7 +66,9 @@ export async function restoreCiAdaptivePriors(options = {}) {
       encoding: "utf8",
       timeout: 1000,
       stdio: ["ignore", "pipe", "ignore"],
-    }).trim().split("\n");
+    })
+      .trim()
+      .split("\n");
   } catch {
     // Missing checkout identity makes the optional bundle ineligible.
   }
@@ -212,7 +214,8 @@ export async function restoreCiAdaptivePriors(options = {}) {
                 result.merge_base_commit?.sha === run.head_sha &&
                 ["ahead", "identical"].includes(result.status) &&
                 result.behind_by === 0 &&
-                Array.isArray(result.files) && result.files.length < 300,
+                Array.isArray(result.files) &&
+                result.files.length < 300,
               "prior-comparison-unavailable",
             );
             const changedFiles = new Set();
@@ -226,7 +229,9 @@ export async function restoreCiAdaptivePriors(options = {}) {
             }
             requirePrior(
               result.status !== "identical" ||
-                (run.head_sha === revision && result.base_commit.commit.tree.sha === tree && changedFiles.size === 0),
+                (run.head_sha === revision &&
+                  result.base_commit.commit.tree.sha === tree &&
+                  changedFiles.size === 0),
               "invalid-identical-comparison",
             );
             comparison = {
@@ -234,7 +239,9 @@ export async function restoreCiAdaptivePriors(options = {}) {
               baseTree: result.base_commit.commit.tree.sha,
               headRevision: revision,
               headTree: tree,
-              changedFiles: [...changedFiles].sort(),
+              changedFiles: [...changedFiles].toSorted((left, right) =>
+                left < right ? -1 : left > right ? 1 : 0,
+              ),
             };
             comparisons.set(run.head_sha, comparison);
           }
