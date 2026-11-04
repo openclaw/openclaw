@@ -229,6 +229,36 @@ Notes:
 - Per-chat-type overrides take precedence over `replyToMode`. Without a `direct` override, existing deployments keep flat, non-threaded DMs.
 - After a restart or session reset, thread-scoped conversations recover recent messages from Mattermost when their pending history is cold. This includes DMs with threading enabled; flat DMs are unchanged. Recovery respects sender access and context visibility, excludes the triggering message, and is bounded by `historyLimit`, a 200-post server window, and a five-second deadline. A temporary server failure does not block the new message indefinitely.
 
+### Thread-bound sub-agent sessions
+
+When an agent answering a Mattermost post calls `sessions_spawn` with `thread: true`, OpenClaw opens a Mattermost thread for the new session and binds it there. The sub-agent starts on its task right away and posts into that thread. Later posts in the thread go to the sub-agent (no mention needed), not to the channel's agent. See [Thread-bound sessions](/tools/subagents/thread-bound-sessions).
+
+- With the default `replyToMode: "off"`, the asker's top-level post becomes the thread root, so the work happens directly under the request.
+- When the asker's thread is already the agent's own conversation (the post was inside a thread, or `replyToMode` is `first`, `all`, or `batched`), OpenClaw posts a new root post in the channel, titled with the spawn label, and binds that thread instead. The current conversation is never handed to the sub-agent.
+- Direct messages need DM threading (`replyToModeByChatType.direct`); flat DMs reject `thread: true`. Use `mode: "run"` there.
+- The binding ends when the sub-agent ends, on `/session unbind`, or after the idle or maximum age limit. `/session idle` and `/session max-age` adjust those limits, and `/agents` shows the binding.
+
+Mattermost inherits the defaults from `session.threadBindings` and supports channel and per-account overrides:
+
+- `threadBindings.enabled`
+- `threadBindings.idleHours`
+- `threadBindings.maxAgeHours`
+- `threadBindings.spawnSessions`: set `false` to block sub-agent and ACP thread spawns.
+- `threadBindings.defaultSpawnContext`: `"isolated"` keeps spawned sub-agents from forking the parent transcript.
+
+```json5
+{
+  channels: {
+    mattermost: {
+      threadBindings: {
+        idleHours: 24,
+        maxAgeHours: 0,
+      },
+    },
+  },
+}
+```
+
 ## Access control (DMs)
 
 - Default: `channels.mattermost.dmPolicy = "pairing"` (unknown senders get a pairing code). Other values: `allowlist`, `open`, `disabled`.

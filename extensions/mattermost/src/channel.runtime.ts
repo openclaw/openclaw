@@ -7,3 +7,4 @@ export { addMattermostReaction, removeMattermostReaction } from "./mattermost/re
 export { readMattermostMessages } from "./mattermost/read.js";
 export { sendMessageMattermost } from "./mattermost/send.js";
 export { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
+export { setMattermostThreadBindingLifecycleBySessionKeyAsync } from "./mattermost/thread-bindings.js";

@@ -52,6 +52,10 @@ import {
   toMattermostOutboundResult,
 } from "./channel-send-result.js";
 import { mattermostSetupPlugin } from "./channel.setup.js";
+import {
+  mattermostConversationBindings,
+  resolveMattermostConversationDeliveryTarget,
+} from "./conversation-bindings.js";
 import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
@@ -549,6 +553,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     groups: {
       resolveRequireMention: resolveMattermostGroupRequireMention,
     },
+    conversationBindings: mattermostConversationBindings,
     actions: mattermostMessageActions,
     message: mattermostMessageAdapter,
     secrets: {
@@ -574,13 +579,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         }
         return target.startsWith("user:") || target.startsWith("@") ? "direct" : "channel";
       },
-      resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
-        const parent = parentConversationId?.trim();
-        const child = conversationId.trim();
-        return parent && parent !== child
-          ? { to: `channel:${parent}`, threadId: child }
-          : { to: normalizeMattermostMessagingTarget(`channel:${child}`) };
-      },
+      resolveDeliveryTarget: resolveMattermostConversationDeliveryTarget,
       resolveOutboundSessionRoute: resolveMattermostOutboundSessionRoute,
       targetResolver: {
         looksLikeId: looksLikeMattermostTargetId,

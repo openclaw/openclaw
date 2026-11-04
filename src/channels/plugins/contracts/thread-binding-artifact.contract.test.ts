@@ -11,7 +11,7 @@ import {
 } from "./test-helpers/bundled-channel-plugin-loader.js";
 
 // Bundled channels expected to ship a top-level thread-binding artifact.
-const THREAD_BINDING_ARTIFACT_PLUGIN_IDS = ["discord", "matrix"] as const;
+const THREAD_BINDING_ARTIFACT_PLUGIN_IDS = ["discord", "matrix", "mattermost"] as const;
 
 describe("bundled channel thread-binding artifact parity", () => {
   const artifactPlacements = new Map<string, unknown>();

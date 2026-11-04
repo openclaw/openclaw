@@ -12,6 +12,14 @@ function registerSlashCommandRoute(api: OpenClawPluginApi): void {
   register(api);
 }
 
+function registerSubagentHooks(api: OpenClawPluginApi): void {
+  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
+    specifier: "./subagent-hooks-api.js",
+    exportName: "registerMattermostSubagentHooks",
+  });
+  register(api);
+}
+
 export default defineBundledChannelEntry({
   id: "mattermost",
   name: "Mattermost",
@@ -33,5 +41,6 @@ export default defineBundledChannelEntry({
     // Actual slash-command registration happens after the monitor connects and
     // knows the team id; the route itself can be wired here.
     registerSlashCommandRoute(api);
+    registerSubagentHooks(api);
   },
 });

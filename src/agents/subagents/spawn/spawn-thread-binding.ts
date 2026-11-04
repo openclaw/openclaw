@@ -34,6 +34,7 @@ export function buildSpawnThreadBinding(params: {
         : {}),
     },
     placement: binding.placement,
+    ...(binding.sourceMessageId ? { sourceMessageId: binding.sourceMessageId } : {}),
     metadata: {
       threadName: resolveThreadBindingThreadName({ agentId, label: label || agentId }),
       agentId,
