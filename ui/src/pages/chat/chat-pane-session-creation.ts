@@ -1,4 +1,3 @@
-import type { SessionsCatalogContinueResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
 import { t } from "../../i18n/index.ts";
@@ -7,11 +6,7 @@ import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
-import {
-  type CatalogSessionKey,
-  announceCatalogSessionContinued,
-} from "../../lib/sessions/catalog-key.ts";
-import { catalogMethod } from "../../lib/sessions/catalog-read-method.ts";
+import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveSessionCreateParams } from "../../lib/sessions/session-create-params.ts";
 import {
@@ -28,8 +23,6 @@ import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.
 import {
   NEW_SESSION_ACTIVE_RUN_MESSAGE,
   NEW_SESSION_LIST_LOADING_MESSAGE,
-  clearPaneSessionHandoff,
-  preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import { canCreateChatSession, resolveChatAgentId } from "./chat-state-route.ts";
 
@@ -56,6 +49,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const sourceSessionKey = state.sessionKey;
     const sourceAgentId = resolveChatAgentId(state);
     const sourceCatalogGeneration = this.catalogLoadGeneration;
+    const sourceHomeId = this.history.catalogSession.sourceHomeId;
     const continuation = Symbol("catalog-continuation");
     this.activeCatalogContinuation = continuation;
     const isCurrent = () =>
@@ -76,47 +70,28 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       state.chatSending = false;
     };
     try {
-      const result = await client.request<SessionsCatalogContinueResult>(
-        catalogMethod(state, key.catalogId, "continue"),
-        {
-          ...key,
-          agentId: sourceAgentId,
-          ...(this.history.catalogSession.sourceHomeId
-            ? { sourceHomeId: this.history.catalogSession.sourceHomeId }
-            : {}),
-        },
-      );
-      // A catalog adoption must not navigate or send into a pane that switched
-      // sessions or reconnected while its original continuation was in flight.
-      if (!isCurrent()) {
-        releaseStaleContinuation();
-        return;
-      }
-      preparePaneSessionHandoff(this.context, this.paneId, result.sessionKey, {
+      const { continueCapturedCatalogSession } =
+        await import("./chat-pane-session-operations.runtime.ts");
+      await continueCapturedCatalogSession({
+        state,
+        client,
+        context: this.context,
+        paneId: this.paneId,
+        key: { ...key, ...(sourceHomeId ? { sourceHomeId } : {}) },
+        agentId: sourceAgentId,
         attachments,
         draft,
-        send: true,
+        isCurrent,
+        onSessionChange: (next) => this.onPaneSessionChange?.(this.paneId, next),
       });
-      if (this.onPaneSessionChange?.(this.paneId, result.sessionKey) === false) {
-        clearPaneSessionHandoff(this.context, this.paneId, result.sessionKey);
-        releaseStaleContinuation();
-        return;
-      }
-      announceCatalogSessionContinued({
-        ...key,
-        agentId: sourceAgentId,
-        sessionKey: result.sessionKey,
-      });
-      this.activeCatalogContinuation = null;
-      state.chatSending = false;
     } catch (error) {
-      if (!isCurrent()) {
-        releaseStaleContinuation();
-        return;
+      if (isCurrent()) {
+        state.lastError = formatUiError(error);
       }
-      this.activeCatalogContinuation = null;
-      state.lastError = formatUiError(error);
-      state.chatSending = false;
+    } finally {
+      // Loading and handoff can yield to a newer continuation or scoped send.
+      // Only the captured token may release its own unscoped sending flag.
+      releaseStaleContinuation();
     }
   }
 
