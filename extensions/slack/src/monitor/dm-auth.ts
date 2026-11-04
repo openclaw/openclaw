@@ -1,3 +1,4 @@
+import { expandAllowFromWithAccessGroups } from "openclaw/plugin-sdk/access-groups";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
@@ -30,8 +31,27 @@ export async function authorizeSlackDirectMessage(params: {
 
   const sender = await params.resolveSenderName(params.senderId);
   const senderName = sender.name;
+  // Access-group refs are matched case-sensitively against the raw config list;
+  // the lowercased DM list cannot express `accessGroup:<name>`.
+  let allowList = params.allowFromLower;
+  const rawAllowFrom = (params.ctx.allowFrom ?? []).map(String);
+  if (rawAllowFrom.some((entry) => entry.startsWith("accessGroup:")) && params.ctx.cfg) {
+    const expanded = await expandAllowFromWithAccessGroups({
+      cfg: params.ctx.cfg,
+      allowFrom: rawAllowFrom,
+      channel: "slack",
+      accountId: params.accountId,
+      senderId: params.senderId,
+      senderAllowEntry: params.senderId.toLowerCase(),
+      isSenderAllowed: (senderId, entries) =>
+        entries.some((entry) => entry.toLowerCase() === senderId.toLowerCase()),
+    });
+    if (expanded.length > rawAllowFrom.length) {
+      allowList = [...new Set([...allowList, params.senderId.toLowerCase()])];
+    }
+  }
   const allowMatch = resolveSlackAllowListMatch({
-    allowList: params.allowFromLower,
+    allowList,
     teamId: params.eventScope?.teamId ?? params.ctx.teamId,
     id: params.senderId,
     name: senderName,

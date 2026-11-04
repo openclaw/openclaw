@@ -492,6 +492,40 @@ describe("authorizeSlackDirectMessage", () => {
     });
   });
 
+  it("admits a sender through an accessGroup reference in DMs", async () => {
+    const params = makeDmParams("allowlist");
+    params.ctx.allowFrom = ["accessGroup:beta"];
+    params.ctx.cfg = {
+      accessGroups: {
+        beta: { type: "message.senders", members: { slack: ["U123"] } },
+      },
+    } as never;
+    params.allowFromLower = ["accessgroup:beta"];
+    params.ctx.installationIdentity = { kind: "workspace", teamId: "T11111111" };
+    params.eventScope = { teamId: "T11111111", client: {} as never };
+
+    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(true);
+
+    expect(params.onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it("still rejects DMs whose accessGroup does not admit the sender", async () => {
+    const params = makeDmParams("allowlist");
+    params.ctx.allowFrom = ["accessGroup:beta"];
+    params.ctx.cfg = {
+      accessGroups: {
+        beta: { type: "message.senders", members: { slack: ["U999"] } },
+      },
+    } as never;
+    params.allowFromLower = ["accessgroup:beta"];
+    params.ctx.installationIdentity = { kind: "workspace", teamId: "T11111111" };
+    params.eventScope = { teamId: "T11111111", client: {} as never };
+
+    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(false);
+
+    expect(params.onUnauthorized).toHaveBeenCalled();
+  });
+
   it("allows bare user ids for workspace-install DMs", async () => {
     const params = makeDmParams("allowlist");
     params.ctx.installationIdentity = { kind: "workspace", teamId: "T11111111" };
