@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -456,7 +457,12 @@ async function appendExactAssistantMessageWithSource(
     ...(params.contextFreeCommand
       ? {
           excludeFromContext: true,
-          __openclaw: { ...params.message["__openclaw"], contextFreeCommand: true },
+          __openclaw: {
+            ...asOptionalRecord(
+              "__openclaw" in params.message ? params.message["__openclaw"] : undefined,
+            ),
+            contextFreeCommand: true,
+          },
         }
       : {}),
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
