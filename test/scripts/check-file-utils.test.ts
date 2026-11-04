@@ -45,7 +45,9 @@ it("renders repo-relative paths when possible", () => {
 });
 
 it("filters tracked source files and bounds the git lookup", () => {
-  execFileSyncMock.mockReturnValueOnce("").mockReturnValue("src/keep.ts\nsrc/keep.mjs\nsrc/skip.d.ts\n");
+  execFileSyncMock
+    .mockReturnValueOnce("")
+    .mockReturnValue("src/keep.ts\nsrc/keep.mjs\nsrc/skip.d.ts\n");
 
   expect(listRepoFilesSync("/fake/repo", { includeFile: isCodeFile })).toEqual([
     "src/keep.mjs",
