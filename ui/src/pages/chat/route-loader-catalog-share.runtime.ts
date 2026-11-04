@@ -28,6 +28,29 @@ function routeError(message: string): Extract<ChatRouteData, { kind: "route-erro
   return { kind: "route-error", message, face: "chat" };
 }
 
+function captureCatalogConnection(
+  context: ApplicationContext,
+  client: Awaited<ReturnType<typeof waitForGatewayClient>>,
+  signal: AbortSignal,
+) {
+  const { hello } = context.gateway.snapshot;
+  const isCurrent = () =>
+    !signal.aborted &&
+    context.gateway.snapshot.phase === "connected" &&
+    context.gateway.snapshot.client === client &&
+    context.gateway.snapshot.hello === hello;
+  return {
+    hello,
+    isCurrent,
+    assertCurrent() {
+      signal.throwIfAborted();
+      if (!isCurrent()) {
+        throw new Error("The Gateway connection changed while resolving the conversation.");
+      }
+    },
+  };
+}
+
 export async function loadResolvedCatalogShareRoute(
   context: ApplicationContext,
   resolved: ResolvedCatalogShareRoute,
@@ -36,20 +59,21 @@ export async function loadResolvedCatalogShareRoute(
   const { target, location: sourceLocation } = resolved;
   try {
     const client = await waitForGatewayClient(context.gateway, signal);
-    signal.throwIfAborted();
+    const connection = captureCatalogConnection(context, client, signal);
+    connection.assertCurrent();
     const agentId = resolveUiDefaultAgentId({
       agentsList: context.agents.state.agentsList,
-      hello: context.gateway.snapshot.hello,
+      hello: connection.hello,
     });
     const listed = await client.request<SessionsCatalogListResult>(
-      catalogMethod(context.gateway.snapshot, target.routeSegment, "list"),
+      catalogMethod(connection, target.routeSegment, "list"),
       {
         agentId,
         search: target.shortId,
         limitPerHost: 2,
       },
     );
-    signal.throwIfAborted();
+    connection.assertCurrent();
     const matchingCatalogs = listed.catalogs.filter(
       (candidate) => candidate.shareRoute?.routeSegment === target.routeSegment,
     );
@@ -120,11 +144,11 @@ export async function loadResolvedCatalogShareRoute(
     }
     const continued = session.sessionKey
       ? await resolveBoundCatalogConversation(
-          context,
           client,
           { catalogId: catalog.id, hostId: shareRoute.hostId, threadId: session.threadId },
           agentId,
           signal,
+          connection,
         )
       : undefined;
     return {
@@ -153,23 +177,21 @@ export async function loadResolvedCatalogShareRoute(
 }
 
 async function resolveBoundCatalogConversation(
-  context: ApplicationContext,
   client: Awaited<ReturnType<typeof waitForGatewayClient>>,
   key: CatalogSessionKey,
   agentId: string,
   signal: AbortSignal,
+  connection: ReturnType<typeof captureCatalogConnection>,
 ) {
   // A catalog pointer is discovery. Reconcile origin and destination ACLs before
   // a deleted destination could be mistaken for a new ordinary conversation.
+  connection.assertCurrent();
   const result = await client.request<SessionsCatalogContinueResult | null>(
-    catalogMethod(context.gateway.snapshot, key.catalogId, "resolve"),
+    catalogMethod(connection, key.catalogId, "resolve"),
     { ...key, agentId },
     { signal },
   );
-  signal.throwIfAborted();
-  if (context.gateway.snapshot.client !== client) {
-    throw new Error("The Gateway connection changed while resolving the conversation.");
-  }
+  connection.assertCurrent();
   if (!result) return undefined;
   return {
     sessionKey: result.sessionKey,
@@ -184,16 +206,21 @@ export async function resolveCatalogContinuation(
   signal: AbortSignal,
 ) {
   const client = await waitForGatewayClient(context.gateway, signal);
+  const connection = captureCatalogConnection(context, client, signal);
+  connection.assertCurrent();
   const lookup = await lookupCatalogSession({
     client,
     key,
     agentId,
     signal,
-    isCurrent: () => !signal.aborted && context.gateway.snapshot.client === client,
-    listMethod: catalogMethod(context.gateway.snapshot, key.catalogId, "list"),
+    isCurrent: connection.isCurrent,
+    listMethod: catalogMethod(connection, key.catalogId, "list"),
   });
-  signal.throwIfAborted();
-  return lookup?.session?.sessionKey
-    ? resolveBoundCatalogConversation(context, client, key, agentId, signal)
+  connection.assertCurrent();
+  if (!lookup) {
+    throw new Error("The Gateway connection changed while resolving the conversation.");
+  }
+  return lookup.session?.sessionKey
+    ? resolveBoundCatalogConversation(client, key, agentId, signal, connection)
     : undefined;
 }

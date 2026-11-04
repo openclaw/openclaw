@@ -1,8 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { resolveCatalogContinuation } from "./route-loader-catalog-share.runtime.ts";
 import { loadCatalogShareRouteFromLocation } from "./route-loader-catalog-share.ts";
 import { loadRoute, routeLocation } from "./route-loading.test-support.ts";
 
@@ -230,5 +232,59 @@ it("reopens a Beam at its one live destination, retaining the bound non-default 
       agentId: "analysis",
     });
   }
+  expect(request.mock.calls.some(([method]) => method.endsWith(".continue"))).toBe(false);
+});
+
+it.each([
+  ["share", "list", "hello"],
+  ["share", "resolve", "hello"],
+  ["query", "list", "hello"],
+  ["query", "resolve", "hello"],
+  ["query", "list", "client"],
+] as const)("rejects stale %s %s results after %s replacement", async (route, phase, changed) => {
+  const entered = createDeferredCore();
+  const deferred = createDeferredCore<unknown>();
+  const key = "agent:analysis:dashboard:handoff";
+  const listed = beamCatalog([
+    { threadId: fullId, name: "Continued investigation", sessionKey: key },
+  ]);
+  const request = vi.fn(async (method: string) => {
+    if (method.endsWith(`.${phase}`)) {
+      entered.resolve();
+      return deferred.promise;
+    }
+    return method.endsWith(".resolve") ? { sessionKey: key } : listed;
+  });
+  const context = catalogContext(request);
+  const loading =
+    route === "share"
+      ? loadRoute(context, "/beam/0123456789ab")
+      : resolveCatalogContinuation(
+          context,
+          { catalogId: "beam", hostId: "gateway", threadId: fullId },
+          "research",
+          new AbortController().signal,
+        );
+  await entered.promise;
+  Object.assign(
+    context.gateway.snapshot,
+    changed === "hello"
+      ? {
+          hello: gatewayHelloForMethods(
+            ["sessions.catalog.list", "sessions.catalog.resolve"],
+            ["operator.read"],
+          ),
+        }
+      : { client: { request } },
+  );
+  const checked =
+    route === "share"
+      ? expect(loading).resolves.toMatchObject({
+          kind: "route-error",
+          message: expect.stringContaining("connection changed"),
+        })
+      : expect(loading).rejects.toThrow("connection changed");
+  deferred.resolve(phase === "list" ? listed : { sessionKey: key });
+  await checked;
   expect(request.mock.calls.some(([method]) => method.endsWith(".continue"))).toBe(false);
 });
