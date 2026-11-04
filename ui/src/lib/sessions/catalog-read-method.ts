@@ -7,16 +7,17 @@ export function catalogMethod(
   catalogId: string,
   operation: "list" | "read" | "continue",
 ): string {
+  const sharedMethod = `sessions.catalog.${operation}`;
   return catalogId === "beam" &&
     snapshot.hello?.auth &&
     !canPresentGatewayMethod(
       snapshot,
-      `sessions.catalog.${operation}`,
+      sharedMethod,
       operation === "continue" ? "operator.write" : "operator.read",
       { requireAdvertisement: false },
     )
     ? `beam.owned.${operation}`
-    : `sessions.catalog.${operation}`;
+    : sharedMethod;
 }
 
 /** Owned-source composition is admitted by its narrow method, not by shared catalog scopes. */
@@ -25,10 +26,11 @@ export function canComposeCatalogSession(
   catalogId: string,
 ): boolean {
   const method = catalogMethod(snapshot, catalogId, "continue");
+  const ownedContinuation = method === "beam.owned.continue";
   return canPresentGatewayMethod(
     snapshot,
     method,
-    method === "beam.owned.continue" ? "operator.sessions.write" : "operator.write",
-    { requireAdvertisement: method === "beam.owned.continue" },
+    ownedContinuation ? "operator.sessions.write" : "operator.write",
+    { requireAdvertisement: ownedContinuation },
   );
 }
