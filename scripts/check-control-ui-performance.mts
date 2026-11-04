@@ -49,9 +49,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Named Actions queries (#186057) add 535 B to Chat on current main; joshavant approved it.
-  // Measured 1,282,595 B plus the existing 64 B build variance; requests stay at 20.
-  chatBootJsGzipBytes: 1_282_659,
+  // Approved named Actions queries (#186057) add 354 B to Chat vs main 079d8d92.
+  // Measured 1,285,870 B plus the existing 64 B headroom; requests stay at 20.
+  chatBootJsGzipBytes: 1_285_934,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
