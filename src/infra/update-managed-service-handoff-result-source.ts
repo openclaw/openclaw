@@ -14,6 +14,15 @@ let terminalRuntimePath = params.recoveryModulePath;
 let serviceStoppedAtMs, serviceDowntimeMs;
 let recoveryObservation;
 
+// Child JSON is untyped. Normalize its reason before typed classification,
+// sentinel publication, and terminal recording can consume it.
+function parseManagedUpdateResult(output) {
+  let result;
+  try { result = JSON.parse(output); } catch { return null; }
+  if (result && typeof result === "object" && typeof result.reason !== "string") delete result.reason;
+  return result;
+}
+
 async function observeUnrecordedRecovery() {
   if (!triageFailure || typeof triageFailure.restored === "boolean" || !ownsManagedUpdateLease()) return;
   const previous = closedUpdateResult?.steps?.findLast((step) => step.name === "gateway recovery verification");

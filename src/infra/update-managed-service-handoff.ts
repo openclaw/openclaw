@@ -754,8 +754,7 @@ async function collectUpdateFailureTriage() {
     // Only this invocation's direct child result carries the producer decision.
     // Success may change install roots; only recovery requires the original root.
     // Sentinels and diagnostic exports never authorize activation.
-    let result = null;
-    try { if (!outputOverflow) result = JSON.parse(updaterOutput); } catch {}
+    const result = outputOverflow ? null : parseManagedUpdateResult(updaterOutput);
     if ((exit.signal || !result) && shouldRecoverInterruptedUpdater()) {
       await recoverInterruptedUpdater();
       return;
