@@ -64,7 +64,7 @@ suite.define(() => {
         }
         const gateway = await installMockGateway(page, scenario);
         await page.goto(`${suite.server.baseUrl}settings/communications`);
-        const prefix = page.getByRole("textbox", { name: "Outbound Response Prefix" });
+        const prefix = page.getByRole("textbox", { name: "Outbound response prefix" });
         await prefix.waitFor();
         await gateway.deferNext("config.set");
         await edit(prefix, "retained draft");
@@ -94,7 +94,7 @@ suite.define(() => {
             .poll(() => secondPage.locator("openclaw-settings-save-indicator").textContent())
             .toContain(recoveryBackupPath);
           const secondPrefix = secondPage.getByRole("textbox", {
-            name: "Outbound Response Prefix",
+            name: "Outbound response prefix",
           });
           await expect.poll(() => secondPrefix.isDisabled()).toBe(true);
           expect(await secondGateway.getRequests("config.set")).toHaveLength(0);

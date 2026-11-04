@@ -748,7 +748,7 @@ export function ChannelsPage() {
         title={t("tabs.channels")}
         subtitle={
           <>
-            {t("subtitles.channels")} <LearnMoreLink url={CHANNELS_DOCS_URL} />
+            <LearnMoreLink url={CHANNELS_DOCS_URL} />
           </>
         }
       />

@@ -8,6 +8,7 @@ import type { SelectPicker } from "../../components/select-picker.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import "../../lib/toast-host.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
@@ -519,11 +520,7 @@ describe("ModelProvidersPage agent scope", () => {
     );
     const row = await expandProvider(page, "openai");
     row.querySelector<HTMLButtonElement>(".provider-row__remove")!.click();
-    const modal = await vi.waitFor(() => {
-      const dialog = document.body.querySelector<HTMLElement>("openclaw-modal-dialog");
-      expect(dialog).not.toBeNull();
-      return dialog!;
-    });
+    const { modal } = await getRenderedModalDialog(document.body);
     expect(modal.textContent).toContain("Remove OpenAI");
     expect(requestCount(request, "models.authLogout")).toBe(0);
     modal.querySelector<HTMLButtonElement>("button.danger")!.click();
