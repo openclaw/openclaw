@@ -458,6 +458,8 @@ describe("full-release-validation-at-sha", () => {
     );
     expect(() => parseArgs(["-f", "rerun_group=qa"])).toThrow("rerun_group must be one of");
     expect(parseArgs(["-f", "rerun_group=qa-parity"]).inputs.rerun_group).toBe("qa-parity");
+    const qualified = parseArgs(["-f", "rerun_group=qualified-package"]);
+    expect(qualified.inputs.rerun_group).toBe("qualified-package");
     expect(parseArgs(["-f", "rerun_group=windows-node"]).inputs.rerun_group).toBe("windows-node");
   });
 
