@@ -4,7 +4,7 @@ import {
   loadTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { withSessionTranscriptWriteLock } from "../plugin-sdk/session-transcript-runtime.js";
+import { withSessionTranscriptWrite } from "../plugin-sdk/session-transcript-runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createGatewaySession,
@@ -16,7 +16,7 @@ afterEach(() => memorySessionActorOwners.reset());
 
 async function appendImportedMessage({ agentId, entry, key, storePath }: CreatedGatewaySession) {
   const scope = { agentId, sessionId: entry.sessionId, sessionKey: key, storePath };
-  await withSessionTranscriptWriteLock(scope, async (transcript) => {
+  await withSessionTranscriptWrite(scope, async (transcript) => {
     await transcript.appendMessage({
       message: { role: "user", content: "Imported snapshot", timestamp: 1 },
     });
@@ -191,15 +191,20 @@ it.each([false, true])(
         createGatewaySession({
           ...base,
           onPhase(phase) {
-            if (phase === "commit") deny = true;
+            if (phase === "commit") {
+              deny = true;
+            }
           },
           commitGuard() {
-            if (deny) throw new Error("publication guard rejected before write");
+            if (deny) {
+              throw new Error("publication guard rejected before write");
+            }
           },
         }),
       ).rejects.toBeInstanceOf(SessionCreationNotCommittedError);
       expect(loadSessionEntryReadOnly({ sessionKey: key })).toBeUndefined();
-      await expect(createGatewaySession(base)).resolves.toMatchObject({ ok: true, key });
+      const retry = await createGatewaySession(base);
+      expect(retry, JSON.stringify(retry)).toMatchObject({ ok: true, key });
     });
   },
 );

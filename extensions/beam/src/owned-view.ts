@@ -8,6 +8,7 @@ import type {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BeamTranscriptCursorError, createBeamSessionCatalog } from "./session-catalog.js";
 import type { BeamStore } from "./store.js";
+import { BeamSourceOwnershipError } from "./store.js";
 
 class BeamOwnedViewForbiddenError extends Error {}
 
@@ -169,8 +170,8 @@ export function createBeamOwnedViewHandler(
           const { uploaderProfileId: _uploaderProfileId, ...ownedSession } = reserved.session;
           return { ...reserved, session: ownedSession };
         },
-        async list() {
-          const rows = await store.list();
+        async list(handoffPrefix) {
+          const rows = await store.list(handoffPrefix);
           assertCurrent();
           return rows.filter((row) => row.publisherProfileId === profileId);
         },
@@ -232,18 +233,20 @@ export function createBeamOwnedViewHandler(
         assertCurrent();
         if (!(error instanceof BeamOwnedViewForbiddenError)) {
           failure =
-            error instanceof BeamTranscriptCursorError
-              ? {
-                  code: "INVALID_REQUEST",
-                  message:
-                    error.kind === "stale"
-                      ? "This Beam changed while you were reading it. Reload the snapshot to continue."
-                      : "Invalid Beam page cursor. Reload the snapshot to continue.",
-                }
-              : {
-                  code: "UNAVAILABLE",
-                  message: "Could not load this Beam. Refresh and try again.",
-                };
+            error instanceof BeamSourceOwnershipError
+              ? { code: "INVALID_REQUEST", message: error.message }
+              : error instanceof BeamTranscriptCursorError
+                ? {
+                    code: "INVALID_REQUEST",
+                    message:
+                      error.kind === "stale"
+                        ? "This Beam changed while you were reading it. Reload the snapshot to continue."
+                        : "Invalid Beam page cursor. Reload the snapshot to continue.",
+                  }
+                : {
+                    code: "UNAVAILABLE",
+                    message: "Could not load this Beam. Refresh and try again.",
+                  };
         }
       } catch {
         // Error replies must not disclose a known cursor state after authority ends.

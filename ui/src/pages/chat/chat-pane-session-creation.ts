@@ -129,6 +129,9 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     if (catalogHost?.kind === "node") {
       return { text: t("chat.catalog.remoteViewOnly") };
     }
+    if (catalogSession?.continuationUnavailableReason) {
+      return { text: catalogSession.continuationUnavailableReason };
+    }
     // Archivable local Codex rows withhold continuation only when supervision is off.
     if (catalogKey.catalogId !== "codex" || catalogSession?.canArchive !== true) {
       return { text: t("chat.catalog.unsupportedViewOnly") };

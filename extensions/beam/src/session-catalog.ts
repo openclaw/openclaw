@@ -121,7 +121,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
       const search = params.search?.trim().toLowerCase().normalize("NFC");
       const shareId =
         search && isControlUiCatalogShareId(BEAM_SESSION_SHARE_ROUTE, search) ? search : undefined;
-      const sessions = (await store.list())
+      const sessions = (await store.list(shareId))
         .filter(
           (session) =>
             !search ||
@@ -154,8 +154,16 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
             recencyAt: session.receivedAt,
             source: session.source,
             archived: false,
-            canContinue: true,
-            ...(session.continuation?.ready ? { sessionKey: session.continuation.sessionKey } : {}),
+            canContinue: Boolean(session.handoffId),
+            ...(!session.handoffId
+              ? {
+                  continuationUnavailableReason:
+                    "This Beam is a read-only snapshot. Its authenticated original publisher must run beam handoff before you can continue here.",
+                }
+              : {}),
+            ...(session.continuation?.ready || session.continuation?.creating
+              ? { sessionKey: session.continuation.sessionKey }
+              : {}),
             canArchive: true,
           })),
           ...(offset + page.length < sessions.length
@@ -169,7 +177,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
     },
     async resolveGatewayConversation(params) {
       const session = await requireSession(params.hostId, params.threadId);
-      if (!session.continuation?.ready) {
+      if (!session.continuation?.ready && !session.continuation?.creating) {
         return undefined;
       }
       if (!params.assertCurrent) {

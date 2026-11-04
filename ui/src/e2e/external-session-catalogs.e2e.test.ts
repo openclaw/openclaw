@@ -60,6 +60,7 @@ function makeCatalog(
   host: { hostId: string; label: string; kind: string; nodeId?: string },
   options: {
     canContinue?: boolean;
+    continuationUnavailableReason?: string;
     status?: string;
     archived?: boolean;
     sourceHomeId?: string;
@@ -87,6 +88,8 @@ suite.define(() => {
   it("continues from a Visitor owned Beam cold link without shared catalog privileges", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 720 } }, async ({ page }) => {
       const fullId = "a".repeat(32);
+      const handoffReason =
+        "This Beam is a read-only snapshot. Its authenticated original publisher must run beam handoff before you can continue here.";
       const gateway = await installMockGateway(page, {
         operatorScopes: ["operator.sessions.write"],
         featureMethods: [
@@ -106,7 +109,11 @@ suite.define(() => {
                 fullId,
                 "Owned synthetic Beam",
                 { hostId: "gateway", label: "Beamed sessions", kind: "gateway" },
-                { shareRoute: SHARE_ROUTE, canContinue: true },
+                {
+                  shareRoute: SHARE_ROUTE,
+                  canContinue: false,
+                  continuationUnavailableReason: handoffReason,
+                },
               ),
             ],
           },
@@ -127,6 +134,23 @@ suite.define(() => {
         },
       });
       await page.goto(new URL("beam/owned-synthetic-beam-aaaaaaaaaaaa", suite.server.baseUrl).href);
+      await exactText(page, "My owned Beam is readable without operator.read.").waitFor();
+      await exactText(page, handoffReason).waitFor();
+      expect(await page.locator(`${visiblePane} textarea`).isDisabled()).toBe(true);
+      await page.screenshot({ path: ".openclaw/tmp/beam-talk-proof/before.png" });
+      await gateway.setMethodResponse("beam.owned.list", {
+        catalogs: [
+          makeCatalog(
+            "beam",
+            "Beam",
+            fullId,
+            "Owned synthetic Beam",
+            { hostId: "gateway", label: "Beamed sessions", kind: "gateway" },
+            { shareRoute: SHARE_ROUTE, canContinue: true },
+          ),
+        ],
+      });
+      await page.reload();
       await exactText(page, "My owned Beam is readable without operator.read.").waitFor();
       expect(await page.locator(`${visiblePane} textarea`).isDisabled()).toBe(false);
       expect((await gateway.getRequests("beam.owned.list")).length).toBeGreaterThan(0);
@@ -178,6 +202,18 @@ suite.define(() => {
               sessionKey: "agent:main:publisher-continuation",
             },
           ),
+        ],
+      });
+      await gateway.setSessionsListResponse({
+        sessions: [
+          {
+            key: "agent:main:publisher-continuation",
+            sessionId: "publisher-continuation-session",
+            updatedAt: Date.now(),
+            kind: "direct",
+            sharingRole: "owner",
+            visibility: "draft",
+          },
         ],
       });
       await page.goto(new URL("beam/owned-synthetic-beam-aaaaaaaaaaaa", suite.server.baseUrl).href);

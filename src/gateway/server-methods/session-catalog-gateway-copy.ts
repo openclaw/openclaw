@@ -64,7 +64,7 @@ export async function resolveSessionCatalogGatewayConversation(params: {
     allowProcessHomeFallback: false,
     assertCurrent: params.assertCurrent,
   });
-  using source = {
+  using _source = {
     [Symbol.dispose]() {
       binding?.release();
     },
@@ -79,7 +79,7 @@ export async function resolveSessionCatalogGatewayConversation(params: {
     method: "chat.history",
     requestParams: { sessionKey: binding.sessionKey, agentId: binding.agentId },
   });
-  using destination = {
+  using _destination = {
     [Symbol.dispose]() {
       admitted.authorization?.release?.();
     },
@@ -310,31 +310,29 @@ export async function copySessionCatalogToGateway(params: {
     },
   };
   const captured = await operatorCapture.preparation;
-  let continuationGuard: (() => void) | undefined;
   let destinationAuthority: SessionMutationAuthorization | undefined;
   const assertSourceCurrent = () => {
     params.commitGuard?.();
     captured?.authority.assertCurrent();
   };
-  const commitGuard = () => {
-    assertSourceCurrent();
-    continuationGuard?.();
-    destinationAuthority?.assertCurrent();
-  };
-  commitGuard();
+  assertSourceCurrent();
   const gatewayCopy = await copyToGatewaySession({
     ...params.providerContinueParams,
     assertCurrent: assertSourceCurrent,
   });
   const continuation = gatewayCopy.continuation;
-  using continuationLease = {
+  using _continuationLease = {
     [Symbol.dispose]() {
       continuation?.release();
     },
   };
   // Creation claims persist before dispatch. Only an unclaimed reservation or the
   // lifecycle owner's proven rollback can retry; an absent row alone proves nothing.
-  continuationGuard = continuation?.assertCurrent;
+  const commitGuard = () => {
+    assertSourceCurrent();
+    continuation?.assertCurrent();
+    destinationAuthority?.assertCurrent();
+  };
   const agentId = continuation?.agentId ?? params.agentId;
   commitGuard();
   const creationError = authorizeGatewaySessionCreation({
@@ -345,8 +343,10 @@ export async function copySessionCatalogToGateway(params: {
   if (creationError) {
     return { ok: false, error: creationError };
   }
-  await using destination = {
-    authorization: undefined as SessionMutationAuthorization | undefined,
+  await using destination: {
+    authorization?: SessionMutationAuthorization;
+    [Symbol.asyncDispose](): Promise<void>;
+  } = {
     async [Symbol.asyncDispose]() {
       this.authorization?.release?.();
     },

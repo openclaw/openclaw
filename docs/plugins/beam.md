@@ -94,6 +94,7 @@ A successful upload returns the stable Beam id and a relative Control UI URL:
 ```json
 {
   "ok": true,
+  "publicationId": "abcdef0123456789abcdef0123456789",
   "beamId": "0123456789abcdef0123456789abcdef",
   "url": "/beam/fix-the-upload-flow-0123456789ab"
 }
@@ -117,9 +118,11 @@ Uploading the same `beamId` updates the existing catalog row when its `updatedAt
 
 ## Continue on the Team Gateway
 
-Select a Beam and send a message in its composer. The first continuation binds that publication to one ordinary Team conversation for the selected agent. Its bounded, sanitized source history seeds the conversation once. Your new message runs there with the destination's own account and tools. The source runtime session ID does not need to survive this handoff.
+Publishing alone shares a read-only snapshot. To move the logical conversation, use the updated Beam skill's `handoff` command with the exact source session. The sender durably retires that Beam identity before network dispatch, obtains the receiver's `publicationId`, and explicitly releases that generation with `handoffId`. Release requires the original verified publisher; shared-token and older ownerless snapshots cannot be claimed through this route. A lost acknowledgment can retry the same generation but cannot recreate an expired publication.
 
-Reopening the original Beam link resolves the existing conversation through a read-only lookup, subject to current source access and ordinary destination read permissions. Retrying continuation uses that same logical conversation. Neither path imports history again or chooses another agent. Later source uploads preserve the binding and cannot overwrite Team turns. Beam does not control the original local harness or synchronize Team turns back to it.
+After release, send a message in the Beam composer or use the skill's `continue` command with your existing authenticated remote OpenClaw profile. The first continuation binds one ordinary Team conversation for the selected agent. Its bounded, sanitized source history seeds the conversation once. New messages run there with the destination's own account and tools. The source runtime session ID does not need to survive this handoff.
+
+Reopening the original Beam link resolves the existing conversation through a read-only lookup, subject to current publisher access and ordinary destination read permissions. Retrying continuation uses that same logical conversation. Neither path imports history again or chooses another agent. Released sources reject later snapshot writes with `409` and an ownership receipt, without changing history or extending retention. Source Beam `read` and `continue` commands route to the authoritative Team conversation through normal authentication. Beam does not stop the original local harness; independent local turns after release are not Team turns.
 
 Model preferences resolve through the destination's configured aliases and provider-declared model/version equivalence. OpenClaw selects the available canonical destination model under normal policy. An unavailable preference leaves model selection unset so the destination's configured default resolves normally. Source credentials and account selections never transfer. A denied destination model or expired authority cannot grant access through this handoff.
 
@@ -135,6 +138,8 @@ Beam stores sanitized payloads in OpenClaw's shared SQLite-backed plugin state:
 - at most 20 live rows per verified publisher for restricted Visitor creation; existing owned rows can still be refreshed
 - restricted Visitor creation is rejected at the shared 500-row cap, rather than evicting an existing snapshot
 - server receipt time controls catalog ordering; clients cannot move themselves ahead with a forged timestamp
+
+Ownership release and destination binding persist separately as SQLite-backed plugin metadata, without retaining transcript items. Snapshot expiry, eviction and archive cannot restore source ownership or allocate a replacement destination. After a destination exists, the Beam link can resolve it after snapshot removal. A snapshot that expires before destination creation cannot be imported later; the source remains retired and needs reconciliation. Retention does not bypass invitation or destination access checks.
 
 The sidebar reuses an in-memory metadata inventory rather than loading every
 transcript on each poll. Uploads and deletions invalidate that inventory immediately;
@@ -162,10 +167,10 @@ User turns are attributed to the verified publisher of the current snapshot, usi
 Any operator with `operator.write` can delete a Beam from its sidebar row menu.
 After confirmation, the sidebar hides the row while deletion finishes. If deletion
 fails, the row returns and an error appears. Successful deletion is permanent.
-Re-uploading the same `beamId` recreates the
+For an unreleased source, re-uploading the same `beamId` recreates the
 row, whether through the manual skill or a still-active mirror's next upload.
 Mirrors skip unchanged snapshots, so recreation does not necessarily happen on
-the next poll. Deleting a Beam does not affect continuations already created from it.
+the next poll. A released source cannot be recreated by uploading. Deleting its snapshot preserves the conversation binding and does not delete the destination conversation.
 
 ## Security boundary
 

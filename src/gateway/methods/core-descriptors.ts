@@ -436,7 +436,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["environments.destroy", "environments", "operator.admin", "2026.7", SIDECAR_CONTROL_PLANE_WRITE],
   ["sessions.catalog.list", "session-catalog", "operator.read", "2026.7"],
   ["sessions.catalog.read", "session-catalog", "operator.read", "2026.7"],
-  ["sessions.catalog.resolve", "session-catalog", "operator.read", "2026.11"],
   ["terminal.upload", "terminal", "operator.admin", "2026.7"],
   ["sessions.catalog.continue", "session-catalog", "operator.write", "2026.7"],
   ["sessions.catalog.archive", "session-catalog", "operator.write", "2026.7"],
@@ -757,4 +756,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.files.preview.release", "sessions-files", "operator.read", "2026.10"],
   ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
   ["sessions.groups.create", "sessions-groups", "operator.write", "2026.10"],
+  ["sessions.catalog.resolve", "session-catalog", "operator.read", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

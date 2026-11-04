@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { registerTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -6,12 +7,21 @@ import type {
   SessionsCatalogListResult,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntryReadOnly,
+  loadTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
 import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
 import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission-state.js";
+import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -170,7 +180,13 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       uploaderProfileId: ensureProfileForEmail("alice@example.test").id,
       items: [{ type: "userMessage", text: "Private legacy synthetic" }],
     });
-    const upload = async (name: string, id: string, headers = {}) =>
+    const upload = async (
+      name: string,
+      id: string,
+      headers = {},
+      handoffId?: string,
+      contentName = name,
+    ) =>
       fetch(`http://127.0.0.1:${port}/api/v1/beam/sessions`, {
         method: "POST",
         headers: {
@@ -188,11 +204,12 @@ test("HTTP Visitor publications are privately readable by their initial publishe
         body: JSON.stringify({
           version: 1,
           beamId: id,
-          title: "Synthetic " + name,
+          title: "Synthetic " + contentName,
           source: "fixture",
           updatedAt: "2026-11-02T12:00:00Z",
           completed: true,
-          items: [{ type: "userMessage", text: "Private synthetic " + name }],
+          items: [{ type: "userMessage", text: "Private synthetic " + contentName }],
+          ...(handoffId ? { handoffId } : {}),
         }),
       });
     try {
@@ -214,7 +231,8 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       }
       const published = await upload("alice", ids[0]!);
       expect(published.status, await published.clone().text()).toBe(200);
-      expect(await published.json()).toMatchObject({
+      const publication = await published.json();
+      expect(publication).toMatchObject({
         ok: true,
         canView: true,
         url: "/beam/synthetic-alice-aaaaaaaaaaaa",
@@ -235,7 +253,12 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       });
       expect(own.ok, JSON.stringify(own.error)).toBe(true);
       expect(own.payload?.catalogs[0]?.hosts[0]?.sessions).toMatchObject([
-        { threadId: ids[0], canContinue: true, canArchive: false },
+        {
+          threadId: ids[0],
+          canContinue: false,
+          canArchive: false,
+          continuationUnavailableReason: expect.stringContaining("beam handoff"),
+        },
       ]);
       expect(JSON.stringify(own)).not.toContain("publisherProfileId");
       const request = { catalogId: "beam", hostId: "gateway", threadId: ids[0] };
@@ -254,6 +277,8 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       expect(replaced.ok).toBe(true);
       expect(replaced.payload?.items[0]?.text).toBe("Private synthetic staff");
       expect(replaced.payload?.items[0]?.sender).toBeUndefined();
+      const released = await upload("alice", ids[0]!, {}, publication.publicationId, "staff");
+      expect(released.status, await released.clone().text()).toBe(200);
       const continued = await rpcReq<{ sessionKey: string }>(alice, "beam.owned.continue", {
         ...request,
         agentId: "main",
@@ -337,7 +362,7 @@ test("HTTP Visitor publications are privately readable by their initial publishe
   });
 });
 
-test("preserves named-role model admission for owned Beam adoption", async () => {
+test("preserves model admission and rolls back revoked owned Beam adoption", async ({ signal }) => {
   const modelA = "fixture/fixture-model-a";
   const modelB = "fixture/fixture-model-b";
   const models = ["a", "b"].map((id) => ({
@@ -367,6 +392,8 @@ test("preserves named-role model admission for owned Beam adoption", async () =>
           scopes: ["operator.sessions.write"],
           modelPolicy: { allow: [modelA] },
         },
+        administrator: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
+        blocked: { sessions: { others: "none" }, agents: "*", scopes: [] },
       },
     },
   });
@@ -385,6 +412,7 @@ test("preserves named-role model admission for owned Beam adoption", async () =>
   });
   const publisher = ensureProfileForEmail("model-publisher@example.test");
   setUserProfileRole(publisher.id, role);
+  setUserProfileRole(ensureProfileForEmail("beam-administrator@example.test").id, "administrator");
   const grant = new AbortController();
   const config = {
     agents: { entries: { main: {} } },
@@ -451,22 +479,24 @@ test("preserves named-role model admission for owned Beam adoption", async () =>
       return realFetch(input, init);
     });
     onTestFinished(() => fetchGuard.mockRestore());
-    const ws = await openWs(port, {
-      ...TRUSTED_BROWSER_HEADERS,
-      "x-forwarded-user": "model-publisher@example.test",
-    });
-    try {
+    const connect = async (email: string, scopes: string[]) => {
+      const socket = await openWs(port, { ...TRUSTED_BROWSER_HEADERS, "x-forwarded-user": email });
       expect(
         (
-          await connectReq(ws, {
+          await connectReq(socket, {
             prePairDevice: true,
             client: CONTROL_UI_CLIENT,
             browserOrigin: BROWSER_ORIGIN,
             skipDefaultAuth: true,
-            scopes: ["operator.sessions.write"],
+            scopes,
           })
         ).ok,
       ).toBe(true);
+      return socket;
+    };
+    let ws = await connect("model-publisher@example.test", ["operator.sessions.write"]);
+    const admin = await connect("beam-administrator@example.test", ["operator.admin"]);
+    try {
       const profiles = await prepareUserProfileCatalog();
       onTestFinished(profiles.release);
       await publishConfiguredModelRuntimeSnapshots({ cfg: loadConfig() });
@@ -489,51 +519,175 @@ test("preserves named-role model admission for owned Beam adoption", async () =>
         model: modelB,
       });
       expect(denied).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
-      const beamId = "9".repeat(32);
-      const upload = await fetch(origin + "/api/v1/beam/sessions", {
-        method: "POST",
-        headers: {
-          ...TRUSTED_BROWSER_HEADERS,
-          "x-forwarded-user": "model-publisher@example.test",
-          "x-openclaw-scopes": "operator.sessions.write",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
+      const releaseBeam = async (beamId: string, model: string) => {
+        const payload = {
           version: 1,
           beamId,
           title: "Synthetic named-role metadata",
-          sourceModel: { provider: "fixture", model: "fixture-model-b" },
+          sourceModel: { provider: "fixture", model: model.split("/")[1] },
           source: "fixture",
           updatedAt: "2026-11-04T00:00:00Z",
           completed: true,
-          items: [{ type: "userMessage", text: "Synthetic metadata-only context" }],
-        }),
+          items: [{ type: "userMessage", text: "Synthetic imported context " + beamId }],
+        };
+        const upload = (body: unknown) =>
+          fetch(origin + "/api/v1/beam/sessions", {
+            method: "POST",
+            headers: {
+              ...TRUSTED_BROWSER_HEADERS,
+              "x-forwarded-user": "model-publisher@example.test",
+              "x-openclaw-scopes": "operator.sessions.write",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(body),
+          });
+        const published = await upload(payload);
+        expect(published.status, await published.clone().text()).toBe(200);
+        const { publicationId } = await published.json();
+        expect(publicationId).toMatch(/^[a-f0-9]{32}$/);
+        const released = await upload({ ...payload, handoffId: publicationId });
+        expect(released.status, await released.clone().text()).toBe(200);
+        return { catalogId: "beam", hostId: "gateway", threadId: beamId, agentId: "main" };
+      };
+      const keys = () =>
+        listSessionEntriesCore({ agentId: "main" })
+          .map(({ sessionKey }) => sessionKey)
+          .toSorted();
+      const allowed = await releaseBeam("8".repeat(32), modelA);
+      const adopted = await rpcReq<{ sessionKey: string }>(ws, "beam.owned.continue", allowed);
+      expect(adopted.ok, JSON.stringify(adopted.error)).toBe(true);
+      const allowedKey = expectDefined(adopted.payload, "adopted destination").sessionKey;
+      const allowedEntry = expectDefined(
+        loadSessionEntryReadOnly({ agentId: "main", sessionKey: allowedKey }),
+        "persisted destination",
+      );
+      expect(allowedEntry).toMatchObject({
+        providerOverride: "fixture",
+        modelOverride: "fixture-model-a",
       });
-      expect(upload.status, await upload.clone().text()).toBe(200);
-      expect(await upload.json()).toMatchObject({
-        ok: true,
-        canView: true,
-        url: expect.stringContaining("/beam/"),
+      expect(allowedEntry.initializationPending).toBeUndefined();
+      expect(allowedEntry.pluginExtensions?.beam).toMatchObject({
+        catalogContinuation: { catalogId: "beam", threadId: allowed.threadId },
       });
-      const continued = await rpcReq(ws, "beam.owned.continue", {
-        catalogId: "beam",
-        hostId: "gateway",
-        threadId: beamId,
+      const allowedScope = {
         agentId: "main",
+        sessionKey: allowedKey,
+        sessionId: allowedEntry.sessionId,
+      };
+      const imported = await loadTranscriptEvents(allowedScope);
+      const importedText = JSON.stringify(imported);
+      expect(importedText.split("Synthetic imported context " + allowed.threadId)).toHaveLength(2);
+      expect(importedText).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+      expect(
+        (await listSessionStateEventsSince(allowedKey, "main", 0)).events.filter(
+          ({ kind }) => kind === "adopted",
+        ),
+      ).toHaveLength(1);
+      expect((await rpcReq(ws, "beam.owned.resolve", allowed)).payload).toEqual({
+        sessionKey: allowedKey,
       });
-      const projected = await assessment.mock.results[0]?.value;
+      expect((await rpcReq(ws, "beam.owned.continue", allowed)).payload).toEqual({
+        sessionKey: allowedKey,
+      });
+      expect(await loadTranscriptEvents(allowedScope)).toEqual(imported);
+      const beforeDenied = keys();
+      const forbidden = await releaseBeam("9".repeat(32), modelB);
+      const continued = await rpcReq(ws, "beam.owned.continue", forbidden);
+      const projected = await assessment.mock.results.at(-1)?.value;
       expect(projected?.models).toContainEqual(
-        expect.objectContaining({
-          provider: "fixture",
-          id: "fixture-model-b",
-          available: true,
-        }),
+        expect.objectContaining({ provider: "fixture", id: "fixture-model-b", available: true }),
       );
       expect(continued).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
       expect(continued.error?.message).toMatch(/role.*model|model.*role/i);
+      expect(keys()).toEqual(beforeDenied);
+
+      const request = await releaseBeam("7".repeat(32), modelA);
+      const historyImport = await import("../plugins/session-catalog-history-import.js");
+      const realImport = historyImport.importSessionCatalogHistory;
+      const entered = createDeferredCore<void>();
+      const resume = createDeferredCore<void>();
+      const exited = createDeferredCore<void>();
+      let scope: { agentId: string; sessionKey: string; sessionId: string } | undefined;
+      const barrier = vi
+        .spyOn(historyImport, "importSessionCatalogHistory")
+        .mockImplementation(async (params) => {
+          const result = await realImport(params);
+          scope = {
+            agentId: expectDefined(params.agentId, "import owner"),
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+          };
+          entered.resolve();
+          try {
+            await resume.promise;
+          } finally {
+            exited.resolve();
+          }
+          return result;
+        });
+      onTestFinished(() => barrier.mockRestore());
+      const pending = rpcReq(ws, "beam.owned.continue", request).then(
+        (reply) => ({ reply }),
+        (error) => ({ error }),
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "adoption settled before real history import",
+          ),
+          signal,
+        );
+        const inflight = expectDefined(scope, "pending destination scope");
+        expect(loadSessionEntryReadOnly(inflight)?.initializationPending).toBe(true);
+        expect(JSON.stringify(await loadTranscriptEvents(inflight))).toContain(
+          "Synthetic imported context " + request.threadId,
+        );
+        const closed = new Promise<number>((resolve) => ws.once("close", resolve));
+        expect(
+          (await rpcReq(admin, "users.setRole", { profileId: publisher.id, role: "blocked" })).ok,
+        ).toBe(true);
+        expect(await withinTest(closed, signal)).toBe(4001);
+        resume.resolve();
+        await withinTest(exited.promise, signal);
+        const settled = await withinTest(pending, signal);
+        if ("reply" in settled) expect(settled.reply.ok).toBe(false);
+        else expect(String(settled.error)).toMatch(/closed|4001/);
+        await expect.poll(getActiveGatewayRootWorkCount, { timeout: 5000 }).toBe(0);
+        expect(keys()).toEqual(beforeDenied);
+        expect(loadSessionEntryReadOnly(inflight)).toBeUndefined();
+        expect(await loadTranscriptEvents(inflight)).toEqual([]);
+        expect(
+          (await listSessionStateEventsSince(inflight.sessionKey, "main", 0)).events.filter(
+            ({ kind }) => kind === "adopted",
+          ),
+        ).toEqual([]);
+        expect(await loadTranscriptEvents(allowedScope)).toEqual(imported);
+        barrier.mockRestore();
+        expect((await rpcReq(admin, "users.setRole", { profileId: publisher.id, role })).ok).toBe(
+          true,
+        );
+        ws = await connect("model-publisher@example.test", ["operator.sessions.write"]);
+        const retry = await rpcReq<{ sessionKey: string }>(ws, "beam.owned.continue", request);
+        expect(retry.ok, JSON.stringify(retry.error)).toBe(true);
+        expect(retry.payload?.sessionKey).toBe(inflight.sessionKey);
+        expect(loadSessionEntryReadOnly(inflight)?.initializationPending).toBeUndefined();
+        expect(
+          (await listSessionStateEventsSince(inflight.sessionKey, "main", 0)).events.filter(
+            ({ kind }) => kind === "adopted",
+          ),
+        ).toHaveLength(1);
+      } finally {
+        resume.resolve();
+        ws.close();
+        await pending;
+        barrier.mockRestore();
+      }
       expect(agentCommandMock).not.toHaveBeenCalled();
     } finally {
       ws.close();
+      admin.close();
     }
   });
 });

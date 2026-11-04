@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { preparePluginStateGuard } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -6,7 +7,7 @@ import type {
   BeamUploadOperations,
   BeamUploadResult,
 } from "../upload-operation-api.js";
-import type { BeamStoredSession, BeamUpload } from "./types.js";
+import type { BeamStoredSession, BeamUpload, BeamHandoff } from "./types.js";
 import { BEAM_MAX_SESSIONS, BEAM_RETENTION_MS } from "./types.js";
 
 type BeamSessionSummary = Readonly<
@@ -20,8 +21,17 @@ type BeamSessionSummary = Readonly<
     | "receivedAt"
     | "publisherProfileId"
     | "continuation"
+    | "handoffId"
   >
 >;
+
+export class BeamSourceOwnershipError extends Error {
+  constructor() {
+    super(
+      "The source still owns this Beam. Use the updated Beam client's handoff command before continuing.",
+    );
+  }
+}
 
 export type BeamStore = {
   catalogService: OpenClawPluginServiceV2;
@@ -48,7 +58,7 @@ export type BeamStore = {
     complete: (assertDestinationCurrent: () => void) => Promise<void>;
   }>;
   delete: (beamId: string) => Promise<boolean>;
-  list: () => Promise<BeamSessionSummary[]>;
+  list: (handoffPrefix?: string) => Promise<BeamSessionSummary[]>;
 };
 
 export function createBeamStore(runtime: PluginRuntime): BeamStore {
@@ -57,6 +67,12 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
     maxEntries: BEAM_MAX_SESSIONS,
     overflowPolicy: "evict-oldest",
     defaultTtlMs: BEAM_RETENTION_MS,
+  });
+  // Logical ownership is durable. Retention or archive must never turn a retired
+  // source identity writable again; this namespace contains no transcript bytes.
+  const handoffs = runtime.state.openKeyedStoreV2<BeamHandoff>({
+    namespace: "handoffs",
+    retention: "retained",
   });
   let inventory: Array<{ value: BeamSessionSummary; expiresAt?: number }> | undefined;
   let refreshing: Promise<void> | undefined;
@@ -88,6 +104,7 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
           receivedAt: value.receivedAt,
           publisherProfileId: value.publisherProfileId,
           continuation: value.continuation,
+          handoffId: value.handoffId,
         },
         expiresAt,
       }));
@@ -122,14 +139,14 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
       }
       // Capture the original request assertion before module preparation or writer admission awaits.
       const operation = store.createOperation<BeamUploadOperations>(
-        [store],
+        [store, handoffs],
         { moduleName: "upload-operation-api.js", exportName: "executeBeamUpload" },
         { assertCurrent },
       );
       try {
         const result = await operation.execute(
           { type: "upload", input: { upload, receivedAt, publisher } },
-          { writeStores: [0] },
+          { writeStores: [0, 1] },
         );
         return result.value;
       } finally {
@@ -137,23 +154,36 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
         invalidate();
       }
     },
-    get: (beamId) => store.lookup(beamId),
+    async get(beamId) {
+      const snapshot = await store.lookup(beamId);
+      if (snapshot) return snapshot;
+      const handoff = await handoffs.lookup(beamId);
+      return handoff?.continuation ? { ...handoff, items: [] } : undefined;
+    },
     async reserveContinuation(session, agentId, assertCurrent) {
+      if (!session.handoffId) {
+        throw new BeamSourceOwnershipError();
+      }
       const execute = async (
         completeId?: string,
         action?: "begin" | "complete" | "rollback",
-        assertDestinationCurrent?: () => void,
+        assertEffectCurrent?: () => void,
+        creationId?: string,
       ) => {
         if (!store.createOperation) {
           throw new Error("Beam requires worker-owned plugin state operations");
         }
         const operation = store.createOperation<BeamUploadOperations>(
-          [store],
+          [store, handoffs],
           { moduleName: "upload-operation-api.js", exportName: "executeBeamUpload" },
           {
             assertCurrent: () => {
-              assertCurrent();
-              assertDestinationCurrent?.();
+              // Successful destination rollback owns cleanup after caller revocation.
+              // The retained binding and worker claim token fence it to this attempt.
+              if (action !== "rollback") {
+                assertCurrent();
+              }
+              assertEffectCurrent?.();
             },
           },
         );
@@ -165,10 +195,11 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
               agentId,
               publisherProfileId: session.publisherProfileId,
               createdAt: session.createdAt,
-              ...(completeId ? { completeId, action } : {}),
+              handoffId: session.handoffId!,
+              ...(completeId ? { completeId, action, creationId } : {}),
             },
           },
-          { writeStores: [0] },
+          { writeStores: [0, 1] },
         );
         invalidate();
         return receipt.value;
@@ -191,12 +222,13 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
       assertCurrent();
       const binding = result.session.continuation!;
       // Pin only this publication and generation, not the namespace's write epoch.
-      // Ownership-preserving uploads may refresh its snapshot while Team keeps its own turns.
-      const guard = await preparePluginStateGuard(store, session.beamId, (current) => {
+      // The source release is immutable; retries cannot restore source ownership.
+      const guard = await preparePluginStateGuard(handoffs, session.beamId, (current) => {
         if (
           !current ||
           current.publisherProfileId !== session.publisherProfileId ||
           current.createdAt !== session.createdAt ||
+          current.handoffId !== session.handoffId ||
           current.continuation?.id !== binding.id ||
           current.continuation.agentId !== binding.agentId ||
           current.continuation.sessionKey !== binding.sessionKey
@@ -207,6 +239,8 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
       if (!guard) {
         throw new Error("Beam handoff requires a native publication guard");
       }
+      let attempted = false;
+      let ownedCreationId: string | undefined;
       return {
         ...result,
         reservedNow: !binding.creating && !binding.ready,
@@ -215,14 +249,32 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
           guard.assertCurrent();
         },
         release: guard.release,
-        beginCreate: async (assertDestinationCurrent) =>
-          (await execute(binding.id, "begin", assertDestinationCurrent)).reservedNow,
+        beginCreate: async (assertDestinationCurrent) => {
+          if (attempted) return false;
+          attempted = true;
+          const creationId = randomUUID();
+          const started = (await execute(binding.id, "begin", assertDestinationCurrent, creationId))
+            .reservedNow;
+          if (started) ownedCreationId = creationId;
+          return started;
+        },
         rollback: async () => {
-          await execute(binding.id, "rollback");
+          if (!ownedCreationId) throw new Error("This lease did not create the destination");
+          // Validate before opening the write: a prepared read guard would reject
+          // this operation's own pending publication. The worker rechecks the token.
+          guard.assertCurrent();
+          await execute(binding.id, "rollback", undefined, ownedCreationId);
         },
         complete: async (assertDestinationCurrent) => {
           if (!binding.ready) {
-            await execute(binding.id, "complete", assertDestinationCurrent);
+            // A new lease may reconcile a committed destination after a lost ack.
+            // Only rollback requires this lease's own successful creation claim.
+            await execute(
+              binding.id,
+              "complete",
+              assertDestinationCurrent,
+              ownedCreationId ?? binding.creating,
+            );
           }
         },
       };
@@ -234,13 +286,28 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
         invalidate();
       }
     },
-    async list() {
+    async list(handoffPrefix) {
       for (;;) {
         if (inventory) {
           const now = Date.now();
-          return inventory
+          const snapshots = inventory
             .filter((entry) => entry.expiresAt === undefined || entry.expiresAt > now)
             .map(({ value }) => value);
+          if (!handoffPrefix) return snapshots;
+          // Pretty-link discovery stays bounded and can find a durable destination
+          // after its imported snapshot expires. Ordinary archived rows stay hidden.
+          const retained = await handoffs.entriesInKeyRange({
+            keyStartInclusive: handoffPrefix,
+            keyEndExclusive: `${handoffPrefix}g`,
+            limit: 101,
+          });
+          const visible = new Set(snapshots.map((row) => row.beamId));
+          return [
+            ...snapshots,
+            ...retained
+              .filter(({ value }) => value.continuation && !visible.has(value.beamId))
+              .map(({ value }) => value),
+          ];
         }
         await refresh();
       }

@@ -95,7 +95,7 @@ export type GatewaySessionCommitResult =
       resolved: { modelProvider: string; model: string };
       resetExisting: boolean;
     }
-  | { ok: false; error: ErrorShape };
+  | { ok: false; error: ErrorShape; initializationNotCommitted?: true };
 
 export type CreateGatewaySessionResult =
   | (Extract<GatewaySessionCommitResult, { ok: true }> & {
@@ -103,7 +103,6 @@ export type CreateGatewaySessionResult =
     })
   | (Extract<GatewaySessionCommitResult, { ok: false }> & {
       initializationRolledBack?: true;
-      initializationNotCommitted?: true;
     });
 
 export type CreateGatewaySessionParams = {

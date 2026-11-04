@@ -6,7 +6,7 @@ import { navigateMarkdownSession } from "../../components/markdown-session-links
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canPresentGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
   projectSessionObserverDigest,
@@ -14,7 +14,6 @@ import {
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { canComposeCatalogSession } from "../../lib/sessions/catalog-read-method.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
@@ -283,7 +282,13 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const auth = gatewaySnapshot.hello?.auth ?? null;
     const hasWriteScope = hasOperatorWriteAccess(auth);
     const composerAccess = catalogKey
-      ? canComposeCatalogSession(gatewaySnapshot, catalogKey.catalogId)
+      ? hasWriteScope ||
+        (catalogKey.catalogId === "beam" &&
+          canPresentGatewayMethod(
+            gatewaySnapshot,
+            "beam.owned.continue",
+            "operator.sessions.write",
+          ))
       : hasWriteScope || mutationAccess.composeScope.allowed;
     const suggestionViewer =
       multiIdentity &&

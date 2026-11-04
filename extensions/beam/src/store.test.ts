@@ -1,5 +1,10 @@
 import { expect, it, vi } from "vitest";
-import { memoryStore, sampleUpload, staffReceipt } from "./beam-store.test-support.js";
+import {
+  memoryStore,
+  sampleUpload,
+  staffReceipt,
+  releaseSource,
+} from "./beam-store.test-support.js";
 import { beamTestServiceContext, persistentBeamTestStore } from "./beam.test-support.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
 
@@ -81,7 +86,7 @@ it("refreshes foreign changes in the background and drains its service on stop",
 
 it("binds one destination across agents, repeated requests, and later source uploads", async () => {
   const store = memoryStore();
-  await store.upload(sampleUpload(), staffReceipt(100));
+  await releaseSource(store);
   const source = (await store.get(sampleUpload().beamId))!;
   const attempts = await Promise.all(
     ["main", "research"].map((agent) => store.reserveContinuation(source, agent, () => {})),
@@ -114,28 +119,34 @@ it("binds one destination across agents, repeated requests, and later source upl
   expect(retried.session.continuation).toMatchObject(binding);
 });
 
-it("does not inherit a deleted publication's handoff or reserve under stale ownership", async () => {
+it("never restores source ownership or replaces the binding after snapshot archive", async () => {
   const store = memoryStore();
-  await store.upload(sampleUpload(), staffReceipt(100));
+  const generation = await releaseSource(store);
   const original = (await store.get(sampleUpload().beamId))!;
   const first = await store.reserveContinuation(original, "main", () => {});
+  await first.beginCreate(() => {});
+  await first.complete(() => {});
   await store.delete(original.beamId);
-  await store.upload(sampleUpload(), {
-    ...staffReceipt(200),
-    publisher: { kind: "staff", profileId: "new-publisher" },
+  expect(await store.upload(sampleUpload(), staffReceipt(200))).toEqual({
+    kind: "handoff",
+    id: generation,
+    accepted: false,
   });
-  await expect(store.reserveContinuation(original, "main", () => {})).rejects.toThrow(
-    "publication changed",
-  );
   const replacement = (await store.get(original.beamId))!;
-  expect(replacement.continuation).toBeUndefined();
-  const second = await store.reserveContinuation(replacement, "main", () => {});
-  expect(second.session.continuation?.sessionKey).not.toBe(first.session.continuation?.sessionKey);
+  expect(replacement.items).toEqual([]);
+  const second = await store.reserveContinuation(replacement, "other", () => {});
+  expect(second.session.continuation?.sessionKey).toBe(first.session.continuation?.sessionKey);
+  expect(await store.list()).toEqual([]);
+  const [host] = await createBeamSessionCatalog(store).list({
+    agentId: "main",
+    search: original.beamId.slice(0, 12),
+  });
+  expect(host?.sessions[0]?.sessionKey).toBe(first.session.continuation?.sessionKey);
 });
 
 it("captures immutable handoff history and keeps an existing reservation noncreating", async () => {
   const store = memoryStore();
-  await store.upload(sampleUpload(), staffReceipt(100));
+  await releaseSource(store);
   const catalog = createBeamSessionCatalog(store);
   const params = {
     hostId: "gateway",
@@ -163,9 +174,12 @@ it("captures immutable handoff history and keeps an existing reservation noncrea
 
 it("retries an unclaimed or proven rolled-back creation at the same key, but never an uncertain one", async () => {
   const store = memoryStore();
-  await store.upload(sampleUpload(), staffReceipt(100));
+  await releaseSource(store);
   const source = (await store.get(sampleUpload().beamId))!;
-  const first = await store.reserveContinuation(source, "main", () => {});
+  let current = true;
+  const first = await store.reserveContinuation(source, "main", () => {
+    if (!current) throw new Error("source grant revoked");
+  });
   const key = first.session.continuation!.sessionKey;
   const beforeDispatch = await store.reserveContinuation(
     (await store.get(source.beamId))!,
@@ -181,7 +195,11 @@ it("retries an unclaimed or proven rolled-back creation at the same key, but nev
   );
   expect(uncertain.reservedNow).toBe(false);
   expect(await uncertain.beginCreate(() => {})).toBe(false);
+  current = false;
+  expect(() => first.assertCurrent()).toThrow("source grant revoked");
   await first.rollback();
+  current = true;
+  expect(await first.beginCreate(() => {})).toBe(false);
   const retry = await store.reserveContinuation(
     (await store.get(source.beamId))!,
     "main",
@@ -190,13 +208,72 @@ it("retries an unclaimed or proven rolled-back creation at the same key, but nev
   expect(retry.reservedNow).toBe(true);
   expect(retry.session.continuation?.sessionKey).toBe(key);
   expect(await retry.beginCreate(() => {})).toBe(true);
+  await expect(first.rollback()).rejects.toThrow("creation attempt changed");
+  await expect(first.complete(() => {})).rejects.toThrow("creation attempt changed");
+  await expect(uncertain.rollback()).rejects.toThrow("did not create");
+  await retry.complete(() => {});
 });
 
+it.each(["complete", "rollback"] as const)(
+  "settles an exact %s claim after snapshot removal without restoring it",
+  async (action) => {
+    const { store, keyedStore, close } = await persistentBeamTestStore();
+    const releases: Array<() => void> = [];
+    let current = true;
+    try {
+      await releaseSource(store);
+      const source = (await store.get(sampleUpload().beamId))!;
+      const owner = await store.reserveContinuation(source, "main", () => {
+        if (!current) throw new Error("source grant revoked");
+      });
+      releases.push(owner.release);
+      expect(await owner.beginCreate(() => {})).toBe(true);
+      await store.delete(source.beamId);
+      const retained = (await store.get(source.beamId))!;
+      expect(retained.items).toEqual([]);
+      const catalog = createBeamSessionCatalog(store);
+      expect(
+        (await catalog.list({ agentId: "main", search: source.beamId.slice(0, 12) }))[0]
+          ?.sessions[0]?.sessionKey,
+      ).toBe(owner.session.continuation?.sessionKey);
+      const resolved = await catalog.resolveGatewayConversation!({
+        hostId: "gateway",
+        threadId: source.beamId,
+        assertCurrent() {},
+      });
+      expect(resolved?.sessionKey).toBe(owner.session.continuation?.sessionKey);
+      if (resolved) releases.push(resolved.release);
+      const reconciled = await store.reserveContinuation(retained, "main", () => {});
+      releases.push(reconciled.release);
+      if (action === "complete") {
+        // A new lease completes only after core verifies the existing destination's provenance.
+        await reconciled.complete(() => {});
+        expect((await store.get(source.beamId))?.continuation?.ready).toBe(true);
+        await expect(reconciled.rollback()).rejects.toThrow("did not create");
+        await expect(owner.rollback()).rejects.toThrow("cannot be recreated");
+      } else {
+        current = false;
+        await owner.rollback();
+        expect((await store.get(source.beamId))?.continuation?.creating).toBeUndefined();
+        await expect(reconciled.complete(() => {})).rejects.toThrow("creation attempt changed");
+      }
+      expect(await keyedStore.lookup(source.beamId)).toBeUndefined();
+      expect(await store.upload(sampleUpload(), staffReceipt(400))).toMatchObject({
+        kind: "handoff",
+        accepted: false,
+      });
+    } finally {
+      for (const release of releases) release();
+      await close();
+    }
+  },
+);
+
 it("retains a native selected-publication guard across unrelated and ownership-preserving uploads", async () => {
-  const { store, close } = persistentBeamTestStore();
+  const { store, close } = await persistentBeamTestStore();
   let release: (() => void) | undefined;
   try {
-    await store.upload(sampleUpload(), staffReceipt(100));
+    await releaseSource(store);
     const selected = (await store.get(sampleUpload().beamId))!;
     const handoff = await store.reserveContinuation(selected, "main", () => {});
     release = handoff.release;
@@ -214,7 +291,11 @@ it("retains a native selected-publication guard across unrelated and ownership-p
     handoff.assertCurrent();
     expect((await store.list())[0]?.continuation?.ready).toBe(true);
     await store.delete(selected.beamId);
-    expect(handoff.assertCurrent).toThrow();
+    handoff.assertCurrent();
+    expect(await store.upload(sampleUpload(), staffReceipt(400))).toMatchObject({
+      kind: "handoff",
+      accepted: false,
+    });
   } finally {
     release?.();
     await close();

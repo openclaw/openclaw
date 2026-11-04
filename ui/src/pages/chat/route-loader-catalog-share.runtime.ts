@@ -192,7 +192,9 @@ async function resolveBoundCatalogConversation(
     { signal },
   );
   connection.assertCurrent();
-  if (!result) return undefined;
+  if (!result) {
+    return undefined;
+  }
   return {
     sessionKey: result.sessionKey,
     agentId: parseAgentSessionKey(result.sessionKey)?.agentId ?? agentId,

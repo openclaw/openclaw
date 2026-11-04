@@ -139,10 +139,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     validateSessionsCatalogContinueParams,
     async (options) => {
       const provider = registrationOrRespond(options.params.catalogId, options.respond)?.provider;
-      if (!provider) return;
+      if (!provider) {
+        return;
+      }
       try {
         const authorization = await authorizeSessionCatalogThread("read", provider, options);
-        if (!authorization) return;
+        if (!authorization) {
+          return;
+        }
         const result = await resolveSessionCatalogGatewayConversation({
           request: options.params,
           provider,

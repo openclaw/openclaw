@@ -19,18 +19,3 @@ export function catalogMethod(
     ? `beam.owned.${operation}`
     : sharedMethod;
 }
-
-/** Owned-source composition is admitted by its narrow method, not by shared catalog scopes. */
-export function canComposeCatalogSession(
-  snapshot: Pick<ApplicationGatewaySnapshot, "hello">,
-  catalogId: string,
-): boolean {
-  const method = catalogMethod(snapshot, catalogId, "continue");
-  const ownedContinuation = method === "beam.owned.continue";
-  return canPresentGatewayMethod(
-    snapshot,
-    method,
-    ownedContinuation ? "operator.sessions.write" : "operator.write",
-    { requireAdvertisement: ownedContinuation },
-  );
-}

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { catalogProvider } from "./session-catalog.fixtures.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -537,14 +539,17 @@ describe("copySessionCatalogToGateway", () => {
   });
 
   it("uses the destination requester when assessing model availability", async () => {
-    const params = copyParams();
-    params.client = {
-      ...params.client,
-      authenticatedUserProfile: { profileId: "destination-requester" },
-    } as never;
-    await copySessionCatalogToGateway(params);
-    expect(mocks.buildModelsListResult).toHaveBeenCalledWith(
-      expect.objectContaining({ requesterProfileId: "destination-requester" }),
-    );
+    await withOpenClawTestState({ label: "catalog-destination-models" }, async () => {
+      const requester = ensureProfileForEmail("destination@example.test");
+      const params = copyParams();
+      params.client = {
+        ...params.client,
+        authenticatedUserProfile: { profileId: requester.id },
+      } as never;
+      await copySessionCatalogToGateway(params);
+      expect(mocks.buildModelsListResult).toHaveBeenCalledWith(
+        expect.objectContaining({ requesterProfileId: requester.id }),
+      );
+    });
   });
 });
