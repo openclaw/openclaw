@@ -150,6 +150,7 @@ export function ApplicationShell(props: {
           {
             "shell--navigation-rail": view().railAvailable,
             "shell--chat": view().chatLikeRoute,
+            "shell--session": view().sessionRoute,
             "shell--nav-collapsed": view().navCollapsed,
             "shell--mobile-nav": view().mobileNavLayout,
             "shell--merged-chat-chrome": view().mergedChatChrome,
