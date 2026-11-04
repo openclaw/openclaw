@@ -1,7 +1,9 @@
 import type { ChatAttachmentImageRequest } from "./chat-attachment-image.ts";
 
 async function resize(file: File, maxBytes: number): Promise<File> {
-  const bitmap = await createImageBitmap(file);
+  // Apply EXIF orientation while decoding so the re-encoded JPEG keeps a
+  // portrait camera photo upright instead of baking it sideways.
+  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
   const canvas = new OffscreenCanvas(1, 1);
   try {
     const context = canvas.getContext("2d");
