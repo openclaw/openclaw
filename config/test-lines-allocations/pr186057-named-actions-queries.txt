@@ -1,3 +1,3 @@
 # Exact net regression growth for named-query admission, live-authority delivery,
 # distinct authenticated readers, durable grants, approval renewal, and widget consumers.
-843
+903

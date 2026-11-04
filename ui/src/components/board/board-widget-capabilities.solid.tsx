@@ -8,6 +8,18 @@ import "../tooltip.ts";
 
 registerEnglishCatalog(registerBoardEnglish);
 
+function describeQueries(widget: BoardWidget) {
+  return (widget.declared?.queries ?? []).map((query) =>
+    t("board.widget.queryCapability", {
+      name: query.name,
+      selectors: Object.entries(query.params)
+        .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+        .join("; "),
+      fields: query.fields.join(", "),
+    }),
+  );
+}
+
 export function BoardPendingCapabilities(props: {
   widget: BoardWidget;
   disabled: boolean;
@@ -19,6 +31,7 @@ export function BoardPendingCapabilities(props: {
       [
         ["board.widget.networkAccess", props.widget.declared?.netOrigins ?? []],
         ["board.widget.hostTools", props.widget.declared?.tools ?? []],
+        ["board.widget.dataQueries", describeQueries(props.widget)],
       ] as const,
   );
   return (
@@ -28,10 +41,7 @@ export function BoardPendingCapabilities(props: {
       </div>
       <strong>{t("board.widget.needsApproval")}</strong>
       <Show
-        when={
-          !props.widget.declared?.queries?.length &&
-          groups().some(([, values]) => values.length > 0)
-        }
+        when={groups().some(([, values]) => values.length > 0)}
         fallback={
           <Show
             when={props.widget.declaredSummary?.length}
@@ -91,18 +101,15 @@ export function BoardGrantedCapabilities(props: {
   widget: BoardWidget;
   presentation?: "tooltip" | "details";
 }) {
-  const capabilities = createMemo(() =>
-    props.widget.declared?.queries?.length
-      ? (props.widget.declaredSummary ?? [])
-      : [
-          ...(props.widget.declared?.netOrigins ?? []).map((origin) =>
-            t("board.widget.networkCapability", { capability: origin }),
-          ),
-          ...(props.widget.declared?.tools ?? []).map((tool) =>
-            t("board.widget.toolCapability", { capability: tool }),
-          ),
-        ],
-  );
+  const capabilities = createMemo(() => [
+    ...(props.widget.declared?.netOrigins ?? []).map((origin) =>
+      t("board.widget.networkCapability", { capability: origin }),
+    ),
+    ...(props.widget.declared?.tools ?? []).map((tool) =>
+      t("board.widget.toolCapability", { capability: tool }),
+    ),
+    ...describeQueries(props.widget),
+  ]);
   return (
     <Show when={props.widget.grantState === "granted" && capabilities().length > 0}>
       <Show

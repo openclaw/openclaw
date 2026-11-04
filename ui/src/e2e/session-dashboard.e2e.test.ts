@@ -192,7 +192,11 @@ suite.define(() => {
       await page.keyboard.press("Tab");
       expect(await badge.evaluate((element) => element.matches(":focus"))).toBe(true);
       await tooltip.waitFor({ state: "visible" });
-      for (const summary of declaredSummary) {
+      for (const summary of [
+        "Network: https://example.com",
+        "Tool: sessions.list",
+        declaredSummary[2],
+      ]) {
         expect(await tooltip.textContent()).toContain(summary);
       }
       await page.keyboard.press("Escape");
@@ -217,7 +221,13 @@ suite.define(() => {
       await gateway.emitGatewayEvent("board.changed", { sessionKey, revision: 2 });
       const pending = widget.locator('[data-test-id="board-pending"]');
       await pending.waitFor();
-      for (const summary of declaredSummary) {
+      for (const summary of [
+        "Network origins",
+        "Host tools and data",
+        "https://example.com",
+        "sessions.list",
+        declaredSummary[2],
+      ]) {
         expect(await pending.textContent()).toContain(summary);
       }
       await pending.getByRole("button", { name: "Allow", exact: true }).waitFor();
