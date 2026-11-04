@@ -162,6 +162,16 @@ public struct OpenClawChatNativeActionGateway: Sendable {
         return history
     }
 
+    /// Authenticate and resolve the requested history before its platform presents it.
+    public func validatePresentation(_ request: OpenClawNativeOpenRequest) async throws
+    -> OpenClawNativeRunInspection? {
+        let run: OpenClawNativeRunRef? = if case let .inspect(run) = request {
+            run
+        } else { nil }
+        let history = try await self.history(session: request.session, runID: run?.runID)
+        return try run.map { try OpenClawChatNativeRunInspection.reduce(history, run: $0) }
+    }
+
     public func runs(matching query: String?) async throws -> [OpenClawNativeRunRef] {
         let (owner, entries) = try await self.sessionEntries(matching: nil)
         var runs: [OpenClawNativeRunRef] = []

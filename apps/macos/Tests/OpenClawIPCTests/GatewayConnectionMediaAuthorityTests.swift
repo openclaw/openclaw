@@ -11,6 +11,72 @@ struct GatewayConnectionMediaAuthorityTests {
     private nonisolated static let artifactID = "artifact_managed_image_authority"
     private nonisolated static let ticket = "/api/chat/media/outgoing/image?mediaTicket=synthetic"
 
+    @Test(arguments: ["current", "retired-before", "retired-during", "replacement", "profile-change", "unknown-http"])
+    func `native media keeps its mocked descriptor on the captured account and lease`(_ scenario: String) async throws {
+        let fixture = try MacNativeActionFixture(holding: scenario == "retired-during" ? "artifacts.download" : nil)
+        var pending: Task<OpenClawChatLoadedMedia?, Error>?
+        do {
+            let lease = try await fixture.gateway.acquireServerLease()
+            let owner = fixture.target.owner
+            let transport = MacGatewayChatTransport(
+                connection: fixture.gateway,
+                nativeBinding: .init(owner: owner, lease: lease))
+            switch scenario {
+            case "retired-before": transport.reportNativeRouteUnavailable()
+            case "replacement":
+                await fixture.gateway.shutdown()
+                _ = try await fixture.gateway.request(method: "health", params: nil)
+            case "profile-change": fixture.profileID.setValue("another-profile")
+            case "unknown-http": fixture.artifactUsesHTTP.setValue(true)
+            default: break
+            }
+            let load = Task {
+                try await transport.loadMediaArtifact(
+                    sessionKey: MacNativeActionFixture.sessionKey,
+                    artifactId: "artifact_managed_image_native",
+                    kind: .image,
+                    playback: nil)
+            }
+            pending = load
+            if scenario == "retired-during" {
+                let deadline = ContinuousClock.now + .seconds(3)
+                while fixture.heldRequest.value == nil, ContinuousClock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                try #require(fixture.heldRequest.value != nil)
+                transport.reportNativeRouteUnavailable()
+                fixture.releaseRequest()
+            }
+            if scenario == "current" {
+                guard case let .data(image) = try await load.value else {
+                    throw OpenClawNativeActionError("Expected inline image bytes")
+                }
+                #expect(image.data == Data("image".utf8))
+            } else if scenario == "profile-change" {
+                await #expect(throws: GatewayResponseError.self) { _ = try await load.value }
+                #expect(!transport.nativeBindingIsCurrent)
+            } else {
+                await #expect(throws: OpenClawChatTransportSendError.self) { _ = try await load.value }
+            }
+            let frames = try fixture.frames(method: "artifacts.download")
+            #expect(frames.count == (["retired-before", "replacement"].contains(scenario) ? 0 : 1))
+            #expect(frames.allSatisfy { $0["expectedProfileId"] as? String == owner.profileID })
+            if scenario == "unknown-http" {
+                // A mocked WebSocket has no TLS-admission evidence. It must not
+                // manufacture HTTP policy from endpoint settings or a configured pin.
+                #expect(await fixture.gateway.admittedHTTPContext(ifCurrentServerLease: lease) == nil)
+                #expect(transport.nativeBindingIsCurrent)
+            }
+        } catch {
+            fixture.releaseRequest()
+            await fixture.gateway.shutdown()
+            _ = await pending?.result
+            throw error
+        }
+        fixture.releaseRequest()
+        await fixture.gateway.shutdown()
+    }
+
     @Test(arguments: [false, true])
     func `cancellation before transport creation cannot dispatch or invalidate its session`(
         afterAdmission: Bool) async throws
