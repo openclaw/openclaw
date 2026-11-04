@@ -1752,8 +1752,14 @@ it.each([false, true])(
     const generated = await import(
       pathToFileURL(path.resolve("src/infra/daemon-runtime-probe.generated.mjs")).href
     );
-    assert.equal(typeof generated.DAEMON_RUNTIME_PROBE_SOURCE, "string");
-    fs.writeFileSync(probe, generated.DAEMON_RUNTIME_PROBE_SOURCE);
+    const probeSource: unknown = generated.DAEMON_RUNTIME_PROBE_SOURCE;
+    assert(typeof probeSource === "string");
+    if (!historical) {
+      expect(createHash("sha256").update(probeSource).digest("hex")).toBe(
+        "cdd22785b67a4371d10fe8a3152a8ae370507691f3e52bfb76c32cf83e03d0f4",
+      );
+    }
+    fs.writeFileSync(probe, probeSource);
     expect(createHash("sha256").update(publishedNodeProbe).digest("hex")).toBe(
       "954fe0502bbd8beb9de99ca78dced72c87b9a8ebd6110dd62fc25ee19eeb61ce",
     );
@@ -1911,6 +1917,24 @@ it.each([false, true])(
     ]) {
       writeRows(denied);
       expect(() => readInstalledTerminalEvents(f.spec.directory, spec)).toThrow();
+    }
+    if (!historical) {
+      const probeLaunch = launchesObserved.find(
+        (row) => Array.isArray(row.argv) && row.argv[0] === probe,
+      );
+      assert(
+        probeLaunch && typeof probeLaunch.packageEntry === "object" && probeLaunch.packageEntry,
+      );
+      for (const patch of [{ sha256: "f".repeat(64) }, { source: `${probeSource}// changed\n` }]) {
+        writeRows(
+          change(probeLaunch, {
+            packageEntry: Object.assign({}, probeLaunch.packageEntry, patch),
+          }),
+        );
+        expect(() => readInstalledTerminalEvents(f.spec.directory, spec)).toThrow(
+          "Missing Node child",
+        );
+      }
     }
     writeRows(withHandoff.filter((row) => row !== exit));
     expect(() =>
