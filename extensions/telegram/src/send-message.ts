@@ -175,7 +175,8 @@ export async function sendMessageTelegram(
     const messageEffectParams = resolveTelegramMessageEffectParams(chatId, opts.messageEffectId);
     // One effect per delivery: keep it on every attempt, including fallbacks,
     // until Telegram accepts the first message.
-    const pendingMessageEffectParams = () => (sender.parts.length === 0 ? messageEffectParams : {});
+    const pendingMessageEffectParams = () =>
+      sender.parts.length === 0 ? messageEffectParams : undefined;
     const buildMediaReceipt = () => {
       const deliveries = new Map(deliveryResults.map((delivery) => [delivery.messageId, delivery]));
       const results = sender.parts.map((part) => {

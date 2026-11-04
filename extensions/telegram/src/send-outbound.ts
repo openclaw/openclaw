@@ -88,13 +88,13 @@ export function withTelegramMessageAction<T, TMessageId extends string | number 
 export function resolveTelegramMessageEffectParams(
   chatId: string,
   messageEffectId: string | undefined,
-): { message_effect_id?: string } {
+): { message_effect_id: string } | undefined {
   if (!messageEffectId) {
-    return {};
+    return undefined;
   }
   if (resolveTelegramTargetChatType(chatId) !== "direct") {
     logVerbose("telegram message effect skipped: effects apply to private chats only");
-    return {};
+    return undefined;
   }
   return { message_effect_id: messageEffectId };
 }

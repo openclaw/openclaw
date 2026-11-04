@@ -75,6 +75,15 @@ describe("Telegram registered action authority and input contracts", () => {
   });
 
   const pollInput = { question: "Ready?", answers: ["Yes", "No"] };
+  const sendInput = { to: "123", message: "Shipped" };
+  const effectId = "5104841245755180586";
+  const nativeButtons = '[[{"text":"Yes","callback_data":"yes"}]]';
+  const conflictingPoll = { to: "123", ...pollInput, pollAnonymous: true, pollPublic: true };
+  const customEmojis = (length: number) =>
+    Array.from({ length }, (_, id) => ({
+      type: "custom_emoji",
+      custom_emoji_id: String(9000 + id),
+    }));
   it.each([
     { label: "true", params: { silent: true }, notification: { disable_notification: true } },
     { label: "false", params: { silent: false }, notification: {} },
@@ -411,13 +420,7 @@ describe("Telegram registered action authority and input contracts", () => {
             id: 123,
             type: "private",
             first_name: "Fixture",
-            available_reactions: [
-              ...Array.from({ length: 25 }, (_, index) => ({
-                type: "custom_emoji",
-                custom_emoji_id: String(9000 + index),
-              })),
-              { type: "emoji", emoji: "👍" },
-            ],
+            available_reactions: [...customEmojis(25), { type: "emoji", emoji: "👍" }],
           }
         : undefined;
     const result = await invoke("react", { chatId: "123", messageId: 456, emoji: "✅" });
@@ -447,13 +450,7 @@ describe("Telegram registered action authority and input contracts", () => {
       id: -1001,
       type: "supergroup",
       title: "Fixture",
-      available_reactions: [
-        { type: "emoji", emoji: "👍" },
-        ...Array.from({ length: 120 }, (_, index) => ({
-          type: "custom_emoji",
-          custom_emoji_id: String(9000 + index),
-        })),
-      ],
+      available_reactions: [{ type: "emoji", emoji: "👍" }, ...customEmojis(120)],
     });
     for (const context of [
       { ...trusted, requesterAccountId: "other" },
@@ -467,14 +464,12 @@ describe("Telegram registered action authority and input contracts", () => {
       /exact current chat and account/,
     );
     expect(requests).toEqual([]);
+    const emojis = [
+      { name: "👍", identifier: "👍" },
+      { identifier: "9000", type: "custom_emoji" },
+    ];
     await expect(invoke("emoji-list", { limit: 2 }, trusted)).resolves.toMatchObject({
-      details: {
-        ok: true,
-        emojis: [
-          { name: "👍", identifier: "👍" },
-          { identifier: "9000", type: "custom_emoji" },
-        ],
-      },
+      details: { ok: true, emojis },
     });
     const capped = await invoke("emoji-list", { chatId: "-1002", limit: 200 });
     expect(capped.details).toMatchObject({
@@ -485,44 +480,25 @@ describe("Telegram registered action authority and input contracts", () => {
   });
 
   it.each([
-    { action: "send", params: { to: "123" }, error: /content required/i },
-    {
-      action: "poll",
-      params: { to: "123", ...pollInput, pollAnonymous: true, pollPublic: true },
-      error: /mutually exclusive/i,
-    },
-    {
-      action: "send",
-      params: {
+    ["send", { to: "123" }, /content required/i],
+    ["poll", conflictingPoll, /mutually exclusive/i],
+    [
+      "send",
+      {
         to: "123",
         location: { latitude: 1, longitude: 2 },
         presentation: { blocks: [{ type: "text", text: "caption" }] },
       },
-      error: /cannot be combined/,
-    },
-    {
-      action: "send",
-      params: { to: "123", message: "choose", buttons: '[[{"text":"Yes","callback_data":"yes"}]]' },
-      error: /native "buttons" is unsupported/,
-    },
-    {
-      action: "send",
-      params: { to: "123", message: "Shipped", effectId: "confetti" },
-      error: /numeric message effect id/,
-    },
-    {
-      action: "send",
-      params: { to: "-1001", message: "Shipped", effectId: "5104841245755180586" },
-      error: /only in private chats/,
-    },
-  ] as const)(
-    "rejects invalid external $action input before network delivery: $error",
-    async ({ action, params, error }) => {
-      cfg.channels!.telegram!.actions = { sticker: true };
-      await expect(invoke(action, params)).rejects.toThrow(error);
-      expect(requests).toEqual([]);
-    },
-  );
+      /cannot be combined/,
+    ],
+    ["send", { ...sendInput, buttons: nativeButtons }, /native "buttons" is unsupported/],
+    ["send", { ...sendInput, effectId: "confetti" }, /numeric message effect id/],
+    ["send", { ...sendInput, to: "-1001", effectId }, /only in private chats/],
+  ] as const)("rejects invalid %s input %j", async (action, params, error) => {
+    cfg.channels!.telegram!.actions = { sticker: true };
+    await expect(invoke(action, params)).rejects.toThrow(error);
+    expect(requests).toEqual([]);
+  });
 
   it("preserves structured missing-topic-name validation", async () => {
     cfg.channels!.telegram!.actions = { createForumTopic: true };

@@ -54,7 +54,7 @@ export function createTelegramTextSender(config: {
   ) => Promise<void>;
   singleUseReplyTo: boolean;
   buildThreadParams: (includeReplyTo: boolean) => Record<string, unknown>;
-  pendingMessageEffectParams: () => Record<string, unknown>;
+  pendingMessageEffectParams: () => Record<string, unknown> | undefined;
   sender: TelegramPreparedSender;
   textMode: "markdown" | "html";
   tableMode: MarkdownTableMode;
