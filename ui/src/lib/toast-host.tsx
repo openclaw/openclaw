@@ -22,7 +22,7 @@ if (typeof customElements !== "undefined") {
               <Errored
                 fallback={(_error, reset) => (
                   <div
-                    class="app-toast app-toast--error"
+                    class="app-toast app-toast--error app-toast--action"
                     data-active={props.active ? "true" : "false"}
                     role="alert"
                     onPointerEnter={() => owner.hover(true)}
@@ -34,10 +34,14 @@ if (typeof customElements !== "undefined") {
                       )
                     }
                   >
-                    <span class="app-toast__message">{t("lazyView.errorTitle")}</span>
-                    <button class="app-toast__action" type="button" onClick={() => reset()}>
-                      {t("common.retry")}
-                    </button>
+                    <div class="app-toast__content">
+                      <div class="app-toast__body">
+                        <span class="app-toast__message">{t("lazyView.errorTitle")}</span>
+                      </div>
+                      <button class="app-toast__action" type="button" onClick={() => reset()}>
+                        {t("common.retry")}
+                      </button>
+                    </div>
                     <button
                       class="app-toast__dismiss"
                       type="button"

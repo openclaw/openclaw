@@ -1,23 +1,29 @@
-import type { IconName } from "../components/solid/icon.tsx";
 import type { AgentIdentity } from "./identity-avatar-view.ts";
 import { listen } from "./reactive/listener.ts";
 
 export type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
 
+/** One signal per variant: the leading icon's color. Neutral toasts omit severity. */
+export type ToastSeverity = "success" | "info" | "warning" | "error" | "progress";
+
 export type ToastOptions = {
-  /** Rich content lets a message name a destination the operator can actually open,
-   * instead of spelling out a settings path the toast then makes them find. */
+  /** The title. Rich content lets a message name a destination the operator can actually
+   * open, instead of spelling out a settings path the toast then makes them find. */
   message: string | Node;
+  /** Muted second line, for the sentence that follows the title. */
+  description?: string;
   /** Positions a compact toast at the top center of the owning surface. */
   anchor?: Element;
   /** Bottom placement suits settings feedback without covering the page heading. */
   placement?: "top" | "top-center" | "bottom";
-  severity?: "error";
-  icon?: IconName;
+  /** Errors announce through role="alert"; every other variant uses role="status". */
+  severity?: ToastSeverity;
   /** Agent identity shown for session notifications, using the shared avatar loader. */
   avatar?: AgentIdentity;
   actionLabel?: string;
   actionHref?: string;
+  /** Terracotta fill, reserved for the required next step (Review…, Try again). */
+  actionPrimary?: boolean;
   onAction?: (event?: MouseEvent) => void;
   onDismiss?: (reason: ToastDismissReason) => void;
   durationMs?: number;

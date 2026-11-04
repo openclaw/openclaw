@@ -663,23 +663,45 @@ openclaw-toast-host[popover] {
  * composer and other bottom-docked controls. The host shows one toast at a time
  * (`show()` replaces the active one), so there is no stack to offset against. */
 .app-toast {
+  --app-toast-row: 20px;
+  --app-toast-wash: color-mix(in srgb, var(--text-strong) 7%, transparent);
+  --app-toast-wash-hover: color-mix(in srgb, var(--text-strong) 12%, transparent);
+  --app-toast-wash-active: color-mix(in srgb, var(--text-strong) 17%, transparent);
+  --app-toast-edge: 0 0 0 0.5px color-mix(in srgb, var(--text-strong) 14%, transparent);
   pointer-events: auto;
   position: fixed;
   right: calc(20px + var(--safe-area-right));
   top: calc(20px + var(--safe-area-top));
   z-index: var(--z-toast);
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 10px;
+  box-sizing: border-box;
   width: max-content;
-  max-width: min(370px, calc(100vw - 32px));
-  padding: 7px 7px 7px 13px;
-  border: 1px solid transparent;
-  border-radius: var(--menu-radius);
-  background: var(--menu-surface);
-  color: var(--popover-foreground);
-  box-shadow: var(--menu-shadow);
-  backdrop-filter: var(--menu-backdrop);
+  min-width: min(240px, calc(100vw - 24px));
+  max-width: min(360px, calc(100vw - 24px));
+  padding: 12px 16px;
+  border: 0;
+  /* One line reads as a pill: a 28px corner on a box under 56px tall clamps to
+   * half its height. Taller toasts keep 28. Square-cornered themes scale it down. */
+  border-radius: min(28px, calc(28px * var(--openclaw-corner-radius-scale)));
+  background: var(--popover);
+  color: var(--text-strong);
+  box-shadow:
+    var(--app-toast-edge),
+    0 1px 2px rgb(30 24 18 / 5%),
+    0 10px 26px -8px rgb(30 24 18 / 18%);
+  font-family: var(--font-body);
+}
+
+.app-toast--action {
+  --app-toast-row: 28px;
+  padding-right: 10px;
+}
+
+.app-toast--avatar {
+  --app-toast-row: 32px;
+  padding-left: 12px;
 }
 
 .shell--chat {
@@ -713,7 +735,8 @@ openclaw-toast-host[data-toast-placement="shell"]
   left: var(--app-toast-anchor-center);
   top: var(--app-toast-anchor-top);
   transform: translateX(-50%);
-  max-width: min(370px, calc(var(--app-toast-anchor-width) - 24px));
+  min-width: 0;
+  max-width: min(360px, calc(var(--app-toast-anchor-width) - 24px));
   transition-property: translate, scale, opacity;
 }
 
@@ -742,74 +765,204 @@ openclaw-toast-host[data-toast-placement="shell"]
   transition-timing-function: cubic-bezier(0.7, 0, 0.84, 0);
 }
 
+/* The leading slot shares the first row's height, so the glyph or avatar centers on
+ * the title line whether an inline action makes that row 20, 28 or 32 tall. */
+.app-toast__icon,
 .app-toast__avatar {
   display: grid;
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-full);
+  height: var(--app-toast-row);
+  place-items: center;
 }
 
 .app-toast__icon {
-  display: grid;
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  place-items: center;
+  width: 20px;
+  color: var(--muted);
+}
+
+.app-toast__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.app-toast__avatar {
+  width: 32px;
+}
+
+.app-toast__avatar > * {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+}
+
+.app-toast--success .app-toast__icon {
+  color: var(--ok);
+}
+
+.app-toast--info .app-toast__icon {
   color: var(--info);
+}
+
+.app-toast--warning .app-toast__icon {
+  color: var(--warn);
+}
+
+.app-toast--error .app-toast__icon {
+  color: var(--danger);
+}
+
+.app-toast--progress .app-toast__icon svg {
+  animation: app-toast-spin 0.9s linear infinite;
+}
+
+@keyframes app-toast-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+/* An action stays beside the text only while the title and description fit one line
+ * next to it. The body's flex basis is its single-line width, so anything longer
+ * wraps the action onto its own row, right aligned. */
+.app-toast__content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
 }
 
 /* Recovery copy and rich links remain readable at narrow widths and enlarged
  * text sizes. Do not clamp away the instruction the operator needs next. */
-.app-toast__message {
-  flex: 1 1 auto;
+.app-toast__body {
+  display: flex;
+  flex: 1 1 max-content;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
   min-width: 0;
+  min-height: var(--app-toast-row);
   max-height: min(240px, 40dvh);
   overflow: auto;
   overflow-wrap: anywhere;
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: 1.5;
 }
 
-.app-toast__action,
-.app-toast__dismiss {
-  flex: 0 0 auto;
-  border: 0;
-  border-radius: var(--menu-item-radius);
+.app-toast__message {
+  font-size: calc(14px * var(--control-ui-text-scale));
+  font-weight: 500;
+  line-height: calc(20px * var(--control-ui-text-scale));
+  text-wrap: pretty;
 }
 
-.app-toast__action {
-  min-height: var(--overlay-modal-close-size);
-  max-width: 35%;
-  padding: 5px 10px;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 600;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
+.app-toast__message a {
+  color: var(--link, var(--accent));
+  font-weight: 500;
 }
 
-.app-toast__dismiss {
-  display: grid;
-  width: var(--overlay-modal-close-size);
-  height: var(--overlay-modal-close-size);
-  padding: 0;
-  place-items: center;
-  background: transparent;
+.app-toast__description {
   color: var(--muted);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: calc(18px * var(--control-ui-text-scale));
+  text-wrap: pretty;
+}
+
+/* One button size: a 28px pill. A label too long for the toast wraps inside it. */
+.app-toast__action {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+  min-height: 28px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+  background: var(--app-toast-wash);
+  color: var(--text-strong);
+  font: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+  line-height: calc(18px * var(--control-ui-text-scale));
+  text-align: center;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  transition: background-color 120ms ease;
 }
 
 .app-toast__action:hover {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--app-toast-wash-hover);
+}
+
+.app-toast__action:active {
+  background: var(--app-toast-wash-active);
+}
+
+.app-toast__action--primary {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.app-toast__action--primary:hover,
+.app-toast__action--primary:active {
+  background: var(--accent-hover);
+}
+
+/* Dismiss floats on the trailing corner and appears only while the toast is
+ * hovered or holds focus; it stays in the accessibility tree throughout. */
+.app-toast__dismiss {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--popover);
+  color: var(--text);
+  box-shadow:
+    var(--app-toast-edge),
+    0 1px 3px rgb(0 0 0 / 12%);
+  opacity: 0;
+  scale: 0.9;
+  transition:
+    opacity 140ms ease,
+    scale 140ms ease;
+}
+
+.app-toast__dismiss::after {
+  position: absolute;
+  inset: -4px;
+  content: "";
+}
+
+.app-toast__dismiss svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 2.5;
+}
+
+.app-toast:hover > .app-toast__dismiss,
+.app-toast:focus-within > .app-toast__dismiss {
+  opacity: 1;
+  scale: 1;
 }
 
 .app-toast__dismiss:hover {
-  background: var(--bg-muted);
+  color: var(--text-strong);
+}
+
+.app-toast__action:focus-visible,
+.app-toast__dismiss:focus-visible {
+  outline: 1.5px solid color-mix(in srgb, var(--text-strong) 55%, transparent);
+  outline-offset: 1px;
 }
 
 /* A corner toast spans nearly the whole phone viewport. Keep the owning shell's
- * chrome offset and safe areas, with full-size touch targets in every variant. */
+ * chrome offset and safe areas. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .shell--chat {
     --app-toast-shell-top: calc(
@@ -831,23 +984,13 @@ openclaw-toast-host[data-toast-placement="shell"]
     width: max-content;
     max-width: calc(var(--app-toast-anchor-width) - 24px);
   }
-
-  .app-toast__action {
-    min-height: 44px;
-    min-width: 44px;
-  }
-
-  .app-toast__dismiss {
-    width: 44px;
-    height: 44px;
-  }
 }
 
 .app-toast--top-center {
   left: 50%;
   right: auto;
   width: max-content;
-  max-width: min(370px, calc(100vw - 32px));
+  max-width: min(360px, calc(100vw - 24px));
   transform: translateX(-50%);
 }
 
@@ -855,32 +998,15 @@ openclaw-toast-host[data-toast-placement="shell"]
   .app-toast--bottom,
   .app-toast--anchored,
   .app-toast--anchored[data-active="true"],
-  .app-toast--anchored[data-active="false"] {
+  .app-toast--anchored[data-active="false"],
+  .app-toast__dismiss,
+  .app-toast__action {
     transition: none;
   }
-}
 
-.app-toast__action:hover,
-.app-toast__action:focus-visible,
-.app-toast__dismiss:hover,
-.app-toast__dismiss:focus-visible {
-  color: var(--text-strong);
-}
-
-.app-toast--error {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
-  background: color-mix(in srgb, var(--danger) 12%, var(--popover));
-  color: var(--danger);
-}
-
-.app-toast--error :is(.app-toast__icon, .app-toast__action, .app-toast__dismiss) {
-  color: inherit;
-}
-
-.app-toast--error .app-toast__action,
-.app-toast--error :is(.app-toast__action, .app-toast__dismiss):is(:hover, :focus-visible) {
-  background: var(--danger-subtle);
-  color: inherit;
+  .app-toast--progress .app-toast__icon svg {
+    animation-duration: 2s;
+  }
 }
 
 .btn--icon {
@@ -2441,7 +2567,6 @@ select.data-table-pagination__size {
   gap: 8px;
 }
 
-.app-toast__icon svg,
 .oc-sensitive-toggle svg {
   width: 16px;
   height: 16px;
@@ -2841,7 +2966,6 @@ select.data-table-pagination__size {
   border-radius: 4px;
 }
 
-.app-toast__dismiss svg,
 .data-table-bulk-bar .btn svg,
 .agent-select__option-check svg {
   width: 14px;
