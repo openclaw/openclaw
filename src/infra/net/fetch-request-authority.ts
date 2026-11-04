@@ -57,33 +57,33 @@ export function withGuardedFetchBeforeRequest<T>(
 }
 
 // Retained guards must not share the async producer's lexical frame.
-function createRequestAuthority(
-  assertCurrent: (() => void) | undefined,
-  beforeRequest: (() => void) | undefined,
-  inherited: RequestAuthority | undefined,
-) {
+function createRequestAuthority(source: {
+  assertCurrent: (() => void) | undefined;
+  beforeRequest: (() => void) | undefined;
+  inherited: RequestAuthority | undefined;
+}) {
   let active = true;
   const assertAuthority = () => {
-    inherited?.assertCurrent();
+    source.inherited?.assertCurrent();
     if (!active) {
       throw new Error("Guarded request authority is no longer active.");
     }
-    invokeSynchronousGuard(assertCurrent);
+    invokeSynchronousGuard(source.assertCurrent);
   };
   return {
     assertCurrent: assertAuthority,
     beforeRequest:
-      beforeRequest || inherited?.beforeRequest
+      source.beforeRequest || source.inherited?.beforeRequest
         ? () => {
-            inherited?.beforeRequest?.();
-            invokeSynchronousGuard(beforeRequest);
+            source.inherited?.beforeRequest?.();
+            invokeSynchronousGuard(source.beforeRequest);
           }
         : undefined,
     close() {
       active = false;
-      inherited = undefined;
-      assertCurrent = undefined;
-      beforeRequest = undefined;
+      source.inherited = undefined;
+      source.assertCurrent = undefined;
+      source.beforeRequest = undefined;
     },
   };
 }
@@ -98,7 +98,7 @@ export async function withGuardedFetchRequestAuthority<T>(
   if (!assertCurrent && !beforeRequest && !inherited) {
     return await run(undefined);
   }
-  const authority = createRequestAuthority(assertCurrent, beforeRequest, inherited);
+  const authority = createRequestAuthority({ assertCurrent, beforeRequest, inherited });
   try {
     authority.assertCurrent();
     return await requestAuthority.run(authority, () => run(authority.assertCurrent));
