@@ -32,7 +32,7 @@ const enMcp = {
     disabledSuccess: "Disabled MCP server {name}.",
     removedSuccess: "Removed MCP server {name}.",
     configUnavailable: "Configuration is unavailable; refresh and try again.",
-    connectRequired: "Connect to the gateway to change MCP servers.",
+    connectRequired: "Reconnect to change MCP servers.",
     adminRequired: "MCP server changes require operator.admin access.",
     removeNamed: "Remove {name}",
     removeConfirmTitle: "Remove {name}?",

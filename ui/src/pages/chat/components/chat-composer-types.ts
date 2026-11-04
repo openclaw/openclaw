@@ -178,6 +178,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   sessions: SessionsListResult | null;
   /** The pane resolves aliases and agent ownership; absence must not reuse an unowned row. */
   selectedSession?: GatewaySessionRow;
+  /** Owners pass the same Incognito decision as the header; the edge turns dashed. */
+  incognito?: boolean;
   contextUsage?: ChatSessionStateSnapshot["contextUsage"];
   toolOverrides?: SessionToolOverrides;
   capabilityMenu?: ChatComposerCapabilityMenuSource;
@@ -243,6 +245,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
+  /** Stop parked the queue; automatic sends wait for Resume. */
+  queuePaused?: boolean;
+  onQueueResume?: () => void;
+  onQueueClear?: () => void;
   displayQueue?: ChatQueueDisplayItem[];
   queuedEdit?: ChatQueuedEditProps;
   onClearReply?: () => void;
