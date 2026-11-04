@@ -120,6 +120,7 @@ export function createSessionTargetPolicyAuthorizer(context: {
   ) => {
     const cfg = readPolicyConfig();
     if (!target && (mayCreateSessionTarget(params.method) || authorizesAgentRun)) {
+      const canonicalKey = resolveSessionMutationWriteRoute(cfg, targetRef).canonicalKey;
       const sourceError = authorizeSessionSourceCreation(
         {
           cfg,
@@ -128,10 +129,13 @@ export function createSessionTargetPolicyAuthorizer(context: {
             : { kind: "system" },
           requestingOperatorScopes: params.client?.connect.scopes,
         },
-        resolveSessionMutationWriteRoute(cfg, targetRef).canonicalKey,
+        canonicalKey,
       );
       if (sourceError) {
-        return sourceError;
+        // Messaging must not disclose whether a private channel target already exists.
+        return params.method === "sessions.send" || params.method === "sessions.steer"
+          ? hiddenSessionNotFound(canonicalKey)
+          : sourceError;
       }
     }
     const policy = preparedPolicy(cfg, members);

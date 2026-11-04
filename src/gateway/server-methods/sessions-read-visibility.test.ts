@@ -7,8 +7,10 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
+import { applySessionEntryCanonicalReplacements } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import * as sessionHistoryWorkers from "../../config/sessions/session-history-worker-runtime.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -327,6 +329,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
   const profileId = (name: string) => ensureProfileForEmail(`${name}@example.com`).id;
   const ownerId = profileId("draft-owner");
   const memberId = profileId("draft-member");
+  const selectedId = profileId("draft-selected");
   const storePath = resolveStorePath(undefined, { agentId: "main" });
   await replaceSessionEntry(
     { agentId: "main", sessionKey, storePath },
@@ -405,6 +408,13 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
       sharedRole: "member",
     },
     {
+      name: "selected",
+      client: identifiedClient(selectedId),
+      cfg: roleConfig("view"),
+      hidden: true,
+      sharedRole: "viewer",
+    },
+    {
       name: "missing profile",
       client: missingProfile,
       cfg: roleConfig("view"),
@@ -423,7 +433,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
       name: "no roles",
       client: identifiedClient(profileId("draft-outsider")),
       cfg: {},
-      hidden: false,
+      hidden: true,
       sharedRole: "viewer",
     },
   ] as const;
@@ -485,6 +495,55 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
         .toMatchObject({ sharingRole: sharedRole, visibility: "shared" });
     }
   }
+
+  // Ordinary bookkeeping preserves access; fixture transitions use the canonical owner.
+  const setAccess = async (access: NonNullable<SessionEntry["access"]>) => {
+    await applySessionEntryCanonicalReplacements({
+      agentId: "main",
+      storePath,
+      sessionKeys: [sessionKey],
+      update: (rows) => ({
+        result: undefined,
+        replacements: rows.map((row) => ({
+          ...row,
+          previousSessionKeys: [],
+          accessMutation: true,
+          entry: { ...row.entry, access },
+        })),
+      }),
+    });
+  };
+  await setAccess({ mode: "audience", profileIds: [selectedId] });
+  for (const { name, client, cfg, sharedRole } of cases) {
+    const allowed = name === "owner" || name === "selected" || name === "admin";
+    const described = await directSessionReq<{
+      session: { sharingRole?: string; visibility?: string } | null;
+    }>(
+      "sessions.describe",
+      { key: sessionKey },
+      { client, context: { getRuntimeConfig: () => cfg } },
+    );
+    expect(described.ok, `confidential ${name}`).toBe(true);
+    if (allowed) {
+      expect(described.payload?.session, name).toMatchObject({
+        sharingRole: sharedRole,
+        visibility: "shared",
+      });
+    } else {
+      expect(described.payload?.session, name).toBeNull();
+    }
+    const transcript = await directSessionReq<{ messages: Array<{ content?: unknown }> }>(
+      "sessions.get",
+      { key: sessionKey },
+      { client, context: { getRuntimeConfig: () => cfg } },
+    );
+    expect(transcript.ok, `confidential ${name}`).toBe(true);
+    expect(
+      transcript.payload?.messages.map((message) => message.content),
+      name,
+    ).toEqual(allowed ? ["foreign draft transcript"] : []);
+  }
+  await setAccess({ mode: "unrestricted" });
 
   let describeCfg = roleConfig("write");
   const readCatalog = vi

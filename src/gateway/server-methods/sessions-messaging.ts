@@ -15,6 +15,7 @@ import { resolveSessionWorkStartError, type SessionEntry } from "../../config/se
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { invalidSessionRequest } from "../session-request-error.js";
+import { hiddenSessionNotFound } from "../session-sharing-policy.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { prepareDeletedAgentSessionCheck } from "../session-utils.js";
@@ -217,7 +218,7 @@ async function handleSessionSend(
     canonicalKey = created.canonicalKey;
   }
   if (!entry?.sessionId) {
-    respondError(respond, ErrorCodes.INVALID_REQUEST, `session not found: ${key}`);
+    respond(false, undefined, hiddenSessionNotFound(canonicalKey));
     return;
   }
   let sendAcked = false;
