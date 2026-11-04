@@ -82,15 +82,17 @@ it.each([1440, 1366, 768, 390])(
     renderDetail(true);
     const { panel, main, content, hero, sidebar } = geometry();
     await expect.poll(() => main.contains(panel)).toBe(true);
+    const columns = getComputedStyle(content).gridTemplateColumns.split(/\s+/u);
+    // One column lays the main column's sections out directly in the content grid.
+    const column = columns.length === 2 ? main : content;
     await expect
       .poll(() =>
-        Math.abs(panel.getBoundingClientRect().width - main.getBoundingClientRect().width),
+        Math.abs(panel.getBoundingClientRect().width - column.getBoundingClientRect().width),
       )
       .toBeLessThanOrEqual(1);
     expect(panel.getBoundingClientRect().top).toBeGreaterThanOrEqual(
       hero.getBoundingClientRect().bottom,
     );
-    const columns = getComputedStyle(content).gridTemplateColumns.split(/\s+/u);
     if (columns.length === 2) {
       expect(panel.getBoundingClientRect().right).toBeLessThanOrEqual(
         sidebar!.getBoundingClientRect().left -
@@ -102,7 +104,7 @@ it.each([1440, 1366, 768, 390])(
       );
     } else {
       expect(sidebar!.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-        main.getBoundingClientRect().bottom,
+        panel.getBoundingClientRect().bottom,
       );
     }
     expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);

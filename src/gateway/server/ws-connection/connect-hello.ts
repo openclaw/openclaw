@@ -18,6 +18,7 @@ import {
 } from "../../../infra/device-pairing-node.js";
 import { recordPairedDeviceAccess } from "../../../infra/device-pairing.js";
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
+import { NODE_MCP_ELICITATION_CAPABILITY } from "../../../infra/node-commands.js";
 import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleResidentSessionSharingIdentities } from "../../../state/user-profile-list.js";
@@ -227,6 +228,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.WORKTREES_RETIRE_SNAPSHOT_OWNER,
         GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS,
+        ...(context.configSnapshot.mcp?.apps?.enabled ? [NODE_MCP_ELICITATION_CAPABILITY] : []),
         GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,

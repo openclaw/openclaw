@@ -34,11 +34,10 @@ import { isSerializedEventPayload, type SerializedEventPayload } from "./node-ev
 import { sendNodeWebSocketEvent } from "./node-event-send.js";
 import { serializeNodeEvent } from "./node-invoke-request.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
+import { NodeMcpElicitationRegistry } from "./node-mcp-elicitation.js";
 import {
-  createRegisteredNodePluginToolDescriptorMap,
-  normalizeNodePluginToolDescriptors,
+  publishNodeSessionPluginTools,
   removeConnectedNodePluginTools,
-  replaceConnectedNodePluginTools,
   type RegisteredNodePluginToolCommand,
 } from "./node-plugin-tool-snapshot.js";
 import {
@@ -142,6 +141,7 @@ export type NodeRegistryOptions = {
 };
 
 export class NodeRegistry {
+  readonly mcpElicitation = new NodeMcpElicitationRegistry();
   private nodesById = new Map<string, PairingBoundNodeSession>();
   private nodesByConn = new Map<string, string>();
   private eventTransportsByConn = new Map<string, NodeEventTransport>();
@@ -358,21 +358,14 @@ export class NodeRegistry {
       caps: node.caps,
       computerUse: node.computerUse,
     });
-    const normalized = normalizeNodePluginToolDescriptors({
-      nodeId: node.nodeId,
-      tools: node.declaredNodePluginTools,
-      allowedCommands: node.commands,
-      enabled: cfg?.gateway?.nodes?.pluginTools?.enabled,
-      registeredDescriptors: createRegisteredNodePluginToolDescriptorMap(
-        this.options.listRegisteredNodePluginToolCommands?.(),
-      ),
-    });
-    node.nodePluginTools = normalized.map((entry) => entry.descriptor);
-    replaceConnectedNodePluginTools({
-      nodeId: node.nodeId,
-      displayName: node.displayName,
-      tools: normalized,
-    });
+    if (!cfg?.mcp?.apps?.enabled || !node.commands.includes(NODE_MCP_TOOLS_CALL_COMMAND)) {
+      this.mcpElicitation.retire(node);
+    }
+    publishNodeSessionPluginTools(
+      node,
+      cfg?.gateway?.nodes?.pluginTools?.enabled,
+      this.options.listRegisteredNodePluginToolCommands?.(),
+    );
     node.nodeSkills = cfg?.gateway?.nodes?.allowSkills === false ? [] : policy.skills;
     recordRemoteSkillNodeInfo(node);
     replaceRemoteNodeSkills({
@@ -503,6 +496,7 @@ export class NodeRegistry {
       skills: [],
       withheldCommands: connect.withheldCommands ?? [],
     });
+    this.mcpElicitation.retire(previousSession);
     const replacesPresence = previousSession?.lastActiveAtMs !== undefined;
     forgetNodeRunnerInventory(this, client.connId);
     this.nodesById.set(nodeId, session);
@@ -553,6 +547,7 @@ export class NodeRegistry {
     const node = this.nodesById.get(nodeId);
     const unregistersCurrentNode = node?.connId === connId;
     if (unregistersCurrentNode) {
+      this.mcpElicitation.retire(node);
       this.hostStatsCheckpoints.forget(node);
       invalidateNodeCatalog(this);
       const hadPresence = node.lastActiveAtMs !== undefined;
@@ -651,6 +646,7 @@ export class NodeRegistry {
     if (this.nodesById.get(node.nodeId) !== node || node.client.invalidated === true) {
       return false;
     }
+    this.mcpElicitation.retire(node);
     node.client.invalidated = true;
     this.hostStatsCheckpoints.forget(node);
     invalidateNodeCatalog(this);
@@ -995,6 +991,7 @@ export class NodeRegistry {
 
     const previousPairingGeneration = node.pairingGeneration;
     if (generationTransition) {
+      this.mcpElicitation.retire(node);
       // Policy refresh can synchronously notify readers of this committed surface.
       this.hostStatsCheckpoints.forget(node);
       node.hostStats = undefined;

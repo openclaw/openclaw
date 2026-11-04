@@ -129,21 +129,19 @@ describe("Talk catalog-selected ClawRouter speech", () => {
                 talk: {
                   provider: "clawrouter",
                   providers: {
-                    clawrouter: {
-                      ...(azure
-                        ? {
-                            upstreamProvider: "azure-speech",
-                            speakerVoiceId: "en-US-JennyNeural",
-                            lang: "en-US",
-                          }
-                        : gradium
-                          ? { upstreamProvider: "gradium", speakerVoiceId: "synthetic-voice" }
-                          : {
-                              modelId: "openai/tts-1",
-                              speakerVoiceId: "shimmer",
-                              responseFormat: "mp3",
-                            }),
-                    },
+                    clawrouter: azure
+                      ? {
+                          upstreamProvider: "azure-speech",
+                          speakerVoiceId: "en-US-JennyNeural",
+                          lang: "en-US",
+                        }
+                      : gradium
+                        ? { upstreamProvider: "gradium", speakerVoiceId: "synthetic-voice" }
+                        : {
+                            modelId: "openai/tts-1",
+                            speakerVoiceId: "shimmer",
+                            responseFormat: "mp3",
+                          },
                   },
                 },
               };

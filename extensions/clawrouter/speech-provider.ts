@@ -326,7 +326,7 @@ export function buildClawRouterSpeechProvider(
         ? buildGradiumSpeechRequestBody({
             text: req.text,
             voiceId: config.voice,
-            outputFormat: responseFormat as "wav" | "opus",
+            outputFormat: responseFormat === "opus" ? "opus" : "wav",
           })
         : buildOpenAiSpeechRequestBody({
             model: offer.routeKind === "unified" ? config.model! : upstream,

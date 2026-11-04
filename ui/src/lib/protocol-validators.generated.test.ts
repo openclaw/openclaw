@@ -121,7 +121,10 @@ const recovery = {
 };
 const duplicateDecisions = {
   ...approval,
-  presentation: { ...approval.presentation, allowedDecisions: ["allow-once", "allow-once"] },
+  presentation: {
+    ...approval.presentation,
+    allowedDecisions: ["allow-once", "allow-once", "deny"],
+  },
 };
 const historySchema = Type.Object(
   {

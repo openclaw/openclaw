@@ -1,5 +1,6 @@
 import { createMemo, For, Show } from "solid-js";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
+import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { Tooltip } from "../../components/solid/tooltip.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -41,54 +42,52 @@ export function TemplateWorkspaceFiles(props: {
   });
   return (
     <Show when={props.files.length}>
-      <section class="plugin-capabilities">
-        <h2>
-          {t("templatesCatalog.workspaceFiles")}
-          <span>{props.files.length}</span>
-        </h2>
-        <div>
+      <div class="plugin-capabilities">
+        <SettingsSection title={t("templatesCatalog.workspaceFiles")} carapace>
           <For each={orderedFiles()}>
             {(file) => (
-              <div class="plugin-capability">
-                <div class="plugin-capability__static templates-workspace-file">
-                  <span class="plugin-capability__icon" aria-hidden="true">
-                    <Icon name={fileRole(file.name)[0]} />
-                  </span>
-                  <div class="plugin-capability__copy">
-                    <div class="templates-workspace-file__title">
+              <div class="settings-row oc-settings-row templates-workspace-file">
+                <span class="plugin-capability__icon" aria-hidden="true">
+                  <Icon name={fileRole(file.name)[0]} />
+                </span>
+                <div class="settings-row__text oc-settings-row-content">
+                  <div class="templates-workspace-file__title">
+                    <button
+                      type="button"
+                      class="templates-workspace-file__open"
+                      onClick={() => props.onOpen(file.name)}
+                    >
+                      <span class="settings-row__title oc-settings-row-title">{file.name}</span>
+                    </button>
+                    <Tooltip
+                      content={t(`templatesCatalog.filePurpose.${fileRole(file.name)[1]}`)}
+                      openOnClick
+                    >
                       <button
                         type="button"
-                        class="templates-workspace-file__open"
-                        onClick={() => props.onOpen(file.name)}
+                        class="templates-workspace-file__info"
+                        aria-label={t("templatesCatalog.aboutFile", { name: file.name })}
                       >
-                        <strong>{file.name}</strong>
+                        <Icon name="info" />
                       </button>
-                      <Tooltip
-                        content={t(`templatesCatalog.filePurpose.${fileRole(file.name)[1]}`)}
-                        openOnClick
-                      >
-                        <button
-                          type="button"
-                          class="templates-workspace-file__info"
-                          aria-label={t("templatesCatalog.aboutFile", { name: file.name })}
-                        >
-                          <Icon name="info" />
-                        </button>
-                      </Tooltip>
-                    </div>
-                    <Show when={file.excerpt}>
-                      <span>{file.excerpt}</span>
-                    </Show>
+                    </Tooltip>
                   </div>
-                  <span class="plugin-capability__chevron" aria-hidden="true">
+                  <Show when={file.excerpt}>
+                    <span class="settings-row__desc oc-settings-row-description">
+                      {file.excerpt}
+                    </span>
+                  </Show>
+                </div>
+                <div class="settings-row__control oc-settings-row-control">
+                  <span class="settings-row__chevron" aria-hidden="true">
                     <Icon name="chevronRight" />
                   </span>
                 </div>
               </div>
             )}
           </For>
-        </div>
-      </section>
+        </SettingsSection>
+      </div>
     </Show>
   );
 }

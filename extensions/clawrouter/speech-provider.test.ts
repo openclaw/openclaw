@@ -739,16 +739,25 @@ describe("ClawRouter native Gradium speech", () => {
       },
       (res) => {
         res.setHeader("content-type", "audio/wav");
-        if (failure === "partial-status") res.statusCode = 206;
-        if (failure === "range") res.setHeader("content-range", "bytes 0-15/100");
-        if (failure === "mime-parameters")
+        if (failure === "partial-status") {
+          res.statusCode = 206;
+        }
+        if (failure === "range") {
+          res.setHeader("content-range", "bytes 0-15/100");
+        }
+        if (failure === "mime-parameters") {
           res.setHeader("content-type", "audio/wav; codecs=unknown");
-        if (failure === "encoding") res.setHeader("content-encoding", "gzip");
+        }
+        if (failure === "encoding") {
+          res.setHeader("content-encoding", "gzip");
+        }
         if (failure === "truncated") {
           res.setHeader("content-length", GRADIUM_WAV.length + 1);
           res.setHeader("connection", "close");
         }
-        if (failure === "oversized") res.setHeader("content-length", 16 * 1024 * 1024 + 1);
+        if (failure === "oversized") {
+          res.setHeader("content-length", 16 * 1024 * 1024 + 1);
+        }
         if (failure === "redirect") {
           res.statusCode = 307;
           res.setHeader("location", "/replayed-speech");

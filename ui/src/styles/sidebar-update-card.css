@@ -58,7 +58,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop)
 
 @media (pointer: coarse) {
   .sidebar-update-card--floating .sidebar-update-card__action {
-    min-height: 44px;
+    min-height: var(--settings-touch-control-height);
   }
 }
 
