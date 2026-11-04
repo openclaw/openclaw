@@ -27,7 +27,7 @@ it("registers shared session copy before optional copy while preserving namespac
 
     registerEnglishCatalog(registerChatSessionEnglish);
     expect(t("chat.savedConversation", { status: "Reconnecting…" })).toBe(
-      "Saved conversation · Reconnecting…",
+      "Reconnecting… · Saved conversation",
     );
     expect(en).toMatchObject(registerChatSessionEnglish.catalog);
     expect(t("chat.activityPills.label")).toBe("chat.activityPills.label");

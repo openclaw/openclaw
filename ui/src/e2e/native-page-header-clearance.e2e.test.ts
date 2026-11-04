@@ -194,7 +194,7 @@ suite.define(() => {
     { width: 1280, height: 900, direction: "rtl" },
     { width: 390, height: 844, direction: "ltr" },
   ] as const)(
-    "shares a stacked title and aligned tabs across Sessions and Worktrees at $width px ($direction)",
+    "keeps Sessions and Worktrees headings accessible and desktop tabs aligned at $width px ($direction)",
     async ({ width, height, direction }) => {
       const { page, toolbar } = await openPage(
         "sessions",
@@ -226,6 +226,14 @@ suite.define(() => {
           };
         });
       const expectAlignedHub = async () => {
+        if (width <= 560) {
+          await expect.poll(() => header.getByRole("heading", { level: 1 }).count()).toBe(1);
+          await expect.poll(() => tabs.isVisible()).toBe(true);
+          const box = (await tabs.boundingBox())!;
+          expect(box.x).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width).toBeLessThanOrEqual(width);
+          return;
+        }
         await expect
           .poll(async () => {
             const { titleWidth, tabsBelowTitle, xDelta } = await alignment();

@@ -167,9 +167,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "src/utils/string-readers.ts":
     case "ui/src/components/file-kind.ts":
     case "ui/src/lib/reactive/application-native.ts":
-    case "ui/src/lib/reactive/visible-poll.ts":
     case "ui/src/lib/chat/follow-up-mode.ts":
-    case "ui/src/lib/sessions/context-budget.ts":
     case "ui/src/lib/sessions/session-archive-reason.ts":
     case "ui/src/lib/sessions/session-message-subscriptions.runtime.ts":
     case "packages/gateway-client/src/session-subscriptions.ts":
@@ -190,6 +188,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/plugins/plugin-icon-owner.ts":
     case "ui/src/components/desktop/desktop-source.ts":
     case "ui/src/components/solid/panel-loading-skeleton.tsx":
+    case "ui/src/components/solid/sanitized-html.tsx":
     case "ui/src/lib/session-progress-cards.ts":
       // These shared helpers load together in Chat without retaining its renderers.
       return "deferred-ui-support";
@@ -205,6 +204,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Shared catalogs and session parameters must not pull Chat into other routes.
       return "deferred-ui-support";
     case "ui/src/lib/page-request.ts":
+    case "ui/src/lib/checkout-snapshot.ts":
     case "ui/src/lib/worktrees/create-worktree.ts":
     case "ui/src/pages/new-session/rejected-initial-turn.ts":
     case "ui/src/lib/model-catalog-reader.ts":
@@ -226,7 +226,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/hub-page-header.tsx":
     case "ui/src/components/solid/settings-workspace.tsx":
     case "ui/src/components/solid/settings-select.tsx":
-      // Only page chrome belongs here; shared controls also serve lazy Chat panels.
+    case "ui/src/lib/timezone-suggestions.ts":
+      // Page chrome and its selectors stay separate from shared controls in lazy Chat panels.
       return "route-chrome";
     case "ui/src/components/config-form.analyze.ts":
     case "ui/src/components/config-form.shared.ts":
@@ -240,8 +241,15 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "config-form-utils-runtime";
     case "ui/src/components/solid/settings-ui.tsx":
     case "ui/src/pages/config/settings-section-header.tsx":
+    case "ui/src/lib/reactive/live-checked.ts":
+    case "ui/src/lib/reactive/observe-state.ts":
       // Shared controls stay independent of route chrome and optional settings editors.
       return "settings-controls-runtime";
+    case "ui/src/lib/gateway-page-binding.ts":
+    case "ui/src/lib/reactive/gateway-page.ts":
+    case "ui/src/lib/sessions/transcript-search.ts":
+      // These readers already load the binding; avoid separate first-visit requests.
+      return "gateway-page-runtime";
     case "node_modules/typebox/build/guard/guard.mjs":
     case "node_modules/typebox/build/guard/globals.mjs":
     case "node_modules/typebox/build/guard/index.mjs":
@@ -377,6 +385,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/cron/form.ts":
     case "ui/src/lib/cron/form-schedule.ts":
     case "ui/src/lib/cron/index.ts":
+    case "ui/src/lib/cron/jobs-full.ts":
     case "ui/src/lib/cron/payload.ts":
     case "ui/src/lib/cron/run-feedback.ts":
     case "ui/src/lib/cron/runs.ts":
@@ -394,6 +403,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/cron/delivery-conversations.ts":
     case "ui/src/pages/cron/event-editor.ts":
     case "ui/src/pages/cron/event-source.ts":
+    case "ui/src/pages/cron/human-owner.ts":
     case "ui/src/pages/cron/route-model.ts":
     case "ui/src/pages/cron/run-transcript.tsx":
     case "ui/src/pages/cron/suggestions.ts":
@@ -560,6 +570,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("node_modules/@solidjs/signals/dist/prod/deferred.js");
                 // Callback-backed leaf owners already share the boot projection runtime.
                 modules.add("ui/src/lib/reactive/callback-owner.ts");
+                // Portal polling must not load optional session controls or a separate chunk.
+                modules.add("ui/src/lib/reactive/visible-poll.ts");
                 // Chat and creation share the same identity-scoped preference owner.
                 modules.add("ui/src/pages/new-session/draft-preference-state.ts");
                 modules.add("ui/src/pages/new-session/preferences.ts");

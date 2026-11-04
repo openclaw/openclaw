@@ -2,11 +2,10 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import {
-  isToolResultError,
   protectNetworkToolExecutionError,
   resolveToolExecutionErrorKind,
-  resolveToolResultFailureKind,
-} from "./tool-result-error.js";
+} from "./tool-execution-error.js";
+import { isToolResultError, resolveToolResultFailureKind } from "./tool-result-error.js";
 import { ToolInputError } from "./tools/common.js";
 
 // Bun's built-in Undici shim does not carry the installed package's error codes.

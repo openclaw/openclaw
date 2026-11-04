@@ -183,10 +183,15 @@ export async function runSessionCollaborationWrite<
             ...location,
             databaseIdentity: identity,
           });
+          // Invitation grants share the membership writer's unknown-outcome latch.
+          const authorityCommand: SqliteWorkerCommand<SessionSharingWorkerOperations> = command;
           const sharingAuthorityChanged =
-            capturedCommand.type === "add" ||
-            capturedCommand.type === "remove" ||
-            capturedCommand.type === "owner.assign";
+            authorityCommand.type === "add" ||
+            authorityCommand.type === "remove" ||
+            authorityCommand.type === "owner.assign" ||
+            (authorityCommand.type === "involvement" &&
+              authorityCommand.input.params.change.kind === "mention" &&
+              Boolean(authorityCommand.input.params.change.invitation?.profileIds.length));
           let publicationKeys = [location.sessionKey];
           let mutationDispatched = false;
           let resultReceived = false;
@@ -240,8 +245,12 @@ export async function runSessionCollaborationWrite<
                       | undefined
                     >();
                     for (const [key, fact] of candidate?.publication.facts ?? []) {
-                      if (fact.kind === "postimage" && fact.value[0]?.kind === "member") {
-                        memberships.set(key, fact.value[0].sessionId);
+                      if (fact.kind === "postimage") {
+                        for (const change of fact.value) {
+                          if (change.kind === "member") {
+                            memberships.set(key, change.sessionId);
+                          }
+                        }
                       }
                       if (
                         capturedCommand.type === "participant" &&

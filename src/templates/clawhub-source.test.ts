@@ -66,7 +66,7 @@ const digest = createHash("sha256").update(archiveBytes).digest("hex");
 const tempDirs = createTrackedTempDirs();
 let fixtureRoot: string;
 let fixtureStateDir: string;
-const packageJson = (name = packageName, selectedVersion = version, template = "template.json") =>
+const packageJson = (name = packageName, selectedVersion = version, template = "CLAW.md") =>
   JSON.stringify({ name, version: selectedVersion, openclaw: { template } });
 const writePackage = (name = packageName, selectedVersion = version) =>
   fs.writeFile(path.join(fixtureRoot, "package.json"), packageJson(name, selectedVersion));
@@ -200,8 +200,8 @@ async function useRealTrust(security = matchingSecurity) {
 
 async function prepareResolverFixture(packages: TemplateManifest["packages"] = []) {
   await fs.writeFile(
-    path.join(fixtureRoot, "template.json"),
-    JSON.stringify({ ...emptyManifest, packages }),
+    path.join(fixtureRoot, "CLAW.md"),
+    `---\n${JSON.stringify({ ...emptyManifest, packages })}\n---\n`,
   );
   return { stateDir: fixtureStateDir };
 }
@@ -239,7 +239,10 @@ beforeEach(async () => {
       },
     ],
   } satisfies TemplateManifest;
-  await fs.writeFile(path.join(extractedRoot, "template.json"), JSON.stringify(contentsManifest));
+  await fs.writeFile(
+    path.join(extractedRoot, "CLAW.md"),
+    `---\n${JSON.stringify(contentsManifest)}\n---\n`,
+  );
   const { readTemplateManifestFile } =
     await vi.importActual<typeof import("./reader.js")>("./reader.js");
   mocks.read.mockImplementation(readTemplateManifestFile);
@@ -281,29 +284,32 @@ describe("public ClawHub Template catalog", () => {
         stats: { installs: 20 },
       };
       const community = { ...communityPackage(), stats: { installs: 1 } };
-      vi.stubGlobal("fetch", async (input: string | URL | Request) => {
-        const url = new URL(
-          typeof input === "string" ? input : input instanceof URL ? input : input.url,
-        );
-        const nextPage = mode === "category" && !url.searchParams.has("cursor");
-        const valid =
-          mode === "category" ? [nextPage ? community : official] : [community, official];
-        const items =
-          url.searchParams.get("isOfficial") === "true"
-            ? [official]
-            : [
-                ...valid,
-                officialPackage("@other/impostor"),
-                { ...officialPackage(), ownerHandle: "someone-else" },
-                { ...officialPackage(), name: 42 },
-                { ...communityPackage(), channel: "private" },
-              ];
-        return Response.json(
-          url.pathname.endsWith("/search")
-            ? { results: items.map((pkg, index) => ({ score: 10 - index, package: pkg })) }
-            : { items, nextCursor: nextPage || mode === "limited" ? "next" : null },
-        );
-      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) => {
+          const url = new URL(
+            typeof input === "string" ? input : input instanceof URL ? input : input.url,
+          );
+          const nextPage = mode === "category" && !url.searchParams.has("cursor");
+          const valid =
+            mode === "category" ? [nextPage ? community : official] : [community, official];
+          const items =
+            url.searchParams.get("isOfficial") === "true"
+              ? [official]
+              : [
+                  ...valid,
+                  officialPackage("@other/impostor"),
+                  { ...officialPackage(), ownerHandle: "someone-else" },
+                  { ...officialPackage(), name: 42 },
+                  { ...communityPackage(), channel: "private" },
+                ];
+          return Response.json(
+            url.pathname.endsWith("/search")
+              ? { results: items.map((pkg, index) => ({ score: 10 - index, package: pkg })) }
+              : { items, nextCursor: nextPage || mode === "limited" ? "next" : null },
+          );
+        }),
+      );
       const entries =
         mode !== "featured" && mode !== "category"
           ? await searchClawHubTemplates({
@@ -634,6 +640,22 @@ describe("verified ClawHub Template source", () => {
       riskAcknowledgementRequired: true,
     });
   });
+
+  it.each([{ claw: "CLAW.md" }, { template: "template.json" }])(
+    "rejects an obsolete artifact before apply handoff or persistence: %j",
+    async (openclaw) => {
+      const { stateDir } = await prepareResolverFixture();
+      await fs.writeFile(
+        path.join(fixtureRoot, "package.json"),
+        JSON.stringify({ name: packageName, version, openclaw }),
+      );
+      await fs.writeFile(path.join(fixtureRoot, "template.json"), JSON.stringify(emptyManifest));
+      const run = vi.fn(async () => undefined);
+      await expectCode(resolveSource({ mode: "apply", stateDir, run }), "clawhub_manifest_invalid");
+      expect(run).not.toHaveBeenCalled();
+      await expectMissing(stateDir);
+    },
+  );
 
   it("rejects a valid archive when its embedded package identity differs", async () => {
     const { stateDir } = await prepareResolverFixture();

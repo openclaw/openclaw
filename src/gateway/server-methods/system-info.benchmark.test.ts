@@ -37,6 +37,7 @@ it.runIf(process.env.OPENCLAW_SYSTEM_INFO_BENCH === "1")(
     const request = {
       params: {},
       respond: () => responses++,
+      client: { connect: { scopes: ["operator.admin"] } },
       context: { getRuntimeConfig: () => config },
     } as unknown as GatewayRequestHandlerOptions;
     let clock = Date.now();
