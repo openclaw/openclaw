@@ -121,7 +121,7 @@ describe("Search settings", () => {
     });
     await waitForSolid(() =>
       expect(page.element.querySelector('[role="alert"]')?.textContent).toContain(
-        "Search settings are not ready",
+        "Couldn’t load search settings",
       ),
     );
     expect(page.input("Search query")).toBeNull();
@@ -141,7 +141,7 @@ describe("Search settings", () => {
     page.click("Refresh search status");
     await waitForSolid(() =>
       expect(page.element.querySelector('[role="alert"]')?.textContent).toContain(
-        "Search settings are not ready",
+        "Couldn’t load search settings",
       ),
     );
     expect(page.input("Search query")).toBe(query);
@@ -455,7 +455,7 @@ describe("Search settings", () => {
         }
       }
       await page.settle();
-      page.expectText(outcome === "success" ? "Search succeeded" : "Search failed");
+      page.expectText(outcome === "success" ? "Search succeeded" : "Couldn’t search. Try again.");
       expect(query.disabled).toBe(false);
       expect(page.calls("webSearch.test")[0]?.[1]).toMatchObject({ query: "Query A" });
       if (outcome === "success") {

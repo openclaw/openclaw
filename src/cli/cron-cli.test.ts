@@ -483,7 +483,7 @@ it("creates a configured agent job from a positional cron schedule and prompt", 
       "--thread-id": " 42 ",
     },
     "0 2 * * *",
-    "hello",
+    "    code\r\n    line\r\n",
   );
   expect(params).toMatchObject({
     name: "job",
@@ -492,7 +492,7 @@ it("creates a configured agent job from a positional cron schedule and prompt", 
     schedule: { kind: "cron", expr: "0 2 * * *", staggerMs: 45_000 },
     payload: {
       kind: "agentTurn",
-      message: "hello",
+      message: "    code\r\n    line\r\n",
       model: "opus",
       thinking: "low",
       lightContext: true,
@@ -506,10 +506,10 @@ it("creates a configured agent job from a positional cron schedule and prompt", 
 });
 
 it("keeps the default-agent warning off JSON stdout and preserves an empty tool grant", async () => {
-  const params = await namedAdd("--message", "hello", "--tools", "", "--json");
+  const params = await namedAdd("--message", "    code\r\n    line\r\n", "--tools", "", "--json");
   expect(params).toMatchObject({
     sessionTarget: "isolated",
-    payload: { kind: "agentTurn", message: "hello", toolsAllow: [] },
+    payload: { kind: "agentTurn", message: "    code\r\n    line\r\n", toolsAllow: [] },
   });
   expect(params.payload).toHaveProperty("timeoutSeconds", undefined);
   expectRuntimeErrorContaining("No --agent specified");
@@ -517,7 +517,7 @@ it("keeps the default-agent warning off JSON stdout and preserves an empty tool 
   expect(stdoutText()).not.toContain("No --agent specified");
   expect(JSON.parse(stdoutText())).toMatchObject({
     ok: true,
-    params: { name: "job", payload: { message: "hello" } },
+    params: { name: "job", payload: { message: "    code\r\n    line\r\n" } },
   });
 });
 
@@ -796,7 +796,7 @@ it.each([
   [[...AGENT_ADD, "--script", "   "], "--script must not be blank"],
   [[...AGENT_ADD, "--webhook", "not-a-url"], "--webhook must be a valid http(s) URL"],
   [
-    ["cron", "create", "0 2 * * *", "Positional", "--name", "job", "--message", "Option"],
+    ["cron", "create", "0 2 * * *", "    code\n", "--name", "job", "--message", "code"],
     "Pass the automation message either positionally or with --message",
   ],
   [

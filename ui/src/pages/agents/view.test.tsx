@@ -603,7 +603,7 @@ describe("renderAgents", () => {
     expect(skillsTab.querySelector(".hub-tab__badge--count")).toBeNull();
   });
 
-  it("localizes agent tabs and the channel subtitle", async () => {
+  it("localizes agent tabs and falls back to the current English channel subtitle", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     await i18n.setLocale("zh-CN");
     const container = document.createElement("div");
@@ -637,7 +637,7 @@ describe("renderAgents", () => {
           Array.from(container.querySelectorAll(".settings-section__desc"), (desc) =>
             desc.textContent?.replace(/\s+/gu, " ").trim(),
           ),
-        ).toContain(chinese.get("agents.channels.subtitle")),
+        ).toContain("Channel status across OpenClaw."),
       );
     } finally {
       await i18n.setLocale("en");
@@ -805,7 +805,7 @@ describe("renderAgentFiles", () => {
     ).map((tab) => directText(tab));
     expect(tabLabels).toStrictEqual(["AGENTS"]);
     expect(container.querySelector(".agent-files-hub-tabs .hub-tab__badge")?.textContent).toBe(
-      "missing",
+      "Missing",
     );
 
     const picker = container.querySelector<HTMLSelectElement>(".agent-tab-add");
@@ -963,9 +963,7 @@ describe("renderAgents toolbar", () => {
       const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
       expect(createButton).not.toBeNull();
       expect(createButton?.disabled).toBe(true);
-      expect(createButton?.title).toContain("openclaw.chat");
-      expect(createButton?.title).toContain("operator.admin");
-      expect(createButton?.title).toContain("reconnect");
+      expect(createButton?.title).toBe("You need admin access to set up OpenClaw.");
       createButton?.click();
       expect(onCreateAgent).not.toHaveBeenCalled();
     } finally {
@@ -995,7 +993,7 @@ it.each([
   { name: "paused authorized job", enabled: false, canRunCron: true, canRun: true },
   { name: "enabled unauthorized job", enabled: true, canRunCron: false, canRun: false },
 ])(
-  "preserves edit links and gates Run Now for a $name",
+  "preserves edit links and gates Run now for a $name",
   async ({ enabled, canRunCron, canRun }) => {
     const container = document.createElement("div");
     const onCronRunNow = vi.fn();
@@ -1035,7 +1033,7 @@ it.each([
       (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === job.name,
     );
     const runNow = [...(jobRow?.querySelectorAll("button") ?? [])].find(
-      (button) => button.textContent?.trim() === "Run Now",
+      (button) => button.textContent?.trim() === "Run now",
     );
     expect(runNow).toBeInstanceOf(HTMLButtonElement);
     expect(runNow?.disabled).toBe(!canRun);

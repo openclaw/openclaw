@@ -92,7 +92,7 @@ it("renders the runtime storage-mode default when the config omits it", () => {
   expect(selectedSegment(defaultPanel)).toBe("separate");
   expect(rowFor(defaultPanel, "Storage mode").textContent).not.toContain("Default:");
   const inline = renderInto({ storage: { mode: "inline" } });
-  expect(rowFor(inline, "Storage mode").textContent).toContain("Default: Separate");
+  expect(rowFor(inline, "Storage mode").textContent).not.toContain("Default:");
   expect(selectedSegment(inline)).toBe("inline");
   expect(selectedSegment(renderInto({ storage: { mode: "both" } }))).toBe("both");
   expect(selectedSegment(renderInto({ storage: { mode: "nonsense" } }))).toBe("separate");
@@ -105,7 +105,9 @@ it("shows the advanced execution model as the inherited model default", async ()
   const row = rowFor(container, "Dreaming model");
   await openPicker(row.querySelector("openclaw-select-picker")!);
 
-  expect(row.textContent).toContain("Default: openai/gpt-5.6");
+  expect(row.querySelector('[role="option"][data-value=""]')?.textContent).toContain(
+    "openai/gpt-5.6",
+  );
   expect(
     row.querySelector('[role="option"][data-value="__openclaw_custom_model__"]')?.textContent,
   ).toContain("Custom model…");
@@ -147,13 +149,13 @@ it("preserves drafts and numeric admission across config refreshes", () => {
     />
   ));
   flush();
-  const frequency = numberInput(view.container, "Dreaming frequency");
+  const frequency = numberInput(view.container, "Schedule (cron)");
   const lookback = numberInput(view.container, "Lookback days");
   frequency.value = "0 4 * * *";
   lookback.value = "14";
   setConfig(draft("0 3 * * *", 7, { verboseLogging: true }));
   flush();
-  expect(numberInput(view.container, "Dreaming frequency")).toBe(frequency);
+  expect(numberInput(view.container, "Schedule (cron)")).toBe(frequency);
   expect(frequency.value).toBe("0 4 * * *");
   expect(lookback.value).toBe("14");
   expect(onPatch).not.toHaveBeenCalled();
@@ -233,10 +235,10 @@ it("submits edited values and removals through the shared config owner without m
     );
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true }));
-    const frequency = numberInput(view.container, "Dreaming frequency");
+    const frequency = numberInput(view.container, "Schedule (cron)");
     editNumber(frequency, "");
     flush();
-    expect(numberInput(view.container, "Dreaming frequency")).toBe(frequency);
+    expect(numberInput(view.container, "Schedule (cron)")).toBe(frequency);
     expect(frequency.value).toBe("");
     runtimeConfig.patchForm(["agents", "defaults", "userTimezone"], "Etc/UTC");
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);

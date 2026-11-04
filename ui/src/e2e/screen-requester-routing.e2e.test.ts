@@ -222,7 +222,7 @@ suite.define(() => {
     const desktop = requester.page.locator("openclaw-desktop-panel[embedded]");
     await requester.gateway.waitForRequest("environments.status");
     await desktop.locator(".desktop-status-surface[role='status']").waitFor();
-    await desktop.getByText("Starting your machine…", { exact: true }).waitFor();
+    await desktop.getByText("Starting your device…", { exact: true }).waitFor();
     expect(await requester.gateway.getRequests("desktop.observe")).toHaveLength(0);
     await captureUiProof(suite, requester.page, "screen-requester-routing", "pending-desktop.png");
     await requester.gateway.setMethodResponse("environments.status", {
