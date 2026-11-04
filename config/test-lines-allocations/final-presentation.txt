@@ -1,0 +1,4 @@
+# Final-presentation hook precedence, accepted-candidate lifetime, and ordinary delivery.
+# Includes cancellation, retry exhaustion, metadata/media preservation, and suppression controls.
+# Exact net test growth against 55a554e78a83af031760ef247e26d5be9e24329d; inherited debt stays separate.
+333
