@@ -22,6 +22,7 @@ import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { escapeRegExp } from "../src/shared/regexp.js";
 import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mts";
+import { checkOfficialRuntimeFloors } from "./check-official-runtime-floor.mts";
 import {
   collectBundledExtensionManifestErrors,
   type BundledExtension,
@@ -1220,6 +1221,7 @@ async function main() {
   );
   checkValidationErrors("skill shell script permission", collectSkillShellScriptExecutableErrors());
   checkBundledExtensionMetadata();
+  await checkOfficialRuntimeFloors();
   const temporaryDir = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
   try {
     const tarballPath = values.tarball

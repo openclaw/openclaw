@@ -25,6 +25,7 @@ import {
   writePackedTarballInstallManifest as writeInstallManifest,
 } from "../../scripts/release-check.ts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
+import { materializeNativeCompiler, materializeTypeChecker } from "./native-boundary-fixture.js";
 import { writeFixtureFiles as writeFiles } from "./z0632-fixtures.test-support.js";
 
 const it = createCommandTest();
@@ -112,6 +113,91 @@ function runReleaseCheck(
 }
 
 describe("release-check", () => {
+  it("rejects missing and incompatible runtime floors before inspecting the package", async ({
+    command,
+  }) => {
+    await command.lifetime.run(async () => {
+      const root = command.createTempDir("openclaw-runtime-floor-gate-");
+      const catalogPath = join(root, "src/plugins/official-runtime-plugins.ts");
+      const sdkPath = join(root, "src/plugin-sdk/deadline.ts");
+      const setFloor = (floor: string) =>
+        writeFileSync(
+          catalogPath,
+          `export const CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES = [{ pluginId: "codex", versionBoundToOpenClaw: true, minimumCompatibleVersion: ${JSON.stringify(floor)} }];\n`,
+        );
+      writeFiles(root, {
+        "package.json": JSON.stringify({ name: "openclaw", version: "2026.10.7", type: "module" }),
+        "extensions/codex/package.json": JSON.stringify({
+          name: "@openclaw/codex",
+          version: "2026.10.6",
+          type: "module",
+        }),
+        "extensions/codex/index.ts":
+          'import { deadline } from "openclaw/plugin-sdk/deadline";\ndeadline({ startedAtMs: 0 });\n',
+        "src/plugin-sdk/deadline.ts":
+          "export function deadline(input: { startedAtMs: number; startedAtMonotonicMs: number }) { return input; }\n",
+        "src/plugins/official-runtime-plugins.ts": "",
+        "tsconfig.json": JSON.stringify({
+          compilerOptions: {
+            target: "ES2022",
+            module: "NodeNext",
+            moduleResolution: "NodeNext",
+            strict: true,
+            skipLibCheck: true,
+            paths: { "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"] },
+          },
+        }),
+        "scripts/run-tsgo.mjs": `import { spawnSync } from "node:child_process";\nconst result = spawnSync(process.execPath, [${JSON.stringify(resolve("scripts/run-tsgo.mjs"))}, ...process.argv.slice(2)], { stdio: "inherit" });\nprocess.exitCode = result.status ?? 1;\n`,
+      });
+      copyFileSync(resolve("appcast.xml"), join(root, "appcast.xml"));
+      materializeNativeCompiler(root, { javaScriptApi: false });
+      materializeTypeChecker(root);
+      const git = async (args: string[]) =>
+        expectExit(await command.run("git", args, { cwd: root }), 0);
+      await git(["init", "--quiet"]);
+      await git(["add", "extensions/codex"]);
+      await git([
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "runtime fixture",
+      ]);
+      await git(["tag", "v2026.10.6"]);
+      await git(["remote", "add", "origin", root]);
+      const run = () =>
+        runReleaseCheck(command, root, process.cwd(), [
+          resolve("scripts/release-check.ts"),
+          "--tarball",
+          join(root, "not-packed.tgz"),
+        ]);
+
+      setFloor("2026.10.5");
+      expectExit(await run(), 1, ["no release tag"], ["not-packed.tgz"]);
+
+      setFloor("2026.10.6");
+      expectExit(
+        await run(),
+        1,
+        ["startedAtMonotonicMs", "minimumCompatibleVersion"],
+        ["not-packed.tgz"],
+      );
+
+      writeFileSync(
+        sdkPath,
+        "export function deadline(input: { startedAtMs: number; startedAtMonotonicMs?: number }) { return input; }\n",
+      );
+      const compatible = await run();
+      expectExit(compatible, 1, ["not-packed.tgz"], ["minimumCompatibleVersion"]);
+      expect(compatible.stdout).toContain("codex 2026.10.6 type-checks against OpenClaw 2026.10.7");
+    });
+  });
+
   it.each([
     ["mts", ["--import", "tsx", "scripts/test-built-bundled-channel-entry-smoke.mts"]],
     ["mjs", ["scripts/test-built-bundled-channel-entry-smoke.mjs"]],
