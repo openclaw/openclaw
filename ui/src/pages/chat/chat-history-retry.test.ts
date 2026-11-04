@@ -318,5 +318,4 @@ describe("shared chat history transient recovery", () => {
     expect(secondSettled).toHaveBeenCalledOnce();
     expect(await second).toMatchObject({ message: expect.stringContaining("in time") });
   });
-
 });
