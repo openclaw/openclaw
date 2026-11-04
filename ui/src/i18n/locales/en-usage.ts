@@ -119,6 +119,8 @@ const enUsage = {
       perDay: "/ day",
     },
     overview: {
+      messageCounts: "{user} user · {assistant} assistant",
+      uniqueToolsCount: "{count} tools used",
       unpriced: "Unpriced",
       messages: "Messages",
       messagesHint: "Total user and assistant messages in range.",

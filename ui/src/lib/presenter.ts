@@ -50,7 +50,7 @@ export function formatCronState(job: CronJob) {
   const next = state.nextRunAtMs ? formatMs(state.nextRunAtMs) : t("common.na");
   const last = state.lastRunAtMs ? formatMs(state.lastRunAtMs) : t("common.na");
   const status = resolveCronJobLastRunStatus(job);
-  return `${status} · next ${next} · last ${last}`;
+  return t("cron.job.state", { status, next, last });
 }
 
 export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
@@ -87,18 +87,21 @@ export function formatCronPayload(job: CronJob) {
   const p = job.payload;
   // Newer Gateways name the stored kind; its agentTurn payload is only a placeholder.
   if (job.payloadSource?.kind === "pluginCommand") {
-    return `Plugin command: /${job.payloadSource.command} (${job.payloadSource.pluginId})`;
+    return t("cron.job.pluginCommand", {
+      command: job.payloadSource.command,
+      plugin: job.payloadSource.pluginId,
+    });
   }
   if (p.kind === "systemEvent") {
-    return `System: ${p.text}`;
+    return t("cron.job.system", { text: p.text });
   }
   if (p.kind === "command") {
-    return `Command: ${p.argv.join(" ")}`;
+    return t("cron.job.command", { command: p.argv.join(" ") });
   }
   if (p.kind === "script") {
-    return `Script: ${p.script}`;
+    return t("cron.job.script", { script: p.script });
   }
-  const base = `Agent: ${p.message}`;
+  const base = t("cron.job.agent", { message: p.message });
   const delivery = job.delivery;
   if (delivery && delivery.mode !== "none") {
     const target =
