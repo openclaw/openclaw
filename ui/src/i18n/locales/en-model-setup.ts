@@ -15,7 +15,7 @@ const enModelSetup = {
     },
     heading: "Set up a model",
     intro:
-      "OpenClaw finds saved accounts and local models on this computer. Choose one to begin; nothing is selected, tested, installed, or saved automatically.",
+      "OpenClaw finds saved accounts and local models on the computer running OpenClaw. Choose one to begin; nothing is selected, tested, installed, or saved automatically.",
     loading: "Loading models…",
     testing: "Asking the selected model for a quick reply…",
     retry: "Retry",
@@ -42,7 +42,7 @@ const enModelSetup = {
       gatewayTooOld: "Update the Gateway to set up models.",
     },
     candidates: {
-      title: "Found on this computer",
+      title: "Found on the computer running OpenClaw",
       recommended: "Recommended",
       credentialsReady: "Account ready",
       detected: "Detected",
@@ -52,7 +52,7 @@ const enModelSetup = {
     },
     nativeDiscovery: {
       title: "Find existing sessions",
-      body: "Show sessions from installed agents on this computer in OpenClaw. This doesn’t import or copy them.",
+      body: "Show sessions from installed agents on the computer running OpenClaw in OpenClaw. This doesn’t import or copy them.",
       enable: "Show existing sessions",
       decline:
         "Leave unchecked to keep these sessions hidden when you add an account. Existing installations aren’t changed.",
@@ -83,10 +83,10 @@ const enModelSetup = {
     },
     prepare: {
       title: "Run a model locally",
-      intro: "Use a local model service or set up a private GGUF model on this computer.",
+      intro: "Use a local model service or set up a private GGUF model on the computer running OpenClaw.",
       ollamaButton: "Check & set up",
       ollamaLabel: "Ollama",
-      ollamaHint: "Use Ollama on this computer to set up a model that supports tools",
+      ollamaHint: "Use Ollama on the computer running OpenClaw to set up a model that supports tools",
       llamaCppLabel: "llama.cpp",
       providerNotReady:
         "Couldn’t find a usable local model from {provider}. Review the setup result, then try again.",
