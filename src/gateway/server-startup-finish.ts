@@ -132,14 +132,6 @@ export async function finishGatewayStartup(params: {
     "gateway.ws-imports",
     () => import("./server/ws-connection.js"),
   );
-  if (workerEnvironmentService) {
-    await startWorkerHumanPresence({
-      clients,
-      service: workerEnvironmentService,
-      log,
-      registerSidecar: registerGatewayLifetimeSidecars,
-    });
-  }
   await startupTrace.measure("gateway.ws-attach", () =>
     attachGatewayWsConnectionHandler({
       wss: runtime.wss,
@@ -333,6 +325,16 @@ export async function finishGatewayStartup(params: {
           startWorkerEnvironmentRuntime: async () => {
             if (lifecycle.closePreludeStarted) {
               return null;
+            }
+            // Presence maintenance consumes registered repository capabilities. Reset
+            // crash-left presence after plugin attachment but before worker recovery.
+            if (workerEnvironmentService) {
+              await startWorkerHumanPresence({
+                clients,
+                service: workerEnvironmentService,
+                log,
+                registerSidecar: registerGatewayLifetimeSidecars,
+              });
             }
             databasePreparationReady.resolve(); // Plugins are attached; worker recovery awaits admission.
             return workerPlacementRuntime

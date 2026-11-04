@@ -410,17 +410,17 @@ groups by agent. Reset leaves those hidden preferences unchanged. It also preser
 a saved Person grouping while owner data temporarily makes that choice unavailable.
 
 In **Show all agents**, compact agent rows show a muted preview of the agent's
-most recent available assistant reply across its visible, non-archived sessions.
+most recent available agent reply across its visible, non-archived sessions.
 A newer user message does not replace that preview. Agents without an available
-assistant reply keep a name-only row. The top-level roster does not show the
+agent reply keep a name-only row. The top-level roster does not show the
 session list's empty-filter hint.
 
 Choose **Pin** in an agent's options menu to move it into the icon section above
 the roster. Hover or focus its avatar to read the full name and a short preview
-of its latest assistant reply. Select the avatar to open its main chat, or use
-**Sessions** in its options menu to browse its conversations. The menu also
+of its latest agent reply. Select the avatar to open its main session, or use
+**Sessions** in its options menu to browse its sessions. The menu also
 offers **Settings** and a confirmed **Delete** action when permitted. Create a
-new conversation from the Sessions page. **Unpin** returns
+new session from the Sessions page. **Unpin** returns
 the agent to the roster. Agent pins are saved in this browser profile.
 
 Switching to the all-agents roster or another navigation view, or closing
@@ -664,7 +664,7 @@ the search; Arrow Down and Enter let you select a matching owner.
 ### Share a session publicly
 
 1. Open the saved session and select **Session sharing** in the chat header. In the compact header menu, select **Session sharing** there instead.
-2. Under **Public access**, select **Enable public access…**, review the warning, then select **Make public**.
+2. Under **Link sharing**, enable **Anyone with the link**, review **Make this session public?**, then select **Make public**.
 3. Select **Copy public link** to copy the normal thread URL. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
 4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user and assistant text, including progress updates, becomes visible to public readers automatically.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
@@ -685,11 +685,11 @@ and login-proxy configuration, see
 
 Hover a cloud session in the sidebar to see its provider and profile. When known, a compact line below them shows the operating system, machine class, vCPU count, and memory in GB. The placement badge tooltip includes the same machine details; unavailable fields are omitted.
 
-A selected session running on a worker shows a quiet **Runs on Cloud** chip in the chat header. Connections with `operator.write` can choose **Move session…** to continue on the Gateway or an eligible paired device, and can use **Stop cloud device…** through the write-scoped `sessions.reclaim` lifecycle. Moving to a configured cloud profile requires `operator.admin`. Cloud rows are filtered against all execution modes advertised by each profile: the same bundled Crabbox profile is selectable for OpenClaw `worker-turn` and Codex `remote-exec`, while a genuinely single-mode profile stays disabled for the other runtime. Profiles with multiple machine classes show a machine picker. Leaving the Move session picker untouched omits a size override; explicitly selecting a class, including the displayed default, sends that class. Choosing a different class on the current profile resizes the session. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently.
+A selected session running on a worker shows a quiet **Runs on Cloud** chip in the **Chat** header. Connections with `operator.write` can choose **Move session…** to continue on the Gateway or an eligible paired device, and can use **Stop cloud device…** through the write-scoped `sessions.reclaim` lifecycle. Moving to a configured cloud profile requires `operator.admin`. Cloud rows are filtered against all execution modes advertised by each profile: the same bundled Crabbox profile is selectable for OpenClaw `worker-turn` and Codex `remote-exec`, while a genuinely single-mode profile stays disabled for the other runtime. Profiles with multiple device classes show a device picker. Leaving the Move session picker untouched omits a size override; explicitly selecting a class, including the displayed default, sends that class. Choosing a different class on the current profile resizes the session. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently.
 
 You can send a message while an existing worker session is provisioning or preparing its workspace. The accepted message shows **Received · setting up device** and starts automatically once that worker is ready. Stop, Move, and Restart keep their own admission controls; cancelled or interrupted input is not silently started on a different destination. The unsent draft in the New Session flow remains separate from accepted input.
 
-During the initial handoff, the chat placement menu and stop confirmation use the selected destination: **Stop device worker…** for explicit or automatic paired-device placement, **Stop cloud device…** for a cloud profile, or neutral **Stop worker…** when the target is unknown; all use `sessions.reclaim`. A destination retained for retry after a failed startup does not label a later restart.
+During the initial handoff, the placement menu on **Chat** and stop confirmation use the selected destination: **Stop device worker…** for explicit or automatic paired-device placement, **Stop cloud device…** for a cloud profile, or neutral **Stop worker…** when the target is unknown; all use `sessions.reclaim`. A destination retained for retry after a failed startup does not label a later restart.
 
 ### Session icons
 

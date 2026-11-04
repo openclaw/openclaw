@@ -30,6 +30,7 @@ The weekly Skill Workshop curator (declaration key `skill-collection-review:<age
 
 <ParamField path="--message" type="string" required>
   Prompt text for an agent-turn job, including main, isolated, current, and custom sessions.
+  Creation preserves leading and trailing whitespace in nonblank prompts and treats a whitespace-only message input as missing.
 </ParamField>
 <ParamField path="--model" type="string">
   Model override; must resolve to an allowed model or the run fails with a validation error.

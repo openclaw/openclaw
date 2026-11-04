@@ -706,7 +706,7 @@ it("shares pending reads, retained rows, and failed refresh recovery between the
   refresh.reject(new Error("private inventory failure"));
   await waitForSolid(() => {
     expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
-      "Couldn't update automations.",
+      "Couldn’t update automations. Try again.",
     );
     expect(view.container.querySelector('[aria-busy="true"]')).toBeNull();
   });
