@@ -145,15 +145,16 @@ describe("buildDeveloperInstructions delegation guidance", () => {
     expect(instructions).not.toContain('runtime="subagent"');
   });
 
-  it.each([{ requireWorkspaceOnly: true }, { delegationCapability: "host_only" }] as const)(
-    "does not advertise native helpers for restricted runs (%j)",
-    (overrides) => {
-      const instructions = render(overrides);
-      expect(instructions).not.toContain("spawn_agent");
-      expect(instructions).not.toContain("wait_agent");
-      expect(instructions).toContain('`sessions_spawn` with `runtime="subagent"`');
-    },
-  );
+  it.each([
+    { requireWorkspaceOnly: true },
+    { delegationCapability: "host_only" },
+    { pluginHarnessToolPolicySafeDeniedTools: ["sessions_send"] },
+  ] as const)("does not advertise native helpers for restricted runs (%j)", (overrides) => {
+    const instructions = render(overrides);
+    expect(instructions).not.toContain("spawn_agent");
+    expect(instructions).not.toContain("wait_agent");
+    expect(instructions).toContain('`sessions_spawn` with `runtime="subagent"`');
+  });
 
   it.each<Partial<CodexThreadPromptContext>>([
     { delegationCapability: "report_only" },

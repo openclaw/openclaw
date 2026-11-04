@@ -585,9 +585,12 @@ function CanvasPreview(props: {
                         message: t("chat.toolCards.widgetExportRerender"),
                       });
                     } else if (result === "html") {
-                      showToast({ message: t("chat.toolCards.widgetExportHtmlFallback") });
+                      showToast({
+                        severity: undefined,
+                        message: t("chat.toolCards.widgetExportHtmlFallback"),
+                      });
                     } else if (value === "copy") {
-                      showToast({ message: t("common.copied") });
+                      showToast({ severity: "success", message: t("common.copied") });
                     }
                   })
                   .catch(() => {

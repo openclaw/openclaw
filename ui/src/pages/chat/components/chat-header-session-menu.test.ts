@@ -275,7 +275,7 @@ it.each(["MacIntel", "Win32"])(
     vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
     const menu = await mountMenu({ archiveShortcut: true });
     expect(shortcut(item(menu, "Archive session"), true)).toBe(
-      platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl+Shift+A",
+      platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl⇧A",
     );
     menu.archiveShortcut = false;
     await menu.updateComplete;

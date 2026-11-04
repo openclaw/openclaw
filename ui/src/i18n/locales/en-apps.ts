@@ -22,7 +22,7 @@ const enApps = {
     ctaDocs: "Docs",
     ctaSetupGuide: "Setup guide",
     ctaChromeWebStore: "Chrome Web Store",
-    ctaOpenPlugins: "Open Plugins",
+    ctaOpenPlugins: "Open plugins",
     ctaBrowseClawHub: "Browse ClawHub",
     linkDiscord: "Discord community",
     linkDocs: "Docs",
@@ -38,7 +38,7 @@ const enApps = {
       },
       appleWatch: {
         title: "Apple Watch",
-        desc: "Glanceable chats and quick replies from your wrist.",
+        desc: "Conversations and quick replies from your wrist.",
       },
       wearOs: {
         title: "Wear OS",
@@ -46,7 +46,7 @@ const enApps = {
       },
       macos: {
         title: "macOS",
-        desc: "Menu bar companion for your Gateway — notifications, approvals, quick chat.",
+        desc: "Menu bar companion for OpenClaw — notifications, approvals, and quick replies.",
       },
       windows: {
         title: "Windows",
@@ -61,7 +61,7 @@ const enApps = {
         desc: "Let OpenClaw drive your existing Chrome — tabs, pages, and forms.",
       },
       plugins: {
-        title: "Plugins & ClawHub",
+        title: "Plugins and ClawHub",
         desc: "Extend OpenClaw with channels, tools, and skills from the community.",
       },
     },
