@@ -564,7 +564,10 @@ describe("standing-intent admitted operations", () => {
     const work = keep(seed());
     await expectWaiting(work, held.entered);
     held.release();
-    await expect(work).rejects.toThrow("Agent database target changed before write admission");
+    // Either physical admission or the captured executor can refuse the retired source first.
+    await expect(work).rejects.toThrow(
+      /^Agent database (target changed before write admission|execution admission is closed)$/,
+    );
     await held.done;
     await closeAgents();
 

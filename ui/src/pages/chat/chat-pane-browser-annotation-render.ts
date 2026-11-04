@@ -84,7 +84,7 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
         }
         if (!canAdmitBrowserAnnotation(latest, modelContext)) {
           finalizeRemoval();
-          showToast({ message: labels.undoUnavailable });
+          showToast({ severity: "error", message: labels.undoUnavailable });
           return;
         }
         settled = true;

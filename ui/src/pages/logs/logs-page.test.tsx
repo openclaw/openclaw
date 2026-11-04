@@ -66,7 +66,7 @@ function mountPage(initial: TestContext) {
     dispose,
     lines,
     async refresh() {
-      query(".settings-section__actions button")!.click();
+      query(".page-header-actions button")!.click();
       await settle();
     },
   };
@@ -143,9 +143,7 @@ it("exports the retained buffer and warns only after old rows are evicted", asyn
   });
   const { page } = await setup(request);
   const expectExport = (expected: string[]) => {
-    page.container
-      .querySelectorAll<HTMLButtonElement>(".settings-section__actions button")[1]!
-      .click();
+    page.container.querySelectorAll<HTMLButtonElement>(".page-header-actions button")[1]!.click();
     expect(downloadTextFile).toHaveBeenLastCalledWith(
       expect.any(String),
       `${expected.join("\n")}\n`,
@@ -351,7 +349,7 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
     page.expectRows(["recovered"], true);
     await poll();
     page.expectRows([], false);
-    expect(page.text()).toContain("You don't have permission to view logs.");
+    expect(page.text()).toContain("Couldn’t view logs. Ask an admin to grant read access.");
   }
 });
 
@@ -368,7 +366,15 @@ it("keeps text and level filters active as quiet polls append rows", async () =>
   filter.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   page.expectRows(["alpha info", "alpha error"]);
-  page.query(".log-chip.info input")!.click();
+  page.query('[aria-controls="logs-levels:content"]')!.click();
+  flush();
+  await vi.waitFor(() => {
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].find(
+      (candidate) => candidate.textContent?.trim() === "info",
+    );
+    expect(item).toBeTruthy();
+    item!.click();
+  });
   flush();
   page.expectRows(["alpha error"]);
   await poll();

@@ -146,6 +146,10 @@ Rebuild indexes, related blocks, dashboards, and the compiled query/prompt snaps
 
 If `render.createDashboards` is enabled, compile also refreshes report pages.
 
+Page names use the frontmatter `title`, then the first level-one heading outside
+code blocks, then the filename. Comments inside fenced code blocks do not become
+page names; inline code in a real heading remains part of its name.
+
 ### `wiki lint`
 
 Lint the vault and write a report covering:
@@ -216,6 +220,8 @@ Apply narrow mutations without freeform page surgery:
 - `apply metadata <lookup>`: update metadata on an existing page
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
+
+Metadata updates preserve comments and numeric spellings on untouched keys in ordinary string-keyed YAML mappings. Pages containing anchors, aliases, explicit tags, or non-string keys retain the existing value-rendering behavior instead; their parsed values remain authoritative, but source formatting is not preserved.
 
 Refreshing a synthesis without `--status` preserves its existing status. New synthesis pages default to `active`; an explicit `--status` sets or replaces the value.
 

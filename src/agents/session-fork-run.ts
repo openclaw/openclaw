@@ -1,6 +1,5 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -46,6 +45,7 @@ import {
   readSessionForkRequesterFromTurn,
   type SessionForkRequester,
 } from "./session-fork-requester.js";
+import { assertSessionForkRunSucceeded } from "./session-fork-result.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 /**
@@ -54,7 +54,7 @@ import { SessionManager } from "./sessions/session-manager.js";
  * transcript, yields to foreground work, and stops when the source session is reset, replaced
  * or rewritten. Tools see the source through `inputProvenance` (`sourceTool: "session_fork"`).
  */
-export type SessionForkRunParams = {
+type SessionForkRunParams = {
   config: OpenClawConfig;
   /** The completed transcript entry the fork reads through. */
   source: TranscriptEntryAnchor;
@@ -95,7 +95,7 @@ const FORK_TURN_SEARCH_LIMITS = [
   undefined,
 ] as const;
 
-export type SessionForkTurn = {
+type SessionForkTurn = {
   /** Undefined for a turn stored before requester recording; callers use session facts. */
   requester?: SessionForkRequester;
   model?: { provider: string; model: string };
@@ -214,29 +214,10 @@ function sessionConversationFacts(entry: SessionEntry | undefined) {
 }
 
 /**
- * A fork succeeded only when the model and runtime finished without error. Tool errors the model
- * saw and recovered from (warning payloads) do not fail the fork.
- */
-export function assertSessionForkRunSucceeded(
-  result: Pick<EmbeddedAgentRunResult, "meta" | "payloads">,
-): void {
-  const runtimeErrorPayload = result.payloads?.find(
-    (payload) => payload.isError && !getReplyPayloadMetadata(payload)?.toolErrorWarning,
-  );
-  const message =
-    result.meta.error?.message.trim() ||
-    (result.meta.aborted ? "Session fork model run aborted." : undefined) ||
-    runtimeErrorPayload?.text?.trim();
-  if (message || runtimeErrorPayload) {
-    throw new Error(message || "Session fork model run failed.");
-  }
-}
-
-/**
  * `cancelled` marks an expected stop: the caller's signal, a Gateway restart drain, yielding to
  * foreground work, or the source session changing under the fork. Anything else is a failure.
  */
-export type SessionForkOutcome =
+type SessionForkOutcome =
   | { ok: true; result: EmbeddedAgentRunResult }
   | { ok: false; error: unknown; cancelled: boolean };
 

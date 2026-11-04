@@ -356,6 +356,14 @@ type EnglishCatalog = TranslationMap & {
 };
 
 const startupEnglish = {
+  runtimeErrors: {
+    socketInsecure:
+      "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
+    socketRefused:
+      "Browser refused the Gateway WebSocket for security reasons. Check the Gateway WebSocket URL and browser security policy.",
+    socketCreateFailed: "Could not create the Gateway WebSocket: {message}",
+    socketTimeout: "gateway websocket opening timed out after {milliseconds}ms",
+  },
   pluginUi: {
     retryView: "Retry plugin view",
     inlineLoading: "Loading plugin view…",
@@ -375,6 +383,7 @@ const startupEnglish = {
     dashboard: "Dashboard",
   },
   common: {
+    showDetails: "Show details",
     uploadsDisabled: "File and image uploads are disabled.",
     health: "Health",
     ok: "OK",
@@ -390,6 +399,7 @@ const startupEnglish = {
     connected: "Connected",
     refresh: "Refresh",
     retry: "Retry",
+    helpFor: "Help for {section}",
     staleData: "Showing stale data.",
     reload: "Reload",
     reset: "Reset",
@@ -398,7 +408,6 @@ const startupEnglish = {
     undo: "Undo",
     probe: "Check connection",
     call: "Call",
-    confirm: "Confirm",
     dontAskAgain: "Don't ask me again",
     cancel: "Cancel",
     close: "Close",
@@ -452,7 +461,6 @@ const startupEnglish = {
     publicKey: "Public Key",
     probeOk: "Connection check passed",
     probeFailed: "Connection check failed",
-    reloadConfig: "Reload Config",
     multiSelect: {
       addCustom: "Add “{value}”",
       noMatches: "No matches",
@@ -566,8 +574,8 @@ const startupEnglish = {
     short: "Starting up…",
   },
   lazyView: {
-    errorTitle: "Panel failed to load",
-    genericSubtitle: "Something went wrong while loading this panel.",
+    errorTitle: "Couldn’t load this panel.",
+    genericSubtitle: "Try again.",
     staleTitle: "This view could not load",
     staleSubtitle:
       "Some interface files could not be downloaded. Check your connection, then reload.",
@@ -675,10 +683,10 @@ const startupEnglish = {
     readOnly: {},
     // The trigger and load failure stay eager; dialog copy follows its lazy renderer.
     pairing: {
-      button: "Pair device",
-      adminRequired: "Administrator access is required to create setup codes.",
-      title: "Pair a device",
-      loadFailed: "Could not load the pairing dialog. Check your connection and try again.",
+      button: "Connect a device",
+      adminRequired: "You need admin access to create setup codes.",
+      title: "Connect a device",
+      loadFailed: "Couldn’t load the connection dialog. Check your connection and try again.",
     },
     binding: {},
     inventory: {},
@@ -821,11 +829,8 @@ const startupEnglish = {
     context: {},
     identity: {},
     overview: {
-      title: {},
-      subtitle: {},
       selectedSkills: "{count} selected",
-      allSkills: "all skills",
-      unsavedConfig: {},
+      allSkills: "All skills",
       modelSelection: {},
       primaryModel: {},
       primaryModelDefault: {},
@@ -970,8 +975,8 @@ const startupEnglish = {
     title: "Terminal",
     toggle: "Toggle terminal",
     open: "Open terminal",
-    startCancelled: "Terminal start was cancelled. Try again.",
-    unavailable: "The terminal is not available on this gateway.",
+    startCancelled: "Couldn’t start the terminal. Try again.",
+    unavailable: "The terminal is unavailable.",
   },
   browser: {
     nativeTab: {},
@@ -1070,7 +1075,7 @@ const startupEnglish = {
     labs: "Labs",
     updates: "Updates",
     about: "About",
-    aiAgents: "Agent Defaults",
+    aiAgents: "Agent defaults",
     modelSetup: "Model Setup",
     memoryImport: "Import Memory",
     security: "Privacy & Security",
@@ -1188,14 +1193,10 @@ const startupEnglish = {
     install: "Install",
   },
   labsPage: {
-    intro:
-      "Labs contains experimental capabilities that may change, break, or disappear between releases.",
-    sectionTitle: "Experimental features",
     sectionDescription:
       "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future agent runs.",
-    documentation: "Documentation",
     restartRequired: "Gateway restart required.",
-    saveErrorTitle: "Could not update feature",
+    saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
     codeMode: {},
@@ -1319,6 +1320,7 @@ const startupEnglish = {
       chooseAvatar: "Choose image",
       displayName: "Display name",
       linkedEmails: "Linked emails",
+      attribution: "Attribution",
     },
     modelAccounts: {},
   },
@@ -1525,17 +1527,17 @@ const startupEnglish = {
     sessionDetails: {
       automations: "Automations",
       progressOptions: "Task progress options",
-      automationError: "Couldn't load automations.",
-      automationUnavailable: "Automations unavailable for this session.",
+      automationError: "Couldn’t load automations. Try again.",
+      automationUnavailable: "Automations unavailable.",
       automationLoading: "Loading automations…",
-      automationEmpty: "No automations for this session",
+      automationEmpty: "No automations yet.",
       automationMore: "Load more automations",
       automationAttention: "Needs attention",
       automationPaused: "Paused",
       automationEnabled: "Enabled",
     },
     agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
-    historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
+    historyRequestTimedOut: "Couldn’t load the conversation in time. Try again.",
     clawhub: {},
     modelAccounts: {
       section: "Account",
@@ -1543,8 +1545,9 @@ const startupEnglish = {
       manage: "Manage saved accounts…",
     },
     mentions: {},
-    cloudWorkerFailed: "Runner failed: {error}",
+    cloudWorkerFailed: "Couldn’t continue this session. Check its device and try again. {error}",
     errorDetails: "Error details",
+    errorSummary: "Couldn’t complete this action. Try again.",
     errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
     errorReplyTitle: "Couldn’t finish this reply",
     historyUnavailableTitle: "Couldn’t load this conversation",
@@ -1553,7 +1556,7 @@ const startupEnglish = {
       retrying: "Retrying…",
       retryingIn: "Retrying in {seconds}s",
       tryingFallback: "Trying fallback model…",
-      failedTitle: "Unable to finish this reply",
+      failedTitle: "Couldn’t finish this reply",
       failedRepeatCount: "{count} times",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
@@ -1562,7 +1565,7 @@ const startupEnglish = {
     },
     errorBusySummary: "OpenClaw is busy. Check status before trying again.",
     errorSignInSummary: "Couldn't sign in to the AI service. Sign in again under Models.",
-    errorStartSummary: "Couldn't start this conversation. Open Settings → Logs for details.",
+    errorStartSummary: "Couldn’t start this session. Try again.",
     checkStatus: "Check status",
     details: "Details",
     usageLimit: {},
@@ -1584,9 +1587,9 @@ const startupEnglish = {
     sessionsPaused: "{count} paused",
     sessionPausedNote: "{name} is paused",
     sessionsPausedNote: "{count} sessions are paused",
-    handoffResumed: "Resumed · {duration} Later",
-    handoffSessionsOne: "1 Session",
-    handoffSessions: "{count} Sessions",
+    handoffResumed: "Resumed · {duration} later",
+    handoffSessionsOne: "1 session",
+    handoffSessions: "{count} sessions",
     handoffSessionStatus: {
       attention: "Needs your input",
       paused: "Paused",
@@ -1748,7 +1751,6 @@ const startupEnglish = {
     skillLearned: {},
     progressLabels: {},
     turnRecap: {
-      doneIn: "Done in {duration}",
       tokens: "{count} output tokens",
       tokensOne: "1 output token",
     },
@@ -1759,9 +1761,8 @@ const startupEnglish = {
       loading: "Loading skills…",
     },
     splitView: {
-      chooseConversation: "Choose a conversation",
-      missingOwner:
-        "Select this pane, then choose Home or a conversation in the sidebar to restore it.",
+      chooseConversation: "Choose a session",
+      missingOwner: "Select this pane, then choose Home or a session in the sidebar to restore it.",
       open: "Open split view",
       splitRight: "Split right",
       splitDown: "Split down",
@@ -1810,7 +1811,7 @@ const startupEnglish = {
     runControls: {
       newSession: "New session",
       newSessionWorktree: "New session in worktree",
-      exportChat: "Export chat",
+      exportChat: "Export conversation",
       queue: "Queue",
       queueMessage: "Queue message",
       stop: "Stop",
@@ -1840,6 +1841,7 @@ const startupEnglish = {
       unattributedSender: "Message",
       toolSender: "Tool",
       errorSender: "Error",
+      agentName: "Agent",
     },
     mediaPlayer: {},
     youtube: {},
@@ -1875,7 +1877,7 @@ const startupEnglish = {
       defaultSaved: "Dashboard default saved for future opens.",
       defaultSaveFailed:
         "Could not save the dashboard default. Check the connection and try again.",
-      defaultSaveError: "Could not save the dashboard default: {error}",
+      defaultSaveError: "Couldn’t save the dashboard default. Try again.",
       swap: "Swap {main} and {side}",
       layout: "Layout",
       panelPosition: "Panel position",
@@ -1943,7 +1945,7 @@ const startupEnglish = {
       modelLocked: "Locked",
       modelLockedLabel: "Model selection controlled for this session",
       lockedSessionModel: "Session model",
-      thinkingLevel: "Chat thinking level",
+      thinkingLevel: "Effort",
     },
     permissions: {},
     toolCards: {
