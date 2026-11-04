@@ -1,6 +1,6 @@
-import { resolveHostAccountName } from "../../../infra/host-account-name.js";
 import { resolveAuthenticatedPairedDeviceIdentity } from "../../../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../../../infra/device-pairing-store-readonly.js";
+import { resolveHostAccountName } from "../../../infra/host-account-name.js";
 import { readTailscaleWhoisIdentity } from "../../../infra/tailscale.js";
 import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
 import { resolveCanonicalTailscaleProfileId } from "../../../state/user-profile-reads.js";
@@ -223,12 +223,13 @@ export async function resolveGatewayConnectProfileAdmission(params: {
     hasGatewayOperatorAccessPolicies(context.configSnapshot);
   const personalIntent = context.connectParams.personalIdentity;
   let personalProfileId: string | undefined;
-  let personalIdentityBinding:
-    | (PersonalIdentityBindingResult & { bindingId: string })
-    | undefined;
+  let personalIdentityBinding: (PersonalIdentityBindingResult & { bindingId: string }) | undefined;
   if (personalIntent && context.isLocalClient) {
     if (personalIntent.phase !== "use") {
-      await rejectUnavailableProfileConnect(context, new Error("Personal identity bind must use Tailscale Serve"));
+      await rejectUnavailableProfileConnect(
+        context,
+        new Error("Personal identity bind must use Tailscale Serve"),
+      );
       return { ok: false };
     }
     const pairing = state.device?.id
@@ -249,40 +250,43 @@ export async function resolveGatewayConnectProfileAdmission(params: {
       state.authMethod === "device-token" ||
       state.authMethod === "token" ||
       state.authMethod === "password";
-    const binding = pairingIdentity && localAuthMethodAllowed
-      ? await resolveGatewayPersonalIdentityBinding({
-          gateway: context.handler.clients,
-          intent: personalIntent,
-          device: pairingIdentity,
-          gatewayId: context.handler.bootId,
-          isDirectLocal:
-            context.handler.ingressAttribution.kind === "direct-local" && context.isLocalClient,
-          isDeviceCurrent: async (identity) => {
-            const current = await loadPairedDevicePairingStoreRecordReadOnly(identity.deviceId);
-            const resolved = current
-              ? resolveAuthenticatedPairedDeviceIdentity(current, {
-                  role: state.role,
-                  publicKey: state.devicePublicKey!,
-                  scopes: context.connectParams.scopes ?? [],
+    const binding =
+      pairingIdentity && localAuthMethodAllowed
+        ? await resolveGatewayPersonalIdentityBinding({
+            gateway: context.handler.clients,
+            intent: personalIntent,
+            device: pairingIdentity,
+            gatewayId: context.handler.bootId,
+            isDirectLocal:
+              context.handler.ingressAttribution.kind === "direct-local" && context.isLocalClient,
+            isDeviceCurrent: async (identity) => {
+              const current = await loadPairedDevicePairingStoreRecordReadOnly(identity.deviceId);
+              const resolved = current
+                ? resolveAuthenticatedPairedDeviceIdentity(current, {
+                    role: state.role,
+                    publicKey: state.devicePublicKey!,
+                    scopes: context.connectParams.scopes ?? [],
+                  })
+                : null;
+              return resolved?.key === identity.key;
+            },
+            isProfileCurrent: async (profileId, tailscaleLogin) => {
+              const authority = await prepareUserProfileRoleAuthority(profileId);
+              return (
+                authority?.profileId === profileId &&
+                authority.isCurrent() &&
+                (await resolveCanonicalTailscaleProfileId(tailscaleLogin)) === profileId
+              );
+            },
+            readCurrentTailscaleLogin: async (sourceClientIp) =>
+              (
+                await readTailscaleWhoisIdentity(sourceClientIp, undefined, {
+                  cacheTtlMs: 0,
+                  errorTtlMs: 0,
                 })
-              : null;
-            return resolved?.key === identity.key;
-          },
-          isProfileCurrent: async (profileId, tailscaleLogin) => {
-            const authority = await prepareUserProfileRoleAuthority(profileId);
-            return (
-              authority?.profileId === profileId &&
-              authority.isCurrent() &&
-              (await resolveCanonicalTailscaleProfileId(tailscaleLogin)) === profileId
-            );
-          },
-          readCurrentTailscaleLogin: async (sourceClientIp) =>
-            (await readTailscaleWhoisIdentity(sourceClientIp, undefined, {
-              cacheTtlMs: 0,
-              errorTtlMs: 0,
-            }))?.login,
-        })
-      : undefined;
+              )?.login,
+          })
+        : undefined;
     if (!binding) {
       await rejectUnavailableProfileConnect(
         context,
@@ -385,35 +389,37 @@ export async function resolveGatewayConnectProfileAdmission(params: {
       const canonicalProfileId = prepared.profile.profileId;
       const sourceBound = Boolean(
         personalIntent.mode === "personal-identity" &&
-          personalIntent.provider === "tailscale" &&
-          state.authMethod === "tailscale" &&
-          ingress.kind === "tailscale-serve" &&
-          context.handler.buildRequestContext().gatewayTlsFingerprint &&
-          providerIdentity?.login &&
-          providerProfileId === canonicalProfileId &&
-          state.authResult.tailscaleIdentity?.login.toLowerCase() ===
-            providerIdentity.login.toLowerCase() &&
-          pairingIdentity &&
-          captureGatewayPersonalIdentityBinding(
-            context.handler.clients,
-            {
-              ingress: ingress.kind,
-              authMethod: state.authMethod,
-              tailscaleLogin: providerIdentity.login,
-              sourceClientIp: ingress.clientIp,
-              canonicalProfileId,
-              device: pairingIdentity,
-              gatewayId: context.handler.bootId,
-              signedAtMs: context.connectParams.device?.signedAt ?? -1,
-              verifiedAtMs: Date.now(),
-            },
-            personalIntent,
-          ),
+        personalIntent.provider === "tailscale" &&
+        state.authMethod === "tailscale" &&
+        ingress.kind === "tailscale-serve" &&
+        context.handler.buildRequestContext().gatewayTlsFingerprint &&
+        providerIdentity?.login &&
+        providerProfileId === canonicalProfileId &&
+        state.authResult.tailscaleIdentity?.login.toLowerCase() ===
+          providerIdentity.login.toLowerCase() &&
+        pairingIdentity &&
+        captureGatewayPersonalIdentityBinding(
+          context.handler.clients,
+          {
+            ingress: ingress.kind,
+            authMethod: state.authMethod,
+            tailscaleLogin: providerIdentity.login,
+            sourceClientIp: ingress.clientIp,
+            canonicalProfileId,
+            device: pairingIdentity,
+            gatewayId: context.handler.bootId,
+            signedAtMs: context.connectParams.device?.signedAt ?? -1,
+            verifiedAtMs: Date.now(),
+          },
+          personalIntent,
+        ),
       );
       if (!sourceBound) {
         await rejectUnavailableProfileConnect(
           context,
-          new Error("A verified Tailscale Serve identity and local TLS trust could not bind this paired device"),
+          new Error(
+            "A verified Tailscale Serve identity and local TLS trust could not bind this paired device",
+          ),
         );
         return { ok: false };
       }
@@ -425,6 +431,8 @@ export async function resolveGatewayConnectProfileAdmission(params: {
         return { ok: false };
       }
       personalIdentityBinding = {
+        mode: personalIntent.mode,
+        provider: personalIntent.provider,
         bindingId: personalIntent.bindingId,
         profileId: canonicalProfileId,
         device: pairingIdentity,
