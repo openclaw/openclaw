@@ -316,7 +316,7 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(connectRes.payload).toMatchObject({ snapshot: { presence: [] } });
       const presence = await rpcReq(ws, "system-presence");
       expect(presence.ok).toBe(false);
-      expect(presence.error?.message).toBe("missing scope: operator.read");
+      expect(presence.error?.message).toBe("missing scope: operator.sessions.read");
       expect(presence.payload).toBeUndefined();
 
       await expectStatusMissingScopeButHealthAvailable(ws);
