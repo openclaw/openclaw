@@ -28,7 +28,7 @@ const enPortals = {
       "This portal uses HTTP with a different hostname or scheme from the Control UI. Open the link in a new tab so its authentication cookies work, or use an HTTPS portal for an embedded preview.",
     ingressRequiredTitle: "Remote portal ingress required",
     ingressRequiredBody:
-      "This Gateway returned a loopback URL, which points to your device. Use a browser on this computer, enable managed private Tailscale Serve, or configure gateway.portals.ingress with a separate private HTTPS wildcard proxy. Forwarding only the Gateway port is not enough.",
+      "This Gateway returned a loopback URL, which points to your device. Use a browser on the computer running OpenClaw, enable managed private Tailscale Serve, or configure gateway.portals.ingress with a separate private HTTPS wildcard proxy. Forwarding only the Gateway port is not enough.",
     writeAccessRequiredTitle: "Write access required",
     writeAccessRequiredBody: "You need write access to view this portal.",
     retry: "Retry",
@@ -50,7 +50,7 @@ const enPortals = {
       "This portal uses HTTP. An HTTPS address allows it to appear inside this panel.",
     embeddedIngressRequiredTitle: "This portal needs a remote address",
     embeddedIngressRequiredBody:
-      "This local address belongs to this computer. Use a remote portal address that this browser can reach.",
+      "This local address belongs to the computer running OpenClaw. Use a remote portal address that this browser can reach.",
     embeddedUnreachableTitle: "Portal isn’t reachable",
     embeddedUnreachableBody: "Check the portal address and your connection, then try again.",
   },
