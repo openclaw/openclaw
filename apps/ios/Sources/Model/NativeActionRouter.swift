@@ -581,13 +581,10 @@ final class NativeActionRouter: OpenClawNativeActionHost {
         // must not revive a request whose account lifetime changed during a read.
         let accountAuthority = self.currentAccountAuthority
         let captured = self.captureGateway(gatewayID: session.owner.gatewayID, route: requestedRoute)
-        let run: OpenClawNativeRunRef? = if case let .inspect(run) = request {
-            run
-        } else { nil }
         #if DEBUG
         diagnostic.record("history", account: accountAuthority)
         #endif
-        let history = try await captured.gateway.history(session: session, runID: run?.runID)
+        let inspection = try await captured.gateway.validatePresentation(request)
         #if DEBUG
         diagnostic.stage = "history-returned"
         #endif
@@ -614,9 +611,7 @@ final class NativeActionRouter: OpenClawNativeActionHost {
         // Only the initiating navigation/root authority governs this pre-adoption phase.
         try requireOrigin()
         try self.requirePreservedDraft(session, binding: binding, observe: observeAdmission)
-        let receipt = try run.map {
-            try RunPresentation(inspection: OpenClawChatNativeRunInspection.reduce(history, run: $0))
-        }
+        let receipt = inspection.map { RunPresentation(inspection: $0) }
         // RootTabs may disappear or be replaced while Gateway reads suspend.
         guard let presentation, presentation.id == rootID else {
             throw OpenClawNativeActionError("Open OpenClaw before running this action.")

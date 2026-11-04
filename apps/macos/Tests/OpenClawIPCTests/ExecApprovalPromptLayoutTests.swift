@@ -5,6 +5,41 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct ExecApprovalPromptLayoutTests {
+    @Test func `failed owner validation after queue acquisition releases the slot without a panel`() async throws {
+        let reservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
+        let windowOwner = NSObject()
+        let windowID = ObjectIdentifier(windowOwner)
+        var validated = false
+        let pending = Task {
+            await ExecApprovalsPromptPresenter.prompt(
+                ExecApprovalPromptRequest(command: "/usr/bin/printf bound"),
+                presentingWindowID: windowID,
+                validateBeforePresentation: {
+                    validated = true
+                    return false
+                })
+        }
+        do {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while ExecApprovalsPromptPresenter.pendingPromptCountForTesting == 0, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(!validated)
+            #expect(ExecApprovalsPromptPresenter.pendingPromptCountForTesting == 1)
+            ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation)
+            #expect(await pending.value == nil)
+            #expect(validated)
+            #expect(!ExecApprovalsPromptPresenter.ownsKeyWindow(for: windowID))
+            let next = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
+            ExecApprovalsPromptPresenter.releasePromptForTesting(id: next)
+        } catch {
+            pending.cancel()
+            ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation)
+            _ = await pending.value
+            throw error
+        }
+    }
+
     @Test func `queued prompt expires without later presentation`() async throws {
         let reservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
         defer { ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation) }
