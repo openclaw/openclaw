@@ -161,7 +161,9 @@ export async function fetchClawRouterImageModels(params: {
   const seen = new Set<string>();
   for (const offer of qualifiedGoogleImageOffers(offers)) {
     const model = String(offer.model!.id);
-    if (seen.has(model)) continue;
+    if (seen.has(model)) {
+      continue;
+    }
     seen.add(model);
     result.push({
       kind: "image_generation",

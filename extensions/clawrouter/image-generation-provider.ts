@@ -44,7 +44,9 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
       GOOGLE_IMAGE_MODELS.map((model) => [model, GOOGLE_IMAGE_CAPABILITIES]),
     ),
     async generateImage(req) {
-      if (isClawRouterGoogleImageModel(req.model)) return generateClawRouterGoogleImage(req);
+      if (isClawRouterGoogleImageModel(req.model)) {
+        return generateClawRouterGoogleImage(req);
+      }
       if (req.inputImages?.length) {
         throw new Error("ClawRouter image editing is not supported.");
       }
