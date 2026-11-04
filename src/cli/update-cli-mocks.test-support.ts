@@ -291,8 +291,7 @@ vi.mock("../config/io.js", async (importOriginal) => {
 });
 
 vi.mock("../infra/update-check.js", async (importOriginal) => ({
-  formatGitInstallLabel: (await importOriginal<typeof import("../infra/update-check.js")>())
-    .formatGitInstallLabel,
+  ...(await importOriginal<typeof import("../infra/update-check.js")>()),
   checkUpdateStatus: vi.fn(),
   resolveUpdateInstallKind: vi.fn(),
   resolveUpdateInstallIdentity: vi.fn(),
