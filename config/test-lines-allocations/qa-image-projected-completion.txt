@@ -1,0 +1,2 @@
+# Cover native/projected current image events and preserve fresh requests.
+67

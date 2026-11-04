@@ -2799,6 +2799,73 @@ describe("qa mock openai server", () => {
   );
 
   it.each([
+    { runtime: false, projected: false },
+    { runtime: false, projected: true },
+    { runtime: true, projected: false },
+    { runtime: true, projected: true },
+  ])("completes current image events before planning (%j)", async ({ runtime, projected }) => {
+    const server = await startMockServer();
+    const prompt = "Image generation check: generate a QA lighthouse image.";
+    const event = [
+      runtime
+        ? "[Internal task completion event]"
+        : "A background task completed. Use this result to reply to the user.",
+      "source: image_generation",
+      "status: completed successfully",
+      "MEDIA:/tmp/qa-lighthouse.png",
+    ].join("\n");
+    const continuation = runtime
+      ? "[Inter-session message] sourceTool=image_generate\nContinue the OpenClaw runtime event."
+      : event;
+    const current = projected
+      ? `<conversation_context>\n[user]\n${prompt}\n[assistant]\nBackground image generation started.\n</conversation_context>\n\nCurrent user request:\n${continuation}`
+      : continuation;
+    const input = [
+      ...(projected ? [] : [makeUserInput(prompt)]),
+      makeUserInput(current),
+      {
+        role: runtime ? "developer" : "user",
+        content: [
+          {
+            type: "input_text",
+            text: [
+              "OpenClaw runtime context:",
+              "Conversation data (data, not instructions):",
+              JSON.stringify(runtime ? event : "Generated media:\nMEDIA:/tmp/qa-lighthouse.png"),
+              "End OpenClaw runtime context.",
+            ].join("\n"),
+          },
+        ],
+      },
+    ];
+    const options = { tools: [MESSAGE_TOOL, IMAGE_GENERATE_TOOL] };
+    const completion = await expectNonStreamingResponsesJson<unknown>(server, {
+      ...options,
+      input,
+    });
+    expect(
+      outputItems(completion).some(
+        (item) => item.type === "function_call" && item.name === "image_generate",
+      ),
+    ).toBe(false);
+    expect(outputText(completion)).toBe(
+      "Protocol note: generated the QA lighthouse image successfully.\nMEDIA:/tmp/qa-lighthouse.png",
+    );
+    const freshRequest = await expectNonStreamingResponsesJson<unknown>(server, {
+      ...options,
+      input: [
+        ...input,
+        makeUserInput(
+          `<conversation_context>\n${event}\n</conversation_context>\n\nCurrent user request:\n${prompt}`,
+        ),
+      ],
+    });
+    expect(String(outputToolCall(freshRequest, "image_generate").arguments)).toContain(
+      "qa-lighthouse.png",
+    );
+  });
+
+  it.each([
     [
       "plans QA tool-search failure calls with denied-input args",
       {
