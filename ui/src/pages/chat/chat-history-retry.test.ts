@@ -203,17 +203,27 @@ describe("shared chat history transient recovery", () => {
         requestHandlers: {
           "chat.history": () => {
             // A suspended tab can observe an RPC timeout before its overdue reader timer runs.
+            // Advance wall and elapsed clocks together so the retry window closes
+            // without firing the reader's abort timer.
             vi.setSystemTime(Date.now() + elapsedMs);
+            if (elapsedMs !== 0) {
+              const advanced = performance.now() + elapsedMs;
+              vi.spyOn(performance, "now").mockReturnValue(advanced);
+            }
             return Promise.reject(error);
           },
         },
       });
-      await loadChatHistory(state, { deferBranches: true });
-      expect(getChatHistoryLoadState(state)).toMatchObject({ phase: "failed", retryable });
-      if (error instanceof GatewayRequestError) {
-        expect(getChatHistoryLoadState(state)).toMatchObject({ message: error.message });
+      try {
+        await loadChatHistory(state, { deferBranches: true });
+        expect(getChatHistoryLoadState(state)).toMatchObject({ phase: "failed", retryable });
+        if (error instanceof GatewayRequestError) {
+          expect(getChatHistoryLoadState(state)).toMatchObject({ message: error.message });
+        }
+        expect(state.request).toHaveBeenCalledOnce();
+      } finally {
+        vi.restoreAllMocks();
       }
-      expect(state.request).toHaveBeenCalledOnce();
     },
   );
 
@@ -307,5 +317,24 @@ describe("shared chat history transient recovery", () => {
     expect(request).toHaveBeenCalledTimes(1);
     expect(secondSettled).toHaveBeenCalledOnce();
     expect(await second).toMatchObject({ message: expect.stringContaining("timed out") });
+  });
+
+  it("retries chat.history when the wall clock jumps forward", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(requestError("UNAVAILABLE", "Agent is preparing", true, 100))
+      .mockResolvedValue({ messages: [], hasMore: false });
+    const state = makeChatHost({ requestHandlers: { "chat.history": request } });
+    const loading = loadChatHistory(state, { deferBranches: true }).catch(
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledOnce();
+    vi.setSystemTime(Date.now() + 120_000);
+    // First backoff is max(retryAfter, 500ms); wall jump must not close the window.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await loading).toMatchObject({ messages: [] });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(getChatHistoryLoadState(state)).toMatchObject({ phase: "committed" });
   });
 });
