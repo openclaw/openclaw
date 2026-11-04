@@ -88,7 +88,7 @@ it("waits for workspace settlement before offering a move", async () => {
   const blocked = run();
   await blocked;
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-  expect(state.lastError).toContain("Finalizing worker workspace");
+  expect(state.lastError).toContain("Saving workspace changes");
   expect(request).not.toHaveBeenCalled();
 
   delete row.placement.workspaceResultReconciling;
@@ -113,7 +113,7 @@ it("rechecks workspace settlement after choosing the destination", async () => {
   submit();
   await moving;
   expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
-  expect(state.lastError).toContain("Finalizing worker workspace");
+  expect(state.lastError).toContain("Saving workspace changes");
 });
 
 it("retains explicit offline-device abandonment with a pending workspace result", async () => {

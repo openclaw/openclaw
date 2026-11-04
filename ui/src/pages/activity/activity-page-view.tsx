@@ -527,7 +527,14 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
           >
             {filtered().length === 0 ? (
               <div class="activity-empty">
-                {liveProps.entries.length === 0 ? t("activity.empty") : t("activity.emptyFiltered")}
+                {liveProps.entries.length === 0 ? (
+                  <div>
+                    <p>{t("activity.empty")}</p>
+                    <p>{t("activity.emptyDescription")}</p>
+                  </div>
+                ) : (
+                  t("activity.emptyFiltered")
+                )}
               </div>
             ) : (
               <For each={filtered()} keyed={(entry) => entry.id}>

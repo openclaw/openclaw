@@ -420,7 +420,7 @@ describe("grouped chat images", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(element(".chat-bubble")).toBe(bubble);
     expectAbsent(".chat-message-image");
-    expect(harness.view.textContent).toContain("Pairing QR expired");
+    expect(harness.view.textContent).toContain("Pairing code expired");
   });
 
   it.each([

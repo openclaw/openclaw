@@ -4,6 +4,7 @@ import type {
   MemoryMigrationProviderPlan,
   MigrationsMemoryApplyResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import "../../components/agent-select-registration.ts";
 import "../../components/modal-dialog.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
@@ -36,6 +37,7 @@ type MemoryCollection = {
 function renderReadError(error: () => unknown) {
   return (
     <div class="callout danger" role="alert">
+      <div>{t("memoryImport.loadFailed")}</div>
       {formatUiError(error())}
     </div>
   );
@@ -387,6 +389,7 @@ function Confirmation(props: { view: MemoryImportViewProps; backfill?: boolean }
             </div>
             <Show when={!props.backfill && props.view.applyError}>
               <div class="callout danger" role="alert">
+                <div>{t("memoryImport.importFailed")}</div>
                 {props.view.applyError}
               </div>
             </Show>
@@ -546,6 +549,7 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
           />
           <Show when={props.view.backfillError}>
             <div class="callout danger" role="alert">
+              <div>{t("memoryImport.backfillFailed")}</div>
               {props.view.backfillError}
             </div>
           </Show>
@@ -645,7 +649,9 @@ export function MemoryImport(props: MemoryImportViewProps) {
         <SettingsPage>
           <SettingsEmpty
             message={t(
-              props.connected ? "memoryImport.adminRequired" : "memoryImport.disconnected",
+              props.actorAuth && !hasOperatorAdminAccess(props.actorAuth)
+                ? "memoryImport.adminRequired"
+                : "memoryImport.disconnected",
             )}
           />
         </SettingsPage>
@@ -657,11 +663,13 @@ export function MemoryImport(props: MemoryImportViewProps) {
           <BackfillSection view={props} />
           <Show when={props.error}>
             <div class="callout danger" role="alert">
+              <div>{t("memoryImport.loadFailed")}</div>
               {props.error}
             </div>
           </Show>
           <Show when={props.applyError && !props.pendingProviderId}>
             <div class="callout danger" role="alert">
+              <div>{t("memoryImport.importFailed")}</div>
               {props.applyError}
             </div>
           </Show>
