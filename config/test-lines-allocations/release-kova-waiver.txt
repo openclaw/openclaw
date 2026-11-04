@@ -1,2 +1,0 @@
-11
-# Kova waiver regression for the operator-authorized 2026.11.1 exception.
