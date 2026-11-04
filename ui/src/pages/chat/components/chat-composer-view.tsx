@@ -32,12 +32,7 @@ import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
-import {
-  ComposerQueue,
-  ComposerInputScope,
-  ComposerProgress,
-  ComposerReplyPreview,
-} from "./chat-composer-regions.tsx";
+import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
 import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
@@ -56,6 +51,10 @@ const HumanMentionMenuView = lazy(() => import("./chat-composer-mention-menu.tsx
   export: "HumanMentionMenuView",
 });
 const EmojiMenu = lazy(() => import("./chat-composer-emoji.tsx"), { export: "EmojiMenu" });
+// The reply strip loads with the first reply, outside the chat boot bundle.
+export const ReplyPreview = lazy(() => import("./chat-composer-reply-preview.tsx"), {
+  export: "ComposerReplyPreview",
+});
 const ChatGoal = lazy(() => import("./chat-composer-goal.tsx"), { export: "ChatGoal" });
 const ChatGoalRecoveryNotice = lazy(() => import("./chat-composer-goal.tsx"), {
   export: "ChatGoalRecoveryNotice",
@@ -489,7 +488,11 @@ export function renderChatComposerView(
                 avatarUrls={context().state.mentionMenu.selectedAvatarUrls}
               />
               <Show when={props.replyTarget}>
-                {(target) => <ComposerReplyPreview composer={props} target={target()} />}
+                {(target) => (
+                  <ChatLazyBoundary>
+                    <ReplyPreview composer={props} target={target()} />
+                  </ChatLazyBoundary>
+                )}
               </Show>
               {props.sessionAdmitted === false ? undefined : (
                 <McpAppContextStrip sessionKey={props.sessionKey} agentId={props.currentAgentId} />
