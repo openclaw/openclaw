@@ -512,4 +512,77 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         );
       });
     });
+
+  addSessionsGatewayOptions(sessionsCmd.command("usage [sessionKey]"))
+    .description("Show per-session token and cost usage")
+    .option("--all", "Aggregate usage across all agents (list-style query)", false)
+    .option("--range <range>", "Preset range: 7d, 30d (default), 90d, 1y, or all")
+    .option("--start <date>", "Explicit start date (YYYY-MM-DD)")
+    .option("--end <date>", "Explicit end date (YYYY-MM-DD, requires --start)")
+    .option("--max-rows <count>", "Max session rows (default 50, max 200)")
+    .option("--group-family", "Roll up rotated session ids into their logical key", false)
+    .addHelpText(
+      "after",
+      () =>
+        `
+${theme.heading("Examples:")}
+${formatHelpExamples([
+  ["openclaw sessions usage", "Per-session tokens and cost for the effective agent, last 30 days."],
+  ['openclaw sessions usage "agent:main:main" --json', "One session's recorded usage as JSON."],
+  [
+    "openclaw sessions usage --agent work --range 90d --group-family",
+    "Work agent's rotated sessions rolled up, 90 days.",
+  ],
+  [
+    "openclaw sessions usage --all --start 2026-10-01 --end 2026-10-31",
+    "Every agent's sessions for an explicit month.",
+  ],
+])}
+
+${theme.muted(
+  "Backed by the sessions.usage gateway RPC; cost attribution comes from the Gateway's recorded usage ledger.",
+)}`,
+    )
+    .action(async (sessionKey: string | undefined, opts, command) => {
+      // The Gateway resolves usage scope from the key and --agent; list selectors cannot apply.
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined; // SAFETY: the sessions parent registers the list options rejected below.
+      rejectUnsupportedSessionsParentOptions(
+        "usage",
+        parentOpts,
+        ["store", "allAgents", "active", "limit", "verbose"],
+        "the gateway resolves usage scope from the session key and --agent",
+      );
+      const limit = parseStrictPositiveInteger(opts.maxRows);
+      if (opts.maxRows !== undefined && limit === undefined) {
+        throwExpectedCliError("--max-rows must be a positive integer.");
+      }
+      if (limit !== undefined && limit > 200) {
+        throwExpectedCliError("--max-rows must be between 1 and 200.");
+      }
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsUsageCommand } = await import("../../commands/sessions-usage.js");
+        await sessionsUsageCommand(
+          {
+            sessionKey,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent, // SAFETY: Commander parses --agent as a string.
+            all: Boolean(opts.all),
+            range: opts.range as string | undefined, // SAFETY: Commander parses --range as a string; the command validates values.
+            startDate: opts.start as string | undefined, // SAFETY: Commander parses --start as a string; the command validates values.
+            endDate: opts.end as string | undefined, // SAFETY: Commander parses --end as a string; the command validates values.
+            limit: opts.maxRows !== undefined ? limit : undefined,
+            groupFamily: Boolean(opts.groupFamily),
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url: opts.url as string | undefined, // SAFETY: Commander parses transport options as strings.
+            token: opts.token as string | undefined, // SAFETY: Commander parses transport options as strings.
+            password: opts.password as string | undefined, // SAFETY: Commander parses transport options as strings.
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
 }
