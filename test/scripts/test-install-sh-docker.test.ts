@@ -731,8 +731,8 @@ describe("test-install-sh-docker", () => {
       writeCommand(
         "npm",
         `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
+import fs from "node:fs";
+import path from "node:path";
 const args = process.argv.slice(2);
 const pack = args.indexOf("pack");
 if (pack >= 0) {
@@ -751,9 +751,9 @@ if (pack >= 0) {
       writeCommand(
         "python3",
         `#!/usr/bin/env node
-const fs = require("node:fs");
-const http = require("node:http");
-const path = require("node:path");
+import fs from "node:fs";
+import http from "node:http";
+import path from "node:path";
 http.createServer((request, response) => {
   const file = path.join(process.cwd(), new URL(request.url, "http://localhost").pathname.slice(1));
   fs.createReadStream(file).on("error", () => {
@@ -773,7 +773,7 @@ http.createServer((request, response) => {
       writeCommand(
         "docker",
         `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] !== "run") throw new Error("Unexpected Docker invocation");
 const env = new Map();
@@ -1661,7 +1661,7 @@ printf 'command-status=%s\\n' "$command_result"
       writeFileSync(
         join(bin, "openclaw"),
         `#!${testNodeExecPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
   console.log("OpenClaw " + fs.readFileSync(process.env.FAKE_VERSION_FILE, "utf8"));

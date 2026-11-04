@@ -1064,7 +1064,7 @@ describe("scripts/pr wrappers", () => {
       writeFileSync(
         join(fixture.bin, "pnpm"),
         `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");
 if (${repairs}) {
   fs.unlinkSync(${JSON.stringify(join(fixture.tooling, "node_modules/tsx"))});

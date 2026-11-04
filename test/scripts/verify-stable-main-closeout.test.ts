@@ -212,7 +212,7 @@ process.stdout.write('${"a".repeat(40)}\\n');
   writeFileSync(
     path.join(bin, "gh"),
     `#!/usr/bin/env node
-const fs = require('node:fs');
+import fs from 'node:fs';
 const args = process.argv.slice(2);
 const releases = JSON.parse(fs.readFileSync(process.env.LINUX_CLOSEOUT_REMOTE, 'utf8'));
 if (args[0] === 'api' && args[1]?.startsWith('repos/${linuxRepository}/commits/')) {

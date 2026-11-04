@@ -715,7 +715,7 @@ describe("original publication admission reader", () => {
       writeFileSync(
         pendingGh,
         `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const receipts = fs.openSync(${JSON.stringify(receipts)}, "w");
 const parent = process.ppid;
 process.once("exit", () => {
@@ -987,7 +987,7 @@ try {
     writeFileSync(
       gh,
       `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2), endpoint = args[1];
 fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
 if (args[0] !== "api") throw new Error("unexpected non-read");

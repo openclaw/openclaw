@@ -937,7 +937,7 @@ global.Date = class extends OriginalDate {
     writeFileSync(
       fakeGh,
       `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(requests)}, JSON.stringify(args) + "\\n");
 const fixture = ${JSON.stringify(fixture)};

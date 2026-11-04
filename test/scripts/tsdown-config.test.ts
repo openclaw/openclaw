@@ -692,9 +692,18 @@ describe("tsdown config", () => {
               "--eval",
               `
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin, registerHooks } from "node:module";
 import { pathToFileURL } from "node:url";
 const entry = pathToFileURL(process.argv[1]);
+const installedRoot = pathToFileURL(process.cwd() + "/").href;
+// Workspace-local TMPDIR must not let the relocated package borrow ancestor dependencies.
+registerHooks({ resolve(specifier, context, nextResolve) {
+  const resolved = nextResolve(specifier, context);
+  if (!isBuiltin(resolved.url) && !resolved.url.startsWith(installedRoot)) {
+    throw Object.assign(new Error("Outside relocated package: " + specifier), { code: "MODULE_NOT_FOUND" });
+  }
+  return resolved;
+} });
 assert.throws(() => createRequire(entry).resolve("tree-sitter-bash"), { code: "MODULE_NOT_FOUND" });
 const { getBashParserForCommandExplanation } = await import(entry.href);
 const parse = await getBashParserForCommandExplanation();

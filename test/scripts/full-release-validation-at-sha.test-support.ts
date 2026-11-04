@@ -146,7 +146,7 @@ export function createDispatchFixture(
   writeFileSync(
     npmPath,
     `#!${testNodeExecPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(npmCallsPath)}, JSON.stringify(args) + "\\n");
 if (JSON.stringify(args) !== JSON.stringify(["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"])) {
@@ -320,8 +320,8 @@ module.exports = async () => {
   writeFileSync(
     gitPath,
     `#!${testNodeExecPath}
-const fs = require("node:fs");
-const { spawnSync } = require("node:child_process");
+import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_GIT_CALLS, JSON.stringify(args) + "\\n");
 if (args[0] === "fetch" && args.includes("refs/heads/main:refs/remotes/origin/main") && ${JSON.stringify(options.toolingLagFetchFailure ?? false)}) {
@@ -352,7 +352,7 @@ process.exit(result.status ?? 1);
   writeFileSync(
     ghPath,
     `#!${testNodeExecPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 fs.appendFileSync(process.env.MOCK_PATH_GH_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");
 console.error("PATH gh must not be used");
 process.exit(89);
@@ -364,8 +364,10 @@ process.exit(89);
   writeFileSync(
     selectedGhPath,
     `#!${testNodeExecPath}
-const fs = require("node:fs");
-const { spawnSync } = require("node:child_process");
+import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_GH_CALLS, JSON.stringify(args) + "\\n");
 if (process.argv[1] === ${JSON.stringify(ghPath)}) {

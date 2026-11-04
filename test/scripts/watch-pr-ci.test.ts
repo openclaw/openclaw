@@ -42,7 +42,7 @@ function replayPlaceholder(
     writeFileSync(calls, "");
     const result = await runWatcher(
       `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const fixture = JSON.parse(fs.readFileSync(${JSON.stringify(payload)}, "utf8"));
 const args = process.argv.slice(2);
 const calls = fs.readFileSync(${JSON.stringify(calls)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
@@ -155,7 +155,7 @@ function replaySummary({
     writeFileSync(callsPath, "");
     const result = await runWatcher(
       `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 const calls = fs.readFileSync(${JSON.stringify(callsPath)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
 fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
@@ -253,7 +253,7 @@ function replayRestRollup(
     writeFileSync(payloadPath, JSON.stringify(fixture));
     const result = await runWatcher(
       `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 const calls = fs.readFileSync(${JSON.stringify(callsPath)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
 fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
@@ -458,7 +458,7 @@ esac
       writeFileSync(callsPath, "");
       const result = await runWatcher(
         `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
 let value;
@@ -620,7 +620,7 @@ console.log(JSON.stringify(value));
         writeFileSync(callsPath, "");
         const result = await runWatcher(
           `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (${inheritedNotifier} && process.env.OPENCLAW_PR_LOCK_NOTIFY_FD !== undefined) throw new Error("unexpected inherited PR notifier");
 const calls = fs.readFileSync(${JSON.stringify(callsPath)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
@@ -1183,9 +1183,9 @@ console.log(JSON.stringify(value));
       async ({ phase, completion, status, exitCode, error }) => {
         const result = await runWatcher(
           `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
-const marker = path.join(__dirname, "attached");
+import fs from "node:fs";
+import path from "node:path";
+const marker = path.join(import.meta.dirname, "attached");
 const phase = fs.existsSync(marker) ? "watch" : "attach";
 if (phase === ${JSON.stringify(phase)}) {
   console.error(${JSON.stringify(error)});
@@ -1723,7 +1723,7 @@ console.log(JSON.stringify(value));
           writeFileSync(calls, "");
           const watched = await runWatcher(
             `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 const calls = fs.readFileSync(${JSON.stringify(calls)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
