@@ -141,6 +141,7 @@ const enCron = {
       emptyConditionUnchecked:
         "The condition has not been checked yet. Activity history starts when the payload executes.",
       loadMore: "Load more activity",
+      loading: "Loading runs…",
       runStatusOk: "Completed",
       runStatusError: "Error",
       runStatusSkipped: "Skipped",

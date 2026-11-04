@@ -955,7 +955,7 @@ const startupEnglish = {
     settingsGroupSystem: "System",
     settingsSearchLabel: "Search settings",
     settingsSearchPlaceholder: "Search settings…",
-    settingsSearchNoResults: "No matching settings.",
+    settingsSearchNoResults: "No settings match your search.",
     settingsSearchClear: "Clear settings search",
     settingsLoadFailed: "Settings navigation could not load.",
     exitSettings: "Back to app",
