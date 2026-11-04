@@ -94,6 +94,7 @@ type WorkboardAgentEndHandler = (
 ) => Promise<void>;
 
 type PendingAgentEnd = {
+  key: string;
   event: WorkboardAgentEndEvent;
   context: WorkboardAgentEndContext & { sessionKey: string };
   timer?: ReturnType<typeof setTimeout>;
@@ -625,7 +626,7 @@ export function createWorkboardLifecycleService(params: {
       const isCurrent = () =>
         generation === owner && workboardLifecycleGatewayState.onAgentEnd === handleAgentEnd;
       const isPending = (pending: PendingAgentEnd) =>
-        isCurrent() && pendingAgentEnds.get(pending.context.sessionKey) === pending;
+        isCurrent() && pendingAgentEnds.get(pending.key) === pending;
       const syncAgentEnd = (
         pending: PendingAgentEnd,
         delayed: boolean,
@@ -643,7 +644,7 @@ export function createWorkboardLifecycleService(params: {
           onMatched,
           onSessionActive,
         });
-      // A later fallback attempt replaces the earlier outcome before inactivity
+      // A later fallback attempt for the same run replaces the earlier outcome before inactivity
       // can settle the card. Prepared hook generations still use this service owner.
       const retryAgentEnd = AsyncResource.bind((pending: PendingAgentEnd, delayMs = 100) => {
         pending.timer = setTimeout(() => {
@@ -675,7 +676,7 @@ export function createWorkboardLifecycleService(params: {
               if (sessionActive && delayMs < AGENT_END_RETRY_MAX_DELAY_MS) {
                 retryAgentEnd(pending, delayMs * 2);
               } else {
-                pendingAgentEnds.delete(pending.context.sessionKey);
+                pendingAgentEnds.delete(pending.key);
               }
             });
         }, delayMs);
@@ -685,24 +686,26 @@ export function createWorkboardLifecycleService(params: {
         if (!isCurrent() || !context.sessionKey) {
           return;
         }
-        clearTimeout(pendingAgentEnds.get(context.sessionKey)?.timer);
+        const key = JSON.stringify([context.sessionKey, event.runId ?? context.runId]);
+        clearTimeout(pendingAgentEnds.get(key)?.timer);
         const pending: PendingAgentEnd = {
+          key,
           event,
           context: { ...context, sessionKey: context.sessionKey },
         };
-        pendingAgentEnds.set(context.sessionKey, pending);
+        pendingAgentEnds.set(key, pending);
         try {
           const matched = await params.store.runOperation(() => syncAgentEnd(pending, false));
           if (isPending(pending)) {
             if (matched === 0) {
               retryAgentEnd(pending);
             } else {
-              pendingAgentEnds.delete(context.sessionKey);
+              pendingAgentEnds.delete(key);
             }
           }
         } catch (error) {
           if (isPending(pending)) {
-            pendingAgentEnds.delete(context.sessionKey);
+            pendingAgentEnds.delete(key);
           }
           throw error;
         }

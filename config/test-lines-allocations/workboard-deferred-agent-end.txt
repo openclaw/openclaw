@@ -1,2 +1,2 @@
-64
-# Registered-plugin deferred completion, fallback overlap, and stale-service proof.
+82
+# Registered-plugin delayed completion, fallback/run isolation, and stale-service proof.

@@ -199,18 +199,26 @@ it.each(["internal", "injected"] as const)(
 );
 
 it.each([
-  { success: true, fallback: false },
-  { success: false, fallback: false },
-  { success: true, fallback: true },
+  { success: true, fallback: false, staleRun: undefined },
+  { success: false, fallback: false, staleRun: undefined },
+  { success: true, fallback: true, staleRun: undefined },
+  { success: true, fallback: false, staleRun: "event" },
+  { success: true, fallback: false, staleRun: "context" },
 ])(
-  "settles a linked card after agent_end ($success, fallback=$fallback)",
-  ({ success, fallback }) =>
+  "settles a linked card after agent_end ($success, fallback=$fallback, staleRun=$staleRun)",
+  ({ success, fallback, staleRun }) =>
     withStateDirEnv("workboard-deferred-agent-end-", async () => {
       vi.useFakeTimers();
       using clock = { [Symbol.dispose]: () => vi.useRealTimers() };
       await using store = openStore();
       const sessionKey = "agent:worker:subagent:workboard-delayed";
-      const card = await store.create({ title: "Delayed worker", status: "running", sessionKey });
+      const runId = "run-current";
+      const card = await store.create({
+        title: "Delayed worker",
+        status: "running",
+        sessionKey,
+        ...(staleRun ? { runId } : {}),
+      });
       const settledAt = Date.now() + (fallback ? 650 : 1_000);
       await using prepared = registerGeneration();
       await using generation = registerGeneration((api) =>
@@ -240,7 +248,17 @@ it.each([
         await prepared.agentEnd({ messages: [], success: false }, { sessionKey });
         await vi.advanceTimersByTimeAsync(500);
       }
-      await prepared.agentEnd({ messages: [], success }, { sessionKey });
+      await prepared.agentEnd(
+        { messages: [], success },
+        { sessionKey, ...(staleRun ? { runId } : {}) },
+      );
+      if (staleRun) {
+        await vi.advanceTimersByTimeAsync(500);
+        await prepared.agentEnd(
+          { messages: [], success: false, ...(staleRun === "event" ? { runId: "run-old" } : {}) },
+          { sessionKey, runId: staleRun === "event" ? runId : "run-old" },
+        );
+      }
       await vi.waitFor(
         async () => {
           expect((await store.get(card.id))?.status).toBe(success ? "review" : "blocked");
