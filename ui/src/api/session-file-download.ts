@@ -4,7 +4,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
-import { isHttpArtifactDownloadUrl } from "./artifact-download.ts";
+import { isHttpArtifactDownloadUrl } from "./artifact-download-url.ts";
 import type { GatewayBrowserClient } from "./gateway.ts";
 
 export type SessionFileDownload = Pick<SessionsFilesDownloadResult, "url" | "filename">;

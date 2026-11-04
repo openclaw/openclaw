@@ -1,6 +1,7 @@
 import { BROWSER_IMAGE_MIME_TYPES } from "../../../../../src/shared/browser-image-mime-types.js";
 import { formatInlineCodeSpan } from "../../../../../src/shared/markdown-code.js";
-import { downloadArtifact, isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
+import { isHttpArtifactDownloadUrl } from "../../../api/artifact-download-url.ts";
+import { downloadArtifact } from "../../../api/artifact-download.ts";
 import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import {
   downloadSessionFile,
