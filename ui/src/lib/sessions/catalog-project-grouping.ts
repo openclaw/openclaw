@@ -28,7 +28,23 @@ export function sessionActorGroupId(owner: SessionCreatedActor | undefined): str
 // folding any cwd at or under `.claude/worktrees/<name>` into the origin repo
 // (the lazy prefix picks the outermost repo root). Returns null for separator-only
 // paths or worktrees with no origin repo.
+// Ordinary sidebar section ids persist this helper's result, so it keeps the
+// exact folding those ids were written with; Windows aliasing lives in the
+// catalog-only helper below.
 export function foldWorktreeCheckoutPath(path: string): string | null {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  if (!trimmed) {
+    return null;
+  }
+  const match = trimmed.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
+  return match ? match[1] || null : trimmed;
+}
+
+// Catalog groups and their collapse aliases own the Windows equivalences: fold
+// case-insensitively for drive paths and keep the separator of a bare drive root
+// so `C:` with either separator lands in one group. Private, so ordinary sidebar
+// section ids never inherit it.
+function foldCatalogWorktreeCheckoutPath(path: string): string | null {
   const trimmed = path.replace(/[\\/]+$/, "");
   if (!trimmed) {
     return null;
@@ -87,7 +103,7 @@ export function catalogProjectSectionAliases(
       continue;
     }
     const suffix = id.slice(prefix.length).replace(/^project:/, "");
-    const path = /^[a-z]:$/i.test(suffix) ? `${suffix}/` : foldWorktreeCheckoutPath(suffix);
+    const path = /^[a-z]:$/i.test(suffix) ? `${suffix}/` : foldCatalogWorktreeCheckoutPath(suffix);
     if (path && `project:${projectPathKey(path)}` === group.key) {
       aliases.push(id);
     }
@@ -137,7 +153,7 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
       }
       // Missing project identities stay in the flat tail, including worktrees with no origin.
       const trimmedPath = session.cwd?.trim();
-      const projectPath = trimmedPath ? foldWorktreeCheckoutPath(trimmedPath) : null;
+      const projectPath = trimmedPath ? foldCatalogWorktreeCheckoutPath(trimmedPath) : null;
       return projectPath
         ? (groups.get(`project:${projectPathKey(projectPath)}`) ?? {
             kind: "project",

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { SessionCatalogSession } from "../../../../packages/gateway-protocol/src/index.ts";
 import {
+  foldWorktreeCheckoutPath,
   groupCatalogSessionsByPerson,
   groupCatalogSessionsByProject,
   normalizeCatalogProjectGrouping,
@@ -70,6 +71,21 @@ it("groups Windows aliases without changing display spelling or POSIX identity",
     ["relative"],
   ]);
   expect(result.groups[0]).toMatchObject({ label: "Notes", title: "C:\\Work\\Notes" });
+});
+
+it("keeps the ordinary sidebar section ids that saved collapse state was written with", () => {
+  // The ordinary sidebar persists this helper's result as its section id and
+  // compares it exactly, so Windows aliasing must stay out of it: otherwise an
+  // upgrade resolves a different id and every collapsed project expands.
+  expect(foldWorktreeCheckoutPath("C:\\Work\\Notes\\.CLAUDE\\WORKTREES\\fix")).toBe(
+    "C:\\Work\\Notes\\.CLAUDE\\WORKTREES\\fix",
+  );
+  expect(foldWorktreeCheckoutPath("C:\\Work\\Notes\\.claude\\worktrees\\fix")).toBe(
+    "C:\\Work\\Notes",
+  );
+  expect(foldWorktreeCheckoutPath("C:\\")).toBe("C:");
+  expect(foldWorktreeCheckoutPath("c:/work/notes/")).toBe("c:/work/notes");
+  expect(foldWorktreeCheckoutPath("/work/openclaw/.claude/worktrees/fix")).toBe("/work/openclaw");
 });
 
 it("keeps creator namespaces separate, combines profile aliases, and leaves native rows ungrouped", () => {
