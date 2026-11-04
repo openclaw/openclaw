@@ -44,7 +44,7 @@ type ContinuationWorkTurnFenceResult =
   | { allowed: false; reason: "cancelled" | "stale" };
 
 /** The stable failure reason of a wake whose turn started but whose delivery was never confirmed. */
-export const WORK_TURN_INTERRUPTED_REASON = "turn-started-delivery-unconfirmed";
+const WORK_TURN_INTERRUPTED_REASON = "turn-started-delivery-unconfirmed";
 
 async function readWorkRecord(recordId: string): Promise<ContinuationRecord | undefined> {
   const record = (await listContinuationRecords({ recordIds: [recordId], kinds: ["work"] }))[0];
