@@ -276,6 +276,7 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
       }
       const headers = new Headers(context.headers);
       headers.set("Content-Type", "application/json");
+      headers.set("Accept-Encoding", "identity");
       req.signal?.throwIfAborted();
       let attempted = false;
       try {

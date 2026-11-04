@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import { buffer } from "node:stream/consumers";
+import { gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as mediaStore from "../../media/store.js";
@@ -111,6 +112,8 @@ let mp3: Buffer;
 let inventory = catalog();
 let output: unknown;
 let status = 200;
+let forceGzip = false;
+const delivered: Array<{ encoding: string | undefined; length: number }> = [];
 let hold: "headers" | "body" | "disconnect" | undefined;
 let held = createDeferredCore();
 let heldResponse: ServerResponse | undefined;
@@ -177,7 +180,15 @@ beforeAll(async () => {
           response.once("finish", () => {
             completed++;
           });
-          response.end(typeof output === "string" ? output : JSON.stringify(output));
+          const json = Buffer.from(typeof output === "string" ? output : JSON.stringify(output));
+          const compressed = forceGzip || request.headers["accept-encoding"] !== "identity";
+          const bytes = compressed ? gzipSync(json) : json;
+          if (compressed) {
+            response.setHeader("Content-Encoding", "gzip");
+          }
+          response.setHeader("Content-Length", bytes.length);
+          delivered.push({ encoding: compressed ? "gzip" : undefined, length: bytes.length });
+          response.end(bytes);
         })().catch((error: unknown) =>
           response.destroy(error instanceof Error ? error : undefined),
         );
@@ -265,6 +276,8 @@ beforeEach(() => {
   inventory = catalog();
   output = payload(mp3);
   status = 200;
+  forceGzip = false;
+  delivered.length = 0;
   hold = undefined;
   held = createDeferredCore();
   heldResponse = undefined;
@@ -319,20 +332,51 @@ it.each(["native", "manifest"] as const)(
       expect(call.headers["x-goog-api-key"]).toBeUndefined();
       expect(call.headers["x-api-key"]).toBeUndefined();
     }
+    expect(posts()[0]?.headers["accept-encoding"]).toBe("identity");
+    expect(delivered).toEqual([
+      { encoding: undefined, length: Buffer.byteLength(JSON.stringify(output)) },
+    ]);
+    expect(completed).toBe(1);
     expect(save.mock.calls[0]?.[0]).toEqual(mp3);
     expect(alternateCalls).toBe(0);
   },
 );
 
-it("returns Pro WAV bytes without promising or serializing an output format", async () => {
-  const audio = wav();
-  output = payload(audio, "audio/wav");
-  const save = vi.spyOn(mediaStore, "saveMediaBuffer");
-  await execute({ model: `clawrouter/${PRO}`, format: "wav" });
-  expect(posts()[0]?.path).toBe(nativePath(PRO));
-  expect(save.mock.calls[0]?.[0]).toEqual(audio);
-  expect(JSON.stringify(posts()[0]?.body)).not.toContain("wav");
-});
+it.each(["native", "manifest"] as const)(
+  "returns Pro WAV bytes through %s without promising or serializing an output format",
+  async (routeKind) => {
+    inventory = catalog(routeKind);
+    const audio = wav();
+    output = payload(audio, "audio/wav");
+    const save = vi.spyOn(mediaStore, "saveMediaBuffer");
+    await execute({ model: `clawrouter/${PRO}`, format: "wav" });
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0]?.path).toBe(routeKind === "native" ? nativePath(PRO) : manifestPath);
+    expect(posts()[0]?.headers["accept-encoding"]).toBe("identity");
+    expect(delivered).toEqual([
+      { encoding: undefined, length: Buffer.byteLength(JSON.stringify(output)) },
+    ]);
+    expect(save.mock.calls[0]?.[0]).toEqual(audio);
+    expect(JSON.stringify(posts()[0]?.body)).not.toContain("wav");
+    expect(alternateCalls).toBe(0);
+  },
+);
+
+it.each(["native", "manifest"] as const)(
+  "rejects forced gzip through %s without saving audio or buying another attempt",
+  async (routeKind) => {
+    inventory = catalog(routeKind);
+    forceGzip = true;
+    const save = vi.spyOn(mediaStore, "saveMediaBuffer");
+    await expect(execute()).rejects.toThrow("invalid HTTP response");
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0]?.headers["accept-encoding"]).toBe("identity");
+    expect(delivered[0]?.encoding).toBe("gzip");
+    expect(completed).toBe(1);
+    expect(save).not.toHaveBeenCalled();
+    expect(alternateCalls).toBe(0);
+  },
+);
 
 it("serializes an actual host-loaded reference image inline without a remote asset URL", async () => {
   const png =
