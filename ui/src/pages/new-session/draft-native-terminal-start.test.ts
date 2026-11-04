@@ -275,7 +275,7 @@ describe("DraftSubmissionFlow native terminal", () => {
     request.mockClear();
     data.terminalHosts = [];
     await flow.submit();
-    expect(flow.blockedSubmitNotice()).toContain("Native CLI host unavailable");
+    expect(flow.blockedSubmitNotice()).toContain("Native CLI unavailable on this device");
     expect(request).not.toHaveBeenCalled();
     expect(place).toMatchObject({
       terminalHostId: "node:chosen",
@@ -296,7 +296,9 @@ describe("DraftSubmissionFlow native terminal", () => {
       folder: "/node/revalidated-project",
     });
     await flow.submit();
-    expect(flow.blockedSubmitNotice()).toBe("This session target is unavailable.");
+    expect(flow.blockedSubmitNotice()).toBe(
+      "Couldn’t use this device or workspace. Refresh and try again.",
+    );
     expect(context.sessions.createResult).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
