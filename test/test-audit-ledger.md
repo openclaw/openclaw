@@ -173,27 +173,35 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [192198](https://github.com/openclaw/openclaw/pull/192198): Capture actual protocol IDs and establish startup polling before subscriber cancellation. All15 declarations/29 cases and original abort/request/timer keepers remain. Actual producer-abort omission passes the old selected row and fails the repaired no-further-request keeper; owner bytes restore exactly. Baseline/clean/published29, related25, scoped checks and fresh review pass. CI41704396708 has31 successes/27 intentional skips and failed test-lines/downstream aggregate: exact CI merge base and merge tree retain81 lines of inherited debt; the five-line repair has equal allocation credit. Native attributed-failure squash receipt and both checkout closeouts complete; failed CI is not green.
 
+- [192236](https://github.com/openclaw/openclaw/pull/192236): Require recovered oversized thread identity before the existing error negatives. The single case and every prior contract remain. Actual catalog producer omission passes the original and fails the repaired identity keeper; owner/test bytes restore exactly. Baseline/clean/published1, related37, scoped checks and fresh review pass. CI41715915689 has29 successes/28 intentional skips and failed test-lines/downstream aggregate: exact CI base and merge tree retain355 lines of inherited debt; the one-line repair has equal allocation credit. Native attributed-failure squash receipt and both checkout closeouts complete; failed CI is not green.
+
+- [192290](https://github.com/openclaw/openclaw/pull/192290): Include mandatory deny in the existing duplicate approval-decision fixture so it reaches uniqueness. All four declarations/28 cases and assertions remain. Actual consumed uniqueness omission passes the original28 and fails only the repaired replay rejection, with27 passes; owner/test bytes restore exactly. Baseline/clean/published28, related21, generated freshness, scoped checks and fresh review pass. CI41725885879 retains31 successes/27 skips and failed test-lines/downstream aggregate: exact CI base and merge retain294 lines of inherited debt, distinct from local296. Exact+3/+3 allocation adds no debt. Native attributed-failure squash receipt and both checkout closeouts complete; failed CI remains failed.
+
 ## Current qualification
 
-Pinned main `e016b6304bb`: preserve the single declaration and every original
-contract in `extensions/codex/src/session-catalog-oversized.test.ts`. Its
-recovery negatives could pass when the recovered thread disappears and the next
-healthy row takes its position. Require recovered `thread-1` before those keepers.
-Same-revision preview reuse is intentional and remains unchanged.
+Pinned main `a12e3ae8d85d`: retain the single existing case and every original
+assertion in `extensions/codex/cli-metadata.test.ts`. Its not-called function
+assertion cannot observe eager evaluation of the session CLI module. Record the
+actual mocked module factory's evaluation before and after invoking the captured
+CLI registrar. Preserve exact descriptors and Commander forwarding.
 
-Untouched native baseline passes one case without skips. An actual catalog-session
-producer omission reaches its marker once in each control: the original case
-passes, while the repaired case fails with `thread-3` instead of `thread-1`.
-Producer and test bytes restore exactly. Clean candidate1 and37 recovery/framing
-sibling cases pass without skips. Focused types, lint, format, ledger MDX,
-whitespace and exact-allocation test-line checks pass. Fresh review, published-head
-proof and CI remain pending.
+Source qualification covers metadata registration, the session CLI owner, SDK
+entry/lazy-value behavior, host selection/registration callers and causal history.
+The independent static import-closure test excludes dynamic imports and does not
+prove module evaluation. Untouched native main and the clean candidate each pass
+the existing case. An actual metadata-owner eager import passes the original and
+fails only the repaired pre-callback module-evaluation check. Owner and test bytes
+restore exactly. Both related suites pass all19 cases; focused typecheck, lint,
+format, MDX and test-line checks pass. Initial CI caught a changed mock-factory
+fingerprint. Add the supported isolation annotation and retire only that factory's
+obsolete baseline entry; the guard now passes. Repeat eager-import controls still
+pass the original and fail the repair, with exact byte restoration and a clean
+candidate pass. Fresh review and repaired-head CI remain pending.
 
-The exercised boundary is real client framing, resident refresh and cloned
-Map-state restart; no native Codex or SQLite claim is made. Production and the
-shared test-line scalar remain unchanged. One added test line has an exact
-separate allocation. No declaration, fixture, import, helper or export is removed;
-no removal-scan claim applies.
+Production, shared scalar, imports, helpers and exports are unchanged. Five
+additional test lines receive exact separate allocation credit. No declaration,
+case or original assertion is removed. This proves local metadata loading only;
+no Gateway, native Codex execution or authorization behavior is claimed.
 
 ## Completed source review
 
@@ -213,7 +221,7 @@ permission to delete without root qualification.
 - Agent internals: all 2,347 suites under `src/agents`/15,973 physical sites: R15743/F224/C2/D4. Zero unread in this scope; other `src` directories remain separate. All83 registry and 58 sandbox suites are source-closed; tool display/schema and process custody retain their contracts. Separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
 - Auto-reply: All429 suites plus43 separate upstream suites and invoked local registrars/support classified. Latest54/498: R495/F2/C1; qualified two duplicates landed above. Keep channel persistence, group/native routing, progress suppression and abort cases.
 - CLI: Config/setup24/209; plugin lifecycle25/176; validation22/106; channel/root/message/device/skills/session98/542; execution/reply presentation overlaps the reply aggregate. Only qualified fixture reduction landed above.
-- Control UI: 2,368 unique suites/13,544 physical sites: R10295/F3241/C1/D7. Agents Memory, Memory Import, Workshop, Systems, About and Worktrees retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. The shared runner owns clocks and normal file mock restoration; six local cleanup nominations were withdrawn after owner inspection. Held-reply custody remains independent. Proof/custody repairs remain pending; other UI remains open.
+- Control UI: 2,389 unique suites/13,617 physical sites: R10368/F3241/C1/D7. Agents Memory, Memory Import, Workshop, Systems, About and Worktrees retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. The shared runner owns clocks and normal file mock restoration; six local cleanup nominations were withdrawn after owner inspection. Held-reply custody remains independent. Proof/custody repairs remain pending; other UI remains open.
 - Shared native: OpenClawKit209 files/2,528 sites: R2523/F3/C2. NativeState/MLX protocol5/46: R45/F1. Swabble6/12 R; MLX helper1/5 with one pending PCM consolidation.
 - macOS: 304 Swift files/2,653 sites: R2635/F8/C9/D1. Native runtime qualification pending.
 - iOS: 135 files/1,416 sites: R1370/F39/C6/D1; obsolete typography metadata scanner and a migration helper remain candidates. Native qualification pending.
@@ -223,7 +231,9 @@ permission to delete without root qualification.
 - Other audited plugins: Voice-call64/523 R522/F1; Nostr14/112 R; Prometheus7/55 R; IMAP/A2A13/103 R; MXC13/64 R61/F3; DeepInfra17/78 qualified above; MiniMax13/75 R74/F1.
 - Plugin service owners: File Transfer21/162 R161/D1; active-memory11/122 R; Synology10/91 R; OpenShell11/88 R; Diagnostics OTel12/86 R83/F1/C2; AgentsAPI10/96 R; Cua12/83 R. All local support/assets live.
 - Later plugin closures: LanceDB22/109 R; Logbook13/55 R; IRC15/99 R97/F2; Diffs14/58 R56/F1/C1; policy15/301 physical R298/F3; SMS16/158 R; team-reports21/138 R; Twitch15/86 R; TypeSafe10/50 R; X24/149 R148/C1; Zalo25/89 local R87/F2 plus9 inherited R and one duplicate row. Assertion-only candidates below do not remove their declarations.
-- Plugin lane progress: Leaf3,928 suites/144 closed owners; combined4,002 suites/177 directory owners plus the closed root boundary. Memory Core201/201 is source-closed:1,282 normalized physical sites R1159/F123 and1,900 expanded cases R1738/F160/C2, including inherited registrations once; all9 PostgreSQL suites are source-only, with no runtime claim. Matrix156/156 is source-closed:1,063 physical sites R945/F117/C1 and1,578 expanded cases R1427/F150/C1; all30 local support surfaces remain live. PostgreSQL proof remains source-only. 15 support-custody findings and support-removal nominations are separate. QA Lab329/329 is source-closed:1938 physical sites R1813/F125/C0/D0 and2989 expanded cases R2812/F177, including one inherited registration counted once; all52 local support files remain live; 40 support proof/custody findings are separate; no runtime claim. Telegram167/167 is source-closed:1,265 normalized physical sites R1117/F148 and2,112 expanded cases R1903/F209, including15 inherited sites/20 registrations counted once; all48 auxiliaries (45 local supports and three root facades/drivers) remain live and31 support proof/custody findings are separate. Discord257/257 is source-closed:1789 physical sites R1596/F193 and2648 expanded cases R2363/F285; its80 auxiliaries remain live and 24 support findings are separate. Codex143/448 is source-closed:928 physical sites R837/F91 and1551 expanded cases R1434/F117, including33 inherited sites/83 registrations counted once; 7 support-custody findings are separate; native/worker execution remains unqualified. Two earlier source credits were duplicates after incorrect app-server path prefixes; unique counts above remove those credits and retain the later closures. Remaining305 suites/1 owner (Codex305); runtime qualification remains separate. Browser280/280 is source-closed:2,006 physical sites R1764/F242 and3,243 expanded cases R2909/F334; actual runtime qualification remains separate. Slack155/155 is source-closed:1,268 direct sites R1258/F10 and1,828 static invocations R1813/F15; all21 auxiliaries and seven live traces remain. MS Teams107/107 is source-closed. WhatsApp103/103 and Feishu104/104 are source-closed; their authority, timing and custody proof repairs remain follow-ups. OpenAI99/99 is closed:744 direct/support sites R737/F5/C2,1,238 static invocations R1228/F8/C2. Its18 supports and packaged icons remain live. Knowledge59, iMessage60, Workboard65, LINE61, Mattermost56, Signal44, memory-wiki50 and Crabbox53 are closed. Keep identity, transport, cache, compiler, storage, interaction and mutation contracts. Source-only; no runtime verdict.
+- Plugin lane progress: Leaf3,948 suites/144 closed owners; combined4,022 suites/177 directory owners plus the closed root boundary. Memory Core201/201 is source-closed:1,282 normalized physical sites R1159/F123 and1,900 expanded cases R1738/F160/C2, including inherited registrations once; all9 PostgreSQL suites are source-only, with no runtime claim. Matrix156/156 is source-closed:1,063 physical sites R945/F117/C1 and1,578 expanded cases R1427/F150/C1; all30 local support surfaces remain live. PostgreSQL proof remains source-only. 15 support-custody findings and support-removal nominations are separate. QA Lab329/329 is source-closed:1938 physical sites R1813/F125/C0/D0 and2989 expanded cases R2812/F177, including one inherited registration counted once; all52 local support files remain live; 40 support proof/custody findings are separate; no runtime claim. Telegram167/167 is source-closed:1,265 normalized physical sites R1117/F148 and2,112 expanded cases R1903/F209, including15 inherited sites/20 registrations counted once; all48 auxiliaries (45 local supports and three root facades/drivers) remain live and31 support proof/custody findings are separate. Discord257/257 is source-closed:1789 physical sites R1596/F193 and2648 expanded cases R2363/F285; its80 auxiliaries remain live and 24 support findings are separate. Codex163/448 is source-closed:1067 physical sites R966/F101 and1747 expanded cases R1620/F127, including33 inherited sites/83 registrations counted once; 7 support-custody findings are separate; native/worker execution remains unqualified. Two earlier source credits were duplicates after incorrect app-server path prefixes; unique counts above remove those credits and retain the later closures. Remaining285 suites/1 owner (Codex285); runtime qualification remains separate. Browser280/280 is source-closed:2,006 physical sites R1764/F242 and3,243 expanded cases R2909/F334; actual runtime qualification remains separate. Slack155/155 is source-closed:1,268 direct sites R1258/F10 and1,828 static invocations R1813/F15; all21 auxiliaries and seven live traces remain. MS Teams107/107 is source-closed. WhatsApp103/103 and Feishu104/104 are source-closed; their authority, timing and custody proof repairs remain follow-ups. OpenAI99/99 is closed:744 direct/support sites R737/F5/C2,1,238 static invocations R1228/F8/C2. Its18 supports and packaged icons remain live. Knowledge59, iMessage60, Workboard65, LINE61, Mattermost56, Signal44, memory-wiki50 and Crabbox53 are closed. Keep identity, transport, cache, compiler, storage, interaction and mutation contracts. Source-only; no runtime verdict.
+
+- Exact root/scripts records now cover `scripts/control-ui-retention/dependency-retention.test.ts` (1 physical/12 registered R), `test/apns-worker-test-ownership.test.ts` (2/7 R), `test/appcast.test.ts` (7/8 R), and `test/architecture-smells.test.ts` (6/32 R). These source-only records add no aggregate credit: overlap with the older root/docs/scripts summary is unresolved. The gross test/scripts inventory is1,606 candidate paths, not certified unread paths.
 
 ## Pending qualification and proof repairs
 

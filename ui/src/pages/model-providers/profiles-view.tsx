@@ -25,7 +25,7 @@ export function showProfileActionError(error: unknown): void {
   showToast({
     placement: "bottom",
     message: modelProviderErrorMessage(error),
-    icon: "alertTriangle",
+    severity: "warning",
     durationMs: 12_000,
   });
 }
@@ -34,7 +34,7 @@ export function showProfileLogoutSuccess(warning?: string): void {
   showToast({
     placement: "bottom",
     message: [t("modelProviders.logout.done"), warning].filter(Boolean).join(" "),
-    icon: "check",
+    severity: "success",
   });
 }
 
