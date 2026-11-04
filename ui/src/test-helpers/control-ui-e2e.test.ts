@@ -90,9 +90,9 @@ describe("shared proof capture", () => {
       expect(await failed).toBe(original);
       const capture = async () => {
         await captureControlUiE2eFailureDiagnostics(page, { error: original, label: "scenario" });
-        const summary = logs.mock.calls
-          .filter(([message]) => message === "[control-ui-e2e] failure state")
-          .at(-1);
+        const summary = logs.mock.calls.findLast(
+          ([message]) => message === "[control-ui-e2e] failure state",
+        );
         return JSON.parse(String(summary?.[1])).scenarioFacts;
       };
       const expected =

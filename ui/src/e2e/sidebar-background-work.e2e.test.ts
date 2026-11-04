@@ -123,20 +123,21 @@ suite.define(() => {
           .count(),
       ).toBe(0);
       try {
-        await ui.visible(toggle.locator(".session-run-spinner"));
+        await ui.visible(toggle.locator(".sidebar-child-session-toggle__icon svg"));
+        expect(await toggle.locator(".session-run-spinner").count()).toBe(0);
       } catch (error) {
         await rethrowWithControlUiE2eFailureFacts(page, error, "backgroundChildFactsRead", () =>
           evaluateControlUiContext(
             page,
-            (context, { parentKey, childKeys }) => {
+            (context, { parentKey: targetParentKey, childKeys }) => {
               const result = context.sessions.state.result;
-              const children = childKeys
+              const matchingChildren = childKeys
                 .map((key) => result?.sessions.find((row) => row.key === key))
                 .filter((row) => row !== undefined);
-              const toggle = document.querySelector(
-                `[data-session-key="${parentKey}"] [data-child-session-toggle]`,
+              const childToggle = document.querySelector(
+                `[data-session-key="${targetParentKey}"] [data-child-session-toggle]`,
               );
-              const spinner = toggle?.querySelector(".session-run-spinner");
+              const spinner = childToggle?.querySelector(".session-run-spinner");
               const replies = (window as MockGatewayWindow).openclawControlUiE2eGateway
                 ?.sessionListResponseFacts;
               return {
@@ -145,14 +146,14 @@ suite.define(() => {
                 admittedRows: result?.sessions.length ?? 0,
                 presentationRows: context.sessions.presentation.result?.sessions.length ?? 0,
                 canonicalListReady: context.sessions.canonicalListReady,
-                matchingChildRows: children.length,
-                runningChildRows: children.filter(
+                matchingChildRows: matchingChildren.length,
+                runningChildRows: matchingChildren.filter(
                   (row) => row.hasActiveRun || (row.backgroundProcessCount ?? 0) > 0,
                 ).length,
-                togglePresent: Boolean(toggle),
-                expanded: toggle?.getAttribute("aria-expanded") === "true",
+                togglePresent: Boolean(childToggle),
+                expanded: childToggle?.getAttribute("aria-expanded") === "true",
                 runningClass:
-                  toggle?.classList.contains("sidebar-child-session-toggle--running") ?? false,
+                  childToggle?.classList.contains("sidebar-child-session-toggle--running") ?? false,
                 spinnerPresent: Boolean(spinner),
                 spinnerVisible: spinner?.checkVisibility() ?? false,
                 repliesAvailable: Boolean(replies),
@@ -163,7 +164,7 @@ suite.define(() => {
           ),
         );
       }
-      expect(await toggle.getAttribute("aria-description")).toBe("Active run");
+      expect(await toggle.getAttribute("aria-description")).toBeNull();
       await toggle.click();
       const background = page.locator(
         `.sidebar-recent-session[data-session-key="${children[5]!.key}"]`,

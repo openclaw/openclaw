@@ -909,7 +909,7 @@ fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presente
     for (const directory of ["node_modules", "ui/node_modules"]) {
       fs.rmSync(at(directory), { recursive: true, force: true });
     }
-    for (const name of ["tsx", "@openclaw/fs-safe"]) {
+    for (const name of ["tsx", "@openclaw/fs-safe", "pako"]) {
       fs.mkdirSync(path.dirname(at("node_modules", name)), { recursive: true });
       fs.symlinkSync(
         fs.realpathSync(path.join(repoRoot, "node_modules", name)),
