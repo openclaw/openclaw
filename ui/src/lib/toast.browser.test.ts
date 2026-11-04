@@ -122,6 +122,8 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     await useViewport(1280);
     const { host, toast, action } = await renderToast();
     const height = rect(toast).height;
+    expect(height).toBe(44);
+    expect(rect(action).height).toBe(28);
     expect(Number.parseFloat(getComputedStyle(toast).borderTopLeftRadius)).toBeGreaterThanOrEqual(
       height / 2,
     );
@@ -140,8 +142,36 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     expect(rect(block.toast).width).toBeCloseTo(360, 0);
     expect(rect(block.action).top).toBeGreaterThan(rect(block.body).bottom);
     expect(rect(block.action).right).toBeCloseTo(rect(block.toast).right - 10, 0);
+    expect(getComputedStyle(block.toast).paddingBlockStart).toBe("12px");
+    expect(getComputedStyle(block.toast).paddingBlockEnd).toBe("12px");
     expect(getComputedStyle(block.toast).borderTopLeftRadius).toBe("28px");
     expect(block.action.classList.contains("app-toast__action--primary")).toBe(true);
+  });
+
+  it("restores roomy padding when the title or action wraps after resizing", async () => {
+    const { host, toast } = await renderToast({
+      message: "Sitzung wurde archiviert",
+      actionLabel: "Wiederherstellen",
+    });
+    const padding = () => getComputedStyle(toast).paddingBlockStart;
+    for (const width of [1280, 320, 1280]) {
+      await useViewport(width);
+      await waitForSolid(() => expect(padding()).toBe(width === 320 ? "12px" : "8px"));
+    }
+    root.style.setProperty("--control-ui-text-scale", "1.6");
+    await useViewport(390);
+    await waitForSolid(() => expect(padding()).toBe("12px"));
+    const wrapped = await renderToast(
+      {
+        message: "The session could not be archived because it is currently in use",
+        actionLabel: undefined,
+      },
+      host,
+    );
+    expect(wrapped.message.offsetHeight).toBeGreaterThan(
+      Number.parseFloat(getComputedStyle(wrapped.message).lineHeight),
+    );
+    expect(getComputedStyle(wrapped.toast).paddingBlockStart).toBe("12px");
   });
 
   it("places actions in the center and arrivals on the right as fixed-width blocks", async () => {
