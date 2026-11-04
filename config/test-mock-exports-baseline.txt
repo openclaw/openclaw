@@ -235,7 +235,6 @@
 ["extensions/codex/src/app-server/side-question.test-support.ts","./provider-capabilities.js","5a4cab7c87dd7ac3e42b31cf8f902ca72341107a5b9cb5bdcb8d1e13d6121c27",1]
 ["extensions/codex/src/app-server/transport-process-registration.lifecycle.test.ts","./transport-process-containment.js","e75c1c7a80e9952240f6fadb973355bee143537da107bc42390b154540cfdd9a",1]
 ["extensions/codex/src/app-server/transport-process-registration.lifecycle.test.ts","openclaw/plugin-sdk/plugin-state-store-runtime","7610eb319ea9538f66a1d484ed4ad0455b48eaf15ba29b3185fd28f4d0f1dda3",1]
-["extensions/codex/src/app-server/transport-spawn.test.ts","./transport-process-registration.js","c46ccb85c38f87d118b15e6e4c2c31bbb6ea26240fcf5c306a71816f150c4aac",1]
 ["extensions/codex/src/app-server/transport-stdio.test.ts","./transport-process-registration.js","5afee5b5c13e9f2c170805d484094fbc077d172ef983ed0e483773e6a279170a",1]
 ["extensions/codex/src/app-server/transport-websocket-startup.test.ts","openclaw/plugin-sdk/websocket-runtime","b8317c68e546b97d2010ce991536c0c063d9d27b1218ac41537ffbd68147ea4e",1]
 ["extensions/codex/src/app-server/turn-router.mcp-app.test.ts","./event-projector-diagnostics.js","ea5cc2a508d192b7a329c88e1c0520dd557bf9dc5d1bb3f8b5fb04a25e59437f",1]

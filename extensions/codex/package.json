@@ -44,6 +44,7 @@
     "build": {
       "openclawVersion": "2026.10.10",
       "workerEntries": [
+        "./stdio.worker.ts",
         "./catalog-page.worker.ts",
         "./session-history.worker.ts"
       ]
