@@ -157,3 +157,37 @@ it("closes the transport worker when a killed native child leaves stdin open", a
   await expect(closed).resolves.toEqual([null, "SIGKILL"]);
   expect(child.signalCode).toBe("SIGKILL");
 });
+
+it("reports a worker startup failure once without inventing native exit facts", async () => {
+  await withTempDir("codex-worker-failure-", async (root) => {
+    const preload = path.join(root, "startup-failure.mjs");
+    await fs.writeFile(preload, "throw new Error('synthetic worker startup failure');");
+    fixture.preload = pathToFileURL(preload).href;
+    const errors: Error[] = [];
+    let closed: Promise<unknown[]> | undefined;
+    try {
+      await expect(
+        createStdioTransport(
+          {
+            transport: "stdio",
+            command: process.execPath,
+            args: ["-e", "process.stdin.resume()"],
+            headers: {},
+          },
+          process.env,
+          undefined,
+          (child) => {
+            child.on("error", (error: Error) => errors.push(error));
+            closed = new Promise((resolve) => {
+              child.once("close", (...facts) => resolve(facts));
+            });
+          },
+        ),
+      ).rejects.toThrow("synthetic worker startup failure");
+      await expect(closed).resolves.toEqual([null, null]);
+      expect(errors.map((error) => error.message)).toEqual(["synthetic worker startup failure"]);
+    } finally {
+      fixture.preload = "";
+    }
+  });
+});

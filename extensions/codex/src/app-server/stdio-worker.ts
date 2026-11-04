@@ -62,7 +62,9 @@ export function spawnCodexStdio(
     },
   };
   const child = Object.assign(new EventEmitter(), streams);
+  let failureReported = false;
   const fail = (error: unknown, notStarted = false) => {
+    failureReported = true;
     if (notStarted) {
       child.exitCode = -1;
     }
@@ -109,7 +111,7 @@ export function spawnCodexStdio(
     }
   });
   worker.once("exit", () => {
-    if (child.exitCode === null && child.signalCode === null) {
+    if (!failureReported && child.exitCode === null && child.signalCode === null) {
       fail(new Error("Codex stdio worker exited before observing process exit"));
     }
     child.stdout.resume();
