@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the real runtime-signing loop with only codesign/signing I/O stubbed."""
 import os
+import json
 import pathlib
 import plistlib
 import re
@@ -25,16 +26,21 @@ class CodexHostSigning(unittest.TestCase):
             jit = root / 'jit.plist'
             jit.write_text(JIT_PLIST)
             inventory = root / 'inventory'
+            # Independently captured published npm layout, not a copy of the signer patterns.
+            layout = json.loads((SCRIPT.parent.parent / "test/fixtures/codex-native-layout.json").read_text())
+            arm, x64 = layout["platforms"]
             hosts = [
-                'node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex-code-mode-host',
-                'node_modules/@openai/codex/node_modules/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/codex/codex-code-mode-host',
-                'node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex-code-mode-host',
-                'node_modules/@openai/codex/vendor/x86_64-apple-darwin/codex/codex-code-mode-host',
+                "node_modules/" + arm["alias"] + "/" + arm["host"],
+                "node_modules/@openai/codex/node_modules/" + x64["alias"] + "/" + x64["host"],
+                "node_modules/@openai/codex/" + arm["host"],
+                "node_modules/@openai/codex/" + x64["host"],
             ]
             ordinary = [
                 'node_modules/unrelated/codex-code-mode-host',
-                'node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex',
-                'node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex-code-mode-host',
+                'node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex',
+                'node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host',
+                # The original candidate assumed a codex/ subdirectory; it must stay plain.
+                'node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex-code-mode-host',
             ]
             claude = 'lib/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude'
             entries = [('executable', name) for name in hosts + ordinary + ['bin/bun', claude]]

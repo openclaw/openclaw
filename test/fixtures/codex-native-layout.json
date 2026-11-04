@@ -1,0 +1,19 @@
+{
+  "package": "@openai/codex",
+  "version": "0.164.0",
+  "source": "Published package file inventories; executable contents were not downloaded or run",
+  "platforms": [
+    {
+      "alias": "@openai/codex-darwin-arm64",
+      "triple": "aarch64-apple-darwin",
+      "host": "vendor/aarch64-apple-darwin/bin/codex-code-mode-host",
+      "inventoryUrl": "https://unpkg.com/@openai/codex@0.164.0-darwin-arm64/?meta"
+    },
+    {
+      "alias": "@openai/codex-darwin-x64",
+      "triple": "x86_64-apple-darwin",
+      "host": "vendor/x86_64-apple-darwin/bin/codex-code-mode-host",
+      "inventoryUrl": "https://unpkg.com/@openai/codex@0.164.0-darwin-x64/?meta"
+    }
+  ]
+}
