@@ -564,5 +564,5 @@ it("reports the last-run prompt budget through /usage", async () => {
     }),
   }));
   const result = await runCommand(request, "usage");
-  expect(result.content).toContain("Prompt budget (last run): **89%** of 180k");
+  expect(result.content).toContain("Prompt budget (last reply): **89%** of 180k");
 });

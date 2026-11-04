@@ -40,6 +40,11 @@ openclaw-new-session-page,
   }
 }
 
+/* A new draft has no session title; keep its header's accessible group name. */
+.new-session-page .mobile-header__title-row {
+  display: none;
+}
+
 /* Chat's phone header holds these controls, so the page has nothing to clear. */
 .new-session-page--chat-header .new-session-page__scroll {
   padding-top: 0;

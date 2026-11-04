@@ -337,7 +337,7 @@ Before downgrading either service to a build without this feature:
 
    Finish or stop active turns, and reclaim every native placement while the
    compatible Gateway and node are still running. Use
-   **Stop cloud worker…** or the existing RPC:
+   **Stop cloud device…** or the existing RPC:
 
    ```bash
    openclaw gateway call sessions.reclaim --json --timeout 600000 \

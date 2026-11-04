@@ -337,7 +337,7 @@ async function readSlotColdOpenOutcome(
         .getByText(
           expectedOutcome === "content"
             ? "Build application"
-            : "No background processes in this conversation.",
+            : "No background processes in this session yet.",
           { exact: true },
         )
         .waitFor();
@@ -850,7 +850,7 @@ suite.define(() => {
         expect(outcome).toEqual({
           outcome: "generic-empty",
           heading: "No processes",
-          description: "No background processes in this conversation.",
+          description: "No background processes in this session yet.",
           emptyStateOffersAction: false,
         });
       } else if (label === "Discussion") {

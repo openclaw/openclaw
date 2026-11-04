@@ -191,6 +191,7 @@ describe("chat pane header state", () => {
       // operator needs a distinct, visible outcome or their lost intent reads
       // as a click that simply did nothing.
       expect(showToast).toHaveBeenCalledWith({
+        severity: "error",
         message: t("sessionsView.deleteSessionStale", { session: "Current session" }),
       });
     } finally {

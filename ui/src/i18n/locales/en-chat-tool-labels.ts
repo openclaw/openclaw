@@ -4,6 +4,12 @@ import { en } from "./en.ts";
 const enChatToolLabels = {
   chat: {
     toolCards: {
+      patch: {
+        move: "Move {source} → {path}",
+        add: "Add {path}",
+        delete: "Delete {path}",
+        update: "Update {path}",
+      },
       tool: "Tool",
       canvas: "Canvas",
       summary: "Summary",
