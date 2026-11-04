@@ -158,6 +158,7 @@ it.each([
     ]);
   } else {
     expect(written.compactGroupSeconds).toEqual({
+      boat: {},
       blacksmith: { other: 99 },
       github: { compact: 17, "release-full-fixture": 900, "release-full-retained": 2000 },
     });
