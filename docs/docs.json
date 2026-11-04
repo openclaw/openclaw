@@ -2289,6 +2289,7 @@
                       "providers/qianfan",
                       "providers/qwen",
                       "providers/radius",
+                      "providers/scaleway",
                       "providers/stepfun",
                       "providers/synthetic",
                       "providers/telnyx",

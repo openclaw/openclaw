@@ -103,6 +103,7 @@ For LiteLLM, the small source stroke widths are unified at 1.35 source units bef
 | `nextcloud-talk`         | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `nextcloud.svg`      |
 | `onepassword`            | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `1password.svg`      |
 | `onnx`                   | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `onnx.svg`           |
+| `scaleway`               | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `scaleway.svg`       |
 | `searxng`                | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `searxng.svg`        |
 | `signal`                 | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `signal.svg`         |
 | `slack`                  | [`simple-icons@13.21.0`](https://www.npmjs.com/package/simple-icons/v/13.21.0) | `slack.svg`          |

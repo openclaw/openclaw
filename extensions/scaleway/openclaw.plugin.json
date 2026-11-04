@@ -1,0 +1,382 @@
+{
+  "id": "scaleway",
+  "categories": ["models"],
+  "name": "Scaleway",
+  "description": "OpenClaw Scaleway Generative APIs provider plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["scaleway"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "scaleway-native",
+      "hosts": ["api.scaleway.ai"],
+      "hostSuffixes": [".ifr.fr-par.scaleway.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "scaleway": {
+        "family": "scaleway"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "scaleway",
+        "envVars": ["SCW_SECRET_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "scaleway",
+      "method": "api-key",
+      "choiceId": "scaleway-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Scaleway API key",
+      "choiceHint": "OpenAI-compatible Generative APIs hosted in the EU",
+      "groupId": "scaleway",
+      "groupLabel": "Scaleway",
+      "groupHint": "Generative APIs",
+      "optionKey": "scalewayApiKey",
+      "cliFlag": "--scaleway-api-key",
+      "cliOption": "--scaleway-api-key <key>",
+      "cliDescription": "Scaleway API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "modelCatalog": {
+    "modelsDev": {
+      "scaleway": "scaleway"
+    },
+    "providers": {
+      "scaleway": {
+        "baseUrl": "https://api.scaleway.ai/v1",
+        "api": "openai-completions",
+        "defaultModel": "glm-5.3",
+        "models": [
+          {
+            "id": "glm-5.3",
+            "name": "GLM-5.3",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 16384,
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": "none",
+              "low": "low",
+              "medium": "high",
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
+            "cost": {
+              "input": 2.01,
+              "output": 6.15,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable",
+              "defaultThinkingLevel": "high"
+            }
+          },
+          {
+            "id": "deepseek-v4.1-flash-1017",
+            "name": "DeepSeek V4.1 Flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 256000,
+            "maxTokens": 32768,
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": "none",
+              "low": "low",
+              "medium": "high",
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
+            "cost": {
+              "input": 0.672,
+              "output": 2.016,
+              "cacheRead": 0.134,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable",
+              "defaultThinkingLevel": "high"
+            }
+          },
+          {
+            "id": "deepseek-v4-flash-0731",
+            "name": "DeepSeek V4 Flash 0731",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 32768,
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": "none",
+              "low": "low",
+              "medium": "high",
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
+            "cost": {
+              "input": 0.468,
+              "output": 0.936,
+              "cacheRead": 0.0936,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable",
+              "defaultThinkingLevel": "high"
+            }
+          },
+          {
+            "id": "qwen3.8-27b",
+            "name": "Qwen3.8 27B",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": "none",
+              "low": "low",
+              "medium": "medium",
+              "high": "xhigh",
+              "xhigh": "xhigh",
+              "max": "xhigh"
+            },
+            "cost": {
+              "input": 0.684,
+              "output": 3.762,
+              "cacheRead": 0.137,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable",
+              "defaultThinkingLevel": "high"
+            }
+          },
+          {
+            "id": "qwen3.6-35b-a3b",
+            "name": "Qwen3.6 35B A3B",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 256000,
+            "maxTokens": 32768,
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": "none",
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": "high",
+              "max": "high"
+            },
+            "cost": {
+              "input": 0.280375,
+              "output": 1.68225,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable",
+              "defaultThinkingLevel": "high"
+            }
+          },
+          {
+            "id": "qwen3.5-397b-a17b",
+            "name": "Qwen3.5 397B A17B",
+            "reasoning": true,
+            "input": ["text", "image", "video"],
+            "contextWindow": 256000,
+            "maxTokens": 16384,
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": "none",
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": "high",
+              "max": "high"
+            },
+            "cost": {
+              "input": 0.6729,
+              "output": 4.0374,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable",
+              "defaultThinkingLevel": "high"
+            }
+          },
+          {
+            "id": "qwen3-235b-a22b-instruct-2507",
+            "name": "Qwen3 235B A22B Instruct 2507",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 250000,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 0.841125,
+              "output": 2.523375,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "gemma-4-26b-a4b-it",
+            "name": "Gemma 4 26B A4B IT",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 256000,
+            "maxTokens": 32768,
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": "none",
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": "high",
+              "max": "high"
+            },
+            "cost": {
+              "input": 0.280375,
+              "output": 0.56075,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "defaultThinkingLevel": "high"
+            }
+          },
+          {
+            "id": "gpt-oss-120b",
+            "name": "GPT-OSS 120B",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 128000,
+            "maxTokens": 32768,
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": null,
+              "max": null
+            },
+            "cost": {
+              "input": 0.168225,
+              "output": 0.6729,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable",
+              "defaultThinkingLevel": "high"
+            }
+          },
+          {
+            "id": "llama-3.3-70b-instruct",
+            "name": "Llama 3.3 70B Instruct",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 100000,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 1.00935,
+              "output": 1.00935,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "mistral-medium-3.5-128b",
+            "name": "Mistral Medium 3.5 128B",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 180000,
+            "maxTokens": 16384,
+            "thinkingLevelMap": {
+              "off": "none",
+              "minimal": "none",
+              "low": "high",
+              "medium": "high",
+              "high": "high",
+              "xhigh": "high",
+              "max": "high"
+            },
+            "cost": {
+              "input": 1.68225,
+              "output": 8.41125,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "defaultThinkingLevel": "off"
+            }
+          },
+          {
+            "id": "mistral-small-3.2-24b-instruct-2506",
+            "name": "Mistral Small 3.2 24B Instruct (2506)",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0.168225,
+              "output": 0.392525,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "scaleway": "refreshable"
+    }
+  }
+}

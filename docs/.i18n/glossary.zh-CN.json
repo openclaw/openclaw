@@ -1168,6 +1168,22 @@
     "target": "Runway"
   },
   {
+    "source": "Scaleway",
+    "target": "Scaleway"
+  },
+  {
+    "source": "scaleway",
+    "target": "scaleway"
+  },
+  {
+    "source": "Scaleway (Generative APIs)",
+    "target": "Scaleway (Generative APIs)"
+  },
+  {
+    "source": "Scaleway plugin reference",
+    "target": "Scaleway 插件参考"
+  },
+  {
     "source": "Signal",
     "target": "Signal"
   },

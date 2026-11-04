@@ -208,7 +208,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-102 plugins
+103 plugins
 
 - **[abliteration](/plugins/reference/abliteration)** (`@openclaw/abliteration-provider`) - npm or ClawHub: `@openclaw/abliteration-provider`. OpenClaw Abliteration provider plugin.
 
@@ -355,6 +355,8 @@ Each entry lists the package, distribution route, and description.
 - **[radius](/plugins/reference/radius)** (`@openclaw/radius-provider`) - npm or ClawHub: `@openclaw/radius-provider`. Radius model gateway provider.
 
 - **[raft](/plugins/reference/raft)** (`@openclaw/raft`) - npm or ClawHub: `@openclaw/raft`. OpenClaw Raft channel plugin for secure CLI wake bridges.
+
+- **[scaleway](/plugins/reference/scaleway)** (`@openclaw/scaleway-provider`) - npm or ClawHub: `@openclaw/scaleway-provider`. OpenClaw Scaleway Generative APIs provider plugin.
 
 - **[searxng](/plugins/reference/searxng)** (`@openclaw/searxng-plugin`) - npm or ClawHub: `@openclaw/searxng-plugin`. Adds web search provider support.
 
