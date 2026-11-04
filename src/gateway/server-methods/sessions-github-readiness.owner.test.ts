@@ -34,7 +34,7 @@ afterEach(() => vi.restoreAllMocks());
 async function ownerSource(f: ReadFixture) {
   const owner = ensureGatewayOwnerProfile("Shared owner");
   f.client.authenticatedUserProfile = gatewayProfile(owner.id, owner.displayName, owner.updatedAt);
-  f.client.connect.client = { id: "cli", mode: "cli", version: "test" };
+  f.client.connect.client = { ...f.client.connect.client, id: "cli", mode: "cli" };
   f.client.usesSharedGatewayAuth = true;
   f.client.sharedGatewaySessionGeneration = "owner-cli-generation";
   f.client.authPolicy = captureGatewayAuthPolicy(f.context.getRuntimeConfig(), {
