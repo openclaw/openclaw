@@ -62,14 +62,14 @@ const catalog = {
         toolAccess: {
           loadFailed: "Couldn’t load tools.",
         },
-        offlineBlocked: "Reconnect to change tools for this chat.",
+        offlineBlocked: "Reconnect to change tools for this session.",
         adminBlocked: "Admin access is required to manage MCP servers.",
         savingBlocked: "Saving… try again in a moment.",
       },
       overrides: {
         count: "{count} overrides",
         countOne: "{count} override",
-        clear: "Reset this chat’s changes",
+        clear: "Reset this session’s changes",
       },
       contextUsage: {
         title: "Context usage details",
@@ -211,7 +211,7 @@ const catalog = {
       moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
-        applyingSettings: "Applying chat settings",
+        applyingSettings: "Applying session settings",
         blockedByReview:
           "Queue paused. Review or discard the earlier held message in the conversation.",
         pausedByStop: "Queue paused",
@@ -234,7 +234,7 @@ const catalog = {
       unavailable: "Could not load people. Try again.",
       accessDenied: "Mention access denied. Sign in or contact an admin.",
       profileUnavailable: "Profile unverified. Reconnect or contact an admin.",
-      rejected: "Mention search rejected. Check access or use another chat.",
+      rejected: "Mention search rejected. Check access or use another session.",
       limit: "You can mention up to 10 people per message.",
       selectedLabel: "Will notify",
       selected: "Will notify: {names}",
@@ -242,7 +242,7 @@ const catalog = {
       restoreFailed:
         "Mention selection could not be restored. Edit this message and select its recipients again.",
       unsupported:
-        "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
+        "Human mentions are not available in this mode. Remove the selected mentions or send from a normal session.",
     },
     permissions: {},
     voice: {
@@ -266,11 +266,11 @@ const catalog = {
         "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",
     },
-    outboxRecoveryReviewTitle: "Review in this chat?",
+    outboxRecoveryReviewTitle: "Review in this session?",
     outboxRecoveryConfirm: "Add this saved copy to “{chat}” for review? Nothing will be sent.",
     outboxRecoveryRestore: "Restore",
     outboxRecoveryConflict:
-      "Keep or clear the draft and pending messages in this chat first, or open another non-Incognito chat. Your saved copy is unchanged.",
+      "Keep or clear the draft and pending messages in this session first, or open another non-Incognito session. Your saved copy is unchanged.",
     outboxRecoveryStorageFailed:
       "We could not access your saved messages. Reload to try again. Do not clear browser site data if you want to keep them.",
     outboxRecoveryFull:
@@ -287,7 +287,7 @@ const catalog = {
     outboxRecoveryDelete: "Delete",
     outboxRecoveryDeleteTitle: "Delete this saved copy?",
     outboxRecoveryDeleteConfirm:
-      "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a chat will not be deleted.",
+      "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a session will not be deleted.",
     outboxRecoveryDeleteConflict:
       "This saved copy changed while you were reviewing it. Nothing was deleted. Reload and review it again.",
     attachments: {

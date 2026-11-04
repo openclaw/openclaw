@@ -335,7 +335,7 @@ describe("DraftSubmissionFlow native terminal", () => {
       if (failure === "mentions") {
         expect(flow.mentions).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
         expect(flow.blockedSubmitNotice()).toBe(
-          "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
+          "Human mentions are not available in this mode. Remove the selected mentions or send from a normal session.",
         );
       }
       if (failure === "overrides") {
