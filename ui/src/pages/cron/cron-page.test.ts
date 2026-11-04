@@ -384,7 +384,9 @@ it.each(["operator.write", "operator.read"])(
     gateway.emitSnapshot({ hello: harness.operatorHello([scope]) });
     staleRunButton.click();
     await page.settle();
-    expect(page.textContent).toContain("Browsing only");
+    expect(page.textContent).toContain(
+      "Only the owner with automation access or an admin can change this automation.",
+    );
     expect(page.querySelector(dom.testId("cron-row-run-access-job"))).toBeNull();
     expect(
       request.mock.calls.some(([method]) =>

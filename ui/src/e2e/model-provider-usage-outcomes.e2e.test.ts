@@ -12,8 +12,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 const now = Date.now();
-const unavailableMessage =
-  "Provider usage is unavailable; the last request failed. Refresh to retry.";
+const unavailableMessage = "Couldn’t load provider usage. Refresh to try again.";
 
 const config = {
   agents: { defaults: { model: "openai/gpt-5.5" } },
@@ -127,7 +126,7 @@ suite.define(() => {
           await page.locator('[data-provider-id="openai"]').waitFor();
           await expect
             .poll(() => page.locator('.provider-row[data-provider-id="openai"]').textContent())
-            .toContain("Check failed");
+            .toContain("Couldn’t check usage");
           await expandProvider(page, "openai");
           await expect
             .poll(() => page.locator('.provider-row[data-provider-id="openai"]').textContent())

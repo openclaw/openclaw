@@ -168,7 +168,7 @@ describe("session menu", () => {
     Object.assign(profiles[2]!, { mergedInto: "research:one" });
     const { context } = createSessionOwnerMenuHarness(() => ({ profiles }));
     const { menu, onAction, onClose } = await actionMenu({ context, currentOwner });
-    await waitForOwners(menu, ["Me", "Research", "Colleague", profiles[1]!.id]);
+    await waitForOwners(menu, ["Me", "Research", "Colleague", "Person profile-"]);
     const selected = menuItem(menu, selectedLabel);
     await waitForSolid(() => expect(selected.getAttribute("role")).toBe("menuitemradio"));
     expect(selected.getAttribute("aria-checked")).toBe("true");
@@ -473,7 +473,7 @@ describe("session menu", () => {
     expect(onAction).not.toHaveBeenCalled();
     const submenu = await openSubmenu(menu, "Move to group");
     expect(
-      menuItem(submenu, returnsToGroups ? "Move back to Groups" : "Remove from group"),
+      menuItem(submenu, returnsToGroups ? "Move back to groups" : "Remove from group"),
     ).toBeDefined();
     const research = menuItem(submenu, "Research");
     expect(research.getAttribute("aria-checked")).toBe("true");

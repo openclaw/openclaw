@@ -496,11 +496,13 @@ export function ModelAccountsSection(props: StateProps & { inventory: JSX.Elemen
   const person = () =>
     snapshot().selfUser?.id === state().props.target.read().identityId ? snapshot().selfUser : null;
   const unavailableReason = () =>
-    !person()
-      ? "identity"
-      : hasOperatorWriteAccess(snapshot().hello?.auth ?? null)
-        ? "profile"
-        : "write";
+    snapshot().phase !== "connected"
+      ? "disconnected"
+      : !person()
+        ? "identity"
+        : hasOperatorWriteAccess(snapshot().hello?.auth ?? null)
+          ? "profile"
+          : "write";
   return (
     <SettingsSection
       title={t("profilePage.modelAccounts.title")}
@@ -526,6 +528,12 @@ export function ModelAccountsSection(props: StateProps & { inventory: JSX.Elemen
         </>
       }
     >
+      <Show when={state().target && snapshot().phase !== "connected"}>
+        <SettingsRow
+          title={t("profilePage.modelAccounts.signInUnavailable")}
+          description={t("profilePage.modelAccounts.unavailable.disconnected")}
+        />
+      </Show>
       <Show
         when={state().target}
         fallback={

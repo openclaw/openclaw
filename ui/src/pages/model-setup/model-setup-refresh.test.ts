@@ -196,7 +196,7 @@ describe("Model setup refresh continuity", () => {
           expect(callsFor(request, "models.list")).toHaveLength(2);
           expect(alert()).toBeNull();
           if (!warm) {
-            expect(status()?.textContent).toContain("Checking installed agents");
+            expect(status()?.textContent).toContain("Loading installed agents");
           }
         });
         retry.resolve({ models: warm ? [{ ...model, name: "Refreshed fixture model" }] : [] });
@@ -206,9 +206,7 @@ describe("Model setup refresh continuity", () => {
           expect(status()).toBeNull();
         } else {
           await waitForFast(() =>
-            expect(status()?.textContent).toContain(
-              "No models are available from installed agents",
-            ),
+            expect(status()?.textContent).toContain("No models from installed agents yet"),
           );
         }
         expect(alert()).toBeNull();

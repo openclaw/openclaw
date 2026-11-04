@@ -122,7 +122,7 @@ async function trackReader(page: Page) {
     rail.locator(`[data-position-marker-id="position-rail-${index}"]`);
   const logicalCount = () => railCount(rail);
   const showMarker = async (index: number) => {
-    await setScrollTop(rail.locator(".chat-position-rail__marks"), index * 12);
+    await setScrollTop(rail.locator(".chat-position-rail__marks"), index * 10);
     await markerForIndex(index).waitFor();
   };
   const preview = rail.locator(".chat-position-rail__preview-copy");

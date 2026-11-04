@@ -422,8 +422,12 @@ the authenticated `gh` CLI and prints focused local proof. `--repo` defaults to
 
 The command fetches each failed or timed-out job's log once, with at most four
 requests in flight, processes failed jobs concurrently, and skips CI control jobs.
-It shows each job's pre-existing/new/unknown class and the deduplicated Vitest
-files and test names.
+When logs are unavailable or yield no test selections, it recovers reported
+failures from check-run annotations. Annotation-only discovery is labeled as
+potentially incomplete because Vitest does not annotate every failure. UI shard
+paths are resolved relative to `ui/`; annotation titles identify the test entry
+point even when the error points into a helper. It shows each job's
+pre-existing/new/unknown class and the deduplicated Vitest files and test names.
 New and unknown failures appear first; pre-existing failures appear separately
 and are excluded from the rerun command unless `--include-pre-existing` is set.
 Classification uses the same owner as the PR failure table.

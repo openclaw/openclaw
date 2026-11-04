@@ -138,7 +138,9 @@ describe("cron view list pane", () => {
       expect(text(container, props.jobs ? ".cron-table" : ".cron-empty-state")).toContain(message);
       expect(attribute(container, ".cron-table", "aria-busy")).toBe(props.loading ? "true" : null);
       if (message === "No automations yet") {
-        expect(text(container, ".cron-empty-state")).toContain("Describe what OpenClaw should do");
+        expect(text(container, ".cron-empty-state")).toContain(
+          "Create an automation to schedule work for an agent.",
+        );
       }
       if (props.error) {
         expect(text(container, '.cron-error-banner[role="alert"]')).toContain(props.error);
