@@ -198,7 +198,7 @@ it("displays desktop worker failures without unsupported controls", async () => 
 });
 it("switches the advertised Mac experience and follows the native owner's saved value", async () => {
   const { page, set, render } = await setup();
-  const title = "Native experience (Experimental)";
+  const title = "Native experience (experimental)";
   const experience = row(page, title);
   expect(toggleInput(experience).checked).toBe(false);
   toggle(page, title, true);
@@ -234,7 +234,7 @@ it("switches Gateway hosting only when available and follows the native owner's 
   expect(toggleInput(hosting).checked).toBe(true);
   await waitForSolid(() =>
     expect(hosting.querySelector('[role="alert"]')?.textContent).toContain(
-      "Could not change Gateway hosting. Gateway did not become ready.",
+      "Couldn’t change whether OpenClaw stays running. Try again. Gateway did not become ready.",
     ),
   );
   toggle(page, title, false);
@@ -299,7 +299,7 @@ it.each([deviceTag, permissionsTag] as const)(
   async (tag) => {
     const { capability } = createCapability(null);
     const waitingPage = await mount(tag, capability);
-    expect(waitingPage.textContent).toContain("Waiting for settings from the app");
+    expect(waitingPage.textContent).toContain("Loading app settings…");
     expect(waitingPage.querySelector("input.settings-toggle__input")).toBeNull();
   },
 );
@@ -310,19 +310,19 @@ it("gates unavailable native controls and delegates Mac panels", async () => {
   snapshot.app.quickChatShortcut = null;
   snapshot.app.launchAtLoginAvailable = false;
   const { capability, page } = await setup(snapshot);
-  expect(row(page, "Quick Chat shortcut").textContent).toContain("Not set");
+  expect(row(page, "Quick chat shortcut").textContent).toContain("Not set");
   expect(toggleInput(row(page, "Launch at login")).disabled).toBe(true);
   expect(row(page, "Launch at login").textContent).toContain("requires a bundled app");
   expect(
-    row(page, "Computer Control provider").querySelector<HTMLOptionElement>('option[value="cua"]')!
+    row(page, "Computer control provider").querySelector<HTMLOptionElement>('option[value="cua"]')!
       .disabled,
   ).toBe(true);
-  expect(row(page, "Allow Computer Control").textContent).toContain(
+  expect(row(page, "Allow computer control").textContent).toContain(
     "without per-action confirmation. High risk.",
   );
 
   for (const [title, panel] of [
-    ["Quick Chat shortcut", "quick-chat-shortcut"],
+    ["Quick chat shortcut", "quick-chat-shortcut"],
     ["Browser logins", "browser-import"],
     ["Debug window", "debug"],
   ] as const) {
@@ -347,7 +347,7 @@ it("renders new native snapshots and removes controls whose native capabilities 
   next.browser.cookieSync.available = false;
   render(next);
   expect(toggleInput(row(page, "Enable Peekaboo Bridge")).disabled).toBe(true);
-  expect(page.querySelector('[aria-label="Computer Control provider"]')).toBeNull();
+  expect(page.querySelector('[aria-label="Computer control provider"]')).toBeNull();
   expect(page.querySelector('[aria-label="Dock icon"]')).toBeNull();
   expect(page.textContent).not.toContain("Import browser logins…");
   expect(page.querySelector('[aria-label="Target profile"]')).toBeNull();

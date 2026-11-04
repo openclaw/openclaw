@@ -29,7 +29,9 @@ it("loads route subtitles with command-palette search", async () => {
   );
   expect(en.subtitles).toBe(subtitles);
   expect(manager.t("subtitles.appearance")).toBe("Darstellung");
-  expect(manager.t("subtitles.connection")).toBe("Gateway connection and browser sign-in.");
+  expect(manager.t("subtitles.connection")).toBe(
+    "Manage how this browser connects to the Gateway.",
+  );
 });
 
 it("loads executor-only copy when a slash command is executed", async () => {

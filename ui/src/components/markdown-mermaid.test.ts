@@ -171,9 +171,9 @@ it("preserves source and reports copy failure", async () => {
 });
 
 it.each([
-  { failure: "layout", message: "Check the source or simplify the diagram" },
+  { failure: "layout", message: "Check the source or simplify it." },
   { failure: "renderer", message: "check proxy or authentication rules" },
-  { failure: "image", message: "The diagram image could not be displayed" },
+  { failure: "image", message: "Couldn’t display the diagram image" },
 ])("keeps $failure failures actionable and recovers", async ({ failure, message }) => {
   if (failure === "layout") {
     renderSvg.mockRejectedValueOnce(new Error("<script>internal parser detail</script>"));

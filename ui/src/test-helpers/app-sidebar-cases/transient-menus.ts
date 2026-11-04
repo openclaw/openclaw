@@ -90,7 +90,9 @@ it.each(["recreated", "different"] as const)("AppSidebar isolates %s pin menus",
     expect(sidebar.sidebarEntries).toEqual([]);
     expect(first.isConnected).toBe(false);
     await selectSidebarView(sidebar, "pages");
-    const page = q('.sidebar-pages [data-sidebar-entry="route:usage"]')!;
+    const selector = '.sidebar-pages [data-sidebar-entry="route:usage"]';
+    await vi.waitFor(() => expect(q(selector)).not.toBeNull());
+    const page = q(selector)!;
     await click(
       page
         .closest(".sidebar-pages__entry")!

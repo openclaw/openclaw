@@ -721,7 +721,7 @@ describe("assistant panel", () => {
         { sessionKey: "stale", agentId: "main", label: "Stale" },
         {},
       ),
-    ).toThrow("conversation dock is unavailable");
+    ).toThrow("Couldn’t open the session dock. Reopen the Control UI and try again.");
     openReview(currentContext.assistantDock);
     await panel.updateComplete;
     expect(home(panel)?.sessionKey).toBe("agent:research:review");

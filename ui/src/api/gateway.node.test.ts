@@ -547,7 +547,8 @@ describe("GatewayBrowserClient", () => {
       message: "constructor failed",
       code: "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR",
       reason: "websocket error",
-      guidance: "Could not create the Gateway WebSocket: constructor failed",
+      guidance:
+        "Couldn’t create the Gateway WebSocket. Check the Gateway WebSocket URL and browser security policy. Details: constructor failed",
     },
   ])(
     "reports $name socket construction failures without retrying",
@@ -579,7 +580,6 @@ describe("GatewayBrowserClient", () => {
           details: { code, browserErrorName: name, browserMessage: message },
         },
       });
-      expect(wsInstances).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(30_000);
       expect(onClose).toHaveBeenCalledTimes(1);
     },

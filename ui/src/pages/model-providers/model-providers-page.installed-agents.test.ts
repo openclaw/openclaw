@@ -285,7 +285,7 @@ it("lists every reported agent with its installation status only when advertised
   // A missing app has no switch to flip; it is named on the shared not-detected line.
   expect(agentRow(page, "qwen")).toBeNull();
   expect(page.querySelector("[data-installed-agents-missing]")?.textContent).toContain(
-    "Not detected on the Gateway computer: Qwen Code.",
+    "Not found on the computer running OpenClaw: Qwen Code.",
   );
   expect(agentRow(page, "pi")?.textContent).toContain("Not verified");
   expect(agentRow(page, "kilo")?.textContent).toContain("Use Kilo");
@@ -330,7 +330,7 @@ it("distinguishes failed and pending discovery and lets Check again recover mode
   const page = appendPage(context);
   await waitForProviders(page);
   await waitForSolid(() => {
-    expect(agentRow(page, "qwen")?.textContent).toMatch(/sign in required/i);
+    expect(agentRow(page, "qwen")?.textContent).toMatch(/sign-in required/i);
     expect(agentRow(page, "kilocode")?.textContent).toMatch(/models unavailable/i);
     expect(agentText(page)).toMatch(/discovering models/i);
     expect(agentText(page)).not.toMatch(/sign.in/i);
@@ -339,7 +339,7 @@ it("distinguishes failed and pending discovery and lets Check again recover mode
   refreshButton(page, ".model-providers__installed-agents").click();
   await waitForSolid(() => {
     expect(agentRow(page, "qwen")?.textContent).toMatch(/models available/i);
-    expect(agentRow(page, "qwen")?.textContent).not.toMatch(/sign in required/i);
+    expect(agentRow(page, "qwen")?.textContent).not.toMatch(/sign-in required/i);
   });
 });
 
@@ -504,7 +504,7 @@ it("keeps the list readable but locked without admin access", async () => {
 
   expect(toggle(page).disabled).toBe(true);
   expect(page.querySelector(".model-providers__installed-agents")?.textContent).toContain(
-    "Model changes require operator.admin access.",
+    "You can view Models, but only admins can change them.",
   );
   expect(runtimeConfig.patch).not.toHaveBeenCalled();
 });
@@ -524,7 +524,9 @@ it("releases the initial provider gate after inventory failure and recovers on r
   await waitForSolid(() => expect(page.querySelector(".model-providers__search")).not.toBeNull());
   const section = page.querySelector(".model-providers__installed-agents")!;
   await waitForSolid(() =>
-    expect(section.querySelector('[role="alert"]')?.textContent).toBe("Inventory unavailable"),
+    expect(section.querySelector('[role="alert"]')?.textContent).toBe(
+      "Couldn’t complete the request. Try again. Inventory unavailable",
+    ),
   );
   [...section.querySelectorAll("button")]
     .find((button) => button.textContent?.trim() === "Retry")!
@@ -553,7 +555,9 @@ it("retains inventory and its refresh control through a failed refresh and retry
   expect(agentRow(page, "opencode")).toBe(row);
   refreshing.reject(new Error("Inventory refresh failed"));
   await waitForSolid(() =>
-    expect(section.querySelector('[role="alert"]')?.textContent).toBe("Inventory refresh failed"),
+    expect(section.querySelector('[role="alert"]')?.textContent).toBe(
+      "Couldn’t complete the request. Try again. Inventory refresh failed",
+    ),
   );
   expect(refreshButton(page, ".model-providers__installed-agents")).toBe(refresh);
   expect(refresh.getAttribute("aria-label")).toBe("Check again");

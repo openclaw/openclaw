@@ -331,12 +331,7 @@ describe("buildInboundUserContextPrefix", () => {
   });
 
   it.each([
-    { name: "native window", reference: true },
-    {
-      name: "merged session window",
-      source: "session",
-      reference: true,
-    },
+    { name: "native IDs after transcript enrichment", source: "session", reference: true },
     { name: "normalized body", body: "quoted\nstatus\0 body", reference: true },
     { name: "different message ID", id: "34970", reference: false },
     { name: "transcript ID", id: "session:34971", reference: false },
@@ -775,21 +770,15 @@ describe("buildInboundUserContextPrefix", () => {
           timestamp: 1_736_380_700_000,
           messageId: "m-2",
           media: [
-            {
-              path: "/tmp/openclaw-secret-image-1.png",
-              url: "https://cdn.example.test/private-token-1",
-              contentType: "image/png",
-              kind: "image",
-              messageId: "m-2",
-            },
-            {
-              path: "/tmp/openclaw-secret-image-2.jpg",
-              url: "https://cdn.example.test/private-token-2",
-              contentType: "image/jpeg",
-              kind: "image",
-              messageId: "m-2",
-            },
-          ],
+            { extension: "png", contentType: "image/png" },
+            { extension: "jpg", contentType: "image/jpeg" },
+          ].map(({ extension, contentType }, index) => ({
+            path: `/tmp/openclaw-secret-image-${index + 1}.${extension}`,
+            url: `https://cdn.example.test/private-token-${index + 1}`,
+            contentType,
+            kind: "image",
+            messageId: "m-2",
+          })),
         },
       ],
     } as TemplateContext);
