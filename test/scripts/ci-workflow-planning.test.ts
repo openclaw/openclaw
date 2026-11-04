@@ -12645,6 +12645,7 @@ describe("ci workflow guards", () => {
     );
     expect(diagnostics.if).toBe("always()");
     expect(diagnostics.with.path.trim().split("\n")).toEqual([
+      "apps/ios/build/SnapshotLogs/*.log",
       "apps/ios/build/screenshot-diagnostics.json",
       "${{ runner.temp }}/ios-resource-timeline.jsonl",
     ]);
