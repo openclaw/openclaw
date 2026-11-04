@@ -411,9 +411,9 @@ const keywordState = (mode: string, requested?: string) => ({
 });
 it.each<[string, Partial<MemoryProviderStatus>, boolean]>([
   [
-    "pending embeddings after reacquisition",
-    { custom: { providerState: { mode: "pending" }, indexIdentity: { status: "valid" } } },
-    false,
+    "pending embeddings on a complete index",
+    { ...providerState("pending", "local"), ...vectorState("complete") },
+    true,
   ],
   ["incomplete vectors", vectorState("incomplete"), false],
   ["unverified vectors", vectorState("unverified"), false],
