@@ -2,25 +2,72 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 export type SidebarExpansionMode = "collapsed-by-user" | "expanded" | "expanded-fully";
 
+type SidebarExpansionScope = { agentId: string; connectionIdentity: unknown };
+
 /** Parent disclosure state: explicit choices plus the child identities each parent last showed. */
 export class SidebarChildExpansion {
   private readonly modes = new Map<string, SidebarExpansionMode>();
   private readonly observedChildKeys = new Map<string, readonly string[]>();
   private restoredPending = false;
+  private activeSessionKey: string | null = null;
+  private readonly revealedAncestors = new Set<string>();
 
   constructor(private readonly onChange: () => void) {}
 
   /** Opens a projection pass; a scope change drops state unless a snapshot handoff is pending. */
-  beginPass(scopeChanged: boolean): void {
+  beginPass(
+    input: SidebarExpansionScope & { rows: readonly SidebarRecentSession[] },
+    previous: SidebarExpansionScope | null,
+  ): void {
+    const scopeChanged =
+      previous !== null &&
+      (previous.agentId !== input.agentId ||
+        previous.connectionIdentity !== input.connectionIdentity);
+    if (scopeChanged) {
+      this.activeSessionKey = null;
+      this.revealedAncestors.clear();
+    }
     if (scopeChanged && !this.restoredPending) {
       this.modes.clear();
       this.observedChildKeys.clear();
     }
     this.restoredPending = false;
+    this.revealActiveSession(input.rows);
   }
 
   keys(): string[] {
     return [...this.modes.keys(), ...this.observedChildKeys.keys()];
+  }
+
+  private revealActiveSession(rows: readonly SidebarRecentSession[]): void {
+    const ancestors: string[] = [];
+    const visit = (row: SidebarRecentSession): string | null => {
+      let activeKey: string | null = null;
+      for (const child of row.children) {
+        activeKey = visit(child) ?? activeKey;
+      }
+      if (activeKey !== null) {
+        ancestors.push(row.key);
+      }
+      return row.visuallyActive ? row.key : activeKey;
+    };
+    let sessionKey: string | null = null;
+    for (const row of rows) {
+      sessionKey = visit(row) ?? sessionKey;
+    }
+    if (this.activeSessionKey !== sessionKey) {
+      this.activeSessionKey = sessionKey;
+      this.revealedAncestors.clear();
+    }
+    for (const key of ancestors) {
+      // Reveal late-arriving ancestors once; refreshes still respect a manual collapse.
+      if (!this.revealedAncestors.has(key)) {
+        if (!this.isExpanded(key)) {
+          this.modes.set(key, "expanded");
+        }
+        this.revealedAncestors.add(key);
+      }
+    }
   }
 
   observe(session: SidebarRecentSession, listLoaded: boolean): void {
@@ -63,6 +110,7 @@ export class SidebarChildExpansion {
   }
 
   restore(rows: readonly { key: string; childrenDisplayMode?: SidebarExpansionMode }[]): void {
+    this.revealedAncestors.clear();
     this.modes.clear();
     this.observedChildKeys.clear();
     for (const row of rows) {

@@ -328,3 +328,60 @@ it("never leaks a held backing-work subtitle into a catalog display that omits o
     narration: undefined,
   });
 });
+
+it("reveals late active ancestry once per navigation without changing other disclosure choices", () => {
+  const treeProjection = new SidebarSessionProjection();
+  const leaf = sessionRow("leaf", { active: true, visuallyActive: true });
+  const middle = sessionRow("middle", {
+    children: [leaf],
+    childSessionKeys: [leaf.key],
+    containsActiveDescendant: true,
+  });
+  const root = sessionRow("root", {
+    children: [middle],
+    childSessionKeys: [middle.key],
+    containsActiveDescendant: true,
+  });
+  const unrelated = sessionRow("unrelated");
+  treeProjection.children.restore(
+    [root, middle, unrelated].map(({ key }) => ({
+      key,
+      childrenDisplayMode: "collapsed-by-user",
+    })),
+  );
+  const projectTree = (rows: SidebarRecentSession[]) =>
+    treeProjection.project(projectionInput(rows));
+  projectTree([sessionRow(root.key), unrelated]);
+  expect(treeProjection.children.isExpanded(root.key)).toBe(false);
+  projectTree([root, unrelated]);
+  expect(treeProjection.children.isExpanded(root.key)).toBe(true);
+  expect(treeProjection.children.isExpanded(middle.key)).toBe(true);
+  expect(treeProjection.children.isExpanded(unrelated.key)).toBe(false);
+  treeProjection.children.showMore(root.key);
+  treeProjection.children.toggle(middle.key);
+  projectTree([root, unrelated]);
+  expect(treeProjection.children.isFullyShown(root.key)).toBe(true);
+  expect(treeProjection.children.isExpanded(middle.key)).toBe(false);
+  projectTree([]);
+  projectTree([root, unrelated]);
+  expect(treeProjection.children.isExpanded(middle.key)).toBe(true);
+  expect(treeProjection.children.isExpanded(unrelated.key)).toBe(false);
+});
+
+it("keeps the selected descendant's root visible beyond the first sidebar page", () => {
+  const treeProjection = new SidebarSessionProjection();
+  const selected = sessionRow("selected", { active: true, visuallyActive: true });
+  const ancestor = sessionRow("older-ancestor", {
+    childSessionKeys: [selected.key],
+    children: [selected],
+    containsActiveDescendant: true,
+  });
+  const quietRoots = Array.from({ length: 30 }, (_, index) => sessionRow("quiet-" + index));
+  const projected = treeProjection.project(
+    projectionInput([...quietRoots, ancestor], { grouping: "none" }),
+  );
+  expect(treeProjection.children.isExpanded(ancestor.key)).toBe(true);
+  expect(projected.sections.flatMap(({ rows }) => rows.map(({ key }) => key))).toContain(
+    ancestor.key,
+  );
+});
