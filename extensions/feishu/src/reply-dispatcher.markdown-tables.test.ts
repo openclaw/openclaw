@@ -329,6 +329,18 @@ describe("createFeishuReplyDispatcher markdown table modes", () => {
       expect(run.chat).toBe(`om_stream:P om-1:T#@ om-2:${first}@ om-3:${rest}@`);
     });
 
+    it("keeps a first chunk that ends at a soft line break when its idle is retried", async () => {
+      await useRealMarkdownChunker(120);
+      const words = Array.from({ length: 24 }, (_, index) => `word${index}`);
+      const [first, rest] = [words.slice(0, 9).join(" "), words.slice(9).join(" ")];
+      // The post writes the break as two spaces and a newline, and the cut falls on that newline.
+      const run = await drive("block", `${early}; preview P+T+W; idle; end`, {
+        rejectPost: 3,
+        names: { W: `${first}\n${rest}` },
+      });
+      expect(run.chat).toBe(`om_stream:P om-1:T#@ om-2:${first}  @ om-3:${rest}@`);
+    });
+
     it("posts a new assistant message with the prefix the settled one had", async () => {
       expect(await drive("block", `${early}; message; preview P+T+S; end`)).toMatchObject({
         chat: "om_stream:P om-1:T#@ om-2:P+T#+S@",
