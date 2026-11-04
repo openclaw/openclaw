@@ -48,8 +48,12 @@ export function isArchiveAccessDeniedError(err: unknown): boolean {
   );
 }
 
+export function formatMissingScopeMessage(scope: string, action: string): string {
+  return `Couldn’t ${action}. Ask an admin to grant ${scope}.`;
+}
+
 export function formatMissingOperatorReadScopeMessage(feature: string): string {
-  return `You don't have permission to view ${feature}. Ask the person who manages OpenClaw for access.`;
+  return formatMissingScopeMessage("operator.read", `view ${feature}`);
 }
 
 /** Retry only a typed deadline or an explicitly retryable rejection of this read. */

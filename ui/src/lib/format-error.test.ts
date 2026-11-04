@@ -11,6 +11,19 @@ import { formatUiError, UserFacingError } from "./format-error.ts";
 const PROGRAMMING_MESSAGE = "Cannot read properties of undefined (reading 'map')";
 
 describe("formatUiError", () => {
+  it.each(["operator.write", "operator.admin"])(
+    "shows the required scope for a blocked request: %s",
+    (scope) => {
+      const error = new GatewayProtocolRequestError({
+        code: "FORBIDDEN",
+        message: "permission denied",
+        details: { code: "MISSING_SCOPE", missingScope: scope, requiredScopes: [scope] },
+      });
+      expect(formatUiError(error)).toBe(
+        `Couldn’t complete this request. Ask an admin to grant ${scope}.`,
+      );
+    },
+  );
   it.each([
     ["Camera access is blocked.", "Camera access is blocked."],
     ["OPENAI_API_KEY=sk-1234567890abcdef", "OPENAI_API_KEY=sk-123...cdef"],
