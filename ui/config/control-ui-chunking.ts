@@ -423,12 +423,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Shared protocol readers must not pull the lazy Plugins page into chat.
       return "plugin-contracts-runtime";
     case "ui/src/components/login-gate-solid.tsx":
-    case "ui/src/components/login-gate-browser-pair.tsx":
     case "ui/src/components/login-gate-feedback.ts":
     case "ui/src/i18n/locales/en-login.ts":
-    case "ui/src/lib/browser-pair.ts":
     case "ui/src/lib/gateway-secret-shape.ts":
-    case "src/shared/browser-pair.ts":
       return "login-runtime";
     case "ui/src/components/sidebar-update-card.tsx":
     case "ui/src/styles/sidebar-update-card.css":

@@ -6,6 +6,8 @@ import {
   createSignal,
   Errored,
   For,
+  lazy,
+  Loading,
   onSettled,
   Show,
 } from "solid-js";
@@ -17,7 +19,6 @@ import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts";
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
-import { canPairBrowserWithGateway } from "../lib/browser-pair.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import "../lib/toast-host.tsx";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
@@ -28,11 +29,6 @@ import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import {
-  createLoginGateBrowserPair,
-  LoginGateBrowserPairCard,
-  LoginGateBrowserPairLink,
-} from "./login-gate-browser-pair.tsx";
-import {
   type LoginFailureFeedback,
   type LoginFailureFeedbackParams,
   type LoginFailureStep,
@@ -40,10 +36,28 @@ import {
 } from "./login-gate-feedback.ts";
 import { ConnectCommand } from "./solid/connect-command.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
+import { LazyViewError } from "./solid/lazy-view-error.tsx";
 import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 import "./tooltip.ts";
 
 registerEnglishCatalog(registerLoginEnglish);
+
+const LoginGateBrowserPairCard = lazy(() => import("./login-gate-browser-pair.tsx"), {
+  export: "LoginGateBrowserPairCard",
+});
+
+/**
+ * Whether the selected Gateway is the one serving this page's pairing route. Pairing
+ * posts to the page's base path while redemption dials the selected URL, so Gateways
+ * mounted under different paths on one host are different issuers.
+ */
+export function canPairBrowserWithGateway(gatewayUrl: string, basePath: string): boolean {
+  const parsed = URL.parse(gatewayUrl);
+  return (
+    parsed?.host === window.location.host &&
+    normalizeBasePath(parsed.pathname) === normalizeBasePath(basePath)
+  );
+}
 
 export type LoginGateProps = LoginFailureFeedbackParams & {
   mascot?: ThemeMascot;
@@ -230,10 +244,17 @@ function LoginForm(
   );
 }
 
+/** Card 1 offers pairing as a second way in without crowding the sign-in form. */
 function BrowserPairSlot(props: ViewProps) {
   return (
     <Show when={canPairBrowserWithGateway(props.model.gatewayUrl, props.model.resourceBasePath)}>
-      <LoginGateBrowserPairLink onOpen={props.openPairCard} />
+      <button
+        type="button"
+        class="btn btn--ghost login-gate__browser-pair-start"
+        onClick={() => props.openPairCard()}
+      >
+        {t("login.browserPair.open")} <Icon name="chevronRight" />
+      </button>
     </Show>
   );
 }
@@ -430,15 +451,6 @@ function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): 
   });
   const [refreshing, setRefreshing] = createOptimistic(false);
   const [pairCardOpen, setPairCardOpen] = createSignal(false);
-  const pair = createLoginGateBrowserPair({
-    basePath: () => normalizeBasePath(model().resourceBasePath),
-    gatewayUrl: () => model().gatewayUrl,
-    onPaired: (bootstrapToken, gatewayUrl) => {
-      // Connection progress and errors belong to the sign-in card.
-      setPairCardOpen(false);
-      model().onBrowserPaired(bootstrapToken, gatewayUrl);
-    },
-  });
   const [now, setNow] = createSignal(Date.now());
   useVisiblePoll(1_000, () => setNow(Date.now()), {
     enabled: () =>
@@ -488,7 +500,6 @@ function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): 
       if (refreshAttempt && !ownsRefresh(refreshAttempt)) {
         retireRefresh();
       }
-      pair.retireUnlessTarget(host.props?.gatewayUrl);
     });
     return () => {
       retireRefresh();
@@ -614,7 +625,29 @@ function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): 
             </Show>
           }
         >
-          <LoginGateBrowserPairCard pair={pair} onBack={() => setPairCardOpen(false)} />
+          <Errored
+            fallback={(error, reset) => (
+              <LazyViewError
+                error={error()}
+                onRetry={() => reset()}
+                onClose={() => setPairCardOpen(false)}
+              />
+            )}
+          >
+            <Loading>
+              <LoginGateBrowserPairCard
+                host={host}
+                basePath={normalizeBasePath(model().resourceBasePath)}
+                gatewayUrl={model().gatewayUrl}
+                onPaired={(bootstrapToken, gatewayUrl) => {
+                  // Connection progress and errors belong to the sign-in card.
+                  setPairCardOpen(false);
+                  model().onBrowserPaired(bootstrapToken, gatewayUrl);
+                }}
+                onBack={() => setPairCardOpen(false)}
+              />
+            </Loading>
+          </Errored>
         </Show>
         {model().onOpenGatewaySettings && (
           <footer class="login-gate__recovery">

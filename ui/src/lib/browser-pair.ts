@@ -7,7 +7,6 @@ import {
   formatBrowserPairDeviceId,
   type BrowserPairAction,
 } from "../../../src/shared/browser-pair.js";
-import { normalizeBasePath } from "../app-route-paths.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./nodes/index.ts";
 
 const BROWSER_PAIR_POLL_INTERVAL_MS = 2_000;
@@ -41,19 +40,6 @@ async function postBrowserPair(params: {
       ...(requestId ? { requestId } : {}),
     }),
   });
-}
-
-/**
- * Whether the selected Gateway is the one serving this page's pairing route. Pairing
- * posts to the page's base path while redemption dials the selected URL, so Gateways
- * mounted under different paths on one host are different issuers.
- */
-export function canPairBrowserWithGateway(gatewayUrl: string, basePath: string): boolean {
-  const parsed = URL.parse(gatewayUrl);
-  return (
-    parsed?.host === window.location.host &&
-    normalizeBasePath(parsed.pathname) === normalizeBasePath(basePath)
-  );
 }
 
 export function createBrowserPairSession(params: {

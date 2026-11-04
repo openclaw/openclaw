@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { canPairBrowserWithGateway, createBrowserPairSession } from "../lib/browser-pair.ts";
+import { createBrowserPairSession } from "../lib/browser-pair.ts";
+// Preloaded so the gate's lazy card import resolves within one fake-timer settle.
+import "./login-gate-browser-pair.tsx";
+import { canPairBrowserWithGateway } from "./login-gate-solid.tsx";
 import { mountFailure } from "./login-gate.test-support.ts";
 
 vi.mock("../lib/nodes/index.ts", async (importOriginal) => ({

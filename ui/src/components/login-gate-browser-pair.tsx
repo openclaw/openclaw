@@ -1,58 +1,47 @@
+// Loaded when the person opens pairing, so the boot sign-in gate carries only its link.
 import { createSignal, onSettled, Show } from "solid-js";
 import { createBrowserPairSession, type BrowserPairState } from "../lib/browser-pair.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import type { LoginGateElement } from "./login-gate-solid.tsx";
 import { ConnectCommand } from "./solid/connect-command.tsx";
 import { Icon } from "./solid/icon.tsx";
 
-/** Owned by the gate so a waiting attempt survives its form and status layouts. */
-export function createLoginGateBrowserPair(params: {
-  basePath: () => string;
-  gatewayUrl: () => string;
+/**
+ * Card 2: one way in, so the sign-in form and its troubleshooting stay on card 1.
+ * The card owns its attempt; leaving it in any way ends the attempt.
+ */
+export function LoginGateBrowserPairCard(props: {
+  host: LoginGateElement;
+  basePath: string;
+  gatewayUrl: string;
   onPaired: (bootstrapToken: string, gatewayUrl: string) => void;
+  onBack: () => void;
 }) {
   const [state, setState] = createSignal<BrowserPairState>({ kind: "idle" });
   const session = createBrowserPairSession({
     get basePath() {
-      return params.basePath();
+      return props.basePath;
     },
     onState: setState,
-    onApproved: params.onPaired,
+    onApproved: (bootstrapToken, gatewayUrl) => props.onPaired(bootstrapToken, gatewayUrl),
   });
-  onSettled(() => session.dispose);
-  return {
-    state,
-    start: () => session.start(params.gatewayUrl()),
-    cancel: session.cancel,
-    retireUnlessTarget: session.retireUnlessTarget,
-  };
-}
-
-export type LoginGateBrowserPairModel = ReturnType<typeof createLoginGateBrowserPair>;
-
-/** Card 1 offers pairing as a second way in without crowding the sign-in form. */
-export function LoginGateBrowserPairLink(props: { onOpen: () => void }) {
-  return (
-    <button
-      type="button"
-      class="btn btn--ghost login-gate__browser-pair-start"
-      onClick={() => props.onOpen()}
-    >
-      {t("login.browserPair.open")} <Icon name="chevronRight" />
-    </button>
-  );
-}
-
-/** Card 2: one way in, so the sign-in form and its troubleshooting stay on card 1. */
-export function LoginGateBrowserPairCard(props: {
-  pair: LoginGateBrowserPairModel;
-  onBack: () => void;
-}) {
+  onSettled(() => {
+    // An approval is only valid for its issuer: a new target ends the attempt before Solid commits it.
+    const stopChange = listen(props.host, "login-gate-props-change", () =>
+      session.retireUnlessTarget(props.host.props?.gatewayUrl),
+    );
+    return () => {
+      stopChange();
+      session.dispose();
+    };
+  });
   const waiting = () => {
-    const current = props.pair.state();
+    const current = state();
     return current.kind === "waiting" ? current : null;
   };
   const failure = () => {
-    const current = props.pair.state();
+    const current = state();
     return current.kind === "failed" ? current : null;
   };
   return (
@@ -62,7 +51,7 @@ export function LoginGateBrowserPairCard(props: {
           type="button"
           class="btn btn--ghost login-gate__browser-pair-back"
           onClick={() => {
-            props.pair.cancel();
+            session.cancel();
             props.onBack();
           }}
         >
@@ -87,8 +76,8 @@ export function LoginGateBrowserPairCard(props: {
             <button
               type="button"
               class="btn primary login-gate__connect login-gate__browser-pair-get"
-              disabled={props.pair.state().kind === "starting"}
-              onClick={() => void props.pair.start()}
+              disabled={state().kind === "starting"}
+              onClick={() => void session.start(props.gatewayUrl)}
             >
               {t(failure() ? "common.retry" : "login.browserPair.getCode")}
             </button>
@@ -111,7 +100,7 @@ export function LoginGateBrowserPairCard(props: {
               <span class="session-run-spinner" aria-hidden="true" />
               {t("login.browserPair.waiting")}
             </p>
-            <button type="button" class="btn" onClick={() => props.pair.cancel()}>
+            <button type="button" class="btn" onClick={() => session.cancel()}>
               {t("common.cancel")}
             </button>
           </>
