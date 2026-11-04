@@ -17,19 +17,24 @@ import {
 } from "../../app-route-paths.ts";
 import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsLoadingSkeleton, SettingsPage } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsLoadingSkeleton,
+  SettingsPage,
+  SettingsPageHeader,
+} from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { WizardLogin } from "../../components/wizard-login-controller.tsx";
+import { configSecretFields } from "../../lib/config/config-secret-fields.ts";
 import { currentConfigRead } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-results.tsx";
+import "./custom-elements.ts";
 import {
   PluginArtTile,
   renderPluginConsentDialog as PluginConsentDialog,
 } from "./consent-dialog.tsx";
-import "./custom-elements.ts";
 import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import {
   pluginRowKey,
@@ -197,6 +202,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     onConfigPatch: (path: Array<string | number>, value: unknown) =>
       page().settings.patch(path, value),
     onConfigRemove: (path: Array<string | number>) => page().settings.patch(path, undefined),
+    configSecretFields: configSecretFields(page().context),
     onConfigReload: page().reloadConfig,
     onConfigReadRetry: actions.retryConfigRead,
     onConfigWriteRetry: () => void page().context.runtimeConfig.retry(),
@@ -307,11 +313,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                   page().context.basePath,
                 )
           }
-          backLabel={
-            page().surface === "discovery" || settingsParentRoute() === "plugins"
-              ? t("tabs.plugins")
-              : t("nav.settings")
-          }
+          backLabel={t("tabs.plugins")}
           tab={page().state.installedDetailTab}
           onBack={() => {
             if (settings()) {
@@ -344,6 +346,13 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
             icon: <Icon name="settings" />,
             onClick: () => actions.openPluginSettings(null),
           }}
+        />
+      )}
+      {page().surface !== "discovery" && !detailPluginId() && (
+        <SettingsPageHeader
+          registerHeading={page().registerRemovalHeading}
+          title={t("tabs.plugins")}
+          subtitle={t("pluginsPage.settingsDescription")}
         />
       )}
       <SettingsWorkspace>

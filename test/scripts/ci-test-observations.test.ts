@@ -76,6 +76,7 @@ describe("CI observation export", () => {
           cacheDirectory,
           configFiles: [configFile],
           configuration,
+          graphConfiguration: { files: [configFile], settings: configuration },
           env: {
             GITHUB_REPOSITORY: "example/project",
             GITHUB_RUN_ID: "100",
@@ -93,6 +94,10 @@ describe("CI observation export", () => {
           { complete: false, files: [{ outcome: "unknown", cases: null, dependencies: null }] },
         ]);
         expect(initial.preExecution.observations).toEqual(initial.observations);
+        expect(initial.preExecution.graphInputs).toMatchObject({
+          version: 1,
+          profile: "unit-fast",
+        });
         // Global setup and tests run after inventory; neither may rewrite its input identity.
         writeFileSync(configFile, "export default { changed: true };");
         writeFileSync(includeFile, "src/changed.test.ts");
@@ -133,6 +138,74 @@ describe("CI observation export", () => {
     },
   );
 
+  it("separates membership from graph inputs without hiding semantic changes", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ci-graph-inputs-"));
+    try {
+      const configFile = path.join(directory, "vitest.config.ts");
+      const setupFile = path.join(directory, "setup.ts");
+      const includeFile = path.join(directory, "include.txt");
+      writeFileSync(configFile, "export default {};");
+      writeFileSync(setupFile, "export {};");
+      const settings = { pool: "threads", alias: { find: /^example$/u, replacement: "./a.ts" } };
+      const capture = (name: string, graphSettings: unknown = settings, env = {}) => {
+        const selected = `src/${name}.test.ts`;
+        writeFileSync(includeFile, selected);
+        const observer = createCiTestObservationCapture({
+          repositoryRoot: process.cwd(),
+          cacheDirectory: directory,
+          configFiles: [configFile],
+          configuration: { ...settings, include: [selected] },
+          graphConfiguration: { files: [configFile, setupFile], settings: graphSettings },
+          env: {
+            OPENCLAW_VITEST_OBSERVATION_DIR: directory,
+            OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+            OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: includeFile,
+            ...env,
+          },
+        })!;
+        observer.record("inventory", {
+          version: 1,
+          dependencyRoot: "",
+          invocation: name,
+          runtime: "node",
+          runtimeVersion: process.version,
+          platform: process.platform,
+          arch: process.arch,
+          files: [{ ...file, file: selected }],
+        });
+        return JSON.parse(readFileSync(path.join(directory, "observations.json"), "utf8"));
+      };
+      const first = capture("first");
+      const second = capture("second");
+      expect(second.observations.context.configDigest).not.toBe(
+        first.observations.context.configDigest,
+      );
+      expect(second.observations.context.environmentDigest).not.toBe(
+        first.observations.context.environmentDigest,
+      );
+      expect(second.preExecution.graphInputs).toEqual(first.preExecution.graphInputs);
+      for (const changed of [
+        capture("first", { ...settings, pool: "forks" }),
+        capture("first", { ...settings, alias: { ...settings.alias, find: /^different$/u } }),
+        capture("first", settings, { OPENCLAW_TEST_WORKERS: "2" }),
+      ]) {
+        expect(changed.preExecution.graphInputs).not.toEqual(first.preExecution.graphInputs);
+      }
+      writeFileSync(setupFile, "export const changed = true;");
+      expect(capture("first").preExecution.graphInputs).not.toEqual(first.preExecution.graphInputs);
+      writeFileSync(setupFile, "export {};");
+      writeFileSync(configFile, "export default { changed: true };");
+      expect(capture("first").preExecution.graphInputs).not.toEqual(first.preExecution.graphInputs);
+      for (const invalid of [{ resolver: () => "unknown" }, new Map(), { timeout: Infinity }]) {
+        const unsupported = capture("first", invalid);
+        expect(unsupported.preExecution.graphInputs).toBeNull();
+        expect(unsupported.observations.invocations[0].files[0].outcome).toBe("unknown");
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps interrupted observations incomplete when native dependencies are missing", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "ci-observation-capture-"));
     try {
@@ -167,6 +240,76 @@ describe("CI observation export", () => {
         env: { OPENCLAW_VITEST_OBSERVATION_DIR: directory },
       });
       expect(() => unavailable!.record("run", {})).not.toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("retains terminal outcomes when native dependency indexes expand beyond the export limit", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ci-observation-capture-"));
+    try {
+      const files = Array.from({ length: 80 }, (_, index) => ({
+        ...file,
+        file: `src/example-${index}.test.ts`,
+      }));
+      const modules = Array.from(
+        { length: 300 },
+        (_, index) =>
+          `src/${"a".repeat(140)}/${"b".repeat(140)}/${"c".repeat(140)}/module-${index}.ts`,
+      );
+      writeFileSync(
+        path.join(directory, "dependencies.json"),
+        JSON.stringify({
+          version: 1,
+          projects: {
+            unit: {
+              modules,
+              files: Object.fromEntries(files.map((row) => [row.file, modules.map((_, i) => i)])),
+            },
+          },
+        }),
+      );
+      const capture = createCiTestObservationCapture({
+        repositoryRoot: process.cwd(),
+        cacheDirectory: directory,
+        configFiles: [],
+        configuration: {},
+        env: { OPENCLAW_VITEST_OBSERVATION_DIR: directory },
+      })!;
+      const events = receipts().map((line) => {
+        const match = /\[vitest:(\w+)\] (.*)/u.exec(line)!;
+        return { kind: match[1]!, value: JSON.parse(match[2]!) };
+      });
+      capture.record("inventory", { ...events[0]!.value, files });
+      const target = path.join(directory, "observations.json");
+      const initial = JSON.parse(readFileSync(target, "utf8"));
+      for (const [index, row] of files.entries()) {
+        capture.record("module", {
+          ...events[1]!.value,
+          ...row,
+          observationFile: row.file,
+          state: index === 1 ? "failed" : "passed",
+          cases: {
+            passed: 1,
+            failed: Number(index === 1),
+            skipped: Number(index === 2),
+            pending: 0,
+          },
+        });
+      }
+      capture.record("run", { ...events[2]!.value, reason: "failed", files: files.length });
+      const text = readFileSync(target, "utf8");
+      const result = JSON.parse(text);
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(8 * 1024 * 1024);
+      expect(result.preExecution).toEqual(initial.preExecution);
+      const invocation = result.observations.invocations[0];
+      expect(invocation.elapsedMs).toBe(100);
+      expect(invocation.files.map((row: { outcome: string }) => row.outcome)).toEqual(
+        files.map((_, index) => (index === 1 ? "failed" : index === 2 ? "unknown" : "passed")),
+      );
+      expect(
+        invocation.files.every((row: { dependencies: null }) => row.dependencies === null),
+      ).toBe(true);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

@@ -274,6 +274,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     config: cfg,
     env: process.env,
     enableAgentRuns: true,
+    receivesLocalMcpPolicy: true,
     forceWorkerRuns: opts.forceWorkerRuns,
     ephemeral: opts.ephemeral,
     installedAppsSharingEnabled: config.installedAppsSharing,
@@ -342,6 +343,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
           evt.payload.decision === "approved"
         ) {
           activeRuntime.refreshRunnerInventory();
+        }
+        return;
+      }
+      if (evt.event === "node.worker.localMcpPolicy") {
+        if (isRecord(evt.payload) && typeof evt.payload.allowed === "boolean") {
+          activeRuntime.setLocalMcpAllowed(evt.payload.allowed);
         }
         return;
       }

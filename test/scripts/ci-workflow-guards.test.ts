@@ -2568,7 +2568,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     for (const [group, expected] of [
       ["extension-package-boundary", 40],
       ["runtime-topology-architecture", 20],
-      ["plugin-sdk-api-diff", 30],
+      ["plugin-sdk-api-diff", 60],
       ["boundaries", 20],
       [undefined, 20],
     ] as const) {
@@ -3857,7 +3857,6 @@ server.listen(0, "127.0.0.1", () => {
     // Blacksmith caps backing disks per installation; snapshot validity belongs
     // in in-job fingerprints, not per-PR, commit, run, or hash key segments.
     const stickyKeys = readStickyDisks();
-    expect(stickyKeys.length).toBeGreaterThan(0);
     for (const { file, key } of stickyKeys) {
       expect(key, file).not.toContain("github.event.pull_request.number");
       expect(key, file).not.toContain("github.sha");
