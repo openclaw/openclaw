@@ -113,7 +113,6 @@ import { createReplyAccount } from "./reply-dispatcher.test-support.js";
 import type { FeishuStreamingSession } from "./streaming-card.js";
 type StreamingCloseResult = Awaited<ReturnType<FeishuStreamingSession["closeWithResult"]>>;
 const imageUrl = "https://example.com/image.png";
-
 function streamingCloseResult(source: {
   visibleReplySent: boolean;
   content?: string;
@@ -130,11 +129,9 @@ function streamingCloseResult(source: {
     ...(source.finalTextAccepted === false ? { finalTextAccepted: false } : {}),
   };
 }
-
 function streamingFailure(cause: Error, source: Parameters<typeof streamingCloseResult>[0]): Error {
   return createFeishuPartialReplyDeliveryError(cause, streamingCloseResult(source));
 }
-
 function visibleClose(content: string, messageId: string): StreamingCloseResult {
   return streamingCloseResult({ visibleReplySent: true, content, messageId });
 }
@@ -191,7 +188,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       },
     });
   });
-
   function useNonStreamingAutoAccount() {
     resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "off", "feishu"));
   }
@@ -256,7 +252,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expectClosed("accepted final");
     },
   );
-
   function useNonStreamingBlockAccount() {
     resolveFeishuAccountMock.mockReturnValue(
       createReplyAccount("auto", "off", "feishu", {
@@ -264,7 +259,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }),
     );
   }
-
   function useStreamingBlockAccount() {
     resolveFeishuAccountMock.mockReturnValue(
       createReplyAccount("auto", "partial", "feishu", {
@@ -272,13 +266,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }),
     );
   }
-
   function makeTableText(count: number): string {
     return Array.from({ length: count }, (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`).join(
       "\n\n",
     );
   }
-
   function expectSend(
     mock: ReturnType<typeof vi.fn>,
     expected: Record<string, unknown>,
@@ -286,7 +278,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   ) {
     expect(mock.mock.calls[callIndex]?.[0]).toEqual(expect.objectContaining(expected));
   }
-
   function expectStreamingStartOptions(index: number, expected: Record<string, unknown>) {
     expect(stream(index).start.mock.calls[0]).toEqual([
       "oc_chat",
@@ -330,7 +321,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     return { result, options: toTypingDispatcherOptions(result) };
   }
-
   async function holdMediaFinal(text: string) {
     const media = gate<{ messageId: string }>();
     sendMediaFeishuMock.mockImplementationOnce(media.wait);
@@ -339,7 +329,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await media.started;
     return { options, media, pending };
   }
-
   async function holdMediaPair(firstText: string, secondText = firstText) {
     const firstMedia = gate<{ messageId: string }>();
     const secondMedia = gate<{ messageId: string }>();
@@ -562,7 +551,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       },
     ],
   };
-
   function presentationCardBodies() {
     return sendCardFeishuMock.mock.calls.map(
       (call) => requireRecord(call[0], "native card send").card,
@@ -722,7 +710,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     kind: "tool" | "block" | "final";
     delivery: Awaited<ReturnType<TypingDispatcherOptions["deliver"]>>;
   };
-
   function createRecordedFeishuDispatcher(onDelivered?: (kind: string) => void) {
     const { result, options } = createDispatcherHarness();
     const deliveries: RecordedFeishuDelivery[] = [];
@@ -1061,7 +1048,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   );
 
   // Strings preview, [text] blocks, [text, true] error finals. null idles, true holds, false rejects.
-  // Numbers close invisibly: 0 fails recovery, 1 succeeds. Prefix recovers A1.; cut retains a line.
+  // Numbers close invisibly: 0 fails recovery, 1 succeeds, 2 starts a message. Chunks end after
+  // a digit. Static sends in failing reject (false) or accept only that part of their text.
+  const failing: Record<string, string | false> = { "A2.": false, "G.": "G. A1.", "F.": "F." };
   it.each([
     ["delta blocks", ["hello", ["lo world"]], ["hellolo world"]],
     ["covered tail", ["First.\n\nLast.", ["First."], ["\n\nLast."]], ["First.\n\nLast."]],
@@ -1079,18 +1068,27 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["recover", ["A. B.", ["A."], ["B."], 1, "A. B. C."], ["A. B.", "C."]],
     ["gap passes", ["A.", ["A."], 0, "A. B.", ["B."], 1, "A. B. C."], ["A.", "A. B.", "A. B. C."]],
     ["cut", ["    a\n    b", true, false, "    a\n    b\n    c"], ["    a\n    b", "    b\n    c"]],
-    ["prefix", ["A1.A2.", ["A1.A2."], 0, "A1.A2.C."], ["A1.A2.", "A2.C."]],
+    ["prefix", ["A1.A2.", ["A1.A2."], 1, "A1.A2.C."], ["A1.A2.", "A2.C."]],
+    ["repeat", ["X. Y. X.", ["X."], ["Y."], ["X."], 1, "X. Y. X. D."], ["X. Y. X.", "X. D."]],
+    ["twin", ["X.", ["X."], ["X."], 1, "X. D."], ["X.X.", "X. D."]],
+    ["full", ["F. F.", ["F."], ["F."], 1, "F. F. D."], ["F. F.", "F. D."]],
+    ["gap", ["G. A1.A2.", ["G."], ["A1.A2."], 1, "G. A1.A2. D."], ["G. A1.A2.", "G. A1.A2. D."]],
+    ["stale", ["A1.A2.", ["A1.A2."], 2, "A1. N", 1, "A1. N D."], ["A1.A2.\n\nA1. N", "A1. N D."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
     const close = gate<StreamingCloseResult>();
-    if (name === "prefix") {
-      getFeishuRuntimeMock().channel.text.chunkMarkdownTextWithMode.mockReturnValueOnce([
-        "A1.",
-        "A2.",
-      ]);
-      sendStructuredCardFeishuMock.mockResolvedValueOnce(undefined);
-    }
+    getFeishuRuntimeMock().channel.text.chunkMarkdownTextWithMode.mockImplementation(
+      (text: string) => text.split(/(?<=\d\.)/u),
+    );
+    sendStructuredCardFeishuMock.mockImplementation(async ({ text }: { text: string }) => {
+      const part = failing[text];
+      if (part !== undefined) {
+        throw part
+          ? streamingFailure(new Error("no"), { visibleReplySent: true, content: part })
+          : new Error("no");
+      }
+    });
     await options.onReplyStart?.();
     for (const event of events) {
       if (event === null) {
@@ -1108,6 +1106,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
           expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
           expect(streamingInstances).toHaveLength(name === "rejection" ? 1 : 2);
         }
+      } else if (event === 2) {
+        result.replyOptions.onAssistantMessageStart?.();
       } else if (typeof event === "number") {
         if (event === 0) {
           sendStructuredCardFeishuMock.mockRejectedValueOnce(new Error("no"));
