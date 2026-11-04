@@ -4,6 +4,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, expect, it, vi } from "vitest";
 import { AutofillConnectCards } from "./autofill-connect-cards.js";
 import { registerAutofill } from "./autofill-registration.js";
+import { AutofillError } from "./autofill-relay.js";
 import { AutofillService } from "./autofill-service.js";
 import { MemoryKeyedStore } from "./memory-store.test-support.js";
 
@@ -290,6 +291,8 @@ it("runs one connect checker from the card click and resumes the chat when conse
   const pickup = vi
     .spyOn(AutofillService.prototype, "pickup")
     .mockResolvedValueOnce({ state: "pending" })
+    // One relay blip must not end the check or wake the chat with a failure.
+    .mockRejectedValueOnce(new AutofillError("networkError"))
     .mockImplementationOnce(async () => {
       view.mockReturnValue({ state: "connected" });
       return { state: "connected" };
@@ -303,7 +306,7 @@ it("runs one connect checker from the card click and resumes the chat when conse
   await f.connectView(f.options);
   expect(scheduler.schedule).toHaveBeenCalledTimes(2);
   await jobs[1]!();
-  expect(pickup).toHaveBeenCalledTimes(2);
+  expect(pickup).toHaveBeenCalledTimes(3);
   expect(f.retained.release).toHaveBeenCalledTimes(1);
   const [text, options] = vi.mocked(f.system.enqueueSessionEvent).mock.calls[0]!;
   expect(text).toContain("1Password is now connected");

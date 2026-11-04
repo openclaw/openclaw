@@ -16,6 +16,9 @@ import { createAutofillTool } from "./autofill-tool.js";
 
 type GatewayOptions = Parameters<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>[0];
 
+// Pickup failures worth retrying within the consent window; fixed codes, no upstream text.
+const transientPickupErrors = new Set(["networkError"]);
+
 // Core admits session-scoped methods only at operator.write; the handler itself
 // still requires a real Control UI client holding operator.admin.
 const cardAccess = { mode: "write", requiredTool: "onepassword_autofill" } as const;
@@ -277,6 +280,17 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
                       await autofillClock.sleep(60_000, signal);
                       continue;
                     }
+                    // A relay or network blip is not a consent outcome; keep checking until
+                    // the consent expires instead of ending the card on one failed request.
+                    if (error instanceof AutofillError && transientPickupErrors.has(error.code)) {
+                      await autofillClock.sleep(5_000, signal);
+                      continue;
+                    }
+                    api.logger.warn(
+                      `1Password connect check stopped: ${
+                        error instanceof AutofillError ? error.code : "unexpected error"
+                      }`,
+                    );
                     // Lost authority stays quiet; an authorized stopped check must be visible.
                     checker.assertCurrent();
                     cards.stopped(input.sessionId);
