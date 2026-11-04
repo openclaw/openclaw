@@ -2671,7 +2671,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     }
   });
 
-  it("resolves the pull request base and changed files from the shallow security checkout", () => {
+  it("checks release fast lane test growth against the shallow pull request merge base", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
     const checkoutIndex = securitySteps.findIndex((step) => step.name === "Checkout");
     const checkout = expectDefined(securitySteps[checkoutIndex], "security checkout");
@@ -2712,11 +2712,17 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       ).trim();
     git(source, "init", "--initial-branch=main");
     writeFileSync(path.join(source, "base.txt"), "base\n");
+    mkdirSync(path.join(source, "config"));
+    writeFileSync(path.join(source, "config/test-lines-baseline.txt"), "0\n");
+    for (const file of ["scripts/check-test-lines-ratchet.mts", "scripts/lib/shrink-ratchet.mts"]) {
+      mkdirSync(path.dirname(path.join(source, file)), { recursive: true });
+      copyFileSync(file, path.join(source, file));
+    }
     git(source, "add", ".");
     git(source, "commit", "-m", "base");
     git(source, "checkout", "-b", "pull-request");
     for (let index = 0; index < 3; index++) {
-      writeFileSync(path.join(source, "change.txt"), `change ${index}\n`);
+      writeFileSync(path.join(source, "change.test.ts"), `export const change = ${index};\n`);
       git(source, "add", ".");
       git(source, "commit", "-m", `change ${index}`);
     }
@@ -2755,7 +2761,44 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     });
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(output, "utf8").trim()).toBe(`sha=${base}`);
-    expect(git(selected, "diff", "--name-only", base, "HEAD")).toBe("change.txt");
+    expect(git(selected, "diff", "--name-only", base, "HEAD")).toBe("change.test.ts");
+    const budget = expectDefined(
+      securitySteps.find((step) => step.name === "Check release fast lane test-line budget"),
+      "release fast lane budget check",
+    );
+    expect(budget["continue-on-error"]).not.toBe(true);
+    for (const [eventName, fastLane, outcome, admitted] of [
+      ["pull_request", "true", "success", true],
+      ["pull_request", "false", "success", false],
+      ["push", "true", "success", false],
+      ["pull_request", "true", "failure", false],
+    ] as const) {
+      expect(
+        Boolean(
+          evaluateWorkflowExpression(budget.if, {
+            eventName,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: { release_fast_lane: fastLane },
+            steps: { node_setup: { outcome, outputs: {} } },
+          }),
+        ),
+      ).toBe(admitted);
+    }
+    const check = () =>
+      runWorkflowShellScript(expectDefined(budget.run, "budget script"), {
+        cwd: selected,
+        env: { ...process.env, BASE_SHA: base },
+      });
+    const unallocated = check();
+    expect(unallocated.status, unallocated.stdout + unallocated.stderr).toBe(1);
+    expect(unallocated.stderr).toContain("over by: 1; net delta: +1.");
+    mkdirSync(path.join(selected, "config/test-lines-allocations"));
+    writeFileSync(path.join(selected, "config/test-lines-allocations/regression.txt"), "1\n");
+    git(selected, "add", "config/test-lines-allocations/regression.txt");
+    const allocated = check();
+    expect(allocated.status, allocated.stdout + allocated.stderr).toBe(0);
+    expect(allocated.stdout).toContain("Test lines OK: 1; ceiling: 1; slack: 0.");
   });
 
   it("keeps action manifests within the runner's anchor-free YAML grammar", () => {

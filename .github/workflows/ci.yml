@@ -1700,6 +1700,12 @@ jobs:
           source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
+      - name: Check release fast lane test-line budget
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && github.event_name == 'pull_request' && needs.preflight.outputs.release_fast_lane == 'true' }}
+        env:
+          BASE_SHA: *diff_base
+        run: node scripts/check-test-lines-ratchet.mts --base "$BASE_SHA" --no-merge-base
+
       - name: Setup protocol coverage compatibility dependencies
         id: protocol_dependencies
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_protocol_event_coverage == 'true' && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.checkout_revision != github.workflow_sha }}
