@@ -7,7 +7,6 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
-import { buildOpenAIRealtimeVoiceProvider } from "../../../../extensions/openai/api.js";
 import { withinTest } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -16,9 +15,11 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
+import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
+import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
   captureGatewayDeviceRevocation,
@@ -31,6 +32,10 @@ import {
 } from "../../server-plugin-in-process-dispatch.test-support.js";
 import { cleanupTalkConnection } from "../session-registry.js";
 import { talkSessionHandlers } from "./session.js";
+
+const { buildOpenAIRealtimeVoiceProvider } = await loadBundledPluginFacade<{
+  buildOpenAIRealtimeVoiceProvider: () => RealtimeVoiceProviderPlugin;
+}>({ pluginId: "openai", artifactBasename: "api.js" });
 
 type Frame = Record<string, unknown>;
 type Response = { ok: boolean; payload?: unknown; error?: { message?: string } };

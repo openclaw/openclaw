@@ -3520,8 +3520,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }));
     vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => ({
       ...(await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>()),
-      listTrackedTestFiles: (rootDir: string) =>
-        rootDir === "test" ? params.files.toSorted() : [],
+      listTrackedTestFiles: (rootDir: string, suffix = ".test.ts") =>
+        rootDir === "test" ? params.files.filter((file) => file.endsWith(suffix)).toSorted() : [],
     }));
     try {
       const { createNodeTestShardBundles: createPlan } =
