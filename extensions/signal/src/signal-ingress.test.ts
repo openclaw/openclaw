@@ -247,10 +247,8 @@ describe("Signal durable ingress", () => {
       gate.resolve();
       await new Promise(() => {});
     });
-    const receiving = started.receive(signalEvent());
-    await gate.promise;
-    await expect(started.stop()).resolves.toBeUndefined();
+    void started.receive(signalEvent()).catch(() => undefined);
+    await gate.promise.then(() => expect(started.stop()).resolves.toBeUndefined());
     monitors.delete(started);
-    void receiving.catch(() => undefined);
   });
 });
