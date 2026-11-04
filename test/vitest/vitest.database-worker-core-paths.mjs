@@ -1545,6 +1545,10 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/continuation/cross-session-targeting.nonexistent-target.test.ts",
   "src/auto-reply/continuation/trace-context-propagation.integration.test.ts",
   "src/auto-reply/continuation/delegate-claim-boundaries.test.ts",
+  // Session maintenance on these fixture writes runs the Gateway's preserve-key providers,
+  // and the continuation provider reads pending rows through shared state (#1544), so the
+  // writes need the host broker.
+  "src/plugin-sdk/session-transcript-hit.projection.test.ts",
   // Continuation custody and counts reach shared state from these suites' spawn,
   // result-accounting and cleanup paths, so they need the host broker.
   "src/agents/tools/sessions-spawn-tool.test.ts",
