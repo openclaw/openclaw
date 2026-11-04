@@ -114,6 +114,12 @@ If that session is archived, non-streaming requests return HTTP `409` with
 requests report the same error in the stream. Unarchive the session before
 retrying; the rejected request preserves its archived state and history.
 
+If session state changes or is invalidated while work is starting, non-streaming
+requests return HTTP `409` with `session_conflict_error`. Streaming requests keep
+HTTP `200` and report the conflict in the error event before `[DONE]`.
+Check the session state before retrying: the error does not guarantee that the
+request had no earlier effects, and the Gateway does not automatically replay it.
+
 ### Explicit incognito session continuation
 
 Explicitly selecting or continuing an incognito conversation with `x-openclaw-session-key` (the `sessionKey` override) requires effective `operator.admin` authority. This rule follows authority, not ingress: it denies both trusted-proxy callers without owner/admin authority and private `gateway.auth.mode="none"` callers that explicitly narrow `x-openclaw-scopes` below admin (for example, to `operator.write`). Either receives HTTP `403` with a `forbidden` error. A profile-less private no-auth caller on this path gets `missing scope: operator.admin`; for a profile-backed caller, the response hides the private target with this error shape (where `<sessionKey>` is the requested override):
