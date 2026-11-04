@@ -95,10 +95,13 @@ const publicationWriters = new Map<string, readonly string[]>([
     key(sharedPublication, "writeGitHubPublicationExecutionInDatabase"),
     [key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase")],
   ],
+  [
+    key(personalPublication, "requirePersonalGitHubPublicationConfirmationInDatabase"),
+    [key(personalPublication, "githubPublications.personalRestart")],
+  ],
   ...[
     "claimPersonalGitHubPublicationInDatabase",
     "writePersonalGitHubPublicationInDatabase",
-    "requirePersonalGitHubPublicationConfirmationInDatabase",
     "markPersonalGitHubPublicationReportedInDatabase",
   ].map((name): [string, string[]] => [
     key(personalPublication, name),
@@ -319,12 +322,21 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
       key("src/state/local-onboarding-state.worker.ts", "localOnboarding.complete"),
       // installationCountStateKey is fixed to telemetry.installationCount.<endpoint hash>.
       key("src/infra/telemetry-store.worker.ts", "telemetry.claimInstallationCount"),
+      // Fixed update recovery/cohort prefixes cannot address authProfiles.store.
+      ...[
+        "beginPluginCohortRecovery",
+        "writePluginCohortRecovery",
+        "recordPluginCohortIndexPublicationInDatabase",
+        "recordPluginCohortMigrationPublicationInDatabase",
+      ].map((name) => key("src/infra/update-run-recovery-store.ts", name)),
     ],
   ],
   [
     key(machineState, "updateConfigMachineStateInDatabase"),
     [
       key(machineState, "updateConfigMachineState"),
+      // Deletes only the exact run/transaction-bound update recovery pair.
+      key("src/infra/update-run-recovery-store.ts", "deletePluginCohortRecovery"),
       // Both receipt writers construct only automation-default: keys in their kernel.
       ...["recordDefaultProactiveJobInDatabase", "recordConvertedProactiveJobInDatabase"].map(
         (name) => key("src/cron/proactive-job-receipt.kernel.ts", name),
@@ -531,6 +543,16 @@ const callers = new Map<string, readonly string[]>([
     [key("src/config/sessions/session-sharing-store.worker.ts", "bindSqliteWorkerBackend/execute")],
   ]),
   [
+    key(sessionMembers, "addSessionMemberInTransaction"),
+    [
+      key(sessionMembers, "addSessionMember"),
+      key(
+        "src/config/sessions/session-accessor.sqlite-involvement.worker.ts",
+        "updateSessionProfileInvolvementInTransaction",
+      ),
+    ],
+  ],
+  [
     key(sessionArtifacts, "clearSessionCollaborationForKey"),
     [
       key(
@@ -695,7 +717,15 @@ const exclusiveMaintenanceCallers = new Map([
 
 // Counts shrink freely. An additional sink, even in an existing function, needs review.
 const sinks = new Map<string, number>([
-  ...["addSessionMember", "removeSessionMember"].map((name): [string, number] => [
+  // Private restore output copies the validated named pair verbatim under parent exclusion.
+  [
+    key(
+      "src/infra/update-database-restore-source.ts",
+      "prepareUpdateDatabaseRestoreSourceInProcess",
+    ),
+    2,
+  ],
+  ...["addSessionMemberInTransaction", "removeSessionMember"].map((name): [string, number] => [
     key(sessionMembers, name),
     1,
   ]),
@@ -892,6 +922,10 @@ const credentialCommandOwners = new Map([
 ]);
 
 const repeatedEdges = new Map([
+  [
+    `${key(machineState, "writeConfigMachineStateInDatabase")}<-${key("src/infra/update-run-recovery-store.ts", "beginPluginCohortRecovery")}`,
+    2,
+  ],
   ...[
     key(
       "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",

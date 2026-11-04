@@ -247,6 +247,12 @@ OAuth refresh settlement remains owned by the OAuth manager.
   </Tab>
 </Tabs>
 
+Custom `StreamFn` factories may return a producer stream or a read-only stream
+with an async iterator and `result()`, either immediately or through a Promise.
+Read-only streams are bridged into the runtime while preserving their final
+`result()` independently of terminal-event completion. Existing synchronous
+producer streams retain their completion identity and lazy result behavior.
+
 Set `supportsSystemPromptCacheBoundary: true` on a provider registration
 only when its `createStreamFn` transport understands the stable/dynamic
 system-prompt boundary. Use `splitSystemPromptCacheBoundary` from
@@ -292,7 +298,7 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `catalog`                         | Model catalog or base URL defaults                                                          |
 | `applyConfigDefaults`             | Provider-owned global defaults during config materialization                                |
 | `normalizeModelId`                | Legacy/preview model-id alias cleanup before lookup                                         |
-| `normalizeTransport`              | Provider-family `api` / `baseUrl` cleanup before generic model assembly                     |
+| `normalizeTransport`              | Same-origin `api` / `baseUrl` cleanup for its transport family before model assembly        |
 | `normalizeConfig`                 | Normalize `models.providers.<id>` config                                                    |
 | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers                                 |
 | `resolveConfigApiKey`             | Provider-owned env-marker auth resolution                                                   |

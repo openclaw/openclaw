@@ -128,7 +128,7 @@ The same `docs` server, written straight into config:
 }
 ```
 
-An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
+An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). Config validation rejects definitions containing both, and writes reject new or edited mixed definitions. Existing mixed definitions keep their prior runtime behavior with a warning so upgrades can start. Doctor can normalize aliases but leaves the transport choice and authentication settings unchanged. For HTTP, remove the command, arguments, environment, and working directory; for stdio, remove the URL and HTTP transport, headers, OAuth, and TLS options. Updates can still record their channel before this explicit repair. The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
 Local `claude-cli` turns receive configured server tools through the Gateway's
 MCP bridge as `<server>__<tool>`, including when `tools.exec.host` is `"node"`.

@@ -1,3 +1,12 @@
+type TeamScaleAudioAttachment = {
+  type: "audio";
+  artifactId: string;
+  url: string;
+  fileName: string;
+  mimeType: string;
+  durationMs: number;
+};
+
 export function createTeamScaleDuplicateReadFixture(sessionKey: string, now: number) {
   const mediaId = "00000000-0000-4000-8000-000000000001";
   const mediaPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${mediaId}/full`;
@@ -12,7 +21,7 @@ export function createTeamScaleDuplicateReadFixture(sessionKey: string, now: num
       branch: "fixture/duplicate-reads",
       repoRoot: "/synthetic/team-scale-project",
     },
-    attachments: Array.from({ length: 6 }, (_unused, alias) => ({
+    attachments: Array.from({ length: 6 }, (_unused, alias): TeamScaleAudioAttachment => ({
       type: "audio",
       artifactId: `artifact_managed_media_${mediaId}`,
       url: `${mediaPath}?mediaTicket=historical-${alias}`,

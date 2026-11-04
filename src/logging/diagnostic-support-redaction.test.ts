@@ -190,6 +190,21 @@ describe("diagnostic support redaction", () => {
   });
 
   it.each([
+    ["Invalid package dist content inventory", " at /private/example/inventory.json"],
+    ["Invalid package dist content inventory", ": private-reason token=synthetic-private-token"],
+    [
+      "Invalid package dist content inventory: malformed metadata",
+      " at /private/example/inventory.json",
+    ],
+    ["Invalid package dist content inventory entry: malformed metadata", " for private-tenant"],
+    [
+      "Invalid package dist content inventory: content mismatch",
+      ` at /private/example/index.js: ${"a".repeat(64)}`,
+    ],
+    [
+      "Invalid package dist content inventory: executable permission mismatch",
+      " on private-host.example token=synthetic-private-token",
+    ],
     ["attempt state write refused", " for private-tenant at /private/example/state.sqlite"],
     ["sentinel transaction refused", " on private-host.example"],
     ["sentinel transaction unavailable", " for token=synthetic-private-token"],

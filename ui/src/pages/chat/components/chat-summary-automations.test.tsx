@@ -170,7 +170,7 @@ it("keeps cached continuation inert through an inventory failure until recovery"
       desktop: { expanded: true, onExpandedChange: vi.fn() },
       cached: {
         more: true,
-        rows: [{ id: "job-0", name: "Check the task", running: false, state: "", result: {} }],
+        rows: [{ id: "job-0", name: "Check the task", running: false, state: "" }],
       },
     });
     await advance();
@@ -284,37 +284,28 @@ it("updates a held automation's runtime state without rereading its inventory", 
   current.unmount();
 });
 
-it("keeps the last meaningful result while a quiet check advances freshness", async () => {
-  const checkedAt = Date.now() - 120_000;
-  const result = {
-    outcome: "blocked" as const,
-    summary: "Waiting for Windows CI",
-    atMs: checkedAt,
-  };
+it("shows only the automation name and schedule after runs and checks", async () => {
+  const ranAt = Date.now() - 120_000;
   const current = component(
-    jobsRequest(job({ lastMeaningfulResult: result, lastRunAtMs: checkedAt, lastDurationMs: 500 })),
+    jobsRequest(
+      job({
+        lastMeaningfulResult: {
+          outcome: "blocked",
+          summary: "Waiting for Windows CI",
+          atMs: ranAt,
+        },
+        lastRunAtMs: ranAt,
+        lastDurationMs: 500,
+        lastRunStatus: "error",
+        lastTriggerEvalAtMs: ranAt + 60_000,
+      }),
+    ),
   );
-  await current.ready("Waiting for Windows CI");
-  const before = current.find("time")?.getAttribute("datetime");
-  current.cron("finished", {
-    jobId: "summary-job",
-    durationMs: 1_000,
-    job: eventJob(checkedAt + 60_000, {
-      lastRunAtMs: checkedAt + 60_000,
-      lastDurationMs: 1_000,
-      lastRunStatus: "ok",
-      lastMeaningfulResult: result,
-    }),
-  });
-  await current.ready("Checked");
-  await waitForSolid(() => {
-    expect(current.find("time")?.getAttribute("datetime")).toBe(
-      new Date(checkedAt + 61_000).toISOString(),
-    );
-  });
-  expect(current.find("time")?.getAttribute("datetime")).not.toBe(before);
-  expect(current.element.textContent).toContain("Waiting for Windows CI");
-  expect(current.request).toHaveBeenCalledTimes(1);
+  await current.ready("Every 10 minutes");
+  expect(current.find(".chat-summary__automation-copy")?.textContent).toBe(
+    "Check the taskEvery 10 minutes",
+  );
+  expect(current.find("time")).toBeNull();
   current.unmount();
 });
 
@@ -518,7 +509,7 @@ it.each([false, true])("restores retry focus: moved=%s", async (moved) => {
   const { element, find } = current;
   const sibling = document.createElement("details");
   document.body.append(sibling);
-  await current.ready("Couldn't load automations.");
+  await current.ready("Couldn’t load automations. Try again.");
   expect(element.textContent).not.toContain("private server detail");
   const retry = find<HTMLButtonElement>(".chat-summary__automation-retry")!;
   expect(retry.textContent?.trim()).toBe("Retry");
@@ -665,8 +656,8 @@ it.each([false, true])("retires automation access and late pages: loaded=%s", as
   expect(current.element.textContent).not.toContain("Retired automation");
 });
 
-it("shares pending reads, retained results, and failed refresh recovery between the mobile list and overview", async () => {
-  const checkedAt = Date.now() - 30_000;
+it("shares pending reads, retained rows, and failed refresh recovery between the mobile list and overview", async () => {
+  const ranAt = Date.now() - 30_000;
   const first = createDeferred<Page>();
   const refresh = createDeferred<Page>();
   const recovery = createDeferred<Page>();
@@ -685,11 +676,11 @@ it("shares pending reads, retained results, and failed refresh recovery between 
         lastMeaningfulResult: {
           outcome: "blocked",
           summary: "Waiting for mobile review",
-          atMs: checkedAt - 60_000,
+          atMs: ranAt - 60_000,
         },
         lastRunStatus: "error",
-        lastRunAtMs: checkedAt - 60_000,
-        lastTriggerEvalAtMs: checkedAt,
+        lastRunAtMs: ranAt - 60_000,
+        lastTriggerEvalAtMs: ranAt,
       }),
     ]),
   );
@@ -698,17 +689,13 @@ it("shares pending reads, retained results, and failed refresh recovery between 
   const overview = view.container.querySelector(
     '.chat-details-mobile-root [data-details-destination="automation"]',
   );
-  expect(overview?.textContent).toContain("Waiting for mobile review");
-  expect(overview?.textContent).toContain("Check failed");
-  expect(overview?.querySelector("time")?.getAttribute("datetime")).toBe(
-    new Date(checkedAt).toISOString(),
-  );
   const retainedRows = [...rows()];
-  expect(retainedRows[0]?.textContent).toContain("Waiting for mobile review");
-  expect(retainedRows[0]?.textContent).toContain("Check failed");
-  expect(retainedRows[0]?.querySelector("time")?.getAttribute("datetime")).toBe(
-    new Date(checkedAt).toISOString(),
-  );
+  for (const row of [overview, retainedRows[0]]) {
+    expect(row?.textContent).toContain("Every 10 minutes");
+    expect(row?.textContent).not.toContain("Waiting for mobile review");
+    expect(row?.textContent).not.toContain("Check failed");
+    expect(row?.querySelector("time")).toBeNull();
+  }
   retainedRows[0]!.focus();
   current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
   await waitForSolid(() =>
@@ -719,7 +706,7 @@ it("shares pending reads, retained results, and failed refresh recovery between 
   refresh.reject(new Error("private inventory failure"));
   await waitForSolid(() => {
     expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
-      "Couldn't update automations.",
+      "Couldn’t update automations. Try again.",
     );
     expect(view.container.querySelector('[aria-busy="true"]')).toBeNull();
   });
@@ -830,6 +817,45 @@ it("retains reconnect facts and distinguishes auto-disabled from paused and stal
   expect(element.querySelectorAll(".chat-summary__automation")).toHaveLength(3);
   pending.resolve(page());
   await current.empty();
+});
+
+it("describes one-shot automations by local day and time instead of a full numeric date", async () => {
+  const now = new Date();
+  const at = (year: number, month: number, day: number, hour: number) => ({
+    kind: "at" as const,
+    at: new Date(year, month, day, hour).toISOString(),
+  });
+  const year = now.getFullYear();
+  const current = component(
+    jobsRequest(
+      job({
+        id: "today",
+        name: "Verify main CI",
+        scheduleKind: "at",
+        schedule: at(year, now.getMonth(), now.getDate(), 11),
+      }),
+      job({
+        id: "tomorrow",
+        name: "Morning check",
+        scheduleKind: "at",
+        schedule: at(year, now.getMonth(), now.getDate() + 1, 9),
+      }),
+      job({
+        id: "later",
+        name: "Renewal",
+        scheduleKind: "at",
+        schedule: at(year + 1, 2, 3, 9),
+      }),
+    ),
+  );
+  await current.ready("Renewal");
+  const state = (id: string) =>
+    current.element.querySelector<HTMLAnchorElement>(`a[href$="job=${id}"]`)!.textContent;
+  expect(state("today")).toContain("Today at 11:00 AM");
+  expect(state("tomorrow")).toContain("Tomorrow at 9:00 AM");
+  expect(state("later")).toContain(`Mar 3, ${year + 1} at 9:00 AM`);
+  expect(current.element.textContent).not.toMatch(/At \d/);
+  current.unmount();
 });
 
 it("describes cron weekdays and non-uniform minute steps without inventing a fixed interval", async () => {

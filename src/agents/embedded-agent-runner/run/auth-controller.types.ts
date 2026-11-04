@@ -22,10 +22,6 @@ export type EmbeddedRunAuthState = {
   thinkLevel: ThinkLevel;
 };
 
-export type RuntimeApiKeySink = {
-  setRuntimeApiKey(provider: string, apiKey: string): void;
-};
-
 export type LogLike = {
   debug(message: string): void;
   info(message: string): void;
@@ -38,7 +34,7 @@ export type EmbeddedRunAuthControllerParams = {
   agentDir: string;
   workspaceDir: string;
   authStore: AuthProfileStore;
-  authStorage: RuntimeApiKeySink;
+  authStorage: { setRuntimeApiKey(provider: string, apiKey: string): void };
   profileCandidates: Array<string | undefined>;
   lockedProfileId?: string;
   initialThinkLevel: ThinkLevel;

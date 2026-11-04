@@ -57,16 +57,38 @@ describe("Google SDK construction auth", () => {
   });
 
   it.each([
+    ["", "v1beta"],
+    ["https://generativelanguage.googleapis.com/v1beta", ""],
+    ["https://proxy.example.com/google/v1alpha", ""],
+    ["https://proxy.example.com/google/v1", ""],
+  ])("preserves the Google API version for base URL %s", async (baseUrl, apiVersion) => {
+    await streamGoogle({ ...googleModel, baseUrl }, context, { apiKey: "test-key" }).result();
+
+    expect(googleMockState.configs).toHaveLength(1);
+    expect(googleMockState.configs[0]).toMatchObject({
+      httpOptions: { apiVersion, ...(baseUrl ? { baseUrl } : {}) },
+    });
+  });
+
+  it("keeps Vertex on v1 without a configured endpoint", async () => {
+    await streamGoogleVertex({ ...vertexModel, baseUrl: "" }, context, {
+      apiKey: "test-key",
+    }).result();
+
+    expect(googleMockState.configs[0]).toMatchObject({ vertexai: true, apiVersion: "v1" });
+  });
+
+  it.each([
     ["gemini-2.5-pro", "low", 64, 2112, budget2048],
     ["gemini-2.5-pro", "off", 64, 192, { thinkingBudget: 128 }],
     ["gemini-2.5-flash", "off", 64, 64, { thinkingBudget: 0 }],
     ["gemini-2.5-pro", "low", undefined, undefined, budget2048],
     ["gemini-2.5-pro", "low", 8000, 8192, budget2048],
   ] as const)(
-    "preserves the output budget at the Google SDK boundary: %s %s %s",
+    "preserves nucleus sampling and the output budget at the Google SDK boundary: %s %s %s",
     async (id, reasoning, maxTokens, maxOutputTokens, thinkingConfig) => {
       configureAiTransportHost({ resolveSecretSentinel: (value) => value });
-      const options = { apiKey: "test-key", reasoning, maxTokens };
+      const options = { apiKey: "test-key", reasoning, maxTokens, topP: 0.4 };
       await streamSimpleGoogle({ ...googleModel, id }, context, options).result();
       await streamSimpleGoogleVertex({ ...vertexModel, id }, context, options).result();
       expect(googleMockState.requests).toHaveLength(2);
@@ -75,7 +97,11 @@ describe("Google SDK construction auth", () => {
         expect(JSON.parse(serialized)).toEqual({
           model: id,
           contents: [{ role: "user", parts: [{ text: "hello" }] }],
-          config: { ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }), thinkingConfig },
+          config: {
+            ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+            topP: 0.4,
+            thinkingConfig,
+          },
         });
       }
     },

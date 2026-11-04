@@ -94,6 +94,7 @@ export function hidePersonalSidebarCatalog(
   );
   message.append(t("chat.sidebar.sectionHidden", { section: label }), " ", recoveryLink);
   showToast({
+    severity: "success",
     message,
     actionLabel: t("common.undo"),
     onAction: () => setStoredSessionCatalogHidden(catalogId, false),
@@ -374,6 +375,10 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
       ];
   const canonical = new Map(rows.map((row) => [row.key, row]));
   const pins = [...new Set(keys)].flatMap((key) => {
+    // Query replacement may retain a descriptor; a known deletion may not.
+    if (host.sessionDataContext?.sessions.deletionState(key)) {
+      return [];
+    }
     const projected = canonical.get(key);
     const row =
       projected ??

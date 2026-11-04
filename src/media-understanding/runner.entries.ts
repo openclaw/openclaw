@@ -6,6 +6,14 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import { normalizeMediaExecutionProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import type {
+  AudioTranscriptionResult,
+  MediaAttachment,
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingModelDecision,
+  MediaUnderstandingOutput,
+} from "../../packages/media-understanding-common/src/types.js";
 import {
   estimateBase64Size,
   resolveVideoMaxBase64Bytes,
@@ -56,16 +64,7 @@ import {
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveCliModelEntry, resolveEntryRunOptions } from "./resolve.js";
 import { isTranscriptArtifactText } from "./transcription-text.js";
-import type {
-  AudioTranscriptionResult,
-  AudioTranscriptionRequest,
-  MediaAttachment,
-  MediaUnderstandingCapability,
-  MediaUnderstandingDecision,
-  MediaUnderstandingModelDecision,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
+import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
 
 function trimOutput(text: string, maxChars?: number): string {
   const trimmed = text.trim();

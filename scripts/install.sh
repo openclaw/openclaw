@@ -1987,10 +1987,6 @@ ensure_macos_default_node_active() {
         return 0
     fi
 
-    local active_path active_version
-    active_path="$(command -v node 2>/dev/null || echo "not found")"
-    active_version="$(node -v 2>/dev/null || echo "missing")"
-
     if [[ -z "$brew_node_prefix" || ! -x "${brew_node_prefix}/bin/node" ]]; then
         ui_error "Homebrew ${NODE_BREW_FORMULA} is not installed on disk"
         echo "The previous 'brew install' step appears to have failed."
@@ -1998,9 +1994,9 @@ ensure_macos_default_node_active() {
         return 1
     fi
 
-    ui_error "Node.js v${NODE_DEFAULT_MAJOR} was installed but this shell is using ${active_version} (${active_path})"
-    echo "Add this to your shell profile and restart shell:"
-    echo "  export PATH=\"${brew_node_prefix}/bin:\$PATH\""
+    # Homebrew's node is first on PATH here, so a rejected runtime is a stale keg, not a shadowing one.
+    ui_error "Homebrew ${NODE_BREW_FORMULA} $(node -v 2>/dev/null || echo "missing") does not meet OpenClaw's Node.js requirement (${NODE_PACKAGE_ENGINE})"
+    echo "Run 'brew update && brew upgrade ${NODE_BREW_FORMULA}', then rerun the installer."
     return 1
 }
 

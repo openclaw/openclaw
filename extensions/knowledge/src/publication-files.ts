@@ -29,8 +29,8 @@ const byteLimit = (role: PublicationRole) =>
       ? SOURCE_DESCRIPTOR_MAX_BYTES
       : AUXILIARY_MAX_BYTES;
 
-/** Synchronous file operations keep the SQLite publisher fence held throughout
- * each filesystem boundary. No user path is accepted by the mutation API. */
+/** The storage worker serializes publication; file boundaries preserve editor changes.
+ * No user path is accepted by the mutation API. */
 export class PublicationFiles {
   readonly root: string;
   private readonly stamp: string;
@@ -176,7 +176,7 @@ export class PublicationFiles {
     } finally {
       fs.closeSync(fd);
     }
-    this.sync(path.dirname(filename));
+    // The journal can recreate a lost stage; publish syncs the installed names.
   }
   /** Move old inode aside, compare *after* displacement, install with no-clobber
    * link. Editor writes through an open old fd remain on the retained inode.

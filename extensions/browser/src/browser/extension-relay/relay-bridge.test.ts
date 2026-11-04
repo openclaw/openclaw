@@ -617,25 +617,25 @@ it("publishes a shared recovered attachment to every waiting auto-attach client"
   expect(attached(first)).toHaveLength(firstAttachedEventCount);
 });
 
-it("skips a permanent Chrome refusal but retries that tab on the next enumeration", async () => {
+it.each([
+  ["The extensions gallery cannot be scripted.", true],
+  ["Cannot access a chrome:// URL", true],
+  ["Cannot access a chrome-extension:// URL of different extension", true],
+  ["Cannot attach to this target.", true],
+  ["Cannot attach to this target. Please retry.", false],
+] as const)("classifies refusal %s and retries after recovery", async (refusal, permanent) => {
   let refused = true;
   const { bridge } = readyBridge(
     (message) =>
       message.type === "attach" && message.tabId === 2 && refused
-        ? {
-            type: "error",
-            seq: message.seq,
-            message: "The extensions gallery cannot be scripted.",
-          }
+        ? { type: "error", seq: message.seq, message: refusal }
         : replyFor(message),
-    [
-      ...defaultTabs(),
-      tab(2, "https://chromewebstore.google.com/detail/x/abc", "Chrome Web Store"),
-    ],
+    [...defaultTabs(), tab(2, "https://example.com/refused", "Refused")],
   );
   const { client, cdp } = connectClient(bridge);
   await dispatch(cdp, 1, "Target.getTargets");
-  expect(response(client, 1)).toMatchObject(targetInfos("target-1"));
+  const unavailable = { error: { message: "Target identities are unavailable" } };
+  expect(response(client, 1)).toMatchObject(permanent ? targetInfos("target-1") : unavailable);
   refused = false;
   await dispatch(cdp, 2, "Target.getTargets");
   expect(response(client, 2)).toMatchObject(targetInfos("target-1", "target-2"));

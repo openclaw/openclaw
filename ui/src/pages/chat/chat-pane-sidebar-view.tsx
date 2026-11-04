@@ -35,9 +35,12 @@ const MobileHostPage = lazy(() => import("./chat-mobile-host.runtime.tsx"), {
   export: "MobileHostPage",
 });
 
-const ChatSidebarRegion = lazy(() => import("./components/chat-sidebar-region.runtime.tsx"), {
-  export: "ChatSidebarRegion",
-});
+export const ChatSidebarRegion = lazy(
+  () => import("./components/chat-sidebar-region.runtime.tsx"),
+  {
+    export: "ChatSidebarRegion",
+  },
+);
 
 function MobileHostBoundary(props: { children: Element; fallback?: Element }) {
   return (
