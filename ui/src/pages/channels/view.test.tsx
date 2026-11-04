@@ -233,7 +233,7 @@ describe("channels setup access", () => {
     const container = renderHub(props);
 
     expect(container.textContent).toContain(
-      "Browsing only. Channel setup requires operator.admin access.",
+      "You can view channels, but only admins can change them.",
     );
     expect(texts(container, "button")).not.toContain("Set up");
     expect(container.textContent).not.toContain("More channels…");
@@ -831,7 +831,7 @@ it("announces a stale refresh without adding a notice to the page", () => {
   expect(container.querySelector(".callout.info")).toBeNull();
   expect(
     container.querySelector(".settings-control__sr-label[role='status']")?.textContent,
-  ).toContain("showing the last successful snapshot");
+  ).toContain("Showing the last available status");
 });
 
 it("keeps a space between the partial snapshot notice and its warnings", () => {
@@ -840,6 +840,6 @@ it("keeps a space between the partial snapshot notice and its warnings", () => {
   );
   const container = renderHub(props);
   expect(container.querySelector(".callout.warn")?.textContent).toContain(
-    "UI budget. Telegram probe timed out",
+    "Refresh to try again. Telegram probe timed out",
   );
 });

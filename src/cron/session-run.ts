@@ -1,5 +1,6 @@
 /** Scheduled shared-session turns use the ordinary reply admission and delivery owners. */
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { classifyAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
 import {
   captureSessionEventTargetForHost as captureSessionEventTarget,
@@ -311,6 +312,9 @@ export async function runCronSessionTurn(
     });
     // Source, notice, and Cron custody remain live until the controller settles.
     const result = await receipt.settled;
+    const classification = result.terminalOutcome
+      ? classifyAgentRunTerminalOutcome(result.terminalOutcome)
+      : undefined;
     const conversationDelivered =
       conversationDelivery && result.conversationResultCommitted === true;
     const delivered = result.deliveryAmbiguous
@@ -322,6 +326,12 @@ export async function runCronSessionTurn(
       admissionDeferred: result.admissionDeferred,
       admissionDeferredReason: result.admissionDeferredReason,
       interruptedByRestart: result.interruptedByRestart,
+      errorClassification:
+        classification === "cancellation"
+          ? { kind: "aborted" }
+          : classification === "timeout"
+            ? { kind: "reason", reason: "timeout" }
+            : undefined,
       error:
         result.error ??
         (result.status === "cancelled" ? "Automation session turn was cancelled" : undefined),

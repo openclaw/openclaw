@@ -12,7 +12,7 @@ vi.mock("../../lib/toast.ts", async (importOriginal) => ({
 function menuProps() {
   return {
     agentId: "alpha",
-    defaultLabel: "Set Default",
+    defaultLabel: "Set default",
     defaultDisabled: false,
     pinLabel: "Pin",
     showPhoneActions: false,

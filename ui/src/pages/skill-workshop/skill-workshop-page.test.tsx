@@ -327,7 +327,7 @@ it("shows only the drafts list on the Drafts tab of an agent with no learned ski
   await click(page, "Drafts 1");
 
   await waitForSolid(() => expect(text(page, ".sw-list__rows .sw-row__uses")).toBe("New skill"));
-  expect(text(page, ".sw-list__rows")).not.toMatch(/Nothing archived|No active skills/);
+  expect(text(page, ".sw-list__rows")).not.toMatch(/No archived skills|No active skills/);
 });
 
 it.each([
@@ -349,6 +349,6 @@ it.each([
 
   await waitForSolid(() => {
     expect(button(page, "Drafts 0", true)).not.toBeNull();
-    expect(text(page, ".sw-list__rows")).toContain("No drafts waiting.");
+    expect(text(page, ".sw-list__rows")).toContain("No drafts yet.");
   });
 });

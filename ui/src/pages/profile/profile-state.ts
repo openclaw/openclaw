@@ -9,6 +9,7 @@ import {
   PR_ATTRIBUTION_PREFERENCE_KEY,
   isGitCoauthorCreditEnabled,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
 import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
@@ -266,7 +267,13 @@ export class ProfileState {
           }
           this.ownProfile = result.profile;
           this.displayName = result.profile.displayName ?? "";
-          this.context.gateway.updateSelfUser?.({ name: result.profile.displayName ?? undefined });
+          this.context.gateway.updateSelfUser?.({
+            name: userProfileDisplayName(
+              result.profile.id,
+              result.profile.displayName,
+              result.profile.githubIdentity?.login,
+            ),
+          });
           break;
         }
         case "avatar": {

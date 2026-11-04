@@ -42,8 +42,10 @@ restricts the native surface because `nodes` is not in the audited set.
 OpenClaw admin and status denies alone do not remove native Codex tools.
 Session and conversation-tool denies still restrict the native surface: the
 supported runtime has not been qualified to enforce the same target boundary
-independently of optional hooks. Default OpenClaw children therefore remain
-restricted. OpenClaw's native input admission checks the sender's admitted tree,
+independently of optional hooks. Default hidden OpenClaw children therefore
+remain restricted. Visible spawned sessions do not get the built-in sub-agent
+denies, so they keep the native surface unless another policy, such as an
+inherited parent restriction, restricts it. OpenClaw's native input admission checks the sender's admitted tree,
 but that hook-side check is not a substitute for native enforcement.
 
 A child at its configured delegation depth cap also loses native collaboration,

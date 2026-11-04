@@ -183,11 +183,10 @@ suite.define(() => {
       await worked.waitFor();
       await worked.click();
       await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
-      await rawDetails.waitFor();
-      if ((await rawDetails.getAttribute("aria-expanded")) === "false") {
+      if (reasoningLevel === "stream") {
         await rawDetails.click();
+        await expect.poll(() => rawDetails.getAttribute("aria-expanded")).toBe("true");
       }
-      await expect.poll(() => rawDetails.getAttribute("aria-expanded")).toBe("true");
       for (const index of [0, 1]) {
         await expect
           .poll(() =>
