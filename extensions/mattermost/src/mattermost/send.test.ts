@@ -1,5 +1,10 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  chunkMarkdownTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "openclaw/plugin-sdk/reply-chunking";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setMattermostRuntime } from "../runtime.js";
 import type * as Client from "./client.js";
@@ -167,6 +172,85 @@ describe("sendMessageMattermost", () => {
       }),
     );
     expect(events).toStrictEqual(["delivery", "activity"]);
+  });
+
+  describe("long media captions", () => {
+    const cfg = { channels: { mattermost: { textChunkLimit: 12 } } };
+    const caption = "first part\nsecond part\nthird part";
+
+    beforeEach(() => {
+      setMattermostRuntime(
+        createPluginRuntimeMock({
+          config: { current: mockState.currentConfig },
+          channel: {
+            activity: { record: mockState.recordActivity },
+            text: { chunkMarkdownTextWithMode, resolveChunkMode, resolveTextChunkLimit },
+          },
+        }),
+      );
+      mockState.loadOutboundMediaFromUrl.mockResolvedValue({
+        buffer: Buffer.from("file"),
+        fileName: "report.pdf",
+        contentType: "application/pdf",
+      });
+    });
+
+    it("posts the first chunk with the file and the rest as thread replies", async () => {
+      mockState.createMattermostPost
+        .mockResolvedValueOnce({ id: "post-1" })
+        .mockResolvedValueOnce({ id: "post-2" })
+        .mockResolvedValueOnce({ id: "post-3" });
+      const onDeliveryResult = vi.fn();
+
+      const result = await sendMessageMattermost("channel:town-square", caption, {
+        cfg,
+        mediaUrl: "https://example.com/report.pdf",
+        replyToId: "root-post",
+        onDeliveryResult,
+      });
+
+      expect(
+        mockState.createMattermostPost.mock.calls.map(([, post]) => ({
+          message: post.message,
+          rootId: post.rootId,
+          fileIds: post.fileIds,
+        })),
+      ).toStrictEqual([
+        { message: "first part", rootId: "root-post", fileIds: ["file-1"] },
+        { message: "second part", rootId: "root-post", fileIds: undefined },
+        { message: "third part", rootId: "root-post", fileIds: undefined },
+      ]);
+      expect(onDeliveryResult.mock.calls.map(([sent]) => sent.messageId)).toStrictEqual([
+        "post-1",
+        "post-2",
+        "post-3",
+      ]);
+      expect(result).toMatchObject({ messageId: "post-1", content: caption });
+      expect(result.receipt.platformMessageIds).toStrictEqual(["post-1", "post-2", "post-3"]);
+    });
+
+    it("keeps posted chunks when a later chunk fails", async () => {
+      const failure = new Error("Mattermost API 500");
+      mockState.createMattermostPost
+        .mockResolvedValueOnce({ id: "post-1" })
+        .mockRejectedValueOnce(failure);
+
+      const caught: unknown = await sendMessageMattermost("channel:town-square", caption, {
+        cfg,
+        mediaUrl: "https://example.com/report.pdf",
+      }).catch((error: unknown) => error);
+
+      if (!isChannelPartialDeliveryError(caught)) {
+        throw new Error("expected a partial Mattermost delivery error");
+      }
+      expect(caught.cause).toBe(failure);
+      expect(caught.deliveryResult).toMatchObject({
+        messageIds: ["post-1"],
+        visibleReplySent: true,
+        content: "first part",
+      });
+      expect(mockState.createMattermostPost).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("builds interactive button props when buttons are provided", async () => {
