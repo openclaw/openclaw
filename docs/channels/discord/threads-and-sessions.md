@@ -91,6 +91,10 @@ failed chunk may have been delivered, so inspect the thread before retrying.
     - Discord threads route as channel sessions and inherit parent channel config unless overridden.
     - Thread sessions inherit the parent channel's session-level `/model` selection as a model-only fallback; thread-local `/model` selections take precedence, and parent transcript history is not copied unless transcript inheritance is enabled.
     - `channels.discord.thread.inheritParent` (default `false`) opts new auto-threads into seeding from the parent transcript. Per-account override: `channels.discord.accounts.<id>.thread.inheritParent`.
+    - `channels.discord.guilds.<guild>.channels.<channel>.autoThread` (default `false`) creates a thread from a new top-level message in that guild text channel. Forum, media, voice, and stage channels never auto-create, and bot-authored messages are skipped. Per-account override: `channels.discord.accounts.<id>.guilds.<guild>.channels.<channel>.autoThread`.
+    - `channels.discord.guilds.<guild>.channels.<channel>.autoThreadName`: `message` (default) names the auto-thread from the triggering message text; `generated` asks the model for a title after the thread is created and renames it.
+    - `channels.discord.guilds.<guild>.channels.<channel>.autoArchiveDuration`: minutes of inactivity before Discord archives an auto-thread — `60` (default), `1440`, `4320`, or `10080`.
+    - `channels.discord.guilds.<guild>.channels.<channel>.includeThreadStarter` (default `true`): set `false` so turns inside a thread do not pull the thread's starter message in as context.
     - Message-tool reactions can resolve `user:<id>` DM targets.
     - `guilds.<guild>.channels.<channel>.requireMention: false` is preserved during reply-stage activation fallback.
 
