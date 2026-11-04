@@ -1,2 +1,0 @@
-# Pasted absolute-path title row needs a ternary assertion so inference receives the full path text (not a stripped skill token).
-3
