@@ -407,9 +407,15 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                           <button
                             class={["btn", { primary: props.pendingCount === 0 }]}
                             type="button"
-                            onClick={(event) =>
-                              void handleCopyButton(event, code, copyLabel(), { label })
-                            }
+                            onClick={(event) => {
+                              void handleCopyButton(event, code, copyLabel(), { label }).then(
+                                (copied) => {
+                                  if (copied === false && props.open) {
+                                    showToast({ message: t("devices.pairing.copyFailed") });
+                                  }
+                                },
+                              );
+                            }}
                           >
                             <Icon name="copy" />{" "}
                             <span ref={(element) => (label = element)} data-copy-label>
