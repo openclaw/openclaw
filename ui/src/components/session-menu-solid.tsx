@@ -61,6 +61,7 @@ type SessionMenuProps = {
   snoozeAllowed: boolean;
   deleteAllowed: boolean;
   cloudWorkerStopAllowed: boolean;
+  cloudWorkerStopLabel?: string;
   groups: readonly string[];
   currentOwner: SessionCreatedActor | null;
   work: SessionMenuWork | null;
@@ -223,7 +224,7 @@ function SessionMenuContent(
         ? [
             {
               id: "stop-cloud-worker",
-              label: t("sessionsView.stopCloudWorker"),
+              label: props.cloudWorkerStopLabel || t("sessionsView.stopCloudWorker"),
               class: "session-menu__item session-menu__item--destructive",
               labelClass: "session-menu__text",
               variant: "danger" as const,
@@ -366,6 +367,7 @@ export const SessionMenu = defineSolidBridge<SessionMenuProps>(
       snoozeAllowed: { default: false, attribute: false },
       deleteAllowed: { default: false, attribute: false },
       cloudWorkerStopAllowed: { default: false, attribute: false },
+      cloudWorkerStopLabel: { default: "", attribute: false },
       groups: { default: [], attribute: false },
       currentOwner: { default: null, attribute: false },
       work: { default: null, attribute: false },

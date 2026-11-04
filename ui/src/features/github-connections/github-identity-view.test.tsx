@@ -357,14 +357,14 @@ describe("GitHub identity view", () => {
     const button = view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
     button.click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(statusText()).toEqual(["Copied!"]);
+    expect(statusText()).toEqual(["Copied"]);
 
     await vi.advanceTimersByTimeAsync(1500);
     writeText.mockRejectedValueOnce(new Error("Synthetic clipboard rejection"));
     fallback.mockReturnValueOnce(false);
     button.click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(statusText()).toEqual(["Copy failed"]);
+    expect(statusText()).toEqual(["Couldn’t copy. Try again."]);
   });
 
   it("keeps the focused PAT field across draft and mutation updates", async () => {

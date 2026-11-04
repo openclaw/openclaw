@@ -163,7 +163,7 @@ it("explains an unresolved initial turn while offline without blocking the outbo
   try {
     const { input, send } = draw();
     expect(container.querySelector(".agent-chat__composer-status-band")?.textContent).toBe(
-      "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
+      "The first message is unresolved. Reconnect if needed, then review it before sending another.",
     );
     expect(input.disabled).toBe(false);
     expect(send.disabled).toBe(false);

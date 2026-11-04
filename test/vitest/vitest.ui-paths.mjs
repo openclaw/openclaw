@@ -91,6 +91,7 @@ export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/styles/cursor-policy.browser.test.ts",
   "ui/src/styles/chat-file-link-presentation.browser.test.ts",
   "ui/src/styles/shimmer.browser.test.ts",
+  "ui/src/styles/incognito-shade.browser.test.ts",
   "ui/src/styles/forced-colors-indicators.browser.test.ts",
   "ui/src/styles/sr-only.browser.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
@@ -171,6 +172,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-long-turn.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-incognito-send.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
@@ -223,6 +225,7 @@ export const uiE2ePrebuiltParallelTestFiles = [
   "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-long-turn.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-incognito-send.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",

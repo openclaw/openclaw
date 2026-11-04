@@ -462,6 +462,7 @@ function renderSidebarMenus(
             archiveAllowed={archiveAllowed()}
             deleteAllowed={deleteAllowed()}
             cloudWorkerStopAllowed={cloudWorkerStopAllowed()}
+            cloudWorkerStopLabel={t(cloudWorkerStopAction()?.copyKey ?? "sessionsView.stopWorker")}
             groups={view.knownSessionGroups()}
             currentOwner={session().owner?.actor ?? null}
             work={batchRows() ? null : projected.sessionMenuWork}

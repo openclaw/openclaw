@@ -6,7 +6,7 @@ const enAgentCreation = {
     createDialogTitle: "Create new agent",
     createDialogName: "Name your agent",
     creationRequiresAdmin: "You need operator.admin to perform this action",
-    creationRequiresConnection: "Connect to the Gateway to perform this action",
+    creationRequiresConnection: "Reconnect to create an agent.",
     creationUnsupported: "This Gateway does not support agent creation",
     creationUnavailable:
       "Creating an agent requires agents.create with operator.admin access. Pair this browser with operator.admin scope, then reconnect.",
