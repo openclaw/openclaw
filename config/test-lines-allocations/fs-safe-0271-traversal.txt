@@ -1,2 +1,2 @@
-# Keep filesystem fault injection scoped to platform traversal and extracted metadata.
-23
+# Scope filesystem faults and preserve crash-resume identity, single input, abort, and fresh reply proof.
+60
