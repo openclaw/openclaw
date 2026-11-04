@@ -625,15 +625,15 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
     let message = error;
     if (path) {
       message += (await copyToClipboard(path))
-        ? `\n\nFile path copied to clipboard: ${path}`
-        : `\n\nFile path: ${path}`;
+        ? `\n\n${t("configView.filePathCopied", { path })}`
+        : `\n\n${t("configView.filePath", { path })}`;
     }
     if (isCurrent()) {
       state.lastError = formatUiExternalText(message);
       if (state.configAutoSaveStatus === "rejected") {
         state.configAutoSaveStatus = "error";
       }
-      showToast({ message: state.lastError });
+      showToast({ severity: "error", message: state.lastError });
     }
   };
   try {
@@ -646,7 +646,7 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
     }
     if (!res.ok) {
       await publishFailure(
-        formatUiExternalText(res.error, "Failed to open config file"),
+        formatUiExternalText(res.error, t("configView.fileOpenFailed")),
         res.path || state.configSnapshot?.path,
       );
       return;

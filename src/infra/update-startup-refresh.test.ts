@@ -2,18 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { compareSemverStrings } from "./npm-registry-spec.js";
 import { checkTelemetryUpdate } from "./telemetry.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 import {
   createGatewayUpdateLifecycle,
   type UpdateCheckLifecycle,
 } from "./update-check-lifecycle.js";
-import {
-  checkUpdateStatus,
-  compareSemverStrings,
-  resolveNpmChannelTag,
-  type UpdateCheckResult,
-} from "./update-check.js";
+import { checkUpdateStatus, resolveNpmChannelTag, type UpdateCheckResult } from "./update-check.js";
 import { resolveDevGitCommits } from "./update-git-metadata.js";
 import { runCampaignUpdate } from "./update-startup-auto-run.js";
 import { createDevGitStatus } from "./update-startup-git.test-support.js";
@@ -47,10 +43,13 @@ vi.mock("./telemetry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./telemetry.js")>()),
   checkTelemetryUpdate: vi.fn(),
 }));
+vi.mock("./npm-registry-spec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./npm-registry-spec.js")>()),
+  compareSemverStrings: vi.fn(),
+}));
 vi.mock("./update-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-check.js")>()),
   checkUpdateStatus: vi.fn(),
-  compareSemverStrings: vi.fn(),
   resolveNpmChannelTag: vi.fn(),
 }));
 vi.mock("./update-git-metadata.js", async (importOriginal) => ({

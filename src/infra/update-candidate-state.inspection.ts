@@ -19,6 +19,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "./sqlite-readonly-worker.js";
+import { SQLITE_SNAPSHOT_PREFIX } from "./sqlite-snapshot-retirement.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import {
@@ -122,6 +123,10 @@ export async function runUpdateStateInspectionWorker(params: {
             : JSON.stringify({
                 ...params.input,
                 resultPath,
+                ...(params.root === undefined &&
+                path.basename(params.stagingRoot).startsWith(SQLITE_SNAPSHOT_PREFIX)
+                  ? { stagingTokenDirectory: params.stagingRoot }
+                  : {}),
                 includeLocalStoreVersions: true,
                 includeClientCredentialStoreVersion: true,
                 env: {

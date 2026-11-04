@@ -563,6 +563,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     readPreparedPoolSummary: preparedPool.summary,
     readReadyWorkerTarget: preparedPool.target,
     readRuntimeRefresh: providerLifecycle.readRuntimeRefresh,
+    resumeNode: providerLifecycle.resumeNode,
     ensureRetainedRunning: providerLifecycle.ensureRetainedRunning,
     suspendRetained: providerLifecycle.suspendRetained,
     inspectTurnLease: (params: Parameters<typeof providerLifecycle.inspectTurnLease>[0]) => {
