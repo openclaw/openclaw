@@ -530,7 +530,8 @@ export async function driveThroughCore(
     mentionTargets,
   });
   const [idles, calls]: [Promise<unknown>[], Promise<string>[]] = [[], []];
-  const ids = (delivered?: { messageIds?: string[] }) => String(delivered?.messageIds ?? "-");
+  const ids = (delivered?: void | { messageIds?: string[] }) =>
+    String((typeof delivered === "object" ? delivered.messageIds : undefined) ?? "-");
   const failed = (error: unknown) =>
     isChannelPartialDeliveryError(error) ? `${ids(error.deliveryResult)}!` : "x";
   const core = createReplyDispatcher({
