@@ -1,2 +1,2 @@
-# Native dependency recording and related-selection regression for binary fixture reads.
-74
+# Native dependency regression, offset by the two-line cron fixture simplification.
+72
