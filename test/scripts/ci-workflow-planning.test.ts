@@ -11846,6 +11846,7 @@ describe("ci workflow guards", () => {
       const [row] = rows;
       expect(row).toMatchObject({
         check_name: "checks-node-manual-inventory",
+        adaptive_observations: true,
         env,
         runner: "ubuntu-24.04",
         timeout_minutes: 20,
@@ -11994,6 +11995,41 @@ describe("ci workflow guards", () => {
         expect(Object.keys(pools).length).toBeGreaterThan(0);
         for (const encoded of Object.values(pools)) {
           expect(String(encoded).length).toBeLessThanOrEqual(60_000);
+        }
+        const download = requiredWorkflowStep(
+          readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps,
+          "Download adaptive CI priors",
+        );
+        const rows = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
+        for (const row of rows) {
+          let packed = row.groups_gzip_base64;
+          if (row.groups_pool) {
+            const groups = decodeNodeTestGroups(pools[row.groups_pool])[row.groups_index];
+            if (!Array.isArray(groups)) {
+              throw new Error("Missing pooled groups");
+            }
+            packed = encodeNodeTestGroups(groups);
+          }
+          const plans = resolveShardPlans({
+            OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: packed,
+            OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(row.groups),
+            OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(row.configs),
+          });
+          const observes = plans.some(
+            (entry) =>
+              entry.kind === "group" &&
+              entry.plan.configs?.includes("test/vitest/vitest.unit-fast.config.ts"),
+          );
+          expect(row.adaptive_observations === true).toBe(observes);
+          expect(
+            evaluateWorkflowCondition(download.if, {
+              eventName: "schedule",
+              runAttempt: 1,
+              repository: "openclaw/openclaw",
+              preflightOutputs: { frozen_target: "false" },
+              matrix: row,
+            }),
+          ).toBe(observes);
         }
       }
     },

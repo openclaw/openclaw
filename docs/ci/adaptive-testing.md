@@ -94,8 +94,9 @@ a prior dependency graph; consumers must retain both identities independently.
 Recording does not fetch Git history; an unavailable comparison commit is a data gap.
 The file hashes the finalized command arguments and pre/post-shard include-file
 contents without exporting absolute paths. A missing base, dirty checkout, or
-unreadable input records a fallback reason. Every record includes
-`no-prior-snapshot`: this stage does not resolve prior artifacts or omit tests.
+unreadable input records a fallback reason. Every launch record includes
+`no-prior-snapshot`: prior qualification happens later, when the reporter has
+the native inventory. The launch record itself does not resolve priors.
 
 The reporter freezes the launch file's SHA-256 hash when it initializes and
 retains it as `preExecution.launchInputs`. Consumers must match the hash to the
@@ -107,8 +108,9 @@ Launch records are bounded to 1 MiB. Preparation is best effort and does not
 change the test command or result when it fails.
 
 The native snapshot follows configuration evaluation and native test selection;
-the launch record precedes them. Neither contains a prior graph, model ranking
-or evaluated selection decision.
+the launch record precedes them. Its `decision` field freezes a graph proposal
+before tests execute, using the full native inventory. `scheduledFiles` always
+contains that inventory; the proposal cannot change execution.
 Global setup can still change worker settings after capture. The local recording
 timestamp is not artifact availability: a later consumer must also retain the
 publication/download time before using an earlier run as predictive evidence.
@@ -130,6 +132,34 @@ the repository, lock, project/pool, runtime, platform and dependency-root identi
 retain source/diff provenance, and measure overlapping-file graph differences.
 The shadow selector still requires the original exact context. Matching graph
 inputs never grants permission to omit tests.
+
+### Published prior snapshots
+
+For sampled same-repository PRs and scheduled runs, preflight uses its existing
+read-only Actions permission to restore at most two observation archives from
+the five most recent successful scheduled main runs. It verifies the exact
+run/attempt, source commit/tree, archive digest and paired launch/member hashes.
+The producer must have completed and published before the current run began.
+Restore has a shared ten-second deadline and does not retry requests. Missing
+history or unavailable APIs produce an empty bundle and preserve full execution.
+
+The bundle is shared through a same-run artifact. Test jobs download it without
+additional token permissions. Each bundle binds the current workflow run,
+attempt and actual checkout commit; the reporter also freezes the bundle hash.
+At the native inventory callback, the reporter selects the newest compatible
+prior and computes the complete prior-to-current Git diff, including both ends
+of renames. It does not substitute the launch record's comparison base.
+
+Exact configuration, lock, environment and runtime identities must match. The
+prior commit must be locally available and an ancestor; no test process fetches
+history. Unknown source, dirty checkout, stale bundle or incompatible inputs
+produce an explicit fallback. Different shard membership can still prevent a
+match; graph-input comparability alone does not relax the selector.
+
+The frozen decision records prior provenance, changed paths, graph candidates
+and the unchanged scheduled inventory. Model rankings remain a separate layer.
+These are prospective proposals, not measured omission savings. Include restore,
+download, comparison and export costs in the eventual net-benefit calculation.
 
 The first readout compares usable-data coverage, native-Bun gaps, observed
 failures, fallback causes, and paired total job costs. Learned selection and
