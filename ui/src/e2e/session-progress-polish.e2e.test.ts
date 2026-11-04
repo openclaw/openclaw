@@ -26,13 +26,17 @@ const steps = [
   })),
 ];
 
-async function openProgress(page: Page) {
+async function openProgress(page: Page, active = true) {
   const card = { sessionKey, revision: 1, updatedAt: Date.now(), steps };
   const gateway = await installMockGateway(page, {
     featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
     sessionKey,
-    sessionInfo: { key: sessionKey, hasActiveRun: true, activeRunIds: ["polish-run"] },
-    inFlightRun: { runId: "polish-run" },
+    sessionInfo: {
+      key: sessionKey,
+      hasActiveRun: active,
+      activeRunIds: active ? ["polish-run"] : [],
+    },
+    ...(active ? { inFlightRun: { runId: "polish-run" } } : {}),
     methodResponses: { "progressCard.get": { card } },
   });
   await page.goto(`${suite.server.baseUrl}chat`);
@@ -49,6 +53,41 @@ async function openProgress(page: Page) {
 }
 
 suite.define(() => {
+  it.each([1440, 390])(
+    "keeps paused progress markers the same size as pending markers at %i px",
+    async (width) => {
+      const context = await suite.newBrowserContext({ viewport: { width, height: 1000 } });
+      try {
+        const page = await context.newPage();
+        const { details } = await openProgress(page, false);
+        const measurements = await details
+          .locator(".session-progress-card__step-marker")
+          .evaluateAll((markers) =>
+            markers.slice(0, 4).map((marker) => {
+              const svg = marker.querySelector("svg")!;
+              const rect = svg.getBoundingClientRect();
+              return {
+                status: marker.getAttribute("data-status"),
+                width: rect.width,
+                height: rect.height,
+              };
+            }),
+          );
+        expect(measurements.map(({ status }) => status)).toEqual([
+          "completed",
+          "completed",
+          "paused",
+          "pending",
+        ]);
+        const paused = measurements.find(({ status }) => status === "paused")!;
+        const pending = measurements.find(({ status }) => status === "pending")!;
+        expect(paused.width).toBeCloseTo(pending.width, 2);
+        expect(paused.height).toBeCloseTo(pending.height, 2);
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
   it.each([
     { width: 1440, touch: false },
     { width: 390, touch: false },

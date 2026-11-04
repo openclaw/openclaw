@@ -338,13 +338,20 @@
   content: "";
 }
 
-/* Keep the spinner and pending circle aligned with the other inset glyphs. */
+/* Keep the spinner and unfinished step markers aligned with the other inset glyphs. */
 .task-progress-details
   :is(.session-progress-card__current-marker, .session-progress-card__step-marker)
   > .session-run-spinner,
-.task-progress-details .session-progress-card__step-marker[data-status="pending"] > svg {
+.task-progress-details
+  .session-progress-card__step-marker:is([data-status="pending"], [data-status="paused"])
+  > svg {
   width: calc(var(--session-progress-marker-size) - 2px);
   height: calc(var(--session-progress-marker-size) - 2px);
+}
+
+/* Match the pending circle's optical correction at the same inset size. */
+.task-progress-details .session-progress-card__step-marker[data-status="paused"] > svg {
+  scale: calc(24 / 21.5);
 }
 
 /* Keep the checklist's smaller type while sharing the desktop row geometry. */
