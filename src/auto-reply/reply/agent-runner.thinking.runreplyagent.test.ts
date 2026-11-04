@@ -63,7 +63,6 @@ it.each([false, true])(
       sessionKey,
       sessionEntry: loadSessionEntry({ storePath, sessionKey }),
       authorized: true,
-      resolvedLevel: "on",
     });
     const isVisible = isReplyReasoningVisible;
     const onBlockReply = vi.fn((payload: ReplyPayload) => {

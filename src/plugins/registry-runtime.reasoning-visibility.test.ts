@@ -34,7 +34,6 @@ it("reads producing-turn reasoning after dispatch consumer closes without retain
       ...scope,
       sessionEntry: loadSessionEntryReadOnly(scope),
       authorized: true,
-      resolvedLevel: "on",
     });
     const payload = { text: "Private reasoning", isReasoning: true };
     bindReplyReasoningVisibility(payload, owner);

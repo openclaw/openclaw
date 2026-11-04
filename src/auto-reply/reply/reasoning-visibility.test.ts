@@ -53,8 +53,8 @@ afterEach(() => {
 
 async function createTurn(
   options: {
-    stored?: "on" | "off" | "stream";
-    level?: "on" | "off" | "stream";
+    stored?: "on" | "off" | "stream" | null;
+    configuredDefault?: "on" | "off" | "stream";
     override?: "on" | "off" | "stream";
     authorized?: boolean;
     abortSignal?: AbortSignal;
@@ -68,13 +68,13 @@ async function createTurn(
   await sessionAccessor.replaceSessionEntry(scope, {
     sessionId: "session-1",
     updatedAt: 1,
-    reasoningLevel: options.stored,
+    reasoningLevel: options.stored === undefined ? "on" : (options.stored ?? undefined),
   });
   const entry = sessionAccessor.loadSessionEntryReadOnly(scope)!;
   const owner = await createReplyReasoningVisibility({
     ...scope,
     sessionEntry: entry,
-    resolvedLevel: options.level ?? "on",
+    configuredDefault: options.configuredDefault,
     override: options.override,
     authorized: options.authorized ?? true,
     abortSignal: options.abortSignal,
@@ -99,20 +99,32 @@ async function createQueuedTurn() {
 
 describe("durable reasoning visibility", () => {
   it.each([
-    { label: "configured on", visible: true },
+    { label: "inferred on without a preference", stored: null, visible: false },
+    { label: "configured on", stored: null, configuredDefault: "on", visible: true },
     { label: "stored on", stored: "on", visible: true },
+    {
+      label: "stored off over configured on",
+      stored: "off",
+      configuredDefault: "on",
+      visible: false,
+    },
     { label: "inline on over stored off", stored: "off", override: "on", visible: true },
     {
       label: "inline off over stored on",
       stored: "on",
       override: "off",
-      level: "off",
       visible: false,
     },
-    { label: "stream", level: "stream", visible: false },
+    { label: "stream", override: "stream", visible: false },
     { label: "unauthorized stored on", stored: "on", authorized: false, visible: false },
-    { label: "unauthorized configured on", authorized: false, visible: false },
-  ] as const)("honors the resolved $label turn", async ({ visible, ...options }) => {
+    {
+      label: "unauthorized configured on",
+      stored: null,
+      configuredDefault: "on",
+      authorized: false,
+      visible: false,
+    },
+  ] as const)("honors the explicit $label turn", async ({ visible, ...options }) => {
     const { payload } = await createTurn(options);
     expect(isReplyReasoningVisible(payload)).toBe(visible);
     expect(isReplyReasoningVisible(copyReplyPayloadMetadata(payload, { ...payload }))).toBe(
@@ -396,8 +408,8 @@ describe("durable reasoning visibility", () => {
   });
 
   it("does not authorize an old payload when a newer turn enables reasoning", async () => {
-    const oldTurn = await createTurn({ level: "off" });
-    const newTurn = await createTurn({ level: "on" });
+    const oldTurn = await createTurn({ stored: "off" });
+    const newTurn = await createTurn({ stored: "on" });
     expect(isReplyReasoningVisible(newTurn.payload)).toBe(true);
     expect(isReplyReasoningVisible(oldTurn.payload)).toBe(false);
     newTurn.owner.close();

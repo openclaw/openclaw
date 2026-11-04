@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import type { PreparedReplyRunAdmission } from "./get-reply-run-admission.js";
 import { canUseReasoningState, createReplyReasoningVisibility } from "./reasoning-visibility.js";
 
@@ -11,7 +12,9 @@ export function buildReplyRunReasoningParams(
     storePath: params.storePath,
     sessionEntry: preparedSessionState.sessionEntry,
     authorized: canUseReasoningState(params.command, params.ctx.GatewayClientScopes),
-    resolvedLevel: params.resolvedReasoningLevel,
+    configuredDefault:
+      resolveAgentConfig(params.cfg, params.agentId)?.reasoningDefault ??
+      params.agentCfg?.reasoningDefault,
     override: params.directives.reasoningLevel,
     abortSignal: params.opts?.abortSignal,
   };

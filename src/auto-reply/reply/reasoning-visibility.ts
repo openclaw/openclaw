@@ -32,7 +32,7 @@ export async function createReplyReasoningVisibility(params: {
   storePath?: string;
   sessionEntry?: SessionEntry;
   authorized: boolean;
-  resolvedLevel: ReasoningLevel;
+  configuredDefault?: ReasoningLevel;
   override?: ReasoningLevel;
   abortSignal?: AbortSignal;
 }): Promise<ReplyReasoningVisibility> {
@@ -67,7 +67,9 @@ export async function createReplyReasoningVisibility(params: {
       release();
     },
   };
-  if (!params.authorized || params.resolvedLevel !== "on" || params.abortSignal?.aborted) {
+  // Model capability and inferred execution levels are not permission to disclose.
+  const explicitLevel = params.override ?? initialLevel ?? params.configuredDefault;
+  if (!params.authorized || explicitLevel !== "on" || params.abortSignal?.aborted) {
     return owner;
   }
   unsubscribe = onSessionLifecycleEvent((event) => {
@@ -93,7 +95,9 @@ export async function createReplyReasoningVisibility(params: {
     if (current.reasoningLevel !== initialLevel) {
       return current.reasoningLevel === "on";
     }
-    return params.override === "on" || (current.reasoningLevel ?? params.resolvedLevel) === "on";
+    return (
+      params.override === "on" || (current.reasoningLevel ?? params.configuredDefault) === "on"
+    );
   };
   const scope = {
     agentId: params.agentId,

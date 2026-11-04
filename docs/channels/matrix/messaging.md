@@ -119,6 +119,9 @@ Matrix notices. Long reasoning is split into messages without replacing the answ
 preview. `/reasoning off` hides it. Matrix does not display `/reasoning stream`
 updates; use `on` for completed reasoning messages.
 
+Display requires an explicit inline or session choice, or an agent/global
+`reasoningDefault: "on"`. Model reasoning capability alone does not enable it.
+
 Reasoning follows the sender's command authorization and any inline setting for
 the current turn. Turning it off stops unsent reasoning chunks once the setting
 change is committed. `/reasoning off` may wait for an active reply to finish;
