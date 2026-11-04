@@ -97,8 +97,13 @@ export function useContinuationForest(stateDir: () => string) {
   beforeEach(async () => {
     const config = {
       agents: { defaults: { workspace: stateDir(), continuation: { enabled: true } } },
-      // Direct rooms per sender, so a prince's chat /new lands on the prince's own room.
-      session: { dmScope: "per-account-channel-peer" as const },
+      session: {
+        // Direct rooms per sender, so a prince's chat /new lands on the prince's own room.
+        dmScope: "per-account-channel-peer" as const,
+        // Room for the whole forest: past maxEntries (default 5,000) store maintenance evicts rooms,
+        // owners of live elections included (karmaterminal/openclaw#1271 load findings).
+        maintenance: { maxEntries: 1_000_000 },
+      },
     };
     await writeFile(path.join(stateDir(), "openclaw.json"), JSON.stringify(config));
     setRuntimeConfigSnapshot(config);
