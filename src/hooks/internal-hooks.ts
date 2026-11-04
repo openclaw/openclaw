@@ -249,6 +249,7 @@ export function omitHookSessionOperatorSources<T>(entry: T): T {
     return entry;
   }
   const { operatorSources: _private, ...rest } = entry;
+  // SAFETY: removing one private key keeps every other field of the caller's entry shape.
   return rest as T;
 }
 
