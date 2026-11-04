@@ -40,6 +40,8 @@ When someone mentions the launch checklist, remind me to confirm the rollback ow
 
 The agent uses the `intent` tool with a description and trigger keywords. It can also narrow the intent to one conversation channel identifier or sender identifier, set an expiry, reduce or increase the fire budget, or change the cooldown.
 
+Conversation scope uses the channel's native chat identifier for both creation and matching, not a routing session key or its topic suffix.
+
 The default scope is the current channel and sender. An explicit `anywhere` or
 `anyone` scope still requires the creating sender identity: the matching hook
 cannot safely enforce a senderless owner principal on later channel turns.

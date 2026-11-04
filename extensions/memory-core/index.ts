@@ -398,8 +398,8 @@ export default definePluginEntry({
           agentId,
           prompt: event.prompt,
           assertCurrent: invocation.assertActive,
-          ...((ctx.channelId ?? ctx.chatId)
-            ? { channel: (ctx.channelId ?? ctx.chatId) as string }
+          ...((ctx.chatId ?? ctx.channelId)
+            ? { channel: (ctx.chatId ?? ctx.channelId) as string }
             : {}),
           ...((ctx.channel ?? ctx.messageProvider)
             ? { provider: (ctx.channel ?? ctx.messageProvider) as string }
