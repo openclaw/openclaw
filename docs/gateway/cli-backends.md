@@ -855,6 +855,11 @@ native permission handling. The separate bridge `exec` capability still targets
 the selected node. Changing the configured MCP surface starts one fresh Claude
 session for an affected existing conversation; OpenClaw history is preserved.
 
+On Windows, if the admitted tool list exceeds the command-line limit, OpenClaw
+retries Claude startup with the same allowlist in a private settings file. Existing
+settings and denials are preserved, and the file is removed when that child exits.
+Commands that fit continue to run inline without creating this file.
+
 When another backend passes configured MCP servers to its harness natively,
 `tools.allow` and `tools.deny` also constrain those servers.
 OpenClaw lists each server through its session-scoped runtime, assigns the same
