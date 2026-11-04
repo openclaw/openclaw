@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Command } from "commander";
@@ -230,6 +231,19 @@ describe("templates cli", () => {
       expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
     },
   );
+
+  it("rejects an explicitly empty Add agent id in a dry-run", async () => {
+    const workspace = join(tempDirs.make("openclaw-template-empty-add-"), "workspace");
+    expect(
+      await add(["--dry-run", "--agent-id", "", "--workspace", workspace, "--json"]),
+    ).toMatchObject({
+      agent: { finalId: "" },
+      blockers: [expect.objectContaining({ code: "invalid_agent_id" })],
+      actions: expect.arrayContaining([expect.objectContaining({ kind: "agent", blocked: true })]),
+    });
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(existsSync(workspace)).toBe(false);
+  });
 
   it("redacts credentials and sanitizes MCP targets in add previews", async () => {
     const manifestPath = await writeManifest({
