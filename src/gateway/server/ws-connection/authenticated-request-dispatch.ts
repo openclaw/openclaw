@@ -18,15 +18,17 @@ import {
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { resolveAuthenticatedPairedDeviceIdentity } from "../../../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../../../infra/device-pairing-store-readonly.js";
-import { readTailscaleWhoisIdentity } from "../../../infra/tailscale.js";
 import {
   createChildDiagnosticTraceContext,
   parseDiagnosticTraceparent,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { readTailscaleWhoisIdentity } from "../../../infra/tailscale.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
+import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
+import { resolveCanonicalTailscaleProfileId } from "../../../state/user-profile-reads.js";
 import {
   captureGatewayAuthPolicy,
   isGatewayAuthGrantCurrent,
@@ -36,13 +38,12 @@ import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { errorShapeFromError } from "../../error-shape.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import { hasCurrentRemoteControlUiIngress } from "../../ingress-attribution.js";
-import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
-import { resolveCanonicalTailscaleProfileId } from "../../../state/user-profile-reads.js";
 import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   hasCurrentGatewayOperatorAccess,
 } from "../../operator-access-policy.js";
 import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
+import { isGatewayPersonalIdentityBindingCurrent } from "../../personal-identity-binding.js";
 import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
@@ -54,7 +55,6 @@ import {
   onGatewayPolicyClientInvalidated,
   registerGatewayPolicyResponse,
 } from "../ws-policy-close.js";
-import { isGatewayPersonalIdentityBindingCurrent } from "../../personal-identity-binding.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 import { createGatewayRpcDiagnostics } from "./request-diagnostics.js";
@@ -174,7 +174,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             gateway: clients,
             bindingId: personalIdentityBinding.bindingId,
             device,
-            gatewayId: client.internal.personalIdentityBinding.gatewayId,
+            gatewayId: personalIdentityBinding.gatewayId,
             isDeviceCurrent: async (identity) => {
               const currentPairing = await loadPairedDevicePairingStoreRecordReadOnly(
                 identity.deviceId,
@@ -197,10 +197,12 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               );
             },
             readCurrentTailscaleLogin: async (sourceClientIp) =>
-              (await readTailscaleWhoisIdentity(sourceClientIp, undefined, {
-                cacheTtlMs: 0,
-                errorTtlMs: 0,
-              }))?.login,
+              (
+                await readTailscaleWhoisIdentity(sourceClientIp, undefined, {
+                  cacheTtlMs: 0,
+                  errorTtlMs: 0,
+                })
+              )?.login,
           })
         : false;
       if (!current) {
