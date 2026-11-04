@@ -738,6 +738,8 @@ const rootEntries = [
   // Native applications load these JavaScript assets directly rather than through Node imports.
   "apps/android/app/src/main/assets/katex/katex.min.js!",
   "apps/android/app/src/main/assets/katex/renderer.js!",
+  // The vendored updater registers this asset through Rust global_api_script_path.
+  "apps/linux/src-tauri/updater-plugin/api-iife.js!",
   "apps/linux/ui/main.js!",
   "apps/linux/ui/quickchat.js!",
   // The native window-chrome owner injects this script through Rust include_str!.
