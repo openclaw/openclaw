@@ -201,6 +201,11 @@ must contain the diagnostic repair; an older updater cannot gain it from a newer
 candidate alone. If capture refuses before the package changes, final recovery
 restarts and verifies the previous owned Gateway unless recorded data is at risk.
 
+PostgreSQL update rollback uses a fresh prepared anchor on each attempt. After a
+prepublication refusal, correcting the reported obstruction allows the same native
+`update restore` request to retry without overwriting an earlier recovery preparation.
+The candidate restore implementation must contain this fix; the supervisor needs no change.
+
 When artifact-preserving SQLite inspection exhausts its stabilization attempts,
 update failures retain the final consistency reason code and attempt count in
 `openclaw update status` and the prepared failure report. The candidate worker
