@@ -175,7 +175,11 @@ describe("Control UI theme contrast", () => {
       ["var(--primary-foreground)", "var(--primary-hover)", AA_NORMAL_TEXT_MIN],
       ["var(--destructive-foreground)", "var(--destructive-hover)", AA_NORMAL_TEXT_MIN],
       ["var(--accent-foreground)", "var(--accent)", 3],
-      // Runtime hover/pressed ink is paired by the accent owner; covered in accent-contrast.e2e.
+      [
+        "var(--chat-send-foreground, var(--primary-foreground))",
+        "var(--chat-send-hover-bg, color-mix(in srgb, var(--primary) 86%, var(--text-strong)))",
+        3,
+      ],
     ],
     "chat confirmation": (_themeName, tokens, floor) => {
       const fill = tokens.get(readColorToken(readPaint(confirmation, "background")));
