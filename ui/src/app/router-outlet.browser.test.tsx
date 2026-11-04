@@ -54,7 +54,7 @@ it("keeps a page's render failure in the outlet without its exception text, then
     await settleRouterOutlet(outlet);
 
     const alert = outlet.querySelector('[role="alert"]');
-    expect(alert?.textContent).toContain("Panel failed to load");
+    expect(alert?.textContent).toContain("Couldn’t load this panel.");
     expect(outlet.textContent).not.toContain(exception);
     expect(outlet.querySelector("details")).toBeNull();
     expect(logged).toHaveBeenCalledWith("[openclaw] route render failed", expect.any(TypeError));

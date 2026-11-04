@@ -98,7 +98,7 @@ it.each<[string, string, Record<string, string[]> | undefined]>([
 });
 
 it.each<[string[], string, boolean | string[], string, boolean]>([
-  [["hooks", "allowPromptInjection"], "Add context to prompts", true, "true", false],
+  [["hooks", "allowPromptModification"], "Modify prompts", true, "true", false],
   [["llm", "allowedModels"], "Allowed models", ["synthetic-sensitive-value"], "<redacted>", true],
 ])(
   "keeps host setting paths intact and redacts sensitive Ask values: %s",

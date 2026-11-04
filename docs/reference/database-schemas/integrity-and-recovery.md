@@ -675,13 +675,24 @@ token; retirement is committed before handles close so a late worker cannot
 restart it. Updaters retain legacy-compatible token handling for released workers.
 Primary databases and backups are never removed by this owner.
 
-The serving Gateway does not scan or reclaim abandoned snapshot directories.
-Legacy copies left by older releases or a machine-wide crash require explicit
-offline operator maintenance. Large reflink cleanup can stall other databases
-on the same filesystem even when each truncate returns quickly; schedule that
-work separately from serving traffic. The cache can contain snapshots from
-multiple state directories, so Doctor's authority over one state directory does
-not authorize a cache-wide sweep. Snapshot allocation never waits for such a sweep.
+New snapshots use an installation-specific namespace under the cache root,
+derived from the resolved state-directory path. Delayed Gateway maintenance
+reclaims abandoned snapshots there, starting after the startup reconnect window
+and then hourly. The streaming scan yields between entries, so retained copies
+do not starve later entries. Retirement requires 15 minutes without payload
+activity plus exclusive ownership of every nested SQLite token.
+Live readers and creators prevent deletion even when the files are old. A crash
+or `SIGKILL` releases native locks, allowing a later pass to recover a leftover
+journal and retire the incomplete copy. Maintenance reports removed bytes and
+retained directories; missing tokens, unknown layouts and legacy workers are
+retained for operator inspection.
+
+Legacy copies in the shared cache and updater-owned temporary roots still require
+explicit offline operator maintenance. They cannot be attributed safely to one
+installation. Primary databases and published backups remain outside this sweep.
+Deletion runs in the native worker, in steps of at most 64 MiB; delayed filesystem
+metadata work can still affect other traffic on the same filesystem. Snapshot
+allocation, fresh maintenance and rollback never invoke or await the sweep.
 
 Schema-only agent inspections during Doctor and restart checks read metadata in
 a child process, within one SQLite read transaction, without copying the whole
