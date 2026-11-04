@@ -17,15 +17,28 @@ const withLocal = (provider: Record<string, unknown>, primary = "Local/m"): Open
     },
   }) as unknown as OpenClawConfig;
 
-it.each<[string, Record<string, unknown>, number]>([
-  ["the 8192 default", {}, 8192],
-  ["provider maxTokens", { maxTokens: 65_536 }, 65_536],
-  ["model maxTokens", { models: [{ id: "m", name: "m", maxTokens: 131_072 }] }, 131_072],
-])("resolves a configured model's output limit from %s", (_label, provider, maxTokens) => {
-  expect(resolveAgentModelOutputLimit({ cfg: withLocal(provider), agentId: "main" })).toEqual({
+const providerPath = "models.providers.local.maxTokens";
+const rowPath = "models.providers.local.models[0].maxTokens";
+it.each<[string, Record<string, unknown>, number, string]>([
+  ["the 8192 default", {}, 8192, providerPath],
+  ["provider maxTokens", { maxTokens: 65_536 }, 65_536, providerPath],
+  ["model maxTokens", { models: [{ id: "m", name: "m", maxTokens: 131_072 }] }, 131_072, rowPath],
+])("resolves a configured model's output limit from %s", (_label, provider, maxTokens, path) => {
+  const cfg = withLocal(provider);
+  expect(resolveAgentModelOutputLimit({ cfg, agentId: "main" })).toEqual({
     providerKey: "local",
     model: "m",
     maxTokens,
+    path,
+  });
+});
+
+it("lets an agent request budget override the model limit, as at runtime", () => {
+  const cfg = withLocal({ models: [{ id: "m", name: "m", maxTokens: 131_072 }] });
+  cfg.agents!.entries = { main: { params: { max_tokens: 8192 } } };
+  expect(resolveAgentModelOutputLimit({ cfg, agentId: "main" })).toMatchObject({
+    maxTokens: 8192,
+    path: "agents.entries.main.params.maxTokens",
   });
 });
 

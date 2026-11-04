@@ -15,7 +15,8 @@ function detect(cfg: OpenClawConfig, limits: Record<string, number | undefined>)
     resolveAgentModelOutputLimit: async ({ agentId }) => {
       const maxTokens = limits[agentId];
       const model = agentId === "big" ? "large" : "small";
-      return maxTokens === undefined ? undefined : { providerKey: "local", model, maxTokens };
+      const path = "models.providers.local.maxTokens";
+      return maxTokens === undefined ? undefined : { providerKey: "local", model, maxTokens, path };
     },
   });
   return registered[0]!.detect({ mode: "doctor", runtime, cfg: { agents, ...cfg } });

@@ -8,7 +8,7 @@ const OUTPUT_LIMIT_CHECK_ID = "knowledge/model-output-limit";
 /** Saving writes several full pages in one reply; below this, long saves get cut off. */
 export const KNOWLEDGE_MIN_OUTPUT_TOKENS = 65_536;
 
-type ModelOutputLimit = { providerKey: string; model: string; maxTokens: number };
+type ModelOutputLimit = { providerKey: string; model: string; maxTokens: number; path: string };
 type ResolveModelOutputLimit = (params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -39,19 +39,22 @@ function createOutputLimitCheck(resolveLimit: ResolveModelOutputLimit): HealthCh
       );
       const findings = new Map<string, HealthFinding>();
       for (const limit of limits) {
-        const key = `${limit?.providerKey}/${limit?.model}`;
-        if (!limit || limit.maxTokens >= KNOWLEDGE_MIN_OUTPUT_TOKENS || findings.has(key)) {
+        if (!limit || limit.maxTokens >= KNOWLEDGE_MIN_OUTPUT_TOKENS) {
           continue;
         }
-        findings.set(key, {
+        const model = `${limit.providerKey}/${limit.model}`;
+        if (findings.has(`${model} ${limit.path}`)) {
+          continue;
+        }
+        findings.set(`${model} ${limit.path}`, {
           checkId: OUTPUT_LIMIT_CHECK_ID,
           severity: "warning",
           category: "recommended",
           docsUrl: "https://docs.openclaw.ai/plugins/knowledge/scribes#limits",
-          message: `Knowledge saves with ${key}, which can write only ${limit.maxTokens} tokens per reply. Long saves can get cut off.`,
-          path: `models.providers.${limit.providerKey}.maxTokens`,
+          message: `Knowledge saves with ${model}, which can write only ${limit.maxTokens} tokens per reply. Long saves can get cut off.`,
+          path: limit.path,
           requirement: `Knowledge saving needs at least ${KNOWLEDGE_MIN_OUTPUT_TOKENS} output tokens.`,
-          fixHint: `Set models.providers.${limit.providerKey}.maxTokens (or that model's maxTokens) to ${KNOWLEDGE_MIN_OUTPUT_TOKENS} or more, if the model supports it.`,
+          fixHint: `Set ${limit.path} to ${KNOWLEDGE_MIN_OUTPUT_TOKENS} or more, if the model supports it.`,
         });
       }
       return [...findings.values()];
