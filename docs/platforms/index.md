@@ -37,6 +37,7 @@ WSL2 for the most Linux-compatible Gateway runtime.
 - Fly.io: [Fly.io](/install/fly)
 - GCP (Compute Engine): [GCP](/install/gcp)
 - Hetzner (Docker): [Hetzner](/install/hetzner)
+- Prized (cloud VM): [Prized](/install/prized)
 
 ## Common links
 

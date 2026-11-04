@@ -952,6 +952,10 @@
     "target": "exe.dev"
   },
   {
+    "source": "Prized",
+    "target": "Prized"
+  },
+  {
     "source": "Linux server",
     "target": "Linux 服务器"
   },

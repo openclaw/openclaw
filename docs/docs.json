@@ -1456,6 +1456,7 @@
                       "install/exe-dev",
                       "install/fly",
                       "install/northflank",
+                      "install/prized",
                       "install/railway",
                       "install/render",
                       "install/upstash"
