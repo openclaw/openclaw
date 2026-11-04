@@ -230,10 +230,7 @@ suite.define(() => {
             await page.goto(new URL("settings/profile", suite.server.baseUrl).href);
             const access = page.locator("#settings-profile-access");
             await access
-              .getByText(
-                "Your role limits access. Device approval cannot grant administrator access. If you need more access, ask a Gateway administrator to change your role, then reconnect.",
-                { exact: true },
-              )
+              .getByText("Only admins can manage access. Ask an admin for access.", { exact: true })
               .waitFor();
             expect(
               await access.getByRole("button", { name: "Request admin", exact: true }).count(),
@@ -264,14 +261,10 @@ suite.define(() => {
             expect(pending[0]?.scopes).toContain("operator.admin");
             expect((await auth()).scopes).not.toContain("operator.admin");
             await adminClient.request("device.pair.approve", { requestId: pending[0]!.requestId });
-            await access
-              .getByText("You have permission to manage this server.", { exact: true })
-              .waitFor();
+            await access.getByText("You have admin access.", { exact: true }).waitFor();
             expect((await auth()).scopes).toContain("operator.admin");
             await page.reload();
-            await access
-              .getByText("You have permission to manage this server.", { exact: true })
-              .waitFor();
+            await access.getByText("You have admin access.", { exact: true }).waitFor();
             const reloadedAuth = await auth();
             expect(reloadedAuth.scopes).toContain("operator.admin");
             expect(
