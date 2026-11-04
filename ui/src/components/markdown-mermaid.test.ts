@@ -153,25 +153,13 @@ it("mounts a newly inserted diagram without replacing an existing sibling", asyn
   await diagram.updateComplete;
 });
 
-it("expands the diagram without a hover tooltip", async () => {
-  const { element } = await mount("Preview diagram");
-  await waitForImage(element);
-  const preview = element.querySelector<HTMLButtonElement>("button.preview")!;
-
-  expect(preview.hasAttribute("title")).toBe(false);
-  expect(preview.getAttribute("aria-label")).toBe("Expand diagram");
-  expect(preview.getAttribute("aria-haspopup")).toBe("dialog");
-  preview.click();
-  await expanded(element, "Mermaid diagram");
-});
-
 it("preserves source and reports copy failure", async () => {
   copySource.mockResolvedValueOnce(false);
   const { original, container, element } = await mount("x < y & z <script>alert(1)</script>");
   const imageUrl = await waitForImage(element!);
 
   expect(renderSvg).toHaveBeenCalledWith(original, expect.objectContaining({ darkMode: false }));
-  expect(action(element!, "Expand diagram").disabled).toBe(false);
+  expect(element!.querySelector("button.preview[title]")).toBeNull();
   await selectAction(element!, "Show source");
   await expectCopyableSource(element, original, false);
   expect(mountMermaidBlocks(container)).toBe(false);
@@ -343,7 +331,7 @@ it("keeps escaped metadata as text and replaces expanded alternatives with their
   );
   const { element } = await mount("Escaped metadata");
   await waitForImage(element);
-  await selectAction(element, "Expand diagram");
+  element.querySelector<HTMLButtonElement>("button.preview")!.click();
   const viewer = await expanded(element, title);
   const expandedDescription = () =>
     document.getElementById(viewer.querySelector("img")?.getAttribute("aria-describedby") ?? "");
