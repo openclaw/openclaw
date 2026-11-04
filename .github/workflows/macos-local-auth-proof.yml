@@ -68,6 +68,8 @@ jobs:
         working-directory: candidate
         run: |
           set -euo pipefail
+          # Cold worker compilation took 116s inside a 120s credential test on run 41909368162.
+          node scripts/prepare-vitest-worker-cache.mts
           pnpm test src/secrets/runtime-gateway-local-surfaces.test.ts src/gateway/credentials.test.ts src/gateway/probe-auth.test.ts --maxWorkers=1 2>&1 | tee "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof/core-tests.log"
       - name: Build actual exact-head ad-hoc app
         working-directory: candidate
