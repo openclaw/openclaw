@@ -12,6 +12,7 @@ export type SystemAgentOperation =
   | { kind: "doctor-fix" }
   | { kind: "status" }
   | { kind: "health" }
+  | { kind: "backup-status" }
   | { kind: "config-validate" }
   | { kind: "config-get"; path: string }
   | { kind: "config-schema"; path?: string }
