@@ -37,9 +37,8 @@ function mockDiscovery(
   modelSummaries: Record<string, unknown>[],
   inferenceProfileSummaries: Record<string, unknown>[] = [],
 ): void {
-  sendMock
-    .mockResolvedValueOnce({ modelSummaries })
-    .mockResolvedValueOnce({ inferenceProfileSummaries });
+  sendMock.mockResolvedValueOnce({ modelSummaries });
+  sendMock.mockResolvedValueOnce({ inferenceProfileSummaries });
 }
 
 function profile(
@@ -121,9 +120,10 @@ beforeEach(() => {
   destroyMock.mockClear();
 });
 
-it("filters to active streaming text models and maps modalities", async () => {
+it("filters to active streaming on-demand text models and maps modalities", async () => {
   const models = await discoverFixture([
     foundation(undefined, { inputModalities: ["TEXT", "IMAGE"] }),
+    foundation("provisioned-only", { inferenceTypesSupported: ["PROVISIONED"] }),
     foundation("anthropic.claude-3-haiku-20240307-v1:0", {
       responseStreamingSupported: false,
     }),
@@ -239,39 +239,6 @@ it.each([
   },
 );
 
-it.each([
-  [["ON_DEMAND"], true],
-  [["INFERENCE_PROFILE"], false],
-  [["PROVISIONED"], false],
-  [["ON_DEMAND", "PROVISIONED"], true],
-  [["ON_DEMAND", "INFERENCE_PROFILE"], true],
-  [[], true],
-  [undefined, true],
-] as const)("lists bare foundation IDs with inference types %j: %s", async (types, listed) => {
-  const summary = foundation(undefined, {
-    inferenceTypesSupported: types ? [...types] : undefined,
-  });
-  const ids = (await discoverFixture([summary])).map((model) => model.id);
-  expect(ids).toEqual(listed ? [summary.modelId] : []);
-});
-
-it("inherits profile capabilities from foundations hidden for missing on-demand support", async () => {
-  const baseId = "openai.gpt-6.1-sol";
-  const models = await discoverFixture(
-    [
-      foundation(baseId, {
-        modelName: "GPT Reasoning",
-        providerName: "openai",
-        inputModalities: ["TEXT", "IMAGE"],
-        inferenceTypesSupported: ["INFERENCE_PROFILE"],
-      }),
-    ],
-    [profile(`us.${baseId}`, [baseId])],
-  );
-  expect(models.map((model) => model.id)).toEqual([`us.${baseId}`]);
-  expectFields(models[0], { reasoning: true, input: ["text", "image"] });
-});
-
 it("aborts stalled Bedrock model discovery requests", async () => {
   vi.useFakeTimers();
   const abortSignals: AbortSignal[] = [];
@@ -305,9 +272,9 @@ it("aborts stalled Bedrock model discovery requests", async () => {
   }
 });
 
-it("discovers inference profiles and inherits foundation model capabilities", async () => {
+it("inherits profile capabilities from hidden foundations", async () => {
   const models = await discoverFixture(
-    [sonnetSummary()],
+    [{ ...sonnetSummary(), inferenceTypesSupported: ["INFERENCE_PROFILE"] }],
     [
       sonnetProfile("us", [sonnetId, `arn:aws:bedrock:us-west-2::foundation-model/${sonnetId}`]),
       sonnetProfile("global"),
@@ -316,11 +283,11 @@ it("discovers inference profiles and inherits foundation model capabilities", as
       }),
     ],
   );
-  expect(models).toHaveLength(3);
+  expect(models).toHaveLength(2);
   expect(models[0]?.id).toBe(`global.${sonnetId}`);
-  expectModel(models, sonnetId, { input: ["text", "image"] });
   expectModel(models, `us.${sonnetId}`, {
     name: "US Anthropic Claude Sonnet 4.6",
+    reasoning: true,
     input: ["text", "image"],
     contextWindow: 1000000,
     maxTokens: 4096,
@@ -441,7 +408,6 @@ it("resolves au. and apac. prefixes for regional inference profiles", async () =
   for (const prefix of ["au", "apac"]) {
     const id = `${prefix}.${sonnetId}`;
     expectModel(models, id, {
-      id,
       name: `${prefix.toUpperCase()} Anthropic Claude Sonnet 4.6`,
       input: ["text", "image"],
     });
