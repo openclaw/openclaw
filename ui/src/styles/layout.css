@@ -3946,7 +3946,8 @@ html.openclaw-native-web-chrome
 .sidebar-recent-session--single-line .sidebar-recent-session__text {
   flex-direction: row;
   align-items: center;
-  gap: calc(var(--sidebar-row-gap) + var(--sidebar-row-gap));
+  /* Trailing metadata needs less separation than the leading status icon. */
+  gap: 6px;
 }
 
 /* Basis 0 mirrors the two-line subtitle contract: the title absorbs all
