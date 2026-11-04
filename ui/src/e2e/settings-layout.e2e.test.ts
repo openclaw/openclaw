@@ -240,7 +240,7 @@ suite.define(() => {
         const stopCapturing: Array<() => void> = [];
         const settingsOnlyCopy = [
           "Global model defaults and provider access for your agents.",
-          "Find existing connections or prepare a local model for {agent}.",
+          "Find an account or set up a local model for {agent}. This changes only this agent’s model.",
         ];
         // Keep each cold-boot document alive through the final assertions: replacing
         // an observed document cancels its idle imports and creates test-owned failures.
@@ -282,7 +282,7 @@ suite.define(() => {
               "Utility model",
             );
             await openModelSetup(page);
-            await page.getByText(/Find existing connections or prepare a local model/).waitFor();
+            await page.getByText(/Find an account or set up a local model/).waitFor();
           }
           if (recordVisuals) {
             await page.screenshot({

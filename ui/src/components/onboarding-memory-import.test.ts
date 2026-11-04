@@ -452,7 +452,9 @@ describe("OnboardingMemoryImport", () => {
       .filter(([method]) => method === "migrations.memory.apply")
       .map(([, params]) => params?.providerId);
     expect(applyProviders).toEqual(["codex", "claude"]);
-    expect(element.textContent).toContain("Couldn’t import memory. Try again.");
+    expect(element.textContent).toContain(
+      "Couldn’t import memory. Continue setup, then try importing again.",
+    );
     expect(element.textContent).toContain("Codex import unavailable: OPENAI_API_KEY=sk-123...cdef");
     expect(element.textContent).not.toContain("sk-1234567890abcdef");
     expect(element.textContent).toContain("Imported 1, skipped 0");
