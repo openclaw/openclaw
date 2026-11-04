@@ -98,9 +98,17 @@ export function registerManagedCampaignFailureTests(
       expect(report).toContain(reason);
       expect(report).toContain("Package publication is incomplete.");
       expect(recorded.verification.recovery).toMatchObject({ serviceRestartSafe: false });
+      if (gatewayHealth === "ready") {
+        expect(recorded.verification).toMatchObject({
+          runningVersion: "1.0.0",
+          versionMatch: true,
+          coreReady: true,
+          settled: true,
+        });
+      }
       expect(report).toContain(
         gatewayHealth === "ready"
-          ? "Recorded recovery: Gateway readiness is pending; recovery check completed without verified readiness."
+          ? "Recorded recovery: verified serving 1.0.0; restart remains unsafe (runtime-verification-failed)."
           : gatewayHealth === "exited"
             ? "Recorded recovery: not serving (service-not-running)"
             : "Recorded recovery: recovery check failed (gateway-probe-failed)",

@@ -456,7 +456,16 @@ describe("doctor lint state isolation", () => {
             const findings = JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings;
             expect(isolated).toBe(true);
             expect(findings).toEqual(
-              exists ? [] : [expect.objectContaining({ severity: "error", path: credentials })],
+              exists
+                ? []
+                : [
+                    expect.objectContaining({
+                      checkId: "core/doctor/state-integrity",
+                      message: "OAuth dir is missing.",
+                      severity: "warning",
+                      path: credentials,
+                    }),
+                  ],
             );
             expect(fs.existsSync(credentials)).toBe(exists);
           } finally {

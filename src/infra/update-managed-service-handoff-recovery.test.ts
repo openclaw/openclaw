@@ -92,7 +92,13 @@ describe("managed handoff lease repair", () => {
     ["recent custody", /recovery grace ends at/],
     ["recent retained service root", /recovery grace ends at/],
     ["process referencing the retained service root", /PID 81236/],
-    ["surviving process group of the cancelled updater", /descendants remain live or unverified/],
+    [
+      "surviving descendants of the cancelled updater",
+      process.platform === "win32"
+        ? /descendants remain alive or unverified: PID 81237/
+        : /descendants remain live or unverified/,
+    ],
+    ["process named by the cancelled update", /descendants remain alive or unverified: PID 81237/],
     ["unverified candidate", /live or unverified: PID 1000004/],
     ["alias outside the family", /unsupported custody at .*-other\/\.openclaw-update-child-/],
   ] as const)("retains cancelled custody unchanged for %s", async (reason, expected) => {
@@ -107,7 +113,13 @@ describe("managed handoff lease repair", () => {
       // The run's own facts name other paths; every retired family key is censused too.
       fixture.pathCensus.set(keys.service, [81236]);
     }
-    if (reason === "surviving process group of the cancelled updater") {
+    if (
+      reason === "process named by the cancelled update" ||
+      (reason === "surviving descendants of the cancelled updater" && process.platform === "win32")
+    ) {
+      // Windows has no detached Unix process group; the run census owns descendant evidence.
+      fixture.runCensus.set("retained-update", { matchingPids: [81237], unverifiedPids: [] });
+    } else if (reason === "surviving descendants of the cancelled updater") {
       const groupAlive = childTree.isChildProcessTreeAlive;
       vi.spyOn(childTree, "isChildProcessTreeAlive").mockImplementation((child) =>
         child.pid === keys.updater.pid ? true : groupAlive(child),

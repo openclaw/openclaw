@@ -39,6 +39,12 @@ it("refreshes supplied missing-history discovery after maintenance admits a newe
       schemaVersion: 19,
       path: path.join(lateDir, "openclaw-agent.sqlite"),
     });
+    // Missing producer identity requires explicit recovery, rather than automatic restoration.
+    // Keep this discovery-refresh fixture on the held-store path it is proving.
+    for (const pathname of [mainPath, latePath]) {
+      using database = openNodeSqliteDatabase(pathname);
+      database.exec("DELETE FROM schema_meta WHERE meta_key = 'primary'");
+    }
     unregisterOpenClawAgentDatabase({ agentId: "late", path: latePath, env: state.env });
     runOpenClawStateWriteTransaction(
       (database) => database.db.exec("DROP TABLE agent_deletion_journal"),
