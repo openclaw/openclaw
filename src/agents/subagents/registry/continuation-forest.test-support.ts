@@ -536,6 +536,12 @@ export class ContinuationForest {
     return this.track(promise);
   }
 
+  /** World operations still running, and how many of them wait on the clock or a barrier. */
+  opStats(): { live: number; parked: number } {
+    const ops = [...this.ops];
+    return { live: ops.length, parked: ops.filter((op) => this.parked.get(op)?.parked).length };
+  }
+
   /** Lets everything that is not waiting on the clock or a barrier finish. */
   async settle(): Promise<void> {
     const started = realNowMs();

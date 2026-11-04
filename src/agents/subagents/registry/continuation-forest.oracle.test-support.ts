@@ -185,11 +185,16 @@ async function reportStories(
     const adopted = forest.adoptionCounts.get(`${report.electionId}\u0000${sessionKey}`) ?? 0;
     const refusal = forest.expectedRefusals.get(`${report.electionId}\u0000${sessionKey}`);
     if (!refusal) {
-      if (adopted !== 1) {
+      if (adopted === 0) {
+        // Where it stopped: no row (never routed there), or the row's receipt state.
+        const rowId = forest.rows.get(`${report.runId}\u0000${sessionKey}`);
+        const row = rowId ? `row ${(await receiptStatus(forest, rowId)) ?? "gone"}` : "no row";
         stories.push(
-          adopted === 0
-            ? `${report.name}'s report never reached ${describeRoom(forest, sessionKey)}`
-            : `${describeRoom(forest, sessionKey)} adopted ${report.name}'s report ${adopted} times`,
+          `${report.name}'s report never reached ${describeRoom(forest, sessionKey)} (${row})`,
+        );
+      } else if (adopted > 1) {
+        stories.push(
+          `${describeRoom(forest, sessionKey)} adopted ${report.name}'s report ${adopted} times`,
         );
       }
       continue;

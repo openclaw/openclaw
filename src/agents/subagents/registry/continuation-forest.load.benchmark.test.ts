@@ -84,6 +84,7 @@ describe.runIf(LOAD)("the burning annex under load", () => {
       const started = realNowMs();
       const outcome = await runStorm(forest, events, BUDGET_MS);
       const stormMs = Math.round(realNowMs() - started);
+      const opsAtEnd = forest.opStats();
       const stories = outcome.finished
         ? await forest.stories()
         : [
@@ -101,6 +102,7 @@ describe.runIf(LOAD)("the burning annex under load", () => {
         reports: forest.reports.size,
         adoptions: forest.adoptions.length,
         restarts: forest.generation,
+        opsAtEnd,
         stories,
         timings: forest.timings,
         contention: contention(forest),
