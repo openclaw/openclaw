@@ -20,6 +20,10 @@ struct SessionDashboardScreen: View {
             storedOperatorToken: storedOperatorToken,
             authorizationRevision: authorization?.revision)
         let url = Self.dashboardURL(config: config, sessionKey: self.sessionKey, agentId: self.agentId)
+        let accessCookieAdmission = AuthenticatedControlUI.dashboardAccessCookieAdmission(
+            url: url,
+            requiresCookie: authorization != nil,
+            cookieForURL: { authorization?.dashboardCookie($0) })
         let authScript: String?
         let authScriptProvider: (@MainActor () async -> String?)?
         if authorization != nil {
@@ -46,7 +50,7 @@ struct SessionDashboardScreen: View {
         return ZStack {
             OpenClawProBackground()
             if let url,
-               authorization == nil || authorization?.dashboardCookie(url) != nil,
+               accessCookieAdmission.isAvailable,
                self.failedAccessBoundaryIdentity != webContentIdentity
             {
                 AuthenticatedControlUIWebView(
@@ -62,7 +66,7 @@ struct SessionDashboardScreen: View {
                     onMainFrameNavigationOutsideScope: {
                         self.dismiss()
                     },
-                    accessCookie: authorization?.dashboardCookie(url),
+                    accessCookie: accessCookieAdmission.cookie,
                     accessAdmissionIsCurrent: authorization.map { authorization in
                         { authorization.isCurrent() }
                     },

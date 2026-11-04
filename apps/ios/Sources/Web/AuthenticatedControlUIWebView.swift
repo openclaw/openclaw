@@ -6,6 +6,11 @@ import WebKit
 
 /// URL, credential, and WebView plumbing shared by authenticated Control UI pages.
 enum AuthenticatedControlUI {
+    struct DashboardAccessCookieAdmission {
+        let isAvailable: Bool
+        let cookie: HTTPCookie?
+    }
+
     struct StoredOperatorAuthorization {
         let identity: DeviceIdentity
         let entry: DeviceAuthEntry
@@ -15,6 +20,21 @@ enum AuthenticatedControlUI {
         charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
     private static let pathSegmentAllowed = CharacterSet(
         charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~!'()*")
+
+    @MainActor
+    static func dashboardAccessCookieAdmission(
+        url: URL?,
+        requiresCookie: Bool,
+        cookieForURL: @MainActor (URL) -> HTTPCookie?) -> DashboardAccessCookieAdmission
+    {
+        guard requiresCookie else {
+            return DashboardAccessCookieAdmission(isAvailable: true, cookie: nil)
+        }
+        guard let url, let cookie = cookieForURL(url) else {
+            return DashboardAccessCookieAdmission(isAvailable: false, cookie: nil)
+        }
+        return DashboardAccessCookieAdmission(isAvailable: true, cookie: cookie)
+    }
 
     static func pageURL(
         config: GatewayConnectConfig?,

@@ -6,6 +6,63 @@ import Testing
 
 @MainActor
 struct SessionDashboardScreenTests {
+    @Test func `dashboard cookie admission reuses one cookie snapshot`() throws {
+        let url = try #require(URL(string: "https://gateway.example.test/focus/chat"))
+        let cookie = try #require(HTTPCookie(properties: [
+            .name: "CF_Authorization",
+            .value: "fixture-token",
+            .domain: "gateway.example.test",
+            .path: "/",
+            .secure: "TRUE",
+        ]))
+        var calls = 0
+
+        let admission = AuthenticatedControlUI.dashboardAccessCookieAdmission(
+            url: url,
+            requiresCookie: true,
+            cookieForURL: { _ in
+                calls += 1
+                return calls == 1 ? cookie : nil
+            })
+
+        #expect(calls == 1)
+        #expect(admission.isAvailable)
+        #expect(admission.cookie?.value == cookie.value)
+    }
+
+    @Test func `dashboard cookie admission fails closed when required cookie is missing`() throws {
+        let url = try #require(URL(string: "https://gateway.example.test/focus/chat"))
+        var calls = 0
+
+        let admission = AuthenticatedControlUI.dashboardAccessCookieAdmission(
+            url: url,
+            requiresCookie: true,
+            cookieForURL: { _ in
+                calls += 1
+                return nil
+            })
+
+        #expect(calls == 1)
+        #expect(!admission.isAvailable)
+        #expect(admission.cookie == nil)
+    }
+
+    @Test func `dashboard cookie admission leaves ordinary routes unchanged`() throws {
+        var calls = 0
+
+        let admission = AuthenticatedControlUI.dashboardAccessCookieAdmission(
+            url: nil,
+            requiresCookie: false,
+            cookieForURL: { _ in
+                calls += 1
+                return nil
+            })
+
+        #expect(calls == 0)
+        #expect(admission.isAvailable)
+        #expect(admission.cookie == nil)
+    }
+
     @Test func `session roster preserves the dashboard face`() throws {
         let data = Data(
             #"{"key":"agent:main:dashboard:cleanup","displayName":"Nightly Disk Cleanup","boardFace":"dashboard","agentId":"main"}"#
