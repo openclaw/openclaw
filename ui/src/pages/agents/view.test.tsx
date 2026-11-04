@@ -963,9 +963,7 @@ describe("renderAgents toolbar", () => {
       const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
       expect(createButton).not.toBeNull();
       expect(createButton?.disabled).toBe(true);
-      expect(createButton?.title).toContain("openclaw.chat");
-      expect(createButton?.title).toContain("operator.admin");
-      expect(createButton?.title).toContain("reconnect");
+      expect(createButton?.title).toBe("You need admin access to set up OpenClaw.");
       createButton?.click();
       expect(onCreateAgent).not.toHaveBeenCalled();
     } finally {

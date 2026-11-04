@@ -267,7 +267,7 @@ describe("SidebarUpdateCard", () => {
           const failedModal = document.querySelector("openclaw-modal-dialog");
           expect(failedModal).not.toBeNull();
           expect(failedModal?.textContent).toContain(
-            "Status could not be refreshed. Check your connection and try again.",
+            "Couldn’t refresh update status. Check your connection and try again.",
           );
           await element.update({
             statusBanner: {
@@ -674,7 +674,7 @@ describe("SidebarUpdateCard", () => {
     expect(action?.getAttribute("aria-disabled")).toBe("true");
     expect(action?.getAttribute("aria-describedby")).not.toBeNull();
     expect(tooltip?.hasAttribute("open-on-click")).toBe(true);
-    expect(tooltip?.content).toContain("Administrator access is required");
+    expect(tooltip?.content).toContain("You need admin access");
     action?.click();
     expect(onUpdate).not.toHaveBeenCalled();
   });
