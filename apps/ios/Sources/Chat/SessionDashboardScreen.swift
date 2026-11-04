@@ -4,6 +4,7 @@ import SwiftUI
 /// Session-scoped dashboard rendered by the gateway Control UI.
 struct SessionDashboardScreen: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(\.dismiss) private var dismiss
     @State private var showsDesktop = false
     let sessionKey: String
@@ -19,26 +20,37 @@ struct SessionDashboardScreen: View {
                 sessionKey: self.sessionKey,
                 agentId: self.agentId)
             {
-                AuthenticatedControlUIWebView(
+                let identity = AuthenticatedControlUI.webContentIdentity(
+                    config: config,
+                    storedOperatorToken: storedOperatorToken)
+                AccessGatedControlUI(
+                    gatewayController: self.gatewayController,
+                    config: config,
                     url: url,
-                    authScript: AuthenticatedControlUI.authUserScript(
-                        config: config,
-                        pageURL: url,
-                        storedOperatorToken: storedOperatorToken,
-                        usesNativeNavigationChrome: true),
-                    tls: config?.tls,
-                    allowedMainFramePathPrefix: Self.dashboardPathPrefix(config: config),
-                    onMainFrameNavigationOutsideScope: {
-                        self.dismiss()
-                    },
-                    nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
-                        config: config,
-                        storedOperatorToken: storedOperatorToken,
-                        appModel: self.appModel))
-                    .id(AuthenticatedControlUI.webContentIdentity(
-                        config: config,
-                        storedOperatorToken: storedOperatorToken))
-                    .ignoresSafeArea(.container, edges: .bottom)
+                    identity: identity,
+                    openGateway: nil)
+                { accessCookie, onAccessSignInRequired in
+                    AuthenticatedControlUIWebView(
+                        url: url,
+                        authScript: AuthenticatedControlUI.authUserScript(
+                            config: config,
+                            pageURL: url,
+                            storedOperatorToken: storedOperatorToken,
+                            usesNativeNavigationChrome: true),
+                        tls: config?.tls,
+                        allowedMainFramePathPrefix: Self.dashboardPathPrefix(config: config),
+                        onMainFrameNavigationOutsideScope: {
+                            self.dismiss()
+                        },
+                        nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
+                            config: config,
+                            storedOperatorToken: storedOperatorToken,
+                            appModel: self.appModel),
+                        accessCookie: accessCookie,
+                        onAccessSignInRequired: onAccessSignInRequired)
+                        .id(identity)
+                }
+                .ignoresSafeArea(.container, edges: .bottom)
             } else {
                 self.unavailableCard
             }

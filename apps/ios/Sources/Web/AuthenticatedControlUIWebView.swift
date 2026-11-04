@@ -301,8 +301,13 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
     private let onMainFrameNavigationOutsideScope: (() -> Void)?
     private let tls: GatewayTLSParams?
     private let basicProxyCredentialProvider: (() -> URLCredential?)?
+    private let accessOrigin: CloudflareAccessOrigin?
+    private let accessIssuerHost: String?
+    private let onAccessSignInRequired: ((CloudflareAccessWebFallbackReason) -> Void)?
     private var hasExitedNavigationScope = false
+    private var hasRequestedAccessSignIn = false
     private var activeNavigation: WKNavigation?
+    var accessCookieRegistration: UUID?
 
     init(
         url: URL,
@@ -314,7 +319,10 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         deviceSettingsBridge: IOSDeviceSettingsBridge? = nil,
         nativeAuth: ControlUINativeGatewayAuthHandler? = nil,
         usesNativeEmbed: Bool = false,
-        embedCompatibility: DashboardEmbedCompatibility? = nil)
+        embedCompatibility: DashboardEmbedCompatibility? = nil,
+        accessOrigin: CloudflareAccessOrigin? = nil,
+        accessIssuerHost: String? = nil,
+        onAccessSignInRequired: ((CloudflareAccessWebFallbackReason) -> Void)? = nil)
     {
         self.url = url
         self.authScript = authScript
@@ -322,6 +330,9 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         self.nativeAuth = nativeAuth
         self.usesNativeEmbed = usesNativeEmbed
         self.embedCompatibility = embedCompatibility
+        self.accessOrigin = accessOrigin
+        self.accessIssuerHost = accessIssuerHost
+        self.onAccessSignInRequired = onAccessSignInRequired
         self.expectedOrigin = GatewayTLSAuthority(url: url)
         self.allowedMainFramePathPrefix = allowedMainFramePathPrefix.map(Self.normalizedPath)
         self.onMainFrameNavigationOutsideScope = onMainFrameNavigationOutsideScope
@@ -398,6 +409,16 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
     {
+        if self.isAccessSignInNavigation(
+            to: navigationAction.request.url,
+            isMainFrame: navigationAction.targetFrame?.isMainFrame)
+        {
+            // A rejected or expired seeded cookie sends the main frame to the Access login.
+            // Native sign-in owns that flow; never show a blank cancelled page.
+            decisionHandler(.cancel)
+            self.requestAccessSignIn(.edgeRejected)
+            return
+        }
         let decision = self.navigationDecision(
             to: navigationAction.request.url,
             isMainFrame: navigationAction.targetFrame?.isMainFrame)
@@ -406,6 +427,42 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
             self.hasExitedNavigationScope = true
             self.onMainFrameNavigationOutsideScope?()
         }
+    }
+
+    func webView(
+        _: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
+    {
+        if navigationResponse.isForMainFrame, let accessOrigin,
+           let response = navigationResponse.response as? HTTPURLResponse,
+           CloudflareAccessClient.isChallenge(response, origin: accessOrigin)
+        {
+            decisionHandler(.cancel)
+            self.requestAccessSignIn(.edgeRejected)
+            return
+        }
+        // Same as WebKit's default when this delegate method is absent.
+        decisionHandler(navigationResponse.canShowMIMEType ? .allow : .cancel)
+    }
+
+    /// WebKit follows 3xx itself, so a redirect to the Access login never reaches `decidePolicyFor`.
+    func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation _: WKNavigation!) {
+        guard self.isAccessSignInNavigation(to: webView.url, isMainFrame: true) else { return }
+        webView.stopLoading()
+        self.requestAccessSignIn(.edgeRejected)
+    }
+
+    func isAccessSignInNavigation(to candidateURL: URL?, isMainFrame: Bool?) -> Bool {
+        guard isMainFrame == true, let accessOrigin else { return false }
+        return CloudflareAccessWebSession.isLoginNavigation(
+            candidateURL, origin: accessOrigin, issuerHost: self.accessIssuerHost)
+    }
+
+    func requestAccessSignIn(_ reason: CloudflareAccessWebFallbackReason) {
+        guard !self.hasRequestedAccessSignIn else { return }
+        self.hasRequestedAccessSignIn = true
+        self.onAccessSignInRequired?(reason)
     }
 
     func webView(
@@ -516,6 +573,8 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
     let nativeAuth: ControlUINativeGatewayAuthHandler?
     let usesNativeEmbed: Bool
     let embedCompatibility: DashboardEmbedCompatibility?
+    let accessCookie: CloudflareAccessWebCookie?
+    let onAccessSignInRequired: ((CloudflareAccessWebFallbackReason) -> Void)?
 
     init(
         url: URL,
@@ -527,7 +586,9 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         deviceSettingsBridge: IOSDeviceSettingsBridge? = nil,
         nativeAuth: ControlUINativeGatewayAuthHandler? = nil,
         usesNativeEmbed: Bool = false,
-        embedCompatibility: DashboardEmbedCompatibility? = nil)
+        embedCompatibility: DashboardEmbedCompatibility? = nil,
+        accessCookie: CloudflareAccessWebCookie? = nil,
+        onAccessSignInRequired: ((CloudflareAccessWebFallbackReason) -> Void)? = nil)
     {
         self.url = url
         self.authScript = authScript
@@ -539,6 +600,8 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         self.nativeAuth = nativeAuth
         self.usesNativeEmbed = usesNativeEmbed
         self.embedCompatibility = embedCompatibility
+        self.accessCookie = accessCookie
+        self.onAccessSignInRequired = onAccessSignInRequired
     }
 
     func makeCoordinator() -> AuthenticatedControlUIWebViewCoordinator {
@@ -552,7 +615,10 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
             deviceSettingsBridge: self.deviceSettingsBridge,
             nativeAuth: self.nativeAuth,
             usesNativeEmbed: self.usesNativeEmbed,
-            embedCompatibility: self.embedCompatibility)
+            embedCompatibility: self.embedCompatibility,
+            accessOrigin: self.accessCookie?.origin,
+            accessIssuerHost: self.accessCookie?.issuerHost,
+            onAccessSignInRequired: self.onAccessSignInRequired)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -592,8 +658,74 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         scrollView.horizontalScrollIndicatorInsets = .zero
         scrollView.automaticallyAdjustsScrollIndicatorInsets = false
 
-        webView.load(URLRequest(url: self.url, cachePolicy: .reloadIgnoringLocalCacheData))
+        let request = URLRequest(url: self.url, cachePolicy: .reloadIgnoringLocalCacheData)
+        if let accessCookie {
+            self.seedAccessCookie(accessCookie, then: request, in: webView, coordinator: context.coordinator)
+        } else {
+            webView.load(request)
+        }
         return webView
+    }
+
+    /// The cookie goes only into this WebView's own non-persistent store, and the first
+    /// load waits for WebKit to acknowledge both the port-blocking rules and the cookie.
+    /// Access retirement unloads the page immediately, then deletes the cookie.
+    private func seedAccessCookie(
+        _ accessCookie: CloudflareAccessWebCookie,
+        then request: URLRequest,
+        in webView: WKWebView,
+        coordinator: AuthenticatedControlUIWebViewCoordinator)
+    {
+        let jar = CloudflareAccessWebCookieJar.shared
+        guard let cookie = accessCookie.httpCookie(),
+              let rules = CloudflareAccessWebSession.otherAuthorityBlockRules(for: accessCookie.origin),
+              let id = jar.register(
+                  accessCookie.origin,
+                  generation: accessCookie.generation,
+                  unload: { [weak webView] in
+                      webView?.stopLoading()
+                      webView?.loadHTMLString("", baseURL: nil)
+                  },
+                  delete: { [weak webView] in
+                      if let cookieStore = webView?.configuration.websiteDataStore.httpCookieStore {
+                          await Self.deleteAccessCookies(in: cookieStore)
+                      }
+                  },
+                  onRetired: { [weak coordinator] in coordinator?.requestAccessSignIn(.signInRequired) })
+        else {
+            // No usable cookie, or the decision predates a retirement. Defer: the fallback updates
+            // SwiftUI state, which must not happen during makeUIView.
+            Task { @MainActor [weak coordinator] in coordinator?.requestAccessSignIn(.signInRequired) }
+            return
+        }
+        coordinator.accessCookieRegistration = id
+        let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
+        Task { @MainActor [weak webView, weak coordinator] in
+            // Fail closed: without the port rules the cookie could reach other ports on the host.
+            let list = try? await WKContentRuleListStore.default().compileContentRuleList(
+                forIdentifier: "ai.openclaw.access.\(accessCookie.origin.url.host ?? "gateway")",
+                encodedContentRuleList: rules)
+            guard let list, let webView, jar.isLive(id) else {
+                await jar.release(id)
+                coordinator?.requestAccessSignIn(.signInRequired)
+                return
+            }
+            webView.configuration.userContentController.add(list)
+            await cookieStore.setCookie(cookie)
+            // Retirement or expiry can win the race with seeding; never leave a late copy behind.
+            guard jar.isLive(id), accessCookie.expiresAt > Date() else {
+                await jar.release(id)
+                coordinator?.requestAccessSignIn(.signInRequired)
+                return
+            }
+            webView.load(request)
+        }
+    }
+
+    private static func deleteAccessCookies(in cookieStore: WKHTTPCookieStore) async {
+        for cookie in await cookieStore.allCookies() where cookie.name == CloudflareAccessWebCookie.name {
+            await cookieStore.deleteCookie(cookie)
+        }
     }
 
     func updateUIView(_ webView: WKWebView, context _: Context) {
@@ -610,6 +742,10 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         coordinator: AuthenticatedControlUIWebViewCoordinator)
     {
         coordinator.retireEmbedCompatibility()
+        if let id = coordinator.accessCookieRegistration {
+            coordinator.accessCookieRegistration = nil
+            Task { @MainActor in await CloudflareAccessWebCookieJar.shared.release(id) }
+        }
         coordinator.deviceSettingsBridge?.detach(from: webView)
         coordinator.nativeAuth?.document.retire()
         coordinator.nativeAuth?.webView = nil

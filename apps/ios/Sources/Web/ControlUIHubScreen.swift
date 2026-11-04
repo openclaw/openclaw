@@ -34,7 +34,7 @@ enum ControlUIHubPage {
     }
 
     func url(config: GatewayConnectConfig?) -> URL? {
-        guard let path = self.path else { return nil }
+        guard let path else { return nil }
         return AuthenticatedControlUI.pageURL(config: config, path: path, queryItems: [])
     }
 
@@ -76,6 +76,7 @@ enum ControlUIHubPage {
 /// and the offline fallback; the page owns its route and reload identity.
 struct ControlUIHubScreen: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(GatewayConnectionController.self) private var gatewayController
     let page: ControlUIHubPage
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var usesNativeNavigationChrome = false
@@ -87,17 +88,30 @@ struct ControlUIHubScreen: View {
         ZStack {
             OpenClawProBackground()
             if let url = self.page.url(config: config) {
-                AuthenticatedControlUIWebView(
+                let identity = self.page.webContentIdentity(config: config, storedOperatorToken: storedOperatorToken)
+                AccessGatedControlUI(
+                    gatewayController: self.gatewayController,
+                    config: config,
                     url: url,
-                    authScript: self.page.authUserScript(config: config, storedOperatorToken: storedOperatorToken),
-                    tls: config?.tls,
-                    nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
-                        config: config,
-                        storedOperatorToken: storedOperatorToken,
-                        appModel: self.appModel))
-                    // Unrelated SwiftUI updates must not reload a live desktop or shell.
-                        .id(self.page.webContentIdentity(config: config, storedOperatorToken: storedOperatorToken))
-                        .ignoresSafeArea(.container, edges: .bottom)
+                    identity: identity,
+                    openGateway: self.gatewayAction)
+                { accessCookie, onAccessSignInRequired in
+                    AuthenticatedControlUIWebView(
+                        url: url,
+                        authScript: self.page.authUserScript(
+                            config: config,
+                            storedOperatorToken: storedOperatorToken),
+                        tls: config?.tls,
+                        nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
+                            config: config,
+                            storedOperatorToken: storedOperatorToken,
+                            appModel: self.appModel),
+                        accessCookie: accessCookie,
+                        onAccessSignInRequired: onAccessSignInRequired)
+                        // Unrelated SwiftUI updates must not reload a live desktop or shell.
+                            .id(identity)
+                }
+                .ignoresSafeArea(.container, edges: .bottom)
             } else {
                 self.unavailableCard
             }
