@@ -1,2 +1,0 @@
-# Wait for the initial child roster before measuring cron-driven session list reads.
-4
