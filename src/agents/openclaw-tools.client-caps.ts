@@ -34,16 +34,24 @@ export function resolveSessionToolListingClientCaps(params: {
  * List tools from the session's recorded operator capabilities, so internal
  * wakes retain the same catalog. Current-turn capabilities gate execution;
  * attached-client tools also check their live recipient at the point of effect.
+ * Names of tools withheld from the listing are added to `withheldToolNames` for diagnostics.
  */
 export function filterToolsByClientCaps(
   tools: AnyAgentTool[],
   listingClientCaps: string[] | undefined,
   executionClientCaps: string[] | undefined,
+  withheldToolNames?: Set<string>,
 ): AnyAgentTool[] {
   const listed = new Set(listingClientCaps ?? []);
   const current = new Set(executionClientCaps ?? []);
   return tools
-    .filter((tool) => !tool.requiredClientCaps?.some((cap) => !listed.has(cap)))
+    .filter((tool) => {
+      if (!tool.requiredClientCaps?.some((cap) => !listed.has(cap))) {
+        return true;
+      }
+      withheldToolNames?.add(tool.name);
+      return false;
+    })
     .map((tool) =>
       tool.requiredClientCaps?.some((cap) => !current.has(cap))
         ? gateAgentToolExecution(

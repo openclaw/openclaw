@@ -175,8 +175,12 @@ describe("tool-policy-pipeline", () => {
   describe("client-capability gated tools from shipped families", () => {
     const canvasPluginMeta = (tool: DummyTool) =>
       tool.name === "canvas" ? { pluginId: "canvas" } : undefined;
-    // Messaging surfaces construct no show_widget: it requires the inline-widgets client capability.
-    const runMessagingProfile = (alsoAllow: string[], tools: DummyTool[], label: string) => {
+    const runMessagingProfile = (
+      alsoAllow: string[],
+      tools: DummyTool[],
+      label: string,
+      clientCapsWithheldToolNames?: string[],
+    ) => {
       const warnings: string[] = [];
       const profilePolicy = resolveToolProfilePolicy("messaging");
       const filtered = runPipeline({
@@ -190,29 +194,35 @@ describe("tool-policy-pipeline", () => {
           agentPolicy: { allow: alsoAllow },
           agentId: label,
         }),
+        declaredToolAllowlist: { clientCapsWithheldToolNames },
       });
       return { warnings, names: filtered.map((tool) => tool.name).toSorted() };
     };
+    // The shared profile label is deduped across tests; agent labels are unique per test.
+    const unavailableWidgetWarning = (label: string) =>
+      `tools: agents.${label}.tools.allow allowlist contains unknown entries (show_widget). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.`;
 
     test.each([
       ["show_widget implied by canvas", ["group:openclaw", "canvas"], ["canvas", "message"]],
       ["group:openclaw alone", ["group:openclaw"], ["message"]],
-    ])("does not warn for %s on a surface without widgets", (label, alsoAllow, names) => {
+    ])("does not warn for %s withheld for client caps", (label, alsoAllow, names) => {
       const tools = names.map((name) => ({ name }));
-      expect(runMessagingProfile(alsoAllow, tools, label)).toEqual({ warnings: [], names });
+      expect(runMessagingProfile(alsoAllow, tools, label, ["show_widget"])).toEqual({
+        warnings: [],
+        names,
+      });
     });
 
-    test("still warns for a literally configured show_widget", () => {
-      // The shared profile label is deduped across tests; the agent label is unique to this one.
+    test.each([
+      // Literal entries warn even when the client lacks the capability.
+      ["literal-widget", ["canvas", "show_widget"], ["show_widget"]],
+      // Host disabled: show_widget was never constructed, so it was not withheld for caps.
+      ["host-disabled-widget", ["canvas"], undefined],
+    ])("still warns for %s", (label, alsoAllow, withheld) => {
       expect(
-        runMessagingProfile(
-          ["canvas", "show_widget"],
-          [{ name: "message" }, { name: "canvas" }],
-          "literal-widget",
-        ).warnings,
-      ).toContain(
-        "tools: agents.literal-widget.tools.allow allowlist contains unknown entries (show_widget). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
-      );
+        runMessagingProfile(alsoAllow, [{ name: "message" }, { name: "canvas" }], label, withheld)
+          .warnings,
+      ).toContain(unavailableWidgetWarning(label));
     });
 
     test("still warns for canvas without its plugin and for other unavailable core tools", () => {
@@ -220,6 +230,7 @@ describe("tool-policy-pipeline", () => {
         runAllowlistWarningStep({
           allow: ["canvas", "browser"],
           label: "canvas-family tools.allow",
+          declaredToolAllowlist: { clientCapsWithheldToolNames: ["show_widget"] },
         }),
       ).toEqual([
         "tools: canvas-family tools.allow allowlist contains unknown entries (canvas, browser). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",

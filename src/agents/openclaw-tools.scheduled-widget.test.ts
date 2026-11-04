@@ -134,3 +134,17 @@ it.each([undefined, []] as Array<string[] | undefined>)(
     );
   },
 );
+
+it.each([
+  ["withheld for missing inline-widgets", {}, true],
+  [
+    "never built when the canvas host is disabled",
+    { config: { plugins: { entries: { canvas: { config: { host: { enabled: false } } } } } } },
+    false,
+  ],
+])("records show_widget for caps diagnostics only when %s", (_label, options, recorded) => {
+  const clientCapsWithheldToolNames = new Set<string>();
+  const tool = createWidget({ listingClientCaps: [], clientCapsWithheldToolNames, ...options });
+  expect(tool).toBeUndefined();
+  expect(clientCapsWithheldToolNames.has("show_widget")).toBe(recorded);
+});
