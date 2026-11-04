@@ -29,6 +29,7 @@ export type StreamRunRenderItem = {
   boundaryId?: string;
   replyToSender?: MessageGroup["replyToSender"];
   replyToMessage?: MessageGroup["replyToMessage"];
+  replyPreviousMessageId?: string;
   parts: Array<Extract<ChatItem, { kind: "stream" | "reading-indicator" }>>;
 };
 export function coalesceStreamRuns(
@@ -46,6 +47,7 @@ export function coalesceStreamRuns(
         parts: run,
         replyToSender: run.find((part) => part.kind === "stream")?.replyToSender,
         replyToMessage: run.find((part) => part.kind === "stream")?.replyToMessage,
+        replyPreviousMessageId: run.find((part) => part.kind === "stream")?.replyPreviousMessageId,
         ...(runId ? { runId } : {}),
         ...(boundaryId ? { boundaryId } : {}),
       });

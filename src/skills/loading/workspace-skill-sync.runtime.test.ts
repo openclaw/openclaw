@@ -19,7 +19,7 @@ import {
 import { refreshSkillsDiscovery } from "../runtime/refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import { useLoadingFixture, writeSkillFixture as writeSkill } from "./loading.test-support.js";
 import { ensureWritableSkillDirectories } from "./skill-directory-modes.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -82,18 +83,17 @@ describe("Template project CLI", () => {
     expect(first.template.packageRoot).toMatch(/^template-artifact:sha256:/u);
   });
 
-  it("uses command-specific schemas for build and dev failures", async () => {
-    const missing = join(tempDirs.make("openclaw-template-errors-"), "missing");
-    await expect(
-      runTemplatesBuildCommand(missing, {
-        out: join(tempDirs.make("openclaw-template-error-output-"), "missing.tgz"),
-        json: true,
-      }),
-    ).rejects.toThrow("__exit__:1");
-    await expect(runTemplatesDevCommand(missing, { json: true })).rejects.toThrow("__exit__:1");
-    expect(payloads()).toMatchObject([
-      { schemaVersion: "openclaw.templateBuild.v1", ok: false },
-      { schemaVersion: "openclaw.templateDev.v1", ok: false },
-    ]);
+  it.for([
+    [runTemplatesCreateCommand, { name: "" }, "Project", "invalid_package_name"],
+    [runTemplatesCreateCommand, { agentId: "" }, "Project", "invalid_agent_id"],
+    [runTemplatesBuildCommand, {}, "Build", undefined],
+    [runTemplatesDevCommand, {}, "Dev", undefined],
+  ] as const)("reports failure %#", async ([run, ids, kind, code]) => {
+    const dir = join(tempDirs.make("openclaw-template-errors-"), "missing");
+    await expect(run(dir, { ...ids, out: `${dir}.tgz`, json: true })).rejects.toThrow("__exit__:1");
+    const schemaVersion = `openclaw.template${kind}.v1`;
+    expect(payloads()).toMatchObject([{ schemaVersion, ok: false }]);
+    expect(payloads()[0]).toMatchObject({ error: { code: code ?? expect.any(String) } });
+    expect(existsSync(dir)).toBe(false);
   });
 });

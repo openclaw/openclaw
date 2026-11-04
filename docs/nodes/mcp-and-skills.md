@@ -38,15 +38,26 @@ Gateway:
 }
 ```
 
-The headless node host starts these servers, lists their tools, and publishes
-the descriptors after connecting. Tool calls return to that node through
-`mcp.tools.call.v1`; the Gateway does not need matching MCP config or a JS
-plugin. OAuth MCP servers are not supported by this node-hosted v1 path.
+The headless node host runs the MCP client. It starts command-based servers
+or connects to remote servers such as `internalApi` above, then lists their
+tools and publishes the descriptors to the Gateway. Those descriptors let the
+Gateway decide which tools a turn can use without a matching server entry or
+JS plugin on the Gateway. When the model worker runs
+on the same node as the MCP client, it can call an admitted tool through the
+node host even if the server is remote. The Gateway routes calls through
+`mcp.tools.call.v1` for other placements, older workers, and tools that require
+Gateway-side call policy or hooks.
+
+For a remote server protected by OAuth, supply an externally obtained bearer
+token through the `Authorization` header, as in `internalApi`. The node host
+skips server entries that request an OpenClaw-managed OAuth flow by setting
+`auth: "oauth"` or an `oauth` block.
 
 A node-hosted tool can ask the user a question during a call. Enable
 `mcp.apps.enabled` on the node and Gateway and restart both. The Gateway shows
 the form or URL prompt in the session that called the tool. The node returns
-the answer to the MCP server and continues the original call. The node rejects
+the answer to the MCP server and continues the original call. During a same-node
+call only the question and answer go through the Gateway. The node rejects
 a prompt if overlapping calls make its requester ambiguous. See [MCP Apps](/cli/mcp/apps)
 for the Gateway listener and reverse proxy settings.
 
