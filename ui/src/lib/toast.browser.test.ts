@@ -231,7 +231,7 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
 
   it("keeps a toast usable inside a native modal and returns it to the shell on dismissal", async () => {
     const shell = document.body.appendChild(document.createElement("div"));
-    shell.className = "shell shell--chat";
+    shell.className = "shell shell--chat shell--session";
     const host = shell.appendChild(document.createElement("openclaw-toast-host"));
     await useViewport(1280);
     const { toast: restingToast } = await renderToast({ message: "Saved" }, host);
