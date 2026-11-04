@@ -1,4 +1,5 @@
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "./session-key-utils.js";
 
 /** Captured logical/store identity. Incarnation is evidence, never live authorization. */
 export type SessionTarget = Readonly<{
@@ -32,6 +33,9 @@ export function captureSessionTarget(params: {
   if (!storeScope || !sessionKey) {
     throw new Error("Session target requires store scope and canonical key");
   }
+  // Channel admission keeps a case-preserving thread id. Storage folds that
+  // same session, so both spellings have to name this owner.
+  const storedKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   return Object.freeze({
     storeScope,
     ...(params.physicalStorePath ? { physicalStorePath: params.physicalStorePath } : {}),
@@ -39,7 +43,7 @@ export function captureSessionTarget(params: {
     aliases: Object.freeze(
       [
         ...new Set(
-          [sessionKey, ...(params.aliases ?? []), params.incarnation].flatMap((value) =>
+          [sessionKey, storedKey, ...(params.aliases ?? []), params.incarnation].flatMap((value) =>
             value?.trim() ? [value.trim()] : [],
           ),
         ),

@@ -179,11 +179,11 @@ describe("native lifecycle admission and cancellation", () => {
       const operation =
         kind === "detached"
           ? undefined
-          : createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+          : createReplyOperation({ sessionId, sessionKey: "agent:main:A", resetTriggered: false });
       const abort = vi.fn();
       const handle = createEmbeddedRunHandle({ abort });
       if (kind === "owned") {
-        attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, undefined, operation);
+        attachActiveEmbeddedRun(sessionId, handle, "agent:main:a", undefined, undefined, operation);
       } else if (kind === "detached") {
         attachActiveEmbeddedRun(sessionId, handle);
       }

@@ -453,14 +453,12 @@ describe("initSessionState guarded initialization", () => {
     }
   });
 });
-
 describe("initSessionState thread forking", () => {
   it("forks a new SQLite session from the parent session with native consent preseeded", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-");
     const parentSessionId = "parent-session";
     const parentSessionFile = path.join(root, "parent.jsonl");
-
     const storePath = path.join(root, "sessions.json");
     const parentSessionKey = "agent:main:slack:channel:c1";
     const threadSessionKey = "agent:main:slack:channel:c1:thread:123";
@@ -479,12 +477,10 @@ describe("initSessionState thread forking", () => {
         nativeRuntimeConsent: "acp-opencode",
       },
     });
-
     const cfg = {
       agents: { defaults: { sandbox: { mode: "all" } } },
       session: { store: storePath },
     } as OpenClawConfig;
-
     const threadLabel = "Slack thread #general: starter";
     const result = await initSessionState({
       ctx: {
@@ -495,14 +491,12 @@ describe("initSessionState thread forking", () => {
       },
       cfg,
     });
-
     expect(result.sessionKey).toBe(threadSessionKey);
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
     expect(result.sessionEntry.sessionId).not.toBe("preseed-native-session");
     expect(result.sessionEntry.displayName).toBe(threadLabel);
     expect(result.sessionEntry.totalTokens).toBeUndefined();
     expect(result.sessionEntry.totalTokensFresh).toBe(false);
-
     expect(result.sessionEntry.forkedFromParent).toBe(true);
     expect(result.sessionEntry.forkSource).toEqual({
       sessionKey: parentSessionKey,
@@ -528,7 +522,6 @@ describe("initSessionState thread forking", () => {
     expect(forkCall.parentEntry).not.toHaveProperty("sessionFile");
     warn.mockRestore();
   });
-
   it("forks from parent when thread session key already exists but was not forked yet", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-existing-");
@@ -557,11 +550,9 @@ describe("initSessionState thread forking", () => {
       { agentId: "main", sessionId: parentSessionId, sessionKey: parentSessionKey, storePath },
       { message: { role: "assistant", content: "Parent reply" } },
     );
-
     const cfg = {
       session: { store: storePath },
     } as OpenClawConfig;
-
     const first = await initSessionState({
       ctx: {
         Body: "Thread reply",
@@ -574,7 +565,6 @@ describe("initSessionState thread forking", () => {
       },
       cfg,
     });
-
     expect(first.sessionEntry.sessionId).not.toBe("preseed-thread-session");
     expect(first.sessionEntry.forkedFromParent).toBe(true);
     expect(first.sessionEntry.forkSource).toEqual({
@@ -584,7 +574,6 @@ describe("initSessionState thread forking", () => {
     expect(first.sessionEntry.totalTokens).toBeUndefined();
     expect(first.sessionEntry.totalTokensFresh).toBe(false);
     expect(first.sessionEntry.abortedLastRun).toBe(false);
-
     const second = await initSessionState({
       ctx: {
         Body: "Thread reply 2",
@@ -594,7 +583,6 @@ describe("initSessionState thread forking", () => {
       },
       cfg,
     });
-
     expect(second.sessionEntry.sessionId).toBe(first.sessionEntry.sessionId);
     expect(second.sessionEntry.displayName).toBe("User title");
     expect(second.sessionEntry.forkedFromParent).toBe(true);
@@ -602,12 +590,10 @@ describe("initSessionState thread forking", () => {
     expect(second.sessionEntry.totalTokensFresh).toBe(false);
     warn.mockRestore();
   });
-
   it("skips fork and creates fresh session when parent tokens exceed threshold", async () => {
     const root = await makeCaseDir("openclaw-thread-session-overflow-");
     const parentSessionId = "parent-overflow";
     const parentSessionFile = path.join(root, "parent.jsonl");
-
     const storePath = path.join(root, "sessions.json");
     const parentSessionKey = "agent:main:slack:channel:c1";
     const threadSessionKey = "agent:main:slack:channel:c1:thread:456";
@@ -622,7 +608,6 @@ describe("initSessionState thread forking", () => {
         totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       },
     });
-
     const cfg = {
       session: { store: storePath },
     } as OpenClawConfig;
