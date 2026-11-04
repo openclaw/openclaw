@@ -59,6 +59,7 @@ import {
   createSessionWorktreeBinding,
   prepareSessionWorktreeCwd,
 } from "./session-worktree-binding.js";
+import type { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
 import { forkSessionRepositoryWorkspace } from "./worker-environments/session-repository-checkpoints.js";
 
 /** Resolve registered sources identically for dashboard and native child sessions. */
@@ -401,6 +402,7 @@ export async function prepareSessionWorktreeCreation(params: {
   target: Parameters<PrepareGatewaySessionLifecycle>[0];
   workspace?: string | { kind: "empty" };
   inheritParentKey?: string;
+  repositoryMutations?: Pick<ReturnType<typeof createRepositoryWorkspaceMutationService>, "fork">;
   projectGitUrl?: string;
   name?: string;
   baseRef?: string;
@@ -479,15 +481,35 @@ export async function prepareSessionWorktreeCreation(params: {
     }
     const store = getSessionRepositoryWorkspaceStore();
     const source = captureOpenClawStateWorkerContext({ path: store.path });
-    const workspace = await forkSessionRepositoryWorkspace({
-      store,
-      sourceWorkspaceId: repository.workspaceId,
-      agentId: lifecycleTarget.agentId,
-      sessionKey: lifecycleTarget.key,
+    const target = { agentId: lifecycleTarget.agentId, sessionKey: lifecycleTarget.key };
+    const options = {
       branchPrefix: cfg.repositoryBranchPrefix,
       runSetupScript: params.runSetupScript,
       assertCurrent,
-    });
+    };
+    if (repository.diskAuthority && !params.repositoryMutations) {
+      return err(
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "Repository child export is unavailable; reconnect the original disk and retry.",
+        ),
+      );
+    }
+    const workspace = repository.diskAuthority
+      ? await params.repositoryMutations!.fork({
+          ...options,
+          target,
+          repository,
+          sessionId: parentSource.sessionId,
+          agentId: repository.agentId,
+          sessionKey: repository.sessionKey,
+        })
+      : await forkSessionRepositoryWorkspace({
+          ...options,
+          ...target,
+          store,
+          sourceWorkspaceId: repository.workspaceId,
+        });
     return ok({
       repositoryWorkspaceId: workspace.workspaceId,
       withCommit: (run) => run(assertCurrent, signal),
