@@ -21,6 +21,10 @@ let signal;
 let childSettlement;
 let settled = true;
 const preserveGit = typeof expected.payload === "string" || expected.script;
+// SSH output can close before cleanup; retain this handler for queued errors.
+if (preserveGit) process.stderr.on("error", error => {
+  if (error.code !== "EPIPE") throw error;
+});
 function forwardSignal(value) {
   signal ??= value;
   if (child?.pid) childSettlement ??= settleGroup(child.pid, value);

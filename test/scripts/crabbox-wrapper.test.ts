@@ -3984,12 +3984,12 @@ esac
     }
   });
 
-  it("passes an advertised Boat alias to Crabbox unchanged", () => {
+  it("passes an advertised Boat provider argument to Crabbox unchanged", () => {
     const args = runArgs("boat", "--", "echo ok");
     const result = runWrapper("provider: ascii-box\n", args);
 
     expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual(args);
+    expect(parseFakeCrabboxOutput(result).args.slice(0, 3)).toEqual(["run", "--provider", "boat"]);
   });
 
   it.each([
@@ -4898,7 +4898,7 @@ require('node:module').syncBuiltinESMExports();`,
           extraEnv?: NodeJS.ProcessEnv;
           nativeSeed?: boolean;
           remoteArgs?: string[];
-          interrupt?: boolean;
+          interrupt?: boolean | "closed-pipes";
           prepareReceiver?: (receiver: string) => void;
         } = {},
       ) => {
@@ -4971,8 +4971,11 @@ require('node:module').syncBuiltinESMExports();`,
           : ["-c", remoteCommand, "receiver-script", ...remoteArgs];
         const terminator = [
           'const {spawn}=require("node:child_process");',
-          'const child=spawn("bash",process.argv.slice(1),{stdio:["inherit","pipe","inherit"]});',
-          'let output="",sent=false; child.stdout.on("data",chunk=>{process.stdout.write(chunk);output+=chunk;if(!sent&&output.includes("payload-ready\\n")){sent=true;child.kill("SIGTERM");}});',
+          `const closedPipes=${JSON.stringify(interrupt === "closed-pipes")};`,
+          'const child=spawn("bash",process.argv.slice(1),{stdio:["inherit","pipe",closedPipes?"pipe":"inherit"]});',
+          'if(process.env.PIPE_ERRORS)process.stdout.write("receiver-pid="+child.pid+"\\n");',
+          'if(closedPipes)child.stderr.on("data",chunk=>process.stderr.write(chunk));',
+          'let output="",sent=false; child.stdout.on("data",chunk=>{process.stdout.write(chunk);output+=chunk;if(!sent&&/payload-ready(?: \\d+)?\\n/.test(output)){sent=true;if(closedPipes){let closed=0;for(const stream of [child.stdout,child.stderr]){stream.once("close",()=>{if(++closed===2)child.kill("SIGTERM");});stream.destroy();}}else child.kill("SIGTERM");}});',
           'child.on("close",(code)=>process.exit(code??1));',
         ].join("");
         const result = runCommand(
@@ -5181,6 +5184,77 @@ require('node:module').syncBuiltinESMExports();`,
         expect(lstatSync(nativeGit).ino).toBe(nativeStat.ino);
         expect(readFileSync(path.join(nativeGit, "index"))).toEqual(nativeIndex);
         expectFileText(nativeGit, "crabbox/manifest", "native sync receipt\n");
+        const pipeMonitor = path.join(root, "pipe-monitor.cjs");
+        const pipeErrors = path.join(root, "pipe-errors.jsonl");
+        writeFileSync(
+          pipeMonitor,
+          'process.on("uncaughtExceptionMonitor",error=>{if(error.code==="EPIPE")require("node:fs").appendFileSync(process.env.PIPE_ERRORS,JSON.stringify({pid:process.pid,code:error.code})+"\\n");});',
+        );
+        for (const closedPipes of [false, true]) {
+          const quietTermination = runSender("shell", [
+            "run",
+            "--provider",
+            provider,
+            "--shell",
+            "--",
+            "exec node -e " +
+              shellQuote(
+                'process.on("SIGTERM",()=>process.exit(0));console.log("payload-ready "+process.pid);setInterval(()=>{},1000);',
+              ),
+          ]);
+          const observed = receive("native-reused", quietTermination, {
+            interrupt: closedPipes ? "closed-pipes" : true,
+            extraEnv: { NODE_OPTIONS: `--require ${pipeMonitor}`, PIPE_ERRORS: pipeErrors },
+          });
+          const childPid = Number(/payload-ready (\d+)/u.exec(observed.result.stdout)?.[1]);
+          const receiverPid = Number(/receiver-pid=(\d+)/u.exec(observed.result.stdout)?.[1]);
+          const backups = readdirSync(receiver).filter((name) =>
+            name.startsWith(".openclaw-source-"),
+          );
+          const head = runCommand("git", ["rev-parse", "HEAD"], { cwd: receiver });
+          const index = path.join(nativeGit, "index");
+          const manifest = path.join(nativeGit, "crabbox", "manifest");
+          const pipeFacts = {
+            closedPipes,
+            receiverPid,
+            receiverExit: observed.result.status,
+            childGone: Number.isInteger(childPid) && childPid > 0 && !isProcessAlive(childPid),
+            gitInodeRestored: existsSync(nativeGit) && lstatSync(nativeGit).ino === nativeStat.ino,
+            gitHeadRestored: head.status === 0 && head.stdout.trim() === nativeHead,
+            gitIndexRestored: existsSync(index) && readFileSync(index).equals(nativeIndex),
+            gitMetadataRestored:
+              existsSync(manifest) && readFileSync(manifest, "utf8") === "native sync receipt\n",
+            gitDirectoryPresent: existsSync(nativeGit),
+            gitMetadataPresent: existsSync(path.join(nativeGit, "crabbox")),
+            nativeBackupPresent: backups.some((name) =>
+              existsSync(path.join(receiver, name, "native-git")),
+            ),
+            backupGone: backups.length === 0,
+            pipeErrors: existsSync(pipeErrors)
+              ? readFileSync(pipeErrors, "utf8")
+                  .trim()
+                  .split("\n")
+                  .map((line) => JSON.parse(line))
+                  .filter((error) => error.pid === receiverPid)
+              : [],
+          };
+          try {
+            expect(pipeFacts).toMatchObject({
+              receiverExit: 143,
+              childGone: true,
+              gitInodeRestored: true,
+              gitHeadRestored: true,
+              gitIndexRestored: true,
+              gitMetadataRestored: true,
+              backupGone: true,
+              pipeErrors: [],
+            });
+          } finally {
+            if (Number.isInteger(childPid) && childPid > 0 && isProcessAlive(childPid)) {
+              process.kill(childPid, "SIGKILL");
+            }
+          }
+        }
         const installer = ".github/actions/setup-node-env/install-dependencies.sh";
         mkdirSync(path.dirname(path.join(producer, installer)), { recursive: true });
         writeFileSync(
@@ -5328,6 +5402,14 @@ require('node:module').syncBuiltinESMExports();`,
             path.join(dependencyBin, "node"),
             fsConstants.COPYFILE_FICLONE,
           );
+          // Copied dynamic Node builds still load libraries from their prefix.
+          const nodeLibraryDirectory = path.resolve(
+            path.dirname(realpathSync(nodeExecPath)),
+            "../lib",
+          );
+          if (existsSync(nodeLibraryDirectory)) {
+            symlinkSync(nodeLibraryDirectory, path.join(dependencyRoot, "lib"), "dir");
+          }
           writeDependencySource(hydratedSource, "a");
           writeDependencySource(selectedSource, "b");
         }
