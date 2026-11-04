@@ -1,0 +1,78 @@
+{
+  "source": "dcf81e57e3d172b2530153dbefb15252edbcd613",
+  "envelope_sha256": "161b3856132d2e5fe53d5629dd8937f6905e79a1b563824745a1445ba0e99859",
+  "files": [
+    "src/gateway/setup-inference.first-signin.integration.test.ts",
+    "src/gateway/server.chat.canonical-publication.test.ts",
+    "src/gateway/server.chat-cli-auth.test.ts",
+    "src/gateway/server.chat-recovered-output.test.ts",
+    "src/gateway/server.cli-watchdog.test.ts",
+    "src/gateway/server.codex-failure-recovery.test.ts",
+    "src/gateway/server.xai-fallback.test.ts",
+    "src/gateway/gateway-cron-process-identity.windows.test.ts",
+    "src/gateway/gateway-ssh-upload-signal.test.ts",
+    "src/gateway/github-publication-draft.test.ts",
+    "src/gateway/github-publication-requester-aliases.test.ts",
+    "src/gateway/github-publication-requester.test.ts",
+    "src/gateway/server-methods/models-list.freshness.integration.test.ts",
+    "src/gateway/server-methods/models-list.remote-catalog.integration.test.ts",
+    "src/gateway/server-methods/models-list.worker-recovery.integration.test.ts"
+  ],
+  "policy": {
+    "CHECKOUT_BASE_SHA": "8b9e240149fb8c3c871f92a653a0423fcc8b320d",
+    "NODE_OPTIONS": "--max-old-space-size=8192",
+    "OPENCLAW_CI_TEST_RUNTIME_POLICY": "bun-all",
+    "FROZEN_TARGET": "false",
+    "RUNNER_ENVIRONMENT": "github-hosted",
+    "OPENCLAW_VITEST_MAX_WORKERS": "3",
+    "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS": "300000",
+    "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY": "1",
+    "OPENCLAW_NODE_TEST_VITEST_ARGS_JSON": "[]"
+  },
+  "source_sha256": {
+    "src/gateway/setup-inference.first-signin.integration.test.ts": "e572d6cbd76695bb1f73425cf2cfbdc36409f77bb2a39ab6c18fa3c35d58f71e",
+    "src/gateway/server.chat.canonical-publication.test.ts": "3fce49231ed22ff980768f27e311eda34f8ff6cca0fa5438fdbda6058bc74748",
+    "src/gateway/server.chat-cli-auth.test.ts": "baf3a54b379cb92ab5d7d32ced855096c2c7895593b3bc7a4df626ed8d67fb54",
+    "src/gateway/server.chat-recovered-output.test.ts": "cc147c447e5186ffc796dd146355ae3f655d451dc82b5c651731ccfcd134bee5",
+    "src/gateway/server.cli-watchdog.test.ts": "bbc61f77e1ebf6710175762b2e83e112e9af639fe69766d18f81a4fcd1390d84",
+    "src/gateway/server.codex-failure-recovery.test.ts": "6cbf12f8edd71a048d71d92ad832397c85de50415b14b3c0032fdfa4ea6e77fc",
+    "src/gateway/server.xai-fallback.test.ts": "84a86876048c91b219d29859efed06c0dd258d5209b349ce60f2128e59695a0c",
+    "src/gateway/gateway-cron-process-identity.windows.test.ts": "362f0a144b9712b5378faf9749f790b56f04531dd87eb3dd436499fb9afc2bf1",
+    "src/gateway/gateway-ssh-upload-signal.test.ts": "7721bb2433bd8ab7cc8c65f4ba8682e887d43551be1aee4756c1add785dcf995",
+    "src/gateway/github-publication-draft.test.ts": "127570a696aa9c77afaf031cc9c7b6548adc42b6a6fd4ef23f1e61bb1aeb4d30",
+    "src/gateway/github-publication-requester-aliases.test.ts": "c3b64ad1f4cd52321bad3070a1fb45e8f985284a47feb3108bcad63f18c02012",
+    "src/gateway/github-publication-requester.test.ts": "73dd235d8796ba22e39fb81bb391bf6e33365f2bcea98af4d95e92821f1b9e88",
+    "src/gateway/server-methods/models-list.freshness.integration.test.ts": "1792fe3832e5c5c2640cc57dfd40f42fdcbeaa98831345478c5341930fad1974",
+    "src/gateway/server-methods/models-list.remote-catalog.integration.test.ts": "203a3f6421ffbdbb781c8fae36602d61de1a3ff9f783cf8bb3c2b818e8de3e1d",
+    "src/gateway/server-methods/models-list.worker-recovery.integration.test.ts": "918790ba8aca8f04f58e90940fe7960faeb037ca5a17f9f46976dab3833be152",
+    "test/vitest/vitest.gateway-server-isolated.config.ts": "facfeb8b6384d5f5c5e20c89e9899037f571b8e629c875cf3e8089d7d6a288ed",
+    "test/vitest/vitest.gateway-database-workers.config.ts": "63deb772b51edf2846791fde03006fabc1fa1f92a0e426d89ad0899cf5f1f158",
+    "pnpm-lock.yaml": "c428adc8508bd39a356284602a1d7e793944bbc0915c91e5327e1179ff905d6a",
+    "package.json": "1e40aa1bbc9c8989e992d58d87375bb0c45008aac49f31ec3238b05839ae99a7",
+    ".github/actions/setup-node-env/action.yml": "39603253182166a6bde764d230ef6d396fac4116ed91208acabf49c2c1fa2fb1",
+    ".github/actions/setup-test-bun/action.yml": "cb8a89a260421898402e1c9427c26acc2faf9d5eaa6ff1f3fc9b9229395573d1",
+    "scripts/ci-run-node-test-shard.mts": "b7a4d153978404aed94370ebb20fc49921bb36d6f3c49ea84f37add4277ee03d",
+    "scripts/test-projects.mts": "2b7b21e871751b8c7e2636b63fd9ee488c554132660dc8998ea30619c9f7c6da",
+    "src/gateway/server.chat-cli-auth.test-support.ts": "ba59954775e0496bdaaddc9bea45a2029e0c3af38ba9fee6bc9a09d0a0119846",
+    "config/test-lines-allocations/hook-revocation-diagnostics.txt": "48900ffe58ee238c2499997bb96bdf3dc40811c8ea354ae91bce5f18a9cf02b2"
+  },
+  "original": {
+    "run_id": 41784433080,
+    "job_id": 126423705925,
+    "frozen_group_index": 1,
+    "partition_files": [
+      7,
+      8
+    ],
+    "partition_tests": [
+      25,
+      77
+    ]
+  },
+  "limits": [
+    "Only target15-file envelope; original preceding3groups not repeated.",
+    "Whole-job upfront qaRuntime warm state not reproduced; canonical test-projects runtime preparation retained unchanged.",
+    "Runner/cache/image byte identity not implied by matching capacity.",
+    "60-minute outer job cap; original test/hook/silence/worker/disposal policies unchanged."
+  ]
+}

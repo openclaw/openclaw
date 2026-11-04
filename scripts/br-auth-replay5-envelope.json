@@ -1,0 +1,27 @@
+[
+  {
+    "configs": [
+      "test/vitest/vitest.gateway-server-isolated.config.ts",
+      "test/vitest/vitest.gateway-database-workers.config.ts"
+    ],
+    "includePatterns": [
+      "src/gateway/setup-inference.first-signin.integration.test.ts",
+      "src/gateway/server.chat.canonical-publication.test.ts",
+      "src/gateway/server.chat-cli-auth.test.ts",
+      "src/gateway/server.chat-recovered-output.test.ts",
+      "src/gateway/server.cli-watchdog.test.ts",
+      "src/gateway/server.codex-failure-recovery.test.ts",
+      "src/gateway/server.xai-fallback.test.ts",
+      "src/gateway/gateway-cron-process-identity.windows.test.ts",
+      "src/gateway/gateway-ssh-upload-signal.test.ts",
+      "src/gateway/github-publication-draft.test.ts",
+      "src/gateway/github-publication-requester-aliases.test.ts",
+      "src/gateway/github-publication-requester.test.ts",
+      "src/gateway/server-methods/models-list.freshness.integration.test.ts",
+      "src/gateway/server-methods/models-list.remote-catalog.integration.test.ts",
+      "src/gateway/server-methods/models-list.worker-recovery.integration.test.ts"
+    ],
+    "shard_name": "agentic-gateway-server-isolated-hosted-1",
+    "timing_key": "changed-agentic-gateway-server-isolated#selector-569-9c07dec5a99c#generation-4f33cd828009#part-1-of-20#include-15-ef86a26794f3"
+  }
+]
