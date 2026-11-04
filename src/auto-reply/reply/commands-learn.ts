@@ -275,7 +275,10 @@ export const handleLearnCommand: CommandHandler = defineAuthorizedTextCommand(
     const contributors = listLearnContributors();
     const active = await resolveActiveContributors(params, contributors);
     if (active.length === 0) {
-      return unavailableReply(contributors);
+      return unavailableReply(
+        contributors,
+        command.kind === "subcommand" ? command.contributor.contribution.medium : undefined,
+      );
     }
     if (command.kind === "subcommand") {
       const { contribution } = command.contributor;

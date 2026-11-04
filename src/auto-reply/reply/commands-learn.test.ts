@@ -303,6 +303,7 @@ describe("learn command", () => {
           contribution: {
             medium: "memory",
             toolNames: ["memory_save"],
+            unavailableText: "Memory notes are not available.",
             buildGuidance: () => ({ lines: [MEMORY_GUIDANCE] }),
             subcommands: [{ name: "notes", handle }],
           },
@@ -313,8 +314,12 @@ describe("learn command", () => {
       expect(await learn(params)).toEqual({ shouldContinue: true });
       expect(params.ctx.BodyForAgent).toBe("Review notes: last week");
 
+      // Its own reply, whether the other medium can learn or no tools are available at all.
       const denied = buildLearnParams("/learn notes", { tools: { deny: ["memory_save"] } });
-      expect((await learn(denied))?.reply?.text).toContain("no learning tools are available here");
+      expect((await learn(denied))?.reply?.text).toBe("Memory notes are not available.");
+      const disabled = buildLearnParams("/learn notes");
+      disabled.opts = { toolsAllow: [] };
+      expect((await learn(disabled))?.reply?.text).toBe("Memory notes are not available.");
       expect(handle).toHaveBeenCalledTimes(1);
     });
   });
