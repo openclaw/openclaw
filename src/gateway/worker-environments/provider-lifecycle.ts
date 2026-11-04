@@ -54,6 +54,7 @@ export function createWorkerProviderLifecycle(
   const {
     identityResolverFor,
     requireCurrentOwner,
+    requireCurrentProvisionOwner,
     stopOwner,
     beginDrain,
     finishProvenDestroy,
@@ -101,9 +102,11 @@ export function createWorkerProviderLifecycle(
 
   const runtimeRefresher = createWorkerRuntimeRefresher({
     ...options,
+    providerFor,
     requireCurrentOwner,
     stopOwner,
     identityResolverFor,
+    lifecycleLease,
   });
 
   const retained = createWorkerRetainedLifecycle({
@@ -111,6 +114,7 @@ export function createWorkerProviderLifecycle(
     providerFor,
     requireCurrentOwner,
     refreshRuntime: runtimeRefresher.refresh,
+    resumeNode: runtimeRefresher.resumeNodeInOperation,
   });
   const finishBootstrap = createWorkerSshBootstrap({
     ...options,
@@ -207,11 +211,8 @@ export function createWorkerProviderLifecycle(
           throw closedAttempt;
         }
         beforeProvision?.();
-        const current = requireCurrentOwner(record);
-        if (current.destroyRequestedAtMs !== null) {
-          throw new Error("Worker provisioning operation is closed");
-        }
-        return current;
+        record = requireCurrentProvisionOwner(record, enrollmentOperation?.setupId);
+        return record;
       };
       const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
       if (project) {
@@ -729,6 +730,7 @@ export function createWorkerProviderLifecycle(
     providerFor,
     reconcileRecord,
     readRuntimeRefresh: runtimeRefresher.read,
+    resumeNode: runtimeRefresher.resumeNode,
     ensureRetainedRunning: retained.ensureRetainedRunning,
     suspendRetained: retained.suspendRetained,
   };

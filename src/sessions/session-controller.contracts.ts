@@ -579,7 +579,7 @@ export type SessionControllerMailboxClaim = {
   retryBeforeExecution?: boolean;
 };
 
-export type FollowupSummaryEntry = { source: FollowupRun; line: string };
+type FollowupSummaryEntry = { source: FollowupRun; line: string };
 
 /** All runnable inputs, including direct native producers, share this ordered owner. */
 export type SessionControllerMailbox = {

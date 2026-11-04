@@ -135,7 +135,7 @@
 .chat-footer,
 .agent-chat__composer-shell,
 .agent-chat__input {
-  --chat-composer-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  --chat-composer-radius: var(--composer-radius);
   --chat-composer-light-outline: rgb(0 0 0 / 6%);
   --composer-attached-surface: color-mix(
     in srgb,
@@ -1016,7 +1016,7 @@
   display: contents;
 }
 
-/* Soft danger fill so Stop generating reads as the one destructive control
+/* Soft danger fill so Stop reads as the one destructive control
    next to the accent-filled send button. */
 .chat-send-btn--stop {
   background: color-mix(in srgb, var(--danger) 12%, transparent);

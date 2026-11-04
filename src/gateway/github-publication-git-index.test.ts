@@ -17,6 +17,7 @@ import {
 import {
   assertSafeGitPublicationWorkspace,
   captureGitHubPublicationWorkspaceSnapshot,
+  captureSettledGitHubPublicationWorkspaceSnapshot,
   githubPublicationPushArgs,
   githubPublicationUpdateRefArgs,
   requireGitHubPublicationCommit,
@@ -514,6 +515,42 @@ it("accepts checkout-configured hooks while snapshot commands keep every hook di
     workspaceTree: commitId,
   });
   await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("prunes only unadmitted raw paths from the private publication index", async () => {
+  const admitted = new Set(["artifact.txt", "source-\uFFFD", "source-é\tline\n.txt"]);
+  for (const file of admitted) {
+    await f.write(file, "accepted content\n");
+  }
+  await f.git("add", "-A");
+  const blob = await f.git("rev-parse", ":artifact.txt");
+  const invalid = Buffer.concat([Buffer.from("source-"), Buffer.from([0xff, 0])]);
+  // An index-only skipped path works even on filesystems rejecting non-UTF-8 names.
+  for (const [args, input] of [
+    [
+      ["update-index", "-z", "--index-info"],
+      Buffer.concat([Buffer.from(`100644 ${blob}\t`), invalid]),
+    ],
+    [["update-index", "--skip-worktree", "-z", "--stdin"], invalid],
+  ] as const) {
+    const result = await runPublicationCommand(["git", ...args], { cwd: f.cwd, input });
+    expect(result.code).toBe(0);
+  }
+  await fs.mkdir(f.file("unadmitted"));
+  await f.write("unadmitted/private\tdata\n.txt", "synthetic host-only bytes\n");
+  const before = await fs.readFile(f.file(".git", "index"));
+  const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
+    { cwd: f.cwd },
+    undefined,
+    admitted,
+  );
+  const listing = await runPublicationCommand(
+    ["git", "ls-tree", "-r", "-z", "--name-only", snapshot.workspaceTree],
+    { cwd: f.cwd },
+  );
+  expect(listing.code).toBe(0);
+  expect(listing.stdout).toEqual(Buffer.from([...admitted].toSorted().join("\0") + "\0"));
+  expect(await fs.readFile(f.file(".git", "index"))).toEqual(before);
 });
 
 it("captures a large tree without buffering unrelated paths for its attribute check", async () => {

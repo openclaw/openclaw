@@ -8,7 +8,7 @@ import type {
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { failedTextResult, textResult } from "./tools/common.js";
+import { textResult } from "./tools/tool-results.js";
 
 export function attachExecApprovalReview(
   result: AgentToolResult<ExecToolDetails>,
@@ -56,7 +56,7 @@ export function buildExecForegroundResult(params: {
         : "";
     const outputText = `${retentionCapNote}${warningText}${params.outcome.reason}${linuxOomGuidance}`;
     const message = `${retentionCapNote}${warningText}${params.outcome.message}${linuxOomGuidance}`;
-    return failedTextResult(outputText, { ...details, status: "failed", message });
+    return textResult(outputText, { ...details, status: "failed", message });
   }
   const outputText = `${retentionCapNote}${warningText}${renderExecOutputText(params.outcome.aggregated)}`;
   return textResult(outputText, details);

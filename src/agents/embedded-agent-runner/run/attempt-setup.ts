@@ -403,6 +403,7 @@ export function installEmbeddedAttemptContextGuards(input: {
 
   const previousContextTransform = activeSession.agent.transformContext;
   activeSession.agent.transformContext = async (messages, signal) => {
+    let localRoots: readonly string[] | undefined;
     const hydrated = await hydratePromptMediaMessages(messages, {
       workspaceDir: input.effectiveWorkspace,
       agentWorkspaceDir: attempt.workspaceDir,
@@ -412,7 +413,11 @@ export function installEmbeddedAttemptContextGuards(input: {
       workspaceOnly: input.effectiveFsWorkspaceOnly,
       localRoots: input.effectiveFsWorkspaceOnly
         ? undefined
-        : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+        : () =>
+            (localRoots ??= getAgentScopedMediaLocalRoots(
+              attempt.config ?? {},
+              input.sessionAgentId,
+            )),
       sandbox:
         input.sandbox?.enabled && input.sandbox.fsBridge
           ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
@@ -435,7 +440,7 @@ export function installEmbeddedAttemptContextGuards(input: {
     checkMidTurnPrecheck: async (
       request: Pick<
         Parameters<typeof resolveProjectedRequestPressure>[0],
-        "context" | "previousRequest"
+        "context" | "previousRequest" | "fixedTokenPressure"
       > & { measuredContextTokens?: number },
     ) => {
       // Deferring maintenance never authorizes an over-window provider request.
