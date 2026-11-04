@@ -27,7 +27,11 @@ const STORAGE_ERRORS = [
     -2,
   ],
 ] as const;
-export type GatewayStorageFailure = (typeof STORAGE_ERRORS)[number][0] | "57014" | "unavailable";
+export type GatewayStorageFailure =
+  | (typeof STORAGE_ERRORS)[number][0]
+  | "57014"
+  | "storage-worker-memory"
+  | "unavailable";
 
 function readOwnErrorDataProperty(value: object, key: string): unknown {
   try {
@@ -103,6 +107,9 @@ export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFai
   if (outcomeUnknown || hasSqliteWorkerOutcomeUnknown(primaryError)) {
     return "session_actor_reconciliation";
   }
+  if (hasStorageWorkerMemoryFailure(primaryError)) {
+    return "storage-worker-memory";
+  }
   let cancellation: GatewayStorageFailure | undefined;
   let reconciliation: GatewayStorageFailure | undefined;
   for (const candidate of collectNestedErrorCandidates(primaryError)) {
@@ -124,6 +131,59 @@ export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFai
     cancellation ??
     (hasSqliteWorkerOutcomeUnknown(error) ? "session_actor_reconciliation" : undefined)
   );
+}
+
+function hasStorageWorkerMemoryFailure(error: unknown): boolean {
+  const pending: Array<{ value: unknown; storageWorker: boolean }> = [
+    { value: error, storageWorker: false },
+  ];
+  const seen = new Map<object, number>();
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (!entry) {
+      continue;
+    }
+    const { value, storageWorker } = entry;
+    if (!isRecord(value)) {
+      continue;
+    }
+    const seenMask = seen.get(value) ?? 0;
+    const mask = storageWorker ? 2 : 1;
+    if ((seenMask & mask) !== 0) {
+      continue;
+    }
+    seen.set(value, seenMask | mask);
+    const code =
+      readOwnErrorDataProperty(value, "errorCode") ?? readOwnErrorDataProperty(value, "code");
+    if (code === "storage-worker-memory") {
+      return true;
+    }
+    const ownsStorageWorker =
+      !(value instanceof AggregateError) &&
+      (isSqliteWorkerError(value, "closed") ||
+        isSqliteWorkerError(value, "overloaded") ||
+        isSqliteWorkerError(value, "unavailable") ||
+        isSqliteWorkerError(value, "outcome-unknown") ||
+        (readOwnErrorDataProperty(value, "errorType") === "SqliteWorkerError" &&
+          typeof code === "string"));
+    const nestedStorageWorker = storageWorker || ownsStorageWorker;
+    if (nestedStorageWorker && code === "ERR_WORKER_OUT_OF_MEMORY") {
+      return true;
+    }
+    pending.push({
+      value: readOwnErrorDataProperty(value, "cause"),
+      storageWorker: nestedStorageWorker,
+    });
+    const errors = readOwnErrorDataProperty(value, "errors");
+    if (Array.isArray(errors)) {
+      for (const key of Object.keys(errors)) {
+        if (/^(0|[1-9][0-9]*)$/u.test(key)) {
+          pending.push({ value: readOwnErrorDataProperty(errors, key), storageWorker });
+        }
+      }
+    }
+  }
+  return false;
 }
 
 function classifyStorageFailure(error: unknown): GatewayStorageFailure | undefined {

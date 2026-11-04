@@ -85,6 +85,26 @@ it("classifies canonical and impersonated unavailability", () => {
   ).toBeUndefined();
 });
 
+it("requires SQLite worker provenance for native worker OOM classification", () => {
+  const nativeOom = codedError("ERR_WORKER_OUT_OF_MEMORY");
+  expect(classifyGatewayStorageFailure(nativeOom)).toBeUndefined();
+
+  const storageOom = new SqliteWorkerError("Storage worker stopped", "unavailable");
+  storageOom.cause = nativeOom;
+  expect(classifyGatewayStorageFailure(storageOom)).toBe("storage-worker-memory");
+  expect(
+    classifyGatewayStorageFailure(
+      new AggregateError(
+        [new SqliteWorkerError("Storage worker unavailable", "unavailable"), nativeOom],
+        "Unrelated worker failures",
+      ),
+    ),
+  ).toBe("unavailable");
+  expect(classifyGatewayStorageFailure({ code: "storage-worker-memory" })).toBe(
+    "storage-worker-memory",
+  );
+});
+
 it.each([false, true])("ignores throwing metadata (native: %s)", (native) => {
   const unsafe = unsafeGetter();
   const failure = native
