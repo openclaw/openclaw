@@ -334,9 +334,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     if (mode === "delta") {
       // Consume completed blocks in preview order, never by suffix overlap.
-      const remaining = previewText.slice(previewBlockOffset).trimStart();
-      if (remaining.startsWith(nextText)) {
-        previewBlockOffset = previewText.length - remaining.length + nextText.length;
+      if (previewText.startsWith(nextText, previewBlockOffset)) {
+        previewBlockOffset += nextText.length;
         return;
       }
       streamText = `${streamText}${nextText}`;
