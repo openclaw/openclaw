@@ -194,15 +194,18 @@ function QuotaGroup(props: { group: ProviderQuotaGroup; usageHref: string }) {
       </div>
       <div class="context-usage__limits">
         <For each={props.group.windows} keyed={false}>
-          {(limit, index) => (
-            <QuotaRow
-              label={formatUsageWindowLabel(limit().label)}
-              usedPercent={limit().usedPercent}
-              value={`${limit().usedPercent}%`}
-              reset={quotaReset(limit().resetAt)}
-              index={index}
-            />
-          )}
+          {(limit, index) => {
+            const usedPercent = () => Math.max(0, Math.min(100, Math.round(limit().usedPercent)));
+            return (
+              <QuotaRow
+                label={formatUsageWindowLabel((limit().label || "").trim())}
+                usedPercent={usedPercent()}
+                value={`${usedPercent()}%`}
+                reset={quotaReset(limit().resetAt)}
+                index={index}
+              />
+            );
+          }}
         </For>
         <For each={props.group.budgets} keyed={false}>
           {(budget, index) => (

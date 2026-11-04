@@ -330,7 +330,11 @@ describe("renderChatComposer context usage", () => {
           ],
         },
       }),
-      planProvider("openai", "Claude", [["Week", 140]]),
+      planProvider("openai", "Claude", [
+        ["  Week  ", 140],
+        [" Fractional ", 32.7],
+        ["Negative", -10],
+      ]),
     ];
     for (const modelProvider of ["anthropic", "openrouter", "openai"]) {
       const container = renderComposer({
@@ -338,7 +342,10 @@ describe("renderChatComposer context usage", () => {
         providerUsage: planUsage(providers),
       });
       expect(textContents(container, ".context-usage__limit-value")).toEqual(
-        modelProvider === "openai" ? ["100%"] : [],
+        modelProvider === "openai" ? ["100%", "33%", "0%"] : [],
+      );
+      expect(textContents(container, ".context-usage__limit-label")).toEqual(
+        modelProvider === "openai" ? ["Weekly", "Fractional", "Negative"] : [],
       );
       expect(container.querySelectorAll(".context-usage__tray")).toHaveLength(
         modelProvider === "openai" ? 1 : 0,

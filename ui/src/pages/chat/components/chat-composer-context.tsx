@@ -72,15 +72,7 @@ export function ContextNotice(props: ContextNoticeProps) {
     ) {
       return { status: "unknown" };
     }
-    const windows: ProviderQuotaGroup["windows"] = (usage.windows ?? []).map((limit) =>
-      Object.assign(
-        {
-          label: (limit.label || "").trim(),
-          usedPercent: Math.max(0, Math.min(100, Math.round(limit.usedPercent))),
-        },
-        limit.resetAt !== undefined ? { resetAt: limit.resetAt } : {},
-      ),
-    );
+    const windows = usage.windows ?? [];
     const budgets: ProviderQuotaGroup["budgets"] = (usage.billing ?? []).flatMap((entry) => {
       if (
         entry.type !== "budget" ||
@@ -91,14 +83,7 @@ export function ContextNotice(props: ContextNoticeProps) {
       ) {
         return [];
       }
-      return [
-        {
-          used: entry.used,
-          limit: entry.limit,
-          unit: entry.unit,
-          ...(entry.label ? { label: entry.label } : {}),
-        },
-      ];
+      return [entry];
     });
     if (windows.length === 0 && budgets.length === 0) {
       return { status: "unavailable" };
@@ -108,8 +93,8 @@ export function ContextNotice(props: ContextNoticeProps) {
       group: {
         providers: [provider.provider],
         displayName: provider.displayName,
-        ...(usage.plan ? { plan: usage.plan } : {}),
-        ...(usage.accountEmail ? { accountEmail: usage.accountEmail } : {}),
+        plan: usage.plan,
+        accountEmail: usage.accountEmail,
         windows,
         budgets,
       },
