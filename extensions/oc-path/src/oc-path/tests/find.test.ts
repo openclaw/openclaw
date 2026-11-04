@@ -495,11 +495,43 @@ describe("findOcPaths — Markdown", () => {
     ]);
   });
 
-  it.each(["*", "**", '{missing,{name,"name"},role,*}'])("finds frontmatter via %s", (key) => {
+  it.each([
+    ["*", ["name", "role"], ["drafter", "writer"]],
+    ["**", ["name", "role"], ["drafter", "writer"]],
+    ['{missing,{name,"name"},role,*}', ["name", "role"], ["drafter", "writer"]],
+    ["**.name", ["name"], ["drafter"]],
+    ["*.absent", [], []],
+    ["name.*", [], []],
+    ["{name,role}.absent", [], []],
+    ["name.**", ["name"], ["drafter"]],
+    ["**.{missing,role}.**", ["role"], ["writer"]],
+    ["{missing,**}.name", ["name"], ["drafter"]],
+    ["name.{absent,**}", ["name"], ["drafter"]],
+    ["**.**", ["name", "role"], ["drafter", "writer"]],
+    ["**/role", ["role"], ["writer"]],
+  ])("finds terminal frontmatter keys via %s", (key, keys, values) => {
     const ast = parseMd("---\nname: drafter\nrole: writer\n---\n");
     const out = find(ast, "oc://SOUL.md/[frontmatter]/" + key);
-    expect(out.map(({ path }) => path.item)).toEqual(["name", "role"]);
-    expect(leafValues(out)).toEqual(["drafter", "writer"]);
+    expect(out.map(({ path }) => path.item)).toEqual(keys);
+    expect(leafValues(out)).toEqual(values);
+  });
+
+  it("bounds repeated frontmatter union expansion", () => {
+    const ast = parseMd("---\nname: drafter\nrole: writer\n---\n");
+    const entries = ast.frontmatter;
+    let reads = 0;
+    Object.defineProperty(ast, "frontmatter", {
+      get() {
+        if (++reads > 20) {
+          throw new Error("Frontmatter union exceeded the expansion budget");
+        }
+        return entries;
+      },
+    });
+    const repeated = Array.from({ length: 12 }, () => "{**,{**}}").join(".");
+    expect(leafValues(find(ast, `oc://SOUL.md/[frontmatter]/${repeated}.name`))).toEqual([
+      "drafter",
+    ]);
   });
 
   const predicates = parseMd(
