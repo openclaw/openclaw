@@ -18,5 +18,5 @@
 {"seq":18,"at":2200,"dir":"out","kind":"getEvent","data":{"result":{"found":true},"target":"$e4"}}
 {"seq":19,"at":2200,"dir":"out","kind":"getRelations","data":{"payload":{"eventType":null,"limit":100,"relationType":"m.replace"},"result":{"count":1},"target":"$e4"}}
 {"seq":20,"at":2200,"dir":"out","kind":"sendMessage","data":{"payload":{"body":"* Deploying to production now. Health checks green.","format":"org.matrix.custom.html","formatted_body":"* <p>Deploying to production now. Health checks green.</p>","m.mentions":{},"m.new_content":{"body":"Deploying to production now. Health checks green.","format":"org.matrix.custom.html","formatted_body":"<p>Deploying to production now. Health checks green.</p>","m.mentions":{},"msgtype":"m.text"},"m.relates_to":{"event_id":"$e4","rel_type":"m.replace"},"msgtype":"m.text"},"result":{"event_id":"$e6"},"target":"!room:example.org"}}
-{"seq":21,"at":2200,"dir":"out","kind":"setTyping","data":{"payload":{"timeoutMs":30000,"typing":false},"target":"!room:example.org"}}
-{"seq":22,"at":2200,"dir":"in","kind":"idle"}
+{"seq":21,"at":2200,"dir":"in","kind":"idle"}
+{"seq":22,"at":2200,"dir":"out","kind":"setTyping","data":{"payload":{"timeoutMs":30000,"typing":false},"target":"!room:example.org"}}
