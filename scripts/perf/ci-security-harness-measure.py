@@ -52,6 +52,8 @@ with tempfile.TemporaryDirectory(prefix="security-harness-measure-") as scratch:
                 shutil.rmtree(harness)
             with tempfile.TemporaryDirectory(dir=root) as run:
                 run = Path(run)
+                for name in ("output", "state"):
+                    (run / name).touch()
                 config = run / "gitconfig"
                 config.write_text(f'[url "{source.as_uri()}"]\n\tinsteadOf = https://github.com/fixture/harness\n'
                                   '[uploadpack]\n\tallowFilter = true\n')
