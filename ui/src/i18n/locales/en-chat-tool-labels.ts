@@ -61,7 +61,6 @@ const enChatToolLabels = {
       blocked: "Blocked",
       outcomeUnknown: "Outcome unknown",
       exitCode: "Exit code {code}",
-      failureCount: "{count} failed",
       noOutputSucceeded: "No output — tool completed successfully.",
       noResult: "No result available.",
       review: {

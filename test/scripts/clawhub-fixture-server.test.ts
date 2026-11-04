@@ -289,6 +289,7 @@ describe("ClawHub fixture server", () => {
       `${versionPath}/artifact`,
       `${versionPath}/security`,
       `${versionPath}/artifact/download`,
+      `${whatsappPath}/detail`,
     ];
     const detail = await fetchJson(baseUrl, whatsappPath);
     expect(detail.package).toMatchObject({
@@ -313,6 +314,7 @@ describe("ClawHub fixture server", () => {
     const download = await fetch(`${baseUrl}${versionPath}/artifact/download`);
     expect(download.headers.get("x-clawhub-artifact-sha256")).toBe(sha256);
     expect(Buffer.from(await download.arrayBuffer())).toEqual(archive);
+    expect((await fetch(`${baseUrl}${whatsappPath}/detail`)).status).toBe(404);
     expect((await fetchJson(baseUrl, "/__fixture__/requests")).requests).toEqual(
       completeRequestPaths.map((requestPath) => `GET ${requestPath}`),
     );
@@ -323,9 +325,9 @@ describe("ClawHub fixture server", () => {
     );
     expectFailure(noRequests(), "unexpected ClawHub fixture requests");
     const requestSequence = async (url = baseUrl) => {
-      for (const requestPath of completeRequestPaths) {
+      for (const [index, requestPath] of completeRequestPaths.entries()) {
         const response = await fetch(`${url}${requestPath}`);
-        expect(response.status).toBe(200);
+        expect(response.status).toBe(index === completeRequestPaths.length - 1 ? 404 : 200);
         await response.arrayBuffer();
       }
     };
@@ -341,7 +343,7 @@ describe("ClawHub fixture server", () => {
     expect(partial.status).toBe(1);
 
     expect((await fetch(`${baseUrl}/api/v1/packages/%40openclaw%2Fforeign`)).status).toBe(404);
-    for (const requestPath of completeRequestPaths.slice(1, 3)) {
+    for (const requestPath of completeRequestPaths.slice(1, 4)) {
       expect((await fetch(`${baseUrl}${requestPath}`)).status).toBe(200);
     }
     expectFailure(assertRequests("complete", 2), "unexpected ClawHub fixture requests");

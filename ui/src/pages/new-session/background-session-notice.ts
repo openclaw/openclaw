@@ -11,6 +11,7 @@ import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -127,11 +128,19 @@ export function prepareBackgroundSessionCompletion(params: {
         },
         message: `${resolveSessionDisplayName(key, row)}: ${status}`,
         actionLabel: t("sessionsView.openSession"),
-        onAction: () => {
+        actionHref: sessionNavigationTarget({ context, face: "chat", sessionKey: key, agentId })
+          .href,
+        onAction: (event) => {
           if (!isCurrentOwner()) {
+            event?.preventDefault();
             return;
           }
-          openSessionNoticeTarget(context, key, agentId);
+          const open = () => openSessionNoticeTarget(context, key, agentId);
+          if (!event) {
+            open();
+          } else if (event.type === "click") {
+            handleNavigationClick(event, open);
+          }
         },
       });
     })();

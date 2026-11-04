@@ -139,7 +139,7 @@ suite.define(() => {
       expect(next).toHaveLength(1);
       expect(next[0]!.params).not.toHaveProperty("answer");
 
-      await button(dialog, "Cancel").click();
+      await button(dialog.locator("openclaw-modal-actions"), "Cancel").click();
       await gateway.waitForRequest(rpc.cancel);
       expect(await gateway.getRequests(rpc.auth)).toHaveLength(1);
     });
@@ -268,7 +268,7 @@ suite.define(() => {
           await dialog.getByLabel("API base URL", { exact: true }).fill("http://127.0.0.1:9876/v1");
 
           if (outcome === "cancel") {
-            await button(dialog, "Cancel").click();
+            await button(dialog.locator("openclaw-modal-actions"), "Cancel").click();
             await gateway.waitForRequest(rpc.cancel);
             expect(await gateway.getRequests(rpc.next)).toHaveLength(1);
           } else {

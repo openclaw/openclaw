@@ -394,7 +394,7 @@ export class ShellChromeOwner {
       !this.shouldIgnoreSettingsEscape(event)
     ) {
       event.preventDefault();
-      host.shellNavigation.exitSettings();
+      host.shellNavigation.leaveSettingsLevel();
     }
   };
 

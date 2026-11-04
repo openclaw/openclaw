@@ -12,7 +12,7 @@ let restoreI18n: () => Promise<void>;
 
 afterEach(() => restoreI18n());
 
-it("loads bundle fallback copy with the skill preview without replacing the active language", async () => {
+it("loads bundle fallback copy with the file preview without replacing the active language", async () => {
   restoreI18n = captureI18nStateForTesting();
   const manager = createI18nManagerForTesting(async () => ({
     filePreview: { bundle: { binary: "Binärdatei" } },
@@ -22,6 +22,8 @@ it("loads bundle fallback copy with the skill preview without replacing the acti
 
   await manager.setLocale("de");
   await import("../pages/plugins/skill-preview.tsx");
+  expect(manager.t("filePreview.bundle.too-large")).toBe("filePreview.bundle.too-large");
+  await import("../components/file-preview-modal.tsx");
 
   expect(manager.t("filePreview.bundle.binary")).toBe("Binärdatei");
   expect(manager.t("filePreview.bundle.too-large")).toBe(

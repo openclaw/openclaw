@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { runGitReadOperation } from "../infra/git-read-cache.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -80,7 +81,25 @@ test.each(["all", "off"] as const)(
       return respond.mock.calls[0];
     };
     const expectOptions = async (projectId: string, current: boolean, worktree: boolean) => {
-      const result = await request("projects.checkoutOptions", { projectId });
+      let result = await request("projects.checkoutOptions", { projectId });
+      if (current && projectId.startsWith("workspace:")) {
+        expect(result).toEqual([true, { current, worktree: false, refreshing: true }, undefined]);
+        const refreshed = Promise.withResolvers<void>();
+        const snapshot = await runGitReadOperation(
+          {
+            type: "repository.branches",
+            input: {
+              repoRoot: projectId === "workspace:main" ? workspace : outside,
+              includeRepositoryStatus: true,
+            },
+          },
+          { snapshot: true, onRefresh: refreshed.resolve },
+        );
+        if (snapshot.refreshing) {
+          await refreshed.promise;
+        }
+        result = await request("projects.checkoutOptions", { projectId });
+      }
       expect(result).toEqual([true, { current, worktree }, undefined]);
     };
     if (mode === "off") {

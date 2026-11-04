@@ -132,6 +132,50 @@ it.each(["cache", "update-tmpdir"])(
   },
 );
 
+it.each([
+  ["synchronous copy", prepareSqliteReadOnlyLocationSyncInProcess],
+  ["asynchronous copy", prepareSqliteReadOnlyCopyInProcess],
+  ["online backup", prepareSqliteReadOnlyLocationInProcess],
+] as const)("reads and cleans up a %s snapshot despite EXDEV renames", async (_mode, prepare) => {
+  const databasePath = createTempDatabasePath(
+    "CREATE TABLE probe(value); INSERT INTO probe VALUES(7);",
+  );
+  const stagingRoot = tempDirs.make("sqlite-efs-publication-");
+  const before = fs.readFileSync(databasePath);
+  vi.spyOn(fs, "renameSync").mockImplementation(() => {
+    throw Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
+  });
+  const prepared = await prepare(databasePath, stagingRoot);
+  try {
+    withDatabase(
+      prepared.location,
+      (db) => {
+        expect(db.prepare("SELECT value FROM probe").all()).toEqual([{ value: 7 }]);
+      },
+      true,
+    );
+    if (process.platform !== "win32") {
+      expect(fs.statSync(prepared.location).mode & 0o777).toBe(0o600);
+    }
+    expect(fs.readFileSync(databasePath)).toEqual(before);
+  } finally {
+    expect(await prepared.cleanupAsync()).toBe(true);
+  }
+  expect(fs.readdirSync(stagingRoot)).toEqual([]);
+});
+
+it("preserves other rename errors and removes the failed snapshot", async () => {
+  const databasePath = createTempDatabasePath("CREATE TABLE probe(value);");
+  const stagingRoot = tempDirs.make("sqlite-rename-refusal-");
+  vi.spyOn(fs, "renameSync").mockImplementation(() => {
+    throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+  });
+  await expect(prepareSqliteReadOnlyLocationInProcess(databasePath, stagingRoot)).rejects.toThrow(
+    "operation not permitted",
+  );
+  expect(fs.readdirSync(stagingRoot)).toEqual([]);
+});
+
 it.each([13, 778])(
   "retains SQLite destination write failure %i and identifies the snapshot cache",
   async (errcode) => {
@@ -390,15 +434,13 @@ it("names retry count and guidance for artifact-preserving synchronous inspectio
   }
   assert(error instanceof Error);
   expect.soft(error.message).toContain("after 10 read-only inspection attempts");
-  expect.soft(error.message).toContain("the database may be under concurrent write activity");
+  expect.soft(error.message).toContain("reason=source-disappeared, attempts=10");
   expect
     .soft(error.message)
     .toContain("Wait a moment for write activity to settle, then retry the inspection");
-  expect.soft(error.message).toContain(canonicalPath);
+  expect.soft(error.message).not.toContain(canonicalPath);
   expect.soft(error.cause).toBeInstanceOf(SqliteSourceChangedError);
-  expect.soft(error.cause).toMatchObject({
-    message: `SQLite source disappeared: ${canonicalPath}`,
-  });
+  expect.soft(error.cause).toMatchObject({ reason: "source-disappeared" });
   expect.soft(error.message).not.toContain("SQLite source disappeared");
 });
 
@@ -712,7 +754,7 @@ it("snapshots a verified live writer once despite checkpoints that exhaust raw-c
       return result;
     });
     await expect(prepareSqliteReadOnlyCopyInProcess(source, staging)).rejects.toThrow(
-      `did not stabilize after ${MAX_SNAPSHOT_ATTEMPTS}`,
+      "reason=wal-copy-unstable, attempts=10",
     );
     expect(raw).toHaveBeenCalledTimes(MAX_SNAPSHOT_ATTEMPTS);
     raw.mockRestore();

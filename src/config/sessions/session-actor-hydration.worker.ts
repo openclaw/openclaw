@@ -37,6 +37,7 @@ import { projectTranscriptNavigationSql } from "./session-model-context-projecti
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
+import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
 import { transcriptEventNavigationSql, transcriptPredicateSql } from "./transcript-payload.js";
 
 // SQL JSON projections retain their declared shape but cross the driver as TEXT.
@@ -390,13 +391,10 @@ export function hydrateSessionActorState(
   const storedNavigation = selected
     ? decodeJsonProjection(selected.actor_navigation).toSorted((a, b) => a.seq - b.seq)
     : [];
-  const navigation = storedNavigation.map((row) =>
-    Object.assign(
-      // SAFETY: SQL selects only tree fields; the tree reader owns their interpretation.
-      JSON.parse(row.navigation_json) as Record<string, unknown>,
-      { seq: row.seq },
-    ),
-  );
+  const navigation = storedNavigation.map((row) => ({
+    ...projectTranscriptNavigationFields(JSON.parse(row.navigation_json)),
+    seq: row.seq,
+  }));
   const contextVersion = {
     generation: rewrite?.generation ?? null,
     rawSeq: coldArchive?.last_seq ?? navigation.at(-1)?.seq ?? null,

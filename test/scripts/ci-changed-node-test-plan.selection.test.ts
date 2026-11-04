@@ -15,6 +15,44 @@ const select = (cwd: string, paths: string[], selectionMode: Mode = "aggressive"
   resolveChangedNodeTestTargets(paths, { cwd, selectionMode });
 
 it.each(["aggressive", "full"] as const)(
+  "retains indirect workflow fixture consumers beside a busy hub in %s mode",
+  (selectionMode) => {
+    const helper = "test/scripts/ci-workflow.test-support.ts";
+    const bridge = "test/scripts/ci-workflow-manifest.test-support.ts";
+    const indirect = ["ci-workflow-native-generated", "ci-workflow-ui-full"].map(
+      (name) => `test/scripts/${name}.test.ts`,
+    );
+    const family = [
+      "ci-workflow-complete",
+      "ci-workflow-cost",
+      "ci-workflow-evidence",
+      "ci-workflow-guards",
+      "ci-workflow-planning",
+      "ci-workflow.test-support",
+      "ci-swift-cache-lifetime",
+    ].map((name) => `test/scripts/${name}.test.ts`);
+    const direct = Array.from({ length: 30 }, (_, i) => `test/scripts/other-${i}.test.ts`);
+    const native = "test/scripts/macos-native-test-launch.test.ts";
+    const cwd = fixture({
+      [helper]: "export {};",
+      [bridge]: 'import "./ci-workflow.test-support.js";',
+      [native]: "export {};",
+      ...Object.fromEntries(
+        [...family, ...direct].map((file) => [file, 'import "./ci-workflow.test-support.js";']),
+      ),
+      ...Object.fromEntries(
+        indirect.map((file) => [file, 'import "./ci-workflow-manifest.test-support.js";']),
+      ),
+    });
+    const files = select(cwd, [helper], selectionMode);
+    expect(files.toSorted()).toEqual(
+      [...family, ...direct, ...indirect, ...(selectionMode === "full" ? [native] : [])].toSorted(),
+    );
+    expect(select(cwd, [family[0]!], selectionMode)).toEqual([family[0]]);
+  },
+);
+
+it.each(["aggressive", "full"] as const)(
   "routes skill node:test and Python files through their Vitest owner in %s mode",
   (selectionMode) => {
     // Skill scripts carry node:test and Python files that no Vitest config owns.

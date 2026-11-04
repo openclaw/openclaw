@@ -1,6 +1,6 @@
 /**
  * node scripts/perf/module-import-measure.mjs --entry /absolute/built/module.js
- *   --iterations 5 --output result.json [--mode timing|allocation]
+ *   --iterations 5 --output result.json [--mode timing|allocation] [--preload loader.mjs]
  * Use only trusted, side-effect-free import entries: this imports but calls no API.
  * Each iteration starts a fresh child with isolated HOME/config/state.
  * Allocation sampling distorts CPU: use timing-mode CPU/elapsed results. Script
@@ -20,6 +20,7 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "5" },
     output: { type: "string" },
     mode: { type: "string", default: "timing" },
+    preload: { type: "string" },
     sample: { type: "boolean" },
   },
 });
@@ -94,7 +95,12 @@ if (values.sample) {
       const state = path.join(root, String(iteration));
       mkdirSync(state);
       const sampleOutput = path.join(state, "sample.json");
-      const args = ["--expose-gc", fileURLToPath(import.meta.url), "--sample"];
+      const args = [
+        "--expose-gc",
+        ...(values.preload ? ["--import", pathToFileURL(path.resolve(values.preload)).href] : []),
+        fileURLToPath(import.meta.url),
+        "--sample",
+      ];
       for (const [key, value] of Object.entries({
         entry: values.entry,
         mode: values.mode,
@@ -140,6 +146,7 @@ if (values.sample) {
   );
   write({
     entry: values.entry,
+    preload: values.preload ? path.resolve(values.preload) : null,
     node: process.version,
     iterations,
     mode: values.mode,

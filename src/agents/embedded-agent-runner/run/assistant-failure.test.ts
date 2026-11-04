@@ -210,6 +210,76 @@ async function streamIncompleteMistralResponseOverLoopback() {
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it.each([
+    "404 model not found",
+    "404 model_not_found",
+    "model-not-found",
+    "unknown model: mock-1",
+    "models/gemini-missing is not found for API version v1beta",
+    "mock-1 was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic-retirement)",
+    "No endpoints found for synthetic/missing",
+    "The model mock-1 has been deprecated.",
+  ])("advances to the fallback model without rotating credentials for %s", async (errorMessage) => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    setAttempt(fixture.input, buildEmbeddedRunnerAssistant({ stopReason: "error", errorMessage }));
+    const requests: string[] = [];
+    let profile = 0;
+    fixture.input.failover.advanceAuthProfile = vi.fn(async () => ++profile < 3);
+    const result = await runWithModelFallback({
+      cfg: createModelFallbackConfig("anthropic/mock-1", ["google/mock-2"]),
+      provider: "anthropic",
+      model: "mock-1",
+      sessionId: `session:missing-${errorMessage}`,
+      skipAuthProfileRuntime: true,
+      run: async (provider, model) => {
+        if (provider === "anthropic") {
+          for (;;) {
+            requests.push(`${provider}/${model}/profile-${profile}`);
+            await handleEmbeddedAssistantFailure(fixture.input);
+          }
+        }
+        requests.push(`${provider}/${model}`);
+        return "fallback complete";
+      },
+    });
+    expect(result.result).toBe("fallback complete");
+    expect(requests).toEqual(["anthropic/mock-1/profile-0", "google/mock-2"]);
+    expect(fixture.input.failover.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "401 unauthorized",
+    "429 quota exceeded",
+    "The model does not exist or you do not have access",
+    "model not found for this plan",
+    "404 page not found",
+    "not_found_error",
+    "HTTP 400 not_found_error: model: mock-1 (request_id: synthetic)",
+    "unknown model: permission denied",
+  ])("retains profile recovery for %s", async (errorMessage) => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    setAttempt(fixture.input, buildEmbeddedRunnerAssistant({ stopReason: "error", errorMessage }));
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).resolves.toMatchObject({
+      action: "retry",
+    });
+    expect(fixture.advanceAuthProfile).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces a missing model without rotating when no fallback is configured", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    fixture.input.runInput.fallbackConfigured = false;
+    setAttempt(
+      fixture.input,
+      buildEmbeddedRunnerAssistant({ stopReason: "error", errorMessage: "unknown model: mock-1" }),
+    );
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
+      reason: "model_not_found",
+    });
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
   it("surfaces storage failure without replaying the run or rotating credentials", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
     fixture.input.normalizedAttempt.attemptAssistant = buildEmbeddedRunnerAssistant({

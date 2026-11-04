@@ -39,8 +39,8 @@ beforeEach(() => {
   postMultipartRequestMock.mockImplementation(pngResponse);
 });
 
-it("forwards count and size overrides on generation requests", async () => {
-  const body = { model: "dall-e-3", prompt: "two landscape variants", n: 2, size: "3840x2160" };
+it.each([1, 2])("forwards generation count %i and size overrides", async (n) => {
+  const body = { model: "dall-e-3", prompt: "two landscape variants", n, size: "3840x2160" };
   const { n: count, ...request } = body;
   await generate({ ...request, count });
   expect(mockObjectArg(postJsonRequestMock)).toMatchObject({
@@ -50,21 +50,32 @@ it("forwards count and size overrides on generation requests", async () => {
   expect(mockObjectArg(postJsonRequestMock).body).toEqual(body);
 });
 
-it.each([1, 2])("uploads %i reference images as multipart", async (count) => {
+it.each([
+  [1, undefined, null],
+  [2, undefined, null],
+  [1, 1, null],
+  [1, 2, "2"],
+] as const)("uploads %i images (count=%s)", async (inputCount, count, expectedN) => {
   const inputImages = [
     { buffer: Buffer.from("first"), mimeType: "image/png" },
     { buffer: Buffer.from("second"), mimeType: "image/jpeg" },
-  ].slice(0, count);
-  await generate({ prompt: "refine the hero", inputImages });
+  ].slice(0, inputCount);
+  await generate({
+    model: "vertex_ai/gemini-3-pro-image",
+    prompt: "refine the hero",
+    inputImages,
+    count,
+  });
   // LiteLLM rejects JSON edits; single and multiple uploads use different part names.
   expect(postJsonRequestMock).not.toHaveBeenCalled();
   const request = mockObjectArg(postMultipartRequestMock);
   expect(request.url).toBe("http://localhost:4000/images/edits");
   const form = request.body as FormData;
-  expect(form.get("model")).toBe("gpt-image-2");
+  expect(form.get("model")).toBe("vertex_ai/gemini-3-pro-image");
   expect(form.get("prompt")).toBe("refine the hero");
-  expect(form.getAll(count === 1 ? "image[]" : "image")).toHaveLength(0);
-  const images = form.getAll(count === 1 ? "image" : "image[]");
+  expect(form.get("n")).toBe(expectedN);
+  expect(form.getAll(inputCount === 1 ? "image[]" : "image")).toHaveLength(0);
+  const images = form.getAll(inputCount === 1 ? "image" : "image[]");
   expect(
     await Promise.all(
       images.map(async (image) => {
