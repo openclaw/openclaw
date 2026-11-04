@@ -631,7 +631,7 @@ suite.define(() => {
           errorCode: ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
         });
         expect(await failure.getAttribute("data-kind")).toBe("trusted-proxy");
-        expect(await failure.locator(".login-gate__failure-steps").textContent()).toContain(
+        expect(await failure.locator(".login-gate__failure-steps:visible").textContent()).toContain(
           "Open the dashboard through the sign-in proxy, not the Gateway directly.",
         );
         expect(await failure.locator(".login-gate__failure-detail").textContent()).toContain(
