@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 // Control UI tests cover cron schedule presentation.
 import { contextBudgetStatusFixture } from "../../../src/config/sessions/context-budget.test-support.js";
 import type { CronJob } from "../api/types.ts";
@@ -22,6 +22,7 @@ function job(schedule: CronJob["schedule"]): CronJob {
 
 describe("formatCronSchedule", () => {
   afterEach(async () => {
+    vi.restoreAllMocks();
     await i18n.setLocale("en");
   });
 
@@ -41,22 +42,21 @@ describe("formatCronSchedule", () => {
         }).format(value),
       )
       .join(" ");
-    expect(formatCronSchedule(job({ kind: "every", everyMs: 90_001 }))).toBe(`Every ${expected}`);
-  });
-
-  it("formats cron schedules", () => {
-    expect(formatCronSchedule(job({ kind: "cron", expr: "0 * * * *" }))).toBe("Cron 0 * * * *");
-  });
-
-  it("formats on-exit schedules with the watched command instead of falling through to cron", () => {
-    expect(formatCronSchedule(job({ kind: "on-exit", command: "make build" }))).toBe(
-      "On exit: make build",
+    expect(formatCronSchedule(job({ kind: "every", everyMs: 90_001 }))).toBe(
+      i18n.t("cron.scheduleLabel.every", { duration: expected }),
     );
   });
 
-  it("includes the working directory for on-exit schedules when set", () => {
-    expect(formatCronSchedule(job({ kind: "on-exit", command: "./watch.sh", cwd: "/repo" }))).toBe(
-      "On exit: ./watch.sh (cwd: /repo)",
+  it("reads schedule wording from the locale catalog", () => {
+    vi.spyOn(i18n, "t").mockImplementation(
+      (key, p) => `<${key} ${Object.values(p ?? {}).join("|")}>`,
+    );
+    const label = (schedule: CronJob["schedule"]) => formatCronSchedule(job(schedule));
+    expect(label({ kind: "cron", expr: "0 9 * * *", tz: "UTC" })).toBe(
+      "<cron.scheduleLabel.withTimeZone <cron.scheduleLabel.cron 0 9 * * *>|UTC>",
+    );
+    expect(label({ kind: "on-exit", command: "make", cwd: "/repo" })).toBe(
+      "<cron.scheduleLabel.withCwd <cron.scheduleLabel.onExit make>|/repo>",
     );
   });
 });
