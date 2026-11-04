@@ -1,4 +1,3 @@
-import * as childProcess from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -14,12 +13,13 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
+import * as stdioWorker from "./stdio-worker.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 import { registrationStoreOptions } from "./transport-registration-fixtures.test-support.js";
 import { closeCodexAppServerTransportAndWait, hasCodexAppServerNaturalExit } from "./transport.js";
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
+vi.mock("./stdio-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stdio-worker.js")>()),
 }));
 
 let receipts: FixtureReceiptChannel;
@@ -38,7 +38,7 @@ async function waitForNativeExit(
 ): Promise<void> {
   for (;;) {
     signal.throwIfAborted();
-    const snapshot = await withinTest(readSnapshot(performance.now() + 2_000), signal);
+    const snapshot = await withinTest(readSnapshot(performance.now() + 2_000, [pid]), signal);
     expect(snapshot.some((row) => row.pid === process.pid)).toBe(true);
     const native = snapshot.find((row) => row.pid === pid);
     if (!native || native.state.startsWith("Z")) {
@@ -131,15 +131,15 @@ child.on("exit", (code, signal) => {
 });
 `,
       );
-      const spawn = childProcess.spawn;
-      let wrapper: childProcess.ChildProcess | undefined;
+      const spawn = stdioWorker.spawnCodexStdio;
+      let wrapper: stdioWorker.CodexStdioChild | undefined;
       let wrapperClosed: Promise<unknown> | undefined;
       let nativePid: number | undefined;
       let nativeExited = false;
       let wrapperSpawns = 0;
-      vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+      vi.spyOn(stdioWorker, "spawnCodexStdio").mockImplementation((...args) => {
         const child = spawn(...args);
-        if (Array.isArray(args[1]) && args[1].includes(wrapperPath)) {
+        if (args[1].includes(wrapperPath)) {
           wrapperSpawns++;
           wrapper = child;
           wrapperClosed = once(child, "close");
