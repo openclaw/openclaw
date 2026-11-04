@@ -1,0 +1,2 @@
+# Exact reviewed worker bytes and changed-byte/package/path rejection at the artifact scanner boundary.
+32

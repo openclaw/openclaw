@@ -1,0 +1,58 @@
+import { spawn } from "node:child_process";
+import { parentPort } from "node:worker_threads";
+//#region extensions/codex/stdio.worker.ts
+const port = parentPort;
+let child;
+const fail = (error) => {
+	port.postMessage({
+		type: "error",
+		error: {
+			message: error.message,
+			code: error.code,
+			errno: error.errno,
+			syscall: error.syscall
+		}
+	});
+};
+port.on("message", (message) => {
+	if (message.type === "close") {
+		port.close();
+		return;
+	}
+	if (message.type === "kill") {
+		child?.kill(message.signal);
+		return;
+	}
+	try {
+		child = spawn(message.command, message.args, {
+			...message.options,
+			stdio: "pipe"
+		});
+		child.on("error", fail);
+		child.once("spawn", () => port.postMessage({
+			type: "spawn",
+			pid: child.pid
+		}));
+		child.once("exit", (code, signal) => port.postMessage({
+			type: "exit",
+			code,
+			signal
+		}));
+		child.once("close", () => {
+			process.stdin.unpipe(child.stdin);
+			process.stdin.push(null);
+			process.stdin.resume();
+			port.close();
+		});
+		child.stdin.on("error", fail);
+		process.stdin.pipe(child.stdin);
+		child.stdout.pipe(process.stdout);
+		child.stderr.pipe(process.stderr);
+	} catch (error) {
+		fail(error instanceof Error ? error : new Error(String(error)));
+		port.close();
+	}
+});
+port.postMessage({ type: "ready" });
+//#endregion
+export {};

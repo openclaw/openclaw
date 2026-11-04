@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { Header } from "tar";
@@ -99,6 +99,38 @@ it("classifies reviewed findings by their file layout", () => {
     "@openclaw/acpx",
   );
   expect(result.criticalFindingCount).toBe(1);
+});
+
+// Exact worker bytes matching plugin producer 44224876938, job 134536789790.
+// Kept as data: the scanner must inspect this child_process call, never execute it.
+const CODEX_STDIO_WORKER = readFileSync(
+  new URL("../fixtures/plugin-npm-security/codex-stdio.worker.js.txt", import.meta.url),
+  "utf8",
+);
+
+it("accepts the exact reviewed Codex stdio worker artifact", () => {
+  expect(createHash("sha256").update(CODEX_STDIO_WORKER).digest("hex")).toBe(
+    "4b974f9a440c7a8ac4356ef11068e0fcea8f363129e59beef46a593a7b12dc48",
+  );
+  expect(scan({ "dist/stdio.worker.js": CODEX_STDIO_WORKER }, "@openclaw/codex")).toMatchObject({
+    scannedFiles: 1,
+    criticalFindingCount: 1,
+  });
+});
+
+it("rejects changed worker bytes and does not transfer the reviewed identity", () => {
+  for (const [file, content, packageName] of [
+    [
+      "dist/stdio.worker.js",
+      CODEX_STDIO_WORKER.replace("message.command", '"other-command"'),
+      "@openclaw/codex",
+    ],
+    ["dist/stdio.worker.js", CODEX_STDIO_WORKER + '\nspawn("extra-child");\n', "@openclaw/codex"],
+    ["dist/other.worker.js", CODEX_STDIO_WORKER, "@openclaw/codex"],
+    ["dist/stdio.worker.js", CODEX_STDIO_WORKER, "@openclaw/example"],
+  ] as const) {
+    expectUnsafe({ [file]: content }, packageName);
+  }
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
