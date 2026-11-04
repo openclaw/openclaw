@@ -61,8 +61,22 @@
   align-items: center;
   min-width: 0;
   margin: 0 -8px;
+  margin-inline-start: calc(-8px + var(--subagent-depth, 0) * 24px);
   padding: 0 8px;
   border-radius: var(--radius-md);
+}
+
+.subagents-desktop__row:not([data-depth="0"])::before {
+  position: absolute;
+  inset-inline-start: -12px;
+  top: -16px;
+  width: 10px;
+  height: calc(50% + 16px);
+  border-inline-start: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-end-start-radius: 5px;
+  content: "";
+  pointer-events: none;
 }
 
 .subagents-desktop__row:not(:last-child)::after {
