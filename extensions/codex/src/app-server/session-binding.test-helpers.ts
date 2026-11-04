@@ -202,7 +202,7 @@ export function testConversationIdentity(sessionFile: string) {
 export const { read: readTestConversationBinding, write: writeTestConversationBinding } =
   bindingAccessors(testConversationIdentity, { clientId: "test-client" });
 
-export function createConversationInspection(
+function createConversationInspection(
   conversation: Parameters<typeof inspectConversationBindingAsync>[0],
   bindingId: string | undefined,
 ): Awaited<ReturnType<typeof inspectConversationBindingAsync>> {
