@@ -38,8 +38,8 @@ describe("cron run filter accessibility", () => {
     ]);
     expectFilters(
       { runsStatuses: ["error", "ok"], runsDeliveryStatuses: ["not-delivered", "delivered"] },
-      ["Status OK, Error", "Delivery Delivered, Not delivered"],
-      ["OK, Error", "Delivered, Not delivered"],
+      ["Status Completed, Error", "Delivery Delivered, Not delivered"],
+      ["Completed, Error", "Delivered, Not delivered"],
     );
     expectFilters(
       {
@@ -47,10 +47,10 @@ describe("cron run filter accessibility", () => {
         runsDeliveryStatuses: ["delivered", "not-delivered", "unknown"],
       },
       [
-        "Status OK +2 (OK, Error, and Skipped)",
+        "Status Completed +2 (Completed, Error, and Skipped)",
         "Delivery Delivered +2 (Delivered, Not delivered, and Unknown)",
       ],
-      ["OK +2", "Delivered +2"],
+      ["Completed +2", "Delivered +2"],
     );
   });
 
@@ -60,8 +60,8 @@ describe("cron run filter accessibility", () => {
       await i18n.setLocale("de");
       expectFilters(
         { runsStatuses: ["error", "ok"], runsDeliveryStatuses: ["not-delivered", "delivered"] },
-        ["Status OK, Fehler", "Zustellung Zugestellt, Nicht zugestellt"],
-        ["OK, Fehler", "Zugestellt, Nicht zugestellt"],
+        ["Status Completed, Fehler", "Zustellung Zugestellt, Nicht zugestellt"],
+        ["Completed, Fehler", "Zugestellt, Nicht zugestellt"],
       );
       expectFilters(
         {
@@ -69,7 +69,7 @@ describe("cron run filter accessibility", () => {
           runsDeliveryStatuses: ["delivered", "not-delivered", "unknown"],
         },
         [
-          "Status OK +2 (OK, Fehler und Übersprungen)",
+          "Status Completed +2 (Completed, Fehler und Übersprungen)",
           "Zustellung Zugestellt +2 (Zugestellt, Nicht zugestellt und Unbekannt)",
         ],
       );

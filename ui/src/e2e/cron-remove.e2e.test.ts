@@ -57,8 +57,10 @@ suite.define(() => {
       await chooseRemove(page);
       const cancelled = await waitForConfirmModal(page);
       await expect(cancelled.textContent()).resolves.toContain(job.name);
-      await expect(cancelled.textContent()).resolves.toContain("permanently deletes");
-      await expect(cancelled.textContent()).resolves.toContain("stops all future runs");
+      await expect(cancelled.textContent()).resolves.toContain("deletes the automation");
+      await expect(cancelled.textContent()).resolves.toContain(
+        "stops future activity. This can’t be undone.",
+      );
       expect(await cancelled.getByRole("checkbox").count()).toBe(0);
       await expect.poll(async () => gateway.getRequests("cron.remove")).toHaveLength(0);
       await cancelled.getByRole("button", { name: "Cancel" }).click();
