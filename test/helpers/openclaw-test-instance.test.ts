@@ -360,7 +360,8 @@ if (kind === "late-refuse") {
   process.exit(1);
 }
 if (kind === "terminal-drain" || kind === "refusal-drain") {
-  const draining = spawn(process.execPath, ["-e", 'const fs = require("node:fs");const release = process.argv[1];const deadline = Date.now() + 5_000;const timer = setInterval(() => { if (fs.existsSync(release) || Date.now() >= deadline) clearInterval(timer); }, 10);', tracePath + ".draining-release"], { detached: true, stdio: ["ignore", "ignore", "inherit"] });
+  // Only Linux's subreaper adopts a setsid child. Other POSIX custody is the process group, so the reaped writer stays in it there.
+  const draining = spawn(process.execPath, ["-e", 'const fs = require("node:fs");const release = process.argv[1];const deadline = Date.now() + 5_000;const timer = setInterval(() => { if (fs.existsSync(release) || Date.now() >= deadline) clearInterval(timer); }, 10);', tracePath + ".draining-release"], { detached: kind === "refusal-drain" || process.platform === "linux", stdio: ["ignore", "ignore", "inherit"] });
   draining.unref();
   recordFixtureProcess(draining.pid);
   writeFileSync(tracePath + ".draining-pid", String(draining.pid));
