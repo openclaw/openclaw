@@ -263,7 +263,7 @@ When a checkout is too large or its Git layout cannot be validated cheaply, summ
 
 Nested repositories remain separate from the parent checkout's file contents. Untracked repositories appear as directory entries, while tracked submodules report Git's change status. Unchanged results can be reused in both cases, including when the checkout uses an external `core.excludesFile`; editing that ignore file refreshes which files appear.
 
-In the chat’s **Changes** panel, gutter chevrons fold complete functions, classes, and other language-supported multiline blocks within a file. Everything starts expanded, including edits. A folded placeholder shows the hidden line count and additions/deletions; click it to expand. Split and unified views share the same folds. The file menu offers **Collapse Code**, **Collapse Functions and Classes**, and **Expand Code**, separately from collapsing whole files. Incomplete source, omitted gaps, unsupported languages, and oversized previews stay expanded. Changing the patch resets code folds.
+In the chat’s **Changes** panel, gutter chevrons fold complete functions, classes, and other language-supported multiline blocks within a file. Everything starts expanded, including edits. A folded placeholder shows the hidden line count and additions/deletions; click it to expand. Split and unified views share the same folds. The file menu offers **Collapse code**, **Collapse functions and classes**, and **Expand code**, separately from collapsing whole files. Incomplete source, omitted gaps, unsupported languages, and oversized previews stay expanded. Changing the patch resets code folds.
 
 Session-start baselines omit SQLite databases and their WAL, SHM, and journal files, as well as hardlinked files. These files remain visible in checkout diffs even when unchanged since the session began; baseline capture never opens them in the Gateway process, preserving live database locks.
 
@@ -527,7 +527,7 @@ file tree** to browse another file, or **Show in Files** to reveal the current f
 in its folder with the **All** filter.
 
 The **Review** file menu offers **Edit file** when the file reader confirms editing
-is available. Readable files keep **Open File** and their supported Markdown and
+is available. Readable files keep **Open file** and their supported Markdown and
 source views when editing is unavailable; downloads remain available from the preview.
 
 If the **Files** panel shows a listing error, select **Retry** to load the current

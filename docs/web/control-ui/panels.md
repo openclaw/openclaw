@@ -103,6 +103,8 @@ Terminal sessions appear as tabs in the Chat side-panel header; choosing **Termi
 
 The unified panel also hosts **Browser**, **Files**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so on desktop switching sessions or reloading restores each session's own working layout. A chat conversation without a saved panel layout does not inherit panels open in another session. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
 
+In **Review**, choose **Sync locally** to copy the command for mirroring the session’s committed changes in a local checkout. **Files** distinguishes a search with no results (**No files match your search.**) from a filter with no matches (**No files match this filter.**).
+
 The side-panel divider follows the pointer and arrow-key direction in both
 left-to-right and right-to-left layouts.
 
