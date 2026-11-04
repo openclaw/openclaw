@@ -318,15 +318,24 @@ export async function createDoctorMaintenanceState(options: {
         return { changes: [], warnings: [] };
       }
       const { repairDoctorSqliteNoCow } = await import("./doctor-sqlite-nocow.js");
+      const { closeAgentDatabaseReaders } = await import("../state/openclaw-agent-db-readers.js");
       const stateDir = resolveStateDir(selectedEnv);
       const databasePath = resolveOpenClawStateSqlitePath(selectedEnv);
       assertOwnerCurrent();
       await closeResources(stateDir);
       try {
-        return await owner!.run(async () => {
+        // Worker pools (memory search) retain idle readers that fuser reports as Doctor's own PID.
+        // A reader that stays open is refused by the repair's holder check like any other.
+        const readerWarnings = await closeAgentDatabaseReaders(paths).then(
+          () => [],
+          (error: unknown) => [
+            `Retained agent database readers could not be closed before NOCOW repair: ${formatErrorMessage(error)}`,
+          ],
+        );
+        const result = await owner!.run(async () => {
           // Agent admission writes through shared state; retain that owner after drainage.
           await closeOpenClawStateDatabaseByPathAsync(databasePath);
-          await assertDoctorAgentLeaseAdmission(selectedEnv);
+          await assertDoctorAgentLeaseAdmission(selectedEnv, options.signal);
           return repairDoctorSqliteNoCow({
             paths,
             stateDir,
@@ -335,6 +344,7 @@ export async function createDoctorMaintenanceState(options: {
             assertCurrent: () => assertOwnerCurrent(databasePath),
           });
         });
+        return { ...result, warnings: [...readerWarnings, ...result.warnings] };
       } finally {
         // Restoration and update receipts use a fresh scope for the new file identity.
         await enterResources(owner!);
@@ -358,7 +368,7 @@ export async function createDoctorMaintenanceState(options: {
       try {
         result = await owner!.run(async () => {
           await closeOpenClawStateDatabaseByPathAsync(databasePath);
-          await assertDoctorAgentLeaseAdmission(selectedEnv);
+          await assertDoctorAgentLeaseAdmission(selectedEnv, options.signal);
           return enableDoctorSqliteReclamation({
             env: selectedEnv,
             agents,

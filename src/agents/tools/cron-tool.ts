@@ -66,6 +66,7 @@ import {
   CRON_TOOL_LIST_MAX_LIMIT,
 } from "./cron-tool-schema.js";
 import { listCronSelfJob } from "./cron-tool-self-list.js";
+import { assertCronSelfRemoveScope, readCronSelfRemoveOnlyJobId } from "./cron-tool-self-scope.js";
 import {
   assertCronCreatorAuthorityResolutionAvailable,
   assertNoCronShellExecution,
@@ -101,33 +102,6 @@ function requireCronJobIdParam(params: Record<string, unknown>): string {
 
 const CRON_RUN_MAX_WAIT_MS = 10 * 60_000;
 const CRON_RUN_ENQUEUE_TIMEOUT_MS = 60_000;
-
-const CRON_SELF_REMOVE_SCOPE_ERROR = "Automations tool is restricted to the current automation.";
-
-function readCronSelfRemoveOnlyJobId(opts: CronToolOptions | undefined) {
-  return opts?.selfRemoveOnlyJobId?.trim() || undefined;
-}
-
-function assertCronSelfRemoveScope(
-  opts: CronToolOptions | undefined,
-  action: string,
-  params: Record<string, unknown>,
-) {
-  const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
-  if (!selfRemoveOnlyJobId || action === "status" || action === "list") {
-    return;
-  }
-  const invocationAction = ["next_check", "scratch_get", "scratch_set", "record_result"].includes(
-    action,
-  );
-  if (invocationAction || ["get", "remove", "runs"].includes(action)) {
-    const id = readToolStringParam(params, "jobId") ?? readToolStringParam(params, "id");
-    if (id === selfRemoveOnlyJobId || (invocationAction && !id)) {
-      return;
-    }
-  }
-  throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
-}
 
 function isOlderGatewayRejectingParam(error: unknown, method: string, param: string): boolean {
   return (
@@ -419,6 +393,14 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 await callGateway(`cron.${action}`, gatewayOpts, {
                   id,
                   ...(runId ? { runId } : {}),
+                  ...(action === "runs"
+                    ? {
+                        limit: readPositiveIntegerParam(params, "limit", {
+                          max: CRON_TOOL_LIST_MAX_LIMIT,
+                        }),
+                        offset: readNonNegativeIntegerParam(params, "offset"),
+                      }
+                    : {}),
                 }),
               );
             }

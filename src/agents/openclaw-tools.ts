@@ -11,6 +11,7 @@ import { resolveWidgetPresenters } from "../plugins/widget-presenters.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { resolvePresentedSkillLibraryAuthoring } from "../skills/library/presented-authoring.js";
 import { hasMultipleSessionSharingIdentitiesNative } from "../state/user-profile-list.native.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { hasConfiguredWebSearchProvider } from "../web-search/runtime.js";
@@ -88,7 +89,7 @@ import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
-import { createSessionSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
+import { createSkillLibraryTool } from "./tools/skill-library-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
@@ -200,6 +201,12 @@ function* createOpenClawToolsSteps(
   AnyAgentTool[],
   AnyAgentTool[]
 > {
+  // Library and plugin tools follow the saved presentation; it grants no authoring.
+  const skillLibraryAuthoring = resolvePresentedSkillLibraryAuthoring(
+    options?.skillLibraryAuthoring,
+    options?.toolDiscovery?.workshop,
+  );
+  options = skillLibraryAuthoring ? { ...options, skillLibraryAuthoring } : options;
   const resolvedConfig = options?.config;
   const sessionConfig = options?.sessionConfigSource === "runtime" ? undefined : resolvedConfig;
   const activeProjectKeys = options?.preparedModelRuntime?.activeProjectKeys ?? [];
@@ -247,8 +254,11 @@ function* createOpenClawToolsSteps(
     widgetPresenters,
     widgetPresenterContext,
   );
+  // Scheduled runs must not borrow a remembered client as an inline renderer.
+  const scheduledCaller = Boolean(options?.gatewayCallerScheduled || options?.scheduledToolTargets);
+  const widgetClientCaps = scheduledCaller ? options?.clientCaps : options?.listingClientCaps;
   const inlineWidgetClientAvailable =
-    (options?.listingClientCaps ?? options?.clientCaps)?.includes("inline-widgets") === true;
+    (widgetClientCaps ?? options?.clientCaps)?.includes("inline-widgets") === true;
   const sessionKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const deliveryContext = {
@@ -427,11 +437,7 @@ function* createOpenClawToolsSteps(
     denylist: explicitFactoryDenylist,
   });
   const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
-  // Admitted Control UI recovery and explicitly capped scheduled turns can
-  // keep authoring their durable board without claiming an inline renderer.
-  // A run admitted with scheduled tool targets is a scheduled turn on every runtime.
-  const scheduledCaller =
-    options?.gatewayCallerScheduled === true || scheduledTargets !== undefined;
+  // Authorized recovery and capped scheduled turns can author boards without an inline renderer.
   const pinnedWidgetAuthoringAdmitted =
     (options?.pinnedWidgetAuthoring === true ||
       (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
@@ -474,6 +480,22 @@ function* createOpenClawToolsSteps(
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
   const githubSettingsOffered = options?.listingClientCaps?.includes("ui-agent-github-settings");
+  // sessions_create runs through the visible-spawn owner, so both tools share one trusted context.
+  const sessionsSpawnToolOptions = {
+    ...options,
+    // Only a keyed parent has a stored incarnation for spawn to check.
+    expectedParentSessionId:
+      (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
+    agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+    requesterTurnRunId: options?.runId,
+    completionOwnerKey: options?.runSessionKey,
+    currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
+    currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,
+    config: sessionConfig,
+    requesterAgentIdOverride: sessionAgentId,
+    requesterRunId: options?.runId,
+    workspaceDir: spawnWorkspaceDir,
+  };
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
@@ -511,7 +533,7 @@ function* createOpenClawToolsSteps(
             creatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
             selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
           }),
-          createSessionsCreateTool({ sessionControlAuthority: options?.sessionControlAuthority }),
+          createSessionsCreateTool(sessionsSpawnToolOptions),
           createSessionsTool({
             ...options,
             stopAllowed: options?.swarmCollector !== true,
@@ -589,14 +611,7 @@ function* createOpenClawToolsSteps(
     ...[createGetGoalTool, createCreateGoalTool, createUpdateGoalTool].map((createTool) =>
       createTool({ ...options, sessionAgentId }),
     ),
-    createSessionSkillWorkshopTool({
-      config: resolvedConfig,
-      agentId: sessionAgentId,
-      sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-      runId: options?.runId,
-      run: { ...options?.skillWorkshop, presentation: options?.toolDiscovery?.workshop },
-      sandboxed: options?.sandboxed,
-    }),
+    options?.skillLibraryAuthoring ? createSkillLibraryTool(options.skillLibraryAuthoring) : null,
     progressCardTool,
     ...swarmToolGroups.structuredOutput,
     ...(
@@ -641,21 +656,7 @@ function* createOpenClawToolsSteps(
     }),
     ...(embedded ? [] : createHostedConversationTools(options, sessionAgentId, sessionConfig)),
     !embedded || options?.allowGatewaySubagentBinding === true
-      ? createSessionsSpawnTool({
-          ...options,
-          // Only a keyed parent has a stored incarnation for spawn to check.
-          expectedParentSessionId:
-            (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
-          agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-          requesterTurnRunId: options?.runId,
-          completionOwnerKey: options?.runSessionKey,
-          currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
-          currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,
-          config: sessionConfig,
-          requesterAgentIdOverride: sessionAgentId,
-          requesterRunId: options?.runId,
-          workspaceDir: spawnWorkspaceDir,
-        })
+      ? createSessionsSpawnTool(sessionsSpawnToolOptions)
       : null,
     ...swarmToolGroups.agentsWait,
     createSessionsYieldTool({

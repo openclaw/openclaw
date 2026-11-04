@@ -20,7 +20,7 @@ vi.mock("../github-publication-discovery.js", () => ({
 
 installLauncherTest();
 
-it("offers a cold worker's personal Workshop declaration without restoring authority", async () => {
+it("offers a cold worker's personal library declaration without restoring authority", async () => {
   await fx.seedActivePlacement();
   const config = getRuntimeConfigSnapshot()!;
   const profile = ensureProfileForEmail("worker-author@example.test");
@@ -57,11 +57,11 @@ it("offers a cold worker's personal Workshop declaration without restoring autho
         get: fx.attachedEnvironment,
         acquireTurnCredential: async () => fx.credential(),
         startTunnel: async () => tunnel,
-        createGatewayTools: async ({ skillWorkshop }) => {
-          expect(skillWorkshop).toBeDefined();
-          expect(skillWorkshop!.description).toContain("requesting person's personal library");
+        createGatewayTools: async ({ skillLibrary }) => {
+          expect(skillLibrary?.name).toBe("skill_library");
+          expect(skillLibrary!.description).toContain("requesting person's personal library");
           await expect(
-            skillWorkshop!.execute("cold-write", { action: "list" }),
+            skillLibrary!.execute("cold-write", { action: "list" }),
           ).rejects.toMatchObject({ code: "AUTHORITY_EXPIRED" });
           offered = true;
           throw observed;

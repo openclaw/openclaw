@@ -35,7 +35,7 @@ export function registerSelectionDiscoveryCases({
       ...providerRuntimeConfig("codex", "codex"),
       session: { store: storePath },
       agents: { entries: { main: {} } },
-      tools: { allow: ["skill_workshop"], toolSearch: false },
+      tools: { allow: ["skill_library"], toolSearch: false },
       gateway: {
         roles: {
           default: "admin",
@@ -77,13 +77,11 @@ export function registerSelectionDiscoveryCases({
             workspaceDir: generationState.workspaceDir,
             toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
           });
-          const workshop = tools.find((tool) => tool.name === "skill_workshop");
-          expect(workshop).toBeDefined();
+          const library = tools.find((tool) => tool.name === "skill_library");
           descriptors.push(
-            JSON.stringify({
-              description: workshop!.description,
-              parameters: workshop!.parameters,
-            }),
+            library
+              ? JSON.stringify({ description: library.description, parameters: library.parameters })
+              : "absent",
           );
           return createAttemptResult("codex");
         },
@@ -105,14 +103,14 @@ export function registerSelectionDiscoveryCases({
       await runEmbeddedAttemptWithBackend(params);
       expect(descriptors).toHaveLength(2);
       expect(descriptors[1]).toBe(descriptors[0]);
-      expect(descriptors[1]).toContain("personal library operations");
+      expect(descriptors[1]).toContain("requesting person's personal library");
       await addSessionMember(
         { agentId: "main", storePath, sessionKey },
         { identityId: "another-person", addedBy: profile.id },
       );
       await runEmbeddedAttemptWithBackend(params);
-      expect(descriptors[2]).not.toBe(descriptors[1]);
-      expect(descriptors[2]).not.toContain("personal library operations");
+      // A changed audience invalidates the saved presentation, and no live grant remains.
+      expect(descriptors[2]).toBe("absent");
     } finally {
       catalog.release();
     }

@@ -604,7 +604,9 @@ describe("subagent composer", () => {
       expect(state.handleSendChat).not.toHaveBeenCalled();
       expect(container.querySelector("textarea, input[type=file]")).toBeNull();
       expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
-      expect(container.querySelector('[aria-label="Stop generating"]')).toBeNull();
+      expect(
+        container.querySelector('[aria-label="Stop"], [aria-label="Stop generating"]'),
+      ).toBeNull();
       const banner = container.querySelector(".agent-chat__disabled-banner");
       expect(banner?.textContent).toContain("View-only subagent");
       const navigate = banner?.querySelector<HTMLButtonElement>("button");
@@ -619,7 +621,7 @@ describe("subagent composer", () => {
 
   it.each([true, false])(
     "keeps an ordinary nested session reply editable while connected=%s",
-    (connected) => {
+    async (connected) => {
       installTranscriptDomMocks();
       const { pane, state, context } = createRefreshChatPane(
         connected ? createGatewayBrowserClientFixture() : undefined,
@@ -656,8 +658,10 @@ describe("subagent composer", () => {
         expect(reply).not.toBeNull();
         reply!.click();
         draw();
-        expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
-          "Review complete.",
+        await waitForSolid(() =>
+          expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
+            "Review complete.",
+          ),
         );
         expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
           "Keep this draft",

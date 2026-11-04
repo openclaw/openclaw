@@ -19,9 +19,10 @@ import {
 } from "./session-cost-usage-cache.kernel.js";
 import {
   listUsageCountedTranscriptSources,
-  resolveUsageCostTranscriptSources,
+  readUsageCostTranscriptSourceStats,
   resolveUsageCostTranscriptFiles,
   resolveUsageCostTranscriptPaths,
+  resolveUsageCostTranscriptSourcePath,
 } from "./session-cost-usage-collection.js";
 import {
   decodeUsageCostPartition,
@@ -126,27 +127,12 @@ export async function executeUsageCostWorker(
     },
   });
   if (operation.kind === "inventory") {
-    const selected = operation.sessionFiles;
-    if (!selected) {
-      const files = await listUsageCountedTranscriptSources(location.agentId, {
-        ...access,
-        storePath: location.storePath,
-        minMtimeMs: operation.minMtimeMs,
-        statistics: false,
-      });
-      return {
-        kind: "inventory",
-        files: files.map(({ kind, sourcePath, sessionId, mtimeMs }) => ({
-          kind,
-          sourcePath,
-          sessionId,
-          mtimeMs,
-        })),
-      };
-    }
-    const files = (await resolveUsageCostTranscriptSources(selected, access)).filter(
-      (file) => file !== undefined,
-    );
+    const files = await listUsageCountedTranscriptSources(location.agentId, {
+      ...access,
+      storePath: location.storePath,
+      minMtimeMs: operation.minMtimeMs,
+      statistics: false,
+    });
     return {
       kind: "inventory",
       files: files.map((file) => ({
@@ -375,8 +361,47 @@ export async function executeUsageCostWorker(
   if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
     throw new WorkerTaskError("A requested usage transcript is unavailable", "unavailable");
   }
-  const files = operation.sessionFiles ? requestedFiles : await inventory(operation.sessionsDir);
+  const sources = operation.sessionFiles
+    ? []
+    : await listUsageCountedTranscriptSources(location.agentId, {
+        ...access,
+        storePath: location.storePath,
+        sessionsDir: operation.sessionsDir,
+        statistics: false,
+      });
+  const sourcesByPath = new Map(
+    sources.map((source) => [resolveUsageCostTranscriptSourcePath(source), source]),
+  );
+  // Read upgrade gaps before selecting expensive inputs; old live sources still own cache rows.
+  const quarterGaps = await readCacheOrEmpty(
+    (db) =>
+      listUsageCostQuarterGapsInDatabase(
+        db,
+        operation.sessionFiles ? requestedFiles.map((file) => file.filePath) : undefined,
+      ),
+    () => new Set<string>(),
+  );
+  const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;
+  const selectedSources = [...sourcesByPath].filter(
+    ([filePath, source]) =>
+      !(minMtimeMs !== undefined && source.mtimeMs < minMtimeMs) || quarterGaps.has(filePath),
+  );
+  const files = operation.sessionFiles
+    ? requestedFiles
+    : await readUsageCostTranscriptSourceStats(
+        selectedSources.map(([, source]) => source),
+        access,
+      );
   const filesByPath = new Map(files.map((file) => [file.filePath, file]));
+  const livePaths = new Set(sourcesByPath.keys());
+  // Selected sources can disappear or change archive identity during expansion.
+  // Reconcile before pruning; unexpected read errors have already aborted without writes.
+  for (const [filePath] of selectedSources) {
+    livePaths.delete(filePath);
+  }
+  for (const file of files) {
+    livePaths.add(file.filePath);
+  }
   let pruned = false;
   if (!operation.sessionFiles) {
     let batch: UsageCostWorkerHostEffects["prune-rows"]["input"] = [];
@@ -389,7 +414,7 @@ export async function executeUsageCostWorker(
       batchBytes = 0;
     };
     for (const row of rows) {
-      if (filesByPath.has(row.key)) {
+      if (livePaths.has(row.key)) {
         continue;
       }
       const value = new TextEncoder().encode(row.valueJson);
@@ -406,17 +431,6 @@ export async function executeUsageCostWorker(
       await sendBatch();
     }
   }
-  // Partitions written before quarter rows existed, or by a build without them,
-  // derive their report rows from the stored partition instead of a transcript scan.
-  const quarterGaps = await readCacheOrEmpty(
-    (db) =>
-      listUsageCostQuarterGapsInDatabase(
-        db,
-        operation.sessionFiles ? [...filesByPath.keys()] : undefined,
-      ),
-    () => new Set<string>(),
-  );
-  const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
   const stale = [];
   for (const file of filesByPath.values()) {

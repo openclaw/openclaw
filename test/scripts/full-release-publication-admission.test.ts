@@ -303,6 +303,9 @@ console.log('{"status":"identical"}');
         check(identityIndex).toBeLessThan(
           resolveTarget.steps.findIndex((step) => step.id === "resolve"),
         );
+        check(resolveTarget.steps[identityIndex]?.run).toContain(
+          '${admission_args[@]+"${admission_args[@]}"}',
+        );
         let status = 0;
         let stderr = "";
         const completed: string[] = [];
@@ -762,7 +765,7 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.origin === "https://registry.npmjs.org") {
     if (${JSON.stringify(options.registry)} === "advisory-deadline" && url.pathname === "/demo-runtime") {
       const now = Date.now;
-      Date.now = () => now() + 300001;
+      Date.now = () => now() + 600001;
     }
     if (${JSON.stringify(options.registry)} === "required-budget" ||
         (${JSON.stringify(options.registry)} === "advisory-budget" && url.pathname.startsWith("/advisory-"))) {
@@ -1389,6 +1392,71 @@ function npmBootstrap(
   } as const;
 }
 
+describe("FRV publication source metadata acquisition", () => {
+  publicationIt(
+    "fetches missing blob:none metadata in one batch instead of per-blob lazy fetches",
+    { timeout: 30_000 },
+    withCommand(async (processFixture, check) => {
+      const root = processFixture.createTempDir("frv-publication-metadata-");
+      const source = join(root, "source");
+      const target = join(root, "target");
+      mkdirSync(source);
+      git(source, "init", "-q");
+      git(source, "config", "uploadpack.allowFilter", "true");
+      writeJson(source, "package.json", { name: "openclaw" });
+      for (const id of ["alpha", "beta"]) {
+        writeJson(source, `extensions/${id}/package.json`, { name: id });
+        write(source, `extensions/${id}/README.md`, `# ${id}\n`);
+      }
+      git(source, "add", "-A");
+      git(source, "commit", "-qm", "fixture");
+      const sha = git(source, "rev-parse", "HEAD");
+      git(
+        root,
+        "clone",
+        "-q",
+        "--filter=blob:none",
+        "--no-checkout",
+        pathToFileURL(source).href,
+        target,
+      );
+      const missing = () =>
+        git(target, "rev-list", "--objects", "--missing=print", sha)
+          .split("\n")
+          .filter((line) => line.startsWith("?"));
+      check(missing()).toHaveLength(5);
+      const step = expectDefined(
+        workflow.jobs.resolve_target?.steps.find(
+          (candidate) => candidate.name === "Acquire publication source metadata",
+        ),
+        "publication metadata step",
+      );
+      // Lazy fetches stay disabled, so success proves the batched prefetch supplied every blob.
+      const result = await processFixture.run(
+        workflowBash,
+        ["-c", expectDefined(step.run, "publication metadata command")],
+        {
+          cwd: root,
+          env: {
+            PATH: [dirname(nodeExecutable), process.env.PATH ?? ""].join(delimiter),
+            HOME: root,
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_NO_LAZY_FETCH: "1",
+            PUBLICATION_TARGET_ROOT: target,
+            PUBLICATION_TARGET_SHA: sha,
+          },
+          encoding: "utf8",
+          timeout: 20_000,
+        },
+      );
+      check(result.status, result.stderr).toBe(0);
+      check(result.stdout).not.toContain("::warning::");
+      check(missing()).toEqual([]);
+    }),
+  );
+});
+
 describe("FRV required registry admission", () => {
   publicationIt.concurrent.for([
     undefined,
@@ -1744,9 +1812,9 @@ describe("FRV observation worker boundary", () => {
         (entry) => entry.kind === "settled" && entry.worker,
       );
       check(settlement).toMatchObject({ active: 0 });
-      check(settlement?.maximumActive).toBeLessThanOrEqual(16);
+      check(settlement?.maximumActive).toBeLessThanOrEqual(8);
       if (registry === "concurrency") {
-        check(settlement?.maximumActive).toBe(16);
+        check(settlement?.maximumActive).toBe(8);
       }
       for (const plan of [result.observations.plans.npm, result.observations.plans.clawhub]) {
         check(plan.all).toHaveLength(count);

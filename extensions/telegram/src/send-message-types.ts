@@ -26,6 +26,8 @@ export type TelegramSendOpts = {
   api?: TelegramApiOverride;
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
+  /** Per-message link-preview override for literal copied content. */
+  linkPreview?: boolean;
   tableMode?: MarkdownTableMode;
   textLimit?: number;
   chunkMode?: ChunkMode;

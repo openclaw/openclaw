@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { adoptBootComposer, retireBootComposer } from "../../app/boot-composer.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
@@ -50,10 +51,9 @@ function mountPane(context: ApplicationContext, props: Partial<ChatPaneProps>) {
 
 const composerSelector = ".agent-chat__composer-combobox textarea";
 it("applies a route draft and its focus cue to an already mounted native pane", async () => {
-  const view = mountedFixture("bridge-draft").render({ active: true, presented: true });
-  const { pane } = view;
+  const { pane } = mountedFixture("bridge-draft").render({ active: true, presented: true });
   const textarea = await waitForSolid(() =>
-    expectDefined(view.container.querySelector<HTMLTextAreaElement>(composerSelector), "composer"),
+    expectDefined(pane.querySelector<HTMLTextAreaElement>(composerSelector), "composer"),
   );
   Object.assign(pane, { draft: "What can you do?", focusComposer: true });
   await pane.updateComplete;
@@ -112,8 +112,7 @@ it("replaces the command provider while document-hidden rendering is parked", as
   const first = createMockBoardProvider(sessionKey);
   const second = createMockBoardProvider(sessionKey);
   const subscribe = vi.spyOn(second.events, "subscribe");
-  const view = render({ boardProvider: first });
-  const { pane } = view;
+  const { pane } = render({ boardProvider: first });
   await pane.updateComplete;
   visibility = "hidden";
   document.dispatchEvent(new Event("visibilitychange"));
@@ -136,14 +135,16 @@ it("opens provider findings through the mounted pane's first rendered frame", as
     explanation: "The agent tried to modify a synthetic file outside the selected project.",
     continuationMessage: "Continue only inside the selected project.",
   };
-  const view = mountedFixture("bridge-provider-review", {
+  const { container, pane } = mountedFixture("bridge-provider-review", {
     agentId: "main",
     providerReview: review,
   }).render({ active: true });
-  const dialog = () => view.container.querySelector("openclaw-modal-dialog");
+  const dialog = () => container.querySelector("openclaw-modal-dialog");
+  await pane.updateComplete;
+  await vi.dynamicImportSettled();
   const reviewButton = await waitForSolid(() =>
     expectDefined(
-      view.container.querySelector<HTMLButtonElement>(".chat-provider-review button"),
+      container.querySelector<HTMLButtonElement>(".chat-provider-review button"),
       "provider review",
     ),
   );
@@ -154,7 +155,7 @@ it("opens provider findings through the mounted pane's first rendered frame", as
     expect(dialog()?.querySelector("blockquote")?.textContent).toBe(review.continuationMessage);
   });
   expectDefined(
-    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions button"),
+    container.querySelector<HTMLButtonElement>("openclaw-modal-actions button"),
     "modal action",
   ).click();
   await waitForSolid(() => expect(dialog()).toBeNull());
@@ -167,6 +168,16 @@ it.each(["ready", "unavailable"] as const)(
   "admits the first pane from a pending snapshot, bounded at 100ms (%s)",
   async (outcome) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const bootComposer = document.createElement("textarea");
+    bootComposer.id = "openclaw-boot-composer";
+    bootComposer.value = "Keep the pending draft";
+    document.documentElement.setAttribute("data-openclaw-boot-chat", "");
+    document.body.append(bootComposer);
+    adoptBootComposer(true);
+    onTestFinished(() => {
+      retireBootComposer();
+      document.documentElement.removeAttribute("data-openclaw-boot-chat");
+    });
     const fixture = mountedFixture("snapshot-admission");
     const gateway = fixture.context.gateway;
     gateway.snapshot.phase = "connecting";
@@ -191,11 +202,28 @@ it.each(["ready", "unavailable"] as const)(
       vi.useRealTimers();
     });
     const prepared = prewarmChatSnapshot(key);
-    const view = fixture.render({ active: true, sessionSnapshotStore: new SessionSnapshotStore() });
+    const view = fixture.render({
+      active: true,
+      ownsRouteComposer: true,
+      presentationId: "snapshot-active",
+      sessionSnapshotStore: new SessionSnapshotStore(),
+    });
+    const inactive = fixture.render({
+      paneId: "inactive",
+      active: false,
+      ownsRouteComposer: false,
+      presentationId: "snapshot-inactive",
+      sessionSnapshotStore: new SessionSnapshotStore(),
+    });
     flush();
     await vi.advanceTimersByTimeAsync(99);
     flush();
     expect(view.pane.querySelector(".chat-pane__header")).toBeNull();
+    expect(view.pane.querySelector(".lazy-view-state--route")).not.toBeNull();
+    expect(inactive.pane.querySelector("textarea")).toBeNull();
+    expect(view.pane.querySelectorAll("textarea")).toHaveLength(1);
+    expect(view.pane.querySelector("textarea")).toBe(bootComposer);
+    expect(bootComposer.value).toBe("Keep the pending draft");
     if (outcome === "ready") {
       read.resolve({
         projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
@@ -217,6 +245,7 @@ it.each(["ready", "unavailable"] as const)(
       await vi.advanceTimersByTimeAsync(0);
       flush();
       expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
+      expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
       expect(view.pane.querySelector(".chat-pane__parent-session")?.textContent).toContain(
         "Stored parent",
       );
@@ -227,6 +256,10 @@ it.each(["ready", "unavailable"] as const)(
       await vi.advanceTimersByTimeAsync(1);
       flush();
       expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
+      expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
+      const composer = view.pane.querySelector<HTMLTextAreaElement>(composerSelector);
+      expect(composer?.value).toBe("Keep the pending draft");
+      expect(view.pane.querySelectorAll("textarea")).toHaveLength(1);
       read.resolve(undefined);
       await prepared;
     }

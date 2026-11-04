@@ -42,6 +42,11 @@ import {
 } from "./agent-runner-run-params.js";
 import { buildReplyRouteThreadingToolContext } from "./agent-runner-utils.js";
 import { prepareCliReplyPayload } from "./cli-reply-payload.js";
+import {
+  createCompactionNoticePayload,
+  deliverCompactionNoticePayload,
+  shouldNotifyUserAboutCompaction,
+} from "./compaction-notice.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -71,6 +76,20 @@ export async function runCliFallbackCandidate(
     (onPreparedBlockReply
       ? (payload, context) => deliverPreparedBlockReply({ onPreparedBlockReply }, payload, context)
       : undefined);
+  const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
+    if (!shouldNotifyUserAboutCompaction(params.runtimeConfig)) {
+      return;
+    }
+    await deliverCompactionNoticePayload(
+      createCompactionNoticePayload({
+        phase,
+        currentMessageId: turn.sessionCtx.MessageSidFull ?? turn.sessionCtx.MessageSid,
+        applyReplyToMode: turn.applyReplyToMode,
+      }),
+      turn.opts?.onBlockReply ?? turn.onCompactionNoticePayload,
+      phase,
+    );
+  };
   const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
   const selectedModelEntry = findModelInCatalog(
     params.candidateRun.thinkingCatalog ?? [],
@@ -316,8 +335,14 @@ export async function runCliFallbackCandidate(
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
           onPlanUpdate: turn.opts?.onPlanUpdate,
           onReasoningProgress: (payload) => turn.opts?.onReasoningProgress?.(payload),
-          onCompactionStart: turn.opts?.onCompactionStart,
-          onCompactionEnd: turn.opts?.onCompactionEnd,
+          onCompactionStart: async () => {
+            await turn.opts?.onCompactionStart?.();
+            await sendCompactionNotice("start");
+          },
+          onCompactionEnd: async (event) => {
+            await turn.opts?.onCompactionEnd?.(event);
+            await sendCompactionNotice(event?.completed === true ? "end" : "incomplete");
+          },
           onToolEvent: async (payload) => {
             const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
             if (payload.phase === "result") {
@@ -406,38 +431,7 @@ export async function runCliFallbackCandidate(
             agentId: turn.followupRun.run.agentId,
             jobId: turn.followupRun.run.scheduledAutomation?.job.id,
             onExecutionStarted: turn.followupRun.run.scheduledAutomation
-              ? async () => {
-                  try {
-                    await turn.followupRun.run.internalEventExecution?.beforeScheduledStart?.(
-                      params.runId,
-                    );
-                    params.runAbortSignal?.throwIfAborted();
-                    turn.followupRun.run.internalEventExecution?.assertCurrent?.();
-                    const automation = turn.followupRun.run.scheduledAutomation;
-                    if (automation && sessionKey) {
-                      automation.onExecutionStarted?.({
-                        runId: params.runId,
-                        sessionId: turn.followupRun.run.sessionId,
-                        sessionKey,
-                        provider: params.provider,
-                        model: params.model,
-                        ...(params.isFallbackRetry ? { isFallback: true } : {}),
-                      });
-                    }
-                  } catch (error) {
-                    if (!params.hasAgentRunStarted()) {
-                      lifecycleBackstop.note({
-                        stream: "lifecycle",
-                        data: {
-                          phase: "finishing",
-                          executionStarted: false,
-                          providerStarted: false,
-                        },
-                      });
-                    }
-                    throw error;
-                  }
-                }
+              ? () => params.notifyScheduledExecutionStarted(lifecycleBackstop, () => sessionKey)
               : undefined,
             scheduledToolPolicy: resolveReplyScheduledToolPolicy(turn.followupRun.run),
             config: params.runtimeConfig,

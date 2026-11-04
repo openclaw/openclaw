@@ -68,7 +68,8 @@ Scheduled turns inside an existing conversation retain its full automations
 definition; job-scoped execution still rejects actions outside the current job.
 
 For authenticated, profile-bound Gateway conversations, the session also records
-the Workshop declaration's default target and profile-selection shape, alongside
+the personal skill library's shape (whether `skill_library` is declared, its
+profile-selection wording, and whether Workshop stays listed beside it), alongside
 the independent ordinary or management Automations declaration. Internal and
 recovery turns can reuse these declarations after storage reopens. A new human
 request replaces or clears the saved presentation; a fresh human message from a
@@ -77,9 +78,9 @@ Changes to the profile, role configuration, session audience, or session
 incarnation invalidate it. Revoking a device or token does not; the next human
 request replaces the presentation, and execution checks apply in the meantime.
 Sessions without a valid saved presentation use their existing tool-discovery
-behavior. The saved facts carry no execution authority: personal Workshop calls
-still require current authoring authority, and Automations calls retain their
-current execution checks.
+behavior. The saved facts carry no execution authority: `skill_library` calls
+still require current authoring authority, Workshop keeps its ordinary access
+rules, and Automations calls retain their current execution checks.
 
 Restart and scheduled-turn orphan recovery use the same bounded model-history
 selection as session startup. Transcript-only metadata does not replace that
@@ -322,6 +323,7 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 - Lifetime fields require both cache-key support and `compat.supportsLongCacheRetention` (true by default; Together AI and Cloudflare profiles disable it). Opted-in proxies use the same GPT-5.6+ TTL mapping and otherwise receive `"24h"`; disable long-retention support if the proxy rejects lifetime fields.
 - `cacheRetention: "short"` sends the key without lifetime fields, leaving the provider's default lifetime in effect. `cacheRetention: "none"` suppresses the key and both lifetime fields; it does not disable OpenAI's automatic prompt caching.
 - Native ChatGPT-backed Responses routes keep the session cache key, honor `none`, and omit both OpenAI lifetime fields.
+- Azure OpenAI Responses sends the cache key by default and honors `none`; set `compat.supportsPromptCacheKey: false` on deployments that reject `prompt_cache_key`.
 - Cache hits surface via `usage.prompt_tokens_details.cached_tokens` (Chat Completions) or `input_tokens_details.cached_tokens` (Responses API), mapped to `cacheRead`.
 - Responses API payloads can also expose `input_tokens_details.cache_write_tokens`, mapped to `cacheWrite` and priced at the model's cache-write rate; Responses payloads that omit the field keep `cacheWrite` at `0`. Chat Completions payloads that include `prompt_tokens_details.cache_write_tokens` also populate `cacheWrite`; availability depends on the model and route.
 - Captured consecutive Responses request bodies retained byte-identical history prefixes, so history rewriting did not explain the observed shortfall. Provider breakpoint placement can affect reported `cacheRead`: OpenAI documents message-end breakpoints for GPT-5.6 and later on the Platform API, while the ChatGPT-backed Responses route was observed to report hits in 1,024-token steps. See [OpenAI live expectations](#openai-live-expectations) below.

@@ -177,17 +177,16 @@ suite.define(() => {
       const finalAnswer = pane.locator(".chat-text").getByText(answer, { exact: true });
       await finalAnswer.waitFor();
       await expect
-        .poll(() => page.getByRole("button", { name: "Stop generating" }).count())
+        .poll(() => page.getByRole("button", { name: "Stop", exact: true }).count())
         .toBe(0);
       const worked = pane.locator(".chat-work-group > .chat-activity-group__summary");
       await worked.waitFor();
       await worked.click();
       await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
-      await rawDetails.waitFor();
-      if ((await rawDetails.getAttribute("aria-expanded")) === "false") {
+      if (reasoningLevel === "stream") {
         await rawDetails.click();
+        await expect.poll(() => rawDetails.getAttribute("aria-expanded")).toBe("true");
       }
-      await expect.poll(() => rawDetails.getAttribute("aria-expanded")).toBe("true");
       for (const index of [0, 1]) {
         await expect
           .poll(() =>

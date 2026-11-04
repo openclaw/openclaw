@@ -614,7 +614,6 @@ self.addEventListener("push", (event) => {
     data = { title: "OpenClaw", body: event.data.text() };
   }
 
-  const title = data.title || "OpenClaw";
   const options = {
     body: data.body || "",
     icon:
@@ -626,13 +625,14 @@ self.addEventListener("push", (event) => {
     badge: "./favicon-32.png",
     tag: data.tag || "openclaw-notification",
     renotify: data.renotify === true,
+    silent: false, // macOS otherwise defaults Web Push to silent.
     data: {
       url: data.url || self.registration.scope,
       explicitUrl: Boolean(data.url),
     },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(self.registration.showNotification(data.title || "OpenClaw", options));
 });
 
 self.addEventListener("notificationclick", (event) => {

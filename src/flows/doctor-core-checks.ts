@@ -33,7 +33,6 @@ import type { DoctorHealthCheckContext } from "./doctor-health-contribution-type
 import { legacyOwnedRepair } from "./doctor-health-contribution.js";
 import { modelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
-import { skillWorkshopToolPolicyCheck } from "./doctor-skill-workshop-check.js";
 import { runtimeToolSchemaCheck } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import { securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
@@ -386,7 +385,7 @@ const telegramGeneralTopicConversationsCheck: CoreHealthCheck = {
   async detect(ctx) {
     const { detectTelegramGeneralTopicConversationRepairs } =
       await import("../commands/doctor-telegram-general-topic-conversations.js");
-    const repairs = detectTelegramGeneralTopicConversationRepairs({
+    const repairs = await detectTelegramGeneralTopicConversationRepairs({
       cfg: ctx.cfg,
       ...(ctx.env ? { env: ctx.env } : {}),
     });
@@ -716,7 +715,6 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     },
     runtimeToolSchemaCheck,
     workspaceSuggestionsCheck,
-    skillWorkshopToolPolicyCheck,
     commandOwnerCheck,
     skillsReadinessCheck,
     finalConfigValidationCheck,

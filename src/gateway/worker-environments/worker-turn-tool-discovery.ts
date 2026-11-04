@@ -1,14 +1,15 @@
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
-import { createConfiguredSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-factory.js";
+import { createSkillLibraryTool } from "../../agents/tools/skill-library-tool.js";
 import { getRuntimeConfig, getRuntimeConfigSnapshot } from "../../config/config.js";
+import { resolvePresentedSkillLibraryAuthoring } from "../../skills/library/presented-authoring.js";
 import { prepareSessionToolDiscovery } from "../tool-discovery.js";
 
-/** Worker Workshop remains personal-only; its saved declaration grants no library authority. */
+/** Worker library authoring remains personal-only; its saved shape grants no library authority. */
 export async function prepareWorkerTurnToolDiscovery(
   turn: Pick<
     SessionPlacementTurnParams,
-    "config" | "runId" | "skillLibraryAuthoring" | "toolDiscoveryCapture"
+    "config" | "skillLibraryAuthoring" | "toolDiscoveryCapture"
   >,
   target: BoundAgentRunSessionTarget,
   assertCurrent: () => void,
@@ -20,25 +21,15 @@ export async function prepareWorkerTurnToolDiscovery(
     assertCurrent,
   });
   const presentation = discovery.presentation;
+  // Worker turns author only the personal library, never Workshop.
+  const skillLibraryAuthoring = resolvePresentedSkillLibraryAuthoring(
+    turn.skillLibraryAuthoring && { ...turn.skillLibraryAuthoring, defaultTarget: "personal" },
+    presentation?.workshop && { ...presentation.workshop, defaultTarget: "personal" },
+  );
   return {
     ...discovery,
     codingToolDiscovery: presentation ? { automations: presentation.automations } : undefined,
-    createSkillWorkshop: () =>
-      turn.skillLibraryAuthoring || presentation?.workshop
-        ? createConfiguredSkillWorkshopTool({
-            config: turn.config ?? {},
-            agentId: target.agentId,
-            sessionKey: target.sessionKey,
-            runId: turn.runId,
-            run: {
-              libraryAuthoring: turn.skillLibraryAuthoring
-                ? { ...turn.skillLibraryAuthoring, defaultTarget: "personal" }
-                : undefined,
-              presentation: presentation?.workshop
-                ? { ...presentation.workshop, defaultTarget: "personal" }
-                : undefined,
-            },
-          })
-        : undefined,
+    skillLibraryAuthoring,
+    skillLibrary: skillLibraryAuthoring && createSkillLibraryTool(skillLibraryAuthoring),
   };
 }
