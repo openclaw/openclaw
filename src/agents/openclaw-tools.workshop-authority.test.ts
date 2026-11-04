@@ -64,7 +64,7 @@ async function createUnderCaller(name: string, revokeDuringPreparation: boolean)
   };
   const skillDir = path.join(state.agentDir(), "workshop-skills", name);
   const realMkdir = fs.mkdir.bind(fs);
-  using _mkdir = vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
+  using _ = vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
     const made = await realMkdir(target, options);
     if (String(target) === skillDir && live && revokeDuringPreparation) {
       live = false;
