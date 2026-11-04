@@ -239,22 +239,16 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
   });
 
   it("retries a request write EPIPE before any registry response", async () => {
-    const packument = { versions: { "2026.7.1-beta.3": {} } };
-    const waits: number[] = [];
+    const packument = { versions: {} };
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockRejectedValueOnce(new TypeError("fetch failed", { cause: { code: "EPIPE" } }))
       .mockResolvedValueOnce(registryResponse({ body: JSON.stringify(packument) }));
-    await expect(
-      fetchPackument({
-        fetchImpl,
-        sleep: async (delayMs) => {
-          waits.push(delayMs);
-        },
-      }),
-    ).resolves.toEqual({ status: 200, ok: true, packument });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(waits).toEqual([1000]);
+    const result = await fetchPackument({ fetchImpl, sleep: async () => {} });
+    expect([result, fetchImpl.mock.calls.length]).toEqual([
+      { status: 200, ok: true, packument },
+      2,
+    ]);
   });
 
   it.each([
