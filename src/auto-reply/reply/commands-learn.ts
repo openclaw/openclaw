@@ -1,4 +1,4 @@
-// Handles /learn: a small dispatcher over the learn contributions (Skill Workshop, the memory provider).
+// Handles /learn: a small dispatcher over the plugins' learn contributions (skills and memory media).
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { explainToolPolicyAvailability } from "../../agents/tool-availability-explanation.js";
@@ -68,7 +68,7 @@ function buildLearnPrompt(request: string, active: readonly ActiveLearnContribut
   if (skills && memory) {
     // Skills exclude facts, people and one codebase's knowledge; memory takes exactly those.
     lines.push(
-      "Route each lesson to one medium. A procedure for a repeatable class of task goes to skill_workshop. Facts, preferences, decisions, commitments, and knowledge about one codebase, person, or project go to memory, including what the skill rules below say not to capture as a skill. Never write the same rule to both.",
+      "Route each lesson to one medium. A procedure for a repeatable class of task goes to a skill. Facts, preferences, decisions, commitments, and knowledge about one codebase, person, or project go to memory, including what the skill rules below say not to capture as a skill. Never write the same rule to both.",
     );
   }
   const appendix: string[] = [];
@@ -79,7 +79,7 @@ function buildLearnPrompt(request: string, active: readonly ActiveLearnContribut
   }
   lines.push(
     !memory
-      ? "Then tell the user which skill changed and that they can say undo to revert. If there is nothing durable to learn, or skill_workshop is unavailable, say so and change nothing."
+      ? "Then tell the user which skill changed and that they can say undo to revert. If there is nothing durable to learn, or the skill tools are unavailable, say so and change nothing."
       : skills
         ? "Then tell the user which skills and memory records changed, and that they can say undo to revert a skill change. If there is nothing durable to learn, say so and change nothing."
         : "Then tell the user which memory records changed. If there is nothing durable to learn, say so and change nothing.",
@@ -91,10 +91,8 @@ function buildLearnPrompt(request: string, active: readonly ActiveLearnContribut
 }
 
 const LEARN_COMMAND_PREFIX = "/learn";
-const SKILL_WORKSHOP_UNAVAILABLE_REPLY =
-  "Skill workshop is not available on this agent. Use a non-sandboxed agent where the skill_workshop tool is available, or use the openclaw skills workshop CLI.";
 const LEARN_UNAVAILABLE_REPLY =
-  "/learn can't save anything on this agent: neither the skill_workshop tool nor the memory plugin's learning tools are available here. They need a non-sandboxed session, a model and harness with tool support, and a tool policy that allows them.";
+  "/learn can't save anything on this agent: no learning tools are available here. They need a non-sandboxed session, a model and harness with tool support, and a tool policy that allows them.";
 
 // "/learn <subcommand> [args]": the first word, then the raw remainder from its separator on.
 const SUBCOMMAND_PATTERN = /^([^\s;:,]+)([\s;:,].*)?$/s;
@@ -155,7 +153,7 @@ async function resolveActiveContributors(
         }
       : {}),
   });
-  // Workshop skills live on the host under the agent dir, and memory providers deny
+  // Learned skills live on the host under the agent dir, and memory providers deny
   // sandboxed callers, so a sandboxed session can learn into neither.
   if (sandboxRuntime.sandboxed) {
     return [];
@@ -218,12 +216,18 @@ async function resolveActiveContributors(
   }
 }
 
-function unavailableReply(contributors: readonly LearnContributor[], medium?: LearnMedium) {
-  // Without a memory contributor, /learn is Skill Workshop alone; keep its remedy.
-  const skillsOnly =
-    medium === "skills" ||
-    contributors.every(({ contribution }) => contribution.medium === "skills");
-  return commandReply(skillsOnly ? SKILL_WORKSHOP_UNAVAILABLE_REPLY : LEARN_UNAVAILABLE_REPLY);
+function unavailableReply(contributors: readonly LearnContributor[], selected?: LearnContribution) {
+  // A selected subcommand's contributor knows its remedy. Otherwise only a reply that every
+  // registered contributor shares, all in one medium, is specific enough to use.
+  if (selected) {
+    return commandReply(selected.unavailableText ?? LEARN_UNAVAILABLE_REPLY);
+  }
+  const media = new Set(contributors.map(({ contribution }) => contribution.medium));
+  const texts = new Set(contributors.map(({ contribution }) => contribution.unavailableText));
+  const [shared] = texts;
+  return commandReply(
+    (media.size === 1 && texts.size === 1 ? shared : undefined) ?? LEARN_UNAVAILABLE_REPLY,
+  );
 }
 
 type LearnSubcommandCommand = Extract<LearnCommand, { kind: "subcommand" }>;
@@ -271,13 +275,16 @@ export const handleLearnCommand: CommandHandler = defineAuthorizedTextCommand(
     const contributors = listLearnContributors();
     const active = await resolveActiveContributors(params, contributors);
     if (active.length === 0) {
-      return unavailableReply(contributors);
+      return unavailableReply(
+        contributors,
+        command.kind === "subcommand" ? command.contributor.contribution : undefined,
+      );
     }
     if (command.kind === "subcommand") {
       const { contribution } = command.contributor;
       return active.some((entry) => entry.contribution === contribution)
         ? runSubcommand(params, command)
-        : unavailableReply(contributors, contribution.medium);
+        : unavailableReply(contributors, contribution);
     }
 
     applyCommandTextToParams(params, buildLearnPrompt(command.request, active));
