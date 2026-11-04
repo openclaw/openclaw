@@ -7,7 +7,7 @@ const enUpdateActions = {
   updates: {
     adminRequired: "Administrator access is required to change update settings or start an update.",
     refreshUnreachable: "Couldn't reach the server",
-    refreshBlocked: "Unsent message in this tab",
+    refreshBlocked: "Finish pending work first",
     campaign: en.updates.campaign,
     holdOneHour: "Hold 1 h",
     reviewUpdate: "Review update",

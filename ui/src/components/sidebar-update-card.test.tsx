@@ -416,16 +416,14 @@ describe("SidebarUpdateCard", () => {
   });
 
   it("retains refresh retries across shell updates and ignores obsolete recovery results", async () => {
-    const element = await mount(null);
     const first = createDeferred<boolean>();
     const second = createDeferred<boolean>();
     const third = createDeferred<boolean>();
-    const onRefresh = vi
-      .fn<() => Promise<boolean>>()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise)
-      .mockReturnValueOnce(third.promise);
-    await element.update({ refreshRequired: true, onRefresh });
+    const onRefresh = vi.fn<() => Promise<boolean>>();
+    for (const request of [first, second, third]) {
+      onRefresh.mockReturnValueOnce(request.promise);
+    }
+    const element = await mount(null, { refreshRequired: true, onRefresh });
 
     element.find<HTMLButtonElement>(".refresh-notice__surface")?.click();
     await settle();
@@ -467,16 +465,15 @@ describe("SidebarUpdateCard", () => {
   });
 
   it("keeps a guard-blocked refresh out of the connection failure state", async () => {
-    const element = await mount(null);
     const releaseGuard = registerControlUiReloadGuard(
       () => false,
       () => undefined,
     );
     try {
-      await element.update({ refreshRequired: true, onRefresh: async () => false });
+      const element = await mount(null, { refreshRequired: true, onRefresh: async () => false });
       const action = element.find<HTMLButtonElement>(".refresh-notice__surface");
       action?.click();
-      await vi.waitFor(() => expect(element.text()).toContain("Unsent message in this tab"));
+      await vi.waitFor(() => expect(element.text()).toContain("Finish pending work first"));
       expect(element.text()).not.toContain(reconnectFailure);
       expect(element.find(".sidebar-update-card__status")).toBeNull();
     } finally {
