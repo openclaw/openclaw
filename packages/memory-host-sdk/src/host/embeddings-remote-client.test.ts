@@ -180,6 +180,15 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
       headers: { Authorization: authorization, "X-Remote-Tenant": "remote-b" },
     });
     expect(client.headers).not.toHaveProperty("X-Provider-Tenant");
+    expect(client.resolveRequestAuthDiagnostic?.(new Headers(client.headers))).toEqual(
+      kind === "apiKey"
+        ? { mode: "configured-bearer", source: "memory-config" }
+        : { mode: "unknown", source: "authorization-header" },
+    );
+    client.headers.Authorization = "Bearer replacement-fixture";
+    expect(client.resolveRequestAuthDiagnostic?.(new Headers(client.headers))).toBeUndefined();
+    delete client.headers.Authorization;
+    expect(client.resolveRequestAuthDiagnostic?.(new Headers(client.headers))).toBeUndefined();
   });
 
   it.each([
@@ -295,5 +304,9 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
       headers: { Authorization: "Bearer provider-key", "X-Provider-Tenant": "provider-a" },
     });
     expect(client.headers).not.toHaveProperty("originator");
+    expect(client.resolveRequestAuthDiagnostic?.(new Headers(client.headers))).toEqual({
+      mode: "api-key",
+      source: "provider-config",
+    });
   });
 });

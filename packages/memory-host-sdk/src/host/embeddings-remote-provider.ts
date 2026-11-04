@@ -7,7 +7,10 @@ import {
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 import type { EmbeddingProvider, EmbeddingProviderCallOptions } from "./embeddings.types.js";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
-import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
+import type {
+  RemoteEmbeddingAuthDiagnosticResolver,
+  RemoteEmbeddingRequestAuth,
+} from "./remote-http.js";
 
 // Remote embedding provider factory for OpenAI-compatible embeddings APIs.
 
@@ -18,6 +21,7 @@ export type RemoteEmbeddingClient = {
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
   resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
+  resolveRequestAuthDiagnostic?: RemoteEmbeddingAuthDiagnosticResolver;
   model: string;
 };
 
@@ -26,6 +30,8 @@ export function createRemoteEmbeddingProvider(params: {
   id: string;
   client: RemoteEmbeddingClient;
   errorPrefix: string;
+  /** Fixed public endpoint used only when the dispatched request reaches that exact URL. */
+  publicDiagnosticEndpoint?: string;
   maxInputTokens?: number;
   /** Provider-documented cap on input items per embeddings request. */
   maxInputsPerRequest?: number;
@@ -50,6 +56,8 @@ export function createRemoteEmbeddingProvider(params: {
       ssrfPolicy: client.ssrfPolicy,
       fetchImpl: client.fetchImpl,
       resolveRequestHeaders: client.resolveRequestHeaders,
+      resolveRequestAuthDiagnostic: client.resolveRequestAuthDiagnostic,
+      publicDiagnosticEndpoint: params.publicDiagnosticEndpoint,
       signal: options?.signal,
       onUsage: options?.onUsage,
       body: {

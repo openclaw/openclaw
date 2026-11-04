@@ -38,7 +38,7 @@ function errorBody(mode: Exclude<ServerMode, "ok">): Record<string, unknown> {
   };
 }
 
-async function startEmbeddingServer() {
+async function startEmbeddingServer(unauthorizedResponse = errorBody("unauthorized")) {
   const requests: Array<{ status: number; body: Record<string, unknown> }> = [];
   let mode: ServerMode = "ok";
   const respond = (res: ServerResponse, status: number, body: Record<string, unknown>) => {
@@ -52,7 +52,7 @@ async function startEmbeddingServer() {
         if (mode !== "ok") {
           const status = mode === "quota" ? 429 : 401;
           requests.push({ status, body });
-          respond(res, status, errorBody(mode));
+          respond(res, status, mode === "quota" ? errorBody(mode) : unauthorizedResponse);
           return;
         }
         requests.push({ status: 200, body });
@@ -213,6 +213,37 @@ afterEach(async () => {
   await closeAllMemorySearchManagers();
   resetMemoryCoreDreamingStateForTests();
   await state.cleanup();
+});
+
+it("explains an embedding authentication rejection without diagnosing chat access", async () => {
+  const server = await startEmbeddingServer({
+    error: {
+      message: "Invalid authentication.",
+      type: "invalid_request_error",
+      code: "invalid_authentication",
+    },
+  });
+  server.setMode("unauthorized");
+  const cfg = createConfig({ baseUrl: server.baseUrl });
+  const manager = await acquireManager({
+    ...cfg,
+    plugins: { enabled: true, allow: ["openai"], entries: { openai: { enabled: true } } },
+    memory: { ...cfg.memory, search: { ...cfg.memory?.search, provider: "openai" } },
+  });
+  const probe = await manager.probeEmbeddingAvailability();
+
+  expect(probe).toMatchObject({ ok: false });
+  expect(probe.error).toContain("401");
+  expect(probe.error).toContain("invalid_authentication");
+  expect(probe.error).toContain("auth_mode=configured-bearer");
+  expect(probe.error).toContain("credential_source=memory-config");
+  expect(probe.error).toContain("endpoint=custom (redacted)");
+  expect(probe.error).toContain("does not establish embedding access");
+  expect(probe.error).toContain("does not identify whether");
+  expect(probe.error).toContain("before rebuilding");
+  expect(probe.error).not.toContain("fixture-token");
+  expect(server.requests).toMatchObject([{ status: 401, body: { input: ["ping"] } }]);
+  expect(server.requests).toHaveLength(1);
 });
 
 it.each([

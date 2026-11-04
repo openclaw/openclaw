@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { buffer as consumeBuffer } from "node:stream/consumers";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
+import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import {
   createRemoteEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
@@ -219,9 +220,9 @@ describe("OpenAI embedding provider HTTP contract", () => {
     },
   );
 
-  it("uses the newly stored OAuth bearer on the next embedding request after re-login", async () => {
+  it("uses and diagnoses the current embedding credential after re-login", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedding-relogin-"));
-    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("OPENAI_API_KEY", "fixture-environment-key");
     vi.stubEnv("OPENAI_OAUTH_TOKEN", "");
     const publishBearer = async (access: string) => {
       await expect(
@@ -242,7 +243,18 @@ describe("OpenAI embedding provider HTTP contract", () => {
       ).resolves.not.toBeNull();
     };
     try {
-      const server = await startEmbeddingServer();
+      const server = await startEmbeddingServer((request) => {
+        if (!request.body.input[0]?.endsWith("rejected")) {
+          respondWithEmbeddings(request);
+          return;
+        }
+        request.response.writeHead(401, { "content-type": "application/json" });
+        request.response.end(
+          JSON.stringify({
+            error: { message: "Invalid authentication.", code: "invalid_authentication" },
+          }),
+        );
+      });
       await publishBearer("fixture-before-login");
       const { provider, client } = await createOpenAiEmbeddingProvider(
         createOptions({
@@ -257,9 +269,44 @@ describe("OpenAI embedding provider HTTP contract", () => {
       await expect(provider.embed("first")).resolves.toEqual([5, 1]);
       await publishBearer("fixture-after-login");
       await expect(provider.embedBatch(["second"])).resolves.toEqual([[6, 1]]);
+      const oauthFailure: unknown = await provider
+        .embed("oauth rejected")
+        .catch((error: unknown) => error);
+      expect(oauthFailure).toMatchObject({ status: 401, code: "invalid_authentication" });
+      const oauthDiagnostic = formatErrorMessageForDisplay(oauthFailure);
+      expect(oauthDiagnostic).toContain("auth_mode=oauth");
+      expect(oauthDiagnostic).toContain("credential_source=stored-profile");
+      expect(server.requests).toHaveLength(3);
+      await updateAuthProfileStoreWithLock({
+        agentDir,
+        saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+        updater(store) {
+          delete store.profiles["openai:embedding"];
+          return true;
+        },
+      });
+      const keyFailure: unknown = await provider
+        .embed("environment rejected")
+        .catch((error: unknown) => error);
+      const keyDiagnostic = formatErrorMessageForDisplay(keyFailure);
+      expect(keyDiagnostic).toContain("auth_mode=api-key");
+      expect(keyDiagnostic).toContain("credential_source=environment");
+      for (const diagnostic of [oauthDiagnostic, keyDiagnostic]) {
+        expect(diagnostic).toContain("endpoint=custom (redacted)");
+        for (const secret of [
+          "fixture-after-login",
+          "fixture-environment-key",
+          "openai:embedding",
+          server.baseUrl,
+        ]) {
+          expect(diagnostic).not.toContain(secret);
+        }
+      }
       expect(server.requests.map((request) => request.authorization)).toEqual([
         "Bearer fixture-before-login",
         "Bearer fixture-after-login",
+        "Bearer fixture-after-login",
+        "Bearer fixture-environment-key",
       ]);
       expect(client.headers).not.toHaveProperty("Authorization");
     } finally {

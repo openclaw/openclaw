@@ -1,5 +1,8 @@
 import type { EmbeddingProviderCallOptions } from "openclaw/plugin-sdk/embedding-providers";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  formatErrorMessage,
+  formatErrorMessageForDisplay,
+} from "openclaw/plugin-sdk/error-runtime";
 import {
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
@@ -14,6 +17,23 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddingProvider } from "./embeddings.js";
+
+/** Probe guidance is display-only; the original error still owns retry and auth policy. */
+export function formatMemoryEmbeddingProbeError(error: unknown): string {
+  const message = formatErrorMessageForDisplay(error);
+  const fields = asOptionalRecord(error);
+  const status = fields?.status ?? fields?.statusCode;
+  if (status !== 401) {
+    return message;
+  }
+  return (
+    `${message}\nThe embedding probe failed authentication. ` +
+    "A working chat login or successful OAuth refresh does not establish embedding access. " +
+    "HTTP 401 alone does not identify whether the credential, grant, or account access caused the rejection. " +
+    "Verify the selected embedding credential and endpoint, then repeat this probe. " +
+    "Reindexing does not repair authentication; keep the existing index and verify embeddings before rebuilding."
+  );
+}
 
 export function embedMemoryQuery(
   provider: EmbeddingProvider,

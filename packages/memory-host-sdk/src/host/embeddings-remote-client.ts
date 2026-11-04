@@ -6,7 +6,11 @@ import {
   resolveProviderTransportSsrFPolicy,
   type SsrFPolicy,
 } from "./openclaw-runtime-network.js";
-import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
+import type {
+  RemoteEmbeddingAuthDiagnostic,
+  RemoteEmbeddingAuthDiagnosticResolver,
+  RemoteEmbeddingRequestAuth,
+} from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
 
 // Builds authenticated remote embedding HTTP clients from agent memory config.
@@ -106,6 +110,23 @@ function isNativeChatOnlySubscriptionRoute(
   );
 }
 
+function describeResolvedEmbeddingAuth(
+  auth: Awaited<ReturnType<typeof resolveApiKeyForProvider>>,
+): RemoteEmbeddingAuthDiagnostic {
+  return {
+    mode: auth.mode,
+    source: auth.profileId
+      ? "stored-profile"
+      : auth.source.startsWith("env:") || auth.source.startsWith("shell env:")
+        ? "environment"
+        : auth.source === "models.json" ||
+            auth.source === "models.json (local marker)" ||
+            auth.source.startsWith("models.providers.")
+          ? "provider-config"
+          : "provider-credential",
+  };
+}
+
 /** Resolve base URL, bearer headers, header overrides, and SSRF policy for remote embeddings. */
 export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;
@@ -117,6 +138,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
+  resolveRequestAuthDiagnostic?: RemoteEmbeddingAuthDiagnosticResolver;
 }> {
   const remote = params.options.remote;
   const remoteApiKey = resolveMemorySecretInputString({
@@ -189,14 +211,30 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   );
   const resolveRequestHeaders: RemoteEmbeddingRequestAuth | undefined =
     auth?.mode === "oauth"
-      ? async ({ forceRefresh, signal }) => ({
-          Authorization: `Bearer ${requireApiKey(await resolveAuth(forceRefresh, signal), params.provider)}`,
-        })
+      ? async ({ forceRefresh, signal, onAuthResolved }) => {
+          const current = await resolveAuth(forceRefresh, signal);
+          const currentApiKey = requireApiKey(current, params.provider);
+          onAuthResolved?.(describeResolvedEmbeddingAuth(current));
+          return { Authorization: `Bearer ${currentApiKey}` };
+        }
       : undefined;
+  const authDiagnostic: RemoteEmbeddingAuthDiagnostic = hasExplicitAuthorization
+    ? { mode: "unknown", source: "authorization-header" }
+    : remoteApiKey
+      ? { mode: "configured-bearer", source: "memory-config" }
+      : auth
+        ? describeResolvedEmbeddingAuth(auth)
+        : { mode: "unknown", source: "unknown" };
+  const selectedAuthorization = new Headers(headers).get("authorization");
   return {
     baseUrl,
     headers,
     ...(resolveRequestHeaders ? { resolveRequestHeaders } : {}),
+    resolveRequestAuthDiagnostic: (requestHeaders) =>
+      selectedAuthorization !== null &&
+      requestHeaders.get("authorization") === selectedAuthorization
+        ? authDiagnostic
+        : undefined,
     ssrfPolicy: resolveEmbeddingProviderSsrFPolicy({
       provider: params.provider,
       api: providerConfig?.api ?? "openai-completions",

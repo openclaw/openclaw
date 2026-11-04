@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "./error-diagnostics.js";
 import * as errors from "./errors.js";
 
@@ -8,13 +8,16 @@ function expectRedacted(formatted: string, visible: string[], secrets = [token])
   secrets.forEach((value) => expect(formatted).not.toContain(value));
 }
 
-it("keeps bounded redacted diagnostics off frozen errors and follows wrapper graphs", () => {
+it("shares bounded redacted diagnostics across host and duplicate SDK module graphs", async () => {
   const error = Object.freeze(new Error("native failure"));
   const before = Object.getOwnPropertyDescriptors(error);
   const diagnostic = `Authorization: Bearer ${token}\n${"x".repeat(4_000)}`;
   expect(attachErrorDiagnostic(error, diagnostic)).toBe(error);
   const wrapper = new AggregateError([{ cause: error }], "outer failure");
-  const display = formatErrorMessageForDisplay(wrapper);
+  vi.resetModules();
+  const duplicateSdk = await import("../plugin-sdk/error-runtime.js");
+  expect(duplicateSdk.attachErrorDiagnostic).not.toBe(attachErrorDiagnostic);
+  const display = duplicateSdk.formatErrorMessageForDisplay(wrapper);
   expectRedacted(display, ["Authorization: Bearer"]);
   expect(display.length).toBeLessThanOrEqual('outer failure | {"cause":{}}\n'.length + 2_048);
   expect(errors.formatErrorMessage(wrapper)).toBe('outer failure | {"cause":{}}');

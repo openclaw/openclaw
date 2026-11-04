@@ -3,9 +3,17 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
+  formatMemoryEmbeddingProbeError,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
+
+it.each([
+  new Error("HTTP 401 without structured status"),
+  Object.assign(new Error("model 401 unavailable"), { status: 503 }),
+])("preserves probe errors that do not report an authentication status: %s", (error) => {
+  expect(formatMemoryEmbeddingProbeError(error)).toBe(error.message);
+});
 
 function expectDelayBetween(delayMs: number | undefined, min: number, max: number): void {
   expect(delayMs).toBeGreaterThanOrEqual(min);

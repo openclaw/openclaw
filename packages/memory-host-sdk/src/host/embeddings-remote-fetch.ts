@@ -10,7 +10,10 @@ import {
 import type { EmbeddingProviderCallOptions } from "./embeddings.types.js";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 import { postJson } from "./post-json.js";
-import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
+import type {
+  RemoteEmbeddingAuthDiagnosticResolver,
+  RemoteEmbeddingRequestAuth,
+} from "./remote-http.js";
 
 /** POST an embedding request and return validated vectors in request order. */
 export async function fetchRemoteEmbeddingVectors(params: {
@@ -19,6 +22,8 @@ export async function fetchRemoteEmbeddingVectors(params: {
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
   resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
+  resolveRequestAuthDiagnostic?: RemoteEmbeddingAuthDiagnosticResolver;
+  publicDiagnosticEndpoint?: string;
   signal?: AbortSignal;
   onUsage?: EmbeddingProviderCallOptions["onUsage"];
   body: unknown;
