@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatImageRenditionWidth } from "../../../../src/shared/chat-image-renditions.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
@@ -128,7 +129,14 @@ describe("pane artifact downloads", () => {
     return { state, resolve };
   }
 
-  it.each([
+  it.each<{
+    page?: string;
+    gateway?: string;
+    http: boolean;
+    variant?: "full" | "thumbnail";
+    previewWidth?: ChatImageRenditionWidth;
+    legacyUrl?: boolean;
+  }>([
     { http: true },
     { http: true, variant: "thumbnail" },
     { http: true, variant: "full" },
@@ -219,7 +227,14 @@ describe("pane artifact downloads", () => {
     },
   );
 
-  it.each([
+  it.each<{
+    failure: string;
+    mimeType: string;
+    type: string;
+    reject: boolean;
+    variant?: "thumbnail";
+    previewWidth?: ChatImageRenditionWidth;
+  }>([
     {
       failure: "preview unavailable",
       mimeType: "image/png",
