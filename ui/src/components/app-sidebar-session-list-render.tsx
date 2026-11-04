@@ -29,20 +29,28 @@ function RosterLoadMore(props: {
   host: SidebarSessionListHost;
   hasMore: boolean;
   loading: boolean;
-  autoLoad: boolean;
 }) {
   const [button, setButton] = createSignal<HTMLButtonElement>();
   // One page per entry into view: the button has to leave and come back before
   // the next load, so a page whose rows land off-screen or a failed load never
   // turns into a request loop. The button stays as the manual fallback.
+  // Grouped and people-sorted views place older rows inside earlier sections,
+  // so they keep the explicit button. The flat list mostly appends; when
+  // Created order or catalog sections put a page above the fold, this still
+  // loads at most one page per entry into view.
   createIntersectionObserver(
     () => {
       const target = button();
-      return props.autoLoad && target ? [target] : [];
+      return target ? [target] : [];
     },
     (entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        void props.host.loadMoreSidebarSessions();
+      const host = props.host;
+      if (
+        host.effectiveSessionsGrouping() === "none" &&
+        host.effectiveSessionSortMode() !== "people" &&
+        entries.some((entry) => entry.isIntersecting)
+      ) {
+        void host.loadMoreSidebarSessions();
       }
     },
   );
@@ -141,7 +149,6 @@ export function renderSessionList(params: {
   sections: RenderableSessionSection[];
   nativeSessionsHaveMore: boolean;
   nativeSessionsLoading: boolean;
-  autoLoadMore: boolean;
   catalogs: SessionCatalogRenderSnapshot;
   catalogRenderer: SessionCatalogGroupsRenderer;
 }) {
@@ -154,7 +161,6 @@ export function renderSessionList(params: {
         host={host()}
         hasMore={params.nativeSessionsHaveMore}
         loading={params.nativeSessionsLoading}
-        autoLoad={params.autoLoadMore}
       />
       {renderPersonalSessionEmpty(
         host(),
