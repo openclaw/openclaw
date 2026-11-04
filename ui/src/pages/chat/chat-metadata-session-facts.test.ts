@@ -15,7 +15,7 @@ import {
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { makeChatHost, makeRequestMock, requestCalls } from "./chat-host.test-support.ts";
-import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import { renderControls } from "./chat-pane-session-controls.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
@@ -136,19 +136,7 @@ it.each(["agent:work:current", "global"])(
     state.sessionsResult = sessionsResult([before], 1);
     state.sessionsResultAgentId = "work";
     await refreshChatMetadata(state);
-    const writeAccess = { allowed: true, requiredScope: "operator.write" } as const;
-    const controls = () =>
-      renderChatPaneComposerControls({
-        state,
-        selectedSession: state.sessionsResult?.sessions[0],
-        agentDefaultModel: undefined,
-        modelAccess: writeAccess,
-        effortAccess: writeAccess,
-        contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
-        permissionAccess: writeAccess,
-        canSelectFull: true,
-        onModelSetup: vi.fn(),
-      });
+    const controls = () => renderControls(state);
     const container = document.createElement("div");
     permissionReadbackUnavailable = true;
     await controls().permissionPicker.onSelect("full");
