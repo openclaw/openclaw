@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import path from "node:path";
@@ -41,7 +42,7 @@ createInterface({input:process.stdin}).on("line",line=>{
 });
 `;
 
-afterEach(async () => { await harness.cleanup(); closePluginTestAdmissions(); vi.restoreAllMocks(); });
+afterEach(async () => { try { await harness.cleanup(); } finally { closePluginTestAdmissions(); vi.restoreAllMocks(); } });
 
 function injectWindowsLimit() {
  vi.spyOn(processRuntime,"createOwnedStdioProcess").mockImplementationOnce(async()=>{
@@ -92,6 +93,14 @@ it.skipIf(hostPlatform !== "win32")("real Claude consumes exactly the relocated 
  const version=execFileSync(entry,["--version"],{timeout:30000,encoding:"utf8",env:context.env,windowsHide:true}).trim();
  expect(version).toContain(metadata.version);
  console.log(JSON.stringify({scenario:"real-claude-binary-ready",version}));
+ // This is a configuration probe, not live model proof. A synthetic token
+ // selects API-key startup; the endpoint is local and rejects every request.
+ let modelRequests=0;
+ const endpoint=createServer((request,response)=>{if(request.url?.includes("/messages")) modelRequests++;
+  response.writeHead(403,{"content-type":"application/json"});response.end(JSON.stringify({error:{type:"authentication_error",message:"No provider requests in this offline permission probe."}}));});
+ await new Promise<void>((resolve,reject)=>{endpoint.once("error",reject);endpoint.listen(0,"127.0.0.1",resolve);});
+ const address=endpoint.address();if(!address || typeof address==="string")throw new Error("No private probe endpoint");
+ Object.assign(context.env,{ANTHROPIC_API_KEY:"sk-ant-synthetic-offline-permission-probe",ANTHROPIC_BASE_URL:`http://127.0.0.1:${address.port}`,CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:"1"});
  expect(entry).toMatch(/\.exe$/i);
  context.command=entry;
  context.args=["--print","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-prompt-tool","stdio","--permission-mode","default","--setting-sources","","--no-session-persistence","--strict-mcp-config","--mcp-config",'{"mcpServers":{}}',"--settings",JSON.stringify(CLAUDE_RESTRICTED_SETTINGS),"--allowedTools",tools.join(","),"--tools","Read","--disallowedTools","Write,Bash"];
@@ -100,9 +109,11 @@ it.skipIf(hostPlatform !== "win32")("real Claude consumes exactly the relocated 
  const rules=new Promise<unknown>((resolve,reject)=>{resolveRules=resolve;rejectRules=reject;});
  void rules.catch(()=>{});
  let settingsFile:string|undefined;
+ let observedChild:Awaited<ReturnType<typeof processRuntime.createOwnedStdioProcess>>|undefined;
  const owned=processRuntime.createOwnedStdioProcess;
  vi.spyOn(processRuntime,"createOwnedStdioProcess").mockImplementation(async options=>{
   const child=await owned(options);
+  observedChild=child;
   settingsFile=options.argv[options.argv.lastIndexOf("--settings")+1];
   let pending="";
   return new Proxy(child,{get(target,key){
@@ -120,6 +131,7 @@ it.skipIf(hostPlatform !== "win32")("real Claude consumes exactly the relocated 
   onMessage:async()=>{},onRequest:async()=>()=>({behavior:"deny",message:"No model prompt in this probe."}),onError:error=>{
    console.log(JSON.stringify({scenario:"real-claude-startup-diagnostic",message:formatErrorMessageForDisplay(error).replaceAll(context.cwd,"<private-probe>")}));rejectRules(error);
   }});
+ const deadline=setTimeout(()=>{rejectRules(new Error("Offline Claude initialization exceeded 30 seconds"));transport.close();},30000);
  try {
   await transport.initialize();
   await transport.send({type:"control_request",request_id:"permission-probe",request:{subtype:"list_permission_rules"}});
@@ -129,8 +141,9 @@ it.skipIf(hostPlatform !== "win32")("real Claude consumes exactly the relocated 
   expect(text).not.toContain("mcp__openclaw__*");
   expect(text).toContain("flagSettings");expect(text).toContain('"Write"');expect(text).toContain('"Bash"');
   expect(settingsFile).not.toBe(JSON.stringify(CLAUDE_RESTRICTED_SETTINGS));
-  console.log(JSON.stringify({scenario:"real-claude-permission-rules",version:metadata.version,admittedMcpNames:tools.length,exactNames:true,wildcardAdded:false,allowSource:"flagSettings",explicitDenials:["Write","Bash"],modelPrompts:0,modelCredentials:0}));
- } finally {transport.close();await transport.waitForExit();}
+  expect(modelRequests).toBe(0);
+  console.log(JSON.stringify({scenario:"real-claude-permission-rules",version:metadata.version,admittedMcpNames:tools.length,exactNames:true,wildcardAdded:false,allowSource:"flagSettings",explicitDenials:["Write","Bash"],modelPrompts:0,realModelCredentials:0,syntheticStartupToken:true,modelRequests}));
+ } finally {clearTimeout(deadline);transport.close();await transport.waitForExit();await observedChild?.waitForExtinction?.();endpoint.closeAllConnections();await new Promise<void>(resolve=>endpoint.close(()=>resolve()));}
  await expect(access(settingsFile!)).rejects.toThrow();
 },240000);
 
