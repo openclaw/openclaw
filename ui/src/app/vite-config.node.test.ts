@@ -709,9 +709,9 @@ it("bootstraps source-only copy without duplicating English page namespaces", as
     expect(flattenTranslations(catalog).has("activity.title")).toBe(false);
     expect(catalog.configHints).toBeUndefined();
     await loadAll();
-    expect(flattenTranslations(catalog)).toEqual(
-      flattenTranslations({ ...en, configHints: loadControlUiSourceCatalog().configHints }),
-    );
+    const { configHints, ...startup } = catalog;
+    expect(flattenTranslations(startup)).toEqual(flattenTranslations(en));
+    expect(configHints).toEqual(loadControlUiSourceCatalog().configHints);
     registerActivityEnglish();
     const manager = createI18nManagerForTesting(async () => catalog);
     await manager.setLocale("fr");
