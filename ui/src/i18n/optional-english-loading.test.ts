@@ -133,7 +133,7 @@ it.each([
   ],
   [
     "chat.sessionSharing.noPeople",
-    "No paired people found.",
+    "No paired people yet.",
     () => import("../pages/chat/components/chat-session-sharing-mobile.tsx"),
   ],
   [
@@ -377,7 +377,7 @@ it("loads people-picker copy with session menu details before any sharing menu",
   await import("../components/session-menu-details-solid.tsx");
 
   expect(manager.t("sessionsView.searchPeople")).toBe("Personen suchen");
-  expect(manager.t("sessionsView.noPeopleMatch")).toBe("No matching people or agents");
+  expect(manager.t("sessionsView.noPeopleMatch")).toBe("No people or agents match your search.");
   expect(manager.t("chat.sessionSharing.copyPublicLink")).toBe(
     "chat.sessionSharing.copyPublicLink",
   );
