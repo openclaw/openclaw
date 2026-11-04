@@ -19,6 +19,10 @@ import {
 import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
 import { validateClawRouterDeepgramAudio } from "./audio-deepgram.js";
+import {
+  transcribeClawRouterMultipartAudio,
+  validateClawRouterMultipartAudio,
+} from "./audio-groq-mistral.js";
 import { normalizeClawRouterRootUrl } from "./base-url.js";
 import {
   fetchClawRouterCapabilityOffers,
@@ -27,6 +31,13 @@ import {
 
 const MODEL = "gpt-4o-transcribe";
 const SENSEAUDIO_MODEL = "senseaudio-asr-pro-1.5-260319";
+const TRANSCRIPTION_MODELS = new Map([
+  ["openai/" + MODEL, { provider: "openai", upstreamModel: MODEL }],
+  ["senseaudio/" + SENSEAUDIO_MODEL, { provider: "senseaudio", upstreamModel: SENSEAUDIO_MODEL }],
+  ["deepgram/nova-3", { provider: "deepgram", upstreamModel: "nova-3" }],
+  ["groq/whisper-large-v3-turbo", { provider: "groq", upstreamModel: "whisper-large-v3-turbo" }],
+  ["mistral/voxtral-mini-latest", { provider: "mistral", upstreamModel: "voxtral-mini-latest" }],
+]);
 const SENSEAUDIO_UPLOAD_MIMES: Record<string, readonly string[]> = {
   wav: ["audio/wav", "audio/wave", "audio/x-wav"],
   mp3: ["audio/mpeg", "audio/mp3"],
@@ -40,13 +51,11 @@ const SENSEAUDIO_UPLOAD_MIMES: Record<string, readonly string[]> = {
 async function prepare(context: AudioTranscriptionConfigContext & { signal?: AbortSignal }) {
   context.signal?.throwIfAborted();
   const model = context.model ?? MODEL;
-  const senseaudio = model === "senseaudio/" + SENSEAUDIO_MODEL;
-  const deepgram = model === "deepgram/nova-3";
-  if (!senseaudio && !deepgram && model !== MODEL && model !== "openai/" + MODEL) {
+  const selected = TRANSCRIPTION_MODELS.get(model === MODEL ? "openai/" + MODEL : model);
+  if (!selected) {
     throw new Error("ClawRouter transcription requires a qualified native model");
   }
-  const provider = senseaudio ? "senseaudio" : deepgram ? "deepgram" : "openai";
-  const upstreamModel = senseaudio ? SENSEAUDIO_MODEL : deepgram ? "nova-3" : MODEL;
+  const { provider, upstreamModel } = selected;
   const configured = context.cfg.models?.providers?.clawrouter;
   // These overrides would replace the credential selected by the canonical auth owner.
   if (
@@ -164,6 +173,10 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
       const prepared = await prepare(context);
       const senseaudio = prepared.provider === "senseaudio";
       const deepgram = prepared.provider === "deepgram";
+      const multipart = prepared.provider === "groq" || prepared.provider === "mistral";
+      if (prepared.provider === "groq" || prepared.provider === "mistral") {
+        validateClawRouterMultipartAudio(prepared.provider, context);
+      }
       if (deepgram) {
         validateClawRouterDeepgramAudio(context);
       }
@@ -240,21 +253,22 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
         signal: context.signal,
         requireFreshProxyCatalog: true,
       });
+      const requestFormat = deepgram
+        ? "deepgram.prerecorded"
+        : multipart
+          ? `${prepared.provider}.transcription`
+          : "openai.audio_transcriptions";
+      const responseFormat = senseaudio ? "senseaudio.transcription" : requestFormat;
       const offer = offers.find(
         (candidate) =>
           candidate.providerId === prepared.provider &&
-          candidate.endpoint === (deepgram ? "listen" : "transcriptions") &&
+          candidate.endpoint ===
+            (deepgram ? "listen" : multipart ? "transcription" : "transcriptions") &&
           candidate.path === (deepgram ? "/v1/listen" : "/v1/audio/transcriptions") &&
-          candidate.routeKind === "native" &&
+          (candidate.routeKind === "native" || (multipart && candidate.routeKind === "manifest")) &&
           candidate.methods.includes("POST") &&
-          candidate.requestFormat ===
-            (deepgram ? "deepgram.prerecorded" : "openai.audio_transcriptions") &&
-          candidate.responseFormat ===
-            (senseaudio
-              ? "senseaudio.transcription"
-              : deepgram
-                ? "deepgram.prerecorded"
-                : "openai.audio_transcriptions") &&
+          candidate.requestFormat === requestFormat &&
+          candidate.responseFormat === responseFormat &&
           candidate.model?.id === `${prepared.provider}/${prepared.upstreamModel}` &&
           candidate.model.upstream === prepared.upstreamModel &&
           Array.isArray(candidate.model.capabilities) &&
@@ -265,12 +279,26 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
       }
       context.signal?.throwIfAborted();
       const fetchFn: typeof fetch = (input, init) => {
+        context.signal?.throwIfAborted();
+        remaining();
         uploadStarted = true;
         return (context.fetchFn ?? fetchWithRuntimeDispatcher)(input, {
           ...init,
           redirect: "error",
         });
       };
+      if (multipart) {
+        const value = await transcribeClawRouterMultipartAudio({
+          input: context,
+          offer,
+          model: prepared.model,
+          upstreamModel: prepared.upstreamModel,
+          http,
+          remaining,
+          fetchFn,
+        });
+        return { ok: true, value };
+      }
       const value = deepgram
         ? await transcribeDeepgramPrerecordedAudio({
             request: { ...context, apiKey: prepared.apiKey, timeoutMs: remaining(), fetchFn },
