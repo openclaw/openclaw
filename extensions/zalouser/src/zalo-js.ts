@@ -496,6 +496,18 @@ export function normalizeZaloInboundMessage(
     normalizedOwnUserId && quoteOwnerId && quoteOwnerId === normalizedOwnUserId,
   );
   const eventMessage = buildEventMessage(data);
+  const attachmentKind =
+    data.msgType === "share.file"
+      ? "document"
+      : data.msgType === "chat.photo"
+        ? "image"
+        : data.msgType === "chat.video.msg"
+          ? "video"
+          : undefined;
+  const attachmentContent =
+    data.content && typeof data.content === "object"
+      ? (data.content as Record<string, unknown>)
+      : undefined;
   return {
     threadId,
     isGroup,
@@ -514,6 +526,17 @@ export function normalizeZaloInboundMessage(
     quotedGlobalMsgId: quotedGlobalMsgId || undefined,
     quotedBody: quotedBody || undefined,
     eventMessage,
+    attachment:
+      attachmentKind && typeof attachmentContent?.href === "string"
+        ? {
+            kind: attachmentKind,
+            url: attachmentContent.href,
+            fileName:
+              attachmentKind === "document"
+                ? normalizeOptionalString(attachmentContent.title)
+                : undefined,
+          }
+        : undefined,
   };
 }
 
