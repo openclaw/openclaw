@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { rankAdaptiveJev } from "../../scripts/lib/ci-adaptive-jev.mjs";
 
 const context = {
@@ -56,7 +56,8 @@ it("maps reordered complete answers by opaque ID and sends only path inputs", as
   expect(url).toBe("https://api.typesafe.ai/v1/systemone");
   expect(options.redirect).toBe("error");
   expect(options.headers).toMatchObject({ Authorization: "Bearer fixture-key" });
-  const payload = JSON.parse(String(options.body));
+  assert(typeof options.body === "string");
+  const payload = JSON.parse(options.body);
   expect(payload.state).toEqual({ changedFiles: ["src/example.ts"] });
   expect(payload.questions.q000.instructions.test).toEqual(files[0]);
   expect(Object.keys(payload.questions)).toEqual(["q000", "q001"]);
@@ -109,7 +110,9 @@ it("uses one deadline across batches and discards partial scores while retaining
     vi.fn(async (_url, options: RequestInit) => {
       calls += 1;
       if (calls === 1) {
-        await new Promise((resolve) => setTimeout(resolve, 6000));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 6000);
+        });
         return Response.json({
           model: "jev-1.14.0",
           answers: Object.fromEntries(
@@ -118,11 +121,11 @@ it("uses one deadline across batches and discards partial scores while retaining
           usage: { input_tokens: 123, output_tokens: 4 },
         });
       }
-      return new Promise<Response>((_resolve, reject) =>
+      return new Promise<Response>((_resolve, reject) => {
         options.signal!.addEventListener("abort", () => reject(new Error("timeout")), {
           once: true,
-        }),
-      );
+        });
+      });
     }),
   );
   const inventory = Array.from({ length: 26 }, (_, i) => ({

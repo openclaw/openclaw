@@ -81,7 +81,13 @@ export async function rankAdaptiveJev(request, apiKey = process.env.TYPESAFE_API
       )
       .digest("hex"),
     scheduledFiles: files,
-    rows: files.map((file) => ({ ...file, score: null, unknownReasons: [] })),
+    rows: files.map(({ file, project, pool }) => ({
+      file,
+      project,
+      pool,
+      score: null,
+      unknownReasons: [],
+    })),
     requests: 0,
     usage: { inputTokens: 0, outputTokens: 0, complete: true },
     fallbackReason: null,
