@@ -70,6 +70,22 @@ function step(workflowJob: WorkflowJob, name: string): WorkflowStep {
 }
 
 describe("install smoke no-push root image transport", () => {
+  it.each([
+    "install-smoke-fast",
+    "root_dockerfile_image",
+    "installer_smoke_candidate_payload",
+    "installer_smoke_update_image",
+    "installer_smoke_nonroot_image",
+    "docker-e2e-fast",
+  ])("uses the portable Docker builder for %s", (jobName) => {
+    const workflow = readWorkflow(INSTALL_SMOKE_REUSABLE);
+    expect(step(job(workflow, jobName), "Set up Docker Buildx")).toEqual({
+      name: "Set up Docker Buildx",
+      uses: "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+      with: { version: "v0.23.0" },
+    });
+  });
+
   it("keeps schedule/manual orchestration read-only and delegates to the reusable core", () => {
     const workflow = readWorkflow(INSTALL_SMOKE);
     expect(workflow.on?.schedule).toBeDefined();

@@ -265,10 +265,10 @@ jobs:
           }
           NODE
 
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          cache-key: Dockerfile
+          version: v0.23.0
 
       # Keep release smoke builds bounded and log-producing. The Blacksmith
       # build action can leave jobs in-progress without step logs when a remote
@@ -443,10 +443,10 @@ jobs:
         shell: bash
         run: *trusted_workflow_restore_run
 
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          cache-key: Dockerfile
+          version: v0.23.0
 
       - name: Build local root Dockerfile smoke image
         env:
@@ -802,10 +802,10 @@ jobs:
             "https://codeload.github.com/${TARGET_REPOSITORY}/tar.gz/${TARGET_SHA}"
           test -s "${RUNNER_TEMP}/candidate.tar.gz"
 
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          cache-key: scripts/docker/install-sh-smoke/Dockerfile
+          version: v0.23.0
 
       - name: Build pinned candidate packaging harness
         run: |
@@ -971,10 +971,10 @@ jobs:
 
       - *trusted_workflow_subdir_restore_step
 
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          cache-key: scripts/docker/install-sh-smoke/Dockerfile
+          version: v0.23.0
 
       - name: Build installer smoke image
         env:
@@ -1053,10 +1053,10 @@ jobs:
 
       - *trusted_workflow_subdir_restore_step
 
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          cache-key: scripts/docker/install-sh-nonroot/Dockerfile
+          version: v0.23.0
 
       - name: Build installer non-root image
         env:
@@ -1682,10 +1682,10 @@ jobs:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@19215110ab936351210feebdfa5b440b4493e184 # v2.2.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          cache-key: scripts/e2e/Dockerfile
+          version: v0.23.0
 
       - name: Setup Node environment for package smoke
         uses: ./.github/actions/setup-node-env
