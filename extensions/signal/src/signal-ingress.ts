@@ -198,9 +198,7 @@ export async function startSignalIngressMonitor(params: {
       failedMaxEntries: 1_000,
     },
     appendRetryDelaysMs: [0],
-    // Bound teardown with the monitor idle window; do not wait forever for a
-    // pre-adoption delivery callback that ignores lifecycle abort. Settlement
-    // writes still join through dispose({ waitForSettlements: true }).
+    // Skip delivery-idle join on stop; settlements still wait in dispose.
     waitForDeliveryIdleOnStop: false,
     drain: {
       resolveNonRetryableFailure: resolveSignalIngressNonRetryableFailure,
