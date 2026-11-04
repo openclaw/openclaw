@@ -310,6 +310,8 @@ describe("xai stream wrappers", () => {
     const corruptProjected = await projectAsync([
       toolOutput([inputText("corrupt"), corruptGif], "call_corrupt"),
     ]);
-    expect(JSON.stringify(corruptProjected)).toContain("(see attached image)");
+    expect(JSON.stringify(corruptProjected)).toContain(
+      "unsupported GIF conversion failed; please provide a PNG or JPEG instead",
+    );
   });
 });

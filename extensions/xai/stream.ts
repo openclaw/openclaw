@@ -136,6 +136,8 @@ function isGifImagePart(part: Record<string, unknown>): boolean {
 
 const MAX_CONVERTED_GIF_ENTRIES = 50;
 const convertedGifCache = new Map<string, string>();
+const GIF_OMISSION_TEXT =
+  "[omitted image payload: unsupported GIF conversion failed; please provide a PNG or JPEG instead]";
 
 async function normalizeXaiImagePart(
   part: Record<string, unknown>,
@@ -158,7 +160,7 @@ async function normalizeXaiImagePart(
   }
 
   if (!base64.trim()) {
-    return { type: "input_text", text: "(see attached image)" };
+    return { type: "input_text", text: GIF_OMISSION_TEXT };
   }
 
   try {
@@ -166,7 +168,12 @@ async function normalizeXaiImagePart(
     let jpegBase64 = convertedGifCache.get(cacheKey);
     if (!jpegBase64) {
       const buffer = Buffer.from(base64, "base64");
-      const encoded = await resizeToJpeg({ buffer });
+      const encoded = await resizeToJpeg({
+        buffer,
+        maxSide: 2048,
+        quality: 85,
+        withoutEnlargement: true,
+      });
       jpegBase64 = encoded.toString("base64");
       if (convertedGifCache.size >= MAX_CONVERTED_GIF_ENTRIES) {
         const oldestKey = convertedGifCache.keys().next().value;
@@ -194,7 +201,7 @@ async function normalizeXaiImagePart(
       },
     };
   } catch {
-    return { type: "input_text", text: "(see attached image)" };
+    return { type: "input_text", text: GIF_OMISSION_TEXT };
   }
 }
 
