@@ -68,6 +68,7 @@ export function createCliEventHandlers(params: {
   };
   let observedCliActivity = false;
   let compactionActive = false;
+  let compactionClosed = false;
   let onCompactionActiveChange: (() => void) | undefined;
   const signaledPhases = new Set<"tool_execution_started" | "assistant_output_started">();
   const signalExecutionPhase = (phase: "tool_execution_started" | "assistant_output_started") => {
@@ -433,6 +434,14 @@ export function createCliEventHandlers(params: {
   };
   const emitCliCompaction = (event: CliCompactionDelta) => {
     observedCliActivity = true;
+    // Claude Code closes one successful compaction with a status `compact_result`
+    // and an automatic `compact_boundary`. Drop that one repeat; ends without a
+    // start (boundary-only streams) still publish.
+    if (event.phase === "end" && compactionClosed) {
+      compactionClosed = false;
+      return;
+    }
+    compactionClosed = event.phase === "end" && event.completed && compactionActive;
     // Native compaction is silent but busy: the no-output watchdog reads this
     // between phase boundaries, so an end event must always clear the flag,
     // even for a failed compaction (`completed: false`).
