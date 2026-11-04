@@ -18,6 +18,8 @@ import {
   teardownPluginsE2e,
 } from "./plugins.e2e.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 describeControlUiE2e("plugin install button progress", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
@@ -65,7 +67,9 @@ describeControlUiE2e("plugin install button progress", () => {
         .toBe(await cards.count());
       expect(await cards.locator(".plugin-install-action__button").count()).toBe(0);
       expect(await gateway.getRequests("plugins.list")).toHaveLength(lists);
-      await page.screenshot({ path: `${evidence}/after-install.png` });
+      if (captureUiProof) {
+        await page.screenshot({ path: `${evidence}/after-install.png` });
+      }
       await gateway.resolveDeferred("config.get");
       await gateway.waitForRequest("plugins.list", { after: lists });
       await gateway.resolveDeferred("plugins.catalog.browse", {
@@ -91,16 +95,26 @@ describeControlUiE2e("plugin install button progress", () => {
 
   it.each([
     ["success", "", "", 0],
-    ["failure", "Download failed", "Dependency installation failed", 4],
-    ["runtime-failure", "Startup failed", "Plugin could not be applied to Gateway", 5],
-    ["finalization-failure", "Refresh failed", "Installation failed", 6],
+    [
+      "failure",
+      "Download failed",
+      "Couldn’t install dependencies. Check the installation details.",
+      4,
+    ],
+    [
+      "runtime-failure",
+      "Startup failed",
+      "Couldn’t apply the plugin. Check the installation details.",
+      5,
+    ],
+    ["finalization-failure", "Refresh failed", "Couldn’t install the plugin", 6],
   ] as const)(
     "keeps truthful progress through the final %s response",
     async (outcome, message, label, completed) => {
       const evidence = createControlUiE2eArtifactDir(`plugin-install-progress-${outcome}`);
       const context = await newContext(undefined, {
         hasTouch: true,
-        recordVideo: { dir: evidence },
+        ...(captureUiProof ? { recordVideo: { dir: evidence } } : {}),
       });
       const page = await context.newPage();
       await page.clock.install();
@@ -128,7 +142,7 @@ describeControlUiE2e("plugin install button progress", () => {
         const pluginButton = (action: string) =>
           page.getByRole("button", { name: `${action} Calendar Plus`, exact: true });
         const disable = pluginButton("Disable");
-        const applying = card.getByText("Applying plugin to Gateway", { exact: true });
+        const applying = card.getByText("Applying plugin…", { exact: true });
         const expectFocused = async (control: Locator) =>
           expect(await control.evaluate((el) => el === document.activeElement)).toBe(true);
         const expectText = async (control: Locator, text: string) =>
@@ -157,7 +171,9 @@ describeControlUiE2e("plugin install button progress", () => {
                 })
                 .toBe(true);
             }
-            await page.screenshot({ path: `${evidence}/${prefix}-${width}.png` });
+            if (captureUiProof) {
+              await page.screenshot({ path: `${evidence}/${prefix}-${width}.png` });
+            }
           }
         };
         const resolveInstall = async () => {
@@ -170,7 +186,9 @@ describeControlUiE2e("plugin install button progress", () => {
           expect(await card.count()).toBe(0);
         };
         await button.waitFor();
-        await page.screenshot({ path: `${evidence}/before.png` });
+        if (captureUiProof) {
+          await page.screenshot({ path: `${evidence}/before.png` });
+        }
         await gateway.deferNext("plugins.install");
         await button.click();
         const request = await gateway.waitForRequest("plugins.install");
@@ -195,7 +213,7 @@ describeControlUiE2e("plugin install button progress", () => {
         await card.waitFor({ state: "visible" });
         expect(await countActivities("completed")).toBe(4);
         await expectTick();
-        await expectText(card, "Installing plugin dependencies");
+        await expectText(card, "Installing plugin dependencies…");
         const buttonBounds = (await button.boundingBox())!;
         const cardBounds = (await card.boundingBox())!;
         const gapY =
@@ -264,7 +282,9 @@ describeControlUiE2e("plugin install button progress", () => {
           });
           await page.getByText(label, { exact: true }).waitFor();
           expect(await countActivities("completed")).toBe(completed);
-          await page.screenshot({ path: `${evidence}/failure-state.png` });
+          if (captureUiProof) {
+            await page.screenshot({ path: `${evidence}/failure-state.png` });
+          }
           expect((await button.textContent())?.trim()).toBe(
             outcome === "failure" ? "Retry install" : "View status",
           );
@@ -273,7 +293,9 @@ describeControlUiE2e("plugin install button progress", () => {
           await page.clock.runFor(1100);
           expect(await timer.textContent()).toBe(stoppedAt);
           expect(await page.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
-          await page.screenshot({ path: `${evidence}/after.png` });
+          if (captureUiProof) {
+            await page.screenshot({ path: `${evidence}/after.png` });
+          }
           await capture("failure", [1440, 1366, 768, 390], "both");
           if (outcome === "failure") {
             await expectText(card, "Plugin not installed");
@@ -304,7 +326,9 @@ describeControlUiE2e("plugin install button progress", () => {
             await publishInstalled();
             await resolveInstall();
             await expectInstallRequests(2);
-            await page.screenshot({ path: `${evidence}/retry-success.png` });
+            if (captureUiProof) {
+              await page.screenshot({ path: `${evidence}/retry-success.png` });
+            }
           } else {
             await button.click();
             await expectInstallRequests(1);
@@ -319,7 +343,9 @@ describeControlUiE2e("plugin install button progress", () => {
           await resolveInstall();
           await expectText(page.locator(".plugin-catalog-detail__actions"), "Ask OpenClaw");
           expect(await page.locator(".plugin-install-action__button").count()).toBe(0);
-          await page.screenshot({ path: `${evidence}/after.png` });
+          if (captureUiProof) {
+            await page.screenshot({ path: `${evidence}/after.png` });
+          }
           await gateway.resolveDeferred("config.get");
         }
       } finally {

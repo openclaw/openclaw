@@ -5,12 +5,12 @@ import { en } from "./en.ts";
 const enNewSessionRuntime = {
   newSession: {
     requiredWorkerUnavailable:
-      "The required worker is unavailable. Ask an administrator to check the worker profile, then retry.",
+      "The required device is unavailable. Ask an admin to check the cloud profile, then retry.",
     requiredWorkerChanged:
-      "The required worker policy changed. Start a new session; this saved message has not been sent.",
-    placementStartFailed: "The session was created, but startup needs attention: {error}",
+      "The device requirement changed. Start a new session. Your saved message hasn’t been sent.",
+    placementStartFailed: "Couldn’t start this session. Retry setup. {error}",
     placementStillStarting:
-      "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.",
+      "Device setup is still in progress. Retry to check the existing device. Your message hasn’t been sent.",
     placementCompletionUnconfirmed:
       "Could not confirm whether worker setup finished. Retry to check again; your message has not been sent.",
     placementCancelled:
@@ -26,6 +26,10 @@ const enNewSessionRuntime = {
     followUpsAdmissionFailed:
       "Your follow-up messages are held. Retry them after checking browser storage.",
     createFailed: "Couldn't create the session.",
+    preferenceSaveUnconfirmed:
+      "Saving your new-session choices could not be confirmed. Check them before starting a session.",
+    worktreeNameClearUnconfirmed:
+      "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
   },
 } satisfies TranslationMap;
 

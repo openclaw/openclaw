@@ -10,11 +10,11 @@ import {
   assertAgentDeletionDatabaseCleanupAccess,
   getAgentDeletionDatabaseCleanup,
 } from "./agent-deletion-cleanup.js";
+import { retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
-import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import { getOpenClawAgentDatabaseIfOpen, openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 
 /** Yield only for BEGIN admission; admitted writes and publications are never replayed. */

@@ -18,9 +18,27 @@ export function applySessionEntryWritePolicy(
     profileInvolvement?: SessionEntry["profileInvolvement"];
     previousEntry?: SessionEntry | null;
     consumePendingReset?: boolean;
+    preserveVisibility?: boolean;
   },
 ): { entry: SessionEntry; previousEntry: SessionEntry | undefined } {
   let normalizedEntry = initialEntry;
+  if (
+    canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
+    canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision ||
+    normalizedEntry.archivedAt !== undefined ||
+    normalizedEntry.incognito
+  ) {
+    delete normalizedEntry.resumeAfterRestart;
+    delete normalizedEntry.mainRestartRecovery;
+  } else if (!Object.hasOwn(normalizedEntry, "resumeAfterRestart")) {
+    // Public projections omit the shutdown marker; same-incarnation bookkeeping retains it.
+    normalizedEntry = {
+      ...normalizedEntry,
+      ...(canonicalPreviousEntry.resumeAfterRestart
+        ? { resumeAfterRestart: canonicalPreviousEntry.resumeAfterRestart }
+        : {}),
+    };
+  }
   if (
     canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
     canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision &&
@@ -86,6 +104,17 @@ export function applySessionEntryWritePolicy(
     const { profileInvolvement: _sourceInvolvement, ...forkEntry } = normalizedEntry;
     normalizedEntry = forkEntry;
   }
+  // Authenticated sources belong to this logical node's people, not its transcript generation.
+  // Writers that omit the private field keep the committed sources; a fork starts without them.
+  const operatorSources = Object.hasOwn(normalizedEntry, "operatorSources")
+    ? normalizedEntry.operatorSources
+    : canonicalPreviousEntry?.operatorSources;
+  if (operatorSources && (canonicalPreviousEntry || options.allowStoredAliases)) {
+    normalizedEntry = { ...normalizedEntry, operatorSources };
+  } else if (Object.hasOwn(normalizedEntry, "operatorSources")) {
+    const { operatorSources: _forkSources, ...entryWithoutSources } = normalizedEntry;
+    normalizedEntry = entryWithoutSources;
+  }
   const previousEntry =
     options.previousEntry === undefined
       ? canonicalPreviousEntry
@@ -99,23 +128,20 @@ export function applySessionEntryWritePolicy(
     // Same-lifecycle bookkeeping cannot cancel the one-time reset owed by legacy state.
     normalizedEntry.updatedAt = 0;
   }
-  // A logical key retains confidentiality across transcript replacement and stale bookkeeping.
-  // Explicit access changes use the canonical replacement owner with its current-row grant.
+  // A logical key retains confidentiality through stale bookkeeping and transcript replacement.
+  // Only the canonical access mutation owner may replace its committed ACL.
   if (canonicalPreviousEntry && !options.allowStoredAliases && !options.accessMutation) {
     normalizedEntry.access = canonicalPreviousEntry.access;
   }
-  // The lifecycle-selected entry owns visibility copy-forward semantics.
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
-    // A transcript replacement must not widen a private logical conversation.
-    // Other modes retain their existing lifecycle-selected copy-forward policy.
-    if (previousEntry.visibility === "draft" || normalizedEntry.visibility === "draft") {
+    // Fresh-child installation retains its current audience; a reset must not widen Draft.
+    if (options.preserveVisibility && canonicalPreviousEntry?.visibility !== undefined) {
+      normalizedEntry.visibility = canonicalPreviousEntry.visibility;
+    } else if (previousEntry.visibility === "draft" || normalizedEntry.visibility === "draft") {
       normalizedEntry.visibility = "draft";
     } else {
       delete normalizedEntry.visibility;
     }
-  }
-  if (normalizedEntry.archivedAt || normalizedEntry.incognito) {
-    delete normalizedEntry.pendingExecNotifications;
   }
   return { entry: normalizedEntry, previousEntry };
 }

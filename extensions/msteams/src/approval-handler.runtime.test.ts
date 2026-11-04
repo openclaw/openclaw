@@ -152,6 +152,10 @@ describe("msTeamsApprovalNativeRuntime", () => {
   });
 
   it("settles an issued card only through its issuing account, not an authorized sibling", async () => {
+    sendAdaptiveCardMSTeams.mockResolvedValue({
+      messageId: "approval-activity-1",
+      conversationId: "a:personal-chat",
+    });
     const scenario = await deliverScenario(createExecPendingView(), "support");
     const { request, entry } = scenario;
     await bindScenario(scenario);
@@ -208,7 +212,12 @@ describe("msTeamsApprovalNativeRuntime", () => {
       deps.accountId = "support";
       await maybeHandleMSTeamsApprovalCardSubmit({ context, deps });
       expect(resolveApprovalOverGateway).toHaveBeenCalledWith(
-        expect.objectContaining({ accountId: "support", approvalId: request.id }),
+        expect.objectContaining({
+          accountId: "support",
+          approvalId: request.id,
+          decision: "allow-once",
+          senderId: "00000000-0000-4000-8000-000000000001",
+        }),
       );
       expect(context.updateActivity).toHaveBeenCalledWith(
         expect.objectContaining({ id: entry.activityId }),
@@ -300,7 +309,7 @@ describe("msTeamsApprovalNativeRuntime", () => {
     expect(editAdaptiveCardMSTeams).toHaveBeenCalledWith({
       cfg,
       accountId: "default",
-      to: "19:channel@thread.tacv2",
+      to: "conversation:19:channel@thread.tacv2",
       activityId: "approval-activity-1",
       card: final.payload,
     });

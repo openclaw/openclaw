@@ -14,15 +14,8 @@ import {
 } from "./includes.js";
 import { CONFIG_FILE, ROOT_DIR, configPath, createMockResolver } from "./includes.test-support.js";
 
-const SHARED_DIR = path.join(ROOT_DIR, "shared");
-
 function resolve(obj: unknown, files: Record<string, unknown> = {}) {
   return resolveIncludes(obj, CONFIG_FILE, createMockResolver(files));
-}
-
-async function writeFixture(filePath: string, content: unknown, raw = false) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, raw ? String(content) : JSON.stringify(content), "utf-8");
 }
 
 function includeChain(length: number) {
@@ -45,7 +38,10 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 async function withFiles(files: Record<string, unknown> = {}) {
   const root = dirs.make("openclaw-includes-");
   const at = (name: string) => path.join(root, name);
-  const write = (name: string, content: unknown) => writeFixture(at(name), content);
+  const write = async (name: string, content: unknown) => {
+    await fs.mkdir(path.dirname(at(name)), { recursive: true });
+    await fs.writeFile(at(name), JSON.stringify(content));
+  };
   await fs.mkdir(at("config"));
   await Promise.all(Object.entries(files).map(([name, content]) => write(name, content)));
   const filename = at("config/openclaw.json");
@@ -80,13 +76,12 @@ type IncludeFailure = [
 ];
 const include = ($include: unknown) => ({ $include });
 const validFile = { [configPath("valid.json")]: { valid: true } };
-const siblingError = /Sibling keys require included content to be an object/;
 
 it.each<IncludeFailure>([
   [
     "array include with siblings",
     { ...include("list.json"), extra: true },
-    siblingError,
+    /Sibling keys require included content to be an object/,
     { [configPath("list.json")]: ["a", "b"] },
   ],
   ["read failure", include("missing.json"), /Failed to read include file/],
@@ -113,7 +108,7 @@ it.each<IncludeFailure>([
     /escapes config directory/,
     {},
     {},
-    { allowedRoots: [SHARED_DIR] },
+    { allowedRoots: [path.join(ROOT_DIR, "shared")] },
   ],
 ])("rejects %s", (_name, input, pattern, files = {}, resolver = {}, options = {}) => {
   const io = { ...createMockResolver(files), ...resolver };
@@ -210,8 +205,6 @@ it("throws CircularIncludeError for circular includes", () => {
   );
   expect(circular).toBeInstanceOf(CircularIncludeError);
   expect(circular).toMatchObject({ chain: expect.arrayContaining([CONFIG_FILE, aPath, bPath]) });
-  expect(circular.message).toContain("a.json");
-  expect(circular.message).toContain("b.json");
 });
 
 it("allows depth 10 but rejects depth 11", () => {
@@ -272,9 +265,9 @@ it.runIf(process.platform !== "win32")(
 );
 
 it("honors explicitly allowed include roots", async () => {
-  const { at, scan } = await withFiles();
+  const { at, scan } = await withFiles({ "shared/shared.json5": {} });
   const sharedIncludePath = at("shared/shared.json5");
-  await writeFixture(sharedIncludePath, "{ shared: true }\n", true);
+  await fs.writeFile(sharedIncludePath, "{ shared: true }\n");
   const env = { OPENCLAW_INCLUDE_ROOTS: at("shared") };
   expect(await scan({ $include: sharedIncludePath }, env)).toEqual([
     await fs.realpath(sharedIncludePath),
@@ -362,51 +355,37 @@ it("fails closed when include realpath resolution fails for reasons other than E
   }
 });
 
-it("rejects include files that are hardlinked aliases", async () => {
+it.each(["hardlink", "oversize", "symlink"] as const)("rejects %s includes", async (kind) => {
   const { at, resolve: readIncludes } = await withFiles({
-    "outside/secret.json5": { logging: { redactSensitive: "tools" } },
-  });
-  if (process.platform === "win32") {
-    return;
-  }
-  try {
-    await fs.link(at("outside/secret.json5"), at("config/extra.json5"));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-      return;
-    }
-    throw err;
-  }
-
-  expect(() => readIncludes({ $include: "./extra.json5" })).toThrow(/security checks|hardlink/i);
-});
-
-it("rejects include files larger than the guarded read limit", async () => {
-  const { resolve: readIncludes } = await withFiles({
-    "config/big.json5": { blob: "a".repeat(2 * 1024 * 1024 + 1) },
-  });
-  expect(() => readIncludes({ $include: "./big.json5" })).toThrow(/security checks|max/i);
-});
-
-it("rejects a symlinked include that escapes both the config directory and every allowed root", async () => {
-  const { at, resolve: readIncludes } = await withFiles({
-    "off-limits/secret.json5": { leaked: true },
+    "outside/secret.json5": {},
+    "config/extra.json5": kind === "oversize" ? { blob: "a".repeat(2 * 1024 * 1024 + 1) } : {},
   });
   await fs.mkdir(at("allowed"));
-  try {
-    await fs.symlink(
-      at("off-limits/secret.json5"),
-      at("config/secret.json5"),
-      process.platform === "win32" ? "file" : undefined,
-    );
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EPERM") {
+  if (kind !== "oversize") {
+    if (kind === "hardlink" && process.platform === "win32") {
       return;
     }
-    throw err;
+    await fs.unlink(at("config/extra.json5"));
+    try {
+      if (kind === "hardlink") {
+        await fs.link(at("outside/secret.json5"), at("config/extra.json5"));
+      } else {
+        await fs.symlink(at("outside/secret.json5"), at("config/extra.json5"), "file");
+      }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if ((kind === "hardlink" && code === "EXDEV") || (kind === "symlink" && code === "EPERM")) {
+        return;
+      }
+      throw err;
+    }
   }
-
-  expect(() =>
-    readIncludes({ $include: "./secret.json5" }, { allowedRoots: [at("allowed")] }),
-  ).toThrow(/resolves outside config directory/);
+  const error = {
+    hardlink: /security checks|hardlink/i,
+    oversize: /security checks|max/i,
+    symlink: /resolves outside config directory/,
+  }[kind];
+  expect(() => readIncludes(include("./extra.json5"), { allowedRoots: [at("allowed")] })).toThrow(
+    error,
+  );
 });

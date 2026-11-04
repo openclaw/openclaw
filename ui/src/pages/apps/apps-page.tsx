@@ -4,6 +4,7 @@ import { isNativeWebChromeHost } from "../../app/native-web-chrome.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { McpAppCatalog } from "../../components/mcp-app-catalog.tsx";
 import type { McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
+import { McpAppView } from "../../components/mcp-app-view-lazy.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
@@ -18,7 +19,11 @@ import { Apps } from "./view.tsx";
 
 registerEnglishCatalog(registerMcpAppEnglish);
 
-const AppsConversation = lazy(() => import("./apps-conversation.tsx"));
+const AppsConversation = lazy(() => {
+  // Start the app view with the conversation; the panel owns failures and launch admission.
+  void McpAppView.preload().catch(() => undefined);
+  return import("./apps-conversation.tsx");
+});
 
 type AppLaunch = { key: string; detail?: McpAppOpenDetail };
 
@@ -38,11 +43,11 @@ export function AppsPage(props: { appSearch?: string }) {
   );
   const launch = createMemo((previous: AppLaunch | undefined): AppLaunch => {
     const state = gateway.read();
-    const agentId = selection.read().state.selectedId ?? undefined;
+    const target = catalog.target();
     const key = JSON.stringify([
       appSearch(),
-      state.snapshot.sessionKey,
-      agentId,
+      target.sessionKey,
+      target.agentId,
       state.connectionRevision,
     ]);
     const route = appRoute();
@@ -80,8 +85,7 @@ export function AppsPage(props: { appSearch?: string }) {
       detail:
         server && entrypoint
           ? {
-              sessionKey: state.snapshot.sessionKey,
-              agentId,
+              ...target,
               owner: state.snapshot.client,
               serverName: server.serverName,
               entrypoint,

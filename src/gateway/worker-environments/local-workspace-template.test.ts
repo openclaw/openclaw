@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -11,6 +10,7 @@ import { createCopyWorktreeBackend } from "../../agents/worktrees/filesystem-bac
 import { requireGit } from "../../agents/worktrees/git.js";
 import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { prewarmLocalWorkspaceTemplates } from "./local-workspace-prewarm.js";
@@ -48,6 +48,8 @@ const sourceText = "export const version = 'original';\n";
 const firstLock = "lockfileVersion: '9.0'\n# first generation\n";
 const secondLock = "lockfileVersion: '9.0'\n# second generation\n";
 const dependencyFile = "node_modules/dependency/index.js";
+const hostSecrets = [".env.local", ".npmrc"];
+const installerSecrets = [...hostSecrets, ".env.installer"];
 let source: string;
 let baseCommit: string;
 let changedCommit: string;
@@ -87,8 +89,8 @@ async function checkClones(signal: AbortSignal, check: (checkout: string) => Pro
 }
 
 beforeAll(async () => {
-  vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
-  vi.stubEnv("GIT_CONFIG_SYSTEM", os.devNull);
+  vi.stubEnv("GIT_CONFIG_GLOBAL", gitNullConfigPath());
+  vi.stubEnv("GIT_CONFIG_SYSTEM", gitNullConfigPath());
   const root = directories.make("openclaw-dependency-template-");
   source = path.join(root, "source");
   env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
@@ -121,7 +123,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.backend.mockResolvedValue(createCopyWorktreeBackend());
   mocks.install.mockImplementation(async ({ directory }) => {
-    await expectMissing(directory, ".env.local", ".npmrc");
+    await expectMissing(directory, ...hostSecrets);
     return installFiles(directory, { [dependencyFile]: await read(directory, "pnpm-lock.yaml") });
   });
 });
@@ -189,7 +191,7 @@ it("isolates dependency clones and rebuilds after lockfile changes", async ({ si
 
 it("retains dependencies without credentials or install debris", async ({ signal }) => {
   mocks.install.mockImplementation(async ({ directory }) => {
-    await expectMissing(directory, ".env.local", ".npmrc");
+    await expectMissing(directory, ...hostSecrets);
     return installFiles(directory, {
       [dependencyFile]: "root dependency\n",
       [`packages/tool/${dependencyFile}`]: "workspace dependency\n",
@@ -202,14 +204,7 @@ it("retains dependencies without credentials or install debris", async ({ signal
     expect(await read(checkout, dependencyFile)).toBe("root dependency\n");
     expect(await read(checkout, `packages/tool/${dependencyFile}`)).toBe("workspace dependency\n");
     expect(await read(checkout, ".git/config")).not.toContain("credential");
-    await expectMissing(
-      checkout,
-      ".env.local",
-      ".npmrc",
-      ".env.installer",
-      "build",
-      "untracked-output.txt",
-    );
+    await expectMissing(checkout, ...installerSecrets, "build", "untracked-output.txt");
   });
 });
 
@@ -245,14 +240,7 @@ it.for([
   await checkClones(signal, async (checkout) => {
     expect(await read(checkout, "source.ts")).toBe(sourceText);
     expect(await read(checkout, "pnpm-lock.yaml")).toBe(firstLock);
-    await expectMissing(
-      checkout,
-      "node_modules",
-      ".pnpm",
-      ".env.installer",
-      ".env.local",
-      ".npmrc",
-    );
+    await expectMissing(checkout, ...installerSecrets, "node_modules", ".pnpm");
   });
   expect(backend.createTemplate).toHaveBeenCalledTimes(sourceChanged ? 2 : 1);
 });

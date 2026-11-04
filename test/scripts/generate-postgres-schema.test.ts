@@ -62,6 +62,21 @@ describe("PostgreSQL schema generation", () => {
     }
   });
 
+  it("emits promoted agent deletion indexes in both runtime artifacts", async () => {
+    const { files, report } = await generatePostgresSchemas(root);
+    for (const name of [
+      "idx_agent_session_input_completions_session_key",
+      "idx_agent_conversation_deliveries_source_session",
+    ]) {
+      const index = report.catalogs.agent!.objects.find(
+        (item) => item.kind === "index" && item.name === name,
+      );
+      expect(index?.sql).toContain(`CREATE INDEX "${name}"`);
+      expect(files["agent.postgres.sql"]).toContain(index?.sql);
+      expect(files["agent-runtime.ts"]).toContain(name);
+    }
+  });
+
   it("refuses unsupported agent objects and trigger bodies", async () => {
     const directory = fixture("");
     const file = path.join(directory, "src/state/openclaw-agent-schema.sql");
@@ -124,6 +139,21 @@ describe("PostgreSQL schema generation", () => {
       expect(files[file], file).not.toContain('"openclaw_state".');
       expect(files[file], file).not.toContain('"openclaw_agent".');
     }
+    const workspaceMigration = files["state-v34-v35.postgres.sql"]!;
+    expect(workspaceMigration).toContain(
+      "IF to_regclass('local_workspace_projections') IS NOT NULL",
+    );
+    for (const column of [
+      "tree_root_digest",
+      "source_paths_digest",
+      "canonical_fingerprints",
+      "projection_fingerprints",
+    ]) {
+      expect(workspaceMigration).toContain(`ADD COLUMN "${column}" bytea;`);
+    }
+    expect(workspaceMigration).toContain('CREATE TABLE "local_workspace_tree_packs"');
+    expect(workspaceMigration).toContain('CREATE TABLE "local_workspace_source_path_sets"');
+    expect(workspaceMigration).not.toMatch(/\b(?:UPDATE|INSERT|DELETE|DROP)\b/u);
   });
 
   it("emits canonical SQL or an omission diagnostic and generates identical bytes twice", async () => {
@@ -230,6 +260,31 @@ describe("PostgreSQL schema generation", () => {
     });
     expect(report.catalogs.state!.notes.join("\n")).toContain("sqlite_sequence");
     expect(fs.readdirSync(directory)).toEqual(["src"]);
+  });
+
+  it("uses native ordering only when partial predicates prove a nullable key non-null", () => {
+    withDatabase((db) => {
+      db.exec(`CREATE TABLE entries (value TEXT, other TEXT, required TEXT NOT NULL) STRICT;`);
+      const predicates = [
+        ["direct", "value IS NOT NULL", false],
+        ["conjunction", "other IS NULL AND (value IS NOT NULL)", false],
+        ["both_branches", "value IS NOT NULL OR (other IS NULL AND value IS NOT NULL)", false],
+        ["one_branch", "value IS NOT NULL OR other IS NOT NULL", true],
+        ["negated", "NOT (value IS NOT NULL)", true],
+        ["nullable", "value IS NULL", true],
+        ["literal", "other = 'value IS NOT NULL'", true],
+        ["different_key", "other IS NOT NULL", true],
+      ] as const;
+      for (const [name, predicate] of predicates) {
+        db.exec(`CREATE INDEX ${name} ON entries(value DESC, required) WHERE ${predicate};`);
+      }
+      const indexes = readCatalog(db, "").objects;
+      for (const [name, , nullable] of predicates) {
+        expect(indexes.find((index) => index.name === name)?.sql, name).toContain(
+          `(("value") DESC${nullable ? " NULLS LAST" : ""}, ("required") ASC)`,
+        );
+      }
+    });
   });
 
   it("translates the explicit expression subset and records refusals without weakening indexes", async () => {

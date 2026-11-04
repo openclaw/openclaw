@@ -9,16 +9,13 @@ import {
 } from "../sidebar-layout.ts";
 import type { RegionProps } from "./chat-sidebar-region-types.ts";
 
-type SidebarRegionDividerProps = Pick<
-  RegionProps,
-  "elements" | "layout" | "availableWidth" | "callbacks"
-> & {
-  column: SidebarColumn;
-  panelElements: ReadonlyMap<string, HTMLDivElement>;
-  host: HTMLElement;
-};
-
-export function SidebarRegionDivider(props: SidebarRegionDividerProps) {
+export function SidebarRegionDivider(
+  props: Pick<RegionProps, "elements" | "layout" | "availableWidth" | "callbacks"> & {
+    column: SidebarColumn;
+    panelElements: ReadonlyMap<string, HTMLDivElement>;
+    host: HTMLElement;
+  },
+) {
   const resizeCommit = {};
   const finishResize = () => {
     scheduleLayout(resizeCommit, () => {

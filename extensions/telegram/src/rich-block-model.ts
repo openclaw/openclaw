@@ -61,32 +61,6 @@ export type InputRichBlockParagraph = {
   text: RichText;
 };
 
-type InputRichBlockHeading = {
-  type: "heading";
-  text: RichText;
-  size: 1 | 2 | 3 | 4 | 5 | 6;
-};
-
-type InputRichBlockPre = {
-  type: "pre";
-  text: string;
-  language?: string;
-};
-
-type InputRichBlockBlockquote = {
-  type: "blockquote";
-  blocks: InputRichBlock[];
-  credit?: RichText;
-};
-
-type InputRichBlockTable = {
-  type: "table";
-  cells: RichBlockTableCell[][];
-  is_bordered?: true;
-  is_striped?: true;
-  caption?: RichText;
-};
-
 export type RichBlockCaption = {
   text: RichText;
   credit?: RichText;
@@ -104,10 +78,28 @@ type InputMediaUrl<K extends string> = { type: K; media: string };
 
 export type InputRichBlock =
   | InputRichBlockParagraph
-  | InputRichBlockHeading
-  | InputRichBlockPre
-  | InputRichBlockBlockquote
-  | InputRichBlockTable
+  | {
+      type: "heading";
+      text: RichText;
+      size: 1 | 2 | 3 | 4 | 5 | 6;
+    }
+  | {
+      type: "pre";
+      text: string;
+      language?: string;
+    }
+  | {
+      type: "blockquote";
+      blocks: InputRichBlock[];
+      credit?: RichText;
+    }
+  | {
+      type: "table";
+      cells: RichBlockTableCell[][];
+      is_bordered?: true;
+      is_striped?: true;
+      caption?: RichText;
+    }
   | { type: "divider" }
   | { type: "anchor"; name: string }
   | { type: "footer"; text: RichText }

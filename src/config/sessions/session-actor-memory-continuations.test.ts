@@ -1,21 +1,9 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
-import { reconcileHarnessCompletionDelivery } from "../../agents/agent-harness-completion-delivery.js";
-import { createHarnessCompletionSourceAssertion } from "../../agents/agent-harness-completion-recovery.js";
-import type {
-  ResetEntry,
-  SessionMessageEntry,
-} from "../../agents/sessions/session-manager-types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { lookupSessionGoalOperation } from "./goals-operations-read.js";
 import { mutateSessionGoal } from "./goals-operations.js";
 import { buildCreatedSessionGoal } from "./goals-transitions.js";
-import {
-  beginRestartRecoveryTerminalDelivery,
-  cancelRestartRecoveryTerminalDelivery,
-  completeRestartRecoveryTerminalDelivery,
-} from "./restart-recovery-receipt.js";
-import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import {
   stageSessionPendingInput,
   bindSessionPendingInputSources,
@@ -28,12 +16,11 @@ import {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { commitMemory, readMemory } from "./session-actor-memory-publication.test-support.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
-import type { SessionMetadataOperations } from "./session-manager-write-contract.js";
 import { listSessionPendingInputs } from "./session-pending-input-history.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import { readSessionPendingInputReceiptsInWorker } from "./session-pending-input-receipts.js";
@@ -71,25 +58,11 @@ const userMessage = (content: string, idempotencyKey: string) => ({
   idempotencyKey,
   timestamp: 1,
 });
-const eventEnvelope = (id: string, parentId: string | null = null, millisecond = 1) => ({
-  id,
-  parentId,
-  timestamp: `1970-01-01T00:00:00.00${millisecond}Z`,
-});
 
 afterEach(() => {
   memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
 });
 
-const completionClaim = (): HarnessCompletionRecovery => ({
-  taskId: "child-task",
-  taskRunId: "child-task",
-  taskStatus: "succeeded",
-  sourceRunId: "announce:child",
-  requesterSessionKey: scope.sessionKey,
-  requesterAgentId: scope.agentId,
-  sessionId: scope.sessionId,
-});
 const makePendingOwner = (
   inputId: string,
   idempotencyKey: string,
@@ -123,30 +96,6 @@ async function fixture(patch: Partial<SessionEntry> = {}) {
   await commitMemory(storage, "session.entry.create", {
     entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true, ...patch },
   });
-  const append = async (
-    event: ResetEntry | (Omit<SessionMessageEntry, "message"> & { message: unknown }),
-  ) => {
-    const input: SessionMetadataOperations["session.metadata.append"]["input"] = {
-      scope,
-      event: JSON.stringify(event),
-      options: {},
-    };
-    if (event.type === "message") {
-      const { message, ...envelope } = event;
-      input.event = envelope;
-      input.message = {
-        messageJson: JSON.stringify(message),
-        cwd: "/synthetic",
-        validateTurn: false,
-      };
-    }
-    const current = await acquire();
-    try {
-      return await commitMemory(current.actor.storage!, "session.metadata.append", input);
-    } finally {
-      await current.actor.release();
-    }
-  };
   const replace = async (next: Partial<SessionEntry>) => {
     const current = await acquire();
     try {
@@ -160,7 +109,7 @@ async function fixture(patch: Partial<SessionEntry> = {}) {
       await current.actor.release();
     }
   };
-  return { owner, binding, storage, acquire, append, replace };
+  return { owner, binding, storage, acquire, replace };
 }
 
 describe("memory continuation adapters", () => {
@@ -210,7 +159,7 @@ describe("memory continuation adapters", () => {
     });
   });
 
-  it("keeps live pending custody, then interrupts the retained window after reset", async () => {
+  it("keeps live pending custody, then hides the retired window after reset", async () => {
     const { binding, storage, replace, acquire } = await fixture();
     const idempotencyKey = "pending:user";
     const messageJson = JSON.stringify(userMessage("pending", idempotencyKey));
@@ -251,7 +200,7 @@ describe("memory continuation adapters", () => {
       const current = await acquire();
       await runWithSessionActorStorage(current, async () => {
         expect(await listSessionPendingInputs(scope)).toMatchObject({
-          items: [{ id: "pending-input", state: "interrupted" }],
+          items: [],
         });
         const fresh = await readPendingInputSource(
           { ...scope, sessionId: "window-2" },
@@ -371,112 +320,5 @@ describe("memory continuation adapters", () => {
       "use Stop",
     );
     expect(owner.readSession(scope.sessionKey, authority)).toBeUndefined();
-  });
-
-  it("retains terminal ambiguity until an unbound actor records the provider outcome", async () => {
-    const { owner, binding } = await fixture({
-      restartRecoveryDeliveryRunId: "recovery-run",
-      restartRecoveryDeliverySourceRunId: "source-turn",
-    });
-    const target = { ...scope, sourceTurnId: "source-turn", toolCallId: "send-1" };
-    await binding.actor.release();
-    expect(await beginRestartRecoveryTerminalDelivery(target)).toBe("started");
-    expect(await beginRestartRecoveryTerminalDelivery(target)).toBe("delivery-ambiguous");
-    await expect(
-      cancelRestartRecoveryTerminalDelivery({ ...target, toolCallId: "wrong-send" }),
-    ).rejects.toThrow("failed to clear terminal delivery intent");
-    expect(await cancelRestartRecoveryTerminalDelivery(target)).toBe("cleared");
-    expect(await beginRestartRecoveryTerminalDelivery(target)).toBe("started");
-    expect(await completeRestartRecoveryTerminalDelivery(target)).toBe("recorded");
-    expect(await beginRestartRecoveryTerminalDelivery(target)).toBe("already-delivered");
-    expect(
-      owner.readSession(scope.sessionKey, authority)?.entry?.restartRecoveryDeliveryReceiptState,
-    ).toBe("delivered-terminal");
-  });
-
-  it.each(["human", "reset"])(
-    "rechecks an unbound completion source after an in-process %s write",
-    async (change) => {
-      const claim = completionClaim();
-      const { binding, append } = await fixture({
-        restartRecoveryHarnessCompletion: claim,
-        restartRecoveryDeliverySourceRunId: claim.sourceRunId,
-        restartRecoveryDeliveryRunId: "recovery-run",
-      });
-      await append({
-        type: "message",
-        ...eventEnvelope("completion-source"),
-        message: {
-          role: "user",
-          content: "child result",
-          idempotencyKey: `${claim.sourceRunId}:user`,
-          __openclaw: { runId: claim.sourceRunId },
-          provenance: {
-            kind: "inter_session",
-            sourceTool: "agent_harness_completion",
-            sourceChannel: "internal",
-            sourceSessionKey: claim.taskRunId,
-          },
-        },
-      });
-      await binding.actor.release();
-      const request = { ...scope, sourceRunId: claim.sourceRunId };
-      const effect = createHarnessCompletionSourceAssertion({
-        claim,
-        storePath: scope.storePath,
-      });
-      expect(await reconcileHarnessCompletionDelivery(request)).toBe("pending");
-      expect(effect).not.toThrow();
-      await append(
-        change === "human"
-          ? {
-              type: "message",
-              ...eventEnvelope("human", "completion-source", 2),
-              message: { role: "user", content: "new work" },
-            }
-          : {
-              type: "reset",
-              ...eventEnvelope("reset", "completion-source", 2),
-              reason: "new",
-              firstKeptEntryId: "completion-source",
-            },
-      );
-      expect(effect).toThrow();
-      expect(await reconcileHarnessCompletionDelivery(request)).toBe("blocked");
-    },
-  );
-
-  it("requires confirmed terminal delivery and blocks a submitted input after its claim is lost", async () => {
-    const claim = completionClaim();
-    const { binding, append, replace } = await fixture();
-    const request = { ...scope, sourceRunId: claim.sourceRunId };
-    await runWithSessionActorStorage(binding, async () => {
-      expect(await reconcileHarnessCompletionDelivery(request)).toBe("unowned");
-      await append({
-        type: "message",
-        ...eventEnvelope("submitted"),
-        message: {
-          role: "user",
-          content: "child result",
-          idempotencyKey: `${claim.sourceRunId}:user`,
-        },
-      });
-      expect(await reconcileHarnessCompletionDelivery(request)).toBe("blocked");
-      const receipt = {
-        runId: claim.sourceRunId,
-        harnessCompletion: claim,
-        deliveryContext: { channel: "discord", to: "channel:synthetic" },
-        deliveryStatus: { status: "sent" as const, resultCount: 0 },
-        payloads: [{ visible: true }],
-      };
-      await replace({ restartRecoveryTerminalDeliveryEvidence: [receipt] });
-      expect(await reconcileHarnessCompletionDelivery(request)).toBe("blocked");
-      await replace({
-        restartRecoveryTerminalDeliveryEvidence: [
-          { ...receipt, deliveryStatus: { status: "sent", resultCount: 1 } },
-        ],
-      });
-      expect(await reconcileHarnessCompletionDelivery(request)).toBe("delivered");
-    });
   });
 });

@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import { historicalIndexOrderingPort } from "./historical-index-ordering-port.js";
 import metadata from "./logbook-port.generated.json" with { type: "json" };
@@ -10,19 +7,12 @@ import { expectedPostgresCatalog } from "./postgres-catalog.js";
 export async function loadLogbookPortDescriptor(
   sourceVersion = metadata.version,
 ): Promise<PortDescriptor> {
-  if (sourceVersion !== metadata.version && sourceVersion !== 1) {
+  if (sourceVersion !== metadata.version && sourceVersion !== 1 && sourceVersion !== 2) {
     throw new DatabasePortDataError(
       `Missing logbook PostgreSQL backup descriptor for version ${sourceVersion}`,
     );
   }
-  const plugins = resolveBundledPluginsDir();
-  if (!plugins) {
-    throw new Error("Bundled logbook port descriptor is unavailable.");
-  }
-  const postgres = await fs.readFile(
-    path.join(plugins, "logbook/src/logbook-schema.postgres.sql"),
-    "utf8",
-  );
+  const postgres = api().postgresSchema;
   const descriptor: PortDescriptor = {
     ...metadata,
     preData: postgres.slice(metadata.preData[0], metadata.preData[1]),
@@ -44,12 +34,18 @@ export async function loadLogbookPortDescriptor(
   if (sourceVersion === metadata.version) {
     return descriptor;
   }
-  return historicalIndexOrderingPort(descriptor, sourceVersion, postgres);
+  return historicalIndexOrderingPort(
+    descriptor,
+    sourceVersion,
+    postgres,
+    sourceVersion === 2 ? "schema-nullability" : "sqlite",
+  );
 }
 
 function api() {
   return loadBundledPluginPublicArtifactModuleSync<{
     logbookDatabasePortApi: {
+      postgresSchema: string;
       LogbookPortSchemaError: new (message?: string) => Error;
       inspectLogbookPortSource: NonNullable<PortDescriptor["inspectSqliteSource"]>;
       admitLogbookPort: NonNullable<PortDescriptor["admit"]>;

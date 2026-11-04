@@ -18,36 +18,34 @@ function encodeRepeatedly(raw: string, layers: number): string {
 
 const proxyUrl = (value: string) => `https://outer.example/proxy/${value}`;
 const queryUrl = (value: string) => `https://outer.example/?next=${value}`;
+const exampleUrl = (value: string) => `https://example.com/${value}`;
+const botToken = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
+const mmsKey = `__openclaw_mms_token_${"a".repeat(24)}`;
+const credentials = "https://USER:PASS@inner.example/";
+const encodedScheme = "%68%74%74%70%73%3A%2F%2F";
 
 it.each([
+  [exampleUrl("?client%5Fse%E2%80%8Bcret=s&ok=1"), exampleUrl("?client_se%E2%80%8Bcret=***&ok=1")],
   [
-    "https://example.com/mcp?client%5Fse%E2%80%8Bcret=secret&safe=value",
-    "https://example.com/mcp?client_se%E2%80%8Bcret=***&safe=value",
+    exampleUrl("?sig=1&X-Api-Key=2&x_access_token=3&x-auth-token=4&signal=keep&x-api-version=1"),
+    exampleUrl(
+      "?sig=***&X-Api-Key=***&x_access_token=***&x-auth-token=***&signal=keep&x-api-version=1",
+    ),
   ],
   [
-    "https://example.com/mcp?sig=one&X-Api-Key=two&x_access_token=three&x-auth-token=four&signal=keep&x-api-version=1",
-    "https://example.com/mcp?sig=***&X-Api-Key=***&x_access_token=***&x-auth-token=***&signal=keep&x-api-version=1",
+    exampleUrl(`?upstream-token=keep&${mmsKey}=${"b".repeat(48)}`),
+    exampleUrl(`?upstream-token=***&${mmsKey}=***`),
   ],
+  [`https://telegram.internal/bot${botToken}/getMe`, "https://telegram.internal/bot***/getMe"],
   [
-    `https://gateway.example.com/webhooks/sms?upstream-token=keep&__openclaw_mms_token_${"a".repeat(24)}=${"b".repeat(48)}`,
-    `https://gateway.example.com/webhooks/sms?upstream-token=***&__openclaw_mms_token_${"a".repeat(24)}=***`,
-  ],
-  [
-    "https://telegram.internal/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd/getMe",
-    "https://telegram.internal/bot***/getMe",
-  ],
-  [
-    "https://api.telegram.org/bot123456%3AABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd/getMe",
+    `https://api.telegram.org/bot${encodeURIComponent(botToken)}/getMe`,
     "https://api.telegram.org/bot***/getMe",
   ],
   [
     `https://example.com/cb#${encodeURIComponent("access_token=secret&keep=visible")}`,
     "https://example.com/cb#access_token%3D***%26keep%3Dvisible",
   ],
-  [
-    "https://example.com/?keep=one&keep=two&token=a&token=b",
-    "https://example.com/?keep=one&keep=two&token=***",
-  ],
+  [exampleUrl("?keep=1&keep=2&token=a&token=b"), exampleUrl("?keep=1&keep=2&token=***")],
 ])("redacts secrets without changing safe URL components: %s", (value, expected) => {
   expect(redactSensitiveUrl(value)).toBe(expected);
 });
@@ -71,44 +69,32 @@ it("fails closed when nested URL encoding exceeds the recursion bound", () => {
   expect(redacted).toContain("***");
 });
 
-it("fails closed when one nested URL exceeds the percent-encoding bound", () => {
-  const nested = encodeRepeatedly("https://inner.example/?keep=visible", 20);
-  const redacted = redactSensitiveUrl(queryUrl(encodeURIComponent(nested)));
-  expect(redacted).toBe("https://outer.example/?next=***");
-});
-
-it("redacts encoded query names with decoded whitespace and control separators in invalid URL-like strings", () => {
-  expect(
-    redactSensitiveUrlLikeString(
-      "//example.com/mcp?client%5Fse%20cret=space&client%5Fse%00cret=nul",
-    ),
-  ).toBe("//example.com/mcp?client%5Fse%20cret=***&client%5Fse%00cret=***");
-});
-
-it("redacts protocol URLs that are too malformed to parse", () => {
-  expect(
-    redactSensitiveUrlLikeString(
-      "wss://fallback-user:fallback-pass@[bad-host/socket?token=fallback-secret&keep=visible)",
-    ),
-  ).toBe("wss://***:***@[bad-host/socket?token=***&keep=visible)");
+it.each([
+  [queryUrl(encodeRepeatedly("https://inner.example/?keep=visible", 21)), queryUrl("***")],
+  ["//e/?client_se%20cret=s&client_se%00cret=n", "//e/?client_se%20cret=***&client_se%00cret=***"],
+  [
+    "wss://user:pass@[bad-host/?token=secret&keep=visible)",
+    "wss://***:***@[bad-host/?token=***&keep=visible)",
+  ],
+  [
+    "fatal: retry https://first:pass@one.example then https://second:pass@two.example",
+    "fatal: retry https://***:***@one.example then https://***:***@two.example",
+  ],
+  ["https://outer.example/#access_token%3Dmalformed-secret%ZZ", "https://outer.example/#***"],
+])("redacts malformed, diagnostic, or over-encoded URL %s", (value, expected) => {
+  expect(redactSensitiveUrlLikeString(value)).toBe(expected);
 });
 
 it("matches the auth-oriented query params used by MCP SSE config redaction", () => {
-  expect(isSensitiveUrlQueryParamName("refresh_token")).toBe(true);
-  expect(isSensitiveUrlQueryParamName("access-token")).toBe(true);
-  expect(isSensitiveUrlQueryParamName("hook-token")).toBe(true);
-  expect(isSensitiveUrlQueryParamName("passwd")).toBe(true);
-  expect(isSensitiveUrlQueryParamName("signature")).toBe(true);
-  expect(isSensitiveUrlQueryParamName("code")).toBe(true);
-  expect(isSensitiveUrlQueryParamName("x-amz-signature")).toBe(true);
-  expect(isSensitiveUrlQueryParamName("X-Amz-Security-Token")).toBe(true);
-  expect(isSensitiveUrlQueryParamName("id_token")).toBe(true);
-  expect(isSensitiveUrlQueryParamName("app_secret")).toBe(true);
-  expect(isSensitiveUrlQueryParamName("client_se\u3164cret")).toBe(true);
-  expect(isSensitiveUrlQueryParamName("credential")).toBe(true);
-  expect(isSensitiveUrlQueryParamName("sigmoid")).toBe(false);
-  expect(isSensitiveUrlQueryParamName("token_count")).toBe(false);
-  expect(isSensitiveUrlQueryParamName("x-request-id")).toBe(false);
+  const names =
+    "refresh_token access-token hook-token passwd signature code " +
+    "x-amz-signature X-Amz-Security-Token id_token app_secret client_se\u3164cret credential";
+  for (const name of names.split(" ")) {
+    expect(isSensitiveUrlQueryParamName(name), name).toBe(true);
+  }
+  for (const name of ["sigmoid", "token_count", "x-request-id"]) {
+    expect(isSensitiveUrlQueryParamName(name), name).toBe(false);
+  }
 });
 
 it("recognizes config paths that may embed URL secrets", () => {
@@ -126,7 +112,7 @@ it("uses an explicit url-secret hint tag", () => {
   expect(hasSensitiveUrlHintTag({ tags: ["security"] })).toBe(false);
 });
 
-function expectRedacted(value: string, secrets: string[], marker = "***"): void {
+function expectRedacted(value: string, secrets = ["USER", "PASS"], marker = "***"): void {
   const redacted = redactSensitiveUrlLikeString(value);
   for (const secret of secrets) {
     expect(redacted).not.toContain(secret);
@@ -134,68 +120,31 @@ function expectRedacted(value: string, secrets: string[], marker = "***"): void 
   expect(redacted).toContain(marker);
 }
 
-it("redacts embedded credentials from query parameter names", () => {
-  const nestedKey = "https://key-user:key-pass@inner.example/";
-  for (const value of [
-    `https://outer.example/?${nestedKey}=value`,
-    `https://outer.example/#/cb?${nestedKey}=value`,
-  ]) {
-    expectRedacted(value, ["key-user", "key-pass"]);
-  }
+it.each([`https://outer.example/?${credentials}=v`, `https://outer.example/#/cb?${credentials}=v`])(
+  "redacts credentials in query names: %s",
+  (value) => expectRedacted(value),
+);
+
+it.each(["%2F", "%3F", "%23"])("redacts reserved userinfo character %s", (reserved) => {
+  const nested = `${encodedScheme}USER%3APASS${reserved}part%40inner.example%2F`;
+  expectRedacted(proxyUrl(nested), undefined, "***:***@inner.example/");
 });
 
-it("redacts encoded reserved characters inside nested userinfo", () => {
-  for (const encodedReserved of ["%2F", "%3F", "%23"]) {
-    const encodedNested = `%68%74%74%70%73%3A%2F%2Fencoded-user%3Aencoded-pass${encodedReserved}part%40inner.example%2F`;
-    expectRedacted(
-      proxyUrl(encodedNested),
-      ["encoded-user", "encoded-pass"],
-      "***:***@inner.example/",
-    );
-  }
-});
+it.each(["USER%3APASS%20part%40", "USER%2Fpart%3APASS%40", "USER%2Fpart%40"])(
+  "fails closed for unresolved encoded userinfo: %s",
+  (userinfo) => {
+    expectRedacted(proxyUrl(`${encodedScheme}${userinfo}inner.example%2F`));
+  },
+);
 
-it("fails closed for unresolved encoded userinfo delimiters", () => {
-  for (const encodedUserInfo of [
-    "encoded-user%3Aencoded-pass%20part%40",
-    "encoded-user%2Fpart%3Aencoded-pass%40",
-    "encoded-user%2Fpart%40",
-  ]) {
-    const encodedNested = `%68%74%74%70%73%3A%2F%2F${encodedUserInfo}inner.example%2F`;
-    expectRedacted(proxyUrl(encodedNested), ["encoded-user", "encoded-pass"]);
-  }
-});
-
-it.each<[string, string, string[], string?]>([
-  [
-    "unresolved protocol-relative userinfo",
-    "//relative-user%2Fpart%3Arelative-pass%40inner.example",
-    ["relative-user", "relative-pass"],
-  ],
-  [
-    "ambiguous userinfo in a nested query value",
-    queryUrl("https%3A%2F%2Fquery-user%2Fpart%3Aquery-pass%40inner.example%2F"),
-    ["query-user", "query-pass"],
-  ],
-  [
-    "an encoded relative fragment in a nested query value",
-    queryUrl(encodeURIComponent("callback#access_token=relative-secret")),
-    ["relative-secret"],
-  ],
-  [
-    "the final userinfo delimiter in a protocol-relative URL",
-    proxyUrl("//first-user@second-user:multi-pass@inner.example/"),
-    ["first-user", "second-user", "multi-pass"],
-    "***:***@inner.example/",
-  ],
-  [
-    "an opaque URL whose pathname cannot be assigned",
-    `data:text/plain,${encodeURIComponent("https://opaque-user:opaque-pass@inner.example/")}`,
-    ["opaque-user", "opaque-pass"],
-    "***:***@inner.example/",
-  ],
-])("redacts %s", (_name, value, secrets, marker) => {
-  expectRedacted(value, secrets, marker);
+it.each<[string, string?]>([
+  ["//USER%2Fpart%3APASS%40inner.example"],
+  [queryUrl("https%3A%2F%2FUSER%2Fpart%3APASS%40inner.example%2F")],
+  [queryUrl(encodeURIComponent("callback#access_token=USER-PASS"))],
+  [proxyUrl("//USER@USER2:PASS@inner.example/"), "***:***@inner.example/"],
+  [`data:text/plain,${encodeURIComponent(credentials)}`, "***:***@inner.example/"],
+])("redacts ambiguous or opaque embedded URL %s", (value, marker) => {
+  expectRedacted(value, undefined, marker);
 });
 
 it("preserves encoded safe URLs when paths, queries, or fragments contain an at sign", () => {
@@ -209,51 +158,29 @@ it("preserves encoded safe URLs when paths, queries, or fragments contain an at 
     "https://[2001:db8::1]#user@example.com",
   ]) {
     const encoded = encodeURIComponent(nested);
-    expect(redactSensitiveUrlLikeString(encoded)).toBe(encoded);
-    for (const outer of [proxyUrl(encoded), queryUrl(encoded)]) {
+    for (const outer of [encoded, proxyUrl(encoded), queryUrl(encoded)]) {
       expect(redactSensitiveUrlLikeString(outer)).toBe(outer);
     }
   }
 });
 
-it("redacts embedded URLs when a diagnostic prefix parses as an opaque scheme", () => {
-  expect(
-    redactSensitiveUrlLikeString(
-      "fatal: retry https://first:first-pass@one.example then https://second:second-pass@two.example",
-    ),
-  ).toBe("fatal: retry https://***:***@one.example then https://***:***@two.example");
-});
-
 it("redacts a percent-encoded credential-bearing URL in an outer URL path", () => {
-  const nested = "https://path-user:path-pass@inner.example/?token=path-token";
   for (const layers of [1, 2, 20]) {
-    const encoded = encodeRepeatedly(nested, layers);
-    expectRedacted(proxyUrl(encoded), ["path-user", "path-pass", "path-token"]);
+    expectRedacted(proxyUrl(encodeRepeatedly(`${credentials}?token=TOKEN`, layers)), [
+      "USER",
+      "PASS",
+      "TOKEN",
+    ]);
   }
 });
 
-it("fails closed when an encoded fragment also has a malformed escape", () => {
-  const value = "https://outer.example/#access_token%3Dmalformed-secret%ZZ";
-  const redacted = redactSensitiveUrlLikeString(value);
-  expect(redacted).toBe("https://outer.example/#***");
-});
-
 it("redacts mixed literal and encoded credentials in one fragment", () => {
-  const literal = "https://literal-user:literal-pass@one.example/";
-  const encoded = encodeURIComponent("https://encoded-user:encoded-pass@two.example/");
-  const redacted = redactSensitiveUrlLikeString(
-    `https://outer.example/#diagnostic ${literal} then ${encoded}`,
-  );
-  expect(redacted).not.toContain("literal-user");
-  expect(redacted).not.toContain("literal-pass");
-  expect(redacted).not.toContain("encoded-user");
-  expect(redacted).not.toContain("encoded-pass");
+  const encoded = encodeURIComponent("https://USER2:PASS2@two.example/");
+  expectRedacted(`https://outer.example/#diagnostic ${credentials} then ${encoded}`);
 });
 
 it("redacts repeatedly encoded sensitive query parameter names", () => {
   for (const layers of [0, 1, 8, 20]) {
-    const key = encodeRepeatedly("%74oken", layers);
-    const value = `https://example.test/?${key}=encoded-name-secret`;
-    expectRedacted(value, ["encoded-name-secret"]);
+    expectRedacted(exampleUrl(`?${encodeRepeatedly("%74oken", layers)}=SECRET`), ["SECRET"]);
   }
 });

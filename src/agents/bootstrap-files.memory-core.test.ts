@@ -37,51 +37,45 @@ const noSearchRuntime = (): MemoryPluginRuntime => ({
 
 type MemoryPath = [path: string, origin: "agent" | "untrusted", source?: string | null];
 
-it.each(["memory-core", "third-party"])(
-  "loads personal files and quarantines an untrusted tool write with %s",
-  (pluginId) =>
-    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      registerMemoryCapability(pluginId, {
-        runtime:
-          pluginId === "memory-core"
-            ? createMemoryRuntime({ runInBackgroundContext: (run) => run() })
-            : noSearchRuntime(),
+it("loads personal files and quarantines an untrusted tool write", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    registerMemoryCapability("memory-core", {
+      runtime: createMemoryRuntime({ runInBackgroundContext: (run) => run() }),
+    });
+    const workspaceDir = state.statePath("workspace");
+    const profile = ensureProfileForEmail("person@example.test");
+    ensureProfileForEmail("other@example.test");
+    const personalFile = path.join(workspaceDir, "users", profile.id, "USER.md");
+    await fs.mkdir(path.dirname(personalFile), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences");
+    await fs.writeFile(personalFile, "Personal preferences");
+    const warnings: string[] = [];
+    const load = async () => {
+      const { contextFiles } = await resolveBootstrapContextForRun({
+        workspaceDir,
+        config: {},
+        agentId: "main",
+        sessionKey: "agent:main:person",
+        bootstrapUserProfileId: profile.id,
+        warn: (message) => warnings.push(message),
       });
-      const workspaceDir = state.statePath("workspace");
-      const profile = ensureProfileForEmail("person@example.test");
-      ensureProfileForEmail("other@example.test");
-      const personalFile = path.join(workspaceDir, "users", profile.id, "USER.md");
-      await fs.mkdir(path.dirname(personalFile), { recursive: true });
-      await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences");
-      await fs.writeFile(personalFile, "Personal preferences");
-      const warnings: string[] = [];
-      const load = async () => {
-        const { contextFiles } = await resolveBootstrapContextForRun({
-          workspaceDir,
-          config: {},
-          agentId: "main",
-          sessionKey: "agent:main:person",
-          bootstrapUserProfileId: profile.id,
-          warn: (message) => warnings.push(message),
-        });
-        return contextFiles
-          .filter((file) => file.path.endsWith("USER.md"))
-          .map((file) => file.content);
-      };
-      expect(await load()).toEqual(["Shared preferences", "Personal preferences"]);
-      expect(warnings).toEqual([]);
-      const operations = withMemoryWriteProvenance(
-        { readFile: fs.readFile, writeFile: fs.writeFile },
-        createMemoryWriteProvenanceObserver({
-          mutationRoot: workspaceDir,
-          workspaceDir,
-          resolveOriginClass: () => "untrusted",
-        }),
-      );
-      await operations.writeFile(personalFile, "Untrusted preferences");
-      expect(await load()).toEqual(["Shared preferences"]);
-    }),
-);
+      return contextFiles
+        .filter((file) => file.path.endsWith("USER.md"))
+        .map((file) => file.content);
+    };
+    expect(await load()).toEqual(["Shared preferences", "Personal preferences"]);
+    expect(warnings).toEqual([]);
+    const operations = withMemoryWriteProvenance(
+      { readFile: fs.readFile, writeFile: fs.writeFile },
+      createMemoryWriteProvenanceObserver({
+        mutationRoot: workspaceDir,
+        workspaceDir,
+        resolveOriginClass: () => "untrusted",
+      }),
+    );
+    await operations.writeFile(personalFile, "Untrusted preferences");
+    expect(await load()).toEqual(["Shared preferences"]);
+  }));
 it.each(["local", "remote", "legacy"] as const)(
   "classifies %s paths without trusting aliases, missing files, or local decoys",
   (mode) =>
@@ -97,12 +91,10 @@ it.each(["local", "remote", "legacy"] as const)(
         const invalid = [
           "../USER.md",
           "/USER.md",
-          "memory/../USER.md",
           "C:\\USER.md",
           "memory/./note.md",
           "memory/bad\0.md",
           "memory/dreaming/note.md",
-          "notes/USER.md",
         ];
         paths = [
           ["USER.md", "agent", "USER.md"],

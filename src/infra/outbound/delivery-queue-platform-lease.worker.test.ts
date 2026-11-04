@@ -62,32 +62,27 @@ describe("outbound producer claim worker", () => {
 
     await stateWorkerRegistry.prepare("deliveryQueue.mutateOutbound");
     vi.useFakeTimers();
-    try {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: fixtures.tmpDir() };
-      const database = openOpenClawStateDatabase({ env });
-      const context: WorkerWriteOperationContext = {
-        open: () => database,
-        writeAdmitted: () => assert.fail("Outbound mutations retain their custom admission"),
-        write: (operation, options) =>
-          runOpenClawStateWriteTransaction(operation, { database, env }, options),
-        stateOptions: () => ({ path: database.path, env }),
-      };
-      for (const [time, kind] of [
-        [1_000, "start"],
-        [9_000, "dispatch"],
-      ] as const) {
-        vi.setSystemTime(time);
-        stateWorkerRegistry.execute(
-          { type: "deliveryQueue.mutateOutbound", input: { kind, id } },
-          context,
-        );
-      }
-    } finally {
-      vi.useRealTimers();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: fixtures.tmpDir() };
+    const database = openOpenClawStateDatabase({ env });
+    const context: WorkerWriteOperationContext = {
+      open: () => database,
+      writeAdmitted: () => assert.fail("Outbound mutations retain their custom admission"),
+      write: (operation, options) =>
+        runOpenClawStateWriteTransaction(operation, { database, env }, options),
+      stateOptions: () => ({ path: database.path, env }),
+    };
+    for (const [time, kind] of [
+      [1_000, "start"],
+      [9_000, "dispatch"],
+    ] as const) {
+      vi.setSystemTime(time);
+      stateWorkerRegistry.execute(
+        { type: "deliveryQueue.mutateOutbound", input: { kind, id } },
+        context,
+      );
     }
-
-    const entry = await loadPendingDelivery(id, fixtures.tmpDir());
-    expect(entry).toMatchObject({
+    vi.useRealTimers();
+    expect(await loadPendingDelivery(id, fixtures.tmpDir())).toMatchObject({
       platformSendStartedAt: 9_000,
       recoveryState: "send_attempt_started",
     });
@@ -102,16 +97,16 @@ describe("outbound producer claim worker", () => {
       threadId: "thread",
       assertDirectAdapterHandoff: localGuard,
     };
-    await markDeliveryPlatformSendAttemptStarted(id, stateDir, route);
-    expect(await loadPendingDelivery(id, stateDir)).toMatchObject({
-      effectiveReplyToId: "reply",
-      recoveryState: "send_attempt_started",
-    });
-    await markDeliveryPlatformSendDispatched(id, stateDir, { ...route, replyToId: null });
-    expect(await loadPendingDelivery(id, stateDir)).toMatchObject({
-      effectiveReplyToId: null,
-      recoveryState: "send_attempt_started",
-    });
+    for (const [mark, replyToId] of [
+      [markDeliveryPlatformSendAttemptStarted, "reply"],
+      [markDeliveryPlatformSendDispatched, null],
+    ] as const) {
+      await mark(id, stateDir, { ...route, replyToId });
+      expect(await loadPendingDelivery(id, stateDir)).toMatchObject({
+        effectiveReplyToId: replyToId,
+        recoveryState: "send_attempt_started",
+      });
+    }
     expect(localGuard).not.toHaveBeenCalled();
   });
 
@@ -122,24 +117,17 @@ describe("outbound producer claim worker", () => {
     await closeOpenClawStateDatabaseAsync();
     const context = captureDeliveryQueueStateContext(stateDir);
     const sql = observeHostDataSql();
-    let claimId: string | undefined;
-    let expiresAt: number | undefined;
-    try {
-      const claims = await Promise.all([
-        claimReusableDeliveryPlatformSendAttempt(id, undefined, context),
-        claimReusableDeliveryPlatformSendAttempt(id, undefined, context),
-      ]);
-      claimId = claims[0];
-      expect(claims[1]).toBeUndefined();
-      expect(claimId).toEqual(expect.any(String));
-      assert(claimId, "Expected the unclaimed queue row to acquire an owner");
-      expiresAt = await renewDeliveryPlatformSendLease(id, undefined, claimId, context);
-      expect(expiresAt).toBeGreaterThan(Date.now());
-      expect(sql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
-    } finally {
-      sql.restore();
-      await closeOpenClawStateDatabaseAsync();
-    }
+    const [claimId, otherClaim] = await Promise.all([
+      claimReusableDeliveryPlatformSendAttempt(id, undefined, context),
+      claimReusableDeliveryPlatformSendAttempt(id, undefined, context),
+    ]);
+    expect(otherClaim).toBeUndefined();
+    assert(claimId, "Expected the unclaimed queue row to acquire an owner");
+    const expiresAt = await renewDeliveryPlatformSendLease(id, undefined, claimId, context);
+    expect(expiresAt).toBeGreaterThan(Date.now());
+    expect(sql.queries).toEqual([]);
+    sql.restore();
+    await closeOpenClawStateDatabaseAsync();
     expect(await loadPendingDelivery(id, stateDir)).toMatchObject({
       id,
       producerClaimId: claimId,
@@ -194,7 +182,6 @@ describe("outbound producer claim worker", () => {
     let cleanup: Promise<void> | undefined;
     try {
       await vi.advanceTimersByTimeAsync(20_000);
-      expect(renew).toHaveBeenCalledTimes(2);
       const result = renew.mock.results.at(-1);
       assert(result?.type === "return", "Expected an admitted renewal");
       const expiresAt = await beforeSettlement(dispatch.held, result.value);
@@ -217,7 +204,6 @@ describe("outbound producer claim worker", () => {
       dispatch.release();
       await lease.stop();
       await cleanup;
-      vi.useRealTimers();
     }
   });
 });

@@ -115,33 +115,6 @@ describe("toStreamingMarkdownParts", () => {
     }
   });
 
-  it("keeps the whole container when later blocks retire", () => {
-    const prefix = "1. one\n\n   continuation\n";
-    for (const suffix of [
-      "# Heading\n",
-      "---\n",
-      "> quote\n",
-      "> ~~~\n> code\n> ~~~\n> after\n",
-      "> ~~~\n> code\n> ~~~\n> after\n\nFollowing\n",
-      "```\ncode\n```\n",
-      "<details><summary>More</summary>body</details>\n",
-      "+ next\n",
-      "2. next\n",
-      "\nParagraph\n",
-      "▀▀▀▀\n▄▄▄▄\n",
-    ]) {
-      const source = prefix + suffix;
-      const expected = toSanitizedMarkdownHtml(source);
-      for (const chunkSize of [1, 7, 24]) {
-        const key = `retired-container-${source}-${chunkSize}`;
-        for (let end = chunkSize; end < source.length; end += chunkSize) {
-          toStreamingMarkdownParts(source.slice(0, end), {}, key);
-        }
-        expect(streamHtml(source, {}, key), key).toBe(expected);
-      }
-    }
-  });
-
   it("relabels earlier file links when later blocks introduce a basename collision", () => {
     const key = "streamed-file-labels";
     const source = "See src/one/index.ts.\n\n";
@@ -187,48 +160,46 @@ describe("toStreamingMarkdownParts", () => {
     }
   });
 
-  it("does not rescan completed disclosures in appended prefixes", () => {
-    const prefixes: string[] = [];
-    let prefix = "<details><summary>Done</summary></details>\n\n";
-    for (let index = 0; index < 48; index += 1) {
-      prefix += `${String(index).padStart(3, "0")} ${"streaming markdown ".repeat(30)}\n`;
-      prefixes.push(prefix);
-    }
-    // A full rescan revisits the completed disclosure on every chunk. Observe
-    // the real scanner instead of comparing sub-millisecond wall-clock times.
-    const scanDisclosure = vi.spyOn(markdownDetails, "scanMarkdownDisclosureLine");
-    onTestFinished(() => scanDisclosure.mockRestore());
-    const fullSplits = prefixes.map((value) => splitStableStreamingMarkdown(value));
-    expect(scanDisclosure).toHaveBeenCalledTimes(prefixes.length);
-    scanDisclosure.mockClear();
-
-    const incrementalSplits = prefixes.map((value) =>
-      splitStableStreamingMarkdown(value, "line-scan-regression"),
-    );
-    expect(incrementalSplits).toEqual(fullSplits);
-    expect(scanDisclosure).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not reparse a literal container line on each append", () => {
-    const prefixes = Array.from(
-      { length: 48 },
-      (_, index) => `<details>\n> <!--\n> ${"literal ".repeat((index + 1) * 30)}`,
-    );
-    const findRawRanges = vi.spyOn(markdownDetails, "findMarkdownRawHtmlRanges");
-    onTestFinished(() => findRawRanges.mockRestore());
-    const fullHtml = prefixes.map((value) => streamHtml(value));
-    expect(findRawRanges).toHaveBeenCalledTimes(prefixes.length);
-    findRawRanges.mockClear();
-
-    const incrementalHtml = prefixes.map((value) =>
-      streamHtml(value, {}, "literal-line-scan-regression"),
-    );
-    expect(incrementalHtml).toEqual(fullHtml);
-    expect(findRawRanges).toHaveBeenCalledTimes(1);
-  });
+  it.each(["completed disclosure", "literal container"])(
+    "does not rescan a %s on append",
+    (kind) => {
+      let prefix = "<details><summary>Done</summary></details>\n\n";
+      const disclosure = kind === "completed disclosure";
+      const prefixes = Array.from({ length: 48 }, (_, index) => {
+        prefix += `${String(index).padStart(3, "0")} ${"streaming markdown ".repeat(30)}\n`;
+        return disclosure ? prefix : `<details>\n> <!--\n> ${"literal ".repeat((index + 1) * 30)}`;
+      });
+      const scanner = vi.spyOn(
+        markdownDetails,
+        disclosure ? "scanMarkdownDisclosureLine" : "findMarkdownRawHtmlRanges",
+      );
+      onTestFinished(() => scanner.mockRestore());
+      const render = (value: string, key?: string) =>
+        disclosure ? splitStableStreamingMarkdown(value, key) : streamHtml(value, {}, key);
+      const full = prefixes.map((value) => render(value));
+      expect(scanner).toHaveBeenCalledTimes(prefixes.length);
+      scanner.mockClear();
+      expect(prefixes.map((value) => render(value, `${kind}-scan-regression`))).toEqual(full);
+      expect(scanner).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("keeps chunked-prefix splits identical to full splits", () => {
+    const completedContainers = [
+      "# Heading\n",
+      "---\n",
+      "> quote\n",
+      "> ~~~\n> code\n> ~~~\n> after\n",
+      "> ~~~\n> code\n> ~~~\n> after\n\nFollowing\n",
+      "```\ncode\n```\n",
+      "<details><summary>More</summary>body</details>\n",
+      "+ next\n",
+      "2. next\n",
+      "\nParagraph\n",
+      "▀▀▀▀\n▄▄▄▄\n",
+    ].map((suffix) => `1. one\n\n   continuation\n${suffix}`);
     const cases = [
+      ...completedContainers,
       "## Result\n\nA paragraph with `inline code`.\n\n<details>\n<summary>Logs</summary>\n\n```ts\nconst value = 1;\n```\n\nMore **text**\n\n</details>",
       "- first\n\n  continuation\n\n# Done\n\n- next\n\n+ changed marker\n\nAfter\n\n",
       "1. one\n\n    - nested\n\n        code\n\n# Done\n\nAfter\n\n",
@@ -274,11 +245,22 @@ describe("toStreamingMarkdownParts", () => {
           );
           expect(streamHtml(prefix, {}, `html-parity-${key}`)).toBe(streamHtml(prefix));
           if (end >= markdown.length) {
+            if (caseIndex < completedContainers.length) {
+              expect(streamHtml(prefix, {}, `html-parity-${key}`)).toBe(
+                toSanitizedMarkdownHtml(markdown),
+              );
+            }
             break;
           }
         }
       }
     }
+  });
+
+  it("keeps streaming indented source literal", () => {
+    const fragment = streamFragment("Intro\n\n    a\n\n    b");
+    expect(fragment.querySelectorAll("pre code")).toHaveLength(1);
+    expect(fragment.querySelector("pre code")?.textContent).toBe("a\n\nb\n");
   });
 
   it("normalizes an appended CRLF boundary without rescanning the prefix", () => {
@@ -315,15 +297,6 @@ describe("toStreamingMarkdownParts", () => {
     expect(html).toContain('class="assistant-transcript-role"');
   });
 
-  it("renders accumulated glyph paragraphs literally", () => {
-    const key = "accumulated glyph paragraphs";
-    toStreamingMarkdownParts("▀▀▀▀\n\n", {}, key);
-    const fragment = streamFragment("▀▀▀▀\n\n▄▄▄▄\n\nIntro", {}, key);
-    expect(fragment.querySelector("pre code.markdown-block-art")?.textContent).toBe(
-      "▀▀▀▀\n\n▄▄▄▄\n\n",
-    );
-  });
-
   it.each([
     ["en", "… truncated", "showing first 140000"],
     ["pt-BR", "… truncado", "exibindo os primeiros 140000"],
@@ -348,13 +321,5 @@ describe("toStreamingMarkdownParts", () => {
     } finally {
       await i18n.setLocale("en");
     }
-  });
-});
-
-describe("indented Markdown source", () => {
-  it("keeps streaming indented source literal", () => {
-    const fragment = streamFragment("Intro\n\n    a\n\n    b");
-    expect(fragment.querySelectorAll("pre code")).toHaveLength(1);
-    expect(fragment.querySelector("pre code")?.textContent).toBe("a\n\nb\n");
   });
 });

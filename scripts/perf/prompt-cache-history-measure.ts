@@ -1,5 +1,8 @@
 // Run on a benchmark host with --expose-gc and --import ./scripts/tsx.mjs.
 // Compare separate processes, alternating --owner base/head, for each mode/content pair.
+// Mutable append envelopes: --mode append --content blocks --count 1000 --passes 2000
+// Use --measure cpu separately from --measure allocation --output profile.json.
+// Allocation covers cold preparation plus warm/append reads; keep counts identical.
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { writeFile } from "node:fs/promises";
@@ -10,7 +13,7 @@ import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
-import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json-normalize.js";
 import type { Message } from "../../src/llm/types.js";
 
 const { values } = parseArgs({

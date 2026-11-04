@@ -19,6 +19,7 @@ export function installSessionActorMemoryEntry(
     providerReviewMutation?: boolean;
     consumePendingReset?: boolean;
     accessMutation?: boolean;
+    preserveVisibility?: boolean;
   } = {},
 ): SessionEntry {
   const previous = state.hot.entry;
@@ -55,10 +56,23 @@ export function installSessionActorMemoryEntry(
   } else {
     delete next.profileInvolvement;
   }
-  // A copied transcript never inherits publication or visibility from its old identity.
+  // Authenticated sources follow this logical node like durable writes; a new node starts without.
+  const operatorSources = Object.hasOwn(entry, "operatorSources")
+    ? entry.operatorSources
+    : previous?.operatorSources;
+  if (operatorSources && previous) {
+    next.operatorSources = operatorSources;
+  } else {
+    delete next.operatorSources;
+  }
+  // Publication never follows a copied transcript; only its lifecycle owner may select an audience.
   delete next.publicShare;
   if (previous && !sameWindow) {
-    delete next.visibility;
+    if (options.preserveVisibility && previous.visibility !== undefined) {
+      next.visibility = previous.visibility;
+    } else {
+      delete next.visibility;
+    }
   }
   selectSessionActorMemoryWindow(state, next);
   state.sourceCreatedAt ??= resolveSessionWindowCreatedAt(next, next.updatedAt);

@@ -18,6 +18,7 @@ import {
   listConversations,
   registerConversationAddresses,
   readConversation,
+  resolveCurrentConversationByDelivery,
   resolveCurrentSessionPrimaryConversation,
   withConversationAuthority,
 } from "./conversation-registry.js";
@@ -253,6 +254,95 @@ describe("conversation registry", () => {
     }
   });
 
+  it("finds only the live owner matching every delivery coordinate", async () => {
+    const scope = { agentId: "main", storePath };
+    const sessionKey = "agent:main:googlechat:group:space-a";
+    const delivery = {
+      channel: "googlechat",
+      accountId: "work",
+      target: "spaces/space-a",
+      threadId: "thread-a",
+    };
+    await upsertSessionEntry(
+      { ...scope, sessionKey },
+      {
+        sessionId: "space-session",
+        updatedAt: 100,
+        chatType: "group",
+        delivery: {
+          kind: "external",
+          route: {
+            channel: delivery.channel,
+            accountId: delivery.accountId,
+            target: { to: delivery.target },
+            thread: { id: delivery.threadId },
+          },
+          context: {
+            channel: delivery.channel,
+            accountId: delivery.accountId,
+            to: delivery.target,
+            threadId: delivery.threadId,
+          },
+          origin: {
+            provider: delivery.channel,
+            accountId: delivery.accountId,
+            to: delivery.target,
+          },
+        },
+      },
+    );
+    expect(await resolveCurrentConversationByDelivery(scope, delivery)).toMatchObject({
+      conversation: { sessionKey, sessionId: "space-session", kind: "group" },
+    });
+    for (const changed of [
+      { channel: "slack" },
+      { accountId: "personal" },
+      { target: "spaces/space-b" },
+      { threadId: "thread-b" },
+      { threadId: undefined },
+    ]) {
+      expect(
+        await resolveCurrentConversationByDelivery(scope, { ...delivery, ...changed }),
+      ).toEqual({ conversation: undefined });
+    }
+  });
+
+  it("reports ambiguous live owners instead of selecting the newest session", async () => {
+    const scope = { agentId: "main", storePath };
+    const delivery = { channel: "googlechat", accountId: "default", target: "spaces/shared" };
+    for (const index of [1, 2]) {
+      await upsertSessionEntry(
+        { ...scope, sessionKey: `agent:main:shared-${index}` },
+        {
+          sessionId: `shared-session-${index}`,
+          updatedAt: index * 100,
+          chatType: "group",
+          delivery: {
+            kind: "external",
+            route: {
+              channel: delivery.channel,
+              accountId: delivery.accountId,
+              target: { to: delivery.target },
+            },
+            context: {
+              channel: delivery.channel,
+              accountId: delivery.accountId,
+              to: delivery.target,
+            },
+            origin: {
+              provider: delivery.channel,
+              accountId: delivery.accountId,
+              to: delivery.target,
+            },
+          },
+        },
+      );
+    }
+    expect(await resolveCurrentConversationByDelivery(scope, delivery)).toEqual({
+      ambiguous: true,
+    });
+  });
+
   it("round-trips authoritative route context on its conversation association", async () => {
     const scope = await seed("ops", "discord");
     const routeContext = {
@@ -261,7 +351,8 @@ describe("conversation registry", () => {
       parentPeerId: "parent-a",
       memberRoleIds: ["support", "admin"],
     };
-    await commitInitialization(scope, { routeContext });
+    // Keep observation times explicit; bookkeeping clamps future activity to its wall clock.
+    await commitInitialization(scope, { routeContext, entry: { updatedAt: 100 } });
     const canonicalConversation = (await list()).find(
       (conversation) => conversation.peerId === "canonical-ops",
     );
@@ -278,26 +369,25 @@ describe("conversation registry", () => {
       routeContext: { ...routeContext, memberRoleIds: ["admin", "support"] },
     });
 
-    await commitInitialization(scope, {
-      entry: { updatedAt: canonicalConversation!.lastSeenAt + 100 },
-    });
+    await commitInitialization(scope, { entry: { updatedAt: 200 } });
     const resumed = await read(conversationRef);
-    expect(resumed!.lastSeenAt).toBeGreaterThan(canonicalConversation!.lastSeenAt);
+    expect(resumed!.lastSeenAt).toBe(200);
     expect(resumed).toEqual({ ...canonicalConversation, lastSeenAt: resumed!.lastSeenAt });
 
     await upsertSessionEntry(scope, {
       totalTokens: 42,
-      updatedAt: resumed!.lastSeenAt + 100,
+      updatedAt: 300,
     });
     expect(await read(conversationRef)).toEqual(resumed);
     expect(await primary(scope, "ops-session")).toEqual(resumed);
 
     await commitInitialization(scope, {
       routeContext: { peerId: "canonical-ops", guildId: "guild-b" },
+      entry: { updatedAt: 400 },
     });
     const observed = await read(conversationRef);
     expect(observed).toMatchObject({ routeContext: { guildId: "guild-b" } });
-    expect(observed!.lastSeenAt).toBeGreaterThan(resumed!.lastSeenAt);
+    expect(observed!.lastSeenAt).toBe(400);
 
     await upsertSessionEntry(scope, { label: "generic current write", updatedAt: 200 });
     expect((await list()).filter((conversation) => conversation.role === "primary")).toEqual([

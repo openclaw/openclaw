@@ -6,6 +6,7 @@ import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionAccessSchema } from "./session-access.js";
 import { SessionCommunicationPolicySchema } from "./sessions-communication.js";
 import {
+  CyberAccessProgramSchema,
   SessionDeviceFolderSchema,
   SessionPermissionModeSchema,
   SessionRepositorySourceSchema,
@@ -13,8 +14,10 @@ import {
 } from "./sessions-row.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
-export { SESSION_CREATE_RETRY_WINDOW_MS } from "../session-limits.js";
-export const SESSION_CREATE_IDEMPOTENCY_RETENTION_MS = 5 * 60_000;
+export {
+  SESSION_CREATE_RETRY_WINDOW_MS,
+  SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
+} from "../session-limits.js";
 
 /** Creates or adopts a session with optional model, thinking, fast mode, label, and parent linkage. */
 export const SessionsCreateParamsSchema = closedObject({
@@ -36,7 +39,6 @@ export const SessionsCreateParamsSchema = closedObject({
         "Prepared presentation title for a newly created session. Unlike label it is not unique and never claims a label; ignored when adopting an existing key.",
     }),
   ),
-  displayNameGenerated: Type.Optional(Type.Boolean()),
   titleSource: Type.Optional(
     Type.String({
       maxLength: 1_000,
@@ -49,6 +51,7 @@ export const SessionsCreateParamsSchema = closedObject({
   agentRuntime: Type.Optional(NonEmptyString),
   contextWindow: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),
+  cyberAccessProgram: Type.Optional(Type.Union([CyberAccessProgramSchema, Type.Null()])),
   fastMode: Type.Optional(
     Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
   ),

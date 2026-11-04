@@ -22,10 +22,7 @@ describe("fetchBrowserJson timeout forwarding", () => {
     const init = { timeoutMs: 1_500, signal: new AbortController().signal };
     const expectedTimeoutMs = 1_500;
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+      response: Response.json({ ok: true }),
       finalUrl: browserControlUrl,
       release: async () => {},
     });

@@ -385,6 +385,37 @@ describe("OpenAI rich forms", () => {
     ).toBe("unsupported");
   });
 
+  it("checks resource aliases once across the complete choice list", () => {
+    const resources = Array.from({ length: 64 }, (_, index) => ({
+      uri: `cad://parts/item-${index}`,
+      name: `Part ${index}`,
+    }));
+    using lowercase = vi.spyOn(String.prototype, "toLowerCase");
+
+    const result = richCompile({
+      parts: resourceFields({ type: "resource", options: resources }),
+    });
+    expect(requireForm(result).fields[0]?.question.options).toHaveLength(64);
+    expect(lowercase.mock.contexts.filter((value) => value === resources[0]!.uri)).toHaveLength(1);
+  });
+
+  it.each([
+    { uri: "cad://parts/washer", name: "Other" },
+    { uri: "cad://parts/other", name: " WASHER " },
+    { uri: "cad://parts/other", name: "CAD://PARTS/WASHER" },
+  ])("rejects cross-resource URI and title collisions: %j", (second) => {
+    const result = richCompile({
+      parts: resourceFields({
+        type: "resource",
+        options: [{ uri: "cad://parts/washer", name: "Washer" }, second],
+      }),
+    });
+    expect(result).toMatchObject({
+      kind: "unsupported",
+      message: expect.stringContaining("duplicate choice"),
+    });
+  });
+
   it("preserves all rich choices without increasing the ordinary form bound", () => {
     const values = Array.from({ length: 12 }, (_, index) => ({
       const: "value-" + index,

@@ -26,9 +26,13 @@ import {
 import * as operatorCapture from "./operator-run-authority.js";
 import { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
-import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import type {
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+} from "./server-methods/types.js";
 import {
   captureOperatorToolGatewayContinuationContext,
+  captureOperatorToolGatewayRequestContinuationContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
 import {
@@ -81,6 +85,37 @@ describe("typed in-process agent continuation authorization", () => {
     startTurn.mockReset();
     waitForTurn.mockReset();
   });
+
+  it("dispatches only the captured plugin reload once", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const requests: unknown[] = [];
+      const reload: GatewayRequestHandler = async ({ params, respond }) => {
+        requests.push(params);
+        respond(true, { ok: true });
+      };
+      const context = createContext([["plugins.reload", "operator.admin", "plugins", reload]]);
+      await inScope({ context }, async () => {
+        const plugin = { pluginId: "original" };
+        const request = {
+          method: "plugins.reload",
+          params: { plugins: [plugin] },
+        };
+        const captured = await captureOperatorToolGatewayRequestContinuationContext(
+          { sessionKey: "agent:main:reload" },
+          request,
+        );
+        assert(captured, "Expected reload continuation");
+        try {
+          plugin.pluginId = "replacement";
+          const options = { assertCurrent: () => {}, signal: new AbortController().signal };
+          await expect(captured.dispatch(options)).resolves.toEqual({ ok: true });
+          await expect(captured.dispatch(options)).rejects.toThrow("already dispatched");
+          expect(requests).toEqual([{ plugins: [{ pluginId: "original" }] }]);
+        } finally {
+          captured.release();
+        }
+      });
+    }));
 
   it.each(["parent settled", "parent retired before acceptance"] as const)(
     "checks an accepted child independently of recovered parent work: %s",

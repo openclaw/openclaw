@@ -20,23 +20,25 @@ import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import {
+  TOOL_SEARCH_CONTROL_TOOL_NAMES,
+  type CatalogSource,
+  type CatalogVisibilityOptions,
+} from "./tool-search-protocol.js";
 import { disposeToolSearchSchedule } from "./tool-search-scheduling.js";
 import {
   createToolSearchSelectionMatcher,
   type ToolSearchSelection,
 } from "./tool-search-selection.js";
-import {
-  TOOL_SEARCH_CONTROL_TOOL_NAMES,
-  type CatalogSource,
-  type CatalogTool,
-  type CatalogVisibilityOptions,
-  type ToolSearchCatalogApplyResult,
-  type ToolSearchCatalogCompactionParams,
-  type ToolSearchCatalogEntry,
-  type ToolSearchCatalogRef,
-  type ToolSearchCatalogSession,
-  type ToolSearchCatalogTelemetry,
-  type ToolSearchToolContext,
+import type {
+  CatalogTool,
+  ToolSearchCatalogApplyResult,
+  ToolSearchCatalogCompactionParams,
+  ToolSearchCatalogEntry,
+  ToolSearchCatalogRef,
+  ToolSearchCatalogSession,
+  ToolSearchCatalogTelemetry,
+  ToolSearchToolContext,
 } from "./tool-search-types.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
@@ -343,7 +345,11 @@ function registerToolSearchCatalog(params: {
     params.mode === "reuse" &&
     existing &&
     metadata &&
-    stableStringify(metadata.toolExecutionAllow) === stableStringify(toolExecutionAllow) &&
+    (metadata.toolExecutionAllow === toolExecutionAllow ||
+      (metadata.toolExecutionAllow !== undefined &&
+        toolExecutionAllow !== undefined &&
+        metadata.toolExecutionAllow.length === toolExecutionAllow.length &&
+        metadata.toolExecutionAllow.every((name, index) => name === toolExecutionAllow[index]))) &&
     sameCatalogDescriptors(existing.entries, entries)
       ? rebindCatalogExecutors(existing.entries, entries)
       : undefined;

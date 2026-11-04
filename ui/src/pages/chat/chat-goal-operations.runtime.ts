@@ -1,7 +1,7 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsGoalMutationResult } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionGoal } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { goalOperationExpired } from "../../lib/chat/goal-operation-storage.ts";

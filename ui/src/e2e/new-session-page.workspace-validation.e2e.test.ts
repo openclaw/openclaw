@@ -5,9 +5,11 @@ import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { holdModuleResponse, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { cliAgentCatalog } from "./new-session-page.native-terminal.test-support.ts";
+import { deferRecoveryScopeHydration } from "./new-session-page.scenario.test-support.ts";
 import {
   LOCAL_GIT_WORKSPACE_RESPONSES,
   NEW_SESSION_MODEL_CATALOG,
@@ -129,13 +131,26 @@ async function chooseCustomFolder(page: Page, gateway: MockGateway) {
     .toEqual({ repoRoot: TARGET_REPO, includeRepositoryStatus: true });
 }
 
+async function disconnectGateway(page: Page, gateway: MockGateway) {
+  await pauseVirtualClock(page);
+  await gateway.setOnline(false);
+  // Show the offline status after its grace window and start the first retry socket.
+  await page.clock.fastForward(2_000);
+  await waitForControlUiGatewayReconnecting(page);
+}
+
 async function reconnectForBranchRediscovery(page: Page, gateway: MockGateway) {
   const branchRequests = await requestCount(gateway, "worktrees.branches");
-  await gateway.setOnline(false);
-  await waitForControlUiGatewayReconnecting(page);
-  await gateway.setOnline(true);
-  await waitForControlUiGatewayReady(page);
+  await disconnectGateway(page, gateway);
+  await resumeGateway(page, gateway);
   await expectRequests(gateway, "worktrees.branches", branchRequests + 1);
+}
+
+async function resumeGateway(page: Page, gateway: MockGateway) {
+  // Disconnect advanced the retry; taking the mock online opens its waiting socket.
+  await gateway.setOnline(true);
+  await page.clock.resume();
+  await waitForControlUiGatewayReady(page);
 }
 
 async function expectPendingNewSession(page: Page, message: string) {
@@ -150,6 +165,94 @@ async function expectPendingNewSession(page: Page, message: string) {
 }
 
 suite.define(() => {
+  it.each([false, true])(
+    "keeps branch choices usable through pushed refreshes (cold cache: %s)",
+    async (cold) => {
+      await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
+        const gateway = await openNewPage(
+          page,
+          {
+            "agents.list": LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"],
+            "worktrees.branches": cold
+              ? { branches: [], refreshing: true }
+              : { ...branchList(), refreshing: true },
+          },
+          { workspaceGit: true, models: NEW_SESSION_MODEL_CATALOG },
+        );
+        await gateway.waitForRequest("worktrees.branches");
+        await page.locator("#new-session-checkout-trigger").click();
+        const picker = checkoutPopover(page);
+        await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "visible" });
+        if (cold) {
+          expect(await worktreeOption(page).isDisabled()).toBe(true);
+          await captureUiProof(suite, page, "checkout-cold-refreshing.png");
+          await gateway.setMethodResponse("worktrees.branches", {
+            ...branchList(),
+            refreshing: true,
+          });
+          await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
+          await expect.poll(() => worktreeOption(page).isDisabled()).toBe(false);
+        }
+        await worktreeOption(page).click();
+        const base = checkoutBaseRefInput(picker);
+        await base.fill("release/custom");
+        await picker.locator("[data-worktree-name]").fill("my-task");
+        await base.focus();
+        await picker.locator('[data-worktree-suggestion="main"]').waitFor({ state: "visible" });
+        expect(await requestCount(gateway, "worktrees.branches")).toBe(cold ? 2 : 1);
+        await captureUiProof(suite, page, "checkout-branches-refreshing.png");
+        await gateway.setMethodResponse("worktrees.branches", {
+          ...branchList(),
+          branches: [
+            { kind: "local", name: "main" },
+            { kind: "local", name: "feature/new" },
+          ],
+        });
+        await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
+        await picker
+          .locator('[data-worktree-suggestion="feature/new"]')
+          .waitFor({ state: "visible" });
+        await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "hidden" });
+        expect(await base.inputValue()).toBe("release/custom");
+        expect(await picker.locator("[data-worktree-name]").inputValue()).toBe("my-task");
+        expect(await requestCount(gateway, "worktrees.branches")).toBe(cold ? 3 : 2);
+        await captureUiProof(suite, page, "checkout-branches-refreshed.png");
+      });
+    },
+  );
+
+  it("keeps a failed cold refresh visible with a retry instruction", async () => {
+    await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
+      const gateway = await openNewPage(
+        page,
+        {
+          "agents.list": LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"],
+          "worktrees.branches": { branches: [], refreshing: true },
+        },
+        { workspaceGit: true, models: NEW_SESSION_MODEL_CATALOG },
+      );
+      await gateway.waitForRequest("worktrees.branches");
+      const trigger = page.locator("#new-session-checkout-trigger");
+      await trigger.click();
+      const picker = checkoutPopover(page);
+      await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "visible" });
+      await gateway.setMethodResponse("worktrees.branches", {
+        branches: [],
+        branchesUnavailable: true,
+      });
+      await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
+      await picker
+        .getByText("Couldn’t verify Git for this folder. Try again.", {
+          exact: true,
+        })
+        .waitFor({ state: "visible" });
+      expect(await trigger.isVisible()).toBe(true);
+      expect(await worktreeOption(page).isDisabled()).toBe(true);
+      expect(await requestCount(gateway, "worktrees.branches")).toBe(2);
+      await captureUiProof(suite, page, "checkout-cold-unavailable.png");
+    });
+  });
+
   it("keeps worktree editing stable and resets the accepted name", async () => {
     await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
       const sessionKey = "agent:main:picker-inputs";
@@ -297,6 +400,7 @@ suite.define(() => {
     "handles %s worktree rediscovery becoming %s",
     async (folder, repositoryStatus, message, id) => {
       await suite.withPage(BASE_CONTEXT, async ({ page }) => {
+        await page.clock.install();
         const key = `agent:main:${id}`;
         const gateway = await installMockGateway(page, {
           workspace: WORKSPACE,
@@ -361,10 +465,16 @@ suite.define(() => {
             expect(await worktree.isDisabled()).toBe(true);
             await expect
               .poll(() => tooltipTitleText(worktree))
-              .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
+              .toBe("Couldn’t verify Git for this folder. Try again.");
           }
           await checkoutPopover(page).getByRole("button", { name: "Current checkout" }).click();
-          await expect.poll(() => trigger.count()).toBe(0);
+          await expectAttribute(trigger, "data-worktree", "false");
+          expect(await trigger.isVisible()).toBe(true);
+          await checkoutPopover(page)
+            .getByText("Couldn’t verify Git for this folder. Try again.", {
+              exact: true,
+            })
+            .waitFor({ state: "visible" });
           if (folder === "custom") {
             await expect.poll(() => start.isEnabled()).toBe(true);
           }
@@ -387,6 +497,7 @@ suite.define(() => {
 
   it("blocks an unavailable cloud source until New workspace is explicitly selected", async () => {
     await suite.withPage(BASE_CONTEXT, async ({ page }) => {
+      await page.clock.install();
       const sessionKey = "agent:main:cleared-unavailable-source";
       const gateway = await openNewPage(
         page,
@@ -573,18 +684,7 @@ suite.define(() => {
     "keeps a local start owned when recovery scope hydrates %s",
     async (hydration) => {
       await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
-        await page.addInitScript(() => {
-          const digest = crypto.subtle.digest.bind(crypto.subtle);
-          const ready = new Promise<void>((resolve) => {
-            window.addEventListener("test-release-recovery-scope", () => resolve(), { once: true });
-          });
-          crypto.subtle.digest = async (algorithm, data) => {
-            if (new TextDecoder().decode(data) === "e2e-device-token") {
-              await ready;
-            }
-            return digest(algorithm, data);
-          };
-        });
+        await page.addInitScript(deferRecoveryScopeHydration);
         const chatModule = await holdModuleResponse(
           page,
           controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
@@ -641,6 +741,9 @@ suite.define(() => {
   for (const reconnectKind of ["same-client reconnect", "client replacement"] as const) {
     it(`automatically resumes an idempotent session creation after ${reconnectKind}`, async () => {
       await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
+        if (reconnectKind === "same-client reconnect") {
+          await page.clock.install();
+        }
         const sessionKey = `agent:main:resumed-${reconnectKind.replaceAll(" ", "-")}`;
         const gateway = await openNewPage(page, {
           "agents.list": mainAgentList("Original agent", SOURCE_REPO),
@@ -669,16 +772,14 @@ suite.define(() => {
           await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
           await waitForControlUiGatewayReady(page);
         } else {
-          await gateway.setOnline(false);
-          await waitForControlUiGatewayReconnecting(page);
+          await disconnectGateway(page, gateway);
           // Transport loss keeps the submitted display while execution waits for reconnection.
           expect(await page.getByText(submittedMessage, { exact: true }).isVisible()).toBe(true);
           await expect
             .poll(() => page.locator(".chat-working-indicator").textContent())
             .toContain("Reconnecting");
           expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
-          await gateway.setOnline(true);
-          await waitForControlUiGatewayReady(page);
+          await resumeGateway(page, gateway);
         }
         await expectRequests(gateway, "agents.list", agentRequestsBefore + 1);
         await expectRequests(gateway, "sessions.create", 2);
@@ -700,6 +801,7 @@ suite.define(() => {
     "keeps an interrupted creation fail-closed after the Gateway %s",
     async (change) => {
       await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
+        await page.clock.install();
         const gateway = await openNewPage(page, {
           "agents.list": LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"],
           "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
@@ -730,10 +832,8 @@ suite.define(() => {
             },
           });
         }
-        await gateway.setOnline(false);
-        await waitForControlUiGatewayReconnecting(page);
-        await gateway.setOnline(true);
-        await waitForControlUiGatewayReady(page);
+        await disconnectGateway(page, gateway);
+        await resumeGateway(page, gateway);
         await waitForGatewayRecoveryScope(page);
 
         const warning = page.getByRole("alert").filter({
@@ -754,7 +854,7 @@ suite.define(() => {
             await page.getByText("do not duplicate this task", { exact: true }).isVisible(),
           ).toBe(false);
           await messageInput(page).fill("new owner's task");
-          expect(await startButton(page).isEnabled()).toBe(true);
+          await expect.poll(() => startButton(page).isEnabled()).toBe(true);
         }
         expect(await page.locator(".new-session-page__starting").isVisible()).toBe(false);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);

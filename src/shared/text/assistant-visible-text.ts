@@ -1,6 +1,8 @@
-import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 // Assistant visible text helpers strip hidden reasoning and control marker text.
-import { projectPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/payload.js";
+import {
+  createPlainTextToolCallBraceProbe,
+  projectPlainTextToolCallBlocks,
+} from "../../../packages/tool-call-repair/src/payload.js";
 import { escapeRegExp } from "../regexp.js";
 import {
   stripMinimaxToolCallXml,
@@ -13,15 +15,14 @@ import {
   INTERNAL_TRACE_LINE_RE,
 } from "./assistant-text-transforms.js";
 import {
-  canReuseMarkdownOwnership,
-  findCodeOwnership,
   findCodeRegions,
+  isInsideSettledBlockCode,
   projectLinesOutsideCode,
 } from "./code-regions.js";
 import { downgradedToolCallTextFilter } from "./downgraded-tool-call-text.js";
 import { orderInternalScaffoldingStages } from "./internal-scaffolding-stages.js";
 import { modelSpecialTokensTextFilter } from "./model-special-tokens.js";
-import { createReasoningTagProbe, stripReasoningTagsFromText } from "./reasoning-tags.js";
+import { reasoningTagTextFilter } from "./reasoning-tags.js";
 import {
   applyTextFilters,
   createConditionalTextProjector,
@@ -45,8 +46,9 @@ const invisibleTextFilter: TextFilter = {
   transform: stripInvisibleAssistantText,
   create: () => {
     let visible = false;
+    let visibleThrough = 0;
     let trailingHighSurrogate = "";
-    return createConditionalTextProjector(
+    const projector = createConditionalTextProjector(
       () => "",
       (input) => {
         if (!visible) {
@@ -56,10 +58,15 @@ const invisibleTextFilter: TextFilter = {
           visible = Boolean(
             stripInvisibleAssistantText(trailingHighSurrogate ? appended.slice(0, -1) : appended),
           );
+          if (visible) {
+            visibleThrough = input.text.length;
+          }
         }
         return !visible;
       },
     );
+    projector.canReplaceFrom = (start) => visible && start >= visibleThrough;
+    return projector;
   },
 };
 
@@ -83,18 +90,12 @@ export function assistantVisibleTextFilters(
       : options?.preserveTrailingWhitespace
         ? "start"
         : "both";
-  const stripReasoning = (text: string) =>
-    stripReasoningTagsFromText(text, {
-      mode: preserve ? "preserve" : "strict",
-      scope: profile === "final-answer-delivery" ? "leading" : "all",
-      trim: preserveCodeIndentation ? "none" : trim,
-      // An unfinished stream cannot use terminal malformed-output recovery.
-      recoverUnclosed: !streaming,
-    });
-  const reasoning: TextFilter = {
-    transform: stripReasoning,
-    create: () => createConditionalTextProjector(stripReasoning, createReasoningTagProbe()),
-  };
+  const reasoning = reasoningTagTextFilter({
+    mode: preserve ? "preserve" : "strict",
+    scope: profile === "final-answer-delivery" ? "leading" : "all",
+    // An unfinished stream cannot use terminal malformed-output recovery.
+    recoverUnclosed: !streaming,
+  });
   if (preserve) {
     const filters = orderInternalScaffoldingStages<TextFilter>({
       reasoning,
@@ -114,7 +115,7 @@ export function assistantVisibleTextFilters(
     return filters;
   }
   const filters: TextFilter[] = [
-    minimaxToolCallTextFilter,
+    minimaxToolCallTextFilter(streaming),
     modelSpecialTokensTextFilter,
     {
       transform: stripRelevantMemoriesTags,
@@ -141,10 +142,12 @@ export function assistantVisibleTextFilters(
 
 // Activation is a necessary condition only; the canonical parsers still own
 // syntax, code protection, and later corrections once a marker has appeared.
-export const minimaxToolCallTextFilter: TextFilter = {
-  transform: stripMinimaxToolCallXml,
-  activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
-};
+export function minimaxToolCallTextFilter(streaming = false): TextFilter {
+  return {
+    transform: (text) => stripMinimaxToolCallXml(text, { recoverUnclosed: !streaming }),
+    activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
+  };
+}
 
 export const legacyBracketToolCallTextFilter: TextFilter = {
   transform: stripLegacyBracketToolCallBlocks,
@@ -210,90 +213,19 @@ export const assistantTraceTextFilter: TextFilter = {
   },
 };
 
-const plainToolCallActivationTokens = ["{", "<parameter=", "<function=", "to="] as const;
-function createAppendCodeRegionResolver() {
-  const isIndentedCodeLine = (line: string) => /^(?: {4}|\t)/u.test(line);
-  const hasOpenIndentedCodeLine = (
-    text: string,
-    regions: ReturnType<typeof findCodeRegions> | undefined,
-  ) => {
-    const last = regions?.at(-1);
-    if (!last?.block || last.end !== text.length) {
-      return false;
-    }
-    const blockLineStart =
-      Math.max(text.lastIndexOf("\n", last.start - 1), text.lastIndexOf("\r", last.start - 1)) + 1;
-    const nextLineFeed = text.indexOf("\n", blockLineStart);
-    const nextCarriageReturn = text.indexOf("\r", blockLineStart);
-    const blockLineEnd = Math.min(
-      ...[nextLineFeed, nextCarriageReturn].filter((offset) => offset >= 0),
-      text.length,
-    );
-    const currentLineStart = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1;
-    return (
-      isIndentedCodeLine(text.slice(blockLineStart, blockLineEnd)) &&
-      isIndentedCodeLine(text.slice(currentLineStart))
-    );
-  };
-  let source = "";
-  let regions: ReturnType<typeof findCodeRegions> | undefined;
-  let ownership: ReturnType<typeof findCodeOwnership> | undefined;
-  let openFence = false;
-  let openIndentedCodeLine = false;
-  let openUntrackedBlock = false;
-  return (text: string) => {
-    if (regions && canReuseMarkdownOwnership(source, text, ownership)) {
-      if (openFence && regions.length > 0) {
-        const last = regions[regions.length - 1];
-        if (last?.block && last.end === source.length) {
-          regions = [...regions.slice(0, -1), { ...last, end: text.length }];
-        }
-        source = text;
-        return regions;
-      } else if (openIndentedCodeLine) {
-        const lineBreaks = [...text.slice(source.length).matchAll(/\r\n|\r|\n/gu)];
-        const hasContentAfterLineBreak = lineBreaks.some(
-          (match) => (match.index ?? 0) + match[0].length < text.length - source.length,
-        );
-        const last = regions[regions.length - 1];
-        if (!hasContentAfterLineBreak && last?.block && last.end === source.length) {
-          regions = [...regions.slice(0, -1), { ...last, end: text.length }];
-          source = text;
-          openIndentedCodeLine = !/(?:\r\n|\r|\n)$/u.test(text);
-          return regions;
-        }
-      } else if (!openUntrackedBlock) {
-        source = text;
-        return regions;
-      }
-    }
-    source = text;
-    ownership = /[`~\t]| {4}/u.test(text) ? findCodeOwnership(text) : undefined;
-    regions = ownership?.regions ?? [];
-    const last = regions.at(-1);
-    const lineStart = last
-      ? Math.max(text.lastIndexOf("\n", last.start - 1), text.lastIndexOf("\r", last.start - 1)) + 1
-      : 0;
-    const isTopLevelFence = Boolean(last && /^ {0,3}$/u.test(text.slice(lineStart, last.start)));
-    const openFenceScan =
-      last?.block && last.end === text.length && isTopLevelFence
-        ? scanFenceSpans(text.slice(last.start))
-        : undefined;
-    openFence = Boolean(openFenceScan?.state.open && openFenceScan.spans.at(-1)?.start === 0);
-    openIndentedCodeLine = hasOpenIndentedCodeLine(text, regions);
-    openUntrackedBlock = Boolean(
-      !openFence && !openIndentedCodeLine && last?.block && last.end === text.length,
-    );
-    return regions;
-  };
-}
-
-function createPlainToolCallTextProjector() {
-  const resolveProtectedRanges = createAppendCodeRegionResolver();
-  const checkpoint = (text: string, settleBefore: number) =>
-    projectPlainTextToolCallBlocks(text, { resolveProtectedRanges, settleBefore });
+const plainToolCallActivationTokens = ["<parameter=", "<function=", "to="] as const;
+function createPlainToolCallTextProjector(preview = false) {
+  const checkpoint: NonNullable<TextFilter["checkpoint"]> = (text, settleBefore, context) =>
+    projectPlainTextToolCallBlocks(text, {
+      resolveProtectedRanges: context.codeRegions,
+      settleBefore,
+      preview,
+      isProtectionSettled: (offset) =>
+        offset < settleBefore || isInsideSettledBlockCode(offset, text, context.codeRegions()),
+    });
   const activation = new RegExp(plainToolCallActivationTokens.map(escapeRegExp).join("|"), "i");
   const overlap = Math.max(...plainToolCallActivationTokens.map((token) => token.length - 1));
+  const braceProbe = createPlainTextToolCallBraceProbe(preview);
   let active = false;
   let tail = "";
   return createConditionalTextProjector(
@@ -301,7 +233,7 @@ function createPlainToolCallTextProjector() {
     (input) => {
       if (!active) {
         const appended = tail + (input.delta ?? input.text);
-        active = activation.test(appended);
+        active = activation.test(appended) || braceProbe(input.delta ?? input.text);
         tail = !active && overlap ? appended.slice(-overlap) : "";
       }
       return active;
@@ -314,6 +246,28 @@ export const plainToolCallTextFilter: TextFilter = {
   transform: plainToolCallTransform,
   create: createPlainToolCallTextProjector,
 };
+
+/** Channel previews share the call grammar, but cannot expose its provisional tail. */
+export const plainToolCallPreviewTextFilter: TextFilter = {
+  transform: plainToolCallTransform,
+  create: () => createPlainToolCallTextProjector(true),
+};
+
+/**
+ * Settlement of a plain-text tool-call candidate at the end of visible text. Streaming may
+ * publish that tail and retract it later through a replacement, but block replies
+ * (already-delivered chat messages) cannot be retracted, so their drain waits until the
+ * candidate settles.
+ */
+export function hasUnsettledPlainTextToolCall(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  const projected = projectPlainTextToolCallBlocks(text, {
+    resolveProtectedRanges: findCodeRegions,
+  });
+  return projected.unsettled;
+}
 
 export function sanitizeAssistantVisibleTextWithProfile(
   text: string,

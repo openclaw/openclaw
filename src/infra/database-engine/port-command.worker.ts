@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasErrnoCode } from "../errno.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { getPostgresPool } from "../postgres-sync/pool.js";
 import { runtimeProcessEntrypoints } from "../runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
@@ -99,20 +100,23 @@ async function inspectSqliteImage(
     version,
     migrationRequired: schemaMigrationRequired,
     pendingColumns,
+    pendingTables = [],
   } = descriptor.inspectSqliteSource?.(db) ?? {
     version: (await import("../sqlite-user-version.js")).readSqliteUserVersion(db),
     migrationRequired: false,
     pendingColumns: {},
   };
-  // Port preparation also fills first-use columns that the live store may omit.
+  // Port preparation fills first-use objects that the live store may omit.
   const migrationRequired =
-    schemaMigrationRequired || Object.values(pendingColumns).some((columns) => columns.length > 0);
+    schemaMigrationRequired ||
+    pendingTables.length > 0 ||
+    Object.values(pendingColumns).some((columns) => columns.length > 0);
   if (allowMigration && migrationRequired) {
     // Historical repairs use family admission; current first-use repairs still
     // need the port's complete layout before preparing a private copy.
     const admitted =
       !schemaMigrationRequired || !descriptor.migrateSqliteSource
-        ? inspectSqlitePortSchema(db, descriptor, pendingColumns)
+        ? inspectSqlitePortSchema(db, descriptor, pendingColumns, pendingTables)
         : descriptor;
     return { version, migrationRequired, notes: admitted.notes };
   }
@@ -440,6 +444,10 @@ export async function runDatabasePortTask(
   scope: Scope,
 ): Promise<DatabasePortReply> {
   scope.assertCurrent();
+  // Target schema admission needs PostgreSQL while the caller still selects SQLite.
+  if (task.operation === "stage" && task.to === "postgres") {
+    getPostgresPool();
+  }
   const { WorkerTaskPool } = await import("../worker-task-pool.js");
   const pool = new WorkerTaskPool<DatabasePortTask, DatabasePortReply>({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.databasePortCommand),

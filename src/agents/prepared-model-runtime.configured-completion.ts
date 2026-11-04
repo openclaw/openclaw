@@ -28,7 +28,10 @@ export function completeConfiguredRuntimeModels(
     PreparedModelRuntimeAgentFacts,
     "input" | "env" | "configuredModelRefs" | "configuredRuntimeModels"
   >,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  pluginGeneration: Pick<
+    PreparedModelRuntimePluginGeneration,
+    "pluginMetadataSnapshot" | "pluginRegistry"
+  >,
   modelRegistry: ModelRegistry,
 ): readonly PreparedConfiguredRuntimeModel[] {
   if (!pluginGeneration.pluginRegistry) {

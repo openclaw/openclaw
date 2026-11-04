@@ -1,4 +1,4 @@
-export type WorkspaceManifestProgramProcess = {
+type WorkspaceManifestProgramProcess = {
   argv: string[];
   env: { HOME: string };
   pid: number;

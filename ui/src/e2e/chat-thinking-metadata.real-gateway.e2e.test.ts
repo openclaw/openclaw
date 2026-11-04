@@ -13,6 +13,7 @@ import {
 } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const sessionKey = "agent:main:thinking-status";
 const harnessOnlyThinkingLevels = [{ id: "ultra", label: "ultra" }];
 const pageOptions = {
@@ -173,18 +174,20 @@ suite.define(() => {
       await composer.press("Enter");
       await expect
         .poll(() => page.getByRole("log").textContent())
-        .toContain("Current thinking level: off.");
+        .toContain("Current effort: off.");
       expect(await page.getByRole("log").textContent()).toContain("Options: default, ultra.");
       expect(await page.locator('[data-chat-thinking-slider="true"]').count()).toBe(0);
       await expectUnselectedUltraChoice(page, "off");
-      await page.screenshot({
-        path: path.join(suite.artifactDir, "saved-off-empty-profile.png"),
-      });
+      if (captureUiProof) {
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "saved-off-empty-profile.png"),
+        });
+      }
       await composer.fill("/think high");
       await composer.press("Enter");
       await expect
         .poll(() => page.getByRole("log").textContent())
-        .toContain('Unsupported thinking level "high" for this model.');
+        .toContain("Couldn’t use effort “high” with this model.");
       const after = await call<SessionsListResult>("sessions.list", { agentId: "main", limit: 50 });
       expect(after.sessions.find((row) => row.key === key)).toMatchObject({
         modelProvider: "thinking-fixture",
@@ -266,10 +269,12 @@ suite.define(() => {
         try {
           await expect
             .poll(() => page.getByRole("log").textContent(), { timeout: 30_000 })
-            .toContain("Current thinking level: Unknown.");
+            .toContain("Current effort: Unknown.");
           expect(await page.getByRole("log").textContent()).toContain("Options: default, ultra.");
         } finally {
-          await page.screenshot({ path: path.join(suite.artifactDir, "thinking-status.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "thinking-status.png") });
+          }
         }
         expect(await composer.inputValue()).toBe("");
         expect(await page.getByRole("slider").count()).toBe(0);
@@ -287,22 +292,28 @@ suite.define(() => {
           .evaluateAll((options) => options.map((option) => option.getAttribute("value")));
         expect(tableOptions).toEqual(["", "ultra"]);
         expect(await thinking.inputValue()).toBe("");
-        await thinking.locator("..").screenshot({
-          path: path.join(suite.artifactDir, "session-thinking.png"),
-        });
+        if (captureUiProof) {
+          await thinking.locator("..").screenshot({
+            path: path.join(suite.artifactDir, "session-thinking.png"),
+          });
+        }
 
-        await page.getByRole("link", { name: "New conversation", exact: true }).first().click();
+        await page.getByRole("link", { name: "New session", exact: true }).first().click();
         await page.waitForURL((current) => current.pathname === "/new");
         await waitForControlUiGatewayReady(page);
         const modelControl = page.locator("[data-chat-model-select='true']");
         await expect.poll(() => modelControl.textContent()).toContain("No effort");
         expect(await page.locator("[data-chat-thinking-slider='true']").count()).toBe(0);
         await expectUnselectedUltraChoice(page, "");
-        await page.locator(".chat-controls__model-settings").screenshot({
-          path: path.join(suite.artifactDir, "draft-thinking.png"),
-        });
+        if (captureUiProof) {
+          await page.locator(".chat-controls__model-settings").screenshot({
+            path: path.join(suite.artifactDir, "draft-thinking.png"),
+          });
+        }
       } finally {
-        await page.screenshot({ path: path.join(suite.artifactDir, "last-page.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(suite.artifactDir, "last-page.png") });
+        }
       }
     });
     const after = await call<SessionsListResult>("sessions.list", { agentId: "main", limit: 50 });

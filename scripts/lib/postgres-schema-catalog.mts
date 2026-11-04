@@ -73,7 +73,7 @@ function parts(input: string[]): string[][] {
   return result;
 }
 
-type Expression = { sql: string; type: string };
+type Expression = { sql: string; type: string; nonNullColumns?: string[] };
 const navigationMembers = [
   "version",
   "modelBytes",
@@ -349,12 +349,17 @@ function expression(source: string, columns: Map<string, string>, table?: string
       const negate = take("NOT");
       const right = atom();
       compatible(left, right);
+      const name = identifier(left.sql);
       return {
         sql:
           right.type === "null"
             ? `${left.sql} IS ${negate ? "NOT " : ""}NULL`
             : `${left.sql} IS ${negate ? "" : "NOT "}DISTINCT FROM ${right.sql}`,
         type: "boolean",
+        nonNullColumns:
+          negate && right.type === "null" && columns.has(name) && left.sql === quote(name)
+            ? [name]
+            : undefined,
       };
     }
     const negate = take("NOT");
@@ -411,14 +416,28 @@ function expression(source: string, columns: Map<string, string>, table?: string
   function and(): Expression {
     let value = not();
     while (take("AND")) {
-      value = { sql: `${boolean(value)} AND ${boolean(not())}`, type: "boolean" };
+      const right = not();
+      value = {
+        sql: `${boolean(value)} AND ${boolean(right)}`,
+        type: "boolean",
+        nonNullColumns: [
+          ...new Set([...(value.nonNullColumns ?? []), ...(right.nonNullColumns ?? [])]),
+        ],
+      };
     }
     return value;
   }
   function or(): Expression {
     let value = and();
     while (take("OR")) {
-      value = { sql: `${boolean(value)} OR ${boolean(and())}`, type: "boolean" };
+      const right = and();
+      value = {
+        sql: `${boolean(value)} OR ${boolean(right)}`,
+        type: "boolean",
+        nonNullColumns: value.nonNullColumns?.filter((name) =>
+          right.nonNullColumns?.includes(name),
+        ),
+      };
     }
     return value;
   }
@@ -489,15 +508,6 @@ function indexExpressions(
   const ts = tokens(indexSource);
   const on = ts.findIndex((token) => keyword(token, "ON"));
   const keys = group(ts, ts.indexOf("(", on));
-  const terms = parts(keys.body).map((term) => {
-    const order = /^(ASC|DESC)$/i.test(term.at(-1)!) ? term.pop()!.toUpperCase() : "ASC";
-    const notNull =
-      term.length === 1 &&
-      columns.some((column) => column.name === identifier(term[0]!) && !column.nullable);
-    // Non-null keys match PostgreSQL's default ORDER BY; nullable expressions retain SQLite order.
-    const nulls = notNull ? "" : ` NULLS ${order === "DESC" ? "LAST" : "FIRST"}`;
-    return `(${expression(term.join(" "), cols, table).sql}) ${order}${nulls}`;
-  });
   const where = ts.slice(keys.end + 1);
   if (where.length && !keyword(where.shift(), "WHERE")) {
     throw new Error("Unsupported index suffix");
@@ -506,6 +516,16 @@ function indexExpressions(
   if (predicate && predicate.type !== "boolean") {
     throw new Error("Non-boolean index predicate");
   }
+  const terms = parts(keys.body).map((term) => {
+    const order = /^(ASC|DESC)$/i.test(term.at(-1)!) ? term.pop()!.toUpperCase() : "ASC";
+    const notNull =
+      term.length === 1 &&
+      (columns.some((column) => column.name === identifier(term[0]!) && !column.nullable) ||
+        predicate?.nonNullColumns?.includes(identifier(term[0]!)));
+    // Schema or predicate-proven non-null keys match PostgreSQL's default ORDER BY.
+    const nulls = notNull ? "" : ` NULLS ${order === "DESC" ? "LAST" : "FIRST"}`;
+    return `(${expression(term.join(" "), cols, table).sql}) ${order}${nulls}`;
+  });
   return `(${terms.join(", ")})${predicate ? ` WHERE ${predicate.sql}` : ""}`;
 }
 

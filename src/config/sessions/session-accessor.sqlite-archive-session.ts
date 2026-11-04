@@ -77,6 +77,7 @@ export async function withSqliteTranscriptArchiveSession<T>(
 }
 
 type SqliteArchiveResponseByOperation = {
+  "cold-prepare": Extract<SqliteArchiveSessionResponse, { type: "cold-prepared" }>;
   materialize: Extract<SqliteArchiveSessionResponse, { type: "done" }>;
   publish: Extract<SqliteArchiveSessionResponse, { type: "published" }>;
   "read-page": Extract<SqliteArchiveSessionResponse, { type: "page-read" }>;
@@ -174,11 +175,13 @@ class ArchiveSession {
   ): Promise<SqliteArchiveSessionResponse> {
     this.assertCurrent();
     if (
-      request.plans.some(
-        (plan) =>
-          normalizeAgentId(plan.agentId) !== this.options.agentId ||
-          path.resolve(plan.databasePath) !== this.options.path,
-      )
+      request.operation === "cold-prepare"
+        ? !this.matches(request.input.databaseOptions)
+        : request.plans.some(
+            (plan) =>
+              normalizeAgentId(plan.agentId) !== this.options.agentId ||
+              path.resolve(plan.databasePath) !== this.options.path,
+          )
     ) {
       throw new Error("SQLite archive request changed its captured database owner");
     }
@@ -203,9 +206,16 @@ class ArchiveSession {
           };
           // The FIFO has one request in flight on this private, paired worker port.
           const receive = (
-            response: SqliteArchiveSessionResponse | { type: "archive-temporary-file" },
+            response:
+              | SqliteArchiveSessionResponse
+              | { type: "archive-temporary-file" }
+              | { status: "memory" },
           ) => {
-            if (response.type === "archive-temporary-file" || connection.failure) {
+            if (
+              "status" in response ||
+              response.type === "archive-temporary-file" ||
+              connection.failure
+            ) {
               return;
             }
             cleanup();

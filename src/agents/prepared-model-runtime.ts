@@ -1,7 +1,7 @@
 /** Lifecycle-owned auth/model discovery snapshots for agent runs. */
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { throwSettledAggregate } from "../infra/error-graph-internal.js";
+import { materializeErrorStack, throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { readOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
@@ -39,6 +39,8 @@ import {
   publishModelRuntimeSnapshot,
   resolveConfiguredOwner,
   readPublishedModelRuntimeSnapshot,
+  resolvePreparedModelRuntimeOwnerBySnapshot,
+  preparedModelRuntimeConfigsMatch,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimePublicationOptions,
@@ -245,6 +247,15 @@ export function getPreparedModelRuntimeSnapshot(
     : readPublishedModelRuntimeSnapshot(owners, rawInput);
 }
 
+/** Cleanup borrows the workspace's published inbound registrations without rebuilding a run. */
+export function getPreparedInboundPluginRegistry(input: PreparedModelRuntimeInput) {
+  const snapshot = getPreparedModelRuntimeSnapshot(input);
+  const owner = snapshot && resolvePreparedModelRuntimeOwnerBySnapshot(snapshot);
+  return owner && preparedModelRuntimeConfigsMatch(owner.input.config, input.config)
+    ? owner.pluginGeneration?.inboundPluginRegistry
+    : undefined;
+}
+
 /** Reads the owner-held publication barrier without starting catalog acquisition. */
 export function getPendingPreparedModelRuntimeReplacement(): Promise<void> | undefined {
   return getBlockingReplacement()?.promise;
@@ -401,6 +412,7 @@ export function markPreparedModelRuntimeSnapshotsStale(
     waitForReplacement?: boolean;
     preserveReplacementWait?: boolean;
     agentIds?: ReadonlySet<string>;
+    preservePluginGenerations?: boolean;
   } = {},
 ): PreparedModelRuntimeReplacementGateId | undefined {
   captureModelRuntimeLifetime();
@@ -431,10 +443,11 @@ export function markPreparedModelRuntimeSnapshotsStale(
   const staleError = new Error(reason);
   updateOwnersForScopedRefresh(owners, options.agentIds, staleError, {
     retireStandalone: true,
-    resetPluginGeneration: true,
+    resetPluginGeneration: !options.preservePluginGenerations,
   });
   // Fence epochs and admission before cancellation can reenter a plugin callback.
   previousCancellation.abort(new PreparedModelRuntimePublicationSupersededError(reason));
+  materializeErrorStack(previousCancellation.signal.reason);
   const replacement = getBlockingReplacement();
   notifyPreparedModelRuntimePublication({
     phase: "invalidated",
@@ -501,6 +514,7 @@ export function refreshPreparedModelRuntimeSnapshots(
   markPreparedModelRuntimeSnapshotsStale(undefined, {
     waitForReplacement: true,
     agentIds: initialAgentIds,
+    preservePluginGenerations: options.preservePluginGenerations,
   });
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const requestEpoch = refreshRequestEpoch;
@@ -538,7 +552,7 @@ export function refreshPreparedModelRuntimeSnapshots(
       // A lost external claim can leave partially built owners; fence them even without a successor.
       updateOwnersForScopedRefresh(owners, publicationAgentIds, error, {
         clearPending: true,
-        resetPluginGeneration: true,
+        resetPluginGeneration: !options.preservePluginGenerations,
       });
     }
     rejectPendingPreparedModelRuntimeReplacement(replacement?.gateId, error);

@@ -27,6 +27,7 @@ import { createFixture } from "./plugin-generation-artifact.admission.test-suppo
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import type { GenerationWorkerInput } from "./plugin-generation-worker-contract.js";
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
+import { isPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 import {
   nativeAdmissionStateFor,
   preparePluginNativeAdmissions,
@@ -86,6 +87,48 @@ function sourceFixture(version?: string) {
   });
   return { root, source, entry };
 }
+
+it("transports source acquisition classification and errno after worker cleanup", async () => {
+  const root = temp.make("plugin-worker-unavailable-");
+  const missing = path.join(root, "missing");
+  await withStorage(root, async () => {
+    let failure: unknown;
+    try {
+      await preparePluginGenerationArtifact({
+        rootDir: missing,
+        source: path.join(missing, "index.cjs"),
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ name: "Error", code: "ENOENT" });
+    expect(isPluginSourceAcquisitionError(failure)).toBe(true);
+    expect(workersActive()).toBe(false);
+  });
+});
+
+it.each(["missing", "directory"] as const)(
+  "classifies an owned %s entry preparation call after initial capture",
+  async (kind) => {
+    const { root, source, entry } = sourceFixture();
+    writeTree(source, { "directory.cjs/index.cjs": "module.exports = {};" });
+    await withStorage(root, async () => {
+      const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
+      let failure: unknown;
+      try {
+        const target = path.join(source, `${kind}.cjs`);
+        prepared.artifact.prepareModule(prepared.artifact.resolve(target));
+      } catch (error) {
+        failure = error;
+      } finally {
+        await prepared.artifact.disposeAsync();
+      }
+      expect(failure).toBeInstanceOf(Error);
+      expect(isPluginSourceAcquisitionError(failure)).toBe(true);
+      expect(workersActive()).toBe(false);
+    });
+  },
+);
 
 it("signals posted source-mapping callbacks before their worker task can finish", async () => {
   const { root, source, entry } = sourceFixture();
@@ -469,13 +512,14 @@ it.each(["capture", "custody", "fork"] as const)(
   },
 );
 
-it("isolates an active artifact from a sibling capture waiting on host publication", async () => {
+it("shares one worker while a sibling capture waits on host publication", async () => {
   const root = fs.realpathSync(temp.make("plugin-generation-worker-sibling-"));
   const fixture = createFixture(path.join(root, "installed"), false);
   const cache = createPluginCache();
   const siblingCache = createPluginCache();
   const { promise: gate, resolve: releasePublication } = createDeferredCore();
   const { promise: started, resolve: publicationStarted } = createDeferredCore();
+  const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
   try {
     await withInstalledCapture(root, cache, async () => {
       preparePluginNativeAdmissions(fixture.index, cache);
@@ -494,6 +538,16 @@ it("isolates an active artifact from a sibling capture waiting on host publicati
         () => withPluginCache(siblingCache, () => prepare(fixture)),
       );
       try {
+        // Resolve synchronously before the sibling's result continuation can run.
+        // The shared transport must service and release its preceding capture.
+        const now = performance.now();
+        const clock = vi.spyOn(performance, "now").mockReturnValue(now + 30_001);
+        clock.mockReturnValueOnce(now);
+        try {
+          first.artifact.prepareModule(first.artifact.resolve(fixture.entry));
+        } finally {
+          clock.mockRestore();
+        }
         await Promise.race([
           started,
           preparing.then(() => {
@@ -503,6 +557,13 @@ it("isolates an active artifact from a sibling capture waiting on host publicati
         // Registration may schedule a lazy import while another plugin is preparing.
         await nextTimer(0);
         expectSource(first.artifact, fixture.entry);
+        const captureWorkers = posts.mock.calls.flatMap(([value], index) =>
+          isRecord(value) && isRecord(value.input) && value.input.operation === "capture"
+            ? [posts.mock.contexts[index]]
+            : [],
+        );
+        expect(captureWorkers).toHaveLength(2);
+        expect(new Set(captureWorkers).size).toBe(1);
         await expect(
           preparePluginGenerationArtifact({
             rootDir: path.join(root, "missing"),

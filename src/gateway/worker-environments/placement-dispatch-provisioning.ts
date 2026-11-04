@@ -1,65 +1,7 @@
 import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
-import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
-import { WorkerEnvironmentReconcileInterruptedError } from "./environment-errors.js";
-import type {
-  WorkerDispatchEnvironmentService,
-  WorkerDispatchPlacement,
-  WorkerDispatchPlacementStore,
-} from "./placement-dispatch-failure.js";
-import {
-  WorkerPlacementAdmissionTargetError,
-  type WorkerPlacementDispatchRequest,
-} from "./service-contract.js";
+import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
+import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
-
-export function isPendingProvisioningEnvironment(
-  environment: ReturnType<WorkerEnvironmentService["get"]>,
-  environmentId: string | null,
-): boolean {
-  return (
-    environment?.environmentId === environmentId &&
-    environment.destroyRequestedAtMs === null &&
-    (environment.state === "requested" ||
-      environment.state === "provisioning" ||
-      environment.state === "bootstrapping")
-  );
-}
-
-export function createInterruptedWorkerProvisioningRetainer(options: {
-  placements: Pick<WorkerDispatchPlacementStore, "getAsync">;
-  environments: Pick<WorkerEnvironmentService, "get" | "recordError">;
-  isShuttingDown?: () => boolean;
-}) {
-  const { environments, placements } = options;
-  return async (
-    owned: WorkerDispatchPlacement,
-    error: unknown,
-  ): Promise<WorkerDispatchPlacement | undefined> => {
-    if (
-      error instanceof WorkerPlacementAdmissionTargetError ||
-      error instanceof WorkerDispatchTargetChangedError ||
-      (!options.isShuttingDown?.() &&
-        !(error instanceof WorkerEnvironmentReconcileInterruptedError))
-    ) {
-      return undefined;
-    }
-    const current = await placements.getAsync(owned.sessionId);
-    if (
-      current?.state !== "provisioning" ||
-      current.state !== owned.state ||
-      current.generation !== owned.generation ||
-      current.environmentId !== owned.environmentId
-    ) {
-      return undefined;
-    }
-    const environment = current.environmentId ? environments.get(current.environmentId) : undefined;
-    if (!environment || !isPendingProvisioningEnvironment(environment, current.environmentId)) {
-      return undefined;
-    }
-    await environments.recordError(environment, error);
-    return current;
-  };
-}
 
 export function requireProvisionedEnvironment(
   environment: Awaited<ReturnType<WorkerEnvironmentService["createWithRequest"]>>,

@@ -148,8 +148,10 @@ suite.define(() => {
       ]);
       expect(await chat.locator(".chat-bubble-dots").count()).toBe(0);
       expect(await chat.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+      // Bubble mode keeps narration in place: one activity disclosure, no completed-work rollup.
+      await browserExpect(chat.locator(".chat-work-group")).toHaveCount(0);
       const activity = chat.locator(".chat-activity-group > button").first();
-      await browserExpect(activity).toHaveText(/operation|Read|Worked|Raw details/);
+      await browserExpect(activity).toHaveText(/operation|Read|Raw details/);
       expect((await activity.boundingBox())!.height).toBeLessThanOrEqual(36);
       await activity.click();
       await browserExpect(chat.locator(".chat-tool-msg-summary").first()).toBeVisible();

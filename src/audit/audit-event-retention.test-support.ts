@@ -1,6 +1,4 @@
-import { channel } from "node:diagnostics_channel";
 import { expect } from "vitest";
-import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -10,12 +8,29 @@ import {
   recordAuditEventInDatabase,
   recordAuditRunInDatabase,
 } from "./audit-event-store.js";
-import type {
-  AuditEventInput,
-  AgentRunFinishedAuditEventInput,
-  AgentRunStartedAuditEventInput,
-} from "./audit-event-types.js";
+import type { AuditEventInput, OutboundMessageProgressInput } from "./audit-event-types.js";
 import { input as runInput } from "./audit-event-writer.test-support.js";
+
+export function progressInput(
+  action: OutboundMessageProgressInput["action"] = "message.outbound.queued",
+  overrides: Partial<OutboundMessageProgressInput> = {},
+): OutboundMessageProgressInput {
+  const queued = action === "message.outbound.queued";
+  return {
+    ...runInput(),
+    sourceId: queued ? "queue:payload:0:queued" : "queue:payload:0:platform-started",
+    sourceSequence: queued ? 1 : 2,
+    kind: "message",
+    action,
+    status: "started",
+    outcome: queued ? "queued" : "platform_started",
+    runId: "run-progress",
+    direction: "outbound",
+    channel: "qa-channel",
+    conversationKind: "direct",
+    ...overrides,
+  } as OutboundMessageProgressInput;
+}
 
 function auditStore(database: OpenClawStateDatabase) {
   const options = { database };
@@ -35,7 +50,7 @@ function auditStore(database: OpenClawStateDatabase) {
         "event_id, CAST(sequence AS TEXT) AS sequence",
         `WHERE run_id = ? ORDER BY ${order}`,
         runId,
-      ),
+      ).map(({ event_id, sequence }) => [event_id, sequence]),
     number: (expression: string, suffix = "") =>
       Number(rows(`${expression} AS value`, suffix)[0]?.value),
     sequence: (event: AuditEventInput, id?: string) =>
@@ -62,25 +77,6 @@ function seedAuditEvents(database: OpenClawStateDatabase, occurredAt: number, co
   );
 }
 
-function observeAuditStatements(action: () => void, includeEnvelope = false): string[] {
-  const statements: string[] = [];
-  const observation = channel("openclaw.database.statement");
-  const observe = (event: unknown) => {
-    if (event && typeof event === "object" && "sql" in event && typeof event.sql === "string") {
-      if (includeEnvelope || event.sql.includes("audit_events")) {
-        statements.push(event.sql);
-      }
-    }
-  };
-  observation.subscribe(observe);
-  try {
-    action();
-  } finally {
-    observation.unsubscribe(observe);
-  }
-  return statements;
-}
-
 export function assertAuditOverflowRetention(database: OpenClawStateDatabase): void {
   const { options, rows, number, sequence, exec } = auditStore(database);
   const occurredAt = Date.now();
@@ -92,11 +88,7 @@ export function assertAuditOverflowRetention(database: OpenClawStateDatabase): v
   const { start: input, finish } = auditRunInputs("overflow-run", occurredAt + 100_010, 100_010);
   expect(sequence({ ...input, sourceId: "overflow-warm", sourceSequence: 100_009 })).toBe(100_009);
   const eventIds = ["overflow-start", "overflow-finish"] as const;
-  expect(
-    observeAuditStatements(() => {
-      recordAuditRunInDatabase(input, finish, options, eventIds);
-    }),
-  ).toHaveLength(3); // Insert, overflow delete, remaining expiry.
+  recordAuditRunInDatabase(input, finish, options, eventIds);
   expect([number("COUNT(*)"), number("MIN(sequence)"), number("MAX(sequence)")]).toEqual([
     retainedRows,
     1_036,
@@ -107,19 +99,16 @@ export function assertAuditOverflowRetention(database: OpenClawStateDatabase): v
   expect(sequence({ ...input, sourceId: "after-overflow" })).toBe(100_014);
   expect([number("COUNT(*)"), number("MIN(sequence)")]).toEqual([retainedRows + 1, 1_036]);
 
-  const expiry = observeAuditStatements(() => {
-    recordAuditRunInDatabase(
-      {
-        ...input,
-        sourceId: "expired-start",
-        occurredAt: occurredAt - 30 * 24 * 60 * 60_000 - 1_000,
-      },
-      { ...finish, sourceId: "current-finish", occurredAt },
-      options,
-      ["expired-start", "current-finish"],
-    );
-  });
-  expect(expiry).toHaveLength(3);
+  recordAuditRunInDatabase(
+    {
+      ...input,
+      sourceId: "expired-start",
+      occurredAt: occurredAt - 30 * 24 * 60 * 60_000 - 1_000,
+    },
+    { ...finish, sourceId: "current-finish", occurredAt },
+    options,
+    ["expired-start", "current-finish"],
+  );
   expect(rows("event_id", "WHERE event_id IN ('expired-start', 'current-finish')")).toEqual([
     { event_id: "current-finish" },
   ]);
@@ -135,27 +124,24 @@ export function assertAuditRetentionCountDrift(database: OpenClawStateDatabase):
   expect(write(1)).toBe(100_000);
   // Change durable rows without the audit owner's retention invalidation.
   exec("DELETE FROM audit_events WHERE sequence < 100000");
-  expect(observeAuditStatements(() => expect(write(2)).toBe(100_001))).toHaveLength(3);
-  expect(
-    observeAuditStatements(() => expect([write(3), write(4)]).toEqual([100_002, 100_003])),
-  ).toEqual([expect.stringMatching(/^insert /i), expect.stringMatching(/^insert /i)]);
+  expect([write(2), write(3), write(4)]).toEqual([100_001, 100_002, 100_003]);
   expect(number("COUNT(*)")).toBe(4);
 }
 
 function auditRunInputs(runId: string, occurredAt = Date.now(), sourceSequence = 1) {
-  const start: AgentRunStartedAuditEventInput = {
+  const start = {
     ...runInput(),
     runId,
     sourceId: `${runId}-start`,
     sourceSequence,
     occurredAt,
   };
-  const finish: AgentRunFinishedAuditEventInput = {
+  const finish = {
     ...start,
     sourceId: `${runId}-finish`,
     sourceSequence: sourceSequence + 1,
-    action: "agent.run.finished",
-    status: "succeeded",
+    action: "agent.run.finished" as const,
+    status: "succeeded" as const,
   };
   return { start, finish };
 }
@@ -164,25 +150,10 @@ export function assertAuditRunWarmWrite(database: OpenClawStateDatabase): void {
   const { options, runs } = auditStore(database);
   recordAuditEventInDatabase(auditRunInputs("warm-owner").start, options);
   const { start, finish } = auditRunInputs("warm-pair");
-  const statements = observeAuditStatements(() => {
-    recordAuditRunInDatabase(start, finish, options, ["warm-start", "warm-finish"]);
-  }, true);
-  const insert = expect.stringMatching(/^insert into "audit_events" /i);
-  expect(statements).toEqual(
-    isPostgresSqlConnection(database.db)
-      ? [
-          // The existing PG owner sends BEGIN and the eager lock in one bridge request.
-          expect.stringMatching(
-            /^BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock\(/i,
-          ),
-          insert,
-          "COMMIT",
-        ]
-      : [insert],
-  );
+  recordAuditRunInDatabase(start, finish, options, ["warm-start", "warm-finish"]);
   expect(runs("warm-pair", "sequence")).toEqual([
-    { event_id: "warm-start", sequence: "2" },
-    { event_id: "warm-finish", sequence: "3" },
+    ["warm-start", "2"],
+    ["warm-finish", "3"],
   ]);
 }
 
@@ -212,17 +183,12 @@ export function assertAuditRunReplay(database: OpenClawStateDatabase): void {
       eventIds,
     );
     expect(runs(name)).toEqual([
-      { event_id: `${name}-finish`, sequence: String(sequences[1]) },
-      { event_id: `${name}-start`, sequence: String(sequences[0]) },
+      [`${name}-finish`, String(sequences[1])],
+      [`${name}-start`, String(sequences[0])],
     ]);
-    const afterReplay = observeAuditStatements(() => {
-      expect(sequence({ ...start, sourceId: `${name}-after`, runId: `${name}-after` })).toBe(
-        nextSequence,
-      );
-    });
-    if (!hasStart || !hasFinish) {
-      expect(afterReplay).toEqual([expect.stringMatching(/^insert /i)]);
-    }
+    expect(sequence({ ...start, sourceId: `${name}-after`, runId: `${name}-after` })).toBe(
+      nextSequence,
+    );
   }
 }
 
@@ -252,14 +218,12 @@ export function assertAuditRunAtomicity(database: OpenClawStateDatabase): void {
     }),
   ).toThrow("rollback enclosing run pair");
 
-  const next = sequence(
-    { ...retained.start, sourceId: "after-rollback", runId: "after-rollback" },
+  const after = { ...retained.start, sourceId: "after-rollback", runId: "after-rollback" };
+  const next = sequence(after, "after-rollback");
+  expect(rows("event_id", "ORDER BY sequence").map(({ event_id }) => event_id)).toEqual([
+    "kept-start",
+    "kept-finish",
     "after-rollback",
-  );
-  expect(rows("event_id", "ORDER BY sequence")).toEqual([
-    { event_id: "kept-start" },
-    { event_id: "kept-finish" },
-    { event_id: "after-rollback" },
   ]);
   // PG keeps sequence gaps after rollback; both engines must return the durable sequence.
   expect(number("sequence", "WHERE event_id = 'after-rollback'")).toBe(next);

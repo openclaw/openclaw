@@ -24,7 +24,7 @@ describe("resolveNodeStartupTlsEnvironment", () => {
 
   it.each([
     ["empty Linux value", "", "linux", FEDORA_CA_BUNDLE_PATH, undefined],
-    ["whitespace macOS value", " \t ", "darwin", "/etc/ssl/cert.pem", "1"],
+    ["whitespace macOS value", " \t ", "darwin", undefined, "1"],
   ] as const)("treats %s as unset", (_label, value, platform, expected, systemCa) => {
     vi.spyOn(fs, "accessSync").mockImplementation(allowOnly(FEDORA_CA_BUNDLE_PATH));
     const startupEnv = resolveNodeStartupTlsEnvironment({
@@ -37,6 +37,21 @@ describe("resolveNodeStartupTlsEnvironment", () => {
       NODE_EXTRA_CA_CERTS: expected,
       NODE_USE_SYSTEM_CA: systemCa,
     });
+  });
+
+  it("drops the legacy darwin CA bundle value on every caller", () => {
+    for (const includeDarwinDefaults of [undefined, false]) {
+      expect(
+        resolveNodeStartupTlsEnvironment({
+          env: { NODE_EXTRA_CA_CERTS: "/etc/ssl/cert.pem" },
+          platform: "darwin",
+          includeDarwinDefaults,
+        }),
+      ).toEqual({
+        NODE_EXTRA_CA_CERTS: undefined,
+        NODE_USE_SYSTEM_CA: includeDarwinDefaults === false ? undefined : "1",
+      });
+    }
   });
 
   it("can skip macOS defaults for CLI-only pre-start planning", () => {

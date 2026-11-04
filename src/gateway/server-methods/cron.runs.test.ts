@@ -34,6 +34,7 @@ import {
   persistRuns,
 } from "./cron-read.test-support.js";
 import {
+  createCronCallerClient,
   expectCronReply as expectReply,
   expectCronFailure as expectError,
 } from "./cron.validation.test-support.js";
@@ -97,7 +98,12 @@ async function withCronHistory(
     viewer: GatewayClient;
     owner: GatewayClient;
   }) => Promise<void>,
-  options: { unresolvedDefault?: boolean; agentId?: string; roles?: boolean } = {},
+  options: {
+    unresolvedDefault?: boolean;
+    agentId?: string;
+    roles?: boolean;
+    scheduled?: boolean;
+  } = {},
 ) {
   await withOpenClawTestState(profileState, async (state) => {
     const agentId = options.agentId ?? "main";
@@ -137,7 +143,22 @@ async function withCronHistory(
     try {
       const jobs = [];
       for (const sessionKey of [ownKey, foreignKey]) {
-        const result = await cron.add(createHistoryJob(agentId, sessionKey, sessionKey));
+        const result = await cron.add(
+          {
+            ...createHistoryJob(agentId, sessionKey, sessionKey),
+            ...(options.scheduled ? { owner: { agentId, sessionKey, accountId: "default" } } : {}),
+          },
+          options.scheduled
+            ? {
+                scheduledToolPolicy: {
+                  version: 1,
+                  mode: "account",
+                  ownerSessionKey: sessionKey,
+                  ownerAccountId: "default",
+                },
+              }
+            : undefined,
+        );
         jobs.push("job" in result ? result.job : result);
       }
       const jobId = expectDefined(jobs[0], "own job").id;
@@ -347,6 +368,36 @@ describe("cron.runs session visibility", () => {
         expectVisibleRuns(await query(all, owner), visibleRuns);
       }),
   );
+  it("lets an admitted job read its receipts across delivery accounts, but no other job", async () => {
+    await withCronHistory(
+      async ({ jobId, foreignJobId, query, owner }) => {
+        const client = {
+          ...owner,
+          internal: createCronCallerClient(
+            "main",
+            "delivery-account",
+            "agent:main:resumed-turn",
+            jobId,
+          ).internal,
+        };
+        expectReply(
+          await query({ id: jobId, limit: 2 }, client),
+          expect.objectContaining({
+            total: 5,
+            entries: [
+              expect.objectContaining({ runId: "history-run-4", deliveryStatus: "delivered" }),
+              expect.objectContaining({ runId: "history-run-3", deliveryStatus: "not-delivered" }),
+            ],
+          }),
+        );
+        expectNotFound(await query({ id: foreignJobId }, client), foreignJobId);
+        client.internal!.agentRuntimeIdentity!.cronSelfManagementContext!.expiresAtMs =
+          Date.now() - 1;
+        expectNotFound(await query({ id: jobId }, client), jobId);
+      },
+      { scheduled: true },
+    );
+  });
 
   it.each([true, false])(
     "keeps retained deleted-main visibility ahead of replacement-agent aliases (visible: %s)",

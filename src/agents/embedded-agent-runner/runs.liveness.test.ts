@@ -27,6 +27,7 @@ import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
+import { observeSettlement } from "../promise-settlement.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../session-placement-admission.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -209,22 +210,19 @@ it("waits in bounded slices, then reclaims host-owned work without a millisecond
     });
 
   const callerAbort = new AbortController();
-  let settled = false;
   const waiting = admitReplyTurn({
     sessionId,
     sessionKey,
     kind: "visible",
     resetTriggered: false,
     upstreamAbortSignal: callerAbort.signal,
-  }).then((result) => {
-    settled = true;
-    return result;
   });
+  const settled = observeSettlement(waiting);
   try {
     await waits[0].promise;
     vi.advanceTimersByTime(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
     await waits[1].promise;
-    expect(settled).toBe(false);
+    expect(settled()).toBe(false);
     expect(abort).not.toHaveBeenCalled();
     expect(waitForIdle.mock.calls.length).toBeGreaterThan(1);
     expect(new Set(waitForIdle.mock.calls.map(([, timeout]) => timeout))).toEqual(

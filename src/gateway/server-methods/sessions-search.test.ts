@@ -535,7 +535,7 @@ describe("sessions.search gateway method", () => {
     expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
   });
 
-  it("searches only scoped keys in existing retired stores and deduplicates migrated hits", async () => {
+  it.each([false, true])("deduplicates retired copies (identified: %s)", async (identified) => {
     resolveExistingAgentSessionStoreTargetsAsyncMock.mockResolvedValue([
       { agentId: "retired", storePath: "/stores/retired-a/sessions.json" },
       { agentId: "retired", storePath: "/stores/retired-b/sessions.json" },
@@ -549,13 +549,13 @@ describe("sessions.search gateway method", () => {
       snippet: "needle",
       score: 3,
     };
-    // Only one canonical metadata row remains; transcript copies can still be deduplicated.
-    readSessionEntriesMock.mockImplementation((params: { storePath: string }) => ({
-      entries:
-        params.storePath === "/stores/retired-a/sessions.json"
-          ? [{ sessionKey: duplicate.sessionKey, entry: { sessionId: duplicate.sessionId } }]
-          : [],
-    }));
+    // Canonical metadata summaries authorize the deduplicated transcript candidate.
+    readSessionEntrySummariesMock.mockResolvedValue([
+      {
+        sessionKey: duplicate.sessionKey,
+        entry: { sessionId: duplicate.sessionId, updatedAt: 1 },
+      },
+    ]);
     searchSessionTranscriptsMock
       .mockReturnValueOnce({
         hits: [duplicate, { ...duplicate, messageId: "message-2", score: 1 }],
@@ -568,12 +568,16 @@ describe("sessions.search gateway method", () => {
         archivedTranscriptsExcluded: 3,
       });
 
-    const respond = await callSearch({
-      agentId: "retired",
-      query: "needle",
-      sessionKeys: ["main"],
-      limit: 3,
-    });
+    const respond = await callSearch(
+      {
+        agentId: "retired",
+        query: "needle",
+        ...(identified ? {} : { sessionKeys: ["main"] }),
+        limit: 3,
+      },
+      identified ? ["operator.read"] : undefined,
+      identified ? "legacy-search-viewer" : undefined,
+    );
 
     expect(searchSessionTranscriptsMock).toHaveBeenCalledTimes(2);
     expect(resolveExistingAgentSessionStoreTargetsAsyncMock).toHaveBeenCalledOnce();

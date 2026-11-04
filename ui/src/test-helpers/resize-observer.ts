@@ -22,3 +22,21 @@ export function stubResizeObserver() {
     },
   );
 }
+
+export function stubTargetRetainingObserver(name: "ResizeObserver" | "IntersectionObserver") {
+  vi.stubGlobal(
+    name,
+    class {
+      private readonly targets = new Set<Element>();
+      observe(target: Element) {
+        this.targets.add(target);
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
+    },
+  );
+}

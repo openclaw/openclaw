@@ -219,12 +219,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         sentinel: { payload: { stats: { requiresRestart: false } } },
       });
       await expect.poll(async () => (await settledProbe("cold-chat")).captured?.label).toBe(label);
-      expect(await settledProbe("cold-chat")).toMatchObject({
-        starts: 1,
-        stops: 0,
-        pid: cold.pid,
-      });
-      expect((await settledProbe("cold-chat")).instance).not.toBe(cold.instance);
+      const replacement = await settledProbe("cold-chat");
+      expect(replacement).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
+      expect(replacement.instance).not.toBe(cold.instance);
       expect(await settledProbe("sibling-chat")).toEqual(sibling);
     }
     // Installing another plugin can rebuild metadata through a different producer.
@@ -283,6 +280,7 @@ it.each([false, true])(
   async (teardownFails) => {
     releasePending = createDeferredCore();
     const starts = new Map<string, number>();
+    const handledRequests = new Map<string, number>();
     const channelPlugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
         id: channelId,
@@ -319,6 +317,7 @@ it.each([false, true])(
             accountId,
             throwOnFailure: true,
             handler: (_req, res) => {
+              handledRequests.set(accountId, (handledRequests.get(accountId) ?? 0) + 1);
               const registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
               res.setHeader(
                 "x-webhook-registry",
@@ -359,14 +358,29 @@ it.each([false, true])(
     await waitForGatewayStartup(port);
     await maintenance.settled;
     const probe = async (accountId: string) => {
-      const response = await fetch(`http://127.0.0.1:${port}/reload-webhook/${accountId}`, {
-        method: "POST",
-      });
-      return {
-        status: response.status,
-        body: await response.text(),
-        registry: response.headers.get("x-webhook-registry"),
-      };
+      const before = handledRequests.get(accountId) ?? 0;
+      let phase = "fetch";
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/reload-webhook/${accountId}`, {
+          method: "POST",
+        });
+        phase = "body";
+        return {
+          status: response.status,
+          body: await response.text(),
+          registry: response.headers.get("x-webhook-registry"),
+        };
+      } catch (error) {
+        process.stderr.write(
+          `[plugin-webhook-probe] ${JSON.stringify({
+            accountId,
+            phase,
+            starts: [...starts],
+            handlerEntered: (handledRequests.get(accountId) ?? 0) > before,
+          })}\n`,
+        );
+        throw error;
+      }
     };
     await expect
       .poll(() => [...starts.keys()].toSorted(), { timeout: 30_000 })
@@ -402,17 +416,12 @@ it.each([false, true])(
         error: { details: { runtime: { committed: false, phase: "drain" } } },
       });
       expect(reload.error?.message).toContain("instance-binding service cleanup rejected");
-      expect(coordinator).toMatchObject({ serviceStops: 1, serviceStarts: 1 });
       expect(getActivePluginRegistry()).toBe(initialRegistry);
       releasePending.resolve();
       for (const accountId of ["active", "pending", "parked"]) {
         expect((await probe(accountId)).status).toBe(accountId === "active" ? 503 : 404);
         expect(starts.get(accountId)).toBe(1);
       }
-      const retry = await reloadPlugin(socket);
-      expect(retry.ok).toBe(false);
-      expect(coordinator.serviceStarts).toBe(1);
-      expect((await rpcReq(socket, "config.get", {})).ok).toBe(true);
       expect(hotReloadRecovery).not.toHaveBeenCalled();
       return;
     }

@@ -126,6 +126,10 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
     expect(runAgentStep).not.toHaveBeenCalled();
     expectNoSend();
   }
+  function deliveredStep() {
+    expect(runAgentStep).toHaveBeenCalledOnce();
+    return vi.mocked(runAgentStep).mock.calls[0]![0];
+  }
 
   it.each([true, false])(
     "recovers a long delayed peer answer or reports missing history (%s)",
@@ -154,16 +158,11 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
         targetSessionKey: "agent:worker:main",
         requesterSessionKey: "agent:main:main",
       });
-      expect(runAgentStep).toHaveBeenCalledOnce();
-      const delivered = vi.mocked(runAgentStep).mock.calls[0]![0];
+      const delivered = deliveredStep();
       expect(delivered.message).toBe(
         available ? fullReply : terminalReply.disposition === "visible" ? terminalReply.text : "",
       );
-      if (available) {
-        expect(delivered.extraSystemPrompt).not.toContain("The reply may be truncated");
-      } else {
-        expect(delivered.extraSystemPrompt).toContain("The reply may be truncated");
-      }
+      expect(delivered.extraSystemPrompt?.includes("The reply may be truncated")).toBe(!available);
     },
   );
 
@@ -291,8 +290,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
           : {}),
       });
       if (cross) {
-        expect(runAgentStep).toHaveBeenCalledOnce();
-        expect(vi.mocked(runAgentStep).mock.calls[0]?.[0]).toMatchObject({
+        expect(deliveredStep()).toMatchObject({
           sessionKey: "agent:main:webchat:direct:requester",
           message: "Already delivered source reply",
           sourceSessionKey: "agent:main:webchat:direct:target",
@@ -391,8 +389,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
     });
     await runNotification("run-lock-timeout");
 
-    expect(runAgentStep).toHaveBeenCalledOnce();
-    const stepInput = vi.mocked(runAgentStep).mock.calls[0]![0];
+    const stepInput = deliveredStep();
     expect(stepInput).toMatchObject({
       sessionKey: "agent:main:discord:group:req",
       sourceSessionKey: "agent:worker:discord:group:dev",
@@ -416,8 +413,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
       runId: "run-failed-after-source-reply",
     });
 
-    expect(runAgentStep).toHaveBeenCalledOnce();
-    const stepInput = vi.mocked(runAgentStep).mock.calls[0]![0];
+    const stepInput = deliveredStep();
     expect(stepInput.message).toContain(wait.error);
     expect(stepInput.message).toContain("final reply was already delivered");
     expect(stepInput.message).toContain("Do not resend");

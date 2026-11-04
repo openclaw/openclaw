@@ -1,5 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { installMockGateway, waitForControlUiRoute } from "../../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
@@ -89,15 +90,7 @@ suite.define(() => {
 
       const gateway = await installWorkboard(page, {
         methodResponses: {
-          "agents.list": {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "writer", name: "Writer" },
-            ],
-          },
+          "agents.list": agentRoster({ main: "Main", writer: "Writer" }, "main", "agent"),
         },
       });
       await page.goto(`${suite.server.baseUrl}workboard`);
@@ -106,7 +99,17 @@ suite.define(() => {
       const agentScope = page.locator(".workboard-agent-filter openclaw-agent-select");
       await agentScope.locator(".agent-select__trigger").click();
       const agentOptions = agentScope.locator(".agent-select__option[data-agent-option]");
-      await expectFocus(agentOptions.filter({ hasText: "Main" }));
+      await expectFocus(agentScope.getByRole("listbox"));
+      await expect
+        .poll(() =>
+          agentOptions
+            .filter({ hasText: "Main" })
+            .evaluate(
+              (option) =>
+                document.activeElement?.getAttribute("aria-activedescendant") === option.id,
+            ),
+        )
+        .toBe(true);
       await agentOptions.filter({ hasText: "Writer" }).click();
       await expect.poll(() => agentValue(agentScope)).toBe("writer");
       await expect

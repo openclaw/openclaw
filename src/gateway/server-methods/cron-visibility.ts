@@ -15,17 +15,19 @@ type CronSessionVisibility = ((sessionKey: string, agentId?: string) => boolean)
   allowUnbound: boolean;
 };
 
-function resolveCronEntryFilter(client: GatewayClient | null, cfg: OpenClawConfig) {
+function resolveCronVisibilityPolicy(client: GatewayClient | null, cfg: OpenClawConfig) {
   const identity = client?.internal?.agentRuntimeIdentity;
   if (identity && getCronManagementAuthority(identity)) {
     return undefined;
   }
   const sharing = prepareProjectedSessionSharing({ client, cfg, isMember: () => false });
-  // Explicit confidentiality applies independently of the caller's role ceiling.
+  // Role ceilings and independent confidentiality both select the projected read path.
   return sharing.entryFilter
     ? {
-        filter: sharing.entryFilter,
-        allowUnbound: sharing.sessionCap !== "none" && !cfg.session?.sharing?.accessPolicy,
+        allowUnbound:
+          sharing.sessionCap !== "none" &&
+          sharing.sessionCap !== "invited" &&
+          !cfg.session?.sharing?.accessPolicy,
       }
     : undefined;
 }
@@ -36,20 +38,22 @@ export function createCronSessionVisibility(
   context: Pick<GatewayRequestContext, "getRuntimeConfig" | "sessionRowProjectionOwner">,
 ) {
   return {
-    prepare(): Promise<void> | undefined {
-      if (!resolveCronEntryFilter(client, context.getRuntimeConfig())) {
+    async prepare(): Promise<void> {
+      if (!resolveCronVisibilityPolicy(client, context.getRuntimeConfig())) {
         return undefined;
       }
-      return requireSessionRowProjection(context).prepareSelection({ metadataOnly: true });
+      const projection = requireSessionRowProjection(context);
+      await projection.prepareSelection({ metadataOnly: true });
+      await projection.prepareMembership();
     },
     resolve(): CronSessionVisibility | undefined {
-      const policy = resolveCronEntryFilter(client, context.getRuntimeConfig());
+      const policy = resolveCronVisibilityPolicy(client, context.getRuntimeConfig());
       if (!policy) {
         return undefined;
       }
       const visible = (sessionKey: string, agentId?: string) => {
         const cfg = context.getRuntimeConfig();
-        const filter = resolveCronEntryFilter(client, cfg);
+        const filter = resolveCronVisibilityPolicy(client, cfg);
         if (!filter) {
           return true;
         }
@@ -75,7 +79,13 @@ export function createCronSessionVisibility(
           }
         }
         const target = projection.sharingTarget(query);
-        return Boolean(target && filter.filter(target.canonicalKey, target.entry));
+        const sharing = prepareProjectedSessionSharing({
+          client,
+          cfg,
+          isMember: (candidate, id) =>
+            projection.hasMembership(candidate.storePath, candidate.storeKey, id),
+        });
+        return Boolean(target && sharing.canReadTarget(target));
       };
       return Object.assign(visible, { allowUnbound: policy.allowUnbound });
     },

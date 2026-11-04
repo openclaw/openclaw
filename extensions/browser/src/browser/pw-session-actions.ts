@@ -2,7 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
-import { errors, type Browser, type Page, type Response } from "playwright-core";
+import type { Browser, Page, Response } from "playwright-core";
 import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import {
@@ -22,6 +22,7 @@ import {
   assertBrowserNavigationAllowed,
   type BrowserNavigationPolicyOptions,
 } from "./navigation-guard.js";
+import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import {
   clearBlockedPageRef,
   clearBlockedPageRefsForCdpUrl,
@@ -593,7 +594,7 @@ export async function createPageViaPlaywright(
         // A committed page can be usable while subresources still delay load.
         // Return it through normal adoption after the same safety checks.
         if (
-          !(error instanceof errors.TimeoutError) ||
+          !(error instanceof getPlaywrightCore().errors.TimeoutError) ||
           page.isClosed() ||
           page.url() === "about:blank"
         ) {

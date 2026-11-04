@@ -1,8 +1,10 @@
 /** Transcript-backed prompt projection state cached by an embedded session lifecycle. */
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { retainOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -36,6 +38,7 @@ type EmbeddedSessionPromptState = {
   systemPrompt?: SystemPromptSeries;
   pendingSystemPrompt?: SystemPromptSeries;
   systemPromptRouteKey?: string;
+  historyBoundary?: { count: number; id: string | null };
   toolSurface?: ToolSurface;
   pendingToolSurface?: ToolSurface;
   removedRuntimeContextKeys?: Set<string>;
@@ -52,6 +55,61 @@ type SystemPromptSeries = {
   restart: boolean;
 };
 
+const SYSTEM_PROMPT_ROUTE_PARTS = [
+  "provider",
+  "model",
+  "api",
+  "baseUrl",
+  "inHistorySystemUpdates",
+  "personalProfile",
+] as const;
+type SystemPromptRoutePart = (typeof SYSTEM_PROMPT_ROUTE_PARTS)[number];
+type SystemPromptRestartReason =
+  | "new"
+  | "history"
+  | "model-change"
+  | `route:${SystemPromptRoutePart}`;
+export type SystemPromptSeriesStatus = "pinned" | `restarted:${SystemPromptRestartReason}`;
+
+/** One owner for the series key layout; saved checkpoints compare these exact bytes. */
+export function buildSystemPromptRouteKey(
+  route: Record<SystemPromptRoutePart, string | boolean | undefined>,
+): string {
+  return JSON.stringify(SYSTEM_PROMPT_ROUTE_PARTS.map((part) => route[part]));
+}
+
+export function parseSystemPromptRouteKey(
+  routeKey: unknown,
+): Partial<Record<SystemPromptRoutePart, unknown>> | undefined {
+  if (typeof routeKey !== "string") {
+    return undefined;
+  }
+  let parts: unknown;
+  try {
+    parts = JSON.parse(routeKey);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(parts)) {
+    return undefined;
+  }
+  const route: Partial<Record<SystemPromptRoutePart, unknown>> = {};
+  SYSTEM_PROMPT_ROUTE_PARTS.forEach((part, index) => {
+    route[part] = parts[index];
+  });
+  return route;
+}
+
+function changedPromptRoutePart(previous: unknown, current: string): SystemPromptRestartReason {
+  const before = parseSystemPromptRouteKey(previous);
+  const after = parseSystemPromptRouteKey(current);
+  const part =
+    before && after
+      ? SYSTEM_PROMPT_ROUTE_PARTS.find((name) => before[name] !== after[name])
+      : undefined;
+  return part ? `route:${part}` : "new";
+}
+
 type ToolDefinition = Pick<AnyAgentTool, "name" | "description" | "parameters">;
 type ToolSurface = {
   routeKey: string;
@@ -62,7 +120,44 @@ type ToolSurface = {
 };
 
 function describeTool(tool: AnyAgentTool): ToolDefinition {
+  // Published schemas are detached, frozen JSON; checkpointing must not copy them per session.
+  if (getPublishedRuntimeToolInputSchema(tool.parameters)) {
+    retainOwnedTranscriptPayload(tool.parameters);
+  }
   return { name: tool.name, description: tool.description, parameters: tool.parameters };
+}
+
+function resolvePromptHistoryId(params: {
+  state: EmbeddedSessionPromptState;
+  entries: SessionEntry[];
+  historyBoundaryCount?: number;
+}): string | null {
+  // Bounded reloads can omit a compaction's payload without changing history.
+  // The manager's boundary count, not its visible window, invalidates this run's fact.
+  const previous = params.state.historyBoundary;
+  if (previous && previous.count === params.historyBoundaryCount) {
+    return previous.id;
+  }
+  const id =
+    params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
+    null;
+  if (params.historyBoundaryCount !== undefined) {
+    params.state.historyBoundary = { count: params.historyBoundaryCount, id };
+  }
+  return id;
+}
+
+function sameToolParameters(left: unknown, right: unknown): boolean {
+  if (left === right) {
+    return true;
+  }
+  const a = getPublishedRuntimeToolInputSchema(left);
+  const b = getPublishedRuntimeToolInputSchema(right);
+  // Restored transcript pins have no publication fact; derive only their side.
+  return a || b
+    ? (a?.canonicalFingerprint ?? sha256Hex(stableStringify(left))) ===
+        (b?.canonicalFingerprint ?? sha256Hex(stableStringify(right)))
+    : stableStringify(left) === stableStringify(right);
 }
 
 /**
@@ -75,11 +170,10 @@ export function prepareSessionToolSurface(params: {
   routeKey: string;
   toolPolicy: string;
   entries: SessionEntry[];
+  historyBoundaryCount?: number;
   tools: AnyAgentTool[];
 }): AnyAgentTool[] {
-  const historyId =
-    params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
-    null;
+  const historyId = resolvePromptHistoryId(params);
   const restored = (): ToolSurface | undefined => {
     const markerIndex = params.entries.findLastIndex(
       (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
@@ -116,13 +210,14 @@ export function prepareSessionToolSurface(params: {
   let changed = !known;
   const tools = params.tools.map((tool) => {
     const pin = pinned.get(tool.name);
+    // Computer discovery supplies live execution facts, not a new session definition.
+    if (pin && tool.name === "computer") {
+      return copyAgentToolMetadata(tool, { ...tool, ...pin });
+    }
     if (changed && pin?.description === tool.description) {
       return tool;
     }
-    const sameParameters =
-      pin &&
-      (pin.parameters === tool.parameters ||
-        stableStringify(pin.parameters) === stableStringify(tool.parameters));
+    const sameParameters = pin && sameToolParameters(pin.parameters, tool.parameters);
     changed ||= !sameParameters;
     return sameParameters && pin.description !== tool.description
       ? copyAgentToolMetadata(tool, { ...tool, description: pin.description })
@@ -136,7 +231,8 @@ export function prepareSessionToolSurface(params: {
       routeKey: params.routeKey,
       historyId,
       toolPolicy: params.toolPolicy,
-      tools: [...current, ...retained].toSorted((a, b) => a.name.localeCompare(b.name)),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The combined definitions array is private.
+      tools: [...current, ...retained].sort((a, b) => a.name.localeCompare(b.name)),
     };
   }
   return [
@@ -155,17 +251,18 @@ export function beginSessionSystemPrompt(params: {
   state: EmbeddedSessionPromptState;
   routeKey: string;
   enabled: boolean;
-  entries: SessionEntry[];
+  getEntries: () => SessionEntry[];
 }): boolean {
   params.state.pendingSystemPrompt = undefined;
+  params.state.historyBoundary = undefined;
   if (params.enabled) {
     return false;
   }
   params.state.systemPrompt = undefined;
   params.state.systemPromptRouteKey = params.routeKey;
-  const previous = params.entries.findLast(
-    (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
-  );
+  const previous = params
+    .getEntries()
+    .findLast((entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt");
   return (
     previous?.type === "custom" &&
     isRecord(previous.data) &&
@@ -206,16 +303,17 @@ export function prepareSessionSystemPrompt(params: {
   routeKey: string;
   systemPrompt: string;
   entries: SessionEntry[];
+  historyBoundaryCount?: number;
 }) {
   const { permissionNotice, systemPrompt } = extractAttemptPermissionNotice(params.systemPrompt);
   const renderedPrefix = shareSystemPromptPrefix(systemPrompt);
-  const historyId =
-    params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
-    null;
+  const historyId = resolvePromptHistoryId(params);
   const markerIndex = params.entries.findLastIndex(
     (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
   );
   const afterCheckpoint = params.entries.slice(markerIndex + 1);
+  const checkpoint = params.entries[markerIndex];
+  const data = checkpoint?.type === "custom" ? checkpoint.data : undefined;
   const orphanedUpdate =
     !params.state.pendingSystemPrompt &&
     afterCheckpoint.some((entry) => getOpenClawSystemUpdateKind(entry) === "prompt-update");
@@ -224,13 +322,12 @@ export function prepareSessionSystemPrompt(params: {
     params.state.systemPrompt = undefined;
   }
   let series = params.state.pendingSystemPrompt ?? params.state.systemPrompt;
+  const previous = series ?? (isRecord(data) && typeof data.prefix === "string" ? data : undefined);
   if (
     !series &&
     !orphanedUpdate &&
     (!params.state.systemPromptRouteKey || params.state.systemPromptRouteKey === params.routeKey)
   ) {
-    const entry = params.entries[markerIndex];
-    const data = entry?.type === "custom" ? entry.data : undefined;
     if (
       isRecord(data) &&
       typeof data.prefix === "string" &&
@@ -254,6 +351,15 @@ export function prepareSessionSystemPrompt(params: {
     }
   }
   const restart = !series || series.routeKey !== params.routeKey || series.historyId !== historyId;
+  const seriesStatus: SystemPromptSeriesStatus = !restart
+    ? "pinned"
+    : !previous
+      ? "restarted:new"
+      : previous.historyId !== historyId
+        ? "restarted:history"
+        : afterCheckpoint.some((later) => later.type === "model_change")
+          ? "restarted:model-change"
+          : `restarted:${changedPromptRoutePart(previous.routeKey, params.routeKey)}`;
   const sections =
     !restart && series && series.renderedPrefix !== renderedPrefix
       ? promptDelta(
@@ -290,6 +396,7 @@ export function prepareSessionSystemPrompt(params: {
         )
       : undefined,
     restart,
+    seriesStatus,
     commit: (restartRecorded = false) => {
       if (committed) {
         return;

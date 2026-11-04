@@ -22,7 +22,7 @@ import {
 } from "../../logging/diagnostic-stability.js";
 import { setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
-import { registerSkillUsageTracking } from "../../skills/workshop/skill-usage.js";
+import { registerSkillUsageTracking } from "../../skills/runtime/skill-usage.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -160,7 +160,8 @@ describe("createGatewayEventLoopHealthMonitor", () => {
   it("detects a late idle wake with separate wall and elapsed clocks", async () => {
     // Isolate deadline detection from callback attribution of the synthetic clock jump.
     vi.spyOn(mainThreadStall, "createMainThreadStallMonitor").mockReturnValue({
-      drain: () => ({ stalls: [], dropped: 0, delayMaxMs: 0 }),
+      drain: () => ({ stalls: [], dropped: 0, unattributedDropped: 0, delayMaxMs: 0 }),
+      setEventLoopSampling: () => {},
       reset: () => {},
       stop: () => {},
     });

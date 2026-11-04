@@ -2,6 +2,7 @@
 import type { RunEntryModelResolve } from "../../agents/embedded-agent-runner/run-entry.types.js";
 import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
 import type { ModelCandidate } from "../../agents/model-fallback.types.js";
+import type { ModelRef } from "../../agents/model-ref-shared.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -61,6 +62,7 @@ export function resolveCronFallbacksOverride(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
+  selectedModel?: ModelRef;
   useSubagentFallbacks?: boolean;
   inheritDefaultFallbacksForAgentStringModel?: boolean;
   /** Stored provenance when the run uses the session's model selection. */
@@ -74,10 +76,10 @@ export function resolveCronFallbacksOverride(params: {
     return payloadFallbacks;
   }
   if (params.sessionModelOverrideSource === "user" && !hasCronPayloadModelOverride) {
-    // A user-selected session model is exact; automatic selections keep the configured chain.
     return resolveEffectiveModelFallbacks({
       cfg: params.cfg,
       agentId: params.agentId,
+      selectedModel: params.selectedModel,
       hasSessionModelOverride: true,
       modelOverrideSource: "user",
     });
@@ -102,6 +104,7 @@ export function resolveCronFallbacksOverride(params: {
   return resolveEffectiveModelFallbacks({
     cfg: params.cfg,
     agentId: params.agentId,
+    selectedModel: params.selectedModel,
     hasSessionModelOverride: hasCronPayloadModelOverride,
     modelOverrideSource: hasCronPayloadModelOverride ? "auto" : undefined,
   });
@@ -118,7 +121,10 @@ export function resolveCronPreflightCandidates(params: {
   inheritDefaultFallbacksForAgentStringModel?: boolean;
   sessionModelOverrideSource?: "auto" | "user";
 }): ModelCandidate[] {
-  const fallbacksOverride = resolveCronFallbacksOverride(params);
+  const fallbacksOverride = resolveCronFallbacksOverride({
+    ...params,
+    selectedModel: { provider: params.provider, model: params.model },
+  });
   return resolveModelCandidateChain({
     cfg: params.cfg,
     agentId: params.agentId,

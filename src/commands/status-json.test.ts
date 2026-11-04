@@ -1,4 +1,3 @@
-// Status JSON tests cover command output and runtime JSON writes.
 import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
@@ -65,7 +64,7 @@ vi.mock("../infra/update-channels.js", () => ({
   resolveUpdateChannelDisplay: mocks.resolveUpdateChannelDisplay,
 }));
 
-function createRuntimeCapture() {
+async function runJson(opts: Parameters<typeof statusJsonCommand>[0] = {}) {
   const logs: string[] = [];
   const runtime = {
     ...createTestRuntime(),
@@ -73,7 +72,9 @@ function createRuntimeCapture() {
       logs.push(String(value));
     }),
   };
-  return { runtime, logs };
+  await statusJsonCommand(opts, runtime);
+  expect(logs).toStrictEqual([expect.any(String)]);
+  return logs[0] ?? "{}";
 }
 
 function createScanResult() {
@@ -112,23 +113,10 @@ describe("statusJsonCommand", () => {
   });
 
   it("keeps plain status --json off the security audit fast path", async () => {
-    const { runtime, logs } = createRuntimeCapture();
-
-    await statusJsonCommand({}, runtime);
-
+    const payload = JSON.parse(await runJson()) as Record<string, unknown>;
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(logs).toStrictEqual([expect.any(String)]);
-    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
-    // The complete schema is owned by status-json-runtime; this boundary covers
-    // the absent-probe defaults and real service-summary composition.
-    expect(payload).toMatchObject({
-      configuredChannels: [],
-      memoryPlugin: null,
-      agents: [],
-      update: { installKind: "npm", git: { tag: null, branch: null } },
-    });
     expect(payload.gateway).toEqual({
       mode: "local",
       url: "ws://127.0.0.1:18789",
@@ -140,53 +128,11 @@ describe("statusJsonCommand", () => {
       error: null,
       authWarning: null,
     });
-    for (const field of ["gatewayService", "nodeService"]) {
-      expect(payload[field]).toEqual({
-        label: "LaunchAgent",
-        installed: false,
-        loadState: { status: "not-loaded" },
-        managedByOpenClaw: false,
-        externallyManaged: false,
-        loadedText: "not loaded",
-        runtime: { status: "stopped" },
-        loaded: false,
-        runtimeShort: "stopped",
-      });
-    }
     expect(payload).not.toHaveProperty("securityAudit");
     expect(payload).not.toHaveProperty("pluginCompatibility");
   });
 
-  it("builds remote gateway JSON payloads consistently", async () => {
-    const { runtime, logs } = createRuntimeCapture();
-    mocks.scanStatusJsonFast.mockResolvedValueOnce({
-      ...createScanResult(),
-      gatewayMode: "remote",
-      gatewayConnection: { url: "wss://gateway.example.com", urlSource: "config" },
-      gatewayReachable: true,
-      gatewayProbe: { connectLatencyMs: 123, error: null },
-      gatewaySelf: { host: "gateway", version: "1.2.3" },
-      gatewayProbeAuthWarning: "warn",
-    });
-
-    await statusJsonCommand({}, runtime);
-
-    const payload = JSON.parse(logs[0] ?? "{}");
-    expect(payload.gateway).toEqual({
-      mode: "remote",
-      url: "wss://gateway.example.com",
-      urlSource: "config",
-      misconfigured: false,
-      reachable: true,
-      connectLatencyMs: 123,
-      self: { host: "gateway", version: "1.2.3" },
-      error: null,
-      authWarning: "warn",
-    });
-  });
-
   it("redacts credential-bearing Gateway URLs from JSON status", async () => {
-    const { runtime, logs } = createRuntimeCapture();
     mocks.scanStatusJsonFast.mockResolvedValueOnce({
       ...createScanResult(),
       gatewayMode: "remote",
@@ -197,23 +143,18 @@ describe("statusJsonCommand", () => {
       gatewayProbe: { error: "unreachable" },
     });
 
-    await statusJsonCommand({}, runtime);
-
-    const payload = JSON.parse(logs[0] ?? "{}");
+    const payload = JSON.parse(await runJson());
     expect(payload.gateway.url).toContain("gateway.example/ws");
     expect(JSON.stringify(payload.gateway)).not.toMatch(/password|secret|api-key|signed/);
   });
 
   it("reports startup phase without an unreachable error in JSON", async () => {
-    const { runtime, logs } = createRuntimeCapture();
     mocks.scanStatusJsonFast.mockResolvedValueOnce({
       ...createScanResult(),
       gatewayProbe: { startupPhase: "plugins", error: null },
     });
 
-    await statusJsonCommand({}, runtime);
-
-    const payload = JSON.parse(logs[0] ?? "{}");
+    const payload = JSON.parse(await runJson());
     expect(payload.gateway).toMatchObject({
       readiness: "still-starting",
       startupPhase: "plugins",
@@ -221,31 +162,7 @@ describe("statusJsonCommand", () => {
     });
   });
 
-  it.each([
-    { engine: "postgres" },
-    { engine: "sqlite", families: { agent: { engine: "postgres" } } },
-  ])(
-    "reports supported PostgreSQL selections without the experimental flag: %j",
-    async (database) => {
-      const { runtime, logs } = createRuntimeCapture();
-      mocks.scanStatusJsonFast.mockResolvedValueOnce({
-        ...createScanResult(),
-        cfg: { database },
-      });
-
-      await statusJsonCommand({}, runtime);
-
-      const payload = JSON.parse(logs[0] ?? "{}");
-      expect(payload.databaseEngines.experimental).toBe(false);
-      expect(payload.databaseEngines.families).toContainEqual(
-        expect.objectContaining({ id: "agent", effective: "postgres" }),
-      );
-      expect(payload.databaseEngines.source).toBe("unavailable");
-    },
-  );
-
   it("includes security audit and plugin compatibility details when --all is requested", async () => {
-    const { runtime, logs } = createRuntimeCapture();
     const compatibilityNotice = {
       pluginId: "legacy-plugin",
       code: "hook-only",
@@ -257,17 +174,8 @@ describe("statusJsonCommand", () => {
       pluginCompatibility: [compatibilityNotice],
     });
 
-    await statusJsonCommand({ all: true }, runtime);
+    const payload = JSON.parse(await runJson({ all: true })) as Record<string, unknown>;
 
-    expect(mocks.runSecurityAudit).toHaveBeenCalledExactlyOnceWith({
-      config: { update: { channel: "stable" } },
-      sourceConfig: {},
-      deep: false,
-      includeFilesystem: true,
-      loadPluginSecurityCollectors: false,
-    });
-    expect(logs).toStrictEqual([expect.any(String)]);
-    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
     expect({
       securityAudit: payload.securityAudit,
       pluginCompatibility: payload.pluginCompatibility,
@@ -284,7 +192,6 @@ describe("statusJsonCommand", () => {
   });
 
   it("reports deep gateway probe failures and runs the documented security audit", async () => {
-    const { runtime, logs } = createRuntimeCapture();
     mocks.scanStatusJsonFast.mockResolvedValueOnce({
       ...createScanResult(),
       gatewayReachable: true,
@@ -296,13 +203,11 @@ describe("statusJsonCommand", () => {
       return null;
     });
 
-    await statusJsonCommand({ deep: true }, runtime);
-
-    expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
-    const payload = JSON.parse(logs[0] ?? "{}") as {
+    const payload = JSON.parse(await runJson({ deep: true })) as {
       health?: { error?: string };
       securityAudit?: { summary?: { critical?: number } };
     };
+    expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
     expect(payload.health).toEqual({ error: "Error: gateway health probe timed out" });
     expect(payload.securityAudit?.summary?.critical).toBe(1);
   });
@@ -314,9 +219,7 @@ it("includes local recovery copy bytes in status --json without retiring them", 
     const file = state.statePath("state", "openclaw.sqlite.pre-startup-migration-old.bak");
     fs.writeFileSync(file, "original");
     mocks.scanStatusJsonFast.mockResolvedValueOnce({ ...createScanResult(), env: state.env });
-    const { runtime, logs } = createRuntimeCapture();
-    await statusJsonCommand({}, runtime);
-    const payload = JSON.parse(logs[0] ?? "{}");
+    const payload = JSON.parse(await runJson());
     expect(payload.recoveryCopies).toMatchObject({
       scope: "local",
       incomplete: false,

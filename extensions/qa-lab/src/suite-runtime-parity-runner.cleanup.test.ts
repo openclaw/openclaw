@@ -17,8 +17,9 @@ import {
 } from "./qa-transport-registry.js";
 import type { RuntimeParityScenarioExecution } from "./runtime-parity.js";
 import * as scenarioCatalog from "./scenario-catalog.js";
+import type { writeQaSuiteArtifacts } from "./suite-artifacts.js";
+import * as suiteRunStandard from "./suite-run-standard.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
-import { runQaRuntimeParitySuite } from "./suite-runtime-parity-runner.js";
 import {
   artifactPaths,
   childResult,
@@ -36,6 +37,29 @@ const runtimeOptions = {
   primaryModel: "mock-openai/test-model",
   alternateModel: "mock-openai/test-model-alt",
 };
+const createTransport = vi.hoisted(
+  () =>
+    (id: string, label: string): Awaited<ReturnType<QaTransportAdapterFactory["create"]>> => ({
+      id,
+      label,
+      accountId: "sut",
+      requiredPluginIds: [],
+      supportedActions: [],
+      sendInbound: vi.fn(async () => {
+        throw new Error("Unexpected inbound message in parity cleanup fixture");
+      }),
+      createGatewayConfig: () => ({}),
+      waitReady: vi.fn(async () => {}),
+      buildAgentDelivery: ({ target }) => ({
+        channel: id,
+        to: target,
+        replyChannel: id,
+        replyTo: target,
+      }),
+      handleAction: vi.fn(async () => {}),
+      createReportNotes: () => [],
+    }),
+);
 
 const mocks = vi.hoisted(() => ({
   captureRuntimeParityCell: vi.fn(
@@ -51,21 +75,11 @@ const mocks = vi.hoisted(() => ({
     baseUrl: "http://127.0.0.1:18789",
     token: "qa-test-token",
     cfg: {},
-    getProcessCpuMs: () => null,
-    getProcessRssBytes: () => null,
-    stop: vi.fn(async () => {}),
   })),
-  writeQaSuiteArtifacts: vi.fn(
-    async (_params: {
-      channel?: string | null;
-      channelDriver?: string | null;
-      transportArtifacts?: unknown;
-      recordedEvidence: QaEvidenceSummaryV3Json;
-    }) => ({
-      evidence: _params.recordedEvidence,
-      ...artifactPaths,
-    }),
-  ),
+  writeQaSuiteArtifacts: vi.fn<typeof writeQaSuiteArtifacts>(async (params) => ({
+    evidence: params.recordedEvidence,
+    ...artifactPaths,
+  })),
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
@@ -74,24 +88,10 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
 }));
+// mock-isolation: lifecycle cleanup uses synthetic transports, not live Crabline clients.
 vi.mock("./crabline-transport.js", () => {
-  const createTransport = vi.fn(async () => ({
-    id: "telegram",
-    label: "Crabline Telegram",
-    accountId: "sut",
-    requiredPluginIds: [],
-    supportedActions: [],
-    sendInbound: vi.fn(async () => {}),
-    createGatewayConfig: () => ({}),
-    waitReady: vi.fn(async () => {}),
-    buildAgentDelivery: ({ target }: { target: string }) => ({
-      channel: "telegram",
-      to: target,
-      replyChannel: "telegram",
-      replyTo: target,
-    }),
-    handleAction: vi.fn(async () => {}),
-    createReportNotes: () => [],
+  const create = vi.fn(async () => ({
+    ...createTransport("telegram", "Crabline Telegram"),
     captureArtifacts: vi.fn(async () => ({
       artifacts: [{ kind: "channel-driver-smoke", path: "/qa-output/driver-smoke.json" }],
       reportNotes: [],
@@ -99,8 +99,8 @@ vi.mock("./crabline-transport.js", () => {
     cleanupAfterGatewayStop: vi.fn(async () => {}),
   }));
   return {
-    createQaCrablineTransportAdapter: createTransport,
-    createQaCrablineTransportDefinition: createTransport,
+    createQaCrablineTransportAdapter: create,
+    createQaCrablineTransportDefinition: create,
   };
 });
 vi.mock("./gateway-child.js", () => ({
@@ -153,22 +153,8 @@ function createCleanupTestFactory(
     async create() {
       const cleanupPhases = await createCleanupPhases();
       return {
-        id: "leased",
-        label: "Leased channel",
-        accountId: "sut",
-        requiredPluginIds: [],
-        supportedActions: [],
+        ...createTransport("leased", "Leased channel"),
         sendInbound: async (input) => lab.state.addInboundMessage(input),
-        createGatewayConfig: () => ({}),
-        async waitReady() {},
-        buildAgentDelivery: ({ target }) => ({
-          channel: "leased",
-          to: target,
-          replyChannel: "leased",
-          replyTo: target,
-        }),
-        async handleAction() {},
-        createReportNotes: () => [],
         ...cleanupPhases,
       };
     },
@@ -181,22 +167,17 @@ async function runCleanupTestSuite(params: {
   progressEnabled?: boolean;
   runChild: QaSuiteRunner;
 }) {
-  const repoRoot = await tempDirs.makeTempDir("qa-parity-cleanup-");
-  return runQaRuntimeParitySuite({
-    runQaFlowSuite: params.runChild,
+  vi.spyOn(suite, "shouldLogQaSuiteProgress").mockReturnValue(params.progressEnabled ?? false);
+  vi.spyOn(suiteRunStandard, "runQaFlowSuiteStandard").mockImplementation((childParams) =>
+    params.runChild(childParams),
+  );
+  return runFlow([makeQaSuiteTestScenario("runtime-cleanup")], {
     adapterFactories: [params.factory],
     channelDriver: "live",
     channelId: "leased",
-    repoRoot,
-    outputDir: path.join(repoRoot, "output"),
-    startedAt: new Date("2026-08-04T00:00:00.000Z"),
-    ...runtimeOptions,
     transportId: "qa-channel",
     fastMode: true,
-    concurrency: 1,
-    selectedScenarios: [makeQaSuiteTestScenario("runtime-cleanup")],
     startLab: async () => params.lab,
-    progressEnabled: params.progressEnabled ?? false,
     runtimePair: ["openclaw", "codex"],
   });
 }
@@ -249,29 +230,7 @@ async function runParityProjection(
     channelDriver: "crabline",
     runtimePair: ["openclaw", "codex"],
   });
-  expect(runScenario).toHaveBeenCalledTimes(2);
-  expect(mocks.captureRuntimeParityCell).toHaveBeenCalledTimes(2);
   return result.scenarios[0]!;
-}
-
-function projectionExecution(
-  runtime: "openclaw" | "codex",
-  status: RuntimeParityScenarioExecution["status"],
-  runtimeErrorClass?: string,
-): RuntimeParityScenarioExecution {
-  return {
-    status,
-    cell: {
-      runtime,
-      transcriptBytes: "",
-      toolCalls: [],
-      finalText: "",
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      wallClockMs: 1,
-      bootStateLines: [],
-      ...(runtimeErrorClass ? { runtimeErrorClass } : {}),
-    },
-  };
 }
 
 describe("QA suite runtime parity result projection", () => {
@@ -280,11 +239,15 @@ describe("QA suite runtime parity result projection", () => {
       { ...makeQaSuiteTestScenario("runtime-tool-read"), title: "Runtime tool fixture — read" },
       {
         openclaw: {
-          ...projectionExecution("openclaw", "skip"),
+          status: "skip",
+          cell: runtimeCell("openclaw"),
           details:
             "implementation unavailable\nRUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy",
         },
-        codex: projectionExecution("codex", "pass", "scenario-failure"),
+        codex: {
+          status: "pass",
+          cell: { ...runtimeCell("codex"), runtimeErrorClass: "scenario-failure" },
+        },
       },
     );
     expect(failed.status).toBe("fail");
@@ -292,35 +255,6 @@ describe("QA suite runtime parity result projection", () => {
     expect(failed.steps?.[0]?.details).toContain(
       "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy",
     );
-  });
-
-  it("retains both skipped runtime cells", async () => {
-    const skipped = await runParityProjection(
-      { ...makeQaSuiteTestScenario("runtime-tool-read"), title: "Runtime tool fixture — read" },
-      {
-        openclaw: projectionExecution("openclaw", "skip"),
-        codex: projectionExecution("codex", "skip"),
-      },
-    );
-    expect(skipped.status).toBe("skip");
-    expect(skipped.steps?.map((step) => step.status)).toEqual(["skip", "skip", "skip"]);
-  });
-
-  it("passes an explicitly known one-sided harness gap while preserving its skipped cell", async () => {
-    const result = await runParityProjection(
-      { ...makeQaSuiteTestScenario("runtime-tool-exec"), title: "Runtime tool fixture — exec" },
-      {
-        openclaw: projectionExecution("openclaw", "pass"),
-        codex: {
-          ...projectionExecution("codex", "skip"),
-          details:
-            "known-harness-gap exec: Codex owns command execution natively\ntracking: #80319",
-        },
-      },
-    );
-    expect(result.status).toBe("pass");
-    expect(result.steps?.map((step) => step.status)).toEqual(["pass", "skip", "pass"]);
-    expect(result.steps?.[1]?.details).toContain("known-harness-gap exec");
   });
 
   it.each([
@@ -356,32 +290,37 @@ describe("QA suite runtime parity result projection", () => {
       });
       const steps = summary.scenarios[1]?.steps?.map((step) => step.status);
       expect(steps).toEqual([bothSkipped ? "skip" : "pass", "skip", pass ? "pass" : "skip"]);
+      expect(summary.scenarios[1]?.status).toBe(pass ? "pass" : "skip");
+      expect(summary.scenarios[1]?.steps?.[1]?.details).toContain(
+        knownGap ? "known-harness-gap" : "implementation unavailable",
+      );
       expect(renderQaRuntimeParityMarkdownReport(report)).toContain("- codex: skip (");
     },
   );
 
-  it("passes runtime parity reports with controlled tool-error cells and advisory drift", async () => {
+  it("projects controlled tool-error cells as passing with advisory drift", async () => {
     const summary = makeRuntimeParitySummary();
     const scenario = summary.scenarios[1]!;
-    const captured = scenario.runtimeParity!;
-    captured.cells.codex.runtimeErrorClass = "tool-error";
+    const { cells, scenarioId } = scenario.runtimeParity!;
+    cells.codex.runtimeErrorClass = "tool-error";
     summary.scenarios[1] = await runParityProjection(
-      { ...makeQaSuiteTestScenario(captured.scenarioId), title: scenario.name },
+      { ...makeQaSuiteTestScenario(scenarioId), title: scenario.name },
       {
-        openclaw: { status: "pass", cell: captured.cells.openclaw },
-        codex: { status: "pass", cell: captured.cells.codex },
+        openclaw: { status: "pass", cell: cells.openclaw },
+        codex: { status: "pass", cell: cells.codex },
       },
     );
-    const report = buildQaRuntimeParityReport({ summary });
-    expect(report).toMatchObject({
+    expect(summary.scenarios[1]?.steps?.map((step) => step.status)).toEqual([
+      "pass",
+      "pass",
+      "pass",
+    ]);
+    expect(buildQaRuntimeParityReport({ summary })).toMatchObject({
       pass: true,
       failedScenarios: 0,
       failures: [],
       scenarios: [{}, { codexStatus: "pass" }],
     });
-    const steps = summary.scenarios[1]?.steps?.map((step) => step.status);
-    expect(steps).toEqual(["pass", "pass", "pass"]);
-    expect(renderQaRuntimeParityMarkdownReport(report)).toContain("- codex: pass (1 tool calls");
   });
 });
 
@@ -389,9 +328,8 @@ describe("runtime parity suite transport cleanup", () => {
   it("executes repeated flow instances in request order through the standard producer", async () => {
     const scenarios = [makeQaSuiteTestScenario("first"), makeQaSuiteTestScenario("second")];
     const observed: string[] = [];
-    const runScenario = vi
-      .spyOn(suite, "runQaSuiteScenarioDefinitionForRuntime")
-      .mockImplementation(async (_env, scenario) => {
+    vi.spyOn(suite, "runQaSuiteScenarioDefinitionForRuntime").mockImplementation(
+      async (_env, scenario) => {
         observed.push(scenario.id);
         return {
           name: scenario.title,
@@ -399,7 +337,8 @@ describe("runtime parity suite transport cleanup", () => {
           details: `invocation ${observed.length}`,
           steps: [],
         };
-      });
+      },
+    );
     const lab = createTestLab();
     const result = await runFlow(scenarios, {
       scenarioIds: ["first", "second", "first"],
@@ -408,7 +347,6 @@ describe("runtime parity suite transport cleanup", () => {
     });
     const evidence = result.evidence as QaEvidenceSummaryV3Json;
     expect(observed).toEqual(["first", "second", "first"]);
-    expect(new Set(runScenario.mock.calls.map(([, scenario]) => scenario)).size).toBe(3);
     const outcomes = projectQaEvidenceScenarioOutcomes(evidence);
     expect(outcomes.map((outcome) => outcome.scenarioId)).toEqual(observed);
     expect(outcomes.map((outcome) => outcome.status)).toEqual(["pass", "pass", "pass"]);

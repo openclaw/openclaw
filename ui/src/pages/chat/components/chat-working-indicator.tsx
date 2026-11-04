@@ -10,13 +10,11 @@ import "../../../components/working-phrase-solid.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
+import { themeBrandingProjection } from "../../../lib/reactive/theme-branding.ts";
+import type { ChatSubagentWait, HandoffSessionLinks } from "../chat-subagent-wait.ts";
+import { ChatSubagentWaitLine } from "./chat-handoff-sessions.tsx";
 import { ChatRetryStatus } from "./chat-retry-status.tsx";
-import {
-  outputTokensLabel,
-  projectWorkingBranding,
-  WorkingBrandGlyph,
-} from "./chat-working-indicator-branding.tsx";
+import { outputTokensLabel, WorkingBrandGlyph } from "./chat-working-indicator-branding.tsx";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -30,6 +28,7 @@ type ChatWorkingIndicatorOptions = {
   workingPhrases?: readonly string[];
   waitingApproval?: boolean;
   waitingSubagents?: ChatSubagentWait;
+  sessionLinks?: HandoffSessionLinks;
   runningSubagents?: number;
   onOpenSubagents?: () => void;
   startupLabel?: string;
@@ -52,7 +51,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
     clawRetiredAt = performance.now();
   });
   const waitingApproval = () => props.options.waitingApproval === true;
-  const waitingSubagents = () => (props.options.waitingSubagents?.runningCount ?? 0) > 0;
+  const waitingSubagents = () => (props.options.waitingSubagents?.sessions.length ?? 0) > 0;
   const working = () => !waitingApproval() && !waitingSubagents() && !props.options.startupLabel;
   const continuation = () => props.options.presentation === "continuation";
   const indicator = () =>
@@ -70,9 +69,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
   const statusLabel = () =>
     waitingApproval()
       ? t("chat.waitingForApproval")
-      : waitingSubagents()
-        ? t("chat.waitingOnSubagents")
-        : props.options.startupLabel || t("common.working");
+      : props.options.startupLabel || t("common.working");
   return (
     <div
       class={[
@@ -120,75 +117,84 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
           </Show>
         </div>
       </Show>
-      <span class="chat-working-indicator__status">
-        <span
-          class={{
-            "sr-only":
-              waitingSubagents() || (working() && !continuation() && indicator() !== "none"),
-          }}
-        >
-          <Show
-            when={!waitingApproval() && props.options.retryAt !== undefined}
-            fallback={statusLabel()}
+      {/* A handoff's wait names what it waits on instead of the working text. */}
+      <Show when={!waitingApproval() && waitingSubagents() && props.options.waitingSubagents}>
+        {(wait) => (
+          <ChatSubagentWaitLine
+            wait={wait()}
+            startMs={wait().startedAt}
+            links={props.options.sessionLinks}
+          />
+        )}
+      </Show>
+      <Show when={waitingApproval() || !waitingSubagents()}>
+        <span class="chat-working-indicator__status">
+          <span
+            class={{
+              "sr-only": working() && !continuation() && indicator() !== "none",
+            }}
           >
-            <ChatRetryStatus retryAt={props.options.retryAt ?? null} />
+            <Show
+              when={!waitingApproval() && props.options.retryAt !== undefined}
+              fallback={statusLabel()}
+            >
+              <ChatRetryStatus retryAt={props.options.retryAt ?? null} />
+            </Show>
+          </span>
+          <Show
+            when={props.options.outputTokens !== null && props.options.outputTokens !== undefined}
+          >
+            <Show when={!working() || continuation() || indicator() === "none"}>
+              <span aria-hidden="true">·</span>
+            </Show>
+            <span class="chat-working-indicator__tokens">
+              {outputTokensLabel(props.options.outputTokens!)}
+            </span>
+          </Show>
+          <Show when={!waitingApproval()}>
+            <Show when={props.options.startupLabel || props.options.outputTokens != null}>
+              <span aria-hidden="true">·</span>
+            </Show>
+            <ElapsedTime
+              class="chat-working-indicator__elapsed"
+              startMs={props.options.waitingSubagents?.startedAt ?? props.part.startedAt}
+            />
+          </Show>
+          <Show when={props.options.outputTokens == null && working() && !props.options.bubbleMode}>
+            <openclaw-working-phrase
+              aria-hidden="true"
+              prop:startMs={props.part.startedAt}
+              prop:seed={props.part.key}
+              prop:phrases={props.options.workingPhrases ?? props.branding.workingPhrases}
+            />
+          </Show>
+          <Show when={runningSubagents() > 0}>
+            <span aria-hidden="true">·</span>
+            <Show
+              when={props.options.onOpenSubagents}
+              fallback={<span class="chat-working-indicator__subagents">{runningLabel()}</span>}
+            >
+              <button
+                class="chat-working-indicator__subagents"
+                type="button"
+                onClick={() => props.options.onOpenSubagents?.()}
+              >
+                {runningLabel()}
+              </button>
+            </Show>
           </Show>
         </span>
-        <Show
-          when={props.options.outputTokens !== null && props.options.outputTokens !== undefined}
-        >
-          <Show
-            when={(!working() && !waitingSubagents()) || continuation() || indicator() === "none"}
-          >
-            <span aria-hidden="true">·</span>
-          </Show>
-          <span class="chat-working-indicator__tokens">
-            {outputTokensLabel(props.options.outputTokens!)}
-          </span>
-        </Show>
-        <Show when={!waitingApproval()}>
-          <Show when={props.options.startupLabel || props.options.outputTokens != null}>
-            <span aria-hidden="true">·</span>
-          </Show>
-          <ElapsedTime
-            class="chat-working-indicator__elapsed"
-            startMs={props.options.waitingSubagents?.startedAt ?? props.part.startedAt}
-          />
-        </Show>
-        <Show when={props.options.outputTokens == null && working() && !props.options.bubbleMode}>
-          <openclaw-working-phrase
-            aria-hidden="true"
-            prop:startMs={props.part.startedAt}
-            prop:seed={props.part.key}
-            prop:phrases={props.options.workingPhrases ?? props.branding.workingPhrases}
-          />
-        </Show>
-        <Show when={runningSubagents() > 0}>
-          <span aria-hidden="true">·</span>
-          <Show
-            when={props.options.onOpenSubagents}
-            fallback={<span class="chat-working-indicator__subagents">{runningLabel()}</span>}
-          >
-            <button
-              class="chat-working-indicator__subagents"
-              type="button"
-              onClick={() => props.options.onOpenSubagents?.()}
-            >
-              {runningLabel()}
-            </button>
-          </Show>
-        </Show>
-      </span>
+      </Show>
     </div>
   );
 }
 
 export function ChatWorkingIndicator(props: WorkingProps) {
-  const branding = projectWorkingBranding();
+  const branding = themeBrandingProjection;
   const attention = () => props.options.waitingApproval || props.options.retryAt !== undefined;
   return (
     <Show
-      when={props.options.bubbleMode && !props.options.waitingSubagents?.runningCount}
+      when={props.options.bubbleMode && !props.options.waitingSubagents?.sessions.length}
       fallback={<WorkingStatus {...props} branding={branding.read()} />}
     >
       <Show when={!props.options.bubbleActivityActive}>

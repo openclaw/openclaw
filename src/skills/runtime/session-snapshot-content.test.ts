@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { completePassiveScan } from "./discovery.test-support.js";
 import { getSkillsSnapshotVersion, registerSkillsChangeListener } from "./refresh-state.js";
 import { closeSkillsWatchers, refreshSkillsDiscovery } from "./refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot as resolveSnapshot } from "./session-snapshot.js";
@@ -53,24 +53,6 @@ const skillFile = (result: SnapshotResult) => result.snapshot.resolvedSkills?.[0
 function expectUnchanged(result: SnapshotResult, previous: SnapshotResult) {
   expect(result.snapshot).toBe(previous.snapshot);
   expect(result.shouldRefresh).toBe(false);
-}
-
-async function completePassiveScan() {
-  const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
-  try {
-    let settledTasks = 0;
-    for (let elapsed = 0; elapsed < 30 * 60_000 + 50; elapsed += 60_000) {
-      await vi.advanceTimersByTimeAsync(Math.min(60_000, 30 * 60_000 + 50 - elapsed));
-      // Native events during a scan can start another pass before publication.
-      while (settledTasks < tasks.mock.results.length) {
-        const pending = tasks.mock.results.slice(settledTasks);
-        settledTasks += pending.length;
-        await Promise.all(pending.map((result) => result.value));
-      }
-    }
-  } finally {
-    tasks.mockRestore();
-  }
 }
 
 it("honors a per-call passive refresh opt-out without disabling another observer", async () => {

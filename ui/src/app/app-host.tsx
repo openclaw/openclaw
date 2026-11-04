@@ -3,7 +3,7 @@ import { onSettled, Show, untrack } from "solid-js";
 import {
   formatDocumentTitle,
   isSettingsNavigationRoute,
-  titleForRoute,
+  pageTitleForRoute,
 } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import "../components/app-topbar-solid.tsx";
@@ -37,7 +37,7 @@ import { ShellNavigationOwner, type ShellNavigationHost } from "./app-shell-navi
 import { ShellPresentation } from "./app-shell-presentation.ts";
 import "./app-shell-locale-recovery.ts";
 import { createShellViewCallbacks } from "./app-shell-view-callbacks.ts";
-import { readShellView } from "./app-shell-view-state.ts";
+import { readShellView, type ShellView } from "./app-shell-view-state.ts";
 import { ApplicationShell, type ShellViewHost } from "./app-shell-view.tsx";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -97,7 +97,10 @@ export class ShellOwner
     Partial<
       Pick<
         AppSidebarElement,
-        "navigationVisible" | "updateComplete" | "findSidebarHovercardRowByKey"
+        | "navigationVisible"
+        | "navigationCollapsed"
+        | "updateComplete"
+        | "findSidebarHovercardRowByKey"
       >
     > = document.createElement("openclaw-app-sidebar");
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
@@ -254,6 +257,10 @@ export class ShellOwner
         const next = selectShellRouteState(runtime.router.getState());
         if (!equalShellRouteState(this.routeState, next)) {
           this.shellNavigation.updateRouteState(next);
+        } else if (this.routeState.sessionUrlPending !== next.sessionUrlPending) {
+          // URL eligibility can settle without a route change. Do not replay recovery.
+          this.routeState = next;
+          this.shellNavigation.synchronizeSessionUrl();
         }
       };
       this.cleanups.push(runtime.router.subscribe(updateRoute));
@@ -327,7 +334,7 @@ export class ShellOwner
     }
     this.shellLayout.dispose();
     this.shellChrome.disconnect();
-    syncControlUiSystemChrome(false, false);
+    syncControlUiSystemChrome(false, { contentCanvas: false, navScrim: false });
     this.outboxStoreImport.dispose();
     this.outboxStoreUnsubscribe?.();
     this.outboxStoreUnsubscribe = null;
@@ -452,7 +459,10 @@ export class ShellOwner
       return;
     }
     const outboxScopeHost = this.storedOutboxScopeHost(context);
-    let primaryContext = routeId === "custodian" ? askBrandLabel() : titleForRoute(routeId);
+    let primaryContext =
+      routeId === "custodian"
+        ? askBrandLabel()
+        : pageTitleForRoute(routeId, context.nativeDeviceSettings?.snapshot);
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }
@@ -476,33 +486,24 @@ export class ShellOwner
     if (this.context && this.runtime) {
       const state = readShellView(this);
       this.syncConnectionFeedback(state.gatewayStatus.kind);
-      this.mobileGatewayStatus = state.mobileGatewayStatus;
       if (!state.settingsTakeover && !state.nativeEmbed) {
         Object.assign(this.navigationSidebar, state.sidebarProperties, {
           gatewayStatus: state.gatewayStatus,
           connectionRecovery: this.connectionRecovery,
           connectionFlagVisible: this.connectionFlagVisible,
-          connectionFlagAllowed: state.navCollapsed && !state.mobileNavLayout,
+          // The floating refresh notice speaks for the collapsed sidebar.
+          connectionFlagAllowed:
+            state.navCollapsed &&
+            !state.mobileNavLayout &&
+            !state.floatingUpdateCard.refreshRequired,
         });
       }
+      this.syncNavigationPresentation(state);
     }
     this.syncDocumentTitle();
-    // Theme and breakpoint owners sync their changes; route/runtime changes
-    // can change whether the committed shell uses the chat background.
-    syncControlUiSystemChrome(
-      false,
-      this.shellElement?.isConnected === true &&
-        this.shellElement.classList.contains("shell--chat"),
-    );
     // Render-gated pending lazy actions replay on the update that first
     // renders their element, independent of further context updates.
     this.restorePendingLazyAction();
-    // Chat owns its route island and the drawer input exposed by its custom element.
-    const chatPage = this.routeOutlet?.renderedElement?.("openclaw-chat-page");
-    if (chatPage) {
-      chatPage.navDrawerOpen = this.navDrawerOpen && !this.onboardingMode;
-      chatPage.gatewayStatus = this.mobileGatewayStatus;
-    }
     const context = this.context;
     if (!context) {
       return;
@@ -526,6 +527,42 @@ export class ShellOwner
     this.lastNativeNavState = navState;
     // Shipped Mac app builds without web chrome still consume this bridge.
     postNativeNavState(navState);
+  }
+
+  protected override afterNavigationCommit(state: ShellView): void {
+    this.commitPresentation();
+    if (!this.context || !this.runtime) {
+      return;
+    }
+    if (!state.settingsTakeover && !state.nativeEmbed) {
+      this.navigationSidebar.navigationVisible = !state.navigationSurfaceHidden;
+      this.navigationSidebar.navigationCollapsed = state.navCollapsed;
+    }
+    this.syncNavigationPresentation(state);
+  }
+
+  private syncNavigationPresentation(state: ShellView): void {
+    this.mobileGatewayStatus = state.mobileGatewayStatus;
+    // Routes choose the canvas; drawer commits only change its native scrim.
+    const shell = this.shellElement?.isConnected === true ? this.shellElement.classList : undefined;
+    syncControlUiSystemChrome(false, {
+      contentCanvas:
+        shell?.contains("shell--chat") === true &&
+        this.contentElement?.classList.contains("content--workbench") !== true,
+      navScrim:
+        shell?.contains("shell--mobile-nav") === true && shell.contains("shell--nav-drawer-open"),
+    });
+    // Chat owns its route island and the drawer input exposed by its custom element.
+    const chatPage = this.routeOutlet?.renderedElement?.("openclaw-chat-page");
+    if (chatPage) {
+      chatPage.navDrawerOpen = state.navDrawerOpen;
+      chatPage.gatewayStatus = this.mobileGatewayStatus;
+    }
+    const newSessionPage = this.routeOutlet?.renderedElement?.("openclaw-new-session-page");
+    if (newSessionPage) {
+      newSessionPage.navDrawerOpen = state.navDrawerOpen;
+      newSessionPage.gatewayStatus = this.mobileGatewayStatus;
+    }
   }
 
   ensureAgentsList(
@@ -556,62 +593,57 @@ declare module "@solidjs/web" {
 export function OpenClawShell(props: OpenClawShellProps): SolidJSX.Element {
   return (
     <Show when={props.runtime} keyed>
-      {(runtime) => renderShellRuntime(runtime, props)}
-    </Show>
-  );
-}
-
-function renderShellRuntime(
-  runtime: ApplicationRuntime,
-  props: OpenClawShellProps,
-): SolidJSX.Element {
-  const element = document.createElement("openclaw-app-shell");
-  const initialShellOptions = untrack(() => ({
-    readiness: props.getReadiness?.(),
-    onboarding: props.onboarding,
-  }));
-  const owner = new ShellOwner(
-    element,
-    runtime,
-    initialShellOptions.readiness,
-    initialShellOptions.onboarding,
-  );
-  const view = <ApplicationShell host={owner} />;
-  onSettled(() => {
-    const initialOnShell = props.onShell;
-    owner.connect();
-    const unmountPresentation = owner.mountPresentation();
-    initialOnShell?.(owner);
-    return () => {
-      // A disconnect preserves reload intent; a replacement context retires it first.
-      if (props.runtime.context !== runtime.context) {
-        owner.replaceRuntime(props.runtime);
-      }
-      unmountPresentation();
-      owner.disconnect();
-      initialOnShell?.(undefined);
-    };
-  });
-  return (
-    <openclaw-app-shell
-      onOpenclaw-route-element={owner.renderedShellElements.register}
-      ref={(host) => {
-        owner.element = host;
-        // The optional observer reads committed owner facts without rendering the shell again.
-        Object.defineProperties(host, {
-          readiness: {
-            get: () => owner.readiness,
-            set: (value: ControlUiReadiness | undefined) => {
-              owner.readiness = value;
-            },
-          },
-          updateComplete: { get: () => owner.updateComplete },
-          navigationSidebar: { get: () => owner.navigationSidebar },
-          activeSessionKey: { get: () => owner.activeSessionKey },
+      {(runtime): SolidJSX.Element => {
+        const element = document.createElement("openclaw-app-shell");
+        const initialShellOptions = untrack(() => ({
+          readiness: props.getReadiness?.(),
+          onboarding: props.onboarding,
+        }));
+        const owner = new ShellOwner(
+          element,
+          runtime,
+          initialShellOptions.readiness,
+          initialShellOptions.onboarding,
+        );
+        const view = <ApplicationShell host={owner} />;
+        onSettled(() => {
+          const initialOnShell = props.onShell;
+          owner.connect();
+          const unmountPresentation = owner.mountPresentation();
+          initialOnShell?.(owner);
+          return () => {
+            // A disconnect preserves reload intent; a replacement context retires it first.
+            if (props.runtime.context !== runtime.context) {
+              owner.replaceRuntime(props.runtime);
+            }
+            unmountPresentation();
+            owner.disconnect();
+            initialOnShell?.(undefined);
+          };
         });
+        return (
+          <openclaw-app-shell
+            onOpenclaw-route-element={owner.renderedShellElements.register}
+            ref={(host) => {
+              owner.element = host;
+              // The optional observer reads committed owner facts without rendering the shell again.
+              Object.defineProperties(host, {
+                readiness: {
+                  get: () => owner.readiness,
+                  set: (value: ControlUiReadiness | undefined) => {
+                    owner.readiness = value;
+                  },
+                },
+                updateComplete: { get: () => owner.updateComplete },
+                navigationSidebar: { get: () => owner.navigationSidebar },
+                activeSessionKey: { get: () => owner.activeSessionKey },
+              });
+            }}
+          >
+            {view}
+          </openclaw-app-shell>
+        );
       }}
-    >
-      {view}
-    </openclaw-app-shell>
+    </Show>
   );
 }

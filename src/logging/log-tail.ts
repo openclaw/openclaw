@@ -16,17 +16,17 @@ const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
 
-type RedactionAnchor = {
-  file: string;
-  dev: number;
-  ino: number;
-  offset: number;
-  states: ReadonlyMap<ResolvedRedactPattern, boolean>;
-};
-
 // Logs append and rotate by file. An in-place rewrite retaining this inode and
 // size >= offset can reuse stale state; accepting that keeps polling window-sized.
-let redactionAnchor: RedactionAnchor | undefined;
+let redactionAnchor:
+  | {
+      file: string;
+      dev: number;
+      ino: number;
+      offset: number;
+      states: ReadonlyMap<ResolvedRedactPattern, boolean>;
+    }
+  | undefined;
 
 function invalidateRedactionAnchor(file: string, stat: Stats | null): void {
   if (
@@ -55,11 +55,6 @@ export type LogTailPayload = {
   truncated: boolean;
   reset: boolean;
   skippedBytes?: number;
-};
-
-/** Redacted configured log tail with only parseable structured records. */
-type ParsedLogTailPayload = Omit<LogTailPayload, "lines"> & {
-  lines: ParsedLogLine[];
 };
 
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
@@ -337,7 +332,11 @@ export async function readConfiguredParsedLogTail(params?: {
   limit?: number;
   maxBytes?: number;
   filter?: (line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">) => boolean;
-}): Promise<ParsedLogTailPayload> {
+}): Promise<
+  Omit<LogTailPayload, "lines"> & {
+    lines: ParsedLogLine[];
+  }
+> {
   const tail = await readConfiguredLogTail(params, (raw) => {
     const parsed = parseLogLine(raw);
     return parsed !== null && (params?.filter?.(parsed) ?? true);

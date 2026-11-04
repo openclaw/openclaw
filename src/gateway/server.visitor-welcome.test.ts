@@ -155,22 +155,29 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
   await withGatewayServer(async ({ port }) => {
     const staffWs = await connectAs(port, "staff@example.com");
     const guestWs = await connectAs(port, "visitor@example.com");
+    const probe = (params: Record<string, unknown>, ws = guestWs) =>
+      rpcReq<Welcome>(ws, "visitor-access.probe", params);
+    const history = (sessionKey: string) =>
+      rpcReq<{ messages: Array<Record<string, unknown>> }>(staffWs, "chat.history", {
+        sessionKey,
+        agentId: "main",
+      });
+    const inbox = () =>
+      rpcReq<{ items: Array<Record<string, unknown>> }>(staffWs, "mentions.list", {});
     try {
       // Staff have no visitor grant reference; the guest's handler client carries its grant.
-      expect(
-        await rpcReq<Welcome>(staffWs, "visitor-access.probe", { key: "agent:main:main" }),
-      ).toMatchObject({ ok: true, payload: { grant: null } });
-      const welcome = await rpcReq<Welcome>(guestWs, "visitor-access.probe", { create: true });
+      expect(await probe({ key: "agent:main:main" }, staffWs)).toMatchObject({
+        ok: true,
+        payload: { grant: null },
+      });
+      const welcome = await probe({ create: true });
       expect(welcome.payload, JSON.stringify(welcome)).toMatchObject({
         grant: { pluginId: "visitor-access", grantId: "grant-1" },
         sessionKey: expect.any(String),
         messageId: expect.any(String),
       });
       const sessionKey = welcome.payload?.sessionKey ?? "";
-      const retried = await rpcReq<Welcome>(guestWs, "visitor-access.probe", {
-        key: sessionKey,
-        create: true,
-      });
+      const retried = await probe({ key: sessionKey, create: true });
       expect(retried.payload, JSON.stringify(retried)).toMatchObject({
         sessionKey,
         messageId: welcome.payload?.messageId,
@@ -184,12 +191,7 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
       expect(listed.payload?.sessions.find((row) => row.key === sessionKey)).toMatchObject({
         createdActor: { type: "human", id: guest.id },
       });
-      const history = await rpcReq<{ messages: Array<Record<string, unknown>> }>(
-        staffWs,
-        "chat.history",
-        { sessionKey, agentId: "main" },
-      );
-      expect(history.payload?.messages).toMatchObject([
+      expect((await history(sessionKey)).payload?.messages).toMatchObject([
         {
           role: "assistant",
           content: [
@@ -201,20 +203,12 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
           __openclaw: { humanMentions: [{ profileId: staff.id, start: 9, end: 15 }] },
         },
       ]);
-      const inbox = await rpcReq<{ items: Array<Record<string, unknown>> }>(
-        staffWs,
-        "mentions.list",
-        {},
-      );
-      expect(inbox.payload?.items).toMatchObject([
+      expect((await inbox()).payload?.items).toMatchObject([
         { senderProfileId: guest.id, sessionKey, messageId: welcome.payload?.messageId },
       ]);
 
       // A guest's own welcome session is visible to its plugin RPC until an administrator deletes it.
-      const described = await rpcReq<Welcome>(guestWs, "visitor-access.probe", {
-        key: sessionKey,
-        describe: true,
-      });
+      const described = await probe({ key: sessionKey, describe: true });
       expect(described.payload, JSON.stringify(described)).toMatchObject({
         session: { key: sessionKey },
       });
@@ -231,24 +225,19 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
       });
       adminWs.close();
       expect(deleted.ok, JSON.stringify(deleted.error)).toBe(true);
-      expect(
-        await rpcReq<Welcome>(guestWs, "visitor-access.probe", { key: deletedKey, describe: true }),
-      ).toMatchObject({ ok: true, payload: { session: null } });
+      expect(await probe({ key: deletedKey, describe: true })).toMatchObject({
+        ok: true,
+        payload: { session: null },
+      });
 
       // The seam keeps the caller's own write authority: a guest cannot write staff sessions.
       const staffSession = `agent:main:dashboard:${randomUUID()}`;
       expect(
         (await rpcReq(staffWs, "sessions.create", { key: staffSession, agentId: "main" })).ok,
       ).toBe(true);
-      const denied = await rpcReq<Welcome>(guestWs, "visitor-access.probe", {
-        key: staffSession,
-      });
+      const denied = await probe({ key: staffSession });
       expect(denied.payload?.error).toContain("require your own session");
-      const staffHistory = await rpcReq<{ messages: unknown[] }>(staffWs, "chat.history", {
-        sessionKey: staffSession,
-        agentId: "main",
-      });
-      expect(staffHistory.payload?.messages).toEqual([]);
+      expect((await history(staffSession)).payload?.messages).toEqual([]);
 
       // Revoking the real visitor grant after the transcript append has started stops
       // the durable message and its Inbox entry.
@@ -257,20 +246,12 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
         transcriptAppend.onStart = undefined;
         visitorGrant.abort(new Error("Grant revoked"));
       };
-      const revoked = await rpcReq<Welcome>(guestWs, "visitor-access.probe", {
-        key: revokedKey,
-        create: true,
-      }).catch(() => undefined);
+      const revoked = await probe({ key: revokedKey, create: true }).catch(() => undefined);
       expect(revoked?.payload?.messageId).toBeUndefined();
       expect(transcriptAppend.onStart).toBeUndefined();
       visitorGrant = new AbortController();
-      const revokedHistory = await rpcReq<{ messages: unknown[] }>(staffWs, "chat.history", {
-        sessionKey: revokedKey,
-        agentId: "main",
-      });
-      expect(revokedHistory.payload?.messages ?? []).toEqual([]);
-      const inboxAfter = await rpcReq<{ items: unknown[] }>(staffWs, "mentions.list", {});
-      expect(inboxAfter.payload?.items).toHaveLength(1);
+      expect((await history(revokedKey)).payload?.messages ?? []).toEqual([]);
+      expect((await inbox()).payload?.items).toHaveLength(1);
     } finally {
       staffWs.close();
       guestWs.close();

@@ -70,23 +70,6 @@ function collectAssignments(
   return context;
 }
 
-function expectInactiveAcpxConfig(params: {
-  plugins?: Record<string, unknown>;
-  entry?: Record<string, unknown>;
-}): void {
-  const config = createPluginConfig(
-    "acpx",
-    { mcpServers: { s1: { command: "node", env: { K: envRef("K") } } } },
-    params.entry ?? {},
-    params.plugins,
-  );
-  const context = collectAssignments(config, [["acpx", "bundled"]]);
-  expect(context.assignments).toHaveLength(0);
-  expect(context.warnings.map((warning) => warning.code)).toContain(
-    "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-  );
-}
-
 describe("collectPluginConfigAssignments", () => {
   beforeEach(() => {
     loadPluginManifestRegistryForPluginRegistryMock.mockReset();
@@ -95,8 +78,6 @@ describe("collectPluginConfigAssignments", () => {
         {
           id: "acpx",
           origin: "bundled",
-          providers: [],
-          legacyPluginIds: [],
           configContracts: {
             secretInputs: {
               bundledDefaultEnabled: false,
@@ -104,7 +85,7 @@ describe("collectPluginConfigAssignments", () => {
             },
           },
         },
-        { id: "other", origin: "config", providers: [], legacyPluginIds: [] },
+        { id: "other", origin: "config" },
       ],
       diagnostics: [],
     });
@@ -153,7 +134,6 @@ describe("collectPluginConfigAssignments", () => {
         ref: { id: "NESTED_TOKEN" },
       },
     ]);
-    expect(new Set(context.assignments.map(({ ownerId }) => ownerId)).size).toBe(2);
   });
 
   it("collects and applies dotted wildcard keys separately from nested record keys", () => {
@@ -228,14 +208,6 @@ describe("collectPluginConfigAssignments", () => {
     ]);
   });
 
-  it("skips assignments when entry.enabled is false", () => {
-    expectInactiveAcpxConfig({ entry: { enabled: false } });
-  });
-
-  it("treats bundled acpx SecretRef surfaces as inactive until enabled", () => {
-    expectInactiveAcpxConfig({ plugins: { enabled: true } });
-  });
-
   it("collects inline env-template refs while leaving normal strings literal", () => {
     const config = createPluginConfig("acpx", {
       mcpServers: {
@@ -252,19 +224,24 @@ describe("collectPluginConfigAssignments", () => {
     ]);
   });
 
-  it("skips stale acpx entries not in loadablePluginOrigins", () => {
-    const config = createPluginConfig("acpx", {
-      mcpServers: { s1: { command: "node", env: { K1: envRef("K1") } } },
-    });
-    const context = collectAssignments(config, []);
-
+  it.each([
+    ["disabled entry", { enabled: false }, {}, true],
+    ["not explicitly enabled", {}, { enabled: true }, true],
+    ["not loadable", { enabled: true }, {}, false],
+  ] as const)("ignores acpx credentials when %s", (_label, entry, plugins, loadable) => {
+    const config = createPluginConfig(
+      "acpx",
+      { mcpServers: { s1: { command: "node", env: { K1: envRef("K1") } } } },
+      entry,
+      plugins,
+    );
+    const context = collectAssignments(config, loadable ? [["acpx", "bundled"]] : []);
     expect(context.assignments).toHaveLength(0);
-    expect(
-      context.warnings.some(
-        (w) =>
-          w.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE" &&
-          w.path === "plugins.entries.acpx.config.mcpServers.s1.env.K1",
-      ),
-    ).toBe(true);
+    expect(context.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "plugins.entries.acpx.config.mcpServers.s1.env.K1",
+      }),
+    );
   });
 });

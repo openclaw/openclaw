@@ -29,9 +29,14 @@ import { SidebarAttention } from "./sidebar-attention.tsx";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 import { GatewayStatus, gatewayStatusLabel } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { ShortcutHint } from "./solid/kbd.tsx";
-import { renderSessionLeadingState, SessionRowBadges } from "./solid/session-presentation.tsx";
+import {
+  renderSessionUnreadBadge,
+  SessionGlyph,
+  SessionRowBadges,
+} from "./solid/session-presentation.tsx";
 import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
@@ -104,10 +109,12 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
   const environment = () => host.sessionDataContext?.config?.current?.environment ?? null;
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   function AgentCard() {
+    const avatarGateway = useAvatarGatewayContext();
     const avatarLoader = createIdentityAvatars();
     onSettled(() => avatarLoader.connect());
     const avatarSource = projectOwner(avatarLoader, (owner) => owner);
     const avatar = createMemo(() => {
+      avatarGateway();
       const sourceUrl = avatarUrl();
       const pending = Boolean(sourceUrl?.startsWith("/") && !avatarAuthReady());
       return avatarSource.read().withActiveRoutes(() => ({
@@ -441,27 +448,35 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
             }}
           >
             <Show when={home()} fallback={<Icon name="home" />}>
-              {(session) => (
-                <>
-                  {
-                    renderSessionLeadingState({
-                      get session() {
-                        return session();
-                      },
-                      attribution: "owned",
-                      icon: <Icon name="home" />,
-                    }).leadingIndicator
-                  }
-                  <SessionRowBadges
-                    outboxAttentionCount={session().outboxAttentionCount}
-                    hasComposerDraft={session().hasComposerDraft}
-                  />
-                </>
-              )}
+              {(session) => {
+                const running = () =>
+                  (session().isRunVisuallyActive ?? session().hasActiveRun) ||
+                  session().runningChildCount > 0;
+                return (
+                  <>
+                    {/* Home is navigation, not an interactive session-attention target. */}
+                    <SessionGlyph
+                      content={<Icon name="home" />}
+                      running={running()}
+                      queued={session().status === "queued" && session().runningChildCount === 0}
+                      badge={
+                        <Show when={session().unread && !running()}>
+                          {renderSessionUnreadBadge()}
+                        </Show>
+                      }
+                    />
+                    <SessionRowBadges
+                      outboxAttentionCount={session().outboxAttentionCount}
+                      hasComposerDraft={session().hasComposerDraft}
+                    />
+                  </>
+                );
+              }}
             </Show>
           </button>
         </openclaw-tooltip>
         <SidebarAttention
+          cachedCount={host.sidebarSnapshot?.issuesCount}
           activeRouteId={host.activeRouteId}
           onNavigate={host.onNavigate}
           watchUpdateProgress={host.watchUpdateProgress}

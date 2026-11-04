@@ -14,6 +14,7 @@ import {
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { readActiveTranscriptStats } from "./session-accessor.sqlite-history.test-support.js";
 import {
+  readTranscriptEventAtSeqInTransaction,
   readTranscriptEventRows,
   readTranscriptStatsSync,
   readTranscriptStorageRows,
@@ -67,7 +68,24 @@ it("captures the replacement's stored rows after media normalization and duplica
     });
     expect(JSON.parse(rows[0]!.eventJson).message).not.toHaveProperty("MediaPaths");
     expect(JSON.parse(rows[1]!.eventJson)).toEqual(unicode);
+    using reads = observeSql(db, ["payload"], (sql) =>
+      /^select .* from "transcript_events" /i.test(sql) ? "payload" : null,
+    );
     expect(rows).toEqual(readTranscriptEventRows(database, scope.sessionId));
+    expect(
+      readTranscriptStorageRows(database, scope.sessionId).map(({ eventJson, seq }) => ({
+        eventJson,
+        seq,
+      })),
+    ).toEqual(rows);
+    expect(readTranscriptEventAtSeqInTransaction(database, scope.sessionId, 0)).toEqual({
+      event: JSON.parse(rows[0]!.eventJson),
+      seq: 0,
+    });
+    // Expanded compressed text stays in JavaScript; only the small identity row crosses SQLite.
+    expect(reads.textBytes.payload).toBe(Buffer.byteLength(rows[1]!.eventJson) * 2);
+    expect(reads.blobBytes.payload).toBeGreaterThan(0);
+    reads.restore();
     using work = observeSql(db, ["identityDeletes"], (sql) =>
       /^delete from "transcript_event_identities" /i.test(sql) ? "identityDeletes" : null,
     );

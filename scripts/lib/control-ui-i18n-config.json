@@ -19,5 +19,6 @@
   { "locale": "nl", "fileName": "nl.ts", "exportName": "nl", "languageKey": "nl" },
   { "locale": "fa", "fileName": "fa.ts", "exportName": "fa", "languageKey": "fa" },
   { "locale": "ru", "fileName": "ru.ts", "exportName": "ru", "languageKey": "ru" },
-  { "locale": "sv", "fileName": "sv.ts", "exportName": "sv", "languageKey": "sv" }
+  { "locale": "sv", "fileName": "sv.ts", "exportName": "sv", "languageKey": "sv" },
+  { "locale": "ca", "fileName": "ca.ts", "exportName": "ca", "languageKey": "ca" }
 ]

@@ -22,6 +22,7 @@ import {
 import {
   broadcastChatDelta,
   broadcastChatFinal,
+  broadcastChatQueueNotice,
   broadcastChatTerminal,
   isSourceReplyTranscriptMirrorPayload,
 } from "./chat-broadcast.js";
@@ -76,13 +77,14 @@ export function createChatSendLateReplyFinalizer(
   return async ({
     runId: runtimeRunId,
     clientRunId: runId,
-    payloads,
+    payloads: initialPayloads,
     completion,
     isCurrent: isBatchCurrent,
   }: Pick<QueuedFollowupReplyBatch, "runId" | "payloads" | "completion"> & {
     clientRunId: string;
     isCurrent: () => boolean;
   }): Promise<ChatSendAgentReplyFinalization> => {
+    let payloads = initialPayloads;
     const { context, session } = params;
     const isCurrent = () =>
       isBatchCurrent() && (runId !== session.clientRunId || sourceIsCurrent());
@@ -97,6 +99,36 @@ export function createChatSendLateReplyFinalizer(
     const terminal = completion.kind !== "progress";
     let publicationStarted = false;
     try {
+      if (!terminal) {
+        const queueNotices = payloads.filter(
+          (payload) => getReplyPayloadMetadata(payload)?.queueAdmissionNotice === "queued",
+        );
+        if (queueNotices.length > 0) {
+          const noticeResult = await finalizeChatSendAgentReplyPayloads({
+            ...params,
+            terminalEntry: broadcastParams.terminalEntry,
+            emitFirstAssistantServerTiming: () => {},
+            inputs: queueNotices.map((payload) => ({ kind: "raw", payload })),
+            isCurrent,
+            session: { ...session, clientRunId: runId },
+            publishMessage: (message) => {
+              publicationStarted = true;
+              const text = typeof message?.text === "string" ? message.text : undefined;
+              if (text) {
+                // Keep the existing final delivery checks, but never seed an answer buffer.
+                broadcastChatQueueNotice({ ...broadcastParams, text });
+              }
+              return false;
+            },
+          });
+          payloads = payloads.filter(
+            (payload) => getReplyPayloadMetadata(payload)?.queueAdmissionNotice !== "queued",
+          );
+          if (payloads.length === 0) {
+            return noticeResult;
+          }
+        }
+      }
       const result = await finalizeChatSendAgentReplyPayloads({
         ...params,
         terminalEntry: broadcastParams.terminalEntry,
@@ -328,8 +360,8 @@ async function finalizeChatSendAgentReplyPayloads(
               broadcastContent: replyBroadcastContent,
             } = await buildContent(inputsByIndex[inputIndex] ?? []);
             const state: SourceReplyContentState = {
-              broadcastContent: replyBroadcastContent ? [...replyBroadcastContent] : [],
-              persistedContent: persistedContent ? [...persistedContent] : [],
+              broadcastContent: replyBroadcastContent ?? [],
+              persistedContent: persistedContent ?? [],
               hasManagedOutgoingContent: hasManagedOutgoingAssistantContent(persistedContent),
               backedManagedOutgoingContent: false,
             };

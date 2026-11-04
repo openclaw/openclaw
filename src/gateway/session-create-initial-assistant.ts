@@ -1,5 +1,7 @@
+import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { prepareInitialAssistantTranscript } from "../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import { isAgentHarnessSessionKeyOwnedBy } from "../sessions/agent-harness-session-key.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { invalidSessionRequest, unavailableSessionRequest } from "./session-request-error.js";
 
@@ -7,6 +9,7 @@ type FreshSessionConstraints = {
   params: Pick<
     CreateGatewaySessionParams,
     | "initialEntry"
+    | "initialCatalogContinuation"
     | "initialAssistantMessage"
     | "fork"
     | "atomicInitialization"
@@ -38,7 +41,7 @@ export function validateFreshSessionConstraints(input: FreshSessionConstraints) 
       "initial assistant transcript requires a new session without fork or deferred initialization",
     );
   }
-  if (params.initialEntry && existingEntry !== undefined) {
+  if ((params.initialEntry || params.initialCatalogContinuation) && existingEntry !== undefined) {
     return invalidSessionRequest("trusted initial session state requires a new session");
   }
   if (
@@ -81,4 +84,24 @@ export function withInitialAssistantTranscript<T extends object>(
         }
       : {}),
   };
+}
+
+/** Trusted initial state must come from the owner of its reserved session namespace. */
+export function resolveSessionCreateTrustedOwners(
+  params: CreateGatewaySessionParams,
+  explicitTargetKey: string | undefined,
+) {
+  const authorizedHarnessCreation = Boolean(
+    explicitTargetKey &&
+    params.initialEntry &&
+    normalizeOptionalAgentRuntimeId(params.authorizedAgentHarnessId) ===
+      normalizeOptionalAgentRuntimeId(params.initialEntry.agentHarnessId) &&
+    isAgentHarnessSessionKeyOwnedBy(explicitTargetKey, params.authorizedAgentHarnessId),
+  );
+  const authorizedPluginCreation = Boolean(
+    explicitTargetKey &&
+    params.initialEntry?.pluginOwnerId &&
+    params.authorizedPluginId === params.initialEntry.pluginOwnerId,
+  );
+  return { authorizedHarnessCreation, authorizedPluginCreation };
 }

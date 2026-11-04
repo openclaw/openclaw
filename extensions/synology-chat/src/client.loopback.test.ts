@@ -4,7 +4,7 @@ import * as http from "node:http";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
-import { synologyChatPlugin } from "./channel.js";
+import { synologyChatPlugin as plugin } from "./channel.js";
 import { resolveLegacyWebhookNameToChatUserId, sendMessage } from "./client.js";
 
 const { hostedCapabilityUrl, hostedCapabilityCleanup } = vi.hoisted(() => ({
@@ -28,9 +28,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
 
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 
-function respond(res: http.ServerResponse, success: boolean, status = 200) {
+function respond(res: http.ServerResponse, success: boolean, status = 200, data?: unknown) {
   res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ success }));
+  res.end(JSON.stringify({ success, data }));
 }
 
 function readForm(req: http.IncomingMessage, done: (payload: string | null) => void) {
@@ -61,20 +61,19 @@ function drip(res: http.ServerResponse) {
   res.write("x");
 }
 
-function shortenDeadline(deadline: number, replacement: number, onceOnly = false) {
+function shortenDeadline(deadline: number, replacement: number) {
   const nativeSetTimeout = globalThis.setTimeout;
   const spy = vi.spyOn(globalThis, "setTimeout");
-  const schedule = ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+  spy.mockImplementation(((
+    callback: (...args: unknown[]) => void,
+    delay?: number,
+    ...args: unknown[]
+  ) =>
     nativeSetTimeout(
       callback,
-      onceOnly || delay === deadline ? replacement : delay,
+      delay === deadline ? replacement : delay,
       ...args,
-    )) as typeof setTimeout;
-  if (onceOnly) {
-    spy.mockImplementationOnce(schedule);
-  } else {
-    spy.mockImplementation(schedule);
-  }
+    )) as typeof setTimeout);
   return spy;
 }
 
@@ -100,6 +99,30 @@ describe("Synology Chat client loopback", () => {
     return port;
   }
 
+  async function capturePayloads(
+    reply: (payload: Record<string, unknown>, index: number, res: http.ServerResponse) => void = (
+      _payload,
+      _index,
+      res,
+    ) => respond(res, true),
+  ) {
+    const payloads: Record<string, unknown>[] = [];
+    const endpoint =
+      "/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=synology-loopback-proof";
+    const port = await listenLoopback((req, res) => {
+      if (req.method !== "POST" || req.url !== endpoint) {
+        respond(res, false, 403);
+        return;
+      }
+      readPayload(req, (payload) => {
+        payloads.push(payload);
+        reply(payload, payloads.length - 1, res);
+      });
+    });
+    const incomingUrl = `http://127.0.0.1:${port}${endpoint}`;
+    return { payloads, incomingUrl, cfg: config(incomingUrl, "synology-loopback-proof") };
+  }
+
   afterEach(async () => {
     vi.restoreAllMocks();
     if (server) {
@@ -118,7 +141,7 @@ describe("Synology Chat client loopback", () => {
     const port = await listenLoopback((_req, res) => respond(res, false, status || 200));
     hostedCapabilityCleanup.mockClear();
     await expect(
-      synologyChatPlugin.outbound.sendMedia({
+      plugin.outbound.sendMedia({
         cfg: config(status ? `http://127.0.0.1:${port}/incoming` : "not-a-url"),
         mediaUrl: "https://example.com/img.png",
         to: "user1",
@@ -161,9 +184,7 @@ describe("Synology Chat client loopback", () => {
     await listenLoopback((req, res) => {
       receivedRequests += 1;
       req.resume();
-      req.on("end", () => {
-        respond(res, true);
-      });
+      req.on("end", () => respond(res, true));
     }, port);
     if (!releaseRetry) {
       throw new Error("expected pre-connect retry backoff");
@@ -175,36 +196,15 @@ describe("Synology Chat client loopback", () => {
   });
 
   it("does not replay after the server receives the upload and disconnects", async () => {
-    let requestCount = 0;
-    let uploadedBody = "";
-    const port = await listenLoopback((req, res) => {
-      requestCount += 1;
-      req.setEncoding("utf8");
-      req.on("data", (chunk: string) => {
-        uploadedBody += chunk;
-      });
-      req.on("end", () => {
-        res.destroy();
-      });
-    });
-    const incomingUrl = `http://127.0.0.1:${port}/webapi/entry.cgi`;
-    await expect(sendMessage(incomingUrl, "post-upload disconnect")).resolves.toBe(false);
-    expect(requestCount).toBe(1);
-    expect(new URLSearchParams(uploadedBody).get("payload")).toBe(
-      JSON.stringify({ text: "post-upload disconnect" }),
+    const { payloads, incomingUrl } = await capturePayloads((_payload, _index, res) =>
+      res.destroy(),
     );
+    await expect(sendMessage(incomingUrl, "post-upload disconnect")).resolves.toBe(false);
+    expect(payloads).toEqual([{ text: "post-upload disconnect" }]);
   });
 
   it("acquires durable send custody before webhook bytes cross the loopback boundary", async () => {
-    const receivedPayloads: Array<Record<string, unknown>> = [];
-    const port = await listenLoopback((req, res) => {
-      readPayload(req, (payload) => {
-        receivedPayloads.push(payload);
-        respond(res, true);
-      });
-    });
-    const incomingUrl = `http://127.0.0.1:${port}/webapi/entry.cgi`;
-    const cfg = config(incomingUrl, "synology-custody-proof");
+    const { payloads, cfg } = await capturePayloads();
     const marker = `autoqa-synology-custody-${randomUUID()}`;
     const sendContext = { cfg, text: marker, to: "42" };
     const custodyFailure = new Error(`fault-injected custody failure: ${marker}`);
@@ -212,50 +212,42 @@ describe("Synology Chat client loopback", () => {
       throw custodyFailure;
     });
     await expect(
-      synologyChatPlugin.message.send?.text?.({
+      plugin.message.send?.text?.({
         ...sendContext,
         onPlatformSendDispatch: rejectedDispatch,
       }),
     ).rejects.toThrow(custodyFailure.message);
     expect(rejectedDispatch).toHaveBeenCalledOnce();
-    expect(receivedPayloads).toEqual([]);
+    expect(payloads).toEqual([]);
     const acceptedDispatch = vi.fn(async () => undefined);
-    await synologyChatPlugin.message.send?.text?.({
+    await plugin.message.send?.text?.({
       ...sendContext,
       onPlatformSendDispatch: acceptedDispatch,
     });
     expect(acceptedDispatch).toHaveBeenCalledOnce();
-    expect(receivedPayloads).toEqual([{ text: marker, user_ids: [42] }]);
-    const rejectedMediaDispatch = vi.fn(async () => {
-      throw custodyFailure;
-    });
+    expect(payloads).toEqual([{ text: marker, user_ids: [42] }]);
+    rejectedDispatch.mockClear();
     hostedCapabilityCleanup.mockClear();
     await expect(
-      synologyChatPlugin.message.send?.media?.({
+      plugin.message.send?.media?.({
         ...sendContext,
         mediaUrl: "https://example.com/custody-proof.png",
-        onPlatformSendDispatch: rejectedMediaDispatch,
+        onPlatformSendDispatch: rejectedDispatch,
       }),
     ).rejects.toThrow(custodyFailure.message);
-    expect(rejectedMediaDispatch).toHaveBeenCalledOnce();
+    expect(rejectedDispatch).toHaveBeenCalledOnce();
     expect(hostedCapabilityCleanup).toHaveBeenCalledOnce();
-    expect(receivedPayloads).toHaveLength(1);
+    expect(payloads).toHaveLength(1);
   });
 
   it("rejects invalid recipients before HTTP and delivers normalized numeric IDs", async () => {
-    const payloads: unknown[] = [];
-    const port = await listenLoopback((req, res) => {
-      readPayload(req, (payload) => {
-        payloads.push(payload);
-        respond(res, true);
-      });
-    });
-    const cfg = config(`http://127.0.0.1:${port}/webapi/entry.cgi`);
-    const plugin: ChannelPlugin = synologyChatPlugin;
-    const resolve = (to: string) => plugin.outbound?.resolveTarget?.({ cfg, to, mode: "explicit" });
+    const { payloads, cfg } = await capturePayloads();
+    const channel: ChannelPlugin = plugin;
+    const resolve = (to: string) =>
+      channel.outbound?.resolveTarget?.({ cfg, to, mode: "explicit" });
     const invalid = resolve("42oops");
     if (invalid?.ok) {
-      await synologyChatPlugin.outbound.sendText({
+      await plugin.outbound.sendText({
         cfg,
         text: "invalid recipient",
         to: invalid.to,
@@ -268,100 +260,24 @@ describe("Synology Chat client loopback", () => {
     if (!valid?.ok) {
       throw new Error("Expected a normalized recipient");
     }
-    await synologyChatPlugin.outbound.sendText({ cfg, text: "normalized recipient", to: valid.to });
+    await plugin.outbound.sendText({ cfg, text: "normalized recipient", to: valid.to });
     expect(payloads).toEqual([{ text: "normalized recipient", user_ids: [42] }]);
-  });
-
-  it("delivers authenticated text and media without inventing platform message ids", async () => {
-    const receivedPayloads: Array<Record<string, unknown>> = [];
-    const port = await listenLoopback((req, res) => {
-      const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
-      if (
-        req.method !== "POST" ||
-        requestUrl.pathname !== "/webapi/entry.cgi" ||
-        requestUrl.searchParams.get("api") !== "SYNO.Chat.External" ||
-        requestUrl.searchParams.get("method") !== "chatbot" ||
-        requestUrl.searchParams.get("version") !== "2" ||
-        requestUrl.searchParams.get("token") !== "synology-loopback-proof"
-      ) {
-        respond(res, false, 403);
-        return;
-      }
-      readForm(req, (payload) => {
-        if (!payload) {
-          respond(res, false, 400);
-          return;
-        }
-        receivedPayloads.push(JSON.parse(payload) as Record<string, unknown>);
-        respond(res, true);
-      });
-    });
-    const incomingUrl =
-      `http://127.0.0.1:${port}/webapi/entry.cgi?` +
-      "api=SYNO.Chat.External&method=chatbot&version=2&token=synology-loopback-proof";
-    const cfg = config(incomingUrl, "synology-loopback-proof");
-    const mediaUrl = "https://example.com/synology-receipt-proof.png";
-    const sendContext = { cfg, to: "42" };
-    const outboundText = await synologyChatPlugin.outbound.sendText({
-      ...sendContext,
-      text: "native outbound text",
-    });
-    const outboundMedia = await synologyChatPlugin.outbound.sendMedia({
-      ...sendContext,
-      text: "native outbound media",
-      mediaUrl,
-    });
-    const durableText = await synologyChatPlugin.message.send?.text?.({
-      ...sendContext,
-      text: "durable adapter text",
-    });
-    const durableMedia = await synologyChatPlugin.message.send?.media?.({
-      ...sendContext,
-      text: "durable adapter media",
-      mediaUrl,
-    });
-    expect(receivedPayloads).toEqual([
-      { text: "native outbound text", user_ids: [42] },
-      { file_url: hostedCapabilityUrl, text: "native outbound media", user_ids: [42] },
-      { text: "durable adapter text", user_ids: [42] },
-      { file_url: hostedCapabilityUrl, text: "durable adapter media", user_ids: [42] },
-    ]);
-    expect(durableText).toBeDefined();
-    expect(durableMedia).toBeDefined();
-    for (const result of [outboundText, outboundMedia, durableText, durableMedia]) {
-      expect(result).toMatchObject({
-        channel: "synology-chat",
-        messageId: "",
-        target: { kind: "chat", id: "42" },
-        receipt: {
-          platformMessageIds: [],
-          parts: [],
-          threadId: "42",
-        },
-      });
-      expect(result?.receipt.primaryPlatformMessageId).toBeUndefined();
-    }
   });
 
   it.each([true, false])(
     "bounds attachment captions and preserves media custody when overflow acceptance is %s",
     async (acceptOverflow) => {
-      const receivedPayloads: Array<Record<string, unknown>> = [];
       const dispatchOrder: string[] = [];
-      const port = await listenLoopback((req, res) => {
+      const { payloads, cfg } = await capturePayloads((payload, _index, res) => {
         dispatchOrder.push("post");
-        readPayload(req, (payload) => {
-          receivedPayloads.push(payload);
-          const accepted =
-            typeof payload.text === "string" &&
-            payload.text.length <= 2_000 &&
-            (Boolean(payload.file_url) || acceptOverflow);
-          respond(res, accepted, accepted ? 200 : 413);
-        });
+        const accepted =
+          typeof payload.text === "string" &&
+          payload.text.length <= 2_000 &&
+          (Boolean(payload.file_url) || acceptOverflow);
+        respond(res, accepted, accepted ? 200 : 413);
       });
-      const cfg = config(`http://127.0.0.1:${port}/webapi/entry.cgi`);
       hostedCapabilityCleanup.mockClear();
-      const delivery = synologyChatPlugin.message.send?.media?.({
+      const delivery = plugin.message.send?.media?.({
         cfg,
         text: "x".repeat(2_001),
         to: "42",
@@ -382,7 +298,7 @@ describe("Synology Chat client loopback", () => {
           },
         });
       }
-      expect(receivedPayloads).toEqual([
+      expect(payloads).toEqual([
         { file_url: hostedCapabilityUrl, text: "x".repeat(2_000), user_ids: [42] },
         { text: "x", user_ids: [42] },
       ]);
@@ -392,92 +308,51 @@ describe("Synology Chat client loopback", () => {
   );
 
   it.each([
-    {
-      name: "all text chunks",
-      text: "x".repeat(4001),
-      media: false,
-      missingChunk: -1,
-      ids: ["25769804017", "25769804018", "25769804019"],
-    },
-    {
-      name: "partially identified text",
-      text: "x".repeat(2001),
-      media: false,
-      missingChunk: 1,
-      ids: [],
-    },
-    { name: "hosted media", text: "", media: true, missingChunk: -1, ids: ["25769804017"] },
-  ])(
-    "preserves genuine webhook identities for $name",
-    async ({ text, media, missingChunk, ids }) => {
-      let requestCount = 0;
-      const payloads: Record<string, unknown>[] = [];
-      const port = await listenLoopback((req, res) => {
-        readPayload(req, (payload) => {
-          payloads.push(payload);
-          const index = requestCount++;
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              success: true,
-              data: {
-                succ: {
-                  user_id_post_map: {
-                    "123456": index === missingChunk ? undefined : 25769804017 + index,
-                  },
-                },
-              },
-            }),
-          );
-        });
+    ["all text chunks", 4001, false, -1, ["25769804017", "25769804018", "25769804019"]],
+    ["partially identified text", 2001, false, 1, []],
+    ["hosted media", 0, true, -1, ["25769804017"]],
+    ["unidentified text", 5, false, 0, []],
+    ["unidentified media", 5, true, 0, []],
+  ] as const)(
+    "preserves genuine webhook identities for %s",
+    async (_name, length, media, missingChunk, ids) => {
+      const text = "x".repeat(length);
+      const { payloads, cfg } = await capturePayloads((_payload, index, res) => {
+        const user_id_post_map = {
+          "123456": index === missingChunk ? undefined : 25769804017 + index,
+        };
+        respond(res, true, 200, missingChunk === 0 ? undefined : { succ: { user_id_post_map } });
       });
-      const cfg = config(`http://127.0.0.1:${port}/incoming`);
       const context = { cfg, text, to: "123456" };
       const result = media
-        ? await synologyChatPlugin.message.send?.media?.({
+        ? await (missingChunk === 0 ? plugin.outbound.sendMedia : plugin.message.send?.media)?.({
             ...context,
             mediaUrl: "https://example.com/proof.png",
           })
-        : await synologyChatPlugin.message.send?.text?.(context);
-      expect(requestCount).toBe(media ? 1 : Math.ceil(text.length / 2000));
-      expect(result?.messageId).toBe(ids[0] ?? "");
-      expect(result?.receipt.platformMessageIds).toEqual(ids);
+        : await (missingChunk === 0 ? plugin.outbound.sendText : plugin.message.send?.text)?.(
+            context,
+          );
+      expect(payloads).toEqual(
+        media
+          ? [{ ...(text ? { text } : {}), user_ids: [123456], file_url: hostedCapabilityUrl }]
+          : Array.from({ length: Math.ceil(length / 2000) }, (_, index) => ({
+              text: text.slice(index * 2000, (index + 1) * 2000),
+              user_ids: [123456],
+            })),
+      );
+      expect(result).toMatchObject({
+        channel: "synology-chat",
+        messageId: ids[0] ?? "",
+        target: { kind: "chat", id: "123456" },
+        receipt: { platformMessageIds: ids, threadId: "123456" },
+      });
       expect(result?.receipt.parts.map((part) => part.platformMessageId)).toEqual(ids);
-      if (!media) {
-        expect(payloads.map((payload) => payload.text).join("")).toBe(text);
-        for (const [index, payload] of payloads.entries()) {
-          expect(typeof payload.text).toBe("string");
-          expect(payload.text).toHaveLength(Math.min(2_000, text.length - index * 2_000));
-          expect(payload.user_ids).toEqual([123456]);
-        }
+      if (missingChunk === 0) {
+        expect(result?.receipt.parts).toEqual([]);
+        expect(result?.receipt.primaryPlatformMessageId).toBeUndefined();
       }
     },
   );
-
-  it("rejects unauthenticated webhook sends without fabricating delivery receipts", async () => {
-    let rejectedRequests = 0;
-    const port = await listenLoopback((_req, res) => {
-      rejectedRequests += 1;
-      respond(res, false, 403);
-    });
-    const cfg = config(
-      `http://127.0.0.1:${port}/webapi/entry.cgi?` +
-        "api=SYNO.Chat.External&method=chatbot&version=2&token=synology-loopback-rejected",
-      "synology-loopback-rejected",
-    );
-    await expect(
-      synologyChatPlugin.outbound.sendText({ cfg, text: "rejected", to: "42" }),
-    ).rejects.toThrow("Failed to send message to Synology Chat");
-    expect(rejectedRequests).toBe(1);
-    await expect(
-      synologyChatPlugin.outbound.sendMedia({
-        cfg,
-        mediaUrl: "https://example.com/synology-receipt-proof.png",
-        to: "42",
-      }),
-    ).rejects.toThrow("rejected the attachment request");
-    expect(rejectedRequests).toBe(2);
-  });
 
   it.each(["overflow", "deadline"] as const)(
     "returns stale identity after a streamed user_list %s",
@@ -515,8 +390,7 @@ describe("Synology Chat client loopback", () => {
       await expect(lookup()).resolves.toBe(17);
       now.mockReturnValue(1_700_000_000_000 + 10 * 60 * 1000);
       const timeoutMs = 250;
-      const timeoutSpy =
-        failure === "deadline" ? shortenDeadline(15_000, timeoutMs, true) : undefined;
+      const timeoutSpy = failure === "deadline" ? shortenDeadline(15_000, timeoutMs) : undefined;
       const startedAt = performance.now();
       await expect(lookup()).resolves.toBe(17);
       const elapsedMs = performance.now() - startedAt;

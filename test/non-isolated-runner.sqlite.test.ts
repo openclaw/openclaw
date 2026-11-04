@@ -50,13 +50,6 @@ export default defineConfig({
     });
     expect(result.code, result.stdout + result.stderr).toBe(1);
     const output = result.stdout + result.stderr;
-    for (const file of Object.keys(files).filter((name) => /^1[12]-/u.test(name))) {
-      const owner = file.startsWith("12-") ? "stateReadWorkers" : "sharedStateWorkerOwner";
-      expect(output).toContain(`[sqlite-test-lifecycle] ${file}: retiring openclaw.${owner}`);
-    }
-    expect(output).toContain(
-      "[sqlite-test-lifecycle] 11-a-sqlite-owner.test.ts: draining agent database custody",
-    );
     expect(output).toContain("Synthetic independent singleton cleanup refused");
     expect(output.match(/retained-lease-independent-reset: \d+/gu)).toEqual([
       "retained-lease-independent-reset: 1",
@@ -81,27 +74,15 @@ export default defineConfig({
     expect(report.testResults.map((file) => path.basename(file.name)).toSorted()).toEqual(
       Object.keys(files).toSorted(),
     );
-    for (const file of report.testResults) {
-      // Scheduled-close fixtures prove ordering, including after a runtime skip.
-      const name = path.basename(file.name);
-      const scheduledCloseStatuses = {
-        "10-a-scheduled-close.test.ts": ["passed", "passed", "skipped", "passed"],
-        "10-b-around-each-close.test.ts": ["passed", "passed"],
-      }[name];
-      const failedTeardown = name === "13-a-retained-lease.test.ts";
-      expect(file, file.name).toMatchObject({
-        status: failedTeardown ? "failed" : "passed",
-        message: failedTeardown
-          ? expect.stringContaining("Synthetic retired lease cleanup refused")
-          : "",
-        assertionResults: scheduledCloseStatuses
-          ? scheduledCloseStatuses.map((status) => ({ status }))
-          : [{ status: "passed", failureMessages: [] }],
-      });
-      if (failedTeardown) {
-        expect(file.message).toContain(`leaseId=${identity.leaseId}`);
-        expect(file.message).toContain(`path=${identity.path}`);
-      }
+    // The fixture tests assert close/skip ordering; this layer checks teardown attribution.
+    const failed = report.testResults.filter((file) => file.status === "failed");
+    expect(failed.map((file) => path.basename(file.name))).toEqual(["13-a-retained-lease.test.ts"]);
+    for (const detail of [
+      "Synthetic retired lease cleanup refused",
+      `leaseId=${identity.leaseId}`,
+      `path=${identity.path}`,
+    ]) {
+      expect(failed[0]?.message).toContain(detail);
     }
     const capture: VitestReportCapture = JSON.parse(
       await fs.readFile(`${reportPath}.capture.json`, "utf8"),

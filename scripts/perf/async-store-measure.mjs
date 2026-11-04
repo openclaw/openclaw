@@ -1,24 +1,38 @@
-// Run on the approved benchmark host with Node 26 and --import ./scripts/tsx.mjs.
+// Run on the approved benchmark host with Node 26; consolidated variants need --import ./scripts/tsx.mjs.
+// Compare revisions with: scripts/perf/async-store-measure.mjs <variant> 26 20000
+// consolidated uses enterWith; consolidated-run uses run; consolidated-restore
+// also changes a sibling field, exercising restoration into a replacement frame.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
+import { loadavg } from "node:os";
 import { performance } from "node:perf_hooks";
-import { AsyncContext } from "../../src/shared/async-context.ts";
 import { runWithAsyncStore } from "../../src/shared/async-store.ts";
 
 const [variant = "single", countText = "26", iterationsText = "200000", profilePath] =
   process.argv.slice(2);
 const count = Number(countText);
 const iterations = Number(iterationsText);
+const AsyncContext = variant.startsWith("consolidated")
+  ? (await import("../../src/shared/async-context.ts")).AsyncContext
+  : undefined;
 if (
-  !["stock", "single", "consolidated", "linked", "slots"].includes(variant) ||
+  ![
+    "stock",
+    "single",
+    "consolidated",
+    "consolidated-run",
+    "consolidated-restore",
+    "linked",
+    "slots",
+  ].includes(variant) ||
   !Number.isSafeInteger(count) ||
   count < 1 ||
   !Number.isSafeInteger(iterations) ||
   iterations < 1
 ) {
   throw new Error(
-    "Usage: async-store-measure.mjs <stock|single|consolidated|linked|slots> <stores> <iterations> [profile-path]",
+    "Usage: async-store-measure.mjs <stock|single|consolidated|consolidated-run|consolidated-restore|linked|slots> <stores> <iterations> [profile-path]",
   );
 }
 
@@ -27,13 +41,19 @@ let sink = 0;
 
 function nativeStores() {
   const stores = Array.from({ length: count + 1 }, () =>
-    variant === "consolidated" ? new AsyncContext(Symbol("measured")) : new AsyncLocalStorage(),
+    variant.startsWith("consolidated")
+      ? new AsyncContext(Symbol("measured"))
+      : new AsyncLocalStorage(),
   );
   const target = stores[count];
-  const enter =
-    variant === "stock" ? (storage, value, run) => storage.run(value, run) : runWithAsyncStore;
+  const enter = ["stock", "consolidated-run", "consolidated-restore"].includes(variant)
+    ? (storage, value, run) => storage.run(value, run)
+    : runWithAsyncStore;
   const work = () => {
     sink += target.getStore().value;
+    if (variant === "consolidated-restore") {
+      stores[0].enterWith(target.getStore());
+    }
   };
   return {
     run: (value) => enter(target, value, work),
@@ -90,9 +110,10 @@ function persistentStores() {
   };
 }
 
-const stores = ["stock", "single", "consolidated"].includes(variant)
-  ? nativeStores()
-  : persistentStores();
+const stores =
+  ["stock", "single"].includes(variant) || variant.startsWith("consolidated")
+    ? nativeStores()
+    : persistentStores();
 await stores.within(async () => {
   const inspector = new Session();
   inspector.connect();
@@ -132,11 +153,13 @@ await stores.within(async () => {
       nativeFrameNodes.has(sample.nodeId),
     );
     // Timings are separate from the allocation profiler, whose overhead depends on bytes.
+    const cpu = process.cpuUsage();
     const started = performance.now();
     for (let index = 0; index < iterations; index++) {
       stores.run(values[index & 63]);
     }
     const runNs = ((performance.now() - started) * 1e6) / iterations;
+    const usedCpu = process.cpuUsage(cpu);
     const lookups = {};
     for (const [label, key] of [
       ["oldest", 0],
@@ -165,6 +188,8 @@ await stores.within(async () => {
           : null,
         nativeFrameAllocationSamples: nativeFrameSamples.length,
         runNs,
+        cpuNsPerRun: ((usedCpu.user + usedCpu.system) * 1000) / iterations,
+        hostLoad: loadavg(),
         getStoreNs: lookups,
         sink,
       }),

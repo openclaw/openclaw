@@ -243,63 +243,6 @@ function Region(props: RegionProps, host: RegionElement) {
     await finishClose();
   };
 
-  /**
-   * A narrow pane puts the side panel in the main view's place, hiding whatever
-   * held focus there. Focus continues on the panel's tab, and goes back to that
-   * control once the panel is closed.
-   */
-  function moveFocusWithSideLock(state: {
-    locked: boolean;
-    managed?: boolean;
-    origin?: () => HTMLElement | null;
-    open: boolean;
-  }): void {
-    const side = props.elements?.outlet;
-    const region = props.elements?.shell;
-    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const inSide = Boolean(active && side?.contains(active));
-    if (state.locked) {
-      // The first panel a pane opens mounts this component after the browser
-      // has dropped focus from the hidden view; the pane then says what held it.
-      const given = state.origin?.() ?? null;
-      const origin = active && region?.contains(active) && !inSide ? active : given;
-      // A pane that merely loads this way has neither, and takes no focus.
-      if (origin) {
-        focusBeforeSideLock = origin;
-        // Content with an opening focus request owns entry. Focusing its tab here
-        // would look like newer input and cancel that request. Keep the return target.
-        if (state.managed) {
-          return;
-        }
-        // A tab strip rendered just now is focusable from its next frame.
-        if (focusFrame !== null) {
-          cancelAnimationFrame(focusFrame);
-        }
-        focusFrame = requestAnimationFrame(() => {
-          focusFrame = null;
-          const now = document.activeElement;
-          const moved = now instanceof HTMLElement && now !== document.body && now !== origin;
-          if (props.sideFocusLocked && !moved) {
-            tabFocus.focusActive();
-          }
-        });
-      }
-      return;
-    }
-    const before = focusBeforeSideLock;
-    focusBeforeSideLock = null;
-    const adrift = !active || active === document.body;
-    // A panel that is still open, beside or under the main view, keeps the focus it has.
-    if (!before || !(adrift || (inSide && !state.open))) {
-      return;
-    }
-    before.focus({ preventScroll: true });
-    if (document.activeElement !== before) {
-      // That control is gone by now; carry on from the main view's own header.
-      props.elements?.header.focus({ preventScroll: true });
-    }
-  }
-
   function scheduleGeometryCommit() {
     scheduleLayout(host, () => {
       const elements = props.elements;
@@ -614,12 +557,59 @@ function Region(props: RegionProps, host: RegionElement) {
         return;
       }
       previousLock = props.sideFocusLocked;
-      moveFocusWithSideLock({
-        locked: props.sideFocusLocked,
-        managed: props.sideFocusManaged,
-        origin: props.sideFocusOrigin,
-        open: props.layout.open === true,
-      });
+      /**
+       * A narrow pane puts the side panel in the main view's place, hiding whatever
+       * held focus there. Focus continues on the panel's tab, and goes back to that
+       * control once the panel is closed.
+       */
+      const transitionLocked = props.sideFocusLocked;
+      const transitionManaged = props.sideFocusManaged;
+      const transitionOrigin = props.sideFocusOrigin;
+      const transitionOpen = props.layout.open === true;
+      const side = props.elements?.outlet;
+      const region = props.elements?.shell;
+      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const inSide = Boolean(active && side?.contains(active));
+      if (transitionLocked) {
+        // The first panel a pane opens mounts this component after the browser
+        // has dropped focus from the hidden view; the pane then says what held it.
+        const given = transitionOrigin?.() ?? null;
+        const origin = active && region?.contains(active) && !inSide ? active : given;
+        // A pane that merely loads this way has neither, and takes no focus.
+        if (origin) {
+          focusBeforeSideLock = origin;
+          // Content with an opening focus request owns entry. Focusing its tab here
+          // would look like newer input and cancel that request. Keep the return target.
+          if (transitionManaged) {
+            return;
+          }
+          // A tab strip rendered just now is focusable from its next frame.
+          if (focusFrame !== null) {
+            cancelAnimationFrame(focusFrame);
+          }
+          focusFrame = requestAnimationFrame(() => {
+            focusFrame = null;
+            const now = document.activeElement;
+            const moved = now instanceof HTMLElement && now !== document.body && now !== origin;
+            if (props.sideFocusLocked && !moved) {
+              tabFocus.focusActive();
+            }
+          });
+        }
+        return;
+      }
+      const before = focusBeforeSideLock;
+      focusBeforeSideLock = null;
+      const adrift = !active || active === document.body;
+      // A panel that is still open, beside or under the main view, keeps the focus it has.
+      if (!before || !(adrift || (inSide && !transitionOpen))) {
+        return;
+      }
+      before.focus({ preventScroll: true });
+      if (document.activeElement !== before) {
+        // That control is gone by now; carry on from the main view's own header.
+        props.elements?.header.focus({ preventScroll: true });
+      }
     });
   }
   const listeners = new AbortController();

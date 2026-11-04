@@ -54,7 +54,7 @@ function mountBuildChip() {
 describe("sidebar build commit copy", () => {
   it.each([
     [true, "Commit hash copied", "1"],
-    [false, "Copy failed", "0"],
+    [false, "Couldn’t copy. Try again.", "0"],
   ] as const)(
     "keeps settled copy=%s feedback for a full 1,500 ms after retry",
     async (copied, label, value) => {
@@ -67,6 +67,7 @@ describe("sidebar build commit copy", () => {
       expect(button.dataset.copied).toBeUndefined();
       pending.resolve();
       await vi.advanceTimersByTimeAsync(0);
+      flush();
       expect(writeText).toHaveBeenCalledExactlyOnceWith("0123456789ab");
       expect(button.getAttribute("aria-label")).toBe("Commit hash copied");
 
@@ -76,12 +77,14 @@ describe("sidebar build commit copy", () => {
       }
       button.click();
       await vi.advanceTimersByTimeAsync(0);
+      flush();
       expect(button.getAttribute("aria-label")).toBe(label);
       expect(button.dataset.copied).toBe(value);
       await vi.advanceTimersByTimeAsync(1_499);
       expect(button.getAttribute("aria-label")).toBe(label);
       expect(button.dataset.copied).toBe(value);
       await vi.advanceTimersByTimeAsync(1);
+      flush();
       expect(button.getAttribute("aria-label")).toBe("Copy full commit hash");
       expect(button.dataset.copied).toBeUndefined();
     },

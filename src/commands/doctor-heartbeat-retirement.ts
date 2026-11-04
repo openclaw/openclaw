@@ -9,7 +9,7 @@ import {
 } from "../cron/proactive-job-receipt.js";
 import { cloneCronJobForMutation, finalizeUpdatedJob } from "../cron/service/jobs-mutation.js";
 import { publishCronJobsStoreMutation, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { cronStoreKey } from "../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { loadCronRows, upsertCronJobRow } from "../cron/store/row-codec.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -95,11 +95,12 @@ export async function retireHeartbeatWithDoctor(
     recoveryWarnings: cutoverWarnings,
   } = runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
       let completed = false;
       let repairedPrompts = 0;
       const warnings: string[] = [];
       const recoveryWarnings: string[] = [];
-      const rows = loadCronRows(db, cronStoreKey(storePath));
+      const rows = loadCronRows(db, storeKey);
       const jobs = decodeDoctorHeartbeatJobRows(rows);
       if (jobs.some((job) => job.payload.kind === "heartbeat" || isHeartbeatTaskCronJob(job))) {
         throw new Error(
@@ -107,7 +108,7 @@ export async function retireHeartbeatWithDoctor(
         );
       }
       for (const agentId of new Set([...listAgentIds(cfg), ...monitors.keys()])) {
-        const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
+        const receipt = readDefaultProactiveJobReceiptInDatabase(db, storeKey, agentId);
         for (const job of jobs) {
           const row = rows.find((candidate) => candidate.job_id === job.id)!;
           const message =
@@ -120,7 +121,7 @@ export async function retireHeartbeatWithDoctor(
           const nextJob = cloneCronJobForMutation({ ...job, payload: job.payload });
           nextJob.payload = { ...job.payload, message };
           nextJob.updatedAtMs = Date.now();
-          upsertCronJobRow(db, cronStoreKey(storePath), nextJob, row.sort_order, {
+          upsertCronJobRow(db, storeKey, nextJob, row.sort_order, {
             preserveRuntimeState: true,
           });
           repairedPrompts += 1;
@@ -151,7 +152,7 @@ export async function retireHeartbeatWithDoctor(
           });
           upsertCronJobRow(
             db,
-            cronStoreKey(storePath),
+            storeKey,
             nextJob,
             rows.find((row) => row.job_id === job.id)!.sort_order,
           );
@@ -179,10 +180,10 @@ export async function retireHeartbeatWithDoctor(
             }
           }
         }
-        recordDefaultProactiveJobInDatabase(db, storePath, agentId, receipt.jobId, Date.now());
+        recordDefaultProactiveJobInDatabase(db, storeKey, agentId, receipt.jobId, Date.now());
         completed = true;
       }
-      publishCronJobsStoreMutation(storePath, db);
+      publishCronJobsStoreMutation(storeKey, db);
       return {
         completedCutover: completed,
         repairedPrompts,

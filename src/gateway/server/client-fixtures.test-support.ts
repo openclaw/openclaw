@@ -1,4 +1,5 @@
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { OperatorRunRecoverySnapshot } from "../operator-run-recovery-source.codec.js";
 import type { GatewayAuthenticatedUserProfile } from "./client-identity-types.js";
 
 export function gatewayProfile(
@@ -39,5 +40,30 @@ export function gatewayConnect(
     },
     role,
     scopes,
+  };
+}
+
+export function operatorRecoverySnapshotFixture(
+  profileId: string,
+  grantGeneration: string,
+  overrides: Partial<OperatorRunRecoverySnapshot> = {},
+): OperatorRunRecoverySnapshot {
+  return {
+    profileId,
+    scopes: ["operator.read"],
+    assignedRole: null,
+    githubLogin: null,
+    grant: null,
+    aliasBindingIds: [],
+    authPolicy: {
+      generation: "",
+      grantGeneration,
+      role: "operator",
+      authMethod: "token",
+    },
+    controlUiAdmin: false,
+    localOperator: false,
+    sourceIngress: "internal",
+    ...overrides,
   };
 }

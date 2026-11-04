@@ -58,8 +58,6 @@ import {
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
-import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
-import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
 
@@ -70,8 +68,12 @@ export type SessionMutationAuthorizationParams = {
   context: GatewayRequestContext;
   /** Trusted prepared identity; never adopt a later target while capturing authority. */
   expectedTarget?: ExpectedSessionMutationTarget;
+  /** Recorded-principal input requires an existing, unarchived physical destination. */
+  assertPrincipalTargetCurrent?: (target: SessionSharingTarget | null) => void;
   /** The router's actual alternative admission, not other grants on the same client. */
   sessionScope?: SessionOperatorScope;
+  /** Database access classified by the host-owned method registry. */
+  databaseAdmission?: "read" | "write";
   sessionRowRead?: SessionRowReadView;
   preparedSharing?: PreparedMutationSharing;
   preparedTargets?: ReadonlyArray<{
@@ -97,7 +99,6 @@ export function createSessionTargetPolicyAuthorizer(context: {
   authorizesAgentRun: boolean;
   authorizesRead: boolean;
   targetOwnership: { requireOwner: boolean; ownerAction?: string };
-  preparedPolicy: ReturnType<typeof createSessionSharingConsumption>["policy"];
   sessionCap: (cfg: OpenClawConfig) => ReturnType<typeof operatorSessionCap> | undefined;
   resolveMembership: typeof resolveSessionSharingMembership;
 }) {
@@ -106,19 +107,18 @@ export function createSessionTargetPolicyAuthorizer(context: {
     authorizesAgentRun,
     authorizesRead,
     targetOwnership,
-    preparedPolicy,
     sessionCap,
     resolveMembership,
   } = context;
   return (
     targetRef: SessionMutationTarget,
     target: SessionSharingTarget | null,
-    readPolicyConfig: () => OpenClawConfig,
+    cfg: OpenClawConfig,
+    policy: ReturnType<ReturnType<typeof createSessionSharingConsumption>["policy"]>,
     projection?: SessionRowProjection,
     members?: readonly string[],
     visibilityAuthorized?: boolean,
   ) => {
-    const cfg = readPolicyConfig();
     if (!target && (mayCreateSessionTarget(params.method) || authorizesAgentRun)) {
       const canonicalKey = resolveSessionMutationWriteRoute(cfg, targetRef).canonicalKey;
       const sourceError = authorizeSessionSourceCreation(
@@ -127,7 +127,7 @@ export function createSessionTargetPolicyAuthorizer(context: {
           operatorRoleActor: params.client
             ? resolveGatewayOperatorRoleActor(params.client)
             : { kind: "system" },
-          requestingOperatorScopes: params.client?.connect.scopes,
+          requestingOperatorScopes: params.client?.connect?.scopes,
         },
         canonicalKey,
       );
@@ -138,7 +138,6 @@ export function createSessionTargetPolicyAuthorizer(context: {
           : sourceError;
       }
     }
-    const policy = preparedPolicy(cfg, members);
     const error =
       (target && authorizesAgentRun
         ? authorizeSessionAgentRun(
@@ -151,11 +150,18 @@ export function createSessionTargetPolicyAuthorizer(context: {
         sessionKey: targetRef.sessionKey,
         target,
       });
+    const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
+    const isMember = target
+      ? resolveMembership(target, identity?.id, members, projection)
+      : undefined;
+    const entryFilter = policy
+      ? policy.entryFilter
+      : createSessionListEntryFilter({ cfg, client: params.client });
     if (target && !error) {
-      const filter = policy
-        ? policy.entryFilter
-        : createSessionListEntryFilter({ cfg, client: params.client });
-      if (filter?.(target.canonicalKey, target.entry) === false) {
+      const visible = policy
+        ? policy.canReadTarget(target)
+        : entryFilter?.(target.canonicalKey, target.entry, isMember) !== false;
+      if (!visible) {
         return hiddenSessionNotFound(target.canonicalKey);
       }
     }
@@ -164,18 +170,15 @@ export function createSessionTargetPolicyAuthorizer(context: {
       !target ||
       (visibilityAuthorized ??
         (VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
-          (sessionCap(readPolicyConfig()) ?? "write") === "write"))
+          ((policy ? policy.sessionCap : sessionCap(cfg)) ?? "write") === "write"))
     ) {
       return error;
     }
-    const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
     if (authorizesRead) {
-      const entryFilter = policy
-        ? policy.entryFilter
-        : createSessionListEntryFilter({ cfg, client: params.client });
-      return entryFilter?.(target.storeKey, target.entry) === false
-        ? hiddenSessionNotFound(target.canonicalKey)
-        : null;
+      const visible = policy
+        ? policy.canReadTarget(target)
+        : entryFilter?.(target.storeKey, target.entry, isMember) !== false;
+      return visible ? null : hiddenSessionNotFound(target.canonicalKey);
     }
     return policy
       ? authorizeSessionSharingTarget(
@@ -190,7 +193,7 @@ export function createSessionTargetPolicyAuthorizer(context: {
           client: params.client,
           target,
           ...targetOwnership,
-          isMember: resolveMembership(target, identity?.id, members, projection),
+          isMember,
         });
   };
 }
@@ -254,6 +257,10 @@ export function prepareSessionMutationAuthorizationRequest(
   // Progress remains bound to its captured conversation even for administrators.
   const bindsProgressLifecycle =
     params.method === "progressCard.put" || params.method === "progressCard.refresh";
+  // Administrator access still needs the exact Talk target for transport ownership.
+  const bindsTalkTarget =
+    resolveTalkSessionTargetInput(params.method, params.requestParams, params.client?.connId) !==
+    undefined;
   const adminBypass = isGatewayAdmin(params.client) && !authorizesAgentRun;
   if (
     !adminBypass &&
@@ -273,6 +280,7 @@ export function prepareSessionMutationAuthorizationRequest(
       requiresCommunicationAuthority ||
       requiresAccessAuthority ||
       bindsProgressLifecycle ||
+      bindsTalkTarget ||
       params.expectedTarget !== undefined,
     targetOwnership: {
       requireOwner:
@@ -306,15 +314,6 @@ export type ExpectedSessionMutationTarget = Readonly<{
 }>;
 
 export type { PreparedMutationSharing } from "./session-sharing-read.js";
-
-export type SessionSharingLookupCaches = {
-  storeCache: GatewaySessionStoreCache;
-  targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
-};
-
-export function createSessionSharingLookupCaches(): SessionSharingLookupCaches {
-  return { storeCache: new Map(), targetDiscoveryCache: new Map() };
-}
 
 // docs/gateway/protocol.md gives these handlers visibility-based authorization.
 // The router still prevents view/suggest-capped callers from reassigning foreign sessions.
@@ -524,7 +523,7 @@ export function resolvePreparedTalkAuthorizationTarget(
 }
 
 export function findPreparedSharingTarget(
-  params: SessionMutationAuthorizationParams,
+  params: Pick<SessionMutationAuthorizationParams, "preparedTargets">,
   targetRef: { sessionKey?: string; key?: string; agentId?: string },
 ) {
   const sessionKey = normalizeOptionalString(targetRef.sessionKey ?? targetRef.key);

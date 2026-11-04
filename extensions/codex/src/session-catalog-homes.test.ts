@@ -1,16 +1,13 @@
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
+import { createWebSocketPeer } from "./app-server/client-websocket.test-support.js";
 import { CodexAppServerClient } from "./app-server/client.js";
 import { threadStartResult } from "./app-server/codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
-import type { RpcRequest } from "./app-server/protocol.js";
 import { createCodexTestBindingStore } from "./app-server/session-binding.test-helpers.js";
 import { clearSharedCodexAppServerClientAndWait } from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
@@ -237,42 +234,25 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
   );
   const rolloutPaths = new Set(pages.map((thread) => thread.path));
   const opening = vi.spyOn(fs, "open");
-  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  const methods: string[] = [];
   const cursors: Array<string | undefined> = [];
   let control: ReturnType<typeof createCodexSessionCatalogControl> | undefined;
-  server.on("connection", (socket) => {
-    socket.on("message", (raw) => {
-      const request = JSON.parse(rawDataToString(raw, "utf8")) as RpcRequest;
-      const send = (result: unknown) => socket.send(JSON.stringify({ id: request.id, result }));
-      methods.push(request.method);
-      if (request.method === "initialize") {
-        send({ userAgent: `codex/${CODEX_APP_SERVER_VERSION}` });
-      } else if (request.method === "thread/list") {
-        const params = request.params as { cursor?: string; limit?: number };
-        cursors.push(params.cursor);
-        const page = Number(params.cursor ?? "0");
-        send({
-          data: [pages[page]],
-          nextCursor: page + 1 < pages.length ? String(page + 1) : null,
-        });
-      } else if (request.method !== "initialized") {
-        socket.send(
-          JSON.stringify({
-            id: request.id,
-            error: { code: -32601, message: "Unexpected fixture request" },
-          }),
-        );
-      }
-    });
+  const peer = await createWebSocketPeer((request, reply, send) => {
+    if (request.method === "initialize") {
+      reply({ userAgent: `codex/${CODEX_APP_SERVER_VERSION}` });
+    } else if (request.method === "thread/list") {
+      const params = request.params as { cursor?: string; limit?: number };
+      cursors.push(params.cursor);
+      const page = Number(params.cursor ?? "0");
+      reply({
+        data: [pages[page]],
+        nextCursor: page + 1 < pages.length ? String(page + 1) : null,
+      });
+    } else if (request.method !== "initialized") {
+      send({ id: request.id, error: { code: -32601, message: "Unexpected fixture request" } });
+    }
   });
 
   try {
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected the fixture's loopback WebSocket port");
-    }
     const config: OpenClawConfig = {
       agents: { entries: { main: { agentDir: path.join(home, "agent") } } },
     };
@@ -282,7 +262,7 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
       getPluginConfig: () => ({
         appServer: {
           transport: "websocket",
-          url: `ws://127.0.0.1:${address.port}`,
+          url: peer.url,
           homeScope: "agent",
           requestTimeoutMs: 5_000,
         },
@@ -313,26 +293,15 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
       Array.from({ length: 20 }, (_, index) => (index === 0 ? undefined : String(index))),
     );
     expect(openedRollouts()).toHaveLength(0);
-    const nativeRequests = [...methods];
+    const nativeRequests = [...peer.methods];
     opening.mockClear();
     expect(await list()).toEqual(result);
-    expect(methods).toEqual(nativeRequests);
+    expect(peer.methods).toEqual(nativeRequests);
     expect(openedRollouts()).toHaveLength(0);
   } finally {
     await control?.stop();
     opening.mockRestore();
     await clearSharedCodexAppServerClientAndWait();
-    await Promise.all(
-      [...server.clients].map((socket) => {
-        const closed = once(socket, "close");
-        socket.terminate();
-        return closed;
-      }),
-    );
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-    expect(server.clients.size).toBe(0);
-    expect(server.address()).toBeNull();
+    await peer.close();
   }
 });

@@ -249,8 +249,13 @@ describe("openclaw session lookup context", () => {
     expectGateway("chat.history", { sessionKey: "agent:research:main" });
   });
 
-  it("preserves implicit all-agent discovery for authorized callers", async () => {
+  it("preserves all-agent discovery and applies live visibility grants and revocations", async () => {
+    const accessibleConfig = sessionPolicyConfig();
+    const restrictedConfig = sessionPolicyConfig("self");
     mockSessionDiscovery((request) => {
+      if (request.method === "chat.history") {
+        return { messages: [{ role: "user", content: "private history" }] };
+      }
       if (request.method === "sessions.search") {
         const { agentId, sessionKeys } = request.params ?? {};
         const sessionKey = Array.isArray(sessionKeys) ? sessionKeys[0] : undefined;
@@ -266,10 +271,10 @@ describe("openclaw session lookup context", () => {
       }
       return undefined;
     });
-    const call = createToolCaller(sessionPolicyConfig());
+    const discovery = createToolCaller(accessibleConfig);
 
-    const listed = await call("sessions_list");
-    const searched = await call("sessions_search", { query: "hit" });
+    const listed = await discovery("sessions_list");
+    const searched = await discovery("sessions_search", { query: "hit" });
 
     expect(listed.details).toMatchObject({ sessions: agentRows("main", "research") });
     expect(searched.details).toMatchObject({
@@ -283,17 +288,6 @@ describe("openclaw session lookup context", () => {
       .filter((request) => request.method === "sessions.list");
     expect(discoveryRequests).not.toHaveLength(0);
     expect(discoveryRequests.some((request) => request.params?.agentId === undefined)).toBe(true);
-  });
-
-  it("applies live session visibility grants and revocations to already-created lookup tools", async () => {
-    const accessibleConfig = sessionPolicyConfig();
-    const restrictedConfig = sessionPolicyConfig("self");
-    mockSessionDiscovery((request) => {
-      if (request.method === "chat.history") {
-        return { messages: [{ role: "user", content: "private history" }] };
-      }
-      return undefined;
-    });
     setRuntimeConfigSnapshot(accessibleConfig);
     const call = createToolCaller(accessibleConfig, { sessionConfigSource: "runtime" });
     setEmbeddedMode(false);

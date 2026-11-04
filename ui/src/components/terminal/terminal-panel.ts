@@ -3,9 +3,9 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { terminalFontFamily } from "../../app/terminal-font.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
-import { renderSolidSnapshot } from "../../lib/dom/solid-snapshot.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import { renderSolidSnapshot } from "../../lib/reactive/detached-root.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { showConfirmDialog } from "../confirm-dialog.ts";
 import { createDockLayout } from "../dock-layout.ts";
@@ -388,7 +388,7 @@ export function createTerminalPanel(
         let confirmed: boolean;
         try {
           confirmed = await showConfirmDialog({
-            title: i18n.t("terminal.closeSession"),
+            title: i18n.t("terminal.closeSessionTitle"),
             message: i18n.t("terminal.closeSessionMessage"),
             confirmLabel: i18n.t("common.close"),
             danger: true,

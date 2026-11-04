@@ -1,8 +1,13 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { redactSensitiveText, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import type {
+  WorkerResourceReceipt,
+  WorkerRetentionPolicy,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { runCrabboxProcess } from "./crabbox-process.js";
+import { crabboxResourceIdentityArgs } from "./crabbox-worker-resource-receipt.js";
 import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -12,7 +17,14 @@ export function sanitizeCrabboxNotice(text: string): string {
   return sliceUtf16Safe(redactToolPayloadText(text).replace(/\s+/gu, " ").trim(), 0, 512);
 }
 
-export type LeaseCommandContext = { binary: string; id: string; provider: string };
+export type LeaseCommandContext = {
+  binary: string;
+  id: string;
+  provider: string;
+  resourceReceipt?: WorkerResourceReceipt;
+  retention?: WorkerRetentionPolicy;
+  assertCurrent?: () => void;
+};
 
 export function leaseRunArgs(
   context: LeaseCommandContext,
@@ -48,14 +60,18 @@ export async function runCrabboxCommand(params: {
   input?: string | Uint8Array;
   signal?: AbortSignal;
   timeoutMs: number;
+  assertCurrent?: () => void;
+  killGraceMs?: number;
 }): Promise<SpawnResult> {
   params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   let result: SpawnResult;
   try {
     result = await runCrabboxProcess([params.binary, ...params.args], {
       timeoutMs: params.timeoutMs,
       maxOutputBytes: MAX_OUTPUT_BYTES,
       killProcessTree: true,
+      ...(params.killGraceMs === undefined ? {} : { killGraceMs: params.killGraceMs }),
       ...(params.env === undefined ? {} : { env: params.env }),
       ...(params.input === undefined ? {} : { input: params.input }),
       ...(params.signal ? { signal: params.signal } : {}),
@@ -282,26 +298,37 @@ export async function stopCrabboxLease(params: {
   id: string;
   provider: string;
   warn: (message: string) => void;
+  resourceReceipt?: WorkerResourceReceipt;
+  retention?: WorkerRetentionPolicy;
+  assertCurrent?: () => void;
   onCleanupAccepted?: () => void;
+  signal?: AbortSignal;
 }): Promise<void> {
   const deadline = performance.now() + CRABBOX_STOP_TIMEOUT_MS;
+  if (params.retention && !params.resourceReceipt) {
+    throw new Error("Crabbox retained teardown requires the original resource receipt");
+  }
   const stop = async (wait: boolean): Promise<"released" | "accepted" | "blocking"> => {
     const timeoutMs = deadline - performance.now();
     if (timeoutMs <= 0) {
       throw new Error("Crabbox stop exceeded its cleanup deadline");
     }
+    params.assertCurrent?.();
     let result = await runCrabboxCommandWithCoordinatorRetry({
       action: "stop",
+      assertCurrent: params.assertCurrent,
       args: [
         "stop",
         "--provider",
         params.provider,
         "--id",
         params.id,
+        ...(params.resourceReceipt ? crabboxResourceIdentityArgs(params.resourceReceipt) : []),
         ...(!wait ? ["--wait=false"] : []),
       ],
       binary: params.binary,
       timeoutMs,
+      signal: params.signal,
     });
     if (
       !wait &&
@@ -328,6 +355,7 @@ export async function stopCrabboxLease(params: {
       }
       result = await runCrabboxCommandWithCoordinatorRetry({
         action: "stop recovery",
+        assertCurrent: params.assertCurrent,
         args: [
           "stop",
           "--provider",
@@ -339,9 +367,11 @@ export async function stopCrabboxLease(params: {
         ],
         binary: params.binary,
         timeoutMs: remainingMs,
+        signal: params.signal,
       });
     }
-    if (isUnrecognizedLease(result, params.id, "stop")) {
+    params.assertCurrent?.();
+    if (!params.resourceReceipt && isUnrecognizedLease(result, params.id, "stop")) {
       params.warn(
         `Crabbox lease ${params.id} (provider ${params.provider}) is absent; treating stop as already released`,
       );
