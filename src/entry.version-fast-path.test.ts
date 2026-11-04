@@ -96,3 +96,19 @@ it.each([
     expect(diagnostic).toContain("version resolution failed");
   }
 });
+
+it("declares the build's capabilities with --json for deploy tooling", async () => {
+  const printed = createDeferred();
+  output.mockImplementation(() => printed.resolve());
+  vi.mocked(resolveCommitHash).mockReturnValue("abc1234");
+
+  expect(tryHandleRootVersionFastPath(["node", "openclaw", "--version", "--json"])).toBe(true);
+  await printed.promise;
+
+  expect(process.exitCode).toBe(0);
+  expect(JSON.parse(String(output.mock.calls[0]?.[0]))).toEqual({
+    version: "9.9.9-test",
+    commit: "abc1234",
+    capabilities: ["continuation-turn-start-fence"],
+  });
+});

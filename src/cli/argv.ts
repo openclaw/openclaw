@@ -94,11 +94,16 @@ export function hasRootVersionAlias(argv: string[]): boolean {
   return isRootInvocationForFlags(argv, ROOT_VERSION_ALIAS_FLAGS);
 }
 
+/** `--json` selects machine-readable version output (`openclaw --version --json`). */
 export function isRootVersionInvocation(argv: string[]): boolean {
-  return isRootInvocationForFlags(argv, VERSION_FLAGS);
+  return isRootInvocationForFlags(argv, VERSION_FLAGS, "--json");
 }
 
-function isRootInvocationForFlags(argv: string[], targetFlags: ReadonlySet<string>): boolean {
+function isRootInvocationForFlags(
+  argv: string[],
+  targetFlags: ReadonlySet<string>,
+  modifierFlag?: string,
+): boolean {
   const args = argv.slice(2);
   let hasTarget = false;
   for (let i = 0; i < args.length; i += 1) {
@@ -111,6 +116,9 @@ function isRootInvocationForFlags(argv: string[], targetFlags: ReadonlySet<strin
     }
     if (targetFlags.has(arg)) {
       hasTarget = true;
+      continue;
+    }
+    if (arg === modifierFlag) {
       continue;
     }
     const consumed = consumeRootOptionToken(args, i);

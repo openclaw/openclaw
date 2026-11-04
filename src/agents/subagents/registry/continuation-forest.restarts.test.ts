@@ -41,6 +41,11 @@ vi.mock("../../../utils/sleep.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/sleep.js")>();
   return { ...actual, ...(await forestSeams()).clock(actual) };
 });
+vi.mock("../../../auto-reply/continuation/work-store.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../auto-reply/continuation/work-store.js")>();
+  return { ...actual, ...(await forestSeams()).workMarks(actual) };
+});
 
 const fixture = useSubagentControlFixture();
 const annex = useContinuationForest(() => fixture.stateDir);
@@ -81,6 +86,23 @@ describe("the burning annex: restarts and replay", () => {
     await folded.release();
 
     await forest.advanceTo(NIGHTFALL_MS);
+    await forest.expectForestHolds();
+  });
+
+  it("the crash in the attic's turn: a wake that died after its turn checked the attic, before its delivered mark, ran once and is interrupted with one notice", async () => {
+    const forest = await annex.build();
+    await forest.light();
+    await forest.advanceTo(ATTIC_DELAY_MS - 1_000);
+    const attic = forest.attic(2);
+    forest.expectElection(attic, { outcome: "interrupted" });
+
+    // The attic wake claims, its turn checks the attic, and the Gateway dies before the turn's
+    // delivery is recorded; the Gateway restarts.
+    await forest.crashMidWake(attic, "effect");
+
+    // Past running-recovery's one-minute staleness: it finds the wake left running and interrupts
+    // it, never driving it again.
+    await forest.advanceTo(80_000, 5_000);
     await forest.expectForestHolds();
   });
 

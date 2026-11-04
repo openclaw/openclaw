@@ -20,6 +20,7 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import { foldCrane } from "./continuation-forest.fire.test-support.js";
 import {
   AGENT_ID,
+  type AnnexElection,
   type AnnexNode,
   type AnnexShape,
   ATTIC_DELAY_MS,
@@ -267,7 +268,7 @@ export async function lightAnnex(forest: ContinuationForest): Promise<void> {
       `the late runner of tree ${prince.tree}`,
       LATE_RUNNER_DELAY_MS,
     );
-    await electAttic(forest, prince);
+    await electAttic(forest, prince, `the attic inspector of tree ${prince.tree}`);
   }
 }
 
@@ -303,16 +304,20 @@ async function electRunner(
   });
 }
 
-/** The prince's continue_work: check the attic again, after the minimum delay. */
-async function electAttic(forest: ContinuationForest, prince: AnnexNode): Promise<void> {
-  const reason = `check the attic again (tree ${prince.tree})`;
+/** The prince's continue_work: `name` checks the attic again, after the minimum delay. */
+export async function electAttic(
+  forest: ContinuationForest,
+  prince: AnnexNode,
+  name: string,
+): Promise<AnnexElection> {
+  const reason = `${name} checks the attic again`;
   const result = await scheduleContinuationWork({
     sessionKey: prince.sessionKey,
     chainState: { ...CHAIN, chainStartedAt: Date.now() },
     request: { reason, delaySeconds: ATTIC_DELAY_MS / 1_000 },
     config: resolveContinuationRuntimeConfig(),
   });
-  expect(result.scheduled, `the attic wake of tree ${prince.tree} was not elected`).toBe(true);
+  expect(result.scheduled, `${name} was not elected`).toBe(true);
   const record = (
     await listContinuationRecords({
       ownerSessionKey: prince.sessionKey,
@@ -320,18 +325,18 @@ async function electAttic(forest: ContinuationForest, prince: AnnexNode): Promis
       statuses: ["queued"],
     })
   ).find((candidate) => candidate.stateJson.includes(reason));
-  // The due time is the world's: elected at the fire's first instant, due after its delay.
-  const dueAt = forest.t0 + ATTIC_DELAY_MS;
-  expect(record?.dueAt, `the attic wake of tree ${prince.tree} is not due at its delay`).toBe(
-    dueAt,
-  );
-  forest.elections.set(record!.recordId, {
+  // The due time is the world's: elected now, due after its delay.
+  const dueAt = Date.now() + ATTIC_DELAY_MS;
+  expect(record?.dueAt, `${name} is not due at its delay`).toBe(dueAt);
+  const election: AnnexElection = {
     id: record!.recordId,
     kind: "attic",
-    name: `the attic inspector of tree ${prince.tree}`,
+    name,
     tree: prince.tree,
     ownerSessionKey: prince.sessionKey,
     dueAt,
     expected: { outcome: "executed" },
-  });
+  };
+  forest.elections.set(election.id, election);
+  return election;
 }

@@ -10,6 +10,7 @@ import { isRootVersionInvocation } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { CLI_NAME } from "../cli-name.js";
 import { formatHelpExamples } from "../help-format.js";
+import { formatRootVersionOutput } from "../version-output.js";
 import {
   getCommanderErrorCommandNames,
   getCommanderErrorCommandPath,
@@ -144,9 +145,7 @@ export function configureProgramHelp(
 
   if (isRootVersionInvocation(process.argv)) {
     const commit = resolveCommitHash({ moduleUrl: import.meta.url });
-    console.log(
-      commit ? `OpenClaw ${ctx.programVersion} (${commit})` : `OpenClaw ${ctx.programVersion}`,
-    );
+    console.log(formatRootVersionOutput(process.argv, ctx.programVersion, commit));
     throw new ExitError(0);
   }
 

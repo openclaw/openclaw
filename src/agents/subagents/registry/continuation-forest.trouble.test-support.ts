@@ -1,7 +1,8 @@
 // Continuation (karmaterminal/openclaw#1271): trouble in the burning annex, each through its real
 // entry point: a prince's chat /new, the Gateway's sessions.reset, a room handed over (its row
 // deleted and recreated, or its owner changed), a Gateway restart booting as production schedules
-// it, a Gateway that dies inside the attic's turn, and the owner's explicit cancel.
+// it, a Gateway that dies inside the attic's turn, the owner's explicit cancel, and a user's message
+// to a room running the real reply owner.
 import { expect } from "vitest";
 import { runContinuationCustodyBoot } from "../../../auto-reply/continuation/custody-boot.js";
 import { resetContinuationCustodyProjection } from "../../../auto-reply/continuation/custody/custody-projection.js";
@@ -9,12 +10,10 @@ import { resetDelegateDispatchHedgesForTests } from "../../../auto-reply/continu
 import { resolveContinuationResetRetentions } from "../../../auto-reply/continuation/session-reset-retention-resolve.js";
 import {
   clearContinuationWorkDispatch,
+  dispatchPendingContinuationWork,
   resetContinuationWorkDispatchForTests,
 } from "../../../auto-reply/continuation/work-dispatch.js";
-import {
-  consumePendingWork,
-  markPendingWorkDelivered,
-} from "../../../auto-reply/continuation/work-store.js";
+import { getReplyFromConfig } from "../../../auto-reply/reply/get-reply.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { initSessionState } from "../../../auto-reply/reply/session.js";
 import { getRuntimeConfig } from "../../../config/config.js";
@@ -36,6 +35,7 @@ import {
   type Handover,
   OWNER_A,
   OWNER_B,
+  userText,
 } from "./continuation-forest.model.test-support.js";
 import type { ContinuationForest } from "./continuation-forest.test-support.js";
 
@@ -153,30 +153,57 @@ export async function restartGateway(forest: ContinuationForest): Promise<void> 
 }
 
 /**
- * The Gateway dies inside the attic wake's turn: the dispatcher claimed the due wake and the turn
- * checked the attic (the effect); the process died before the turn's completion was recorded, or
- * after its durable delivered mark and before the finish. Composed with the claim and mark owners
- * in the dispatcher's order; nothing after the crash runs. Then the Gateway restarts.
+ * The Gateway dies inside the attic wake's turn. At the wake's due time the work dispatcher claims
+ * it and drives its turn as production does (the turn-start fence, then the reply owner, where the
+ * inspector checks the attic: the effect). The process dies as the dispatcher writes the turn's
+ * durable delivered mark, before it commits (`after: "effect"`), or once that mark is written, as
+ * it writes the finish. The dying write never commits and never returns, so nothing after it runs
+ * in the dead process; the Gateway then restarts. Suites using it mock the work store with the
+ * world's `workMarks` seam.
  */
 export async function crashMidWake(
   forest: ContinuationForest,
   attic: AnnexElection,
   after: "effect" | "delivered mark",
 ): Promise<void> {
-  // The dying process's timer for this room never fires; the wake is claimed at its due time.
+  // The room's dispatch timer is the dying process's; its due-time dispatch runs here instead, as a
+  // world operation the process can die inside (a timer's dispatch is root work settle() awaits).
   clearContinuationWorkDispatch(attic.ownerSessionKey);
   await forest.advance(attic.dueAt! - Date.now());
-  const claimed = (await consumePendingWork(attic.ownerSessionKey)).find(
-    (work) => work.flowId === attic.id,
-  );
-  expect(claimed, `${attic.name} was not claimed at its due time`).toBeDefined();
-  forest.logAttempt(attic.id, "attempt");
-  forest.bits.set(attic.id, 1);
-  forest.logAttempt(attic.id, "effect");
-  if (after === "delivered mark") {
-    expect((await markPendingWorkDelivered(claimed!)).applied).toBe(true);
-  }
+  const died = { at: undefined as number | undefined };
+  const mark = after === "effect" ? "delivered mark" : "finish";
+  forest.dying = {
+    flowId: attic.id,
+    mark,
+    died: () => {
+      died.at = Date.now();
+    },
+  };
+  void forest
+    .run(() => dispatchPendingContinuationWork({ sessionKey: attic.ownerSessionKey }))
+    .catch((error: unknown) => forest.failures.push(`${attic.name}: ${String(error)}`));
+  await forest.settle();
+  forest.dying = undefined;
+  expect(died.at, `the Gateway never reached ${attic.name}'s ${mark}`).toBe(attic.dueAt);
   await restartGateway(forest);
+}
+
+/**
+ * A user's message to a room running the real reply owner, as a world operation: its turn runs now,
+ * or queues as a follow-up behind a running one.
+ */
+export function userSays(forest: ContinuationForest, node: AnnexNode, who: string) {
+  return forest.run(() =>
+    getReplyFromConfig(
+      finalizeInboundContext({
+        Provider: "webchat",
+        Surface: "webchat",
+        ChatType: "direct",
+        SessionKey: node.sessionKey,
+        Body: userText(who),
+      }),
+    ),
+  );
 }
 
 /** The owner's explicit `/continuations cancel <id...>`, through its decision owner. */

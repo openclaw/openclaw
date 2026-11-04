@@ -15,6 +15,9 @@ import {
 import type { ContinuationForest } from "./continuation-forest.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 
+/** The work store's failure reason for a wake whose turn started and whose delivery never did. */
+const WORK_TURN_INTERRUPTED_REASON = "turn-started-delivery-unconfirmed";
+
 export async function tellStories(forest: ContinuationForest): Promise<string[]> {
   const stories = [...forest.failures];
   const records = new Map(
@@ -72,7 +75,10 @@ function deriveRefusalsFromHandovers(forest: ContinuationForest): void {
   }
 }
 
-/** Executed exactly once (attempt log), or refused or cancelled before it ever started. */
+/**
+ * Executed exactly once (attempt log), or interrupted after its one run, or refused or cancelled
+ * before it ever started.
+ */
 function electionStories(
   forest: ContinuationForest,
   election: AnnexElection,
@@ -85,8 +91,9 @@ function electionStories(
   const lines = forest.attemptsByElection.get(election.id) ?? [];
   const attempts = lines.filter((line) => line.kind === "attempt");
   const effects = lines.filter((line) => line.kind === "effect");
-  const { outcome, reason, stage } = election.expected;
-  if (outcome === "executed") {
+  const { outcome, reason, stage, deferred } = election.expected;
+  const runsOnce = outcome === "executed" || outcome === "interrupted";
+  if (runsOnce) {
     if (attempts.length !== 1) {
       stories.push(
         attempts.length === 0
@@ -142,20 +149,50 @@ function electionStories(
       }
     }
   }
-  if (election.kind === "attic" && outcome === "executed" && record) {
-    // When the inspector's turn ran, from the attempt log.
+  if (election.kind === "attic" && runsOnce && record) {
+    // When the inspector's turn ran, from the attempt log; a deferred wake may run late, never early.
     const wokeAt = attempts[0]?.at;
     if (
       election.dueAt !== undefined &&
-      (wokeAt === undefined || !firesOnTime(forest, election.dueAt, wokeAt))
+      (wokeAt === undefined ||
+        (deferred ? wokeAt < election.dueAt : !firesOnTime(forest, election.dueAt, wokeAt)))
     ) {
       stories.push(
-        `${election.name} woke at ${wokeAt === undefined ? "no time" : at(wokeAt)}, not at its due time ${at(election.dueAt)}`,
+        `${election.name} woke at ${wokeAt === undefined ? "no time" : at(wokeAt)}, ${deferred ? "before" : "not at"} its due time ${at(election.dueAt)}`,
       );
     }
-    if (record.status !== "succeeded") {
+    if (outcome === "executed" && record.status !== "succeeded") {
       stories.push(`${election.name}'s election ended ${record.status}, not succeeded`);
     }
+    if (outcome === "interrupted") {
+      stories.push(...interruptedStories(forest, election, record));
+    }
+  }
+  return stories;
+}
+
+/**
+ * A wake whose Gateway died after its turn ran and before its delivery was recorded: its record
+ * fails as interrupted (it may have had effects, so it never runs again), and its room adopts the
+ * one notice naming it.
+ */
+function interruptedStories(
+  forest: ContinuationForest,
+  election: AnnexElection,
+  record: ContinuationRecord,
+): string[] {
+  const stories: string[] = [];
+  if (record.status !== "failed" || record.failureReason !== WORK_TURN_INTERRUPTED_REASON) {
+    stories.push(
+      `${election.name} was not interrupted (status ${record.status}, reason ${record.failureReason})`,
+    );
+  }
+  const notice = `continue_work record ${election.id} started its turn`;
+  const told = forest.adoptedBlocks.filter(
+    (block) => block.sessionKey === election.ownerSessionKey && block.text.includes(notice),
+  ).length;
+  if (told !== 1) {
+    stories.push(`${election.name}'s room was told of its interrupted turn ${told} times`);
   }
   return stories;
 }

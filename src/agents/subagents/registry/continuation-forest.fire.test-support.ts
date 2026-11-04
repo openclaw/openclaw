@@ -1,10 +1,12 @@
 // Continuation (karmaterminal/openclaw#1271): the fire in the burning annex. Clones fold cranes
 // in the world outside the Gateway and report through the production return router; the doubles
-// at the Gateway's edge admit runners through the real registry and run the attic wake's turn.
+// at the Gateway's edge admit runners through the real registry and run the attic wake's turn, or,
+// in a room whose turns run the real reply owner, stand in for its provider.
 import { resolveSpawnRecipientAuthorityBinding } from "../../../auto-reply/continuation/recipient-authority-binding.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply/get-reply.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import type { ContinuationRecipientAuthorityBinding } from "../../../config/sessions/session-recipient-authority-types.js";
+import type { EmbeddedAgentRunResult, runEmbeddedAgent } from "../../embedded-agent.js";
 import { routeSubagentContinuationReturn } from "../../subagent-announce.continuation-return.js";
 import { buildSubagentContinuationRegistrationFields } from "../spawn/subagent-spawn-continuation.js";
 import type { spawnSubagentDirect } from "../spawn/subagent-spawn.js";
@@ -15,6 +17,7 @@ import {
   nodeKey,
   realNowMs,
   reportText,
+  USER_TAG,
 } from "./continuation-forest.model.test-support.js";
 import type { ContinuationForest } from "./continuation-forest.test-support.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
@@ -199,24 +202,58 @@ export async function admitRunner(
   return { status: "accepted", context: "isolated", childSessionKey, runId: childRunId };
 }
 
+/** The attic election a continue_work wake's text names, if any. */
+function atticOf(forest: ContinuationForest, text: string): AnnexElection | undefined {
+  const flowId = /\bFlow: ([\w-]+)/.exec(text)?.[1];
+  const election = flowId ? forest.elections.get(flowId) : undefined;
+  return election?.kind === "attic" ? election : undefined;
+}
+
+/** The inspector checks the attic: the attempt, then the effect. */
+function inspectAttic(forest: ContinuationForest, election: AnnexElection): void {
+  forest.logAttempt(election.id, "attempt");
+  forest.bits.set(election.id, 1);
+  forest.logAttempt(election.id, "effect");
+}
+
 /** The reply owner's double: a continue_work wake turn, in which the inspector checks the attic. */
 export async function checkAttic(
   forest: ContinuationForest,
   ...[ctx, opts]: Parameters<typeof getReplyFromConfig>
 ): ReturnType<typeof getReplyFromConfig> {
   const body = typeof ctx.Body === "string" ? ctx.Body : "";
-  const flowId = /\bFlow: ([\w-]+)/.exec(body)?.[1];
-  const election = flowId ? forest.elections.get(flowId) : undefined;
-  if (election?.kind !== "attic") {
+  const election = atticOf(forest, body);
+  if (!election) {
     throw new Error(`unexpected reply turn for ${ctx.SessionKey}: ${body.slice(0, 120)}`);
   }
   opts?.onPreparedAgentRunStart?.({
     runId: `attic-turn-${forest.attempts.length}`,
     transcriptStart: null,
   });
-  forest.logAttempt(election.id, "attempt");
-  forest.bits.set(election.id, 1);
-  forest.logAttempt(election.id, "effect");
+  inspectAttic(forest, election);
   opts?.onAgentRunTerminalOutcome?.("completed");
   return { text: `${election.name} checked the attic` };
+}
+
+/**
+ * The provider behind a room's real reply owner: a wake's turn checks the attic; a user's turn
+ * (`[annex:user <who>]`) takes its time at the barrier `turn:<who>`.
+ */
+export async function provideTurn(
+  forest: ContinuationForest,
+  params: Parameters<typeof runEmbeddedAgent>[0],
+): Promise<EmbeddedAgentRunResult> {
+  await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+  const election = atticOf(forest, params.prompt);
+  const who = election?.name ?? USER_TAG.exec(params.prompt)?.[1];
+  if (!who) {
+    throw new Error(`unexpected provider turn: ${params.prompt.slice(0, 120)}`);
+  }
+  forest.providerTurns.push({ sessionKey: params.sessionKey ?? "", who, at: Date.now() });
+  if (election) {
+    inspectAttic(forest, election);
+  } else {
+    await forest.gate(`turn:${who}`);
+  }
+  return { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
 }

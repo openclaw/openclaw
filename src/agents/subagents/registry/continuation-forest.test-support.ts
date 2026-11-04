@@ -12,15 +12,17 @@
 // session-delivery queue and its production retry runtime, the return router, the Gateway reset,
 // chat /new, prompt adoption and acknowledgement, restart recovery. Doubled, and only at the edge
 // of the Gateway: the spawn owner (it admits the child through the real registry, then the world
-// folds that child's crane), the reply owner (a continue_work wake turn checks the attic), and
-// continuation wake requests (recorded: every head with queued events takes its turn, and the
-// oracle requires a wake for every return a head adopted). Faked: the
-// clock (Date, setTimeout, performance), and the world outside the Gateway: the crane bits and the
+// folds that child's crane), the reply owner (a continue_work wake turn checks the attic; a room
+// may run the real one instead, its admission, follow-up mailbox and drain, with only its provider
+// doubled), and continuation wake requests (recorded: every head with queued events takes its
+// turn, and the oracle requires a wake for every return a head adopted). Faked: the clock (Date,
+// setTimeout, performance), and the world outside the Gateway: the crane bits and the
 // append-only attempt log, which survive a Gateway restart as the outside world would. Relays and
 // cranes are written through the registry writer as clones of one real registration.
 //
 // The world's modules: model (vocabulary), build (rooms, runs, elections), fire (folds, reports,
-// the spawn and reply doubles), trouble (swaps, handovers, restarts, cancels), oracle (the stories).
+// the spawn, reply and provider doubles), trouble (swaps, handovers, restarts, crashes, cancels,
+// users), oracle (the stories).
 import { AsyncLocalStorage } from "node:async_hooks";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -33,6 +35,8 @@ import {
 import { resetDelegateDispatchHedgesForTests } from "../../../auto-reply/continuation/delegate-dispatch.js";
 import type { cancelOwnedContinuationRecords } from "../../../auto-reply/continuation/session-reset.js";
 import { resetContinuationWorkDispatchForTests } from "../../../auto-reply/continuation/work-dispatch.js";
+import { withFullRuntimeReplyConfig } from "../../../auto-reply/reply/get-reply-fast-path.js";
+import { getExistingFollowupQueue } from "../../../auto-reply/reply/queue/state.js";
 import {
   resolveFinalSystemEventAdoption,
   settleManagedSystemEventsAfterTurnAdoption,
@@ -41,17 +45,20 @@ import { prepareFormattedSystemEvents } from "../../../auto-reply/reply/session-
 import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { deliverQueuedSessionDelivery } from "../../../gateway/server-restart-sentinel.js";
 import { GatewayScheduler } from "../../../infra/gateway-scheduler.js";
 import { startSessionDeliveryRuntime } from "../../../infra/session-delivery-queue-runtime.js";
 import { resolveSystemEventQueueKey } from "../../../infra/system-event-ownership.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../../infra/system-events.js";
 import { defaultRuntime } from "../../../runtime.js";
+import { isSessionRunActiveForKey } from "../../../sessions/session-controller.queries.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { buildForest, lightAnnex } from "./continuation-forest.build.test-support.js";
+import { buildForest, electAttic, lightAnnex } from "./continuation-forest.build.test-support.js";
 import {
   admitRunner,
   checkAttic,
+  provideTurn,
   reportElection,
   settleRun,
 } from "./continuation-forest.fire.test-support.js";
@@ -71,7 +78,10 @@ import {
   realNowMs,
 } from "./continuation-forest.model.test-support.js";
 import { tellStories } from "./continuation-forest.oracle.test-support.js";
-import { continuationForestSeams } from "./continuation-forest.seams.test-support.js";
+import {
+  continuationForestSeams,
+  type WorkMark,
+} from "./continuation-forest.seams.test-support.js";
 import * as trouble from "./continuation-forest.trouble.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 
@@ -91,21 +101,27 @@ const opContext = new AsyncLocalStorage<{ parked: boolean }>();
 /**
  * Installs the annex around each test: continuation enabled, custody hydrated, the fake clock, the
  * production session-delivery runtime on it, and the world's seams. Call after
- * useSubagentControlFixture(), whose state directory and registry the world uses.
+ * useSubagentControlFixture(), whose state directory and registry the world uses. With
+ * `realReplyOwner`, the configuration a room needs to run the real reply owner
+ * (forest.runsRealReplyOwner); its suite mocks the provider with the world's `providerEdge` seam.
  */
-export function useContinuationForest(stateDir: () => string) {
+export function useContinuationForest(
+  stateDir: () => string,
+  options: { realReplyOwner?: boolean } = {},
+) {
   let world: ContinuationForest | undefined;
   beforeEach(async () => {
-    const config = {
+    const base: OpenClawConfig = {
       agents: { defaults: { workspace: stateDir(), continuation: { enabled: true } } },
       session: {
         // Direct rooms per sender, so a prince's chat /new lands on the prince's own room.
-        dmScope: "per-account-channel-peer" as const,
+        dmScope: "per-account-channel-peer",
         // Room for the whole forest: past maxEntries (default 5,000) store maintenance evicts rooms,
         // owners of live elections included (karmaterminal/openclaw#1271 load findings).
         maintenance: { maxEntries: 1_000_000 },
       },
     };
+    const config = options.realReplyOwner ? withRealReplyOwner(base) : base;
     await writeFile(path.join(stateDir(), "openclaw.json"), JSON.stringify(config));
     setRuntimeConfigSnapshot(config);
     await captureRuntimeConfigAsyncReader()();
@@ -114,7 +130,7 @@ export function useContinuationForest(stateDir: () => string) {
     // concurrent first imports cannot race its mock factory.
     await import("../../../auto-reply/reply/get-reply.js");
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
-    world = new ContinuationForest(stateDir(), observeRootWork());
+    world = new ContinuationForest(stateDir(), observeRootWork(), options.realReplyOwner === true);
   });
   afterEach(async () => {
     await world?.dispose();
@@ -133,6 +149,26 @@ export function useContinuationForest(stateDir: () => string) {
       return world;
     },
   };
+}
+
+/**
+ * What a room's real reply owner needs: the full reply runtime, a model whose provider the world
+ * stands in for, no plugins, and a user's turn that queues as a follow-up behind a running one.
+ */
+function withRealReplyOwner(config: OpenClawConfig): OpenClawConfig {
+  return withFullRuntimeReplyConfig({
+    ...config,
+    agents: {
+      defaults: {
+        ...config.agents?.defaults,
+        skipBootstrap: true,
+        model: { primary: "mock-openai/gpt-4o" },
+        models: { "mock-openai/gpt-4o": { agentRuntime: { id: "openclaw" } } },
+      },
+    },
+    plugins: { enabled: false },
+    messages: { queue: { mode: "followup" } },
+  });
 }
 
 export class ContinuationForest {
@@ -194,6 +230,16 @@ export class ContinuationForest {
   readonly relaysToCheck = new Set<AnnexNode>();
   /** Runner (branch) elections by the id of the room that elected them. */
   readonly runners = new Map<string, AnnexElection[]>();
+  /** Rooms whose turns run the real reply owner (runsRealReplyOwner). */
+  readonly realReplyRooms = new Set<string>();
+  /**
+   * The turns their provider ran, in order: who took each (a wake's election, or a user). The
+   * oracle counts what the world's own turns adopt; what a real reply owner's turn drains it does
+   * not see.
+   */
+  readonly providerTurns: Array<{ sessionKey: string; who: string; at: number }> = [];
+  /** The Gateway dies as the work dispatcher writes this wake's `mark` (crashMidWake). */
+  dying: { flowId: string; mark: WorkMark; died: () => void } | undefined;
   stopDeliveryRuntime: (() => Promise<void>) | undefined;
 
   private readonly ops = new Set<Promise<unknown>>();
@@ -207,6 +253,7 @@ export class ContinuationForest {
   constructor(
     readonly stateDir: string,
     private readonly settleRootWork: (keepObserving?: boolean) => Promise<void>,
+    private readonly replyRuntime: boolean,
   ) {
     this.storePath = path.join(stateDir, "agents", AGENT_ID, "sessions", "sessions.json");
   }
@@ -239,6 +286,17 @@ export class ContinuationForest {
     trouble.cancelElections(this, owner, electionIds);
   /** The clone ends its turn instead of yielding: its own run goes home, its wing still out. */
   endsItsTurn = (node: AnnexNode) => settleRun(node.runId!);
+  says = (node: AnnexNode, who: string) => trouble.userSays(this, node, who);
+  /** The prince's continue_work, elected now: `name` checks the attic after the minimum delay. */
+  asksToBeWoken = (prince: AnnexNode, name: string) => electAttic(this, prince, name);
+
+  /** From now on the room's turns run the real reply owner; the world stands in for its provider. */
+  runsRealReplyOwner(node: AnnexNode): void {
+    if (!this.replyRuntime) {
+      throw new Error("runsRealReplyOwner: install the annex with { realReplyOwner: true }");
+    }
+    this.realReplyRooms.add(node.sessionKey);
+  }
 
   /** Every way the forest broke, told as the story. Empty when everything held. */
   async stories(): Promise<string[]> {
@@ -318,6 +376,16 @@ export class ContinuationForest {
     return entry ? `${entry.sessionId}@${entry.lifecycleRevision ?? "initial"}` : undefined;
   }
 
+  /** The prompts queued in the room's follow-up mailbox (a room running the real reply owner). */
+  followups(sessionKey: string): string[] {
+    return (getExistingFollowupQueue(sessionKey)?.items ?? []).map((item) => item.prompt);
+  }
+
+  /** Whether a turn is running in the room. */
+  turnRunning(sessionKey: string): boolean {
+    return isSessionRunActiveForKey(sessionKey);
+  }
+
   /** The child run behind an election: its node's run, or the run a branch spawned. */
   runIdOf(election: AnnexElection): string {
     if (election.node?.runId) {
@@ -392,6 +460,8 @@ export class ContinuationForest {
   private installSeams(): void {
     continuationForestSeams.spawn = (params, context) => admitRunner(this, params, context);
     continuationForestSeams.reply = (ctx, opts) => checkAttic(this, ctx, opts);
+    continuationForestSeams.realReplyRoom = (sessionKey) => this.realReplyRooms.has(sessionKey);
+    continuationForestSeams.provider = (params) => provideTurn(this, params);
     continuationForestSeams.wake = (request) => {
       this.wakes.push({ sessionKey: request.sessionKey, deliveryIds: request.deliveryIds });
       this.touchedRooms.add(request.sessionKey);
@@ -407,6 +477,14 @@ export class ContinuationForest {
     };
     continuationForestSeams.clockWait = () => this.clockWait();
     continuationForestSeams.beforeResetKill = (sessionKey) => this.gate(`reset-kill:${sessionKey}`);
+    continuationForestSeams.beforeWorkMark = async (mark, work) => {
+      const dying = this.dying;
+      if (dying && dying.flowId === work.flowId && dying.mark === mark) {
+        this.dying = undefined;
+        dying.died();
+        await this.die();
+      }
+    };
     continuationForestSeams.logLine = (subsystem, message) => {
       if (message.startsWith("[continuation:")) {
         this.logLines.push({ subsystem, message, at: Date.now() });
@@ -518,6 +596,18 @@ export class ContinuationForest {
     return () => {
       op.parked = false;
     };
+  }
+
+  /**
+   * The process running the current world operation dies here: the operation never resumes, so
+   * nothing after this point runs, and settle() no longer waits for it.
+   */
+  async die(): Promise<never> {
+    if (!opContext.getStore()) {
+      throw new Error("only a world operation can die: run it with forest.run()");
+    }
+    this.clockWait();
+    return await new Promise<never>(() => {});
   }
 
   /** A world operation's wait on the clock: settle() does not wait for it. */

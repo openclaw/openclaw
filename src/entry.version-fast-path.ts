@@ -27,10 +27,14 @@ export function tryHandleRootVersionFastPath(argv: string[]): boolean {
     }
   };
 
-  Promise.all([import("./version.js"), import("./infra/git-commit.js")])
-    .then(([{ VERSION }, { resolveCommitHash }]) => {
+  Promise.all([
+    import("./version.js"),
+    import("./infra/git-commit.js"),
+    import("./cli/version-output.js"),
+  ])
+    .then(([{ VERSION }, { resolveCommitHash }, { formatRootVersionOutput }]) => {
       const commit = resolveCommitHash({ moduleUrl: import.meta.url });
-      console.log(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
+      console.log(formatRootVersionOutput(argv, VERSION, commit));
       process.exitCode = 0;
     })
     .catch(onError);

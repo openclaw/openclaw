@@ -59,6 +59,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
   },
   {
+    commandPath: ["continuations"],
+    // The fence count must leave a stopped store untouched; startup must not initialize it first.
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true, ownsProtocolStdout: true },
+  },
+  {
     commandPath: ["crestodian"], // hidden alias
     policy: { configGuard: "skip", loadPlugins: "never", ensureCliPath: false },
   },

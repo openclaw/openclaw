@@ -42,8 +42,18 @@ export type AnnexNode = {
   routing: Routing;
 };
 
-export type ElectionOutcome = "executed" | "refused" | "cancelled";
-export type ElectionExpectation = { outcome: ElectionOutcome; reason?: string; stage?: string };
+/**
+ * `interrupted`: an attic wake whose turn ran once, then whose Gateway died before its delivery was
+ * recorded. It never runs again; its record fails as interrupted and its room is told once.
+ */
+export type ElectionOutcome = "executed" | "interrupted" | "refused" | "cancelled";
+/** `deferred`: why it may run after its due time (refused while its room was busy, run after). */
+export type ElectionExpectation = {
+  outcome: ElectionOutcome;
+  reason?: string;
+  stage?: string;
+  deferred?: string;
+};
 
 export type AnnexElection = {
   /** The election id: the child run (crane, relay), the custody record (branch, attic). */
@@ -114,6 +124,13 @@ export function reportText(election: AnnexElection): string {
 }
 
 export const REPORT_TAG = /\[annex:report ([^\]]+)\]/g;
+
+/** A user's message to a room whose turns run the real reply owner: `[annex:user <who>] …`. */
+export function userText(who: string): string {
+  return `[annex:user ${who}] is the attic all right?`;
+}
+
+export const USER_TAG = /\[annex:user ([^\]]+)\]/;
 
 /** Wall time, which the fake clock does not move. */
 export function realNowMs(): number {

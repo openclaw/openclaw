@@ -434,6 +434,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/auto-reply/continuation/custody/custody-store.kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["selectRecords"],
+        evidence:
+          "Worker list and boot reads run in custody-store.worker.ts. The one host caller is the CLI one-shot `openclaw continuations fence-status`: custody-store.ts listContinuationRecordsReadOnly over an artifact-preserving read-only snapshot, refused while a Gateway or embedded agent owns the state.",
+      },
+    ],
+  ],
+  [
     "src/agents/bash-durable-process-store.ts",
     [
       {
@@ -3585,9 +3596,9 @@ const workerModules = new Set([
   "src/audit/message-delivery-progress-store.ts", // Audit writer owns progress writes; audit read worker owns progress queries.
   "src/audit/message-execution-binding.ts", // Audit writer alone ensures and confirms outbound execution bindings.
 
-  // Imported only by custody-store.worker.ts and custody-store.worker-handoffs.ts;
-  // those reach the host only through
-  // custody-store.worker.ts <- openclaw-state-worker-runtime.ts.
+  // Runtime custody SQL runs in custody-store.worker.ts and custody-store.worker-handoffs.ts,
+  // reached only through custody-store.worker.ts <- openclaw-state-worker-runtime.ts. The one
+  // host reader is the CLI one-shot listing reviewed in reviewedOperations.
   "src/auto-reply/continuation/custody/custody-store.kernel.ts",
 
   "src/channels/message/ingress-queue-health.kernel.ts",

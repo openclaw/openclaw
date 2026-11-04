@@ -11,6 +11,11 @@
 // This module imports types only, so a mock factory can load it while the module it mocks is
 // still being linked. With no world installed every override passes through to the real export.
 import type { requestContinuationWake } from "../../../auto-reply/continuation/continuation-wake.js";
+import type { PendingContinuationWork } from "../../../auto-reply/continuation/work-flow-state.js";
+import type {
+  markPendingWorkDelivered,
+  markPendingWorkTurnGranted,
+} from "../../../auto-reply/continuation/work-store.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply/get-reply.js";
 import type { stopSessionResetSubagents } from "../../../auto-reply/reply/session-reset-cleanup.js";
 import type {
@@ -19,6 +24,7 @@ import type {
 } from "../../../infra/session-delivery-queue-storage.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { sleep } from "../../../utils/sleep.js";
+import type { runEmbeddedAgent } from "../../embedded-agent.js";
 import type { spawnSubagentDirect } from "../spawn/subagent-spawn.js";
 import type { markContinuationRunsRetainedByReset } from "./subagent-continuation-reset-retention.js";
 
@@ -28,6 +34,10 @@ export type ContinuationForestSeams = {
   spawn?: typeof spawnSubagentDirect;
   /** The reply owner: a continue_work wake turn. */
   reply?: typeof getReplyFromConfig;
+  /** A room whose turns run the real reply owner instead; its provider is the edge. */
+  realReplyRoom?: (sessionKey: string) => boolean;
+  /** The provider behind the real reply owner's turns. */
+  provider?: typeof runEmbeddedAgent;
   /** Continuation return wakes are process-external; the world records them. */
   wake?: typeof requestContinuationWake;
   /** Runs after a durable session-delivery row is written, before its producer continues. */
@@ -40,7 +50,12 @@ export type ContinuationForestSeams = {
   beforeResetKill?: (sessionKey: string) => Promise<void>;
   /** Runs a reset's retention mark pass; the load test measures it. */
   measureMarks?: (pass: () => Promise<string[]>) => Promise<string[]>;
+  /** Runs as the work dispatcher writes a wake's delivered mark or its finish, before the write. */
+  beforeWorkMark?: (mark: WorkMark, work: PendingContinuationWork) => Promise<void>;
 };
+
+/** The two writes that end a wake's turn: its durable delivered mark, then its finish. */
+export type WorkMark = "delivered mark" | "finish";
 
 export const continuationForestSeams: ContinuationForestSeams = {};
 
@@ -53,8 +68,19 @@ export function spawnOwner(actual: { spawnSubagentDirect: typeof spawnSubagentDi
 
 export function replyOwner(actual: { getReplyFromConfig: typeof getReplyFromConfig }) {
   return {
-    getReplyFromConfig: (...args: Parameters<typeof getReplyFromConfig>) =>
-      (continuationForestSeams.reply ?? actual.getReplyFromConfig)(...args),
+    getReplyFromConfig: (...args: Parameters<typeof getReplyFromConfig>) => {
+      const real = continuationForestSeams.realReplyRoom?.(args[0].SessionKey ?? "") === true;
+      return ((real ? undefined : continuationForestSeams.reply) ?? actual.getReplyFromConfig)(
+        ...args,
+      );
+    },
+  };
+}
+
+export function providerEdge(actual: { runEmbeddedAgent: typeof runEmbeddedAgent }) {
+  return {
+    runEmbeddedAgent: (...args: Parameters<typeof runEmbeddedAgent>) =>
+      (continuationForestSeams.provider ?? actual.runEmbeddedAgent)(...args),
   };
 }
 
@@ -107,6 +133,22 @@ export function retentionMarks(actual: {
     ) => {
       const pass = () => actual.markContinuationRunsRetainedByReset(...args);
       return continuationForestSeams.measureMarks?.(pass) ?? pass();
+    },
+  };
+}
+
+export function workMarks(actual: {
+  markPendingWorkDelivered: typeof markPendingWorkDelivered;
+  markPendingWorkTurnGranted: typeof markPendingWorkTurnGranted;
+}) {
+  return {
+    markPendingWorkDelivered: async (...args: Parameters<typeof markPendingWorkDelivered>) => {
+      await continuationForestSeams.beforeWorkMark?.("delivered mark", args[0]);
+      return await actual.markPendingWorkDelivered(...args);
+    },
+    markPendingWorkTurnGranted: async (...args: Parameters<typeof markPendingWorkTurnGranted>) => {
+      await continuationForestSeams.beforeWorkMark?.("finish", args[0]);
+      return await actual.markPendingWorkTurnGranted(...args);
     },
   };
 }
