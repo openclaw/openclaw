@@ -245,15 +245,13 @@ it.each([false, true])(
     emitEvent(gateway, "chat.metadata.changed");
     await expectModels(page, hasRows ? ["fixture/current"] : []);
     expect(page.textContent).toContain(
-      hasRows
-        ? "Some models could not be refreshed. Open Models to try again."
-        : "Models unavailable",
+      hasRows ? "Couldn’t refresh some models. Open Models to try again." : "Models unavailable",
     );
     result = { models: [], refreshFailed: false };
     emitEvent(gateway, "chat.metadata.changed");
     await waitForCronPage(() =>
       expect(page.textContent).not.toContain(
-        hasRows ? "Some models could not be refreshed" : "Models unavailable",
+        hasRows ? "Couldn’t refresh some models" : "Models unavailable",
       ),
     );
     await expectModels(page, []);

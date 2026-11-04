@@ -396,7 +396,7 @@ share GitHub's anonymous IP quota. Existing widgets using `fetch` should replace
 that call with a named query and replace their GitHub `netOrigins` declaration
 with the complete query declaration. Check the effective account in **Agent settings
 → Tools → GitHub account**. Administrators can also reach it from **Settings →
-Profile → GitHub connections**.
+Profile → GitHub accounts**.
 
 For refreshable widgets, keep the last successful data and a separate error
 element. Clear the error after a successful read, and keep result containers in

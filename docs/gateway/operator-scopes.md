@@ -126,6 +126,10 @@ their per-person activity counts. The Gateway returns `FORBIDDEN`; the Control U
 shows the restriction and removes previously loaded activity. People and owner
 facets contain only the caller's own profile. Visible shared-session rows and
 their attribution remain available under the existing sharing policy.
+Presence stays visible as a person-only view: who is online, their last activity
+time, and watched sessions the caller can read. Device, network, connection, and
+email details remain `operator.read` only, as does `presence.query`
+([presence](/gateway/protocol/presence#broadcast-event-scoping)).
 Named roles with `operator.read` retain access to other people's activity even
 when a connection requests only session scopes.
 They can inspect a visible session's effective tool names with `tools.effective`.

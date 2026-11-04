@@ -232,8 +232,8 @@ it.each([
     path.join(bin, "npm"),
     `#!${process.execPath}\n` +
       String.raw`
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
 const fault = ${JSON.stringify(fault)};
 const args = process.argv.slice(2);
 assert.deepEqual(args.slice(0, -1), ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund', '--save-dev', '--save-exact']);

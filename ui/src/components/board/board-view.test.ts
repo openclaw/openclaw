@@ -396,7 +396,7 @@ describe("openclaw-board-view", () => {
     await openBoardMenu(view);
     view.querySelector<HTMLButtonElement>(".board-widget__menu-danger")?.click();
     await vi.waitFor(() => {
-      expectText(view.querySelector(".board-view__error"), "could not be saved");
+      expectText(view.querySelector(".board-view__error"), "Couldn’t save the dashboard change");
       expectText(testId(view, "board-widget-action-error"), "fixture write failed");
     });
     expect(view.querySelector("iframe")).toBe(frame);
@@ -434,7 +434,7 @@ describe("openclaw-board-view", () => {
     await openBoardMenu(view);
     removeButton(view)?.click();
     await vi.waitFor(() =>
-      expectText(view.querySelector(".board-view__error"), "could not be saved"),
+      expectText(view.querySelector(".board-view__error"), "Couldn’t save the dashboard change"),
     );
 
     await openBoardMenu(view);
@@ -625,8 +625,8 @@ describe("openclaw-board-view", () => {
     await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expectText(
-        toastHost.querySelector(".app-toast__message"),
-        "Could not reject widget access. Try again.",
+        toastHost.querySelector(".app-toast__body"),
+        "Couldn’t reject widget access. Try again.",
       ),
     );
     expect([allow?.disabled, reject?.disabled]).toEqual([false, false]);
@@ -656,7 +656,7 @@ describe("openclaw-board-view", () => {
     });
 
     expect(view.querySelector("iframe")).toBeNull();
-    expectText(testId(view, "board-widget-error"), "Widget sandbox host is unavailable.");
+    expectText(testId(view, "board-widget-error"), "The widget sandbox is unavailable.");
   });
 
   it("keeps cell focus order stable and exposes move, resize, and menu labels", async () => {

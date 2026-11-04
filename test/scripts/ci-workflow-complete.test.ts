@@ -376,6 +376,7 @@ describe("native CI failure collection", () => {
       env: {
         ...process.env,
         HISTORICAL_TARGET: "false",
+        IOS_FROZEN_TARGET: "false",
         RUNNER_TEMP: root,
         GITHUB_OUTPUT: path.join(root, "outputs"),
         TRACE: path.join(root, "trace"),

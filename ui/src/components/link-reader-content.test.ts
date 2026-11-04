@@ -1,6 +1,7 @@
 import { createComponent, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
+import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { LinkReaderContent } from "./link-reader-content.tsx";
@@ -483,4 +484,17 @@ describe("link reader document content", () => {
     expect(container.textContent).toContain("Some files could not be shown");
     expect(container.textContent).toContain("No text diff available");
   });
+});
+
+it("renders document dates in the UI locale and leaves invalid external dates verbatim", () => {
+  const locale = vi.spyOn(i18n, "getLocale").mockReturnValue("de");
+  const createdAt = "2026-01-02T12:34:56Z";
+  const container = mount({ ...detail("Example"), createdAt });
+  try {
+    expect(container.textContent).toContain(new Date(createdAt).toLocaleString("de"));
+    update(container, { ...detail("Example"), createdAt: "external date" });
+    expect(container.textContent).toContain("external date");
+  } finally {
+    locale.mockRestore();
+  }
 });

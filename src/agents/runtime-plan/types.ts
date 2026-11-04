@@ -7,7 +7,7 @@ import type {
 } from "../../plugin-sdk/provider-model-types.js";
 import type { ReplyPayload as AgentRuntimeReplyPayload } from "../../shared/reply-payload.types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
+import type { ModelFallbackResultClassification } from "../model-fallback.types.js";
 import type { EmbeddedRunTrigger } from "../run-trigger.js";
 import type { AgentTool } from "../runtime/index.js";
 import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";

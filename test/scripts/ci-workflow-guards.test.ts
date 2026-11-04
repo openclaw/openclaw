@@ -536,15 +536,20 @@ describe("ci workflow guards", () => {
         repository,
         runId,
         runAttempt: 1,
-        preflightOutputs: { frozen_target: frozen },
+        preflightOutputs: { frozen_target: frozen, diff_base_revision: "a".repeat(40) },
       };
       expect(evaluateWorkflowCondition(upload.if, context)).toBe(expected);
       expect(
         Boolean(evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_OBSERVATIONS_DIR, context)),
       ).toBe(expected);
+      expect(evaluateWorkflowExpression(run.env.CHECKOUT_BASE_SHA, context)).toBe("a".repeat(40));
     }
     expect(upload["continue-on-error"]).toBe(true);
-    expect(upload.with.path).toBe("${{ runner.temp }}/ci-test-observations/*/observations.json");
+    expect(job.env.CHECKOUT_BASE_SHA).toBeUndefined();
+    expect(upload.with.path.trim().split("\n")).toEqual([
+      "${{ runner.temp }}/ci-test-observations/*/observations.json",
+      "${{ runner.temp }}/ci-test-observations/*/launch.json",
+    ]);
     expect(upload.with["retention-days"]).toBe(7);
   });
 
@@ -810,6 +815,7 @@ AFTER_CD
     const workflow = readWorkflow(".github/workflows/stale.yml");
     expect(Object.keys(workflow.jobs)).toEqual(["stale-lifecycle"]);
     const job = workflow.jobs["stale-lifecycle"];
+    expect(job["runs-on"]).toBe("ubuntu-24.04");
     const script = String(
       requiredWorkflowStep(job.steps, "Evaluate issue/PR inactivity").with?.script,
     );
@@ -2034,6 +2040,21 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     });
     expect(android.with["install-native-deps"]).toBe("true");
     expect(job.steps.indexOf(node)).toBeLessThan(job.steps.indexOf(android));
+
+    const steps = readAndroidToolchainAction().runs.steps;
+    const reserve = requiredWorkflowStep(steps, "Reserve hosted runner disk for Android");
+    for (const [os, environment, expected] of [
+      ["Linux", "github-hosted", true],
+      ["Linux", "self-hosted", false],
+      ["macOS", "github-hosted", false],
+      ["Windows", "github-hosted", false],
+    ] as const) {
+      expect(runInNewContext(String(reserve.if), { runner: { os, environment } })).toBe(expected);
+    }
+    expect(reserve.run?.match(/^\s*sudo .*$/gm)).toEqual(["sudo rm -rf -- /usr/share/dotnet"]);
+    for (const name of ["Setup Java", "Setup Gradle cache", "Restore Android SDK cache"]) {
+      expect(steps.indexOf(reserve)).toBeLessThan(steps.indexOf(requiredWorkflowStep(steps, name)));
+    }
   });
 
   it("installs the Android SDK platform used by Gradle", () => {
@@ -2568,7 +2589,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     for (const [group, expected] of [
       ["extension-package-boundary", 40],
       ["runtime-topology-architecture", 20],
-      ["plugin-sdk-api-diff", 30],
+      ["plugin-sdk-api-diff", 60],
       ["boundaries", 20],
       [undefined, 20],
     ] as const) {
@@ -2666,7 +2687,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     }
   });
 
-  it("resolves the pull request base and changed files from the shallow security checkout", () => {
+  it("checks release fast lane test growth against the shallow pull request merge base", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
     const checkoutIndex = securitySteps.findIndex((step) => step.name === "Checkout");
     const checkout = expectDefined(securitySteps[checkoutIndex], "security checkout");
@@ -2707,11 +2728,17 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       ).trim();
     git(source, "init", "--initial-branch=main");
     writeFileSync(path.join(source, "base.txt"), "base\n");
+    mkdirSync(path.join(source, "config"));
+    writeFileSync(path.join(source, "config/test-lines-baseline.txt"), "0\n");
+    for (const file of ["scripts/check-test-lines-ratchet.mts", "scripts/lib/shrink-ratchet.mts"]) {
+      mkdirSync(path.dirname(path.join(source, file)), { recursive: true });
+      copyFileSync(file, path.join(source, file));
+    }
     git(source, "add", ".");
     git(source, "commit", "-m", "base");
     git(source, "checkout", "-b", "pull-request");
     for (let index = 0; index < 3; index++) {
-      writeFileSync(path.join(source, "change.txt"), `change ${index}\n`);
+      writeFileSync(path.join(source, "change.test.ts"), `export const change = ${index};\n`);
       git(source, "add", ".");
       git(source, "commit", "-m", `change ${index}`);
     }
@@ -2750,7 +2777,44 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     });
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(output, "utf8").trim()).toBe(`sha=${base}`);
-    expect(git(selected, "diff", "--name-only", base, "HEAD")).toBe("change.txt");
+    expect(git(selected, "diff", "--name-only", base, "HEAD")).toBe("change.test.ts");
+    const budget = expectDefined(
+      securitySteps.find((step) => step.name === "Check release fast lane test-line budget"),
+      "release fast lane budget check",
+    );
+    expect(budget["continue-on-error"]).not.toBe(true);
+    for (const [eventName, fastLane, outcome, admitted] of [
+      ["pull_request", "true", "success", true],
+      ["pull_request", "false", "success", false],
+      ["push", "true", "success", false],
+      ["pull_request", "true", "failure", false],
+    ] as const) {
+      expect(
+        Boolean(
+          evaluateWorkflowExpression(budget.if, {
+            eventName,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: { release_fast_lane: fastLane },
+            steps: { node_setup: { outcome, outputs: {} } },
+          }),
+        ),
+      ).toBe(admitted);
+    }
+    const check = () =>
+      runWorkflowShellScript(expectDefined(budget.run, "budget script"), {
+        cwd: selected,
+        env: { ...process.env, BASE_SHA: base },
+      });
+    const unallocated = check();
+    expect(unallocated.status, unallocated.stdout + unallocated.stderr).toBe(1);
+    expect(unallocated.stderr).toContain("over by: 1; net delta: +1.");
+    mkdirSync(path.join(selected, "config/test-lines-allocations"));
+    writeFileSync(path.join(selected, "config/test-lines-allocations/regression.txt"), "1\n");
+    git(selected, "add", "config/test-lines-allocations/regression.txt");
+    const allocated = check();
+    expect(allocated.status, allocated.stdout + allocated.stderr).toBe(0);
+    expect(allocated.stdout).toContain("Test lines OK: 1; ceiling: 1; slack: 0.");
   });
 
   it("keeps action manifests within the runner's anchor-free YAML grammar", () => {
@@ -3058,7 +3122,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           testNodeExecPath +
           "\n" +
           String.raw`
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "-v") { console.log("fixture"); process.exit(0); }
 const log = process.env.RECIPE_LOG;
@@ -4735,9 +4799,9 @@ test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
       writeFileSync(
         path.join(binDir, "security"),
         `#!${process.execPath}
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 const args = process.argv.slice(2);
 assert.notEqual(process.env.HOME, ${JSON.stringify(root)});
 assert.equal(path.dirname(args.at(-1)), path.join(process.env.HOME, 'Library/Keychains'));

@@ -13,6 +13,27 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isCodeModeControlTool } from "./code-mode-control-tools.js";
 import { markToolExecutionNotStarted as registerTrustedToolNoStartError } from "./tool-effect-receipt.js";
 
+export type ToolTurnHandoff = { readonly code: "sessions_yield"; readonly turnHandoff: true };
+type ToolTurnHandoffReceipt = { status: "started"; async: true; yielded?: true; message: string };
+const acceptedHandoffs = new WeakMap<
+  object,
+  { toolCallId: string | undefined; receipt: ToolTurnHandoffReceipt }
+>();
+
+/** Host-only acceptance evidence; guest JSON and ordinary aborts cannot mint a handoff. */
+export function createToolTurnHandoff(
+  toolCallId: string | undefined,
+  receipt: ToolTurnHandoffReceipt,
+): ToolTurnHandoff {
+  const reason = { code: "sessions_yield", turnHandoff: true } as const;
+  acceptedHandoffs.set(reason, { toolCallId, receipt });
+  return reason;
+}
+
+export function readToolTurnHandoff(reason: unknown) {
+  return typeof reason === "object" && reason !== null ? acceptedHandoffs.get(reason) : undefined;
+}
+
 function throwAbortError(): never {
   throw registerTrustedToolNoStartError(createAbortError("Aborted"));
 }

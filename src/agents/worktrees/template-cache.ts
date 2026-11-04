@@ -15,6 +15,7 @@ import {
 } from "./allocation.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import {
   listGitWorktrees,
   requireGit,
@@ -126,7 +127,7 @@ async function retireWorktreeTemplate(
         timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
       });
     } else {
-      await fs.rm(record.path, { recursive: true, force: true });
+      await nativeWorktreeFilesystem.remove(record.path, options);
     }
     await deleteTemplateAsync(env, record.id, assertCurrent);
     return true;

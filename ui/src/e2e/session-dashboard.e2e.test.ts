@@ -482,14 +482,14 @@ suite.define(() => {
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
     const toast = page.locator("openclaw-toast-host .app-toast");
     await toast.waitFor();
-    expect(await toast.textContent()).toContain("Could not pin to dashboard. Try again.");
+    expect(await toast.textContent()).toContain("Couldn’t pin to dashboard. Try again.");
     expect(await pin.isEnabled()).toBe(true);
     await page.mouse.move(0, 0);
     await pin.focus();
     await pin.hover();
     const hint = page.locator(".tooltip-surface[popover]:popover-open");
     await hint.locator(".tooltip-content").waitFor({ state: "visible" });
-    expect(await hint.textContent()).toContain("Could not pin to dashboard. Try again.");
+    expect(await hint.textContent()).toContain("Couldn’t pin to dashboard. Try again.");
     expect(await page.getByText("internal path detail", { exact: false }).count()).toBe(0);
     await close();
   });
