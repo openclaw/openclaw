@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
@@ -106,6 +108,13 @@ describe("subagent maintenance protection", () => {
     } finally {
       prepared.dispose();
     }
+  });
+
+  it("reads continuation custody without creating a missing state database", async () => {
+    const run = createRun();
+    subagentRuns.set(run.runId, run);
+    expect(await protectedKeys()).toEqual([run.childSessionKey]);
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
   });
 
   it("loads protection once without decoding retained task and reply text", async () => {

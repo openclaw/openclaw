@@ -680,16 +680,21 @@ export async function loadPendingSessionDeliveries(
 }
 
 /**
- * The sessions pending continuation-owned rows are addressed to. A read only: a row that does not
- * decode is left for the load that owns failing it.
+ * The sessions pending continuation-owned rows are addressed to; undefined without a state database,
+ * which this read never creates. A read only: a row that does not decode is left for the load that
+ * owns failing it.
  */
 export async function listPendingContinuationSessionDeliveryKeys(
   context: OpenClawStateWorkerContext,
-): Promise<string[]> {
-  const results = await executeSessionDelivery(context, {
-    type: "sessionDelivery.list",
-    input: undefined,
-  });
+): Promise<string[] | undefined> {
+  const results = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "sessionDelivery.list", input: undefined }),
+    { existingOnly: true },
+  );
+  if (!results) {
+    return undefined;
+  }
   const sessionKeys = new Set<string>();
   for (const result of results) {
     const decoded = decodeStoredSessionDeliveryResult(result);

@@ -9,7 +9,10 @@
  */
 
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { readContinuationLiveWork } from "./custody/custody-projection.js";
+import {
+  readContinuationCustodySnapshot,
+  readContinuationLiveWork,
+} from "./custody/custody-projection.js";
 import {
   listContinuationRecords,
   resolveContinuationCustodyDatabasePath,
@@ -788,23 +791,11 @@ export async function hasPendingIdleRetryWork(
 }
 
 /**
- * Live work that is not durably delivered, or a live pending delegate. Staged post-compaction
- * delegates are excluded: cleanup fails them when it deletes the session.
+ * Live custody that still needs its owner: work, or a pending delegate no cancel has fenced. Staged
+ * post-compaction delegates are excluded: cleanup fails them when it deletes the session.
  */
-function isLiveCustodyRecord(record: ContinuationRecord): boolean {
-  if (record.kind === "delegate") {
-    return record.cancelRequestedAt === undefined;
-  }
-  // A durably delivered record left `running` by a crash is done, not live.
-  return decodeWorkState(record)?.succeeded === undefined;
-}
-
-async function listLiveCustodyRecords(ownerSessionKey?: string): Promise<ContinuationRecord[]> {
-  return await listContinuationRecords({
-    ...(ownerSessionKey !== undefined ? { ownerSessionKey } : {}),
-    kinds: ["work", "delegate"],
-    statuses: ["queued", "running"],
-  });
+function isLiveCustody(kind: ContinuationRecord["kind"], cancelRequested: boolean): boolean {
+  return kind === "work" || (kind === "delegate" && !cancelRequested);
 }
 
 /**
@@ -812,18 +803,37 @@ async function listLiveCustodyRecords(ownerSessionKey?: string): Promise<Continu
  * continuation custody that needs it?
  */
 export async function hasLiveContinuationCustody(sessionKey: string): Promise<boolean> {
-  return (await listLiveCustodyRecords(sessionKey)).some(isLiveCustodyRecord);
+  const live = await listContinuationRecords({
+    ownerSessionKey: sessionKey,
+    kinds: ["work", "delegate"],
+    statuses: ["queued", "running"],
+  });
+  return live.some(
+    (record) =>
+      isLiveCustody(record.kind, record.cancelRequestedAt !== undefined) &&
+      // A durably delivered record left `running` by a crash is done, not live.
+      (record.kind !== "work" || decodeWorkState(record)?.succeeded === undefined),
+  );
 }
 
-/** Every session that owns live continuation custody, by the cleanup guard's rule. */
-export async function listLiveContinuationCustodyOwners(): Promise<string[]> {
-  const owners = new Set<string>();
-  for (const record of await listLiveCustodyRecords()) {
-    if (isLiveCustodyRecord(record)) {
-      owners.add(record.ownerSessionKey);
+/**
+ * Every session that owns live custody, by the same rule, from the hot-path projection (session
+ * maintenance, karmaterminal/openclaw#1544). Erring toward retention, an owner an unresolved write
+ * left unknown counts, and a delivered record left `running` by a crash counts until startup
+ * recovery finalizes it. Empty before phase A.
+ */
+export function listLiveContinuationCustodyOwners(): string[] {
+  const snapshot = readContinuationCustodySnapshot(resolveContinuationCustodyDatabasePath());
+  if (snapshot.state === "unknown") {
+    return [];
+  }
+  const owners = [...snapshot.unknownOwners];
+  for (const [owner, facts] of snapshot.owners) {
+    if (facts.some((fact) => isLiveCustody(fact.kind, fact.cancelRequested))) {
+      owners.push(owner);
     }
   }
-  return [...owners];
+  return owners;
 }
 
 /** Has this run already elected work for the session, in any status, including work that ran? */

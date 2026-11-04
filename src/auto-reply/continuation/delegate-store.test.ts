@@ -189,7 +189,7 @@ describe("delegate store — continuation custody", () => {
 
     expect(await listPendingDelegateSessionKeysForRecovery()).toEqual([]);
     expect(await hasLiveContinuationCustody(sessionKey)).toBe(false);
-    expect(await listLiveContinuationCustodyOwners()).toEqual([]);
+    expect(listLiveContinuationCustodyOwners()).toEqual([]);
     expect(await consumePendingDelegates(sessionKey)).toEqual([]);
     const fenced = await readRecord(queued.recordId);
     expect(fenced.status).toBe("queued");
@@ -227,8 +227,8 @@ describe("delegate store — continuation custody", () => {
     expect(await hasLiveContinuationCustody(postCompactionSession)).toBe(false);
     await claimStagedPostCompactionDelegates(postCompactionSession);
     expect(await hasLiveContinuationCustody(postCompactionSession)).toBe(false);
-    // Session maintenance keeps the same owners, read in one pass.
-    expect(await listLiveContinuationCustodyOwners()).toEqual([regularSession]);
+    // Session maintenance keeps the same owners, read from the hot-path projection.
+    expect(listLiveContinuationCustodyOwners()).toEqual([regularSession]);
   });
 
   it("fails queued and running post-compaction delegates for completed child cleanup", async () => {

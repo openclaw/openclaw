@@ -136,12 +136,13 @@ export function readContinuationLiveWork(
 /**
  * Every owner's live facts plus recent terminal transitions, for queue
  * metrics. `unknown` before hydration; owners with an unresolved write are
- * left out rather than reported stale.
+ * left out of `owners` rather than reported stale, and named in `unknownOwners`.
  */
 export function readContinuationCustodySnapshot(databasePath: string):
   | {
       state: "known";
       owners: ReadonlyMap<string, readonly ContinuationLiveRecordFact[]>;
+      unknownOwners: ReadonlySet<string>;
       ended: readonly ContinuationEndedRecordFact[];
     }
   | { state: "unknown" } {
@@ -149,7 +150,12 @@ export function readContinuationCustodySnapshot(databasePath: string):
   if (!projection?.hydrated) {
     return { state: "unknown" };
   }
-  return { state: "known", owners: projection.owners, ended: projection.ended };
+  return {
+    state: "known",
+    owners: projection.owners,
+    unknownOwners: projection.invalidOwners,
+    ended: projection.ended,
+  };
 }
 
 /** Drop the projection with its database lifecycle (close, reset, or test teardown). */
