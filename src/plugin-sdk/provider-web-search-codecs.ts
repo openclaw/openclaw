@@ -28,11 +28,12 @@ export const nativeWebSearchCodecs = {
     },
     readResults: readDeepSeekSearchResults,
     results(payload: unknown, count: number) {
-      return readDeepSeekSearchResults(payload, count).results.map((row) => ({
-        ...row,
-        title: wrapped(row.title),
-        snippet: row.snippet ? wrapped(row.snippet) : undefined,
-      }));
+      const { results } = readDeepSeekSearchResults(payload, count);
+      for (const row of results) {
+        row.title = wrapped(row.title);
+        row.snippet = row.snippet ? wrapped(row.snippet) : undefined;
+      }
+      return results;
     },
   },
   "brave.search": {

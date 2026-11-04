@@ -140,8 +140,9 @@ beforeEach(() => {
   const nativeFetch = globalThis.fetch;
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
-    if (url.origin !== new URL(baseUrl).origin)
+    if (url.origin !== new URL(baseUrl).origin) {
       throw new Error("Unexpected non-fixture HTTP egress");
+    }
     return nativeFetch(input, init);
   });
 });
@@ -175,7 +176,9 @@ function config(key: string | undefined = proxyKey): OpenClawConfig {
 
 async function execute(args: Record<string, unknown> = {}, cfg = config(), signal?: AbortSignal) {
   const tool = createWebSearchTool({ config: cfg, agentDir: state.agentDir() });
-  if (!tool) throw new Error("Expected configured ClawRouter web_search tool");
+  if (!tool) {
+    throw new Error("Expected configured ClawRouter web_search tool");
+  }
   const result = await tool.execute("proxy-search", { query: "synthetic query", ...args }, signal);
   expect(Value.Check(WebSearchOutputSchema, result.details)).toBe(true);
   expect(JSON.stringify(result)).not.toContain(proxyKey);
@@ -261,8 +264,12 @@ it.each([
   "ineligible",
 ])("denies the %s catalog before search dispatch", async (reason) => {
   const provider = catalog.providers[0]!;
-  if (reason === "stale") catalog.observedAt = new Date(Date.now() - 120_000).toISOString();
-  if (reason === "foreign-scope") catalog.scope.authType = "upstream_key";
+  if (reason === "stale") {
+    catalog.observedAt = new Date(Date.now() - 120_000).toISOString();
+  }
+  if (reason === "foreign-scope") {
+    catalog.scope.authType = "upstream_key";
+  }
   if (reason === "foreign-provider") {
     provider.id = "foreign";
     provider.nativeBaseUrl = "/v1/native/foreign";
@@ -276,8 +283,12 @@ it.each([
     provider.routes[0]!.path = "/chat/completions";
     provider.offers[0]!.route = "/v1/native/deepseek/chat/completions";
   }
-  if (reason === "wrong-format") provider.routes[0]!.responseFormat = "openai.chat_completions";
-  if (reason === "ineligible") provider.offers[0]!.eligible = false;
+  if (reason === "wrong-format") {
+    provider.routes[0]!.responseFormat = "openai.chat_completions";
+  }
+  if (reason === "ineligible") {
+    provider.offers[0]!.eligible = false;
+  }
   expect(await execute()).toMatchObject({ kind: "error", provider: "clawrouter" });
   expect(requests.map((r) => r.path)).toEqual(["/tenant/v1/catalog"]);
 });
@@ -285,6 +296,7 @@ it.each([
 it.each([
   { query: "x".repeat(129) },
   { query: "\ud800" },
+  { query: "\udc00" },
   { need_content: true },
   { country: "US" },
 ])("rejects unsupported DeepSeek input %j before POST", async (args) => {
@@ -316,18 +328,29 @@ it.each([
     responseStatus = 302;
     responseHeaders.Location = "/follow";
   }
-  if (kind === "mime") responseHeaders["Content-Type"] = "text/plain";
-  if (kind === "compressed") responseHeaders["Content-Encoding"] = "unsupported-encoding";
-  if (kind === "excess") responseBody = JSON.stringify({ results: [source, source] });
-  if (kind === "unsafe-url")
+  if (kind === "mime") {
+    responseHeaders["Content-Type"] = "text/plain";
+  }
+  if (kind === "compressed") {
+    responseHeaders["Content-Encoding"] = "unsupported-encoding";
+  }
+  if (kind === "excess") {
+    responseBody = JSON.stringify({ results: [source, source] });
+  }
+  if (kind === "unsafe-url") {
     responseBody = JSON.stringify({ results: [{ ...source, url: "javascript:alert(1)" }] });
-  if (kind === "credentials")
+  }
+  if (kind === "credentials") {
     responseBody = JSON.stringify({
       results: [{ ...source, url: "https://user:pass@example.com/" }],
     });
-  if (kind === "oversized")
+  }
+  if (kind === "oversized") {
     responseBody = JSON.stringify({ results: [{ ...source, summary: "x".repeat(1024 * 1024) }] });
-  if (kind === "truncated") responseBody = '{"results":[';
+  }
+  if (kind === "truncated") {
+    responseBody = '{"results":[';
+  }
   expect(await execute({ count: 1 })).toMatchObject({ kind: "error", provider: "clawrouter" });
   expect(requests).toHaveLength(2);
   expect(globalThis.fetch).toHaveBeenCalledTimes(2);

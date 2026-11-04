@@ -15,7 +15,7 @@ export function isDeepSeekSearchOffer(offer: ClawRouterCapabilityOffer): boolean
 }
 
 export function assertDeepSeekSearchInput(args: Record<string, unknown>, query: string): void {
-  if (!query.isWellFormed() || !query.trim() || Array.from(query).length > 128) {
+  if (/\p{Surrogate}/u.test(query) || !query.trim() || Array.from(query).length > 128) {
     throw new Error("ClawRouter DeepSeek search requires 1-128 Unicode query characters");
   }
   // Only the frozen unary query/count contract is qualified. Never silently drop

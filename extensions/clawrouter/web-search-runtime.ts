@@ -73,7 +73,9 @@ export async function searchClawRouter(
     throw new Error("ClawRouter Parallel search accepts at most 200 query characters");
   }
   const deepseek = offer.requestFormat === "deepseek.search";
-  if (deepseek) assertDeepSeekSearchInput(args, query);
+  if (deepseek) {
+    assertDeepSeekSearchInput(args, query);
+  }
   const request = codec.request(offer.url, query, count);
   execution?.signal?.throwIfAborted();
   execution?.assertCurrent?.();
@@ -109,7 +111,9 @@ export async function searchClawRouter(
     if (!response.ok) {
       throw new Error(`ClawRouter search failed (HTTP ${response.status})`);
     }
-    if (deepseek) assertDeepSeekSearchResponse(response);
+    if (deepseek) {
+      assertDeepSeekSearchResponse(response);
+    }
     const payload = asOptionalRecord(
       await readProviderJsonResponse(response, "clawrouter.web-search", {
         maxBytes: 1024 * 1024,
@@ -119,7 +123,9 @@ export async function searchClawRouter(
     timeoutMs();
     execution?.signal?.throwIfAborted();
     execution?.assertCurrent?.();
-    if (deepseek) assertDeepSeekSearchResults(payload, count);
+    if (deepseek) {
+      assertDeepSeekSearchResults(payload, count);
+    }
     const envelope =
       offer.requestFormat === "brave.search" ? asOptionalRecord(payload?.web) : payload;
     if (!Array.isArray(envelope?.results)) {
@@ -188,7 +194,9 @@ const tavilySearchCodec = {
 };
 
 function isSearchOffer(candidate: ClawRouterCapabilityOffer): boolean {
-  if (candidate.requestFormat === "deepseek.search") return isDeepSeekSearchOffer(candidate);
+  if (candidate.requestFormat === "deepseek.search") {
+    return isDeepSeekSearchOffer(candidate);
+  }
   const codec = searchCodec(candidate.requestFormat);
   return (
     codec !== undefined &&
