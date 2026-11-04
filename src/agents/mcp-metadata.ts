@@ -2,7 +2,7 @@ import type { ClientCapabilities, ServerCapabilities, Tool } from "@modelcontext
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
+import type { McpCatalogTool } from "./agent-bundle-mcp-catalog.types.js";
 
 const MCP_METADATA_TEXT_LIMIT = 1_200;
 const MCP_APPS_CLIENT_EXTENSION = "io.modelcontextprotocol/ui";
