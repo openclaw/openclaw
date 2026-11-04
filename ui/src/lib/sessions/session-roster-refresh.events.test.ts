@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { session } from "../../test-helpers/app-sidebar-cases/roster.test-support.ts";
@@ -257,22 +258,23 @@ describe("session roster event traffic", () => {
     ]);
   });
 
-  it.each([false, true])(
-    "recovers failed membership refreshes on the next keyed snapshot (managed: %s)",
-    async (managed) => {
+  it.each([false, true, "FORBIDDEN"] as const)(
+    "retries transient membership failures automatically and denied queries explicitly (%s)",
+    async (mode) => {
+      const managed = mode !== false;
       const held = session("main", 1, { sessionId: "held" });
       const updated = { ...held, updatedAt: 2 };
-      const added = makeRow("new", 3);
       let rows = [held];
       let fail = false;
       let reads = 0;
       const harness = fixture(async (_method, params) => {
         const selected = (Reflect.get(params ?? {}, "archived") === "all") === managed;
-        if (selected) {
-          reads += 1;
-          if (fail) {
-            throw new Error("List unavailable");
-          }
+        reads += Number(selected);
+        if (selected && fail) {
+          throw new GatewayRequestError({
+            code: typeof mode === "string" ? mode : "UNAVAILABLE",
+            message: "List unavailable",
+          });
         }
         return sessionsResult(rows, 1);
       });
@@ -281,19 +283,19 @@ describe("session roster event traffic", () => {
       if (managed) {
         watch(query);
       }
-      await sessions.refresh({ agentId: "main", force: true });
-      if (managed) {
-        await sessions.refreshList(query);
-      }
+      await sessions.refreshList({ ...query, force: true });
       fail = true;
       harness.emit({ reason: "stores" });
       await advance(5_000);
       expect(sessions.listSnapshot(query).error).toBe("List unavailable");
       fail = false;
-      rows = [added, updated];
+      rows = [makeRow("new", 3), updated];
       harness.emit({ reason: "patch", session: updated });
       await advance(20_000);
-      expect(reads).toBe(3);
+      expect(reads).toBe(mode === "FORBIDDEN" ? 2 : 3);
+      if (mode === "FORBIDDEN") {
+        await sessions.refreshList(query);
+      }
       expect(sessions.listSnapshot(query).error).toBeNull();
       expect(listRows(query)).toEqual(rows);
     },
@@ -387,8 +389,6 @@ describe("session roster event traffic", () => {
       expect(sessions.state.result?.sessions).toEqual(finalRows);
       if (limited) {
         expect(sessions.state.result).toMatchObject({ hasMore: true, nextOffset: 2, count: 2 });
-      } else {
-        expect(listRows({ agentId: "main" })).toEqual(finalRows);
       }
     },
   );

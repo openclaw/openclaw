@@ -51,6 +51,7 @@ export const cliMessageExitEntrypoints = {
   }),
   command: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "../commands/message" }),
   oneShotExit: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "one-shot-exit" }),
+  cleanup: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "runtime-cleanup" }),
 } as const;
 
 export const oneShotExitProbeEntrypoints = {
