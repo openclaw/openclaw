@@ -2039,6 +2039,21 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     });
     expect(android.with["install-native-deps"]).toBe("true");
     expect(job.steps.indexOf(node)).toBeLessThan(job.steps.indexOf(android));
+
+    const steps = readAndroidToolchainAction().runs.steps;
+    const reserve = requiredWorkflowStep(steps, "Reserve hosted runner disk for Android");
+    for (const [os, environment, expected] of [
+      ["Linux", "github-hosted", true],
+      ["Linux", "self-hosted", false],
+      ["macOS", "github-hosted", false],
+      ["Windows", "github-hosted", false],
+    ] as const) {
+      expect(runInNewContext(String(reserve.if), { runner: { os, environment } })).toBe(expected);
+    }
+    expect(reserve.run?.match(/^\s*sudo .*$/gm)).toEqual(["sudo rm -rf -- /usr/share/dotnet"]);
+    for (const name of ["Setup Java", "Setup Gradle cache", "Restore Android SDK cache"]) {
+      expect(steps.indexOf(reserve)).toBeLessThan(steps.indexOf(requiredWorkflowStep(steps, name)));
+    }
   });
 
   it("installs the Android SDK platform used by Gradle", () => {
@@ -3106,7 +3121,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           testNodeExecPath +
           "\n" +
           String.raw`
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "-v") { console.log("fixture"); process.exit(0); }
 const log = process.env.RECIPE_LOG;
@@ -4783,9 +4798,9 @@ test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
       writeFileSync(
         path.join(binDir, "security"),
         `#!${process.execPath}
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 const args = process.argv.slice(2);
 assert.notEqual(process.env.HOME, ${JSON.stringify(root)});
 assert.equal(path.dirname(args.at(-1)), path.join(process.env.HOME, 'Library/Keychains'));

@@ -1,7 +1,7 @@
 import type { AgentIdentity } from "./identity-avatar-view.ts";
 import { listen } from "./reactive/listener.ts";
 
-export type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
+type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
 
 /** One signal per variant: the leading icon's color. Neutral toasts omit severity. */
 export type ToastSeverity = "success" | "info" | "warning" | "error" | "progress";

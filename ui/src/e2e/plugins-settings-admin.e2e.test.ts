@@ -521,7 +521,7 @@ suite.define(() => {
       await page.getByRole("searchbox", { name: "Search settings", exact: true }).last().waitFor();
       expect(await gateway.getRequests("plugins.inspect")).toHaveLength(1);
 
-      await page.getByRole("checkbox", { name: "Add context to prompts", exact: true }).waitFor();
+      await page.getByRole("checkbox", { name: "Modify prompts", exact: true }).waitFor();
       await page
         .getByRole("checkbox", { name: "Read conversation context", exact: true })
         .waitFor();
@@ -956,7 +956,7 @@ suite.define(() => {
         .click();
       await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
       expect(
-        await page.getByRole("checkbox", { name: "Add context to prompts", exact: true }).count(),
+        await page.getByRole("checkbox", { name: "Modify prompts", exact: true }).count(),
       ).toBe(0);
 
       await page.getByRole("alert").filter({ hasText: "Configuration unavailable" }).waitFor();
@@ -964,7 +964,7 @@ suite.define(() => {
       await gateway.setMethodResponse("config.get", configMocks["config.get"]);
       await page.getByRole("button", { name: "Retry", exact: true }).click();
       await page.getByLabel("Workspace label", { exact: true }).waitFor();
-      await page.getByRole("checkbox", { name: "Add context to prompts", exact: true }).waitFor();
+      await page.getByRole("checkbox", { name: "Modify prompts", exact: true }).waitFor();
       expect(await gateway.getRequests("config.get")).toHaveLength(configRequests + 1);
     });
   });

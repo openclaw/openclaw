@@ -19,9 +19,12 @@ const EXPECTED_EXTERNAL_HREFS = [
   "https://docs.openclaw.ai/platforms/linux",
   "https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig",
   "https://docs.openclaw.ai/tools/chrome-extension",
-  ...["clawhub.ai", "community.openclaw.ai/", "discord.gg/clawd", "docs.openclaw.ai"].map(
-    (host) => `https://${host}`,
-  ),
+  ...[
+    "clawhub.ai",
+    "community.openclaw.ai/",
+    "openclaw.ai/discord?from=openclaw-app-community",
+    "docs.openclaw.ai",
+  ].map((host) => `https://${host}`),
 ];
 
 beforeEach(() => i18n.setLocale("en"));
