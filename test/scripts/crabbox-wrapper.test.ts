@@ -358,7 +358,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         "  printf '%s\\000\\000' \"$PWD\"",
         "  exit 0",
         "fi",
-        `exec node ${shellQuote(nodePath)} "$@"`,
+        `exec ${shellQuote(nodePath)} "$@"`,
       ].join("\n"),
     );
   }
@@ -467,12 +467,14 @@ function resolvePinnedFixturePnpm(cwd: string, nodeExecPath: string, pnpmArgs: s
 }
 
 function writeNodeCommand(commandPath: string, script: string): void {
-  writeFileSync(commandPath, `#!/usr/bin/env node\n${script.trimStart()}\n`, "utf8");
+  const sourcePath = `${commandPath}.cjs`;
+  writeFileSync(sourcePath, `${script.trimStart()}\n`, "utf8");
   if (process.platform === "win32") {
-    const shim = windowsNodeCmdShim(path.basename(commandPath));
+    const shim = windowsNodeCmdShim(path.basename(sourcePath));
     writeFileSync(`${commandPath}.cmd`, shim, "utf8");
+  } else {
+    writeShellCommand(commandPath, `exec node ${shellQuote(sourcePath)} "$@"`);
   }
-  chmodSync(commandPath, 0o755);
 }
 
 function makeFakeGit(
@@ -529,10 +531,7 @@ process.exit(response.status ?? 0);`;
       ].join("\n");
     });
     writeNodeCommand(nodePath, script);
-    writeShellCommand(
-      gitPath,
-      `${responseCases.join("\n")}\nexec node ${shellQuote(nodePath)} "$@"`,
-    );
+    writeShellCommand(gitPath, `${responseCases.join("\n")}\nexec ${shellQuote(nodePath)} "$@"`);
   }
   fakeGitBinDirs.set(key, binDir);
   return binDir;
