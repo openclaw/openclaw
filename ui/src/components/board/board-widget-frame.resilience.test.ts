@@ -188,6 +188,51 @@ it("keeps a stalled inner document mounted, offers retry, and accepts only the c
   expect(root.querySelector('[role="status"] button')).toBeNull();
 });
 
+it.each([
+  { sandboxOrigin: undefined, hint: true },
+  { sandboxOrigin: "https://sandbox.example", hint: false },
+])(
+  "offers sandboxOrigin guidance behind More info after the ready deadline (sandboxOrigin=$sandboxOrigin)",
+  async ({ sandboxOrigin, hint }) => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<p>Dashboard</p>")),
+    );
+    const context = {
+      gateway: {
+        snapshot: { phase: "connected" },
+        connection: { gatewayUrl: "https://gateway.example" },
+      },
+    } as ApplicationContext;
+    const root = document.createElement("div");
+    document.body.append(root);
+    const widget = { ...grantedFrameWidgetFixture(), sandboxOrigin };
+    lifecycle = createFrameOwner(() => widget, {
+      connected: () => root.isConnected,
+      context: () => context,
+      refreshFrame: () => vi.fn(async () => {}),
+      resolveFrameUrl: () => () => "/widget?bt=ticket",
+    });
+    onTestFinished(lifecycle.subscribe(() => lifecycle?.update()));
+    mountBoardWidgetFrame(lifecycle, widget, root, disposers);
+    lifecycle.update();
+    // The outer sandbox frame never announces readiness.
+    await vi.advanceTimersByTimeAsync(30_000);
+    flush();
+    const notice = root.querySelector('[role="status"]');
+    expect(notice?.textContent).toContain("reconnects automatically");
+    const details = notice?.querySelector("details");
+    expect(Boolean(details)).toBe(hint);
+    if (details) {
+      // The short notice leads; the possible cause stays collapsed until asked for.
+      expect(details.open).toBe(false);
+      expect(details.querySelector("summary")?.textContent).toBe("More info");
+      expect(details.querySelector("p")?.textContent).toContain("mcp.apps.sandboxOrigin");
+    }
+  },
+);
+
 it.each(["current", "revision", "replacement", "reconnect"] as const)(
   "publishes a failed refresh only for its admitted frame lifecycle (%s)",
   async (transition) => {

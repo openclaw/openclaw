@@ -55,6 +55,16 @@
   text-overflow: ellipsis;
 }
 
+/* Disclosed guidance must stay readable in narrow cards. */
+.board-widget__notice--wrap {
+  max-width: 64ch;
+  white-space: normal;
+}
+
+.board-widget__notice-details p {
+  margin: 4px 0 0;
+}
+
 /* The picker floats over the existing canvas; it never reserves a rail or padding. */
 .chat-dashboard-menu {
   position: absolute;
