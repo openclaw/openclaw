@@ -78,7 +78,7 @@ suite.define(() => {
           await page.screenshot({ path: path.join(artifactDir, "arrival.png") });
           const history = page.locator("[data-test-id=cron-detail-tab-history]");
           await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
-          const attention = page.locator("[data-test-id=cron-failure-details]");
+          const attention = page.locator(".cron-failure-details");
           await attention.waitFor();
           expect(await attention.getAttribute("open")).toBeNull();
           const collapsed = await attention.boundingBox();

@@ -39,7 +39,7 @@ it("opens a job-only failure link on its recorded run without replaying it", asy
     await waitForCronPage(() =>
       expect(page.querySelector(".cron-run-entry--highlighted")).not.toBeNull(),
     );
-    const warning = () => page.querySelector<HTMLElement>('[data-test-id="cron-failure-details"]');
+    const warning = () => page.querySelector<HTMLElement>(".cron-failure-details");
     expect(warning()?.textContent).toContain(job.state.lastError);
     expect(warning()?.textContent).toContain("No further run is scheduled");
     page.querySelector<HTMLButtonElement>('[data-test-id="cron-detail-tab-settings"]')?.click();
@@ -81,9 +81,7 @@ it("keeps an explicit older run link instead of replacing it with the latest fai
           ),
       ).toBe(true),
     );
-    expect(page.querySelector('[data-test-id="cron-failure-details"]')?.textContent).toContain(
-      "Latest failure",
-    );
+    expect(page.querySelector(".cron-failure-details")?.textContent).toContain("Latest failure");
     expect(
       vi
         .mocked(client)
@@ -135,7 +133,7 @@ it("clears stale history filters for an attention job without a recorded run id"
         .querySelector('[data-test-id="cron-detail-tab-settings"]')
         ?.getAttribute("aria-selected"),
     ).toBe("true");
-    expect(page.querySelector('[data-test-id="cron-failure-details"]')).toBeNull();
+    expect(page.querySelector(".cron-failure-details")).toBeNull();
   } finally {
     page.remove();
   }

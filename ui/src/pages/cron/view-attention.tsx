@@ -1,5 +1,6 @@
 import type { CronJob } from "../../api/types.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { isCronJobRunning } from "../../lib/cron-status.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { createMsFormatter } from "../../lib/format.ts";
@@ -24,21 +25,20 @@ export function FailureDetails(props: { job: CronJob; onSelectJob: CronProps["on
       : t("cron.attention.noNextRun");
   };
   return (
-    <details class="cron-failure-details" data-test-id="cron-failure-details">
-      <summary>
-        <span class="cron-failure-details__icon" aria-hidden="true">
-          <Icon name="alertTriangle" />
-        </span>
-        <span class="cron-failure-details__copy">
-          <strong>
-            {t(
-              props.job.state.autoDisabled
-                ? "cron.attention.autoDisabledTitle"
-                : "cron.attention.title",
-            )}
-          </strong>
-          <span class="cron-failure-details__preview">{cause()}</span>
-        </span>
+    <SettingsDisclosure
+      class="cron-failure-details"
+      title={
+        <SettingsStatus
+          kind="danger"
+          label={t(
+            props.job.state.autoDisabled
+              ? "cron.attention.autoDisabledTitle"
+              : "cron.attention.title",
+          )}
+        />
+      }
+      description={cause()}
+      actions={
         <button
           type="button"
           class="btn btn--ghost btn--sm"
@@ -51,18 +51,18 @@ export function FailureDetails(props: { job: CronJob; onSelectJob: CronProps["on
         >
           {t("cron.attention.reviewRun")}
         </button>
-        <span class="cron-failure-details__chevron" aria-hidden="true">
-          <Icon name="chevronDown" />
-        </span>
-      </summary>
-      <div class="cron-failure-details__body">
-        <p class="cron-failure-details__cause">{cause()}</p>
-        {diagnostic() && diagnostic() !== cause() ? (
-          <p class="cron-failure-details__cause">{diagnostic()}</p>
-        ) : undefined}
-        <p>{consequence()}</p>
-        <p class="muted">{t("cron.attention.effectsUnknown")}</p>
+      }
+    >
+      <div class="settings-row cron-failure-details__body">
+        <div class="stack">
+          <span class="settings-row__desc cron-failure-details__cause">{cause()}</span>
+          {diagnostic() && diagnostic() !== cause() ? (
+            <span class="settings-row__desc">{diagnostic()}</span>
+          ) : undefined}
+          <span class="settings-row__desc">{consequence()}</span>
+          <span class="settings-row__desc">{t("cron.attention.effectsUnknown")}</span>
+        </div>
       </div>
-    </details>
+    </SettingsDisclosure>
   );
 }

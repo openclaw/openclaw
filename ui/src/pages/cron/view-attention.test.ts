@@ -18,7 +18,7 @@ it("distinguishes automatic shutdown from a manual pause in detail", async () =>
   expect(container.querySelector('[data-test-id="cron-toggle-enabled"]')?.textContent).toContain(
     "Auto-disabled",
   );
-  const warning = container.querySelector('[data-test-id="cron-failure-details"]');
+  const warning = container.querySelector(".cron-failure-details");
   expect(warning?.textContent).toContain("Provider rejected the request");
   expect(warning?.textContent).toContain("No response was recorded");
   expect(warning?.textContent).toContain("Review the run before resuming");
@@ -34,7 +34,7 @@ it("does not flag a manually paused historical error as an active failure", asyn
   expect(container.querySelector('[data-test-id="cron-toggle-enabled"]')?.textContent).toContain(
     "Paused",
   );
-  expect(container.querySelector('[data-test-id="cron-failure-details"]')).toBeNull();
+  expect(container.querySelector(".cron-failure-details")).toBeNull();
 });
 
 it("does not imply that a recurring failure with a next run has stopped", async () => {
@@ -46,7 +46,7 @@ it("does not imply that a recurring failure with a next run has stopped", async 
     },
   });
   const container = await renderView({ editingJob: job });
-  const warning = container.querySelector('[data-test-id="cron-failure-details"]');
+  const warning = container.querySelector(".cron-failure-details");
   expect(warning?.textContent).toContain("Next run is scheduled");
   expect(warning?.textContent).not.toContain("No further run");
   expect(warning?.textContent).not.toContain("will not retry");
@@ -57,7 +57,7 @@ it("shows a run already in progress rather than implying that scheduling stopped
     state: { lastRunStatus: "error", runningAtMs: 10, lastError: "Previous failure" },
   });
   const container = await renderView({ editingJob: job });
-  const warning = container.querySelector('[data-test-id="cron-failure-details"]');
+  const warning = container.querySelector(".cron-failure-details");
   expect(warning?.textContent).toContain("A new run is in progress");
   expect(warning?.textContent).not.toContain("No further run");
 });
