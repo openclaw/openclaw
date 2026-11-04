@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
-import { assert, expect, it, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
 import plugin from "./index.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
@@ -209,7 +209,7 @@ it.each([
   ({ success, fallback, staleRun }) =>
     withStateDirEnv("workboard-deferred-agent-end-", async () => {
       vi.useFakeTimers();
-      using clock = { [Symbol.dispose]: () => vi.useRealTimers() };
+      onTestFinished(() => vi.useRealTimers());
       await using store = openStore();
       const sessionKey = "agent:worker:subagent:workboard-delayed";
       const runId = "run-current";
