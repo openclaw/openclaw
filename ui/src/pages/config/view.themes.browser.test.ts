@@ -56,6 +56,8 @@ it("offers plugin and personal themes from the shared catalog with their descrip
   });
   const pluginTheme = themeButton(container, "space-pack/xenovessel");
   expect(pluginTheme?.title).toBe("Alien theme");
+  expect(pluginTheme.querySelector(".settings-theme-card__palette")).not.toBeNull();
+  expect(pluginTheme.querySelector(".settings-theme-card__icon")).toBeNull();
   pluginTheme?.click();
   expect(setTheme).toHaveBeenCalledWith("space-pack/xenovessel");
   const personalTheme = themeButton(container, "user/candlelight")!;
@@ -65,7 +67,11 @@ it("offers plugin and personal themes from the shared catalog with their descrip
   expect(personalTheme.querySelector(".settings-theme-card__palette")).not.toBeNull();
   props.theme = "claw";
   renderConfigInto(props, container);
-  expect(personalTheme.querySelector(".settings-theme-card__icon")).not.toBeNull();
+  expect(personalTheme.querySelector(".settings-theme-card__palette")).not.toBeNull();
+  expect(personalTheme.querySelector(".settings-theme-card__icon")).toBeNull();
+  expect(
+    container.querySelector(".settings-theme-card:last-child .settings-theme-card__icon"),
+  ).not.toBeNull();
 });
 
 it.each(["profile", "device-local"] as const)(
