@@ -109,13 +109,14 @@ export async function requireWorkspaceResultGit(
 export async function withWorkspaceResultRefMutation<T>(
   root: string,
   operation: (baseEnv: NodeJS.ProcessEnv) => Promise<T>,
+  prepared?: { commonDir?: string; baseEnv: NodeJS.ProcessEnv },
 ): Promise<T> {
   // Git environment can redirect discovery or a queued writer; bind both to
   // the same snapshot while keeping the worker's timeout and byte contracts.
-  const baseEnv = { ...process.env };
-  const common = await requireWorkspaceResultGit(root, ["rev-parse", "--git-common-dir"], {
-    baseEnv,
-  });
+  const baseEnv = prepared?.baseEnv ?? { ...process.env };
+  const common =
+    prepared?.commonDir ??
+    (await requireWorkspaceResultGit(root, ["rev-parse", "--git-common-dir"], { baseEnv }));
   return await enqueueGitRefMutation(root, common, async () => {
     // Clear lookup only: admitted reads keep their outcome, but later readers must
     // observe the ref mutation, including aliases and partially failed writes.
@@ -155,5 +156,59 @@ export async function updateWorkspaceResultRefs(
       baseEnv,
       beforeInput: assertCurrent,
     });
+  });
+}
+
+export async function readWorkspaceResultRefObjects(
+  root: string,
+  refs: readonly string[],
+  baseEnv?: NodeJS.ProcessEnv,
+): Promise<Map<string, string>> {
+  const output = await requireWorkspaceResultGit(
+    root,
+    ["for-each-ref", "--format=%(refname) %(objectname)", ...refs],
+    { baseEnv },
+  );
+  const objects = new Map<string, string>();
+  for (const line of output.split("\n")) {
+    const separator = line.indexOf(" ");
+    const ref = line.slice(0, separator);
+    if (refs.includes(ref)) {
+      objects.set(ref, line.slice(separator + 1));
+    }
+  }
+  return objects;
+}
+
+/** Publish immutable result identities idempotently under the existing ref-mutation owner. */
+export async function publishImmutableWorkspaceResultRefs(
+  root: string,
+  targets: readonly (readonly [string, string | undefined])[],
+  assertCurrent: () => void,
+): Promise<void> {
+  await withWorkspaceResultRefMutation(root, async (baseEnv) => {
+    const updates: string[] = [];
+    const objects = await readWorkspaceResultRefObjects(
+      root,
+      targets.map(([target]) => target),
+      baseEnv,
+    );
+    for (const [target, expected] of targets) {
+      const existing = objects.get(target);
+      if (existing !== undefined && existing !== expected) {
+        throw new Error("Repository checkpoint identity already contains a different result");
+      }
+      if (expected !== undefined && existing === undefined) {
+        updates.push(`create ${target}\0${expected}\0`);
+      }
+    }
+    assertCurrent();
+    if (updates.length) {
+      await requireWorkspaceResultGit(root, ["update-ref", "--stdin", "-z"], {
+        input: Buffer.from(updates.join("")),
+        baseEnv,
+        beforeInput: assertCurrent,
+      });
+    }
   });
 }

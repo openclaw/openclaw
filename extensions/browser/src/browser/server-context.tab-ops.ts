@@ -27,6 +27,7 @@ import { resolveBrowserEngine } from "./engines/registry.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
+  assertChromeMcpNavigationAllowed,
   InvalidBrowserNavigationUrlError,
   requiresInspectableBrowserNavigationRedirectsForUrl,
   withBrowserNavigationPolicy,
@@ -99,32 +100,32 @@ function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | u
 }
 
 /**
- * Collects the freshest recorded session activity per target for one profile.
- * Durable records and volatile registrations both carry lastUsedAt; durable
- * native identities also fold in activity observed after the record froze.
+ * Collects the freshest page activity for a profile, including durable aliases.
+ * Durable native identities include activity observed after the record froze.
  */
 async function readProfileTabLastUsedAt(profileName: string): Promise<Map<string, number>> {
   const profile = normalizeOptionalLowercaseString(profileName);
   const lastUsedByTarget = new Map<string, number>();
-  const observe = (targetId: string, recordProfile: string | undefined, lastUsedAt: number) => {
-    if (!targetId || normalizeOptionalLowercaseString(recordProfile) !== profile) {
-      return;
-    }
-    const previous = lastUsedByTarget.get(targetId);
-    if (previous === undefined || lastUsedAt > previous) {
-      lastUsedByTarget.set(targetId, lastUsedAt);
-    }
-  };
+  const observe = (targetId: string, lastUsedAt: number) =>
+    lastUsedByTarget.set(targetId, Math.max(lastUsedByTarget.get(targetId) ?? 0, lastUsedAt));
   for (const record of await readDurableTabs()) {
+    if (
+      record.dashboard ||
+      (record.profile !== profile && !record.profileAliases?.some((alias) => alias === profile))
+    ) {
+      continue;
+    }
     const observedAt =
       record.interactionTargetKind === "native"
         ? readColdNativeActivity(browserSessionTabNativeIdentity(record))
         : undefined;
-    observe(record.nativeTargetId, record.profile, Math.max(record.lastUsedAt, observedAt ?? 0));
+    observe(record.nativeTargetId, Math.max(record.lastUsedAt, observedAt ?? 0));
   }
   for (const sessionTabs of volatileTabsBySession().values()) {
     for (const tab of sessionTabs.values()) {
-      observe(tab.targetId, tab.profile, tab.lastUsedAt);
+      if (tab.profile === profile) {
+        observe(tab.targetId, tab.lastUsedAt);
+      }
     }
   }
   return lastUsedByTarget;
@@ -380,7 +381,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       adoptValidatedTab(await withTabOwnership(tab, opts), { ...opts, label: normalizedLabel });
 
     if (capabilities.usesChromeMcp) {
-      await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+      await assertChromeMcpNavigationAllowed({ url, ...ssrfPolicyOpts });
       assertChromeMcpCdpTransportAllowed(profile, cdpPolicy);
       const { openChromeMcpTab } = await getChromeMcpModule();
       const cdpTimeouts = getRemoteCdpActionTimeouts();
@@ -461,8 +462,8 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             url: createdViaCdp.finalUrl,
             ...ssrfPolicyOpts,
           });
-          const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
-          while (Date.now() < deadline) {
+          const deadline = performance.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
+          while (performance.now() < deadline) {
             opts?.signal?.throwIfAborted();
             const tabs = await readTabs(opts).catch(() => [] as BrowserTab[]);
             const found = tabs.find((t) => t.targetId === createdViaCdp.targetId);

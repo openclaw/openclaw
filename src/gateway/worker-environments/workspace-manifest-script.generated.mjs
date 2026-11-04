@@ -67,10 +67,14 @@ export async function runWorkspaceManifestProgram(
     ".cache/openclaw/bun",
     ".cache/ms-playwright",
     ".local/share/pnpm/store",
+    "artifacts/task-environment/local/share/pnpm/store",
+    ".openclaw/.pnpm-store",
+    ".openclaw/tools",
     ".artifacts/vitest-workers",
     ".artifacts/vitest-worker-cache",
     ".artifacts/vitest-shard-timings.json",
   ];
+  const PNPM_FALLBACK_STORE_ROOT_PATH = ".openclaw/.pnpm-store";
   const BUILD_CACHE_ROOT_PATHS = [".artifacts/build-all-cache", ".artifacts/build-cache-inputs"];
   function isBuildCacheWorkspacePath(relativePath) {
     return BUILD_CACHE_ROOT_PATHS.some(
@@ -93,13 +97,22 @@ export async function runWorkspaceManifestProgram(
   );
   function isRuntimeOwnedWorkspacePath(relativePath) {
     return (
+      relativePath === ".git" ||
+      relativePath.startsWith(".git/") ||
+      relativePath.endsWith("/.git") ||
+      relativePath.includes("/.git/") ||
       isManagedSandboxSkillsPath(relativePath) ||
       RUNTIME_WORKSPACE_ROOT_PATHS.some(
         (root) => relativePath === root || relativePath.startsWith(root + "/"),
       )
     );
   }
-  function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuildCaches = false) {
+  function isDerivedWorkspacePath(
+    relativePath,
+    retainedInput = false,
+    excludeBuildCaches = false,
+    includeLegacyPnpmStore = false,
+  ) {
     if (isRuntimeOwnedWorkspacePath(relativePath)) {
       return true;
     }
@@ -109,7 +122,9 @@ export async function runWorkspaceManifestProgram(
     if (excludeBuildCaches && isBuildCacheWorkspacePath(relativePath)) return true;
     if (
       DERIVED_WORKSPACE_ROOT_PATHS.some(
-        (root) => relativePath === root || relativePath.startsWith(root + "/"),
+        (root) =>
+          (!includeLegacyPnpmStore || root !== PNPM_FALLBACK_STORE_ROOT_PATH) &&
+          (relativePath === root || relativePath.startsWith(root + "/")),
       )
     ) {
       return true;

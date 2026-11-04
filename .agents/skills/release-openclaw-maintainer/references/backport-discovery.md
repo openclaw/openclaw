@@ -198,3 +198,34 @@ update the ledger, run focused proof plus the release-appropriate validation,
 and keep the final branch/tag/version/SHA identity in that record. Dispatch npm
 preflight only after the canonical release branch or tag has that exact final
 version and SHA.
+
+## Port with Bounded Workers
+
+Read-only audit lanes may fan out. Porting lanes write to the release candidate
+and share one host, so run at most eight concurrent writing workers, and do not
+launch or resume workers close to a session usage limit. A worker does not
+spawn its own agents unless its brief allows it. A 17-lane porting wave on
+2026.10.8 saturated the Mac and lost 16 lanes mid-port when the session limit
+hit. The lead keeps a watcher on every worker and never ends a turn waiting on
+one; once the required fixes and P0s are integrated, push and dispatch
+validation, and add stragglers in a later cycle.
+
+Every porting brief contains these steps for each pick, in order:
+
+1. Run the companion audit for the pick (`pnpm release:backport-companions`
+   above) and `git log <pinned-main-sha> --grep '#<PR>'`. List each later
+   follow-up and its disposition in the commit body. Missing follow-ups caused
+   most 2026.10.8 validation failures, including a macOS regression found only
+   after tagging.
+2. Confirm the defect exists on the baseline (`git show <baseline>:<path>`)
+   before porting.
+3. Cherry-pick with `-x`, resolve conflicts, and note any adaptation as
+   `Release adaptation:` in the commit body.
+4. Run targeted tests and typechecks for the touched owners only. Wrap every
+   local command in `timeout`; full local gates are not a worker's job.
+5. Commit, then append the pick's result to the lane report before the next
+   pick. Time-box a pick to about 40 minutes and report it as blocked rather
+   than continuing past that.
+
+Reuse the lead checkout's dependencies instead of a fresh install per lane when
+the lockfile matches.

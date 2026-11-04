@@ -35,6 +35,7 @@ import {
   resolveSandboxRuntimeStatusAsync,
 } from "../sandbox/runtime-status.js";
 import { resolveSpawnAdmission } from "../spawn-plan.js";
+import { resolveRequesterDeliveryThreadId } from "../spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
 import { prepareSubagentSessionListReadCache } from "../subagents/registry/subagent-registry-state.js";
 import { registerSubagentRun } from "../subagents/registry/subagent-registry.js";
@@ -114,7 +115,10 @@ export async function maybeSpawnVisibleSession(params: {
       `Cloud placement requires visible=true and worktree=true. Corrected call: ${correctedVisibleSpawnCall(params.raw)}`,
     );
   }
-  const worktreeName = readToolStringParam(params.raw, "worktreeName", {
+  // Hidden native checkout selectors only apply when worktree is explicitly enabled.
+  const checkoutParams =
+    worktree || params.raw.visible === true || params.runtime === "acp" ? params.raw : {};
+  const worktreeName = readToolStringParam(checkoutParams, "worktreeName", {
     trim: false,
     allowEmpty: true,
   });
@@ -125,9 +129,9 @@ export async function maybeSpawnVisibleSession(params: {
       throw new ToolInputError(error instanceof Error ? error.message : String(error));
     }
   }
-  const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
+  const worktreeBaseRef = readToolStringParam(checkoutParams, "worktreeBaseRef");
   const group = readToolStringParam(params.raw, "group");
-  const projectId = readToolStringParam(params.raw, "projectId");
+  const projectId = readToolStringParam(checkoutParams, "projectId");
   const projectGitUrl = readToolStringParam(params.raw, "projectGitUrl");
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
@@ -146,11 +150,6 @@ export async function maybeSpawnVisibleSession(params: {
     if (params.runtime === "acp" && (projectId || worktree || worktreeName || worktreeBaseRef)) {
       throw new ToolInputError(
         'Managed worktree parameters are unavailable with runtime="acp". Use runtime="subagent" with worktree=true, or omit projectId, worktree, worktreeName, and worktreeBaseRef for ACP.',
-      );
-    }
-    if (!worktree && (projectId || worktreeName || worktreeBaseRef)) {
-      throw new ToolInputError(
-        "Hidden native subagents require worktree=true with projectId, worktreeName, or worktreeBaseRef.",
       );
     }
     return undefined;
@@ -637,7 +636,7 @@ export async function maybeSpawnVisibleSession(params: {
               params.options?.currentMessagingTarget ??
               params.options?.currentChannelId ??
               params.options?.agentTo,
-            threadId: params.options?.currentThreadTs ?? params.options?.agentThreadId,
+            threadId: params.options ? resolveRequesterDeliveryThreadId(params.options) : undefined,
           }),
           requesterDisplayKey: ownership.completionRequesterDisplayKey,
           task: params.task,

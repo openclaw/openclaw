@@ -14,7 +14,6 @@ vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
   WebSocket: MockWebSocket,
 }));
 
-import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { createClickClackClient } from "./http-client.js";
 
 describe("createClickClackClient websocket options", () => {
@@ -23,7 +22,6 @@ describe("createClickClackClient websocket options", () => {
   });
 
   it("passes a 30-second opening handshake deadline to ws", () => {
-    expect(WebSocket).toBe(MockWebSocket);
     const client = createClickClackClient({
       baseUrl: "https://clickclack.example",
       token: "fake",

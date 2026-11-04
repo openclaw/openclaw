@@ -368,12 +368,13 @@ describe("memory-core plugin runtime registration", () => {
       markMemoryIndexingLive("main");
       markMemoryIndexingLive("research");
       const config = indexConfig(owner);
-      const { services, backgroundTasks, context } = captureCapability({ config });
+      const { tools, services, backgroundTasks, context } = captureCapability({ config });
       for (const service of services) {
         await service.start(context);
       }
       await Promise.all(backgroundTasks);
       expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+      expect(tools.flatMap(([, options]) => options?.names ?? [])).toEqual(["intent"]);
     },
   );
 
@@ -474,7 +475,11 @@ describe("memory-core plugin runtime registration", () => {
       throw new Error("expected memory-core host operations");
     }
 
-    const target = { providerId: "local", baseUrl: "http://127.0.0.1:11434" };
+    const target: Parameters<OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"]>[0] = {
+      providerId: "local",
+      baseUrl: "http://127.0.0.1:11434",
+      onReadinessWait: vi.fn(),
+    };
     await injectedHost.acquireLocalService(target);
     const storeOptions = { namespace: "lazy-host", maxEntries: 1 };
     injectedHost.openKeyedStore(storeOptions);

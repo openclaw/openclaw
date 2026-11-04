@@ -1,6 +1,7 @@
 // Gateway WebSocket connect admission validates protocol, role, and browser origin.
 import type { IncomingMessage } from "node:http";
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_IDS,
@@ -52,6 +53,15 @@ import type {
 
 export function isStartupNodeConnect(connectParams: ConnectParams): boolean {
   return connectParams.role === "node" && connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE;
+}
+
+export function claimsWorkerConnectionIdentity(value: unknown): boolean {
+  const connect = asOptionalObjectRecord(value);
+  if (connect?.role === "worker") {
+    return true;
+  }
+  const client = asOptionalObjectRecord(connect?.client);
+  return client?.id === GATEWAY_CLIENT_IDS.WORKER || client?.mode === GATEWAY_CLIENT_MODES.WORKER;
 }
 
 /** Exact first-connect shape emitted by `openclaw connect` for a setup-code node. */
@@ -217,10 +227,10 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   } = context;
 
   const isNodeClient = isStartupNodeConnect(connectParams);
-  const startupPending = isStartupPending?.() === true;
-  // Node enrollment is an awaited startup dependency: authenticated node admission
-  // must complete while ordinary methods and other clients remain startup-gated.
-  if (startupPending && !isNodeClient) {
+  const startupPending = isNodeClient && isStartupPending?.() === true;
+  // Operator hello needs prepared auth and request snapshots, not autonomous recovery.
+  // Nodes retain their stricter startup enrollment policy until sidecars are ready.
+  if (context.handler.isConnectPending?.() && !isNodeClient) {
     await rejectGatewayStartupConnect(context);
     return undefined;
   }

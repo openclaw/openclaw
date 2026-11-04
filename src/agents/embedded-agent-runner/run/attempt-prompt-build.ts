@@ -63,7 +63,6 @@ import {
   buildSystemUpdateMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
-import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
@@ -349,22 +348,16 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
 
 type PromptContextAttempt = Pick<
   EmbeddedRunAttemptParams,
-  | "chatType"
   | "config"
   | "contextTokenBudget"
   | "currentInboundContext"
   | "currentInboundEventKind"
   | "internalEvents"
-  | "messageChannel"
-  | "messageProvider"
   | "fallbackActive"
-  | "requireExplicitMessageTarget"
-  | "messageToolFinalByDefault"
   | "runtimeContextFragments"
   | "sessionId"
   | "sessionKey"
   | "sessionTarget"
-  | "sourceReplyDeliveryMode"
   | "suppressNextUserMessagePersistence"
   | "skipPreparedUserTurnMessage"
   | "userTurnTranscriptRecorder"
@@ -457,15 +450,6 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
 
   const escapedProjection = !input.isRawModelRun && usesEscapedRuntimeContext(input.sessionVersion);
   const eventFragments: RuntimeContextFragment[] = [
-    ...buildTurnDeliveryContextFragments({
-      config: attempt.config,
-      sessionKey: attempt.sessionKey,
-      chatType: attempt.chatType,
-      channel: attempt.messageChannel ?? attempt.messageProvider,
-      sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
-      requireExplicitMessageTarget: attempt.requireExplicitMessageTarget,
-      messageToolFinalByDefault: attempt.messageToolFinalByDefault,
-    }),
     ...buildAgentInternalEventContext(attempt.internalEvents),
     ...(attempt.runtimeContextFragments ?? []),
     ...(input.systemPromptRuntimeContextFragments ?? []),

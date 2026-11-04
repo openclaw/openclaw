@@ -43,6 +43,12 @@ use `knowledge_attach` or `knowledge_recall`.
    attribution, existing evidence, decision rationale, event dates, and uncertainty.
    Maintain the page as a coherent account of its subject. Integrate new information
    into the relevant section; do not append a dated heading for each capture.
+   Page bodies have a size budget ([page budgets](references/publish.md#page-budgets)).
+   If an edit returns `state: "rejected"`, nothing was saved: move a section that
+   has its own subject to its own page with `knowledge_extract_section`, then retry,
+   and save the fact with `knowledge_remember` meanwhile. Never truncate to fit.
+   Moved claims keep the source page as a subject; remove it with
+   `knowledge_annotate` `entities` only when the claim is no longer about it.
    Preserve supporting evidence and meaningful changes over time without retaining
    every conversational editing step in the summary.
    Do not invent a subject match or create an empty profile merely to supply a link.

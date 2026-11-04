@@ -18,6 +18,11 @@ import { runInNewContext } from "node:vm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  evaluateWorkflowCondition,
+  runWorkflowCommand,
+  runWorkflowShellScript,
+} from "./ci-workflow.test-support.js";
 
 const FULL_RELEASE = ".github/workflows/full-release-validation.yml";
 const FULL_RELEASE_ARTIFACTS = ".github/workflows/full-release-artifacts.yml";
@@ -51,6 +56,7 @@ beforeAll(() => {
     "scripts/lib/canonical-json.mjs",
     "scripts/lib/docker-e2e-plan.mts",
     "scripts/lib/docker-e2e-scenarios.mts",
+    "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs",
     "scripts/lib/official-external-channel-catalog.json",
     "scripts/lib/official-external-provider-catalog.json",
     "scripts/lib/record-shared.mjs",
@@ -299,6 +305,7 @@ function executeReleaseGroupCapture(
   phase = "all",
   candidateArtifactJson = "",
   releaseProfile = "beta",
+  captureScript?: string,
 ) {
   const root = tempDirs.make("openclaw-release-groups-");
   const output = join(root, "github-output");
@@ -307,9 +314,11 @@ function executeReleaseGroupCapture(
     job(readWorkflow(RELEASE_CHECKS), "resolve_target"),
     "Capture selected inputs",
   );
-  const result = spawnSync("bash", ["-euo", "pipefail", "-c", capture.run ?? ""], {
+  // Preserve Linux Bash semantics while file-backing module stdin; Darwin's
+  // pipe-backed heredocs can stall before the selection reader starts.
+  const result = runWorkflowShellScript(captureScript ?? capture.run ?? "", {
+    linuxWorkflow: true,
     cwd: toolingRoot,
-    encoding: "utf8",
     env: {
       ...process.env,
       ADMISSION_TOOLING_ROOT: join(toolingRoot, "workflow"),
@@ -387,8 +396,8 @@ function executeParentFilterValidation(
     job(readWorkflow(FULL_RELEASE), "resolve_target"),
     "Validate suite filters",
   );
-  const result = spawnSync("bash", ["-euo", "pipefail", "-c", normalize.run ?? ""], {
-    encoding: "utf8",
+  const result = runWorkflowShellScript(normalize.run ?? "", {
+    linuxWorkflow: true,
     env: {
       ...process.env,
       GITHUB_OUTPUT: output,
@@ -459,6 +468,46 @@ describe("release validation no-push transport", () => {
     expect(
       job(release, "live_repo_e2e_release_checks").with?.use_github_hosted_runners,
     ).toBeUndefined();
+  });
+
+  it("builds the sandbox image only for repo E2E consumers that require it", () => {
+    const live = readWorkflow(LIVE_E2E);
+    const repo = readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml");
+    const input = repo.on?.workflow_call?.inputs?.requires_sandbox_image;
+    const image = step(job(repo, "test"), "Build sandbox image");
+    const admitted = (required: unknown, matrix: Record<string, unknown>) =>
+      evaluateWorkflowCondition(image.if ?? "true", {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        inputs: { requires_sandbox_image: required ?? input?.default ?? false },
+        matrix,
+      });
+    for (const [name, expected] of [
+      ["validate_repo_e2e_gateway", [true, true, true, true]],
+      ["validate_repo_e2e_runtime", [false, false, false, false, false]],
+    ] as const) {
+      const caller = job(live, name);
+      const suites = JSON.parse(String(caller.with?.suites)) as Record<string, unknown>[];
+      expect(
+        suites.map((suite) => admitted(caller.with?.requires_sandbox_image, suite)),
+        name,
+      ).toEqual(expected);
+    }
+    expect(input).toMatchObject({ type: "boolean", required: false, default: true });
+    for (const [required, expected] of [
+      [undefined, true],
+      [true, true],
+      [false, false],
+    ] as const) {
+      expect(
+        admitted(required, {
+          name: "Custom",
+          command: "custom-e2e",
+          requires_sandbox_image: false,
+        }),
+      ).toBe(expected);
+    }
   });
 
   it.each([
@@ -629,9 +678,9 @@ describe("release validation no-push transport", () => {
       '#!/usr/bin/env bash\n[[ "$1" == exec ]] || exit 98\nshift\nexec "$@"\n',
     );
     chmodSync(join(bin, "pnpm"), 0o755);
-    const result = spawnSync("bash", ["-euo", "pipefail", "-c", validate.run ?? ""], {
+    const result = runWorkflowShellScript(validate.run ?? "", {
+      linuxWorkflow: true,
       cwd: root,
-      encoding: "utf8",
       env: {
         PATH: `${bin}:${process.env.PATH ?? ""}`,
         CHECK_EXIT: String(fixture.checkExit ?? 0),
@@ -741,7 +790,6 @@ describe("release validation no-push transport", () => {
     expect(capture.run).toContain(
       "import { createReleaseCheckSelection } from './workflow/scripts/plan-release-workflow-matrix.mjs'",
     );
-    expect(capture.run).toContain("JSON.stringify(createReleaseCheckSelection({");
     expect(job(release, "prepare_release_package").if).toBe(
       "needs.resolve_target.outputs.package_required == 'true'",
     );
@@ -757,6 +805,25 @@ describe("release validation no-push transport", () => {
     expect(job(release, "qa_live_release_checks").if).toContain(
       "needs.resolve_target.outputs.qa_live_scheduled == 'true'",
     );
+  });
+
+  it("does not publish selected resources when the selector fails after emitting them", () => {
+    const capture = step(
+      job(readWorkflow(RELEASE_CHECKS), "resolve_target"),
+      "Capture selected inputs",
+    );
+    const { result, outputs } = executeReleaseGroupCapture(
+      "install-smoke",
+      false,
+      "",
+      "",
+      "all",
+      "",
+      "beta",
+      capture.run?.replace("\nNODE\n", "\nprocess.exitCode = 23;\nNODE\n"),
+    );
+    expect(result.status).toBe(23);
+    expect(outputs).toEqual({});
   });
 
   it.each([
@@ -1091,9 +1158,9 @@ describe("release validation no-push transport", () => {
     chmodSync(join(bin, "zstd"), 0o755);
 
     // Run the checked-in pack step and artifact owner; only an invalid external Docker image ID is injected.
-    const result = spawnSync("bash", ["-c", pack.run ?? ""], {
+    const result = runWorkflowShellScript(pack.run ?? "", {
+      linuxWorkflow: true,
       cwd: root,
-      encoding: "utf8",
       env: {
         PATH: `${bin}:${process.env.PATH ?? ""}`,
         DOCKER_CALLS: calls,
@@ -2077,11 +2144,8 @@ describe("release validation no-push transport", () => {
       const calls = join(root, "calls");
       for (const finalizerExit of [0, 1]) {
         writeFileSync(calls, "");
-        const result = spawnSync(
-          "bash",
-          [
-            "-c",
-            `
+        const result = runWorkflowShellScript(
+          `
           gh() { printf '%s\\n' "$SOURCE_SHA"; }
           git() {
             printf '%s\\trefs/tags/%s\\n' "$SIGNED_RELEASE_TAG_OBJECT_SHA" "$RELEASE_TAG"
@@ -2095,9 +2159,8 @@ describe("release validation no-push transport", () => {
           }
           ${script}
         `,
-          ],
           {
-            encoding: "utf8",
+            linuxWorkflow: true,
             env: {
               PATH: process.env.PATH,
               CALLS: calls,
@@ -2211,8 +2274,7 @@ exit 2
       );
       chmodSync(docker, 0o755);
 
-      const result = spawnSync("bash", [resolve(LIVE_BUILD)], {
-        encoding: "utf8",
+      const result = runWorkflowCommand("bash", [resolve(LIVE_BUILD)], {
         env: {
           ...process.env,
           DOCKER_COMMAND_TIMEOUT: "5s",
@@ -2257,7 +2319,7 @@ exit 2
       );
       chmodSync(docker, 0o755);
 
-      const result = spawnSync(
+      const result = runWorkflowCommand(
         "bash",
         [
           "-c",
@@ -2267,7 +2329,6 @@ docker_e2e_build_or_reuse "openclaw-e2e:required-local" "required local image te
           resolve(DOCKER_E2E_IMAGE_HELPER),
         ],
         {
-          encoding: "utf8",
           env: {
             ...process.env,
             FAKE_DOCKER_LOG: calls,

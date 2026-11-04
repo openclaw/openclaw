@@ -127,6 +127,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
             ? resolveUtilityModelRefForAgent({
                 cfg: prepared.config,
                 agentId: soleAgentId,
+                catalog: prepared,
                 metadataSnapshot: prepared.metadataSnapshot,
               })
             : undefined;
