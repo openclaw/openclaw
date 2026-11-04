@@ -294,7 +294,7 @@ describe("settings sidebar search", () => {
     ]);
   });
 
-  it("finds Agent Defaults by page name after its sidebar demotion", () => {
+  it("finds Agent defaults by page name after its sidebar demotion", () => {
     render({
       activeRouteId: "agents",
       searchQuery: "agent defaults",
@@ -303,7 +303,7 @@ describe("settings sidebar search", () => {
     const result = container.querySelector<HTMLAnchorElement>(
       '.settings-sidebar__item[href="/settings/ai-agents"]',
     );
-    expect(result?.textContent?.trim()).toBe("Agent Defaults");
+    expect(result?.textContent?.trim()).toBe("Agent defaults");
   });
 
   it("excludes admin-only pages and config blocks from non-admin search", () => {
@@ -435,7 +435,7 @@ describe("settings sidebar search", () => {
 
     expect(labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label")).toEqual([
       "Agents",
-      "Agent Defaults",
+      "Agent defaults",
       "Agent sandbox",
     ]);
   });

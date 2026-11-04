@@ -6,7 +6,6 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   LearnMoreLink,
-  SettingsDefaultDescription,
   SettingsRow,
   SettingsSection,
   SettingsSegmented,
@@ -92,15 +91,9 @@ function CuratedField(props: {
       ? t(value ? "common.enabled" : "common.disabled")
       : String(value);
   };
-  const description = (
-    <>
-      {t(props.row?.descriptionKey ?? props.spec.helpKey)}{" "}
-      <SettingsDefaultDescription value={defaultValue()} overridden={field().overridden} />
-    </>
-  );
   const row = {
     title: <>{t(props.row?.titleKey ?? props.spec.labelKey)}</>,
-    description,
+    description: <>{t(props.row?.descriptionKey ?? props.spec.helpKey)}</>,
   };
   const checked = () => {
     const value = field().value;

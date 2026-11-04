@@ -233,7 +233,7 @@ describe("ordinary chat input admission", () => {
       expect(response).toHaveBeenCalledOnce();
       expect(response).toHaveBeenCalledWith(false, undefined, expect.anything());
     };
-    for (const method of ["users.list", "system-presence", "cron.list"]) {
+    for (const method of ["users.list", "presence.query", "cron.list"]) {
       rejected(await fixture.request(method, {}));
     }
     rejected(await fixture.request("users.mentionable", { sessionKey: "unrelated" }));
