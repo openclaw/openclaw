@@ -98,6 +98,7 @@ class SkillWorkshopPageState {
       sync();
       return () => {
         stops.forEach((stop) => stop());
+        this.plugin.dispose();
         this.scope?.abort.abort();
         this.scope?.retire();
         this.scope = null;
