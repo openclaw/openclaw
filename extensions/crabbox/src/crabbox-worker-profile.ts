@@ -238,7 +238,9 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
 }
 
 /** Existing pre-egress leases retain inspection/release, never new setup or capture. */
-export function parseCrabboxCleanupProfile(profile: WorkerProfile): CrabboxProfile {
+export function parseCrabboxCleanupProfile(
+  profile: Parameters<typeof parseCrabboxProfile>[0],
+): CrabboxProfile {
   const { setupEnv: retiredSetupEnv, ...settings } = profile;
   const parsed = parseCrabboxProfile(settings);
   if (retiredSetupEnv !== undefined) {
