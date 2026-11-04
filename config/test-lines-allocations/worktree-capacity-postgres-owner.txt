@@ -1,0 +1,2 @@
+# PostgreSQL capacity admission and renewal retain the current reservation owner; changed owners are rejected.
+63
