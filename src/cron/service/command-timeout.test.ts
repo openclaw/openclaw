@@ -205,13 +205,17 @@ describe("cron agent setup watchdog", () => {
     vi.useRealTimers();
   });
 
-  function makeWatchdog(timeoutMultiplier = 3, executionKind: "agent" | "command" = "agent") {
+  function makeWatchdog(
+    timeoutMultiplier = 3,
+    executionKind: "agent" | "command" = "agent",
+    jobTimeoutMs = CRON_AGENT_SETUP_WATCHDOG_MS * timeoutMultiplier,
+  ) {
     vi.useFakeTimers();
     const triggerTimeout = vi.fn();
     const watchdog = createCronAgentWatchdog({
       executionKind,
       deferUntilRunner: true,
-      jobTimeoutMs: CRON_AGENT_SETUP_WATCHDOG_MS * timeoutMultiplier,
+      jobTimeoutMs,
       triggerTimeout,
     });
     const jobId = "watchdog-job";
@@ -293,5 +297,18 @@ describe("cron agent setup watchdog", () => {
     runner(true);
     await advance(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
     await advance(1, { phase: "runner_entered", isFallback: true });
+  });
+
+  it("keeps the lane-wait budget on the monotonic clock", async () => {
+    const { triggerTimeout, watchdog } = makeWatchdog(1, "agent", 400);
+    await vi.advanceTimersByTimeAsync(30);
+    // The wall clock is corrected; the monotonic clock that setTimeout uses is not.
+    vi.setSystemTime(Date.now() + 60 * 60_000);
+    watchdog.noteLaneWait();
+    watchdog.noteLaneAdmitted();
+    await vi.advanceTimersByTimeAsync(369);
+    expect(triggerTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(triggerTimeout).toHaveBeenCalledTimes(1);
   });
 });
