@@ -3846,6 +3846,14 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `groups_gzip_base64=${encodeNodeTestGroups(groups)}\n`);
           JS
 
+      - name: Download adaptive CI priors
+        if: ${{ github.repository == 'openclaw/openclaw' && needs.preflight.outputs.frozen_target == 'false' && matrix.adaptive_observations == true && (github.event_name == 'schedule' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && endsWith(github.run_id, '0'))) }}
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ci-adaptive-priors-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts
+
       - name: Run Node test shard
         env:
           CHECKOUT_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
