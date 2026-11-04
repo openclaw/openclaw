@@ -590,6 +590,47 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         return loaded
     }
 
+    func acquireSessionArtifactAccess(sessionKey: String) async throws -> IOSSessionArtifactAccess {
+        guard let mediaArtifactLoader,
+              let route = await self.currentSessionMutationRoute(),
+              let gatewayID = await self.gateway.currentGatewayID(ifCurrentRoute: route)
+        else { throw URLError(.notConnectedToInternet) }
+        let target = self.sessionTarget(for: sessionKey)
+        let isCurrent: @Sendable () async -> Bool = {
+            guard !Task.isCancelled else { return false }
+            return await self.gateway.currentRoute() == route
+        }
+        return IOSSessionArtifactAccess(
+            list: {
+                try Task.checkCancellation()
+                // The image gallery projects different IDs and may inline previews.
+                // Keep this metadata catalog authoritative; joining those results
+                // would duplicate images or lose exportable items.
+                let request = OpenClawChatGatewayRequests.artifactsList(
+                    sessionKey: target.sessionKey, agentID: target.agentID)
+                let data = try await self.gateway.request(request, ifCurrentRoute: route)
+                guard await isCurrent() else { throw CancellationError() }
+                return try JSONDecoder().decode(ArtifactsListResult.self, from: data)
+            },
+            download: { artifactID in
+                let managed = OpenClawChatMediaKind.image.acceptsManagedArtifactID(artifactID) ||
+                    OpenClawChatMediaKind.file.acceptsManagedArtifactID(artifactID)
+                let request = OpenClawChatGatewayRequests.artifactDownload(
+                    sessionKey: target.sessionKey,
+                    agentID: target.agentID,
+                    artifactId: artifactID,
+                    httpTransport: !managed)
+                let data = try await self.gateway.request(request, ifCurrentRoute: route)
+                guard await isCurrent() else { throw CancellationError() }
+                let response = try JSONDecoder().decode(ArtifactsDownloadResult.self, from: data)
+                guard response.artifact.id == artifactID,
+                      response.artifact.download["mode"]?.value as? String != "unsupported"
+                else { throw IOSMediaArtifactLoader.LoadError.invalidResponse }
+                return try await mediaArtifactLoader.loadArtifact(
+                    response: response, managed: managed, expectedGatewayID: gatewayID, isCurrent: isCurrent)
+            })
+    }
+
     func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL? {
         await self.resolveInlineWidgetResource(
             path: path,

@@ -124,6 +124,7 @@ struct IOSGatewayChatTransportTests {
 
     private func withSessionTransport(
         unreadAckAdvertisement: Bool? = true,
+        artifacts: Bool = false,
         _ run: @MainActor (IOSGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
     {
         let recorder = RequestRecorder()
@@ -137,6 +138,15 @@ struct IOSGatewayChatTransportTests {
                 }
                 let request = try await recorder.record(data)
                 let payload = switch request.method {
+                case "artifacts.list":
+                    if request.params["type"]?.value as? String == "image" {
+                        // The image projection can name the same source with a different ID.
+                        #"{"artifacts":[{"id":"image-projection","type":"image","title":"chart.png","download":{"mode":"bytes"}}]}"#
+                    } else {
+                        #"{"artifacts":[{"id":"file-one","type":"file","title":"notes.txt","mimeType":"text/plain","download":{"mode":"bytes"}},{"id":"image-one","type":"image","title":"chart.png","download":{"mode":"bytes"}},{"id":"image-two","type":"image","title":"chart.png","download":{"mode":"unsupported"}}]}"#
+                    }
+                case "artifacts.download":
+                    #"{"artifact":{"id":"file-one","type":"file","title":"notes.txt","mimeType":"text/plain","download":{"mode":"bytes"}},"encoding":"base64","data":"bm90ZXM="}"#
                 case "agents.list": GatewayWebSocketTestSupport.agentCatalogPayload
                 case "agent.identity.get":
                     try String(decoding: JSONEncoder().encode(AgentIdentityResult(
@@ -164,6 +174,8 @@ struct IOSGatewayChatTransportTests {
                         "users.self",
                         "session.reactions.list",
                         "session.reactions.set",
+                        "artifacts.list",
+                        "artifacts.download",
                     ],
                     capabilities: unreadAckAdvertisement == true ? ["session-unread-ack-contract"] : [],
                     scopes: ["operator.write"])
@@ -184,6 +196,7 @@ struct IOSGatewayChatTransportTests {
         let gateway = GatewayNodeSession()
         var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
         options.allowStoredDeviceAuth = false
+        if artifacts { options.deviceAuthGatewayID = "artifact-fixture" }
         do {
             try await gateway.connect(
                 url: #require(URL(string: "ws://session-transport-test.invalid")),
@@ -193,11 +206,41 @@ struct IOSGatewayChatTransportTests {
                 onConnected: {},
                 onDisconnected: { _ in },
                 onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
-            try await run(IOSGatewayChatTransport(gateway: gateway, globalAgentId: " Reviewer "), recorder)
+            try await run(IOSGatewayChatTransport(
+                gateway: gateway, globalAgentId: " Reviewer ",
+                mediaArtifactLoader: artifacts ? IOSMediaArtifactLoader(connectionProvider: { nil }) : nil), recorder)
             await gateway.disconnect()
         } catch {
             await gateway.disconnect()
             throw error
+        }
+    }
+
+    @Test func `session catalog preserves image identities and cannot follow a retired connection`() async throws {
+        try await self.withSessionTransport(artifacts: true) { transport, recorder in
+            let access = try await transport.acquireSessionArtifactAccess(sessionKey: "main")
+            let catalog = try await access.list()
+            #expect(catalog.artifacts.map(\.id) == ["file-one", "image-one", "image-two"])
+            #expect(catalog.artifacts[2].download["mode"]?.value as? String == "unsupported")
+            let file = try await access.download("file-one")
+            #expect(String(decoding: file.data, as: UTF8.self) == "notes")
+            #expect(file.mimeType == "text/plain")
+            let requests = await recorder.all().filter { $0.method.hasPrefix("artifacts.") }
+            #expect(requests.count == 2)
+            #expect(requests.allSatisfy { $0.params["sessionKey"]?.value as? String == "agent:reviewer:main" })
+            #expect(requests.allSatisfy { $0.params["messageRole"] == nil })
+            #expect(requests.first?.params["type"] == nil)
+            #expect(requests.last?.params["artifactId"]?.value as? String == "file-one")
+            #expect(requests.last?.params["transport"]?.value as? String == "http")
+            await #expect(throws: IOSMediaArtifactLoader.LoadError.invalidResponse) {
+                try await access.download("image-one")
+            }
+
+            let count = await recorder.all().count
+            await transport.gateway.disconnect()
+            await #expect(throws: (any Error).self) { try await access.list() }
+            await #expect(throws: (any Error).self) { try await access.download("file-one") }
+            #expect(await recorder.all().count == count)
         }
     }
 

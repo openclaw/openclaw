@@ -8,10 +8,10 @@ import AppKit
 import UIKit
 #endif
 
-enum ChatMediaImageDecoder {
+public enum ChatMediaImageDecoder {
     static let maximumThumbnailPixels = 2048
 
-    static func decode(_ data: Data) -> OpenClawPlatformImage? {
+    public static func decode(_ data: Data) -> OpenClawPlatformImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               CGImageSourceGetCount(source) > 0
         else { return nil }

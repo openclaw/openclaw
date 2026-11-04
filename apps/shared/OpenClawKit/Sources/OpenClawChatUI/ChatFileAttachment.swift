@@ -7,12 +7,12 @@ import UIKit
 #endif
 
 /// Owns only the temporary copy handed to the system exporter, not Gateway paths.
-final class ChatDownloadedFile: Identifiable, Sendable {
-    let id = UUID()
-    let url: URL
+public final class ChatDownloadedFile: Identifiable, Sendable {
+    public let id = UUID()
+    public let url: URL
     private let directory: URL
 
-    init(data: Data, fileName: String) throws {
+    public init(data: Data, fileName: String) throws {
         let name = (fileName.replacingOccurrences(of: "\\", with: "/") as NSString).lastPathComponent
         let safeName = name.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }
             .map(String.init).joined()

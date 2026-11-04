@@ -41,6 +41,30 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - **Settings** opens the Dashboard settings pages when connected with `operator.admin`; the native Gateway screen remains available for connection and pairing.
 - Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
+## Session artifacts
+
+Open **Chat actions → Artifacts** to browse files shared in the current conversation,
+including the main session. Search filters the returned collection by title; the
+Type menu narrows it to documents, images, or audio and video. Pull to refresh.
+
+Select an item to preview supported text, images, or PDFs. **Share** opens the iOS
+share sheet, where you can save the original to Files or open it in another app.
+Other formats remain exportable when the Gateway supports their download. Text
+previews are limited to 256 KiB and PDF previews to 8 MiB; larger originals can
+still be exported within the existing 100 MiB download limit. HTML and SVG appear
+as source text, without executing active content.
+
+The collection follows the session's available artifact catalog, not every path
+mentioned in chat or every file in the agent's workspace. Images linked only in
+Markdown may remain available only in the conversation. Unsupported or removed
+items may not be downloadable. Downloads require a live authorized Gateway
+connection; the browser is not a permanent offline archive. Switching the session
+or Gateway closes the collection so results cannot carry into another conversation.
+
+For the agent's workspace instead, open **Pages → Edit Pages → Files** in the sidebar.
+You can pin that page for easier access. Workspace files and conversation artifacts
+have separate sources and access checks.
+
 ## Chat text size
 
 Chat uses a 13.5-point base text size for a denser transcript. It still follows

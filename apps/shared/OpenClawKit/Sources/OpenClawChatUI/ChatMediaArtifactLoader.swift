@@ -21,9 +21,12 @@ public enum OpenClawChatMediaArtifactLoader {
     {
         let declaredMIME = response.artifact.mimetype?.lowercased()
         if playback != .transcode,
-           let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !encoded.isEmpty
+           let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines)
         {
+            // Reject oversized inline payloads before allocating their decoded bytes.
+            guard encoded.utf8.count <= ((kind.maximumDownloadBytes + 2) / 3) * 4 else {
+                throw LoadError.payloadTooLarge
+            }
             guard response.encoding == "base64",
                   let declaredMIME,
                   kind.acceptsMIMEType(declaredMIME),

@@ -7,6 +7,70 @@ import Testing
 
 @Suite("iOS managed media artifact loader")
 struct IOSMediaArtifactLoaderTests {
+    @Test(arguments: ["valid", "wrong MIME", "inline disposition", "retired route"])
+    @MainActor func `catalog grants preserve bounded TLS and reject unsafe responses`(scenario: String) async throws {
+        actor Authority {
+            var current = true
+            func retire() {
+                self.current = false
+            }
+        }
+        let authority = Authority()
+        let tls = GatewayTLSParams(
+            required: true, expectedFingerprint: "sha256:fixture", allowTOFU: false, storeKey: "fixture")
+        let config = try Self.config(url: #require(URL(string: "wss://gateway.example/gw")), tls: tls)
+        let path = "/api/artifacts/download/connection-one/ticket-one"
+        let loader = IOSMediaArtifactLoader(
+            connectionProvider: {
+                IOSMediaArtifactLoader.Connection(
+                    config: config, gatewayID: config.effectiveStableID, customHeaders: ["X-Proxy-Token": "proxy"])
+            },
+            requestFactory: { receivedTLS, maximumBytes in
+                #expect(receivedTLS == tls)
+                #expect(maximumBytes == 100 * 1024 * 1024)
+                return { request in
+                    #expect(request.url?.absoluteString == "https://gateway.example/gw" + path)
+                    #expect(request.value(forHTTPHeaderField: "X-Proxy-Token") == "proxy")
+                    #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+                    if scenario == "retired route" { await authority.retire() }
+                    let url = try #require(request.url)
+                    let http = try #require(HTTPURLResponse(
+                        url: url, statusCode: 200, httpVersion: nil,
+                        headerFields: [
+                            "Content-Type": scenario == "wrong MIME" ? "text/html" : "application/pdf",
+                            "Content-Disposition": scenario == "inline disposition" ? "inline" : "attachment",
+                        ]))
+                    return (Data("fixture".utf8), http)
+                }
+            })
+        do {
+            let file = try await loader.loadArtifact(
+                response: Self.downloadResult(mimeType: "application/pdf", url: path),
+                managed: false, expectedGatewayID: config.effectiveStableID,
+                isCurrent: { await authority.current })
+            #expect(scenario == "valid")
+            #expect(file.data == Data("fixture".utf8))
+            #expect(file.mimeType == "application/pdf")
+        } catch is CancellationError {
+            #expect(scenario == "retired route")
+        } catch let error as IOSMediaArtifactLoader.LoadError {
+            #expect(scenario == "wrong MIME" || scenario == "inline disposition")
+            #expect(error == .invalidResponse)
+        }
+    }
+
+    @Test @MainActor func `empty catalog files are valid without an HTTP request`() async throws {
+        let loader = IOSMediaArtifactLoader(connectionProvider: {
+            Issue.record("Inline bytes must not start an HTTP request")
+            return nil
+        })
+        let file = try await loader.loadArtifact(
+            response: Self.downloadResult(mimeType: "text/plain", inlineData: Data()),
+            managed: false, expectedGatewayID: "fixture", isCurrent: { true })
+        #expect(file.data.isEmpty)
+        #expect(file.mimeType == "text/plain")
+    }
+
     @Test(arguments: ["application/pdf", "text/csv", "application/zip", "text/html"])
     @MainActor func `downloads documents using the pinned authenticated bounded route`(mimeType: String) async throws {
         let tls = GatewayTLSParams(

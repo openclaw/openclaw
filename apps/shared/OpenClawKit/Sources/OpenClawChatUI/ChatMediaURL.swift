@@ -1,6 +1,36 @@
 import Foundation
 
 public enum OpenClawChatMediaURL {
+    /// Exact-resource grants are separate from managed outgoing-media tickets.
+    /// Never resolve arbitrary artifact URLs with Gateway credentials.
+    public static func resolveArtifactDownload(gatewayURL: URL, ticketedPath: String) -> URL? {
+        let prefix = "/api/artifacts/download/"
+        guard ticketedPath.hasPrefix(prefix),
+              let relative = URLComponents(string: ticketedPath),
+              relative.scheme == nil, relative.host == nil,
+              relative.query == nil, relative.fragment == nil,
+              relative.percentEncodedPath == ticketedPath
+        else { return nil }
+        let components = ticketedPath.dropFirst(prefix.count).split(separator: "/", omittingEmptySubsequences: false)
+        let safeCharacters =
+            CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+        guard components.count == 2,
+              components.allSatisfy({ !$0.isEmpty && $0.unicodeScalars.allSatisfy(safeCharacters.contains) }),
+              var base = URLComponents(url: gatewayURL, resolvingAgainstBaseURL: false),
+              base.host != nil
+        else { return nil }
+        switch base.scheme?.lowercased() {
+        case "wss", "https": base.scheme = "https"
+        case "ws", "http": base.scheme = "http"
+        default: return nil
+        }
+        let contextPath = base.percentEncodedPath == "/" ? "" : base.percentEncodedPath
+        base.percentEncodedPath = contextPath + relative.percentEncodedPath
+        base.percentEncodedQuery = nil
+        base.fragment = nil
+        return base.url
+    }
+
     public static func resolve(
         gatewayURL: URL,
         ticketedPath: String,

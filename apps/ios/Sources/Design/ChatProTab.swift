@@ -18,6 +18,7 @@ struct ChatProTab: View {
 
     private enum PendingChatAction {
         case exportTranscript
+        case artifacts
         case gatewaySettings
         case newSessionOptions
     }
@@ -36,6 +37,16 @@ struct ChatProTab: View {
         self.appModel.chatPresentation.viewModel
     }
 
+    private struct ArtifactsPresentation: Identifiable {
+        let id = UUID()
+        let sessionKey: String
+        let title: String
+        let identity: String
+        let controlUIInputs: GatewayConnectConfig.ControlUIInputs?
+        let transport: IOSGatewayChatTransport
+    }
+
+    @State private var artifactsPresentation: ArtifactsPresentation?
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
     @State private var showsNewSessionOptions = false
@@ -83,6 +94,20 @@ struct ChatProTab: View {
                     } else {
                         self.chatToolbar
                     }
+                }
+                .sheet(item: self.$artifactsPresentation) { item in
+                    SessionArtifactsScreen(sessionTitle: item.title) {
+                        guard await self.isCurrentArtifactsPresentation(item) else { throw CancellationError() }
+                        let access = try await item.transport.acquireSessionArtifactAccess(sessionKey: item.sessionKey)
+                        guard await self.isCurrentArtifactsPresentation(item) else { throw CancellationError() }
+                        return access
+                    }
+                }
+                .onChange(of: self.artifactsIdentity) { _, _ in
+                    self.artifactsPresentation = nil
+                }
+                .onChange(of: self.appModel.activeGatewayConnectConfig?.controlUIInputs) { _, _ in
+                    self.artifactsPresentation = nil
                 }
                 .sheet(item: self.$transcriptShareItem) { item in
                     OpenClawChatFileShareSheet(fileURL: item.fileURL)
@@ -487,6 +512,15 @@ struct ChatProTab: View {
                 .accessibilityIdentifier("chat-show-reasoning-toggle")
 
                 self.chatActionButton(
+                    title: "Artifacts",
+                    systemImage: "doc.on.doc",
+                    disabled: self.viewModel == nil || !self.gatewayConnected)
+                {
+                    self.pendingChatAction = .artifacts
+                }
+                .accessibilityIdentifier("chat-session-artifacts")
+
+                self.chatActionButton(
                     title: "Export transcript",
                     systemImage: "square.and.arrow.up",
                     disabled: self.viewModel == nil)
@@ -525,6 +559,18 @@ struct ChatProTab: View {
         guard let pendingChatAction else { return }
         self.pendingChatAction = nil
         switch pendingChatAction {
+        case .artifacts:
+            guard let viewModel,
+                  let transport = self.appModel.makeChatTransport() as? IOSGatewayChatTransport
+            else { return }
+            self.artifactsPresentation = ArtifactsPresentation(
+                sessionKey: viewModel.sessionKey,
+                title: viewModel.sessions.first { $0.key == viewModel.sessionKey }?.displayName ??
+                    (viewModel.sessionKey == self.appModel
+                        .mainSessionKey ? String(localized: "Main Session") : viewModel.sessionKey),
+                identity: self.artifactsIdentity,
+                controlUIInputs: self.appModel.activeGatewayConnectConfig?.controlUIInputs,
+                transport: transport)
         case .exportTranscript:
             self.exportTranscript()
         case .gatewaySettings:
@@ -532,6 +578,16 @@ struct ChatProTab: View {
         case .newSessionOptions:
             self.showsNewSessionOptions = true
         }
+    }
+
+    private var artifactsIdentity: String {
+        "\(self.appModel.chatViewModelIdentityID)|\(self.viewModel?.sessionKey ?? "")"
+    }
+
+    @MainActor private func isCurrentArtifactsPresentation(_ item: ArtifactsPresentation) -> Bool {
+        self.artifactsPresentation?.id == item.id && self.artifactsIdentity == item.identity &&
+            self.appModel.activeGatewayConnectConfig?.controlUIInputs == item.controlUIInputs &&
+            self.appModel.chatPresentation.isCurrent(appModel: self.appModel) && self.gatewayConnected
     }
 
     private func exportTranscript() {

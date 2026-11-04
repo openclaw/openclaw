@@ -4,6 +4,28 @@ import Testing
 
 struct ChatMediaURLTests {
     @Test(arguments: [
+        "/api/artifacts/download/connection-one/ticket_one",
+        "https://other.example/api/artifacts/download/connection/ticket",
+        "//other.example/api/artifacts/download/connection/ticket",
+        "/api/artifacts/download/connection/ticket/extra",
+        "/api/artifacts/download/../ticket",
+        "/api/artifacts/download/connection/%2e%2e",
+        "/api/artifacts/download/connection/ticket?redirect=elsewhere",
+        "/api/artifacts/download/connection/ticket#fragment",
+        "/api/artifacts/download//ticket",
+        "/api/artifacts/download/connection%2Fother/ticket",
+    ])
+    func `catalog URLs admit only exact grants on the captured gateway`(path: String) throws {
+        let gateway = try #require(URL(string: "wss://gateway.example:8443/proxy%20mount"))
+        let resolved = OpenClawChatMediaURL.resolveArtifactDownload(gatewayURL: gateway, ticketedPath: path)
+        if path == "/api/artifacts/download/connection-one/ticket_one" {
+            #expect(resolved?.absoluteString == "https://gateway.example:8443/proxy%20mount" + path)
+        } else {
+            #expect(resolved == nil)
+        }
+    }
+
+    @Test(arguments: [
         ("ws://gateway.example:18789", "http://gateway.example:18789"),
         ("http://gateway.example/", "http://gateway.example"),
         ("wss://gateway.example/tenant%20gateway/gw", "https://gateway.example/tenant%20gateway/gw"),
