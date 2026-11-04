@@ -66,9 +66,12 @@ it("keeps a watched reaction on the runtime-bound global owner's queue", async (
   createClient.mockImplementation(async (options) => {
     const client = new IMessageRpcClient(options);
     vi.spyOn(client, "request").mockResolvedValue({ subscription: 1 });
-    vi.spyOn(client, "waitForClose").mockImplementation(async () =>
-      options?.onNotification?.({ method: "message", params: { message } }),
-    );
+    vi.spyOn(client, "waitForClose").mockImplementation(async () => {
+      await options?.onNotification?.({ method: "message", params: { message } });
+      await vi.waitFor(() => {
+        expect(peekSystemEventEntries("agent:research:global").length).toBeGreaterThan(0);
+      });
+    });
     return client;
   });
 
