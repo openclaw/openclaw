@@ -463,7 +463,7 @@ export class ContinuationForest {
     continuationForestSeams.beforeResetKill = (sessionKey) => this.gate(`reset-kill:${sessionKey}`);
     continuationForestSeams.beforeWorkMark = async (mark, work) => {
       const dying = this.dying;
-      if (dying?.flowId === work.flowId && dying.mark === mark) {
+      if (dying && dying.flowId === work.flowId && dying.mark === mark) {
         this.dying = undefined;
         dying.died();
         await this.die();
