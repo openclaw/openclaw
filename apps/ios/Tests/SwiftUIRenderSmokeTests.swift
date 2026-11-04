@@ -16,6 +16,29 @@ struct SwiftUIRenderSmokeTests {
         return window
     }
 
+    @Test @MainActor func `Talk microphone states render on compact screens with large text`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+        for muted in [false, true] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let control = OpenClawChatTalkControl(
+                    isEnabled: true,
+                    isListening: false,
+                    isSpeaking: true,
+                    isGatewayConnected: true,
+                    statusText: "Speaking",
+                    providerLabel: "",
+                    isMicrophoneMuted: muted,
+                    toggleMicrophone: {},
+                    recentTranscript: ["A synthetic reply is still playing."],
+                    toggle: { _ in })
+                let root = ChatTalkActivityStrip(control: control)
+                    .environment(\.dynamicTypeSize, typeSize)
+                windows.append(Self.host(root, size: CGSize(width: 320, height: 240)))
+            }
+        }
+    }
+
     @Test @MainActor func `settings hub fallback builds in light and dark mode`() {
         var windows: [UIWindow] = []
         defer { windows.forEach { $0.isHidden = true } }

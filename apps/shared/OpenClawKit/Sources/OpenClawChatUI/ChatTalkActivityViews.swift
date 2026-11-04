@@ -36,20 +36,39 @@ struct ChatTalkActivityStrip: View {
 
         if self.control.isEnabled {
             VStack(alignment: .leading, spacing: 6) {
-                if model.hasTranscript {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            self.isExpanded.toggle()
+                HStack(spacing: 8) {
+                    if model.hasTranscript {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.16)) {
+                                self.isExpanded.toggle()
+                            }
+                        } label: {
+                            self.header(model: model, showsDisclosure: true)
                         }
-                    } label: {
-                        self.header(model: model, showsDisclosure: true)
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(self.isExpanded
+                            ? String(localized: "Hide talk transcript")
+                            : String(localized: "Show talk transcript"))
+                    } else {
+                        self.header(model: model, showsDisclosure: false)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(self.isExpanded
-                        ? String(localized: "Hide talk transcript")
-                        : String(localized: "Show talk transcript"))
-                } else {
-                    self.header(model: model, showsDisclosure: false)
+                    if let toggleMicrophone = self.control.toggleMicrophone {
+                        Button(action: toggleMicrophone) {
+                            Image(systemName: self.control.isMicrophoneMuted ? "mic.slash.fill" : "mic.fill")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(self.control.isMicrophoneMuted ? Color.orange : Color.secondary)
+                                .frame(minWidth: 44, minHeight: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(self.control.isMicrophoneMuted
+                            ? String(localized: "Unmute microphone")
+                            : String(localized: "Mute microphone"))
+                        .accessibilityValue(self.control.isMicrophoneMuted
+                            ? String(localized: "Microphone muted")
+                            : String(localized: "Microphone on"))
+                        .accessibilityIdentifier("chat-talk-microphone")
+                    }
                 }
 
                 if self.isExpanded, model.hasTranscript {
@@ -91,9 +110,16 @@ struct ChatTalkActivityStrip: View {
             Circle()
                 .fill(OpenClawChatTheme.accent)
                 .frame(width: 7, height: 7)
-            Text(self.control.statusText)
-                .font(OpenClawChatTypography.captionSemiBold)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(self.control.statusText)
+                    .font(OpenClawChatTypography.captionSemiBold)
+                    .lineLimit(1)
+                if self.control.isMicrophoneMuted {
+                    Text("Microphone muted")
+                        .font(OpenClawChatTypography.captionSemiBold)
+                        .foregroundStyle(.orange)
+                }
+            }
             if let collapsedText = model.collapsedText, !self.isExpanded {
                 Text(collapsedText)
                     .font(OpenClawChatTypography.caption)

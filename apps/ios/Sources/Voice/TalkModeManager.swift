@@ -125,6 +125,7 @@ final class TalkModeManager {
     private static let realtimePrefetchExpiryLeewaySeconds: TimeInterval = 30
     private static let preferredInputDeviceIDKey = "talk.preferredInputDeviceID"
     var isEnabled: Bool = false
+    private(set) var isMicrophoneMuted: Bool = false
     var isListening: Bool = false
     var isSpeaking: Bool = false
     var isUserSpeechDetected: Bool = false
@@ -331,7 +332,7 @@ final class TalkModeManager {
 
     private func markRealtimeSessionReady() {
         guard self.captureMode != .pushToTalk else { return }
-        self.isListening = true
+        self.isListening = !self.isMicrophoneMuted
         self.captureMode = .continuous
         if self.realtimeSessionReadyAt == nil {
             self.realtimeSessionReadyAt = Date()
@@ -552,6 +553,43 @@ final class TalkModeManager {
         }
     }
 
+    /// Mute owns input only; submitted turns, playback, and the logical call keep their owners.
+    /// The choice survives Talk restarts for this manager's lifetime.
+    func setMicrophoneMuted(_ muted: Bool) async {
+        guard self.isMicrophoneMuted != muted else { return }
+        self.isMicrophoneMuted = muted
+        self.realtimeSession?.setMicrophoneMuted(muted)
+        self.realtimeRelaySession?.setMicrophoneMuted(muted)
+        guard self.isEnabled else { return }
+
+        if muted {
+            let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            let finishNativeTranscript = self.captureMode == .continuous &&
+                self.isListening && !self.hasRealtimeOwnerOrStart && !self.isSpeechOutputActive &&
+                self.continuousTranscriptProcessingGeneration != self.transcriptProcessingGeneration
+            self.isListening = false
+            self.isUserSpeechDetected = false
+            self.stopRecognition()
+            if self.continuousTranscriptProcessingGeneration != self.transcriptProcessingGeneration {
+                self.silenceTask?.cancel()
+                self.silenceTask = nil
+            }
+            if let captureId = self.activePTTCaptureId {
+                _ = self.endPushToTalk(captureId: captureId)
+            } else if finishNativeTranscript, !transcript.isEmpty {
+                self.lastTranscript = ""
+                self.lastHeard = nil
+                await self.processContinuousTranscript(transcript)
+            }
+        } else if self.realtimeSession != nil || self.realtimeRelaySession != nil {
+            self.isListening = self.phase == .listening
+        } else if self.isSpeechOutputActive {
+            self.startSpeechInterruptionRecognitionIfNeeded()
+        } else {
+            await self.start()
+        }
+    }
+
     func applyAudioRoutePreferenceChanged() {
         guard self.audioSessionIsActive else { return }
         do {
@@ -645,14 +683,18 @@ final class TalkModeManager {
             try configureOwnedAudioSession(reuseActiveSession: true)
             // Set this before starting recognition so any early speech errors are classified correctly.
             self.captureMode = .continuous
-            try self.startRecognition()
-            self.isListening = true
+            if !self.isMicrophoneMuted {
+                try self.startRecognition()
+            }
+            self.isListening = !self.isMicrophoneMuted
             if let issue = pendingRealtimeIssue {
                 markNativeFallbackActive(after: issue)
             } else {
                 markNativeTalkActive()
             }
-            self.startSilenceMonitor()
+            if !self.isMicrophoneMuted {
+                self.startSilenceMonitor()
+            }
             self.logger.info("listening")
         } catch {
             self.stopNativeCaptureAndDiscardTranscript()
@@ -834,6 +876,9 @@ final class TalkModeManager {
         guard canStartCapture(), self.foregroundPushToTalkAllowed else {
             throw Self.pushToTalkStartCancelledError()
         }
+        guard !self.isEnabled || !self.isMicrophoneMuted else {
+            throw Self.pushToTalkModeConflictError()
+        }
         if self.isPushToTalkActive, let activePushToTalk {
             guard activePushToTalk.transcriptionOnly == transcriptionOnly else {
                 throw Self.pushToTalkModeConflictError()
@@ -872,6 +917,9 @@ final class TalkModeManager {
         try Task.checkCancellation()
         guard canStartCapture(), transcriptionOnly || self.gatewayConnected, self.foregroundPushToTalkAllowed else {
             throw Self.pushToTalkStartCancelledError()
+        }
+        guard !self.isEnabled || !self.isMicrophoneMuted else {
+            throw Self.pushToTalkModeConflictError()
         }
         guard self.activePushToTalk == nil, self.finishingPushToTalk == nil else {
             throw Self.pushToTalkBusyError()
@@ -1113,7 +1161,9 @@ final class TalkModeManager {
         canStartCapture: @MainActor () -> Bool) throws
     {
         try Task.checkCancellation()
-        guard self.activePTTCaptureId == captureId, canStartCapture() else {
+        guard self.activePTTCaptureId == captureId, canStartCapture(),
+              !self.isEnabled || !self.isMicrophoneMuted
+        else {
             throw Self.pushToTalkStartCancelledError()
         }
     }
@@ -1495,6 +1545,7 @@ final class TalkModeManager {
     private func canRestartNativeRecognition(expectedGeneration: UInt64) -> Bool {
         self.recognitionGeneration == expectedGeneration &&
             self.isEnabled &&
+            !self.isMicrophoneMuted &&
             self.captureMode == .continuous &&
             self.foregroundAudioCaptureAllowed &&
             self.realtimeSession == nil &&
@@ -1933,6 +1984,7 @@ final class TalkModeManager {
             voiceSessionId: self.activeRealtimeVoiceSessionId,
             transcriptStore: self.realtimeTranscriptStore,
             delegate: self)
+        session.setMicrophoneMuted(self.isMicrophoneMuted)
         self.realtimeSession = session
         // WebRTC owns the shared AVAudioSession internally; track the attempt
         // before its first suspension so every failure/teardown can deactivate it.
@@ -2075,6 +2127,7 @@ final class TalkModeManager {
             relayGeneration: relayGeneration,
             supportsVoiceSelection: supportsVoiceSelection,
             voiceChange: voiceChange)
+        relaySession.setMicrophoneMuted(self.isMicrophoneMuted)
         self.realtimeRelaySession = relaySession
         do {
             try await relaySession.start()
@@ -2935,7 +2988,7 @@ final class TalkModeManager {
     }
 
     private func startSpeechInterruptionRecognitionIfNeeded(context: String = "speak") {
-        guard self.interruptOnSpeech else { return }
+        guard self.interruptOnSpeech, !self.isEnabled || !self.isMicrophoneMuted else { return }
         do {
             try self.startRecognition()
         } catch {
@@ -3701,7 +3754,7 @@ extension TalkModeManager {
                 phase: presentation.phase,
                 watchPresentation: presentation.watch)
         }
-        self.isListening = presentation.phase == .listening
+        self.isListening = presentation.phase == .listening && !self.isMicrophoneMuted
         if presentation.phase == .thinking || presentation.phase == .connecting {
             self.isSpeaking = false
             self.isUserSpeechDetected = false
@@ -4097,8 +4150,8 @@ extension TalkModeManager: TalkRealtimeWebRTCSessionDelegate {
 
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didDetectInputSpeech active: Bool) {
         guard session === self.realtimeSession else { return }
-        self.isUserSpeechDetected = active
-        if active {
+        self.isUserSpeechDetected = active && !self.isMicrophoneMuted
+        if active, !self.isMicrophoneMuted {
             self.isListening = true
         }
     }
