@@ -39,7 +39,7 @@ Custom model text stays in the field while background data refreshes, without
 saving before the field's normal commit event. A newly committed model value
 still replaces the displayed value.
 
-When the Gateway rejects an invalid setting, **Settings not applied** keeps your draft and offers **Show reason**, **Retry**, and **Discard draft and reload**. Discard removes all unsaved configuration edits and reloads the saved settings. Edits entered while Discard waits for an earlier save remain pending; newer Form edits resume autosaving, and newer Raw edits remain available to save. Clearing a text field is an edit, not a discard: settings that accept an empty string keep that explicit value.
+When the Gateway rejects an invalid setting, **Couldn’t apply settings. Review your changes.** keeps your draft, shows the rejection reason, and offers **Retry** and **Discard changes**. Discard removes all unsaved configuration edits and reloads the saved settings. Edits entered while Discard waits for an earlier save remain pending; newer Form edits resume autosaving, and newer Raw edits remain available to save. Clearing a text field is an edit, not a discard: settings that accept an empty string keep that explicit value.
 
 Typing in Form fields copies the edited path instead of cloning and formatting the full configuration on every keystroke. Full JSON formatting happens when saving or opening **Advanced → Raw**. The Raw editor still shows the current draft, including newer edits made while an earlier save is in flight.
 

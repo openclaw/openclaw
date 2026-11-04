@@ -88,7 +88,7 @@ describe("settings save indicator", () => {
       pending: true,
       savedNotice: true,
     });
-    expect(part("title")?.textContent).toBe("Save failed");
+    expect(part("title")?.textContent).toBe("Couldn’t save settings. Try again.");
     expect(indicator.textContent).not.toContain("Saving");
     expect(part("reason")?.textContent).toBe("permission denied");
     button("Discard changes")?.click();
@@ -106,12 +106,12 @@ describe("settings save indicator", () => {
     await waitForSolid(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
     await Promise.resolve();
     expect(onReload).not.toHaveBeenCalled();
-    expect(part("title")?.textContent).toBe("Save failed");
+    expect(part("title")?.textContent).toBe("Couldn’t save settings. Try again.");
   });
 
   it.each([
-    ["error", "permission denied", "Save failed"],
-    ["rejected", "logging.level: Invalid option", "Settings not applied"],
+    ["error", "permission denied", "Couldn’t save settings. Try again."],
+    ["rejected", "logging.level: Invalid option", "Couldn’t apply settings. Review your changes."],
   ] as const)(
     "explains %s with its reason in view and retries",
     async (status, lastError, title) => {
@@ -128,7 +128,7 @@ describe("settings save indicator", () => {
   it("offers only Discard when the Gateway could not restore the settings", async () => {
     const lastError = "Settings could not be restored. Your draft is kept.";
     await update({ status: "recovery", lastError });
-    expect(part("title")?.textContent).toBe("Save failed");
+    expect(part("title")?.textContent).toBe("Couldn’t save settings. Try again.");
     expect(part("reason")?.textContent).toBe(lastError);
     expect(button("Retry")).toBeUndefined();
     expect(button("Discard changes")).toBeDefined();
@@ -170,11 +170,11 @@ describe("settings save indicator", () => {
   it("retires the previous failure during a manual save and shows the same error again", async () => {
     const lastError = "permission denied";
     await update({ status: "error", lastError });
-    expect(indicator.textContent).toContain("Save failed");
+    expect(indicator.textContent).toContain("Couldn’t save settings. Try again.");
     await update({ status: "error", saving: true, lastError: null });
     expect(indicator.textContent?.trim()).toBe("Saving…");
     await update({ status: "error", lastError });
-    expect(indicator.textContent).toContain("Save failed");
+    expect(indicator.textContent).toContain("Couldn’t save settings. Try again.");
     expect(indicator.querySelector(".settings-save-indicator__reason")?.textContent).toBe(
       lastError,
     );
