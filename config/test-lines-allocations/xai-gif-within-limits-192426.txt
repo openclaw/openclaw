@@ -1,2 +1,2 @@
-# Within-limit GIFs must transcode to cached JPEG; prompt-image consumers now expect the transcoded slot (#192426).
-20
+# xAI-only GIF->JPEG regression: fresh, replayed, and non-xAI passthrough in one test.
+29

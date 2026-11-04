@@ -1,3 +1,4 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple, type Model, type ModelThinkingLevel } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
@@ -107,6 +108,34 @@ async function captureXaiResponsesPayloadWithThinking(
 }
 
 describe("xai stream wrappers", () => {
+  it("converts within-limit GIFs to JPEG for xAI fresh and replayed turns only", async () => {
+    const data = "R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==";
+    const gif = { type: "image", mimeType: "image/gif", data };
+    const messages = [
+      { role: "toolResult", content: [gif] },
+      { role: "user", content: [gif] },
+    ] as unknown as Parameters<StreamFn>[1]["messages"];
+    const send = async (provider: string) => {
+      let seen: unknown[] = [];
+      const streamFn: StreamFn = (_model, ctx) => {
+        seen = ctx.messages.flatMap((msg): unknown[] =>
+          Array.isArray(msg.content) ? msg.content : [],
+        );
+        return {} as ReturnType<StreamFn>;
+      };
+      await wrapXaiProviderStream({ provider: "xai", modelId: "grok-4", streamFn })?.(
+        xaiModel({ provider }),
+        {
+          messages,
+        },
+      );
+      return seen;
+    };
+    const jpeg = { type: "image", mimeType: "image/jpeg", data: expect.stringMatching(/^\/9j\//) };
+    expect(await send("xai")).toEqual([jpeg, jpeg]);
+    expect(await send("openai")).toEqual([gif, gif]);
+  });
+
   it("does not add Grok OAuth headers for a lookalike host", () => {
     const { headers } = captureXaiRequest(
       xaiModel({ id: "grok-4.5", baseUrl: "https://cli-chat-proxy.grok.com.example/v1" }),

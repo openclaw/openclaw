@@ -89,19 +89,6 @@ describe("tool image sanitizing", () => {
       expect(canonicalize).toHaveBeenCalledTimes(5);
     });
 
-    it("transcodes within-limit GIFs to cached decodable JPEG", async () => {
-      const gif = imageBlock(
-        "R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==",
-        "image/gif",
-      );
-      const first = getImageBlock(await replay(gif));
-      expect(first.mimeType).toBe("image/jpeg");
-      expect(await getImageMetadata(Buffer.from(first.data, "base64"))).toMatchObject({ width: 1 });
-      const calls = resizeToJpegMock.mock.calls.length;
-      expect(await replay(gif)).toEqual([first]);
-      expect(resizeToJpegMock).toHaveBeenCalledTimes(calls);
-    });
-
     it("reuses rejected bytes without retaining the caller's label", async () => {
       const canonicalize = vi.mocked(canonicalizeBase64).mockClear();
       const block = imageBlock("invalid!");

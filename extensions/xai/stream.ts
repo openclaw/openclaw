@@ -1,5 +1,6 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
+import { resizeToJpeg } from "openclaw/plugin-sdk/media-runtime";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
@@ -43,6 +44,73 @@ function createXaiGrokOAuthHeadersWrapper(
         "x-grok-model-override": model.id,
       }),
     });
+  };
+}
+
+// xAI rejects GIF and other formats outside JPG/PNG/WebP/ICO, even within size limits.
+// Other providers keep GIF pass-through; convert only xAI-bound requests, including replay.
+const XAI_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const xaiJpegCache = new Map<string, string | null>();
+
+type XaiImageBlock = { type: "image"; data: string; mimeType: string };
+
+function needsXaiImageTranscode(block: unknown): block is XaiImageBlock {
+  const image = asOptionalRecord(block);
+  return (
+    image?.type === "image" &&
+    typeof image.data === "string" &&
+    typeof image.mimeType === "string" &&
+    (image.data.startsWith("R0lGOD") || !XAI_IMAGE_MIME_TYPES.has(image.mimeType.toLowerCase()))
+  );
+}
+
+async function transcodeForXai(block: XaiImageBlock) {
+  let jpeg = xaiJpegCache.get(block.data);
+  if (jpeg === undefined) {
+    const buffer = Buffer.from(block.data, "base64");
+    jpeg = await resizeToJpeg({ buffer, maxSide: 4096, quality: 85, withoutEnlargement: true })
+      .then((out) => out.toString("base64"))
+      .catch(() => null);
+    if (xaiJpegCache.size >= 64) {
+      xaiJpegCache.delete(xaiJpegCache.keys().next().value as string);
+    }
+    xaiJpegCache.set(block.data, jpeg);
+  }
+  return jpeg === null
+    ? {
+        type: "text" as const,
+        text: `[omitted image payload: xAI does not accept ${block.mimeType}]`,
+      }
+    : { ...block, data: jpeg, mimeType: "image/jpeg" };
+}
+
+function createXaiImageFormatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const hasUnsupported =
+      isXaiProviderId(model.provider) &&
+      context.messages.some(
+        (msg) => Array.isArray(msg.content) && msg.content.some(needsXaiImageTranscode),
+      );
+    if (!hasUnsupported) {
+      return underlying(model, context, options);
+    }
+    return Promise.all(
+      context.messages.map(async (msg) =>
+        Array.isArray(msg.content) && msg.content.some(needsXaiImageTranscode)
+          ? {
+              ...msg,
+              content: await Promise.all(
+                msg.content.map((block) =>
+                  needsXaiImageTranscode(block) ? transcodeForXai(block) : block,
+                ),
+              ),
+            }
+          : msg,
+      ),
+    ).then((messages) =>
+      underlying(model, { ...context, messages: messages as typeof context.messages }, options),
+    );
   };
 }
 
@@ -192,6 +260,7 @@ export function wrapXaiProviderStream(
   const toolStreamEnabled = extraParams?.tool_stream !== false;
   return composeProviderStreamWrappers(
     ctx.streamFn,
+    createXaiImageFormatWrapper,
     (streamFn) => createXaiGrokOAuthHeadersWrapper(streamFn, runtime?.clientVersion),
     (streamFn) => xaiReasoning.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn ?? streamSimple,
     createXaiToolPayloadCompatibilityWrapper,
