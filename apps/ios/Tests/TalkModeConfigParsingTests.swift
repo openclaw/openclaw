@@ -974,6 +974,64 @@ struct TalkConfigRefreshTests {
         await gateway.disconnect()
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    func `talk start keeps the last loaded provider when the config refresh fails`() async throws {
+        let served = ServedTalkConfig(Self.relayTalkConfig(provider: "xai", voice: "ara"))
+        let creates = AsyncStream<Data>.makeStream()
+        defer { creates.continuation.finish() }
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let socket = GatewayTestWebSocketTask(sendHook: { [weak manager] socket, message, _ in
+            let method = GatewayWebSocketTestSupport.requestMethod(from: message)
+            guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            if method == "talk.config" {
+                if await served.isFailing {
+                    try socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.errorResponseData(
+                        id: id, code: "UNAVAILABLE", message: "Synthetic refresh failure", details: [:])))
+                } else {
+                    try await socket.emitReceiveSuccess(.data(served.response(id: id)))
+                }
+            } else if method == "talk.session.create" {
+                if case let .string(text) = message { creates.continuation.yield(Data(text.utf8)) }
+                if case let .data(data) = message { creates.continuation.yield(data) }
+                await manager?.stop()
+                try socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.errorResponseData(
+                    id: id, code: "UNAVAILABLE", message: "Synthetic stop", details: [:])))
+            }
+        })
+        let gateway = GatewayNodeSession()
+        defer { manager.stop() }
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://talk-config-refresh-failure.invalid")),
+                credentials: .init(),
+                connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            manager.attachGateway(gateway)
+            manager.updateGatewayConnected(true)
+            await manager.reloadConfig(gateway: gateway)
+            await served.setFailing(true)
+            manager._test_prepareEnabledRealtimeSessionForClose()
+            await manager.start()
+            var requests = creates.stream.makeAsyncIterator()
+            // Bounded wait: without the fix no create is sent; the watchdog ends the stream so the
+            // #require below fails the assertion instead of hanging.
+            let watchdog = Task { try? await Task.sleep(for: .seconds(5)); creates.continuation.finish() }
+            defer { watchdog.cancel() }
+            let frame = try #require(await requests.next())
+            let request = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
+            let params = try #require(request["params"] as? [String: Any])
+
+            #expect([params["provider"] as? String, params["voice"] as? String] == ["xai", "ara"])
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+        await gateway.disconnect()
+    }
+
     @Test func `config reload keeps the realtime prefetch until provider model or voice change`() async throws {
         let served = ServedTalkConfig(Self.webRTCTalkConfig(voice: "marin"))
         let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
@@ -1052,6 +1110,7 @@ struct TalkConfigRefreshTests {
 /// The Gateway's current `talk.config`, changeable between requests like a web config edit.
 private actor ServedTalkConfig {
     private var config: Data
+    private(set) var isFailing = false
 
     init(_ config: Data) {
         self.config = config
@@ -1059,6 +1118,10 @@ private actor ServedTalkConfig {
 
     func set(_ config: Data) {
         self.config = config
+    }
+
+    func setFailing(_ failing: Bool) {
+        self.isFailing = failing
     }
 
     func response(id: String) throws -> Data {

@@ -3759,12 +3759,14 @@ extension TalkModeManager {
 
     private func ensureTalkConfigLoadedForStart() async {
         // Talk settings can change on the Gateway at any time; every start uses the current config.
-        await self.reloadConfig()
+        // A failed refresh keeps the last good config instead of dropping to native speech.
+        await self.reloadConfig(keepLastGoodOnFailure: self.gatewayTalkConfigLoaded)
     }
 
     func reloadConfig(
         gateway gatewayOverride: GatewayNodeSession? = nil,
         gatewayRoute: GatewayNodeSessionRoute? = nil,
+        keepLastGoodOnFailure: Bool = false,
         shouldApply: @MainActor @Sendable () -> Bool = { true }) async
     {
         guard let gateway = gatewayOverride ?? gateway else { return }
@@ -3795,6 +3797,10 @@ extension TalkModeManager {
             return
         } catch {
             guard shouldApply() else { return }
+            if keepLastGoodOnFailure {
+                GatewayDiagnostics.log("talk config refresh failed; keeping last loaded config")
+                return
+            }
             self.applyTalkConfigLoadFailure(error)
         }
     }
