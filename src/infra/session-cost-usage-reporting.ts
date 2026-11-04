@@ -361,7 +361,10 @@ export async function loadSessionLogs(
         timestamp: entry?.timestamp?.getTime() ?? 0,
         role,
         content,
-        tokens: usage ? computeUsageTokenTotals(usage).totalTokens : undefined,
+        tokens:
+          usage && usage.usageReport?.state !== "unavailable"
+            ? computeUsageTokenTotals(usage).totalTokens
+            : undefined,
         cost: usage ? entry?.costTotal : undefined,
       });
       // Timestamps can arrive out of order, so keep a bounded sorted window instead

@@ -133,8 +133,9 @@ it.each([null, { input: 0, output: 0, usageReport: { state: "available" as const
 it.each([
   ["different configured prices", undefined, undefined, 0.00252, undefined],
   ["provider-billed zero", billedZero, billedZero, 0, undefined],
-  ["unknown price before known price", { total: 0 }, { total: 0.7 }, undefined, undefined],
-  ["unknown price after known price", { total: 0.7 }, { total: 0 }, undefined, undefined],
+  ["unknown price before known price", undefined, { total: 0.7 }, undefined, undefined],
+  ["unknown price after known price", { total: 0.7 }, undefined, undefined, undefined],
+  ["recorded zero plus known price", { total: 0 }, { total: 0.7 }, 0.7, undefined],
   ["separate diagnostic totals", { total: 0.2 }, { total: 0.7 }, 0.9, diagnosticUsage],
 ] as const)(
   "retains discarded work and %s across reply and session accounting",

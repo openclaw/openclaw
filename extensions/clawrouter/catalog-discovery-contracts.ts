@@ -2,7 +2,7 @@ import { asOptionalRecord, asPositiveSafeInteger } from "openclaw/plugin-sdk/str
 import type { ClawRouterCapabilityOffer } from "./capability-offers.js";
 
 // These are published operations, not provider-name or response-shape guesses.
-export const CATALOG_DISCOVERY_CONTRACTS = {
+const CATALOG_DISCOVERY_CONTRACTS = {
   cerebras: { endpoint: "public_models", format: "cerebras.public_catalog", manifestOnly: true },
   nvidia: { endpoint: "public_models", format: "nvidia.public_catalog", manifestOnly: true },
   chutes: { endpoint: "models_list", format: "chutes.models" },

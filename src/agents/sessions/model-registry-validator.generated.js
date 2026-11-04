@@ -426,14 +426,18 @@ var isModelsConfig = (() => {
                       (typeof unique_10.cost == "object" &&
                         unique_10.cost !== null &&
                         !Array.isArray(unique_10.cost) &&
-                        "input" in unique_10.cost &&
-                        "output" in unique_10.cost &&
-                        "cacheRead" in unique_10.cost &&
-                        "cacheWrite" in unique_10.cost &&
-                        Number.isFinite(unique_10.cost.input) &&
-                        Number.isFinite(unique_10.cost.output) &&
-                        Number.isFinite(unique_10.cost.cacheRead) &&
-                        Number.isFinite(unique_10.cost.cacheWrite))) &&
+                        (unique_10.cost.input === void 0 ||
+                          !("input" in unique_10.cost) ||
+                          Number.isFinite(unique_10.cost.input)) &&
+                        (unique_10.cost.output === void 0 ||
+                          !("output" in unique_10.cost) ||
+                          Number.isFinite(unique_10.cost.output)) &&
+                        (unique_10.cost.cacheRead === void 0 ||
+                          !("cacheRead" in unique_10.cost) ||
+                          Number.isFinite(unique_10.cost.cacheRead)) &&
+                        (unique_10.cost.cacheWrite === void 0 ||
+                          !("cacheWrite" in unique_10.cost) ||
+                          Number.isFinite(unique_10.cost.cacheWrite)))) &&
                     (unique_10.contextWindow === void 0 ||
                       !("contextWindow" in unique_10) ||
                       Number.isFinite(unique_10.contextWindow)) &&

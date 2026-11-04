@@ -390,6 +390,7 @@ describe("ClawRouter admitted hosted search HTTP composition", () => {
     catalog = await discover("synthetic-admitted");
     deniedCatalog = await discover("synthetic-denied");
     await discover("synthetic-admitted");
+    expect(catalogAuth).toEqual(["Bearer synthetic-admitted", "Bearer synthetic-denied"]);
   });
   afterAll(async () => {
     server?.listener.closeAllConnections();
@@ -803,7 +804,6 @@ describe("ClawRouter admitted hosted search HTTP composition", () => {
     ).toBe("managed");
   });
   it("keeps one key's catalog admission out of another key's projection", () => {
-    expect(catalogAuth).toEqual(["Bearer synthetic-admitted", "Bearer synthetic-denied"]);
     expect(resolveNativeWebSearchRoute(prepare({}, undefined, deniedCatalog).policy).kind).toBe(
       "managed",
     );

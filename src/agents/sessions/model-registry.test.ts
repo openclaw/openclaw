@@ -110,7 +110,10 @@ describe("ModelRegistry", () => {
   ) => ModelRegistry.create(auth, modelsPath, options);
   const exampleCatalog = (apiKey?: string) =>
     writeRoot({
-      custom: providerConfig([{ id: "example-model" }], { api: "openai-responses", apiKey }),
+      custom: providerConfig([{ id: "example-model", cost: { input: 0 } }], {
+        api: "openai-responses",
+        apiKey,
+      }),
     });
   const ownerSnapshot = (...ids: string[]) =>
     pluginOwnerSnapshotEntries(ids.map((id) => ({ providerId: id, pluginId: id })));
@@ -303,11 +306,8 @@ describe("ModelRegistry", () => {
     });
     for (const candidate of [registry, registry.fork(AuthStorage.inMemory())]) {
       for (const [id, expected] of [
-        ["unknown", { contextWindow: 128_000, contextWindowSource: "synthetic" }],
-        [
-          "prompt-only",
-          { contextWindow: 777_000, contextTokens: 777_000, contextWindowSource: "synthetic" },
-        ],
+        ["unknown", { contextWindow: undefined }],
+        ["prompt-only", { contextWindow: undefined, contextTokens: 777_000 }],
         ["reported", { contextWindow: 128_000 }],
         ["authored", { contextWindow: 64_000 }],
       ] as const) {

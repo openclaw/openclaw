@@ -370,49 +370,42 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
   );
 
   it.each([
-    ["missing", undefined, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
-    [
-      "partial",
-      { input: 3, output: 15, cacheRead: 0.3 },
-      { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-    ],
-  ] as const)(
-    "defaults only %s manifest model cost components",
-    async (_name, cost, expectedCost) => {
-      mockManifestPlugins([
-        catalogManifest(
-          "anthropic",
-          {
-            "claude-cli": { models: [anthropicModel()] },
-            anthropic: {
-              baseUrl: "https://api.anthropic.com",
-              api: "anthropic-messages",
-              models: [{ ...anthropicModel(), ...(cost ? { cost } : {}) }],
-            },
+    ["missing", undefined, undefined],
+    ["partial", { input: 3, output: 15, cacheRead: 0.3 }, { input: 3, output: 15, cacheRead: 0.3 }],
+  ] as const)("preserves %s manifest model cost components", async (_name, cost, expectedCost) => {
+    mockManifestPlugins([
+      catalogManifest(
+        "anthropic",
+        {
+          "claude-cli": { models: [anthropicModel()] },
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            api: "anthropic-messages",
+            models: [{ ...anthropicModel(), ...(cost ? { cost } : {}) }],
           },
-          { "claude-cli": "static", anthropic: "static" },
-        ),
-      ]);
-
-      const providers = discoverProviders({ discoveryEntriesOnly: true });
-      expect(providers.map(({ id }) => id)).toEqual(["anthropic"]);
-
-      expect(
-        await providers[0]?.staticCatalog?.run({
-          config: {},
-          env: {},
-          resolveProviderApiKey: () => ({ apiKey: undefined }),
-          resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-        }),
-      ).toEqual({
-        providers: {
-          anthropic: expect.objectContaining({
-            models: [expect.objectContaining({ id: "claude-sonnet-4-6", cost: expectedCost })],
-          }),
         },
-      });
-    },
-  );
+        { "claude-cli": "static", anthropic: "static" },
+      ),
+    ]);
+
+    const providers = discoverProviders({ discoveryEntriesOnly: true });
+    expect(providers.map(({ id }) => id)).toEqual(["anthropic"]);
+
+    expect(
+      await providers[0]?.staticCatalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      }),
+    ).toEqual({
+      providers: {
+        anthropic: expect.objectContaining({
+          models: [expect.objectContaining({ id: "claude-sonnet-4-6", cost: expectedCost })],
+        }),
+      },
+    });
+  });
 
   it.each([
     ["selected static", "static", true, false, false, ["router"]],

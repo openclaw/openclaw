@@ -211,6 +211,10 @@ bucket; missing counts cannot. A total estimate is available only when every
 bucket is known. A provider-billed total, including zero, remains authoritative
 even when its component costs are unknown.
 
+ClawRouter uses the selected endpoint's pricing card when present. An explicitly
+unpriced endpoint stays unknown; only an absent endpoint card inherits global
+model pricing.
+
 Reports retain known subtotals and count unpriced entries and incomplete cost
 breakdowns separately. Time-series totals remain unavailable after an unpriced
 call. Unknown amounts display as unavailable rather than `$0.00`.

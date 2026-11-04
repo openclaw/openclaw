@@ -215,6 +215,25 @@ describe("worker protocol schemas", () => {
     expect(commitError("transcript commit rejected", "stale-base-leaf")).toBe(true);
   });
 
+  it.each([
+    { cost: {}, accepted: true },
+    { cost: { input: 0.1 }, accepted: true },
+    { cost: { total: 0, totalOrigin: "provider-billed" }, accepted: true },
+    { cost: { input: -1 }, accepted: false },
+  ])(
+    "preserves partial and billed costs across worker messages ($cost)",
+    ({ cost: reportedCost, accepted }) => {
+      const message = { ...assistantMessage, usage: { ...usage, cost: reportedCost } };
+      expect([
+        validateCommit(transcriptMessage(message)),
+        validateInferenceStart(inferenceMessages([message])),
+        validateInferenceTerminal(
+          inferenceFrame("terminal", { outcome: { type: "done", message } }),
+        ),
+      ]).toEqual([accepted, accepted, accepted]);
+    },
+  );
+
   it("accepts bounded opaque provider response IDs across worker message transports", () => {
     const accepts = (responseId: string) => {
       const message = { ...assistantMessage, responseId };

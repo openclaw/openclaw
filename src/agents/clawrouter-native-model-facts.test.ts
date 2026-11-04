@@ -436,9 +436,10 @@ it("uses Vercel's granted native Messages SDK route for catalog, replay and stre
     expect((await (await stream(model, context, {})).result()).stopReason).toBe("error");
     expect(requests).toHaveLength(1);
     reject = true;
-    expect((await (await stream(model, context, { apiKey: credential })).result()).stopReason).toBe(
-      "error",
-    );
+    expect(
+      (await (await stream(model, context, { apiKey: credential, maxTokens: 100 })).result())
+        .stopReason,
+    ).toBe("error");
     expect(requests).toHaveLength(2);
 
     // Keep the valid Chat offer: denial must not silently switch this native model to Chat.

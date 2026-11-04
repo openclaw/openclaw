@@ -59,6 +59,7 @@ it.each(["synthetic", "reported", "billed", "unavailable"] as const)(
       usage.usageReport = { state: "available" };
     }
     if (kind === "billed") {
+      usage.cost.total = 0;
       usage.cost.totalOrigin = "provider-billed";
     }
     if (kind === "unavailable") {

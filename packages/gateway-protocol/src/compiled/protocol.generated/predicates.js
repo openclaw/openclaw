@@ -18044,19 +18044,14 @@ var External = [
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    "input" in value &&
-    "output" in value &&
-    "cacheRead" in value &&
-    "cacheWrite" in value &&
-    "total" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_1799, unique_1800) => External[915].test(unique_1799) || check_2(value[unique_1799]),
     ) &&
-    check_1369(value.input) &&
-    check_1369(value.output) &&
-    check_1369(value.cacheRead) &&
-    check_1369(value.cacheWrite) &&
-    check_1369(value.total) &&
+    (value.input === void 0 || !("input" in value) || check_640(value.input)) &&
+    (value.output === void 0 || !("output" in value) || check_640(value.output)) &&
+    (value.cacheRead === void 0 || !("cacheRead" in value) || check_640(value.cacheRead)) &&
+    (value.cacheWrite === void 0 || !("cacheWrite" in value) || check_640(value.cacheWrite)) &&
+    (value.total === void 0 || !("total" in value) || check_640(value.total)) &&
     (value.totalOrigin === void 0 || !("totalOrigin" in value) || check_2707(value.totalOrigin)),
   check_2707 = (value) => typeof value == "string" && value === "provider-billed",
   check_2708 = (value) =>

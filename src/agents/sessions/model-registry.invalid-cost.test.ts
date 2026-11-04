@@ -41,10 +41,11 @@ it.each(["authored", "generated"])(
       { id: "unpriced" },
     ]);
 
-    expect(registry.getAll().map((model) => model.id)).toEqual(["priced", "unpriced"]);
+    expect(registry.getAll().map((model) => model.id)).toEqual(["partial", "priced", "unpriced"]);
     expect(registry.find(provider, "priced")?.cost).toEqual(cost);
-    expect(registry.getError()?.match(/Skipped model/g)).toHaveLength(3);
-    for (const id of ["partial", "null", "wrong-type"]) {
+    expect(registry.find(provider, "partial")?.cost).toEqual({ input: 1, output: 2 });
+    expect(registry.getError()?.match(/Skipped model/g)).toHaveLength(2);
+    for (const id of ["null", "wrong-type"]) {
       expect(registry.getError()).toContain(`Skipped model ${provider}/${id}: invalid cost.`);
     }
     expect(registry.getError()).toContain(

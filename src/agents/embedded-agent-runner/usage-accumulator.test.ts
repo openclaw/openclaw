@@ -83,8 +83,9 @@ describe("usage-accumulator", () => {
       cacheWrite1h: 3_004,
       cacheWrite5m: 2_011,
       total: 251_505,
-      costStatus: "unavailable",
     });
+    expect(run?.cost).toBeUndefined();
+    expect(run?.costStatus).toBeUndefined();
   });
 
   it("carries complete costs across attempts without claiming provider provenance", () => {

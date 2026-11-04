@@ -68,6 +68,19 @@ export const mergeUsageIntoAccumulator = (
   target.reasoningTokens += usage.reasoningTokens ?? 0;
   target.total += callTotal;
   const previous = target.cost;
+  // Never-priced complete counters can use linear catalog pricing. Partial or
+  // mixed recorded prices remain incomplete and must not be reconstructed.
+  if (
+    !unavailable &&
+    usage.cost === undefined &&
+    usage.costStatus === undefined &&
+    target.costStatus === undefined &&
+    (previous === undefined || previous === "unavailable") &&
+    USAGE_COST_COMPONENTS.every((key) => usage[key] !== undefined)
+  ) {
+    target.cost = "unavailable";
+    return;
+  }
   const cost: NonNullable<NormalizedUsage["cost"]> = {};
   for (const key of [...USAGE_COST_COMPONENTS, "total"] as const) {
     const amount =
@@ -132,10 +145,12 @@ export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | un
     return undefined;
   }
   const derivedTotal = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  const completeUnpricedCounters = usage.cost === "unavailable" && usage.costStatus === undefined;
   return {
     ...(usage.usageReport ? { usageReport: usage.usageReport } : {}),
-    input: usage.usageReport ? usage.input : usage.input || undefined,
-    output: usage.usageReport ? usage.output : usage.output || undefined,
+    input: usage.usageReport || completeUnpricedCounters ? usage.input : usage.input || undefined,
+    output:
+      usage.usageReport || completeUnpricedCounters ? usage.output : usage.output || undefined,
     cacheRead: usage.cacheReadReported ? usage.cacheRead : usage.cacheRead || undefined,
     cacheWrite: usage.cacheWriteReported ? usage.cacheWrite : usage.cacheWrite || undefined,
     ...(usage.cacheWrite1h !== undefined ? { cacheWrite1h: usage.cacheWrite1h } : {}),

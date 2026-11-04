@@ -751,10 +751,10 @@ it("keeps the latest logs when transcript timestamps are out of order", async ()
 });
 it.each<PricingCase>([
   ["top-level usage", 0.0021, flatPricing, undefined, breakdown(0.001, 0.001, 0.0001), "top-level"],
-  ["unknown zero", undefined, undefined, { total: 0 }],
+  ["recorded zero", 0, undefined, { total: 0 }],
   ["zero pricing", 0, zeroPricing, { total: 0 }],
   ["interrupted placeholder", undefined, zeroPricing, { total: 0 }, undefined, "unavailable"],
-  ["interrupted billing", undefined, undefined, interimBill, undefined, "unavailable"],
+  ["interrupted billing", 0.001, undefined, interimBill, undefined, "unavailable"],
   // A later catalog cannot recover the recorded call's service tier.
   ["flat estimate survives tiers", 0.001, tieredPricing, { total: 0.001 }],
   ["priority estimate survives tiers", 0.0084, tieredPricing, priorityBill, priorityParts],
@@ -795,7 +795,7 @@ it.each<PricingCase>([
     ]);
 
     const summary = await loadSessionCostSummary(params);
-    // A turn with unknown usage adds no tokens, cost or missing-cost entry.
+    // Unavailable token accounting contributes no tokens; billed amounts survive independently.
     expect(summary).toMatchObject({
       totalTokens: usageUnavailable ? 0 : 1_700,
       missingCostEntries: expectedCost === undefined && !usageUnavailable ? 1 : 0,
@@ -807,7 +807,9 @@ it.each<PricingCase>([
 
     const series = await loadSessionUsageTimeSeries(params);
     expect(series?.points).toMatchObject(
-      usageUnavailable ? [] : [{ totalTokens: 1_700, cost: expect.closeTo(expectedCost ?? 0, 8) }],
+      usageUnavailable && expectedCost === undefined
+        ? []
+        : [{ totalTokens: usageUnavailable ? 0 : 1_700, cost: expectedCost }],
     );
   },
 );

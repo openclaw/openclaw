@@ -50,7 +50,7 @@ export const parseUsageCostTranscriptRecord = (
   const reported =
     usageRaw?.usageReport?.state === "unavailable"
       ? usageRaw.cost?.totalOrigin === "provider-billed"
-        ? { cost: usageRaw.cost }
+        ? { usageReport: usageRaw.usageReport, cost: usageRaw.cost }
         : undefined
       : usageRaw;
   const usage = reported ? (normalizeUsage(reported) ?? undefined) : undefined;

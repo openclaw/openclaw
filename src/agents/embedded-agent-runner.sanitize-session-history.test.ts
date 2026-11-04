@@ -322,8 +322,8 @@ describe("sanitizeSessionHistory", () => {
   it("preserves unknown cost when token fields already match", async () => {
     const usage = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10 };
     const out = await sanitize([user("question"), { ...textAssistant("answer"), usage }]);
-    expect((out[1] as AssistantMessage).usage).toEqual(usage);
-    expect((out[1] as AssistantMessage).usage.cost).toBeUndefined();
+    expect((out[1] as AssistantMessage).usage).toEqual({ ...usage, cost: {} });
+    expect((out[1] as AssistantMessage).usage.cost.total).toBeUndefined();
   });
 
   it("keeps fresh usage after compaction timestamp in summary-first ordering", async () => {

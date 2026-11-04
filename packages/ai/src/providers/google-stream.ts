@@ -176,6 +176,7 @@ export async function consumeGoogleGenerateContentStream(params: {
         usageReport: {
           state:
             sawTerminalReason ||
+            (!chunk.candidates?.[0] && chunk.promptFeedback) ||
             chunk.candidates?.some(
               (candidate) =>
                 candidate.finishReason && candidate.finishReason !== "FINISH_REASON_UNSPECIFIED",

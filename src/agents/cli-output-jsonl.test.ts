@@ -310,7 +310,10 @@ describe("parseCliJsonl", () => {
     });
     // Every write in this turn used the 1h TTL; the CLI reports costUSD 0.40499 for it.
     const opus48 = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
-    expect(calculateUsageCost(output.diagnosticUsage ?? {}, opus48).total).toBeCloseTo(0.40499, 8);
+    const estimate = calculateUsageCost(output.diagnosticUsage ?? {}, opus48);
+    expect(estimate.cacheRead).toBeUndefined();
+    expect(estimate.total).toBeUndefined();
+    expect(estimate.input! + estimate.output! + estimate.cacheWrite!).toBeCloseTo(0.40499, 8);
   });
 
   it("keeps subagent thinking, tools, and messages out of the parent lane", () => {

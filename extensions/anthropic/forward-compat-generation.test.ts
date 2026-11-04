@@ -31,6 +31,7 @@ it.each([
 it("clones released snapshot ids from their dateless manifest template", () => {
   expect(resolveModel("claude-haiku-4-5-20251001")).toEqual(
     makeModel("claude-haiku-4-5-20251001", {
+      cost: undefined,
       mediaInput: { image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" } },
       compat: { codeMode: "capable" },
       // The Anthropic catalog declares one developer for every model it serves.

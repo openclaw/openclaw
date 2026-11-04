@@ -251,7 +251,6 @@ function buildRoutedModel(
   const supportedReasoningEfforts = normalizeClawRouterReasoningEfforts(
     row?.supportedReasoningEfforts,
   );
-  const pricing = asOptionalRecord(row?.pricing);
   const native = asOptionalRecord(row?.nativeCapabilities);
   const responses = asOptionalRecord(asOptionalRecord(native?.endpoints)?.responses);
   const supportsHostedWebSearch =
@@ -321,6 +320,7 @@ function buildRoutedModel(
     upstreamModel = upstream;
   } else if (cohereChat) {
     api = "openai-completions";
+    endpoint = cohereChat.endpoint;
     baseUrl = cohereChat.url.slice(0, -"/chat/completions".length);
     upstreamModel = upstream;
   } else if (provider.id === "cohere") {
@@ -365,6 +365,13 @@ function buildRoutedModel(
     upstreamModel = upstream;
   }
 
+  const endpointPricing = asOptionalRecord(row?.endpointPricing);
+  // A present endpoint card owns pricing, including an explicitly unpriced null.
+  const pricing = asOptionalRecord(
+    endpoint && endpointPricing && Object.hasOwn(endpointPricing, endpoint)
+      ? asOptionalRecord(endpointPricing[endpoint])?.pricing
+      : row?.pricing,
+  );
   const endpointFacts =
     native?.version === "clawrouter.native-capabilities.v1" && endpoint
       ? asOptionalRecord(asOptionalRecord(native.endpoints)?.[endpoint])

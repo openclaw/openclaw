@@ -1,12 +1,28 @@
-import {
-  CATALOG_DISCOVERY_CONTRACTS,
-  type CatalogDiscoveryProvider,
-} from "./catalog-discovery-contracts.js";
+import type { CatalogDiscoveryProvider } from "./catalog-discovery-contracts.js";
+
+// Published wire fixtures stay independent of the production selector table.
+export const DISCOVERY_CONTRACTS = {
+  cerebras: { endpoint: "public_models", format: "cerebras.public_catalog", manifestOnly: true },
+  nvidia: { endpoint: "public_models", format: "nvidia.public_catalog", manifestOnly: true },
+  chutes: { endpoint: "models_list", format: "chutes.models" },
+  venice: { endpoint: "models_list", format: "venice.models" },
+  baseten: { endpoint: "models_list", format: "baseten.models" },
+  arcee: { endpoint: "models_list", format: "arcee.models" },
+  novita: { endpoint: "models_list", format: "novita.models" },
+  featherless: { endpoint: "catalog", format: "featherless.catalog", manifestOnly: true },
+  deepinfra: { endpoint: "models_list", format: "openai.models" },
+  bifrost: { endpoint: "models_list", format: "openai.models" },
+  litellm: { endpoint: "models_list", format: "openai.models" },
+  requesty: { endpoint: "models_managed", format: "requesty.models_managed" },
+} satisfies Record<
+  CatalogDiscoveryProvider,
+  { endpoint: string; format: string; manifestOnly?: true }
+>;
 
 export const DISCOVERY_BASE = "https://clawrouter.example";
 export const DISCOVERY_ID = "Fixture/Alias";
-export const DISCOVERY_PROVIDERS = Object.keys(CATALOG_DISCOVERY_CONTRACTS).filter(
-  (id): id is CatalogDiscoveryProvider => id in CATALOG_DISCOVERY_CONTRACTS,
+export const DISCOVERY_PROVIDERS = Object.keys(DISCOVERY_CONTRACTS).filter(
+  (id): id is CatalogDiscoveryProvider => id in DISCOVERY_CONTRACTS,
 );
 
 export function discoveryPayload(provider: CatalogDiscoveryProvider, empty = false) {
@@ -62,7 +78,7 @@ export function discoveryCatalog(
   provider: CatalogDiscoveryProvider,
   routeKind: "native" | "manifest" = "manifest",
 ) {
-  const contract = CATALOG_DISCOVERY_CONTRACTS[provider];
+  const contract = DISCOVERY_CONTRACTS[provider];
   const path = provider === "requesty" ? "/models/managed" : "/models";
   const route =
     routeKind === "native"

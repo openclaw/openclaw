@@ -5,12 +5,10 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import {
-  CATALOG_DISCOVERY_CONTRACTS,
-  type CatalogDiscoveryProvider,
-} from "./catalog-discovery-contracts.js";
+import type { CatalogDiscoveryProvider } from "./catalog-discovery-contracts.js";
 import {
   DISCOVERY_BASE,
+  DISCOVERY_CONTRACTS,
   DISCOVERY_ID,
   DISCOVERY_PROVIDERS,
   discoveryCatalog,
@@ -114,7 +112,7 @@ function fixture(family: CatalogDiscoveryProvider, kind: "native" | "manifest" =
 }
 
 const routes = DISCOVERY_PROVIDERS.flatMap((family) =>
-  ("manifestOnly" in CATALOG_DISCOVERY_CONTRACTS[family]
+  ("manifestOnly" in DISCOVERY_CONTRACTS[family]
     ? ["manifest" as const]
     : ["manifest" as const, "native" as const]
   ).map((kind) => ({ family, kind })),

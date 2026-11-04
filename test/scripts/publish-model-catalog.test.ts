@@ -267,8 +267,6 @@ describe("publish model catalog", () => {
       expect(resolveModelCostConfig({ ...params, model })).toEqual({
         input: 0,
         output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
       });
     }
     expect(resolveModelCostConfig({ ...params, model: "qualified" })).toBeUndefined();

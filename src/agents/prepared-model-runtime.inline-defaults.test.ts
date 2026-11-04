@@ -28,7 +28,7 @@ const expectedDefaults = {
   ...exact,
   reasoning: false,
   input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  cost: undefined,
 };
 
 it.each([false, true])("selects rows before applying defaults (duplicate: %s)", (duplicate) => {
@@ -53,7 +53,7 @@ it.each([false, true])("selects rows before applying defaults (duplicate: %s)", 
         ...expectedDefaults,
         reasoning: true,
         input: ["image"],
-        cost: { input: 7, output: 8, cacheRead: 0.5, cacheWrite: 0 },
+        cost: { input: 7, output: 8, cacheRead: 0.5 },
       }
     : expectedDefaults;
   const provider = { api: "openai-completions" as const, baseUrl: "https://fixture.invalid/v1" };
