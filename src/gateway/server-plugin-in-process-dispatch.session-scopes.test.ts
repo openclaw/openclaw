@@ -500,7 +500,7 @@ describe("independent session creation tool", () => {
 
   it("starts an agent-authored initial brief, never a direct human command", () =>
     withHostedCreation(async ({ toolCreate }) => {
-      const args = { message: "/reset is an example to investigate, not a command" };
+      const args = { message: "    /reset is an example to investigate, not a command\n" };
       const first = await toolCreate(args);
       expect(first.details).toMatchObject({ runStarted: true, runId: "scope-independent-run" });
       expect(kickoff.internal).toHaveBeenCalledTimes(1);

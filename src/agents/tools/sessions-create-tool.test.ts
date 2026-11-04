@@ -84,7 +84,7 @@ describe("sessions_create", () => {
     await createFromChannel(
       {},
       {
-        sessionPermissionPolicy: { mode: "guarded" },
+        sessionPermissionPolicy: { root: "/workspace", mode: "guarded" },
         inheritedToolDenylist: ["exec"],
       },
     );

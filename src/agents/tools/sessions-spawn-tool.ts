@@ -13,10 +13,6 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
-import {
-  mergeAcceptedSessionSpawnsForRun,
-  normalizeAcceptedSessionSpawnResult,
-} from "../accepted-session-spawn.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -67,7 +63,6 @@ import {
 } from "./gateway-caller-context.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
-  recordSessionToolActionFact,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
 } from "./sessions-helpers.js";
@@ -82,6 +77,7 @@ import {
 import { resolveSessionsSpawnAcpUnavailableMessage } from "./sessions-spawn-acp-availability.js";
 import { describeSessionsSpawnAgentId } from "./sessions-spawn-agent-id.js";
 import type { SessionsSpawnToolOptions } from "./sessions-spawn-options.js";
+import { recordAcceptedSessionSpawn } from "./sessions-spawn-receipt.js";
 import { resolveSessionsSpawnThreadAvailability } from "./sessions-spawn-thread-availability.js";
 import { maybeSpawnVisibleSession } from "./sessions-spawn-visible.js";
 import { SESSIONS_SPAWN_SESSION_SCHEMA } from "./sessions-spawn-visible.schema.js";
@@ -101,31 +97,6 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "reply_to",
 ] as const;
 const loadAcpSpawnModule = createLazyPromise(() => import("../subagents/spawn/acp-spawn.js"));
-
-function recordAcceptedSessionSpawn(
-  result: Record<string, unknown>,
-  context: "fork" | "isolated" | undefined,
-): void {
-  const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
-  const accepted = normalizeAcceptedSessionSpawnResult({ details: result });
-  if (instance && accepted) {
-    mergeAcceptedSessionSpawnsForRun(instance, [accepted]);
-  }
-  const childSessionKey =
-    typeof result.childSessionKey === "string" ? result.childSessionKey.trim() : "";
-  const targetAgentId = childSessionKey
-    ? parseAgentSessionKey(childSessionKey)?.agentId
-    : undefined;
-  if (result.status !== "accepted" || !childSessionKey || !targetAgentId || !context) {
-    return;
-  }
-  recordSessionToolActionFact({
-    operation: context === "fork" ? "fork" : "create",
-    fact: "committed",
-    targetAgentId,
-    targetSessionKey: childSessionKey,
-  });
-}
 
 const createSessionsSpawnToolSchema = createCachedToolSchema({
   build: buildSessionsSpawnToolSchema,
@@ -417,7 +388,11 @@ export function createSessionsSpawnTool(
             `sessions_spawn does not support "${unsupportedTimeoutParam}". Use "runTimeoutSeconds" for a per-run timeout.`,
           );
         }
-        const task = readToolStringParam(params, "task", { required: !opts?.independent }) ?? "";
+        const task =
+          readToolStringParam(params, "task", {
+            required: !opts?.independent,
+            trim: !opts?.independent,
+          }) ?? "";
         const runTimeoutSeconds = readNonNegativeIntegerParam(params, "runTimeoutSeconds");
         const taskNameResult = normalizeSubagentTaskName(params.taskName);
         if (taskNameResult.error) {

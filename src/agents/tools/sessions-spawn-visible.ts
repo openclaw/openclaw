@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { Value } from "typebox/value";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { SessionsDispatchResult } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
-import type { CyberAccessProgram } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { readChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -67,7 +66,7 @@ import {
   type InProcessGatewayCaller,
 } from "./in-process-gateway.js";
 import { startVisibleCloudSession } from "./sessions-spawn-cloud.js";
-import type { SessionsSpawnToolOptions } from "./sessions-spawn-options.js";
+import type { VisibleSessionSpawnParams } from "./sessions-spawn-options.js";
 import {
   cleanupVisibleSpawnSession,
   summarizeVisibleSessionSpawnError,
@@ -79,24 +78,9 @@ import {
   validateVisibleSpawnOptions,
 } from "./sessions-spawn-visible.schema.js";
 
-type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {
-  onSpawnEffectsStart?: () => void;
-  assertActive?: () => void;
-};
-
-export async function maybeSpawnVisibleSession(params: {
-  raw: Record<string, unknown>;
-  task: string;
-  taskName?: string;
-  label: string;
-  runtime: "subagent" | "acp";
-  requestedAgentId?: string;
-  runTimeoutSeconds?: number;
-  sandbox: "inherit" | "require";
-  expectsCompletionMessage: boolean;
-  cyberAccessProgram?: CyberAccessProgram;
-  options?: VisibleSessionsSpawnOptions;
-}): Promise<Record<string, unknown> | undefined> {
+export async function maybeSpawnVisibleSession(
+  params: VisibleSessionSpawnParams,
+): Promise<Record<string, unknown> | undefined> {
   const promptedAt = Date.now();
   // sessions_create shares this owner's admission and containment, not its supervision.
   const independent = params.options?.independent === true;
@@ -482,14 +466,25 @@ export async function maybeSpawnVisibleSession(params: {
         ...(worktreeBaseRef ? { worktreeBaseRef } : {}),
       };
       response = await runWithAgentToolSourceExecutionScope(assertActive, () =>
-        // Placement and sessions_create fence cancellation before the creation commit.
-        placement || independent
-          ? createGatewayCall("sessions.create", createParams, {
-              signal: params.options?.signal,
-              sessionMutationCommitGuard: assertActive,
-              timeoutMs: null,
-            })
-          : createGatewayCall("sessions.create", createParams),
+        // Placement fences the whole request; independent sessions fence only the commit.
+        // Once committed, the session owns its opening run and receipt.
+        createGatewayCall(
+          "sessions.create",
+          createParams,
+          placement
+            ? {
+                signal: params.options?.signal,
+                sessionMutationCommitGuard: assertActive,
+                timeoutMs: null,
+              }
+            : independent
+              ? {
+                  revalidateOnCompletion: false,
+                  requesterCommitGuard: assertActive,
+                  timeoutMs: null,
+                }
+              : undefined,
+        ),
       );
     } catch (error) {
       const missingScope = readMissingScopeErrorDetails(
