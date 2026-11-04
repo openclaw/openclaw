@@ -57,6 +57,9 @@ const ownerFacet = (id: string, label: string, type: "human" | "agent" = "human"
   id,
   identity: { type: type === "human" ? "profile" : "agent", id },
   label,
+  ...(type === "human"
+    ? { avatarUrl: "/api/users/" + encodeURIComponent(id) + "/avatar?v=42" }
+    : {}),
 });
 const adaOwner = {
   ...ownerFacet("profile-ada", "Ada"),
@@ -443,6 +446,7 @@ it("associates a required spawn creator without inventing profile contributions 
     id: "former",
     identity: { type: "profile", id: "current" },
     label: "Current",
+    avatarUrl: "/api/users/current/avatar?v=1",
   };
   expect(all.sessions.find((row) => row.key === childKey)).toMatchObject({
     createdActor: creator,
@@ -460,7 +464,11 @@ it("associates a required spawn creator without inventing profile contributions 
   expect(unqualified?.owner).toBeUndefined();
   const involving = await listSessionFixture({ ...query, involvingActorId: "current" });
   expect(keys(involving)).toEqual(["agent:main:historical", childKey]);
-  const current = { ...profileParticipant("current"), label: "Current" };
+  const current = {
+    ...profileParticipant("current"),
+    label: "Current",
+    avatarUrl: "/api/users/current/avatar?v=1",
+  };
   expect(involving.sessions[0]?.participants).toEqual([current]);
   expect(involving.people).toEqual([{ ...current, sessionCount: 2 }]);
   const ownerFirst = await listSessionFixture({

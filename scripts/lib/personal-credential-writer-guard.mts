@@ -95,10 +95,13 @@ const publicationWriters = new Map<string, readonly string[]>([
     key(sharedPublication, "writeGitHubPublicationExecutionInDatabase"),
     [key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase")],
   ],
+  [
+    key(personalPublication, "requirePersonalGitHubPublicationConfirmationInDatabase"),
+    [key(personalPublication, "githubPublications.personalRestart")],
+  ],
   ...[
     "claimPersonalGitHubPublicationInDatabase",
     "writePersonalGitHubPublicationInDatabase",
-    "requirePersonalGitHubPublicationConfirmationInDatabase",
     "markPersonalGitHubPublicationReportedInDatabase",
   ].map((name): [string, string[]] => [
     key(personalPublication, name),
@@ -540,6 +543,16 @@ const callers = new Map<string, readonly string[]>([
     [key("src/config/sessions/session-sharing-store.worker.ts", "bindSqliteWorkerBackend/execute")],
   ]),
   [
+    key(sessionMembers, "addSessionMemberInTransaction"),
+    [
+      key(sessionMembers, "addSessionMember"),
+      key(
+        "src/config/sessions/session-accessor.sqlite-involvement.worker.ts",
+        "updateSessionProfileInvolvementInTransaction",
+      ),
+    ],
+  ],
+  [
     key(sessionArtifacts, "clearSessionCollaborationForKey"),
     [
       key(
@@ -712,7 +725,7 @@ const sinks = new Map<string, number>([
     ),
     2,
   ],
-  ...["addSessionMember", "removeSessionMember"].map((name): [string, number] => [
+  ...["addSessionMemberInTransaction", "removeSessionMember"].map((name): [string, number] => [
     key(sessionMembers, name),
     1,
   ]),

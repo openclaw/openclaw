@@ -17,6 +17,7 @@ import { createAssistantOutput } from "../transports/assistant-output.js";
 import { buildGuardedModelFetch } from "../transports/host-policy.js";
 import { parseJsonPreservingUnsafeIntegers } from "../transports/json-unsafe-integers.js";
 import {
+  awaitProviderLifecycleCallback,
   failTransportStream,
   iterateSseFrames,
   notifyProviderHttpResponse,
@@ -42,6 +43,7 @@ import {
   type GoogleInteractionsRequestBody,
 } from "./google-interactions-request.js";
 import { buildGoogleInteractionsSimpleThinking, type GoogleApiType } from "./google-shared.js";
+import { mapGoogleToolArguments } from "./google-tool-parameters.js";
 import {
   GOOGLE_VIDEO_SLOT_OMISSION,
   materializeGoogleVideoSlots,
@@ -110,7 +112,10 @@ export const streamGoogleInteractions: StreamFunction<
         : context;
       const videoSlots: GoogleVideoSlots = new Map();
       let body = buildGoogleInteractionsParams(model, providerContext, options, videoSlots);
-      const nextBody = await options?.onPayload?.(body, model);
+      const nextBody = await awaitProviderLifecycleCallback(
+        options?.onPayload ? () => options.onPayload?.(body, model) : undefined,
+        options?.signal,
+      );
       if (nextBody !== undefined) {
         if (!isGoogleInteractionsRequestBody(nextBody)) {
           throw new Error("Google Interactions onPayload returned an invalid request body");
@@ -228,6 +233,12 @@ export const streamGoogleInteractions: StreamFunction<
           if (currentBlock.partialJson?.trim()) {
             currentBlock.arguments = parseTerminalToolCallArguments(currentBlock.partialJson);
           }
+          currentBlock.arguments = mapGoogleToolArguments(
+            providerContext.tools,
+            currentBlock.name,
+            currentBlock.arguments,
+            "decode",
+          );
           delete currentBlock.partialJson;
           stream.push({
             type: "toolcall_end",
@@ -560,6 +571,7 @@ export const streamSimpleGoogleInteractions: StreamFunction<
   const videoMetadata = record.videoMetadata ?? record.video_metadata;
   return streamGoogleInteractions(model, context, {
     ...base,
+    ...(typeof record.topP === "number" ? { topP: record.topP } : {}),
     thinking: buildGoogleInteractionsSimpleThinking(model, options),
     ...(toolChoice ? { toolChoice } : {}),
     ...(videoMetadata !== undefined ? { videoMetadata } : {}),

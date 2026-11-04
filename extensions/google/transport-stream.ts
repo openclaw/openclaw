@@ -75,6 +75,7 @@ type GoogleTransportModel = ProviderModel<GoogleTransportApi> & {
 type GoogleTransportOptions = SimpleStreamOptions &
   ProviderCallStreamOptions & {
     cachedContent?: string;
+    topP?: number;
     toolChoice?:
       | "auto"
       | "none"
@@ -278,6 +279,9 @@ export function buildGoogleGenerativeAiParams(
   if (typeof options?.temperature === "number") {
     generationConfig.temperature = options.temperature;
   }
+  if (typeof options?.topP === "number") {
+    generationConfig.topP = options.topP;
+  }
   if (options?.stop !== undefined && options.stop.length > 0) {
     generationConfig.stopSequences = options.stop;
   }
@@ -291,6 +295,7 @@ export function buildGoogleGenerativeAiParams(
       (id) => (requiresGoogleToolCallId(model.id) ? normalizeToolCallId(id) : id),
       { preserveCrossModelToolCallThoughtSignature: isGoogleGemini3ThinkingLevelModel(model.id) },
     ) as ProviderContext["messages"],
+    tools: context.tools,
     replay: "managed",
     requiresToolCallSignature: isGoogleGemini3ThinkingLevelModel(model.id),
     videoPart: (video) =>
@@ -651,6 +656,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           chunks: sse.chunks,
           model: canonicalModel,
           output,
+          tools: providerContext.tools,
           stream,
           signal: options?.signal,
           nextToolCallId: (name) => `${name || "tool"}_${Date.now()}_${++toolCallCounter}`,

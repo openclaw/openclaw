@@ -56,10 +56,10 @@ export async function requestExecHostViaSocket(params: {
   if (!socketPath || !token) {
     return null;
   }
-  // Zero disables both command and response deadlines.
+  // Zero and null (Gateway no expiry) disable deadlines; undefined keeps the default.
   const timeoutMs =
     params.timeoutMs ??
-    (request.timeoutMs === 0
+    (request.timeoutMs !== undefined && (request.timeoutMs ?? 0) === 0
       ? 0
       : addTimerTimeoutGraceMs(request.timeoutMs, EXEC_HOST_RESPONSE_GRACE_MS)) ??
     20_000;

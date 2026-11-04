@@ -11,7 +11,6 @@ import { resolveWidgetPresenters } from "../plugins/widget-presenters.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import { resolveSkillWorkshopToolConstructionBlock } from "../skills/workshop/tool-availability.js";
 import { hasMultipleSessionSharingIdentitiesNative } from "../state/user-profile-list.native.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { hasConfiguredWebSearchProvider } from "../web-search/runtime.js";
@@ -89,7 +88,7 @@ import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
-import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
+import { createSkillLibraryTool } from "./tools/skill-library-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
@@ -248,8 +247,11 @@ function* createOpenClawToolsSteps(
     widgetPresenters,
     widgetPresenterContext,
   );
+  // Scheduled runs must not borrow a remembered client as an inline renderer.
+  const scheduledCaller = Boolean(options?.gatewayCallerScheduled || options?.scheduledToolTargets);
+  const widgetClientCaps = scheduledCaller ? options?.clientCaps : options?.listingClientCaps;
   const inlineWidgetClientAvailable =
-    (options?.listingClientCaps ?? options?.clientCaps)?.includes("inline-widgets") === true;
+    (widgetClientCaps ?? options?.clientCaps)?.includes("inline-widgets") === true;
   const sessionKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const deliveryContext = {
@@ -428,11 +430,7 @@ function* createOpenClawToolsSteps(
     denylist: explicitFactoryDenylist,
   });
   const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
-  // Admitted Control UI recovery and explicitly capped scheduled turns can
-  // keep authoring their durable board without claiming an inline renderer.
-  // A run admitted with scheduled tool targets is a scheduled turn on every runtime.
-  const scheduledCaller =
-    options?.gatewayCallerScheduled === true || scheduledTargets !== undefined;
+  // Authorized recovery and capped scheduled turns can author boards without an inline renderer.
   const pinnedWidgetAuthoringAdmitted =
     (options?.pinnedWidgetAuthoring === true ||
       (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
@@ -589,19 +587,7 @@ function* createOpenClawToolsSteps(
     ...[createGetGoalTool, createCreateGoalTool, createUpdateGoalTool].map((createTool) =>
       createTool({ ...options, sessionAgentId }),
     ),
-    resolveSkillWorkshopToolConstructionBlock({
-      sandboxed: options?.sandboxed,
-      libraryAuthoring: options?.skillWorkshop?.libraryAuthoring,
-    }) || !resolvedConfig
-      ? null
-      : createConfiguredSkillWorkshopTool({
-          config: resolvedConfig,
-          agentId: sessionAgentId,
-          sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-          runId: options?.runId,
-          run: options?.skillWorkshop,
-          sandboxed: options?.sandboxed,
-        }),
+    options?.skillLibraryAuthoring ? createSkillLibraryTool(options.skillLibraryAuthoring) : null,
     progressCardTool,
     ...swarmToolGroups.structuredOutput,
     ...(

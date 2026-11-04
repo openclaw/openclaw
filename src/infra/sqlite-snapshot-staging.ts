@@ -1,10 +1,6 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
-import { getChildLogger } from "../logging/logger.js";
 import { tryReadDiskSpace } from "./disk-space.js";
-import { formatErrorMessage } from "./errors.js";
 import {
   isPrivateDirectoryCreationRefused,
   markPrivateDirectoryCreationRefused,
@@ -26,31 +22,9 @@ import { sqliteSnapshotSourceFileSize } from "./sqlite-snapshot-policy.js";
 import {
   acquireSqliteSnapshotToken as snapshotToken,
   beginSqliteSnapshotRetirement,
-  isSqliteSnapshotStagingName as isStagingName,
-  SQLITE_SNAPSHOT_LEGACY_AGE_MS as legacyAgeMs,
-  SQLITE_SNAPSHOT_LEGACY_MARKER as legacyMarker,
   SQLITE_SNAPSHOT_PREFIX as prefix,
 } from "./sqlite-snapshot-retirement.js";
 import type { SqliteStagingToken as SnapshotToken } from "./sqlite-staging-token.js";
-
-const currentAgeMs = 15 * 60 * 1000;
-const reclamationByteBudget = 512 * 1024 * 1024;
-
-export function sqliteSnapshotStagingParent(root: string): string | undefined {
-  const parent = path.basename(root) === "openclaw" ? path.dirname(root) : root;
-  return isStagingName(path.basename(parent)) ? parent : undefined;
-}
-
-export function warnSqliteSnapshotReclamation(message: string, error?: unknown): void {
-  try {
-    getChildLogger({ subsystem: "infra/sqlite-snapshot" }).warn(
-      { errorCode: extractErrorCode(error) },
-      message,
-    );
-  } catch {
-    // Cleanup diagnostics must not prevent inspection or startup.
-  }
-}
 
 /** A private reader protects its bytes independently of the staging child. */
 export function acquireSqliteSnapshotReadToken(directory: string): () => void {
@@ -65,67 +39,11 @@ export function reconcileSqliteSnapshotRetirement(directory: string): void {
   // Explicit retirement has confirmed owner exit; nested legacy layouts keep their age clamp.
   const retirement = beginSqliteSnapshotRetirement(directory, { cutoff: Number.POSITIVE_INFINITY });
   try {
-    retireSqliteSnapshotPayload(retirement);
+    for (const _ of retireSqliteSnapshotPayload(retirement)) {
+      // Synchronous reconciliation keeps the token until all bounded steps settle.
+    }
   } finally {
     retirement.release();
-  }
-}
-
-export function* reclaimAbandonedSqliteSnapshots(
-  root: string,
-  report = warnSqliteSnapshotReclamation,
-): Generator<void> {
-  if (sqliteSnapshotStagingParent(root)) {
-    return;
-  }
-  try {
-    let admittedBytes = 0;
-    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (admittedBytes >= reclamationByteBudget) {
-        report("Stopped SQLite snapshot reclamation: byte budget exhausted for this pass.");
-        break;
-      }
-      const legacy = legacyMarker.test(entry.name);
-      if (!entry.isDirectory() || !isStagingName(entry.name)) {
-        continue;
-      }
-      const directory = path.join(root, entry.name);
-      let retirement: ReturnType<typeof beginSqliteSnapshotRetirement> | undefined;
-      try {
-        retirement = beginSqliteSnapshotRetirement(directory, {
-          cutoff: Date.now() - (legacy ? legacyAgeMs : currentAgeMs),
-        });
-        const { bytes } = retirement;
-        // Admit one oversized directory before spending the pass budget; otherwise
-        // interrupted multi-gigabyte copies can never be reclaimed.
-        if (admittedBytes > 0 && bytes > reclamationByteBudget - admittedBytes) {
-          throw new Error("Snapshot reclamation byte budget exhausted for this pass");
-        }
-        admittedBytes += bytes;
-        retireSqliteSnapshotPayload(retirement);
-        const claimed = path.join(
-          root,
-          `${legacy ? `openclaw-sqlite-readonly-${process.pid}-` : prefix}${randomUUID()}`,
-        );
-        fs.renameSync(directory, claimed);
-        if (!removeTempDirectory(claimed)) {
-          throw new Error("Snapshot removal failed; check private cache permissions");
-        }
-        report(`Reclaimed ${bytes} bytes of interrupted SQLite snapshot data.`);
-      } catch (error) {
-        report(`Skipped SQLite snapshot reclamation: ${formatErrorMessage(error)}`, error);
-      } finally {
-        try {
-          retirement?.release();
-        } catch (error) {
-          report("SQLite snapshot token close failed; retaining native cleanup custody.", error);
-        }
-      }
-      // Yield only after retirement, removal, and token release settle together.
-      yield;
-    }
-  } catch (error) {
-    report("SQLite snapshot reclamation failed; check private cache permissions.", error);
   }
 }
 

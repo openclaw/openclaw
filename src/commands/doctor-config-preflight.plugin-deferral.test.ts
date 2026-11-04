@@ -702,6 +702,52 @@ module.exports.stateMigrations = ${JSON.stringify(actions)}.map(action => ({
       expect(checked.valid).toBe(true);
     }));
 
+  it("promotes heartbeat config when update Doctor rewrites only retained obligation guidance", () =>
+    withFixture(async (f) => {
+      await f.stateless();
+      const config = {
+        ...f.config({ region: "us-en" }, [f.root]),
+        agents: {
+          defaults: { heartbeat: { agentId: "main", every: "30m" } },
+          entries: { main: { workspace: path.join(f.home, "workspace") } },
+        },
+      };
+      await f.write(config);
+      await recordDeferredPluginMigrations({
+        pending: [
+          {
+            pluginId: f.pluginId,
+            reason:
+              "Package convergence must wait until the updating parent releases its install records.",
+            command: "openclaw update repair",
+            requiresStateMigration: true,
+            configPaths: [["plugins", "entries", f.pluginId, "config"]],
+          },
+        ],
+      });
+      await seedInstalledPluginIndex(
+        {
+          [f.pluginId]: { source: "path", sourcePath: f.root, installPath: f.root },
+        },
+        { config },
+      );
+
+      await withEnvAsync(updating, async () => {
+        const result = await doctor();
+        expect(result.snapshot.valid).toBe(true);
+        f.pending({
+          requiresStateMigration: true,
+          command: "openclaw doctor --fix",
+          reason: expect.stringContaining("has not confirmed"),
+        });
+        expect(await f.read()).not.toHaveProperty("agents.defaults.heartbeat");
+        expect((await f.read()).plugins.entries[f.pluginId].config).toEqual({ region: "us-en" });
+        // update repair invokes the same candidate Doctor with the same parent markers.
+        expect((await doctor()).snapshot.valid).toBe(true);
+      });
+      expect((await withEnvAsync(notUpdating, () => doctor())).snapshot.valid).toBe(true);
+    }));
+
   it.each(["public-setup-full-detector", "broken"] as const)(
     "inspects retained obligations through the %s contract",
     (contract) =>

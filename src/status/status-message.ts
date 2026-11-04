@@ -9,6 +9,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { MediaUnderstandingDecision } from "../../packages/media-understanding-common/src/types.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
@@ -16,6 +17,7 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -61,7 +63,6 @@ import {
   findDecisionReason,
   summarizeDecisionReason,
 } from "../media-understanding/runner.entries.js";
-import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
@@ -505,18 +506,38 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const activeModelProvider = runtimeAliasModelEquivalent
     ? selectedLookupProvider
     : contextLookupProvider;
-  const selectedContextTokens = resolveContextTokensForModel({
+  const selectedCatalogEntry = findModelInCatalog(
+    args.thinkingCatalog ?? [],
+    selectedLookupProvider,
+    selectedLookupModel,
+  );
+  const selectedWindow = resolveModelContextWindowProfile({
+    catalogEntry: selectedCatalogEntry ?? { contextWindow: args.selectedContextWindow },
+    selected: entry?.contextWindow,
+  });
+  const resolvedSelectedContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     provider: selectedLookupProvider,
     model: selectedLookupModel,
-    modelContextWindow: args.selectedContextWindow,
+    modelContextWindow: selectedWindow.contextTokens,
     modelContextTokens: args.selectedContextTokens,
     allowAsyncLoad: false,
     allowCacheLookup: false,
   });
+  const selectedContextTokens =
+    selectedWindow.contextWindow && selectedWindow.contextTokens !== undefined
+      ? Math.min(
+          resolvedSelectedContextTokens ?? selectedWindow.contextTokens,
+          selectedWindow.contextTokens,
+        )
+      : resolvedSelectedContextTokens;
   const activeCatalogEntry = contextLookupProvider
     ? findModelInCatalog(args.thinkingCatalog ?? [], contextLookupProvider, contextLookupModel)
     : undefined;
+  const activeWindow = resolveModelContextWindowProfile({
+    catalogEntry: activeCatalogEntry,
+    selected: entry?.contextWindow,
+  });
   const activeModelMatchesPreparedIdentity =
     normalizeLowercaseStringOrEmpty(contextLookupProvider) ===
       normalizeLowercaseStringOrEmpty(modelRefs.active.provider) &&
@@ -528,12 +549,12 @@ export function buildStatusMessageParts(args: StatusArgs) {
       normalizeLowercaseStringOrEmpty(modelRefs.active.provider)
       ? (args.runtimeContextProvider ?? contextLookupProvider)
       : contextLookupProvider;
-  const activeContextTokens = resolveContextTokensForModel({
+  const resolvedActiveContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     ...(activeContextProvider ? { provider: activeContextProvider } : {}),
     modelProvider: contextLookupProvider,
     model: contextLookupModel,
-    modelContextWindow: activeCatalogEntry?.contextWindow,
+    modelContextWindow: activeWindow.contextTokens,
     modelContextTokens:
       activeCatalogEntry?.contextTokens ??
       (activeCatalogEntry || activeModelMatchesPreparedIdentity
@@ -542,6 +563,13 @@ export function buildStatusMessageParts(args: StatusArgs) {
     allowAsyncLoad: false,
     allowCacheLookup: false,
   });
+  const activeContextTokens =
+    activeWindow.contextWindow && activeWindow.contextTokens !== undefined
+      ? Math.min(
+          resolvedActiveContextTokens ?? activeWindow.contextTokens,
+          activeWindow.contextTokens,
+        )
+      : resolvedActiveContextTokens;
   const channelOverride =
     args.config &&
     entry &&

@@ -58,7 +58,7 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { formatSchemaMigrationFailure, SCHEMA_RECOVERY } from "./schema-migration-diagnostics.js";
 import {
   backupDoctorSqliteRepair,
-  repairDoctorSqliteIndexCorruption,
+  repairDoctorSqliteIndexCorruptionAsync,
 } from "./sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
@@ -73,6 +73,7 @@ import { formatAgentDatabaseCorruptionRepairHint } from "./state-migrations.agen
 import { recoverMisplacedAgentDatabaseCopies } from "./state-migrations.agent-owner-recovery.js";
 import { migrateTranscriptArchive } from "./state-migrations.media-persistence-archive-source.js";
 import {
+  mediaRowsNeedMigration,
   scanTranscriptRows,
   scanTrajectoryRows,
 } from "./state-migrations.media-persistence-database.js";
@@ -177,6 +178,20 @@ async function migrateAgentDatabase(params: {
       invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(params.pathname);
     }
     const initialVersion = params.migratedFromVersion ?? userVersion;
+    let preserved = false;
+    const prepareRewrite = async () => {
+      if (!preserved) {
+        const backup = await backupDoctorSqliteRepair(params.pathname, "media-persistence");
+        assertAgentDatabaseMaintenanceAuthority(params.maintenance);
+        preserved = true;
+        params.changes.push(`Saved pre-repair SQLite backup: ${backup}`);
+      }
+    };
+    // The prerequisite can add derived schema before media rows are scanned.
+    if (userVersion <= PREVIOUS_MEDIA_SCHEMA_VERSION) {
+      assertAgentDatabaseMaintenanceAuthority(params.maintenance);
+      await prepareRewrite();
+    }
     const prepareSchema = async () => {
       userVersion = readSqliteUserVersion(database);
       if (userVersion <= PREVIOUS_MEDIA_SCHEMA_VERSION) {
@@ -219,13 +234,13 @@ async function migrateAgentDatabase(params: {
         assertAgentDatabaseMaintenanceAuthority(params.maintenance);
         assertOpenClawAgentDatabaseOwner(database, params);
       };
-      integrityChanges = repairDoctorSqliteIndexCorruption(database, params.pathname, {
+      integrityChanges = await repairDoctorSqliteIndexCorruptionAsync(database, params.pathname, {
         ftsSchemas: AGENT_FTS_SCHEMAS,
         label: `agent ${params.agentId}`,
         assertCurrent,
       });
       if (integrityChanges.length === 0) {
-        integrityChanges = repairDoctorSessionWindowOrphans(
+        integrityChanges = await repairDoctorSessionWindowOrphans(
           database,
           params.pathname,
           assertCurrent,
@@ -314,40 +329,47 @@ async function migrateAgentDatabase(params: {
     assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode);
     const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
     let rewritten = { rewrittenSessions: 0, rewrittenTrajectoryRows: 0 };
-    let preserved = false;
-    const beforeRewrite = () => {
-      if (!preserved) {
-        const backup = backupDoctorSqliteRepair(params.pathname, "media-persistence");
-        preserved = true;
-        params.changes.push(`Saved pre-repair SQLite backup: ${backup}`);
-      }
-    };
     if (mediaSchemaUpgrade || !hasMediaRowsMigrationReceipt(database)) {
       const changedLegacySessions = new Set<string>();
       const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
+      const needsRowRewrite =
+        preserved ||
+        (await mediaRowsNeedMigration(database, params.pathname, {
+          transcriptLegacyTextStorage: legacyTextStorage,
+          trajectoryLegacyTextStorage: userVersion < AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
+          signal:
+            resolveSqliteInspectionSignal(params.maintenance.signal) ?? params.maintenance.signal,
+        }));
+      // The held maintenance lease excludes supported writers through receipt publication.
+      assertAgentDatabaseMaintenanceAuthority(params.maintenance);
+      if (needsRowRewrite) {
+        await prepareRewrite();
+      }
       rewritten = runSqliteImmediateTransactionSync(
         database,
         () => {
           assertAgentDatabaseMaintenanceAuthority(params.maintenance);
           assertMediaSchemaMigration();
-          const rewrittenSessions = scanTranscriptRows({
-            database,
-            pathname: params.pathname,
-            writer: owner,
-            legacyTextStorage,
-            beforeRewrite,
-            onChangedSession: legacyTextStorage
-              ? (sessionId) => {
-                  changedLegacySessions.add(sessionId);
-                }
-              : undefined,
-          });
-          const rewrittenTrajectoryRows = scanTrajectoryRows({
-            database,
-            pathname: params.pathname,
-            legacyTextStorage: userVersion < AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
-            beforeRewrite,
-          });
+          const rewrittenSessions = needsRowRewrite
+            ? scanTranscriptRows({
+                database,
+                pathname: params.pathname,
+                writer: owner,
+                legacyTextStorage,
+                onChangedSession: legacyTextStorage
+                  ? (sessionId) => {
+                      changedLegacySessions.add(sessionId);
+                    }
+                  : undefined,
+              })
+            : 0;
+          const rewrittenTrajectoryRows = needsRowRewrite
+            ? scanTrajectoryRows({
+                database,
+                pathname: params.pathname,
+                legacyTextStorage: userVersion < AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
+              })
+            : 0;
           if (mediaSchemaUpgrade) {
             database.exec(`PRAGMA user_version = ${AGENT_MEDIA_SCHEMA_VERSION};`);
             executeSqliteQuerySync(
@@ -421,7 +443,7 @@ async function migrateAgentDatabase(params: {
       start: { generation: "", sessionId: "" },
       verification: { key: MEDIA_ARCHIVE_VERIFICATION_KEY, prepared: params.preparedArchives },
       onArchive: (archivePath) => params.canonicalArchivePaths.add(archivePath),
-      beforeRewrite,
+      prepareRewrite,
       transformLine: transformMediaArchiveContent,
     });
     refreshSqlitePlannerStatistics(database);
