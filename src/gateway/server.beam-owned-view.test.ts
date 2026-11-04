@@ -604,9 +604,9 @@ test("preserves model admission and rolls back revoked owned Beam adoption", asy
       const request = await releaseBeam("7".repeat(32), modelA);
       const historyImport = await import("../plugins/session-catalog-history-import.js");
       const realImport = historyImport.importSessionCatalogHistory;
-      const entered = createDeferredCore<void>();
-      const resume = createDeferredCore<void>();
-      const exited = createDeferredCore<void>();
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const exited = createDeferredCore();
       let scope: { agentId: string; sessionKey: string; sessionId: string } | undefined;
       const barrier = vi
         .spyOn(historyImport, "importSessionCatalogHistory")
@@ -628,7 +628,7 @@ test("preserves model admission and rolls back revoked owned Beam adoption", asy
       onTestFinished(() => barrier.mockRestore());
       const pending = rpcReq(ws, "beam.owned.continue", request).then(
         (reply) => ({ reply }),
-        (error) => ({ error }),
+        (error: unknown) => ({ error }),
       );
       try {
         await withinTest(
@@ -644,7 +644,9 @@ test("preserves model admission and rolls back revoked owned Beam adoption", asy
         expect(JSON.stringify(await loadTranscriptEvents(inflight))).toContain(
           "Synthetic imported context " + request.threadId,
         );
-        const closed = new Promise<number>((resolve) => ws.once("close", resolve));
+        const closed = new Promise<number>((resolve) => {
+          ws.once("close", resolve);
+        });
         expect(
           (await rpcReq(admin, "users.setRole", { profileId: publisher.id, role: "blocked" })).ok,
         ).toBe(true);
@@ -652,9 +654,12 @@ test("preserves model admission and rolls back revoked owned Beam adoption", asy
         resume.resolve();
         await withinTest(exited.promise, signal);
         const settled = await withinTest(pending, signal);
-        if ("reply" in settled) expect(settled.reply.ok).toBe(false);
-        else expect(String(settled.error)).toMatch(/closed|4001/);
-        await expect.poll(getActiveGatewayRootWorkCount, { timeout: 5000 }).toBe(0);
+        if ("reply" in settled) {
+          expect(settled.reply.ok).toBe(false);
+        } else {
+          expect(String(settled.error)).toMatch(/closed|4001/);
+        }
+        await expect.poll(() => getActiveGatewayRootWorkCount(), { timeout: 5000 }).toBe(0);
         expect(keys()).toEqual(beforeDenied);
         expect(loadSessionEntryReadOnly(inflight)).toBeUndefined();
         expect(await loadTranscriptEvents(inflight)).toEqual([]);

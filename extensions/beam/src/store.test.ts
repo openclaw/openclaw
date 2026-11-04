@@ -178,7 +178,9 @@ it("retries an unclaimed or proven rolled-back creation at the same key, but nev
   const source = (await store.get(sampleUpload().beamId))!;
   let current = true;
   const first = await store.reserveContinuation(source, "main", () => {
-    if (!current) throw new Error("source grant revoked");
+    if (!current) {
+      throw new Error("source grant revoked");
+    }
   });
   const key = first.session.continuation!.sessionKey;
   const beforeDispatch = await store.reserveContinuation(
@@ -224,7 +226,9 @@ it.each(["complete", "rollback"] as const)(
       await releaseSource(store);
       const source = (await store.get(sampleUpload().beamId))!;
       const owner = await store.reserveContinuation(source, "main", () => {
-        if (!current) throw new Error("source grant revoked");
+        if (!current) {
+          throw new Error("source grant revoked");
+        }
       });
       releases.push(owner.release);
       expect(await owner.beginCreate(() => {})).toBe(true);
@@ -242,7 +246,9 @@ it.each(["complete", "rollback"] as const)(
         assertCurrent() {},
       });
       expect(resolved?.sessionKey).toBe(owner.session.continuation?.sessionKey);
-      if (resolved) releases.push(resolved.release);
+      if (resolved) {
+        releases.push(resolved.release);
+      }
       const reconciled = await store.reserveContinuation(retained, "main", () => {});
       releases.push(reconciled.release);
       if (action === "complete") {
@@ -263,7 +269,9 @@ it.each(["complete", "rollback"] as const)(
         accepted: false,
       });
     } finally {
-      for (const release of releases) release();
+      for (const release of releases) {
+        release();
+      }
       await close();
     }
   },

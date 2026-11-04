@@ -55,7 +55,7 @@ export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations
 ) => {
   if (command.type === "reserveContinuation") {
     const { beamId, agentId, publisherProfileId, createdAt, handoffId } = command.input;
-    const value = tx.lookup(1, beamId) as BeamHandoff | undefined;
+    const [value] = tx.lookupMany<BeamHandoff>([{ store: 1, key: beamId }]);
     const snapshot = tx.entries<BeamStoredSession>(0).find((entry) => entry.key === beamId);
     const row = value ? { value: { ...value, items: snapshot?.value.items ?? [] } } : undefined;
     if (

@@ -156,7 +156,9 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
     },
     async get(beamId) {
       const snapshot = await store.lookup(beamId);
-      if (snapshot) return snapshot;
+      if (snapshot) {
+        return snapshot;
+      }
       const handoff = await handoffs.lookup(beamId);
       return handoff?.continuation ? { ...handoff, items: [] } : undefined;
     },
@@ -250,16 +252,22 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
         },
         release: guard.release,
         beginCreate: async (assertDestinationCurrent) => {
-          if (attempted) return false;
+          if (attempted) {
+            return false;
+          }
           attempted = true;
           const creationId = randomUUID();
           const started = (await execute(binding.id, "begin", assertDestinationCurrent, creationId))
             .reservedNow;
-          if (started) ownedCreationId = creationId;
+          if (started) {
+            ownedCreationId = creationId;
+          }
           return started;
         },
         rollback: async () => {
-          if (!ownedCreationId) throw new Error("This lease did not create the destination");
+          if (!ownedCreationId) {
+            throw new Error("This lease did not create the destination");
+          }
           // Validate before opening the write: a prepared read guard would reject
           // this operation's own pending publication. The worker rechecks the token.
           guard.assertCurrent();
@@ -293,7 +301,9 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
           const snapshots = inventory
             .filter((entry) => entry.expiresAt === undefined || entry.expiresAt > now)
             .map(({ value }) => value);
-          if (!handoffPrefix) return snapshots;
+          if (!handoffPrefix) {
+            return snapshots;
+          }
           // Pretty-link discovery stays bounded and can find a durable destination
           // after its imported snapshot expires. Ordinary archived rows stay hidden.
           const retained = await handoffs.entriesInKeyRange({

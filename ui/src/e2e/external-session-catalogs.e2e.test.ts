@@ -216,19 +216,29 @@ suite.define(() => {
           },
         ],
       });
+      // The request audit belongs to each document; canonical rows survive reload.
+      // Retain the first send before navigation so both sends remain accounted for.
+      const firstSends = await gateway.getRequests("chat.send");
+      expect(firstSends).toHaveLength(1);
+      expect(await gateway.getRequests("beam.owned.continue")).toHaveLength(1);
       await page.goto(new URL("beam/owned-synthetic-beam-aaaaaaaaaaaa", suite.server.baseUrl).href);
       await expect
         .poll(async () => (await paneStates(page.locator(visiblePane)))[0]?.sessionKey)
         .toBe("agent:main:publisher-continuation");
       await composer.fill("And continue with my next message");
       await composer.press("Enter");
-      await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);
+      await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
+      const reopenedSends = await gateway.getRequests("chat.send");
+      expect(reopenedSends[0]?.params).toMatchObject({
+        sessionKey: "agent:main:publisher-continuation",
+        message: "And continue with my next message",
+      });
       expect(
-        (await gateway.getRequests("chat.send")).map(
+        [...firstSends, ...reopenedSends].map(
           ({ params }) => (params as { sessionKey?: string }).sessionKey,
         ),
       ).toEqual(["agent:main:publisher-continuation", "agent:main:publisher-continuation"]);
-      expect(await gateway.getRequests("beam.owned.continue")).toHaveLength(1);
+      expect(await gateway.getRequests("beam.owned.continue")).toHaveLength(0);
       expect(await gateway.getRequests("beam.owned.resolve")).toHaveLength(1);
     });
   });

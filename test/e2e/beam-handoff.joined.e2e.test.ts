@@ -43,7 +43,9 @@ it("continues one released Beam conversation through real client, Gateway, resta
       let body = "";
       for await (const chunk of request) {
         body += chunk;
-        if (body.length > 1_000_000) throw new Error("fixture request bound");
+        if (body.length > 1_000_000) {
+          throw new Error("fixture request bound");
+        }
       }
       expect(JSON.parse(body)).toMatchObject({ model: "echo" });
       calls += 1;
@@ -132,10 +134,11 @@ it("continues one released Beam conversation through real client, Gateway, resta
             ...route,
             ...(index === 0
               ? {
-                  configure(proxy) {
-                    proxy.on("start", (request) => {
-                      if (request.method !== "POST" || request.url !== "/api/v1/beam/sessions")
+                  configure(transport) {
+                    transport.on("start", (request) => {
+                      if (request.method !== "POST" || request.url !== "/api/v1/beam/sessions") {
                         return;
+                      }
                       let body = "";
                       request.on("data", (chunk) => {
                         body += chunk;
@@ -144,7 +147,7 @@ it("continues one released Beam conversation through real client, Gateway, resta
                         releaseBodies.set(request, body);
                       });
                     });
-                    proxy.on("proxyRes", (upstream, request, response) => {
+                    transport.on("proxyRes", (upstream, request, response) => {
                       if (
                         !lostAck &&
                         upstream.statusCode === 200 &&
@@ -163,7 +166,9 @@ it("continues one released Beam conversation through real client, Gateway, resta
         proxies.push(proxy);
         await proxy.listen();
         const url = proxy.resolvedUrls?.local[0];
-        if (!url) throw new Error("fixture identity proxy unavailable");
+        if (!url) {
+          throw new Error("fixture identity proxy unavailable");
+        }
         urls.push(url);
       }
       const cfg = JSON.parse(await readFile(instance.configPath, "utf8"));
@@ -245,7 +250,9 @@ it("continues one released Beam conversation through real client, Gateway, resta
           onReady(child) {
             child.stdout?.on("data", (chunk) => {
               stdout += chunk;
-              if (stdout.length > 4_000_000) outputLimit.abort(new Error("fixture stdout bound"));
+              if (stdout.length > 4_000_000) {
+                outputLimit.abort(new Error("fixture stdout bound"));
+              }
             });
             child.stderr?.on("data", (chunk) => {
               stderr = (stderr + chunk).slice(-16_000);
@@ -271,7 +278,10 @@ it("continues one released Beam conversation through real client, Gateway, resta
           ],
           profiles[index],
         );
-        expect(out.status, out.stderr).toBe(0);
+        expect(
+          out.status,
+          JSON.stringify({ method, stdout: out.stdout.slice(-6000), stderr: out.stderr }),
+        ).toBe(0);
         return JSON.parse(out.stdout);
       };
       const transcript = path.join(root, "source.jsonl");
