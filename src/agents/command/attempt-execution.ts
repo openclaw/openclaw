@@ -7,6 +7,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { CliSessionBinding } from "../../config/sessions/types.js";
 import {
   injectTimestamp,
   timestampOptsFromConfig,
@@ -345,7 +346,13 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         classifyResult: params.classifyResult,
         onCompactionAccounting: params.onCompactionAccounting,
       },
-      async ({ sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult }) => {
+      async ({
+        sessionEntry,
+        cliSessionBinding,
+        assertSettlementCurrent,
+        settleResult,
+        persistStoppedFirstSession,
+      }) => {
         const accessProgram = params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram;
         if (accessProgram !== undefined && accessProgram !== "standard") {
           throw new Error(
@@ -498,6 +505,17 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             cliSessionId: cliSessionBinding?.sessionId,
             cliSessionBinding,
             forkCliSessionOnResume: cliSessionBinding?.forkNextResume === true,
+            // A preserved binding stays as-is; otherwise a lost first turn keeps its native session.
+            ...(params.preserveCliSessionBinding
+              ? {}
+              : {
+                  persistStoppedFirstCliSession: (binding: CliSessionBinding) =>
+                    persistStoppedFirstSession({
+                      binding,
+                      expectedSession: sessionEntry,
+                      sessionStore: params.sessionStore,
+                    }),
+                }),
             ...(forkStoreParams
               ? buildCliSessionForkRunParams(
                   {
