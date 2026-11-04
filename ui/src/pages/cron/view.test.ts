@@ -117,12 +117,25 @@ describe("cron view list pane", () => {
     expect(onSelectJob).toHaveBeenCalledWith(paused);
   });
 
+  it("names runs when loading more activity instead of automations", async () => {
+    const pending = await renderView({ listTab: "activity", runsState: "pending" });
+    expect(text(pending, testId("cron-runs-loading"))).toBe("Loading runs…");
+    const container = await renderView({
+      listTab: "activity",
+      runsHasMore: true,
+      runsLoadingMore: true,
+    });
+    const loading = getButtonByText(container, "Loading runs…");
+    expect(loading.disabled).toBe(true);
+    expect(container.textContent).not.toContain("Loading automations…");
+  });
+
   it("renders a truthful inventory state matrix for the tasks table", async () => {
     const pending = await renderView({ loading: true, hasLoaded: false });
     const pendingStatus = getElement(pending, testId("cron-jobs-loading"), HTMLDivElement);
     expect(pendingStatus.getAttribute("role")).toBe("status");
     expect(pendingStatus.getAttribute("aria-live")).toBe("polite");
-    expect(pendingStatus.textContent).toContain("Loading...");
+    expect(pendingStatus.textContent).toContain("Loading automations…");
     expect(pending.textContent).not.toContain("No automations yet");
     expect(attribute(pending, ".cron-table", "aria-busy")).toBe("true");
     const states: Array<[Partial<CronProps>, string]> = [
