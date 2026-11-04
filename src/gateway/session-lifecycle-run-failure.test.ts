@@ -219,6 +219,8 @@ describe("durable pre-reply run failure", () => {
               ...target,
               runId: attemptRunId,
               messageChannel: "internal",
+              // Parent completion inputs are optional unless this turn owes a result.
+              terminalReplyExpectation: "result-required",
               inputProvenance: {
                 kind: "inter_session",
                 sourceTool: "subagent_settle",

@@ -42,6 +42,17 @@ activates only the requested route's inventory. Keep those lazy boundaries when
 changing delivery: preloading every route trades one navigation's latency for
 unnecessary downloads on every other navigation.
 
+Exact browser chat links start the existing Gateway connection before loading
+the application renderers. Cold loads also queue the initial history subscription
+behind authentication. The transport retains ordered events until the chat
+consumer attaches; it closes and uses normal connection recovery if the route
+changes, authentication fails, or the bounded handoff expires. Warm loads keep
+their saved transcript cursor and overlap only the connection. Native handoffs,
+ambiguous links, and links requiring Gateway confirmation keep normal startup.
+
+Plugin stylesheet URLs in the plugin catalog are metadata, not boot stylesheets.
+Their view loader requests them when the plugin is presented.
+
 ## Compression measurement
 
 Run the committed benchmark against a completed production build:

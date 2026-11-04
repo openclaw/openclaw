@@ -458,14 +458,15 @@ it("clears navigation resize feedback when the drag ends or its divider disconne
 });
 
 it.each([false, true])(
-  "keeps the focused gateway retry across footer and mobile header updates (mobile %s)",
+  "keeps the focused gateway retry across avatar flag and mobile header updates (mobile %s)",
   async (mobile) => {
     mockMobile(() => mobile);
-    const { owner, gateway, query, settle: settleShell } = await mountShell();
+    const { owner, runtime, gateway, query, settle: settleShell } = await mountShell();
+    runtime.context.navigation.update({ navCollapsed: true });
     owner.routeState = { routeId: "sessions" };
     await vi.dynamicImportSettled();
     const presentation = () =>
-      query(mobile ? ".mobile-connection-status" : ".sidebar-shell__footer")!;
+      query(mobile ? ".mobile-connection-status" : ".sidebar-connection-flag")!;
     const settle = () => settleShell(true);
     const disconnected = {
       phase: "offline" as const,
@@ -566,18 +567,15 @@ it("keeps status in navigation across web layouts without replacing the content 
   await vi.dynamicImportSettled();
   const publish = gateway();
   const content = query("main.content");
-  const footer = () => query(".sidebar-shell__footer .gateway-status");
+  const footer = () =>
+    query(".sidebar-shell__connection .gateway-status, .sidebar-shell__footer .gateway-status");
   for (const phase of ["connecting", "starting", "connected", "offline"] as const) {
     publish({ phase, offlineStable: false });
     refresh();
     await owner.navigationSidebar.updateComplete;
-    if (phase === "connected") {
-      expect(footer()?.textContent).toBe("Connected");
-    } else {
-      expect(footer(), phase).toBeNull();
-    }
+    expect(footer(), phase).toBeNull();
   }
-  publish({ phase: "offline", offlineStable: true });
+  publish({ phase: "reconnecting", offlineStable: true });
   for (const layout of [
     { mobile: false, collapsed: false, drawer: false, routeId: "chat" },
     { mobile: false, collapsed: true, drawer: false, routeId: "chat" },
@@ -594,7 +592,7 @@ it("keeps status in navigation across web layouts without replacing the content 
     await vi.dynamicImportSettled();
     await owner.navigationSidebar.updateComplete;
     flush();
-    expect(footer()?.textContent, JSON.stringify(layout)).toContain("Disconnected");
+    expect(footer()?.textContent, JSON.stringify(layout)).toContain("Reconnecting");
     expect(query(".mobile-connection-status") !== null).toBe(layout.mobile && !layout.drawer);
     expect(footer()?.querySelector("[role=status], [aria-live]")).toBeNull();
     expect(query("main.content")).toBe(content);
@@ -631,7 +629,7 @@ it("keeps connection retry in the minimal footer when the Settings renderer is u
   expect(connect).toHaveBeenCalledOnce();
 });
 
-it("briefly reveals collapsed status transitions without removing the stable status footer", async () => {
+it("briefly reveals collapsed status transitions without reserving footer space", async () => {
   vi.stubGlobal("innerWidth", 1280);
   const { owner, runtime, gateway, query, settle } = await mountShell();
   await vi.dynamicImportSettled();
@@ -645,7 +643,7 @@ it("briefly reveals collapsed status transitions without removing the stable sta
   const footer = () => query(".sidebar-shell__footer .gateway-status");
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(false);
-  expect(footer()?.textContent).toBe("Connected");
+  expect(footer()).toBeNull();
   publish({ ...connected, phase: "offline", offlineStable: true });
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(true);
@@ -668,10 +666,10 @@ it("briefly reveals collapsed status transitions without removing the stable sta
   publish(connected);
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(true);
-  expect(footer()?.textContent).toBe("Connected");
+  expect(footer()).toBeNull();
   vi.advanceTimersByTime(2_000);
   await settle();
-  expect(footer()?.textContent).toBe("Connected");
+  expect(footer()).toBeNull();
   expect(flag()?.hasAttribute("data-open")).toBe(true);
   vi.advanceTimersByTime(2_000);
   await settle();

@@ -39,7 +39,7 @@ export function renderSessionSection(params: {
   const group = createMemo(() => section().category);
   // Created rows lead their section, so a create for this group takes that slot now.
   const pendingCreate = createMemo(() => {
-    const pending = host().pendingSessionCreate();
+    const pending = host().sessionCreateDisplay();
     return pending?.category && pending.category === group() ? pending : undefined;
   });
   const personOwner = createMemo(() => section().personOwner);

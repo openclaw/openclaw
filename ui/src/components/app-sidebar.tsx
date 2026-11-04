@@ -10,6 +10,7 @@ import { listen } from "../lib/reactive/listener.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { createTimeout } from "../lib/reactive/timers.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
@@ -95,9 +96,24 @@ function AppSidebarContent(
   const projection = projectSource(owner, {
     read: (current) => current,
     subscribe: (current, notify) => {
+      const refresh = () => {
+        const accepted = context.chatSubmissions.readAcceptedCreate();
+        const selected = context.gateway.snapshot.sessionKey;
+        if (
+          accepted &&
+          ((selected && !areUiSessionKeysEquivalent(selected, accepted.creation.sessionKey)) ||
+            current.sessionData.sessionsResult?.sessions.some((row) =>
+              areUiSessionKeysEquivalent(row.key, accepted.creation.sessionKey),
+            ))
+        ) {
+          context.chatSubmissions.retireAcceptedCreate();
+        }
+        notify();
+      };
       const stops = [
-        current.subscribe(notify),
-        context.chatSubmissions.subscribeCreate(notify),
+        current.subscribe(refresh),
+        context.chatSubmissions.subscribeCreate(refresh),
+        context.gateway.subscribe(refresh),
         context.theme.subscribe(notify),
         context.config.subscribe(notify),
         context.agentIdentity.subscribe(current.sessionData.requestSessionDataUpdate),

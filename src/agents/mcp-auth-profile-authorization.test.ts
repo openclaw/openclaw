@@ -156,6 +156,22 @@ it("enrolls inherited owners through the generic API and preserves MCP capture a
   });
 });
 
+it("enrolls concurrent inherited captures without borrowing their authority", async () => {
+  await withRoot(async (root) => {
+    const captures = await Promise.allSettled([root.capture(), root.capture()]);
+    expect(captures.map((capture) => capture.status)).toEqual(["fulfilled", "fulfilled"]);
+    const authorities = captures.flatMap((capture) =>
+      capture.status === "fulfilled" ? [capture.value] : [],
+    );
+    expect(authorities[0]!.authorizationId).toBe(authorities[1]!.authorizationId);
+    authorities[0]!.dispose();
+    expect(authorities[0]!.assertCurrent).toThrow(retired);
+    expect(authorities[1]!.assertCurrent).not.toThrow();
+    await writeProfile("shared", "replacement");
+    expect(authorities[1]!.assertCurrent).toThrow(retired);
+  });
+});
+
 it.each(["reconnect", "replace"] as const)("retires identical-byte %s", async (mode) => {
   await withRoot(async (root) => {
     const profileId = mode === "reconnect" ? "shared" : "local";

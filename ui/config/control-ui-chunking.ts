@@ -438,6 +438,14 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
     includeDependenciesRecursively: false,
     groups: [
       {
+        name: "control-ui-connection",
+        test: (id: string) => controlUiBootManifestKey(id) === "ui/src/main.ts",
+        priority: 21,
+        // The connection must evaluate before the application. Do not let a
+        // shared dependency pull a later rendering group back into this entry.
+        includeDependenciesRecursively: true,
+      },
+      {
         name: (id: string) => controlUiStableChunkName(id) ?? null,
         test: (id: string) => controlUiStableChunkName(id) !== undefined,
         priority: 20,

@@ -4,7 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { loadChatRoute } from "../pages/chat/route-loader.ts";
-import * as snapshots from "../pages/chat/session-snapshot-invalidation.runtime.ts";
+import * as snapshots from "../pages/chat/session-snapshot-invalidation.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { clearBootRecords, type BootRecord } from "./boot-record.ts";

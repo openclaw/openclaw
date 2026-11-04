@@ -161,7 +161,7 @@ async function ensureSandboxWorkspaceLayout(
     }
   }
   const syncedSkills = await syncSandboxSkillsToWorkspace();
-  await ensureReadOnlyWorkspaceSkillMountSources(
+  const createdSkillMountSources = await ensureReadOnlyWorkspaceSkillMountSources(
     {
       workspaceDir,
       agentWorkspaceDir,
@@ -171,6 +171,12 @@ async function ensureSandboxWorkspaceLayout(
     },
     assertCurrent,
   );
+  if (createdSkillMountSources && localWorkspace) {
+    // Finish producer-created layout before first use, so source admission does
+    // not mistake protected mount directories for unsaved guest work.
+    await localWorkspace.checkpoint();
+    assertCurrent?.();
+  }
 
   return {
     agentWorkspaceDir,

@@ -8,6 +8,7 @@ import {
   listSessionEntriesAsync,
   resolveStorePath,
   upsertSessionEntry,
+  withSessionEntriesAsync,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import * as transcript from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -42,6 +43,7 @@ it.each([false, true])(
               resolveStorePath,
               listSessionEntries,
               listSessionEntriesAsync,
+              withSessionEntriesAsync,
               createSessionEntryListReader: async (params) => async () => ({
                 entries: await listSessionEntriesAsync(params),
                 // This fixture keeps the physical database fixed; row updates remain real.
@@ -52,8 +54,8 @@ it.each([false, true])(
         });
         const originalRead = transcript.readSessionTranscriptCatalogPage;
         vi.spyOn(transcript, "readSessionTranscriptCatalogPage").mockImplementation(
-          async (params) => {
-            const page = await originalRead(params);
+          async (...args) => {
+            const page = await originalRead(...args);
             await applySessionEntryPatch({
               ...scope,
               patch: { category: revoked ? "private" : "team", label: "updated while reading" },

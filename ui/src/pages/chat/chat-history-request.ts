@@ -18,6 +18,10 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
+import {
+  chatHistoryRequestParams,
+  CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
+} from "./chat-history-request-params.ts";
 import { CHAT_HISTORY_RETRY_WINDOW_MS, isRetryableChatReadError } from "./chat-history-retry.ts";
 import {
   type ChatHistoryResult,
@@ -43,44 +47,10 @@ import {
   projectChatTranscriptMetadata,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
-
-export const CHAT_HISTORY_REQUEST_LIMIT = 80;
-const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
-const CHAT_HISTORY_TOOL_RESULT_MAX_CHARS = 2_000;
-
-export function chatHistoryRequestParams(
-  method: "chat.history" | "chat.startup",
-  sessionKey: string,
-  requestAgentId: string | undefined,
-  cursor?: string,
-  inputRunIds: string[] = [],
-  historyState?: ChatHistoryState,
-) {
-  const knownState =
-    cursor !== undefined && historyState
-      ? {
-          ...(historyState.pendingInputs
-            ? { pendingInputs: historyState.stateRevision.pendingInputs }
-            : {}),
-          ...(historyState.sessionInfo
-            ? { sessionInfo: historyState.stateRevision.sessionInfo }
-            : {}),
-          ...(method === "chat.startup" && historyState.commands
-            ? { commands: historyState.stateRevision.commands }
-            : {}),
-        }
-      : {};
-  return {
-    sessionKey,
-    toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
-    knownState,
-    ...(requestAgentId ? { agentId: requestAgentId } : {}),
-    ...(cursor !== undefined ? { cursor } : {}),
-    limit: CHAT_HISTORY_REQUEST_LIMIT,
-    maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
-    ...(inputRunIds.length ? { inputRunIds } : {}),
-  };
-}
+export {
+  CHAT_HISTORY_REQUEST_LIMIT,
+  chatHistoryRequestParams,
+} from "./chat-history-request-params.ts";
 
 export function captureChatHistoryRun(
   state: ChatState,

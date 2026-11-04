@@ -113,6 +113,7 @@ export async function resolveMainSessionCronDeliveryContext(
       agentId,
       sessionKey: targetSessionKey,
       storePath,
+      projection: "list",
     });
     return deliveryContextFromSession(sessionEntry);
   } catch {

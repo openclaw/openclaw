@@ -127,6 +127,7 @@ export function prepareSessionSharing(
     );
   const entryFilter = createSessionListEntryFilter(params, isCreator, { sessionCap });
   return {
+    identity,
     isCreator,
     sessionCap,
     entryFilter,

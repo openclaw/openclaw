@@ -1,17 +1,25 @@
+import { configHealthReadOperations } from "../config/io.health-state.kernel.js";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { hasVerifiedLiveSqliteOwner } from "../infra/sqlite-live-owner.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
 import type { SqliteReadOnlyOperationContext } from "../infra/sqlite-readonly-operation-types.js";
+import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
 import {
   admitStateSchemaFacts,
   assertSupportedStateSchemaVersion,
-} from "../state/openclaw-state-db-schema-version.js";
-import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
-import { pluginMetadataReadOperations } from "./plugin-metadata-state.read.worker.js";
+} from "./openclaw-state-db-schema-version.js";
+import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 
-export const pluginMetadataLiveReadOperations = {
-  "pluginMetadata.readLive": (
-    input: Parameters<(typeof pluginMetadataReadOperations)["plugins.metadata.read"]>[0],
+type StartupMetadataRead =
+  | { type: "config.health.read"; input: undefined }
+  | {
+      type: "plugins.metadata.read";
+      input: Parameters<(typeof pluginMetadataReadOperations)["plugins.metadata.read"]>[0];
+    };
+
+export const startupMetadataLiveReadOperations = {
+  "startupMetadata.readLive": (
+    command: StartupMetadataRead,
     context: SqliteReadOnlyOperationContext,
   ) => {
     assertStateDatabaseAccessAllowed(context.path);
@@ -29,7 +37,10 @@ export const pluginMetadataLiveReadOperations = {
         sourceAdmitted = true;
         return {
           ok: true as const,
-          rows: pluginMetadataReadOperations["plugins.metadata.read"](input, db).rows,
+          result:
+            command.type === "config.health.read"
+              ? configHealthReadOperations[command.type](command.input, db)
+              : pluginMetadataReadOperations[command.type](command.input, db),
         };
       } catch (error) {
         // Keep domain refusals typed; native rollback/close failures still retire the child.

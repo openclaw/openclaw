@@ -279,6 +279,8 @@ describe("standing-intent admitted operations", () => {
     await clock.wake();
     const match = () => matchStandingIntents({ agentId: "main", prompt: "launch", nowMs: 1_000 });
     await expect(match()).resolves.toEqual([]);
+    // Startup recovery must not create an unused agent database.
+    expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }))).toBe(false);
 
     const other = await seed({ agentId: "other" });
     await expect(

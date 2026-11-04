@@ -24,6 +24,11 @@ during an update.
 Doctor checks every configured agent. Plugin metadata retained between workspace
 checks is bounded, so adding agents does not retain a full plugin inventory per agent.
 
+Healthy transcript history does not require stopping the Gateway just to record
+historical migration completion. Doctor defers that bookkeeping while any agent
+database is in use. History that actually needs repair still requires exclusive
+maintenance custody.
+
 SIGINT and SIGTERM cancel Doctor's preparation before it stops a Gateway or
 starts repairs. If repair already owns state, Doctor settles its admitted work
 and restores any service it stopped before exiting.

@@ -1,10 +1,25 @@
 // Synthetic checkout.diff workload through the production read/worker owners.
+// Cold owner comparison (no cache; first call reported separately):
+//   node --expose-gc --import ./scripts/tsx.mjs scripts/perf/checkout-diff-measure.ts \
+//     --state-dir <fixture> --boundary owner --samples 5 [--diff-owner <baseline.ts>]
+// Seed with --tracked 20000 --changed-tracked 200 --untracked 100; near-limit
+// patches and binary content are included in the changed tracked set. Add
+// --changed-tracked 400 --changed-lines 300 to cross the 100k-line stats-only
+// threshold. Run AB/BA on the same fixture, then repeat with --allocation for a
+// separate sampled pass.
+// --boundary read measures the warm cache, whereas owner measures every cold load.
+// Accept identical response hashes and fewer filesystem reads with lower CPU/allocation;
+// report wall-time spread and host load instead of gating on noisy short tails.
+// Git byte counts measure captured output passed to the owner, after output caps.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
+import { loadavg } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
@@ -22,6 +37,10 @@ const { values } = parseArgs({
     seed: { type: "boolean" },
     untracked: { type: "string", default: "100" },
     tracked: { type: "string", default: "0" },
+    "changed-tracked": { type: "string", default: "0" },
+    "changed-lines": { type: "string", default: "1" },
+    "diff-owner": { type: "string" },
+    allocation: { type: "boolean" },
     boundary: { type: "string", default: "worker" },
     cold: { type: "boolean" },
     poll: { type: "boolean" },
@@ -89,7 +108,12 @@ and response contents are verified after measurement. Cold mode prohibits mutati
 Use --scope uncommitted for working-tree-only diffs (default: all). --poll opts RPC
 requests into nonblocking poll responses on revisions that support that contract.
 Use --read-cache-owner <adjacent baseline.ts> with --boundary read or rpc to compare a
-previous Git read-cache owner against the candidate in one source checkout.`);
+previous Git read-cache owner against the candidate in one source checkout.
+Use --boundary owner for uncached collectCheckoutDiff calls with Git wall/output
+observations and thread CPU. --diff-owner <baseline.ts> replaces that owner's source
+in this process only. --allocation adds a separate 4 KiB sampled allocation pass
+(use --expose-gc); compare timing from runs without this option. Seed with
+--changed-tracked 200 for changed text, binary, and near-limit tracked files.`);
   process.exit(0);
 }
 const integer = (raw: string, label: string, min = 0) =>
@@ -97,8 +121,8 @@ const integer = (raw: string, label: string, min = 0) =>
 if (!values["state-dir"]) {
   throw new Error("--state-dir must name a task-owned synthetic fixture");
 }
-if (values.boundary !== "worker" && values.boundary !== "read" && values.boundary !== "rpc") {
-  throw new Error("--boundary must be worker, read, or rpc");
+if (!["worker", "read", "rpc", "owner"].includes(values.boundary)) {
+  throw new Error("--boundary must be worker, read, rpc, or owner");
 }
 assert(
   values.scope === "all" || values.scope === "uncommitted",
@@ -125,6 +149,14 @@ if (untracked > 100) {
 const samples = integer(values.samples, "--samples", 1);
 const tracked = integer(values.tracked, "--tracked");
 assert(tracked <= 500_000, "--tracked must not exceed 500000 files");
+const changedTracked = integer(values["changed-tracked"], "--changed-tracked");
+const changedLines = integer(values["changed-lines"], "--changed-lines", 1);
+assert(changedTracked === 0 || (changedTracked >= 4 && changedTracked <= 497));
+assert(!values.allocation || values.boundary === "owner", "--allocation requires owner boundary");
+assert(
+  !values["diff-owner"] || values.boundary === "owner",
+  "--diff-owner requires owner boundary",
+);
 const pollMs = integer(values["poll-ms"], "--poll-ms");
 assert(!values.cold || pollMs > 0, "--cold requires --poll-ms > 0 (use 5000 for steady stress)");
 const churnMs = integer(values["churn-ms"], "--churn-ms");
@@ -164,6 +196,79 @@ if (readCacheOwner) {
       }
       readCacheOwnerLoads++;
       return { ...result, url: override };
+    },
+  });
+}
+type GitObservation = { args: string[]; elapsedMs: number; capturedStdoutBytes: number };
+const gitObservations: GitObservation[] = [];
+const filesystemCounts = { lstat: 0, realpath: 0 };
+let diffOwnerLoads = 0;
+if (values.boundary === "owner") {
+  const ownerUrl = new URL("../../src/sessions/session-diff.runtime.ts", import.meta.url).href;
+  const gitUrl = new URL("../../src/agents/worktrees/git.ts", import.meta.url).href;
+  const originalGitUrl = `${gitUrl}?benchmark-original`;
+  const wrapperUrl = "openclaw-benchmark:git-observer";
+  const fsWrapperUrl = "openclaw-benchmark:fs-observer";
+  channel("openclaw.benchmark.diff-filesystem").subscribe((name) => {
+    filesystemCounts[name as keyof typeof filesystemCounts]++;
+  });
+  const observationChannel = channel("openclaw.benchmark.git-output");
+  observationChannel.subscribe((event) => gitObservations.push(event as GitObservation));
+  const source = values["diff-owner"] ? readFileSync(values["diff-owner"], "utf8") : undefined;
+  registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (context.parentURL === ownerUrl && specifier === "node:fs/promises") {
+        return { url: fsWrapperUrl, shortCircuit: true };
+      }
+      const result = nextResolve(specifier, context);
+      return result.url === gitUrl ? { ...result, url: wrapperUrl } : result;
+    },
+    load(url, context, nextLoad) {
+      if (url === ownerUrl && source !== undefined) {
+        diffOwnerLoads++;
+        return { format: "module-typescript", shortCircuit: true, source };
+      }
+      if (url === fsWrapperUrl) {
+        return {
+          format: "module",
+          shortCircuit: true,
+          source: `
+            import fs from "node:fs/promises";
+            import { channel } from "node:diagnostics_channel";
+            const observe = (name, args) => {
+              channel("openclaw.benchmark.diff-filesystem").publish(name);
+              return fs[name](...args);
+            };
+            export default { ...fs,
+              lstat: (...args) => observe("lstat", args),
+              realpath: (...args) => observe("realpath", args),
+            };
+          `,
+        };
+      }
+      if (url === wrapperUrl) {
+        return {
+          format: "module",
+          shortCircuit: true,
+          source: `
+            import * as git from ${JSON.stringify(originalGitUrl)};
+            import { channel } from "node:diagnostics_channel";
+            export * from ${JSON.stringify(originalGitUrl)};
+            const observe = async (name, cwd, args, options) => {
+              const started = performance.now();
+              const result = await git[name](cwd, args, options);
+              channel("openclaw.benchmark.git-output").publish({
+                args, elapsedMs: performance.now() - started,
+                capturedStdoutBytes: Buffer.byteLength(result.stdout),
+              });
+              return result;
+            };
+            export const runGit = (...args) => observe("runGit", ...args);
+            export const runGitBuffered = (...args) => observe("runGitBuffered", ...args);
+          `,
+        };
+      }
+      return nextLoad(url, context);
     },
   });
 }
@@ -233,8 +338,23 @@ async function seed() {
     }
     await fs.writeFile(path.join(bucket, `${index}.txt`), "");
   }
+  const changedContent = (index: number, changed: boolean) => {
+    if (index === 0) {
+      return Buffer.from([0, 1, 2, changed ? 4 : 3]);
+    }
+    const line = changed ? "after" : "before";
+    return index <= 3
+      ? `${line} ${"x".repeat(49_000 + (index - 1) * 1000)}\n`
+      : `${line} synthetic tracked content ${index}\n`.repeat(changedLines);
+  };
+  for (let index = 0; index < changedTracked; index++) {
+    await fs.writeFile(path.join(repo, `changed-${index}.txt`), changedContent(index, false));
+  }
   await git("add", ".");
   await git("-c", "commit.gpgSign=false", "commit", "--quiet", "-m", "test: seed synthetic diff");
+  for (let index = 0; index < changedTracked; index++) {
+    await fs.writeFile(path.join(repo, `changed-${index}.txt`), changedContent(index, true));
+  }
   const head = (await git("rev-parse", "HEAD")).stdout.trim();
   await fs.writeFile(path.join(repo, "modified.txt"), "Synthetic tracked content\nChanged 0\n");
   await fs.writeFile(path.join(repo, "staged.txt"), "Synthetic staged content\n");
@@ -314,7 +434,8 @@ async function seed() {
     format: "openclaw-checkout-diff-v1",
     head,
     untracked,
-    tracked: 3,
+    tracked: 3 + changedTracked,
+    changedLines,
     unchangedTracked: tracked + 1,
     nestedRepository: values["nested-repository"] === true,
     excludesFile: values["excludes-file"] === true,
@@ -352,7 +473,11 @@ async function readFixture(directory: string) {
   ) {
     throw new Error("Expected an offline fixture created with --seed");
   }
-  return { ...fixture, untracked: fixture.untracked };
+  return {
+    ...fixture,
+    untracked: fixture.untracked,
+    tracked: "tracked" in fixture && typeof fixture.tracked === "number" ? fixture.tracked : 3,
+  };
 }
 
 async function measure() {
@@ -361,23 +486,36 @@ async function measure() {
     await measureRpc(fixture);
     return;
   }
-  const expectedFiles = fixture.untracked + 3;
+  const expectedFiles = fixture.untracked + fixture.tracked;
   Object.assign(process.env, gitEnv, { GIT_TRACE2_EVENT: trace });
-  const [{ loadCheckoutDiff }, { runGitWorkerOperation }, { drainGlobalSingletonLifecycleState }] =
-    await Promise.all([
-      import("../../src/sessions/session-diff.js"),
-      import("../../src/infra/git-worker.js"),
-      import("../../src/shared/global-singleton.js"),
-    ]);
+  const { drainGlobalSingletonLifecycleState } =
+    await import("../../src/shared/global-singleton.js");
+  const { collectCheckoutDiff } =
+    values.boundary === "owner"
+      ? await import("../../src/sessions/session-diff.runtime.js")
+      : { collectCheckoutDiff: undefined };
+  const inspector = values.allocation ? new Session() : undefined;
+  if (inspector) {
+    assert(global.gc, "--allocation requires --expose-gc");
+    inspector.connect();
+  }
   const input: GitCheckoutDiffInput = {
     cwd: repo,
     scope,
     summaryOnly: values.summary === true,
   };
-  const request = () =>
-    values.boundary === "read"
-      ? loadCheckoutDiff({ ...input, sessionKey: "synthetic-diff" })
-      : runGitWorkerOperation({ type: "checkout.diff", input });
+  const request = collectCheckoutDiff
+    ? () => collectCheckoutDiff(input)
+    : values.boundary === "read"
+      ? (() => {
+          const loaded = import("../../src/sessions/session-diff.js");
+          return async () =>
+            (await loaded).loadCheckoutDiff({ ...input, sessionKey: "synthetic-diff" });
+        })()
+      : (() => {
+          const loaded = import("../../src/infra/git-worker.js");
+          return async () => (await loaded).runGitWorkerOperation({ type: "checkout.diff", input });
+        })();
   const sample = async (index: number) => {
     if (values.mutate) {
       await fs.writeFile(
@@ -386,10 +524,24 @@ async function measure() {
       );
     }
     await fs.writeFile(trace, "");
+    gitObservations.length = 0;
+    filesystemCounts.lstat = filesystemCounts.realpath = 0;
+    if (inspector) {
+      global.gc?.();
+      await inspector.post("HeapProfiler.startSampling", {
+        samplingInterval: 4096,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
+    }
     const startedAt = Date.now();
+    const cpu = process.threadCpuUsage();
     const started = performance.now();
     const result = await request();
     const elapsedMs = performance.now() - started;
+    const used = process.threadCpuUsage(cpu);
+    const allocation = inspector ? await inspector.post("HeapProfiler.stopSampling") : undefined;
+    const observations = [...gitObservations];
     if (result.unavailableReason || result.files.length !== expectedFiles) {
       throw new Error(
         `Missing synthetic changes: ${result.files.length}, ${result.unavailableReason}`,
@@ -410,10 +562,27 @@ async function measure() {
       }
     }
     const { root: _root, ...portable } = result;
+    const serializationStarted = performance.now();
     const response = JSON.stringify(portable);
+    const serializationMs = performance.now() - serializationStarted;
     return {
       startedAt,
       elapsedMs,
+      cpuMs: (used.user + used.system) / 1000,
+      serializationMs,
+      ...(allocation
+        ? { sampledBytes: allocation.profile.samples.reduce((sum, entry) => sum + entry.size, 0) }
+        : {}),
+      ...(collectCheckoutDiff
+        ? {
+            gitObservations: observations,
+            filesystemCounts: { ...filesystemCounts },
+            gitCapturedStdoutBytes: observations.reduce(
+              (sum, observation) => sum + observation.capturedStdoutBytes,
+              0,
+            ),
+          }
+        : {}),
       gitCommands: commands.length,
       commands: Object.fromEntries(
         [...new Set(commands)].map((name) => [
@@ -451,11 +620,21 @@ async function measure() {
       pollMs,
       fixture,
       node: process.version,
+      load: loadavg(),
+      allocation: values.allocation === true,
+      cpuMs: summarize(results.map((result) => result.cpuMs)),
+      serializationMs: summarize(results.map((result) => result.serializationMs)),
+      ...(inspector
+        ? { sampledBytes: summarize(results.map((result) => result.sampledBytes!)) }
+        : {}),
       latencyMs: summarize(results.map((result) => result.elapsedMs)),
       gitCommands: summarize(results.map((result) => result.gitCommands)),
       warmup,
       samples: results,
     };
+    if (values["diff-owner"]) {
+      assert(diffOwnerLoads > 0, "the selected diff owner was not loaded");
+    }
     if (readCacheOwner) {
       assert(readCacheOwnerLoads > 0, "the selected Git read-cache owner was not loaded");
     }
@@ -465,6 +644,7 @@ async function measure() {
     );
     console.log(JSON.stringify({ latencyMs: report.latencyMs, gitCommands: report.gitCommands }));
   } finally {
+    inspector?.disconnect();
     await drainGlobalSingletonLifecycleState();
   }
 }
@@ -694,7 +874,7 @@ async function measureRpc(fixture: Awaited<ReturnType<typeof readFixture>>) {
       }
       assert(!result.files.some((file) => file.path === "external-ignored.txt"));
       if (values.cold) {
-        assert.equal(result.files.length, currentFixture.untracked + 3);
+        assert.equal(result.files.length, currentFixture.untracked + currentFixture.tracked);
         assert.equal(
           result.files.find((file) => file.path === "modified.txt")?.additions,
           1,

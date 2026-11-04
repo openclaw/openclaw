@@ -8,6 +8,7 @@
 // records a separate diagnostic CPU/Git-trace pass; --git-trace records Git Trace2 alone.
 // --state-dir reuses an existing
 // synthetic fixture after a setup failure; --output must always be new.
+// --now <epoch-ms> shares a fresh fixture clock between arms; otherwise use startup time.
 // Subscriber waterfalls include provider delay; server scope totals are overlapping stage aggregates.
 // Fresh bursts are separated by 31s to expire the base-refresh TTL. Tails at 40 samples are descriptive, not regression gates. All state is synthetic.
 // See docs/reference/session-start-measurement.md for receipts, outputs, and comparison rules.
@@ -41,6 +42,7 @@ import {
 const { values } = parseArgs({
   options: {
     output: { type: "string" },
+    now: { type: "string" },
     "state-dir": { type: "string" },
     "start-file": { type: "string" },
     port: { type: "string", default: "41920" },
@@ -59,34 +61,40 @@ if (!values.output) {
   throw new Error("--output must name a new directory");
 }
 const output = path.resolve(values.output);
+const stateDir = values["state-dir"]
+  ? path.resolve(values["state-dir"])
+  : path.join(output, "state");
+let fixtureShape = values["state-dir"]
+  ? JSON.parse(readFileSync(path.join(stateDir, "team-shape-summary.json"), "utf8"))
+  : undefined;
 const port = Number(values.port);
 const historyTurns = Number(values["history-turns"] ?? (values["rich-context"] ? "100" : "0"));
 const coldRounds = Number(values["cold-rounds"] ?? (historyTurns ? "0" : "10"));
 const warmRounds = Number(values["warm-rounds"]);
+const now = Number(fixtureShape?.now ?? values.now ?? Date.now());
 const worktreeLocalOrigin = coldRounds > 0;
 const advanceOrigin = worktreeLocalOrigin && !values["unchanged-origin"];
 if (
-  ![port, coldRounds, warmRounds, historyTurns].every(Number.isSafeInteger) ||
+  ![port, coldRounds, warmRounds, historyTurns, now].every(Number.isSafeInteger) ||
   port < 40000 ||
   port > 65532 ||
   coldRounds < 0 ||
   warmRounds < 1 ||
   historyTurns < 0 ||
-  (historyTurns > 0 && coldRounds > 0)
+  (historyTurns > 0 && coldRounds > 0) ||
+  now < 0
 ) {
   throw new Error(
-    "Use port 40000–65532, nonnegative cold/history counts, positive warm rounds, and zero cold rounds with seeded history",
+    "Use port 40000–65532, nonnegative cold/history counts and epoch-ms clock, positive warm rounds, and zero cold rounds with seeded history",
   );
 }
 mkdirSync(output);
 const entry = path.resolve(values.entry);
-const stateDir = values["state-dir"]
-  ? path.resolve(values["state-dir"])
-  : path.join(output, "state");
 const before = { at: new Date().toISOString(), load: loadavg() };
 const buildInfoPath = path.join(path.dirname(entry), "build-info.json");
 const identity = {
   workload: {
+    now,
     sessions: 10800,
     plugins: 40,
     clients: 65,
@@ -159,20 +167,17 @@ const identity = {
 };
 writeFileSync(path.join(output, "identity.json"), JSON.stringify(identity, null, 2));
 if (!values["state-dir"]) {
-  await generateTeamShapeStressFixture({
+  ({ summary: fixtureShape } = await generateTeamShapeStressFixture({
     stateDir,
     port,
     seed: 1823,
-    now: 1792961880000,
+    now,
     worktreeFiles: 3000,
     worktreeFileBytes: 256,
     worktreeLocalOrigin,
     longTranscriptEntries: 2000,
-  });
+  }));
 }
-const fixtureShape = JSON.parse(
-  readFileSync(path.join(stateDir, "team-shape-summary.json"), "utf8"),
-);
 if (
   fixtureShape.sessionCount !== identity.workload.sessions ||
   fixtureShape.longTranscriptEntries !== identity.workload.longTranscriptEntries ||

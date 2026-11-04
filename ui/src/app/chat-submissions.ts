@@ -35,6 +35,7 @@ type PendingChatCreate = Readonly<{
   /** Custom group requested by the create; its admitted row lands in that section. */
   category?: string;
 }>;
+type AcceptedChatCreate = Omit<PendingChatCreate, "message" | "composer">;
 
 export type ApplicationChatSubmissions = ReturnType<typeof createChatSubmissions>;
 /** App-owned display bytes only. Delivery and retries stay with the outbox. */
@@ -42,6 +43,8 @@ export function createChatSubmissions() {
   const initial = new Map<string, RetainedChatSubmission>();
   // Only the foreground handoff owns a provisional display; accepted turns are separate.
   let pendingCreate: PendingChatCreate | undefined;
+  // Accepted metadata survives admission without retaining the draft's message or composer.
+  let acceptedCreate: AcceptedChatCreate | undefined;
   const createListeners = createChangeListeners();
   const setPendingCreate = (pending: typeof pendingCreate) => {
     pendingCreate = pending;
@@ -108,6 +111,17 @@ export function createChatSubmissions() {
       return pendingCreate?.creation;
     },
     readCreate: () => (pendingCreate?.canDisplay() ? pendingCreate : undefined),
+    acceptCreate: (accepted: AcceptedChatCreate) => {
+      acceptedCreate = accepted;
+      createListeners.publish();
+    },
+    readAcceptedCreate: () => (acceptedCreate?.canDisplay() ? acceptedCreate : undefined),
+    retireAcceptedCreate: () => {
+      if (acceptedCreate) {
+        acceptedCreate = undefined;
+        createListeners.publish();
+      }
+    },
     readCreateMessage: (sessionKey: string) =>
       pendingCreate?.creation.sessionKey === sessionKey && pendingCreate.canDisplay()
         ? pendingCreate.message
@@ -133,6 +147,7 @@ export function createChatSubmissions() {
     clear: () => {
       initial.clear();
       delivered = new WeakMap();
+      acceptedCreate = undefined;
       setPendingCreate(undefined);
     },
   };

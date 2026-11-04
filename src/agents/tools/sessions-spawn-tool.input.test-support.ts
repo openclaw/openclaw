@@ -95,8 +95,8 @@ export function registerSessionsSpawnInputTests({
     ],
     [
       "hidden worktree name without worktree",
-      { worktreeName: "review" },
-      "Hidden native subagents require worktree=true",
+      { worktree: false, worktreeName: "review" },
+      /^Hidden native subagents require worktree=true.*Corrected hidden call: sessions_spawn\(\{"task":"inspect","worktree":false\}\)$/,
     ],
     [
       "hidden worktree base without worktree",

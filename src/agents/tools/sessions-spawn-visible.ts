@@ -149,8 +149,15 @@ export async function maybeSpawnVisibleSession(params: {
       );
     }
     if (!worktree && (projectId || worktreeName || worktreeBaseRef)) {
+      const corrected = Object.fromEntries(
+        Object.entries(params.raw).filter(
+          ([key]) => !["projectId", "worktreeName", "worktreeBaseRef"].includes(key),
+        ),
+      );
       throw new ToolInputError(
-        "Hidden native subagents require worktree=true with projectId, worktreeName, or worktreeBaseRef.",
+        "Hidden native subagents require worktree=true with projectId, worktreeName, or worktreeBaseRef. " +
+          "For a managed checkout, set worktree=true. Otherwise omit those parameters to keep the hidden runtime without a checkout. " +
+          `Corrected hidden call: sessions_spawn(${JSON.stringify(corrected)})`,
       );
     }
     return undefined;

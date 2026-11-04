@@ -14,9 +14,15 @@ import {
   type SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
-import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import { selectSidebarContext, type ContextualSidebar } from "./sidebar-context-state.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
@@ -259,6 +265,8 @@ export abstract class AppSidebarBase {
   }
 
   abstract readonly sessionOwnerFilter: SessionOwnerFilter;
+  abstract readonly sessionData: Pick<SessionDataOwner, "sessionsResult">;
+  abstract readonly sessionsStatusFilter: SidebarSessionStatusFilter;
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
     this.sessionOwnerFilter.set(ownerId, involvingMe);
@@ -277,6 +285,23 @@ export abstract class AppSidebarBase {
   pendingSessionCreate() {
     const pending = this.context.chatSubmissions.readCreate();
     return this.activeRouteId === "chat" && !pending?.creation.admitted ? pending : undefined;
+  }
+
+  sessionCreateDisplay() {
+    const pending = this.pendingSessionCreate();
+    if (pending) {
+      return pending;
+    }
+    const accepted = this.context.chatSubmissions.readAcceptedCreate();
+    return this.activeRouteId === "chat" &&
+      this.sessionsStatusFilter === "active" &&
+      accepted &&
+      areUiSessionKeysEquivalent(accepted.creation.sessionKey, this.sessionKey) &&
+      !this.sessionData.sessionsResult?.sessions.some((row) =>
+        areUiSessionKeysEquivalent(row.key, accepted.creation.sessionKey),
+      )
+      ? accepted
+      : undefined;
   }
 
   public getRouteSessionKey(): string {

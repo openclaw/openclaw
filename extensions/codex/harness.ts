@@ -418,7 +418,7 @@ export function createCodexAppServerAgentHarness(
       const workspace = { agentId: params.agentId, authProfileId: params.authProfileId };
       const result = await runAttemptOnModel(attemptModel);
       const refusal = readCodexCyberAttemptVerdict(result);
-      if (!refusal.cyberRefused) {
+      if (!refusal.cyberRefused || params.cyberAccessProgram !== undefined) {
         return result;
       }
       const plan = planCodexCyberEscalation({

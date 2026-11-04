@@ -28,7 +28,7 @@ type ReviewScheduler = {
 const JOBS = ["relink"];
 const RELINK_PAGE = 500;
 /** Declaration key of the automation the review scribe creates for itself. */
-export const REVIEW_SCRIBE_DECLARATION_KEY = "knowledge:scribe:unlinked-review";
+const REVIEW_SCRIBE_DECLARATION_KEY = "knowledge:scribe:unlinked-review";
 /** A missed run is caught up shortly after start, once the Gateway settles. */
 const CATCH_UP_DELAY_MS = 60_000;
 

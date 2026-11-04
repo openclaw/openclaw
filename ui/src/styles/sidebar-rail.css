@@ -14,25 +14,29 @@
 }
 
 .sidebar--rail .sidebar-shell__footer {
-  min-height: 37px;
-  padding-block: 4px;
+  min-height: 0;
 }
 
-.sidebar--rail .sidebar-shell__connection,
-.sidebar--rail .sidebar-shell__footer .gateway-status--row {
-  height: 28px;
+.sidebar--rail .sidebar-shell__content {
+  position: relative;
+}
+
+/* Reconnecting feedback floats over the list without reserving healthy-state space. */
+.sidebar--rail .sidebar-shell__connection {
+  position: absolute;
+  inset-inline: calc(-1 * var(--sidebar-pad-x));
+  bottom: 0;
+  padding: 4px var(--sidebar-pad-x);
+  border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  background: var(--sidebar-bg);
 }
 
 .sidebar-shell__connection > .gateway-status-tooltip {
   display: flex;
 }
 
-.sidebar--rail .sidebar-shell__footer .gateway-status--connected {
-  color: var(--muted);
-}
-
-.sidebar--rail .sidebar-shell__footer .gateway-status--connected .gateway-status__icon {
-  color: var(--ok);
+.sidebar--rail .sidebar-shell__connection .gateway-status--row {
+  height: 28px;
 }
 
 .sidebar--rail .sidebar-shell {
@@ -170,6 +174,10 @@
 
     &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active) {
       --sidebar-rail-control-surface: var(--sidebar-rail-selected-surface);
+
+      &:is(.sidebar-rail__button, .nav-item) > :is(svg, .nav-item__icon) {
+        color: var(--accent);
+      }
     }
 
     &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active):hover {

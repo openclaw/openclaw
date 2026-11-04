@@ -38,6 +38,7 @@ import {
 } from "../../plugin-sdk/session-store-runtime-internal.js";
 import {
   listSessionEntriesAsync,
+  withSessionEntriesAsync,
   patchSessionEntry,
   prepareSessionEntryPatch,
   updateSessionStoreEntry,
@@ -293,6 +294,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     getSessionEntryByIdAsync,
     listSessionEntries,
     listSessionEntriesAsync,
+    withSessionEntriesAsync,
     createSessionEntryListReader: async (
       params: Parameters<RuntimeSession["createSessionEntryListReader"]>[0],
     ) =>

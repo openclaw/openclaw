@@ -3,6 +3,7 @@ import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-ru
 import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import {
+  getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
   runWithGatewayDetachedWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -216,6 +217,7 @@ export function createSubagentRegistrySweeper(params: {
       return;
     }
     sweepInProgress = true;
+    const drainSignal = getGatewayRestartDrainSignal();
     try {
       const now = Date.now();
       recovery.prune();
@@ -266,6 +268,10 @@ export function createSubagentRegistrySweeper(params: {
         );
       }
       for (const [runId, snapshot] of runEntries) {
+        // Finish admitted cleanup, but leave the remaining durable backlog for the next Gateway.
+        if (drainSignal.aborted) {
+          return;
+        }
         const deferredSource = retryDeferredSubagentCompletionSource(snapshot);
         if (deferredSource) {
           await deferredSource;
@@ -551,6 +557,9 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         for (const [candidateRunId, candidate] of groupEntries) {
+          if (drainSignal.aborted) {
+            return;
+          }
           const warnCleanup = (message: string, failure?: { error: unknown }) =>
             params.warn(message, {
               runId: candidateRunId,

@@ -23,12 +23,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-session-history.js";
-import {
-  claudeUser,
-  cliMeta,
-  LEGACY_EXEC_COMPLETION_PROMPT,
-  withClaudeProjectsDir,
-} from "./cli-session-history.test-support.js";
+import { claudeUser, cliMeta, withClaudeProjectsDir } from "./cli-session-history.test-support.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
 import { archiveSessionTranscriptPaths } from "./session-transcript-files.fs.js";
@@ -437,7 +432,6 @@ it.each([
         ),
         nativeUser("native-question", `${prefix}${events}real question`, 3_001),
         nativeUser("native-unmatched", `${prefix}${events}only in the native file`, 4_000),
-        nativeUser("native-exec", `${events}${LEGACY_EXEC_COMPLETION_PROMPT}`, 5_000),
       ].join("\n"),
     );
     await fixture.owner.run(fixture.target.database, async () => {
@@ -456,7 +450,6 @@ it.each([
               content: "only in the native file",
               __openclaw: { externalId: "native-unmatched" },
             },
-            { display: false, provenance: { kind: "internal_system", sourceTool: "exec" } },
           ]);
         },
       );

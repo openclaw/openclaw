@@ -1,4 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionEventOutcome,
@@ -7,12 +8,16 @@ import type {
 import * as handoff from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../infra/agent-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -289,7 +294,7 @@ describe("background exec completion obligations", () => {
         sessionKey,
         source: "exec",
         contextKey: `exec:${processSessionInstanceId(process)}`,
-        sourceTurnId: `exec:${processSessionInstanceId(process)}`,
+        sourceTurnId: `exec:${processSessionInstanceId(process)}:restart:${getAgentEventLifecycleGeneration()}`,
         expectedTarget: { sessionId: "original-session", lifecycleRevision: "original-revision" },
       });
       await options.onAdopted?.();
@@ -297,6 +302,58 @@ describe("background exec completion obligations", () => {
       rotateAgentEventLifecycleGeneration();
       await recover();
       expect(enqueue).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("wakes again after restarts interrupt the accepted completion and restart notice", async () => {
+    await withFixture(async ({ background, read, recover }) => {
+      const process = await background();
+      // Like the session-event handoff: stage under the source turn with a fresh run id,
+      // then let a restart interrupt the queued input before adoption.
+      const acceptThenInterrupt = async () => {
+        const { text, options } = lastNotification();
+        const target = options.expectedTarget!;
+        const receipt = await stageSessionPendingInput(
+          {
+            agentId: "main",
+            sessionKey: target.sessionKey!,
+            sessionId: target.sessionId,
+            storePath: target.storePath,
+          },
+          {
+            runId: randomUUID(),
+            message: {
+              role: "user",
+              content: text,
+              timestamp: Date.now(),
+              idempotencyKey: options.sourceTurnId,
+            },
+            trackCompletion: true,
+            assertCurrent: () => {},
+          },
+        );
+        receipt?.finish("interrupted");
+        await receipt?.settled?.();
+        settlements.at(-1)?.resolve({
+          status: "failed",
+          executionStarted: false,
+          delivered: false,
+          error: "Session event was abandoned before execution",
+        });
+      };
+      process.exitCode = 0;
+      await maybeNotifyOnExit(process, "completed", false);
+      await acceptThenInterrupt();
+      rotateAgentEventLifecycleGeneration();
+      await recover();
+      await acceptThenInterrupt();
+      rotateAgentEventLifecycleGeneration();
+      await recover();
+      await acceptThenInterrupt();
+      expect(enqueue).toHaveBeenCalledTimes(3);
+      expect((await read())?.pendingExecNotifications).toHaveProperty(
+        processSessionInstanceId(process),
+      );
     });
   });
 

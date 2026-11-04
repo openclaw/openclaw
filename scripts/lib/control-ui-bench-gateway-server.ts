@@ -54,6 +54,7 @@ export async function startControlUiBenchGatewayServer(
   }
 
   let currentRoot = await prepareRoot(outDir);
+  let responseLatencyMs = assetLatencyMs;
   let preloadHeadersEnabled = true;
   let terminalEnabled = false;
   let closing: Promise<void> | undefined;
@@ -112,9 +113,9 @@ export async function startControlUiBenchGatewayServer(
     );
   };
   const server = createServer((request, response) => {
-    if (assetLatencyMs > 0) {
+    if (responseLatencyMs > 0) {
       // Server-side delay also covers dedicated-worker module imports.
-      setTimeout(() => serve(request, response), assetLatencyMs);
+      setTimeout(() => serve(request, response), responseLatencyMs);
     } else {
       serve(request, response);
     }
@@ -139,6 +140,9 @@ export async function startControlUiBenchGatewayServer(
     },
     setTerminalEnabled(enabled: boolean) {
       terminalEnabled = enabled;
+    },
+    setAssetLatencyMs(latencyMs: number) {
+      responseLatencyMs = latencyMs;
     },
     setFixtureReader(reader: typeof readFixture) {
       readFixture = reader;

@@ -86,9 +86,13 @@ function recoveringWorker(options: { beforeAck?: () => Promise<unknown>; retry?:
       const leafId = await completed.appendMessageAsync(completedWorkerMessage());
       return fx.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
     }),
-    reconcileWorkspace: options.retry
-      ? vi.fn(fx.reconcileUnchangedLocalWorkspace).mockImplementationOnce(fail)
-      : vi.fn(fail),
+    // Refresh input before dispatch; exercise failure only when collecting the completed turn.
+    reconcileWorkspace: vi
+      .fn<WorkerTunnelHandle["reconcileWorkspace"]>(
+        options.retry ? fx.reconcileUnchangedLocalWorkspace : fail,
+      )
+      .mockImplementationOnce(fx.reconcileUnchangedLocalWorkspace)
+      .mockImplementationOnce(fail),
   });
   const destroy = vi.fn(async () => fx.attachedEnvironment());
   return {
@@ -284,12 +288,14 @@ describe("worker turn launcher terminal results", () => {
             }),
           );
         }),
-        reconcileWorkspace: vi.fn(async (request) => {
-          if (reconciliationFails) {
-            throw reconciliationError;
-          }
-          return fx.reconcileUnchangedLocalWorkspace(request);
-        }),
+        reconcileWorkspace: vi
+          .fn(async (request) => {
+            if (reconciliationFails) {
+              throw reconciliationError;
+            }
+            return fx.reconcileUnchangedLocalWorkspace(request);
+          })
+          .mockImplementationOnce(fx.reconcileUnchangedLocalWorkspace),
       }) satisfies WorkerTunnelHandle;
       const environments = fx.workerTurnEnvironments(tunnel, {
         get: vi.fn(() => environment),
@@ -392,7 +398,7 @@ describe("worker turn launcher terminal results", () => {
         if (outerFallback) {
           expect(candidateFailures[0]).toBeInstanceOf(WorkerTurnExecutionError);
           expect(candidateFailures[0]).toMatchObject({ message: failure });
-          expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
+          expect(tunnel.reconcileWorkspace).toHaveBeenCalledTimes(providerFailure ? 3 : 2);
           expect((await fx.openSessionManager()).getLeafEntry()).toMatchObject({
             type: "message",
             message: {
@@ -728,7 +734,7 @@ describe("worker turn launcher terminal results", () => {
     expect(reconcileActivePlacement).toHaveBeenCalledWith(fx.ENVIRONMENT_ID);
     expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
     expect(await fx.placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
-    expect(worker.tunnel.reconcileWorkspace).toHaveBeenCalledTimes(2);
+    expect(worker.tunnel.reconcileWorkspace).toHaveBeenCalledTimes(3);
     expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
     expect(harness.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();

@@ -14,6 +14,7 @@ import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunStateActive } from "../shared/session-run-state.js";
 import { normalizeSessionSearchText } from "../shared/session-search-text.js";
 import { filterSessionEntries, type SessionListFilterParams } from "./session-list-filters.js";
+import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
 import {
   readSessionListSelectionFacts,
   type SessionListModelFactsLookup,
@@ -29,8 +30,20 @@ import {
 import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
+const now = 1_800_000_000_000;
+const searchKeys = (params: SessionListFilterParams) =>
+  filterSessionEntries(params).entries.map(([key]) => key);
+
+function searchTargets(rows: [string, SessionEntry][]) {
+  return new Map(
+    rows.map(([key, entry]) => [
+      key,
+      { agentId: key.split(":")[1]!, entry, selection: readSessionListSelectionFacts(key, entry) },
+    ]),
+  );
+}
+
 test("non-status vocabulary misses skip per-row run state and model facts", () => {
-  const now = 1_800_000_000_000;
   const rowContext = buildSessionListRowMetadataContext({ now });
   const display = vi.spyOn(rowContext.subagentRuns, "getDisplaySubagentRun");
   const projectActiveRun = vi.fn(() => ({ active: false }));
@@ -43,16 +56,7 @@ test("non-status vocabulary misses skip per-row run state and model facts", () =
       modelOverride: "raw-alias",
     },
   ]);
-  const targets = new Map(
-    rows.map(([key, entry]) => [
-      key,
-      {
-        agentId: "main",
-        entry,
-        selection: readSessionListSelectionFacts(key, entry),
-      },
-    ]),
-  );
+  const targets = searchTargets(rows);
   const normalizeModelId = vi.fn(({ modelId }: ProviderNormalizeModelIdContext) =>
     modelId === "raw-alias" ? "hidden-canonical" : modelId,
   );
@@ -113,16 +117,13 @@ test("non-status vocabulary misses skip per-row run state and model facts", () =
     expect(display.mock.calls.length).toBeLessThanOrEqual(rows.length);
     normalizeModelId.mockClear();
     params.opts.search = "hidden-canonical";
-    expect(filterSessionEntries(params).entries.map(([key]) => key)).toEqual(
-      rows.map(([key]) => key),
-    );
+    expect(searchKeys(params)).toEqual(rows.map(([key]) => key));
     expect(getModelFacts).toHaveBeenCalledTimes(rows.length);
     expect(normalizeModelId).toHaveBeenCalledTimes(rows.length + 1);
   });
 });
 
 test("automatic runtime labels use loaded vocabulary without per-row support checks", () => {
-  const now = 1_800_000_000_000;
   const cfg = { agents: { defaults: { model: "fixture/auto-model" }, entries: { main: {} } } };
   const key = "agent:main:fixture";
   const entry: SessionEntry = { sessionId: "fixture", updatedAt: now };
@@ -161,7 +162,6 @@ test("automatic runtime labels use loaded vocabulary without per-row support che
 });
 
 test("native models and prepared runtime labels outside the catalog retain their matches", () => {
-  const now = 1_800_000_000_000;
   const cfg = {
     agents: {
       defaults: { model: "short", models: { "openai/gpt-4.1": { alias: "short" } } },
@@ -170,6 +170,7 @@ test("native models and prepared runtime labels outside the catalog retain their
   };
   const key = "agent:main:fixture";
   const entry: SessionEntry = { sessionId: "fixture", updatedAt: now, status: "done" };
+  const targets = searchTargets([[key, entry]]);
   const ownership: AgentHarnessSessionRuntimeOwnership = {
     model: "native",
     auth: "native",
@@ -203,11 +204,7 @@ test("native models and prepared runtime labels outside the catalog retain their
     opts: {},
     now,
     entries: () => [[key, entry]],
-    getTarget: () => ({
-      agentId: "main",
-      entry,
-      selection: readSessionListSelectionFacts(key, entry),
-    }),
+    getTarget: (sessionKey) => targets.get(sessionKey),
     getModelFacts,
     modelSearchMayMatch: (search) =>
       modelFacts.mayMatchSessionRowModelSearch(
@@ -226,28 +223,25 @@ test("native models and prepared runtime labels outside the catalog retain their
     involvementKeys: () => new Set(),
     projectActiveRun: () => ({ active: false }),
   };
+  const assertSearch = (search: string, factReads: number) => {
+    params.opts = { search };
+    const expected = eagerSearch(params, key, entry);
+    getModelFacts.mockClear();
+    expect(searchKeys(params), search).toEqual(expected ? [key] : []);
+    expect(getModelFacts.mock.calls.length, search).toBe(factReads);
+    return expected;
+  };
   for (const model of ["native-only-target", "different-native-target"]) {
     ownership.modelRef = { provider: "fixture-native", model };
-    for (const search of [
-      model,
-      `fixture-native/${model}`,
-      "fixture-runtime",
-      "running",
-      "idle",
-      "zz-no-match",
-    ]) {
-      params.opts = { search };
-      const expected = eagerSearch(params, key, entry);
-      getModelFacts.mockClear();
-      expect(
-        filterSessionEntries(params).entries.map(([value]) => value),
-        search,
-      ).toEqual(expected ? [key] : []);
-      expect(getModelFacts.mock.calls.length, search).toBe(
-        search === model || search === `fixture-native/${model}` || search === "fixture-runtime"
-          ? 1
-          : 0,
-      );
+    for (const [search, factReads] of [
+      [model, 1],
+      [`fixture-native/${model}`, 1],
+      ["fixture-runtime", 1],
+      ["running", 0],
+      ["idle", 0],
+      ["zz-no-match", 0],
+    ] as const) {
+      assertSearch(search, factReads);
     }
   }
   ownership.modelRef = undefined;
@@ -256,24 +250,13 @@ test("native models and prepared runtime labels outside the catalog retain their
     ["openai/gpt-4.1", 0],
     ["short", 1],
   ] as const) {
-    params.opts = { search };
-    const expected = eagerSearch(params, key, entry);
-    expect(expected, search).toBe(search !== "short");
-    getModelFacts.mockClear();
-    expect(
-      filterSessionEntries(params).entries.map(([value]) => value),
-      search,
-    ).toEqual(expected ? [key] : []);
-    expect(getModelFacts.mock.calls.length, search).toBe(factReads);
+    expect(assertSearch(search, factReads), search).toBe(search !== "short");
   }
   params.projectActiveRun = () => ({ active: true });
-  params.opts = { search: "running" };
-  getModelFacts.mockClear();
-  expect(filterSessionEntries(params).entries.map(([value]) => value)).toEqual([key]);
-  expect(getModelFacts).not.toHaveBeenCalled();
+  expect(assertSearch("running", 0)).toBe(true);
   acp.backend = "agent:fixture-runtime";
   params.opts = { search: acp.backend };
-  expect(filterSessionEntries(params).entries.map(([value]) => value)).toEqual([key]);
+  expect(searchKeys(params)).toEqual([key]);
 });
 
 // The original eager predicate is the oracle for query gates and per-call memo keys.
@@ -354,7 +337,6 @@ function eagerSearch(params: SessionListFilterParams, key: string, entry: Sessio
 }
 
 test("search preserves the eager predicate's rows and order across vocabulary substrings and request scopes", () => {
-  const now = 1_800_000_000_000;
   let seed = 242;
   const choose = <T>(items: readonly T[]): T => {
     seed ^= seed << 13;
@@ -381,10 +363,10 @@ test("search preserves the eager predicate's rows and order across vocabulary su
       modelOverrideRouteResolution: choose([undefined, "resolved"] as const),
       modelOverrideFallbackOriginProvider: choose(providers),
       modelOverrideFallbackOriginModel: choose(models),
-      ...(index % 3
-        ? {}
-        : {
-            goal: {
+      goal:
+        index % 3
+          ? undefined
+          : {
               schemaVersion: 1,
               id: `goal-${index}`,
               objective: "Investigate sparse targets",
@@ -396,19 +378,9 @@ test("search preserves the eager predicate's rows and order across vocabulary su
               continuationTurns: 0,
               lastStatusNote: "Waiting for review",
             },
-          }),
     },
   ]);
-  const targets = new Map(
-    rows.map(([key, entry]) => [
-      key,
-      {
-        agentId: key.split(":")[1]!,
-        entry,
-        selection: readSessionListSelectionFacts(key, entry),
-      },
-    ]),
-  );
+  const targets = searchTargets(rows);
   const runs = rows
     .filter((_, index) => index % 5 === 0)
     .map(([key], index) => ({
@@ -430,7 +402,7 @@ test("search preserves the eager predicate's rows and order across vocabulary su
     }),
   });
   const facts = new Map<string, ReturnType<SessionListModelFactsLookup>>(
-    rows.map(([key]): [string, ReturnType<SessionListModelFactsLookup>] => [
+    rows.map(([key], index): [string, ReturnType<SessionListModelFactsLookup>] => [
       key,
       {
         selectedModel: {
@@ -443,6 +415,7 @@ test("search preserves the eager predicate's rows and order across vocabulary su
           agentRuntime: {
             id: choose(["openclaw", "codex", "acp"]),
             source: "implicit",
+            ...(index % 2 ? { fallback: "portable-mode" } : {}),
           },
           acpMeta: undefined,
         },
@@ -510,6 +483,34 @@ test("search preserves the eager predicate's rows and order across vocabulary su
     "agent:main",
   ];
   const searches = [...vocabulary];
+  // Every field the model matcher can emit must survive its vocabulary gate.
+  const modelFields: Array<string | undefined> = [];
+  for (const [key, entry] of rows) {
+    const source = facts.get(key)!;
+    for (const identity of [
+      { provider: entry.modelProvider, model: entry.model },
+      resolveSessionModelIdentityRef(
+        params.cfg,
+        entry,
+        targets.get(key)!.agentId,
+        rowContext.subagentRuns.getDisplaySubagentRun(key)?.model,
+        { allowPluginNormalization: false },
+      ),
+      source.selectedModel,
+      source.rowModelIdentity,
+    ]) {
+      addSessionListSearchModelFields(modelFields, identity);
+    }
+    modelFields.push(formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime));
+  }
+  for (const field of new Set(modelFields.map(normalizeLowercaseStringOrEmpty))) {
+    for (const query of [field, field.slice(1), field.slice(0, -1)]) {
+      if (query) {
+        expect(params.modelSearchMayMatch!(query), query).toBe(true);
+        searches.push(query);
+      }
+    }
+  }
   for (let index = 0; index < 256; index++) {
     const word = choose(vocabulary);
     const start = choose(Array.from({ length: word.length + 1 }, (_, i) => i));
@@ -520,9 +521,6 @@ test("search preserves the eager predicate's rows and order across vocabulary su
     const expected = rows
       .filter(([key, entry]) => eagerSearch(params, key, entry))
       .map(([key]) => key);
-    expect(
-      filterSessionEntries(params).entries.map(([key]) => key),
-      search,
-    ).toEqual(expected);
+    expect(searchKeys(params), search).toEqual(expected);
   }
 });

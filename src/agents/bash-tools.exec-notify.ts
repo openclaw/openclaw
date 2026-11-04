@@ -225,6 +225,9 @@ async function recoverExecExitNotificationsForAgents(
             target,
             id,
             {
+              // The pending-input store binds a source turn to one request and run. A
+              // completion or earlier notice interrupted before adoption keeps its key.
+              sourceTurnId: `exec:${id}:restart:${getAgentEventLifecycleGeneration()}`,
               abortSignal: signal,
               assertCurrent: () => {
                 signal.throwIfAborted();
@@ -279,7 +282,7 @@ function enqueueExecExitNotification(
     sessionKey: target.sessionKey!,
     source: "exec",
     contextKey: options.contextKey ?? `exec:${id}`,
-    sourceTurnId: `exec:${id}`,
+    sourceTurnId: options.sourceTurnId ?? `exec:${id}`,
     expectedTarget: target,
   });
 }

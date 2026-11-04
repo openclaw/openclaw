@@ -27,6 +27,8 @@ import {
   type StressInput,
   type StressEvent,
   type RestartRecord,
+  type StressSettlement,
+  type SharedRateLimitProbe,
 } from "./team-shape-restart-report.ts";
 
 export async function runRestartStress(argv: string[]) {
@@ -91,6 +93,8 @@ export async function runRestartStress(argv: string[]) {
   const workspace = await mkdtemp(path.join(tmpdir(), "openclaw-restart-workspaces-"));
   const entries: Record<string, unknown> = {};
   const effects: Record<string, string[]> = {};
+  let settlement: StressSettlement | undefined;
+  let sharedRateLimit: SharedRateLimitProbe | undefined;
   try {
     for (let i = 0; i < concurrency; i++) {
       const directory = path.join(workspace, `stress${i}`);
@@ -329,17 +333,38 @@ export async function runRestartStress(argv: string[]) {
       input.rejected = isGatewayProtocolResponseError(error);
     }
   };
-  const waitUntil = async (predicate: () => boolean | Promise<boolean>, ms: number) => {
+  const waitUntil = async (
+    predicate: () => boolean | Promise<boolean>,
+    ms: number,
+    pollMs = 500,
+  ) => {
     const until = Math.min(Date.now() + ms, deadline);
     while (Date.now() < until) {
       abort.signal.throwIfAborted();
       if (await predicate()) {
         return true;
       }
-      await delay(500, undefined, { signal: abort.signal });
+      await delay(pollMs, undefined, { signal: abort.signal });
     }
     return false;
   };
+  const summarize = () =>
+    summarizeRestartStress({
+      inputs,
+      events,
+      restarts,
+      histories,
+      log: logs.join("") || instance.logs(),
+      effects,
+      provider: {
+        ...provider.counters,
+        requests: provider.requests,
+        firstActivity: Object.fromEntries(activity),
+      },
+      errors,
+      settlement,
+      sharedRateLimit,
+    });
   try {
     await instance.startGateway();
     trackProcess();
@@ -379,7 +404,7 @@ export async function runRestartStress(argv: string[]) {
           const effect = path.join(workspace, `stress${i}`, `${id}.effects`);
           const scenario =
             i % 4 === 1
-              ? "Spawn two subagents with sessions_spawn to independently check input.txt arithmetic. Wait for their results before finishing."
+              ? "Read input.txt, then ask two independent helpers to check the calculation. Give each helper the calculation and all context it needs in its task so it can answer without creating a checkout or modifying files. Wait for both results and summarize whether they agree."
               : i % 4 === 2
                 ? "Start a background exec (sleep 30), then keep working by reading input.txt and writing result.txt. Check the background process before finishing."
                 : "Use read to inspect input.txt, edit to add an explanation, write result.txt containing the computed result, and exec to verify it.";
@@ -387,7 +412,7 @@ export async function runRestartStress(argv: string[]) {
             key,
             id,
             kind,
-            `${scenario}\nUse only this throwaway workspace. Never inspect environment or credentials.\nEFFECT_PATH=${effect}\nAppend EFFECT_${id} to that file once (inspect it before resuming after interruption). Then run exec sleep 25 while you continue working; wait for it to finish before your final answer. Finish with exactly DONE_${id}. Preserve this completion marker across steering and recovery.`,
+            `${scenario}\nUse only this throwaway workspace. Never inspect environment or credentials.\nEFFECT_PATH=${effect}\nAppend EFFECT_${id} to that file once (inspect it before resuming after interruption). Then run exec sleep 25 while you continue working; wait for it to finish before your final answer. Finish with exactly DONE_${id} alone on the final line of your final answer. Preserve this completion marker across steering and recovery.`,
           );
         }),
       );
@@ -519,27 +544,69 @@ export async function runRestartStress(argv: string[]) {
     const rateKeys = await Promise.all(
       Array.from({ length: concurrency }, (_, i) => createSession(`stress${i}`, `rate-${i}`)),
     );
-    provider.rejectFor(values.dry ? 5000 : 30_000);
-    await Promise.all(
+    const rateStartedAt = Date.now();
+    const resetAt = provider.rejectFor(30_000);
+    const rateSends = Promise.all(
       Array.from({ length: concurrency }, (_, i) =>
         send(rateKeys[i]!, `rate-${i}`, "rate-limit", `Reply exactly DONE_rate-${i}. No tools.`),
       ),
     );
-    await waitUntil(async () => {
-      let complete = true;
-      for (let i = 0; i < concurrency; i++) {
-        if (stressAnswerMessages(await history(rateKeys[i]!), `rate-${i}`).length === 0) {
-          complete = false;
+    await waitUntil(
+      () =>
+        provider.requests.some(
+          (request) => request.at >= rateStartedAt && request.primary && request.status === 429,
+        ),
+      60_000,
+    );
+    const first429 = provider.requests.find(
+      (request) => request.at >= rateStartedAt && request.primary && request.status === 429,
+    );
+    if (first429) {
+      sharedRateLimit = { first429At: first429.at, resetAt };
+      const newcomer = await createSession("stress0", "rate-newcomer");
+      sharedRateLimit.newcomerCreatedAt = Date.now();
+      await send(
+        newcomer,
+        "rate-newcomer",
+        "rate-newcomer",
+        "Reply exactly DONE_rate-newcomer. No tools.",
+      );
+    }
+    await rateSends;
+    console.log("SETTLE: observe every accepted input for up to ten minutes");
+    settlement = {
+      startedAt: Date.now(),
+      deadline: Math.min(Date.now() + 600_000, deadline),
+      timedOut: false,
+    };
+    const settled = await waitUntil(
+      async () => {
+        for (const key of new Set(inputs.map((input) => input.sessionKey))) {
+          await history(key);
         }
-      }
-      return complete;
-    }, 180_000);
-    for (const key of new Set(inputs.map((input) => input.sessionKey))) {
-      await history(key);
+        return summarize().report.inputs.every(
+          (input) =>
+            !input.accepted ||
+            (input.outcome !== "unresolved" &&
+              input.pending.length === 0 &&
+              (!isRecord(input.sessionInfo) || input.sessionInfo.hasActiveRun !== true)),
+        );
+      },
+      600_000,
+      5000,
+    );
+    settlement.finishedAt = Date.now();
+    settlement.timedOut = !settled;
+    if (!settled) {
+      console.log("SETTLE deadline: unresolved accepted inputs are explicitly timed out");
     }
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
   } finally {
+    if (settlement && settlement.finishedAt === undefined) {
+      settlement.finishedAt = Date.now();
+      settlement.timedOut = settlement.finishedAt >= settlement.deadline;
+    }
     clearTimeout(timer);
     process.off("SIGINT", interrupt);
     process.off("SIGTERM", interrupt);
@@ -586,20 +653,7 @@ export async function runRestartStress(argv: string[]) {
     await rm(workspace, { recursive: true });
     const log = logs.join("") || instance.logs();
     await writeFile(path.join(output, "gateway.log"), log, { mode: 0o600 });
-    const { report, markdown } = summarizeRestartStress({
-      inputs,
-      events,
-      restarts,
-      histories,
-      log,
-      effects,
-      provider: {
-        ...provider.counters,
-        requests: provider.requests,
-        firstActivity: Object.fromEntries(activity),
-      },
-      errors,
-    });
+    const { report, markdown } = summarize();
     await writeFile(
       path.join(output, "report.json"),
       JSON.stringify(

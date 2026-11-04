@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { getDatabaseEngineInput } from "openclaw/plugin-sdk/database-engine-runtime";
+import { pathEntryExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
@@ -41,6 +43,10 @@ export {
   type StandingIntentStatus,
 } from "./standing-intents-model.js";
 
+async function isMissingSqliteAgentDatabase(path: string): Promise<boolean> {
+  return getDatabaseEngineInput("agent") === undefined && !(await pathEntryExists(path));
+}
+
 function executeStandingIntent<Key extends keyof StandingIntentOperations>(
   params: { agentId: string; assertCurrent?: () => void },
   command: { type: Key; input: StandingIntentOperations[Key]["input"] },
@@ -61,6 +67,16 @@ async function executeStandingIntent(
       const facts = lifecycleFacts.get(options.path);
       if (command.type === "match" && facts?.empty) {
         return [];
+      }
+      // Sweeps only maintain stored rows. Opening a missing SQLite agent database would
+      // create and prepare it during Gateway startup, before any agent has used it.
+      if (command.type === "sweep" && (await isMissingSqliteAgentDatabase(options.path))) {
+        assertCurrent?.();
+        if (facts) {
+          facts.empty = true;
+        }
+        scheduleMaintenance?.(options.path, Infinity);
+        return undefined;
       }
       // Keep committed absence in owner order with creates and lifecycle transitions.
       if (facts) {

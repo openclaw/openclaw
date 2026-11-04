@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { assertOperatorAccessProgramAllowed } from "../../agents/admitted-run-context.js";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
@@ -69,7 +70,6 @@ import {
   normalizeMainKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { resolveAgentHarnessSessionContextError } from "../../sessions/agent-harness-session-key.js";
 import {
   isCronExecutionInputProvenance,
   isInterSessionInputProvenance,
@@ -123,7 +123,11 @@ import {
   ReplySessionInitConflictError,
   runWithSessionInitConflictRetry,
 } from "./session-init-conflict-retry.js";
-import type { SessionInitResult } from "./session-init.types.js";
+import type {
+  InitSessionLifecycleMutation,
+  InitSessionStateAttemptOutcome,
+  SessionInitResult,
+} from "./session-init.types.js";
 import {
   assertReplySessionInitializationAllowed,
   prepareReplySessionInitialization,
@@ -151,44 +155,7 @@ import { withoutThreadDelivery } from "./session-route-reset.js";
 
 const log = createSubsystemLogger("session-init");
 
-type InitSessionLifecycleMutation = {
-  kind: "lifecycle-mutation";
-  sessionId: string;
-  sessionKey: string;
-  lifecycleRevision?: string;
-  resetTriggered: boolean;
-};
-type InitSessionStateAttemptOutcome =
-  | { kind: "complete"; result: SessionInitResult }
-  | InitSessionLifecycleMutation;
-
-type ReplySessionPreprocessingState = {
-  sessionEntry?: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-};
-
-/** Resolves durable ownership before utility preprocessing can invoke another model. */
-export async function resolveReplySessionPreprocessingState(
-  params: Pick<InitSessionStateParams, "cfg" | "ctx">,
-): Promise<ReplySessionPreprocessingState> {
-  const attemptContext = await resolveInitSessionStateAttemptContext(params, "preprocessing");
-  const { sessionKey } = attemptContext;
-  const { currentEntry: sessionEntry } = await loadReplySessionInitializationSnapshot({
-    agentId: attemptContext.agentId,
-    storePath: attemptContext.storePath,
-    sessionKey,
-  });
-  const contextError = resolveAgentHarnessSessionContextError(sessionKey, sessionEntry);
-  if (contextError) {
-    throw new Error(contextError);
-  }
-  return {
-    sessionEntry,
-    sessionKey,
-    storePath: attemptContext.storePath,
-  };
-}
+export { resolveReplySessionPreprocessingState } from "./session-initialization-admission.js";
 
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
   prepareChannelParticipantObservation(params.ctx);
@@ -249,7 +216,10 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
       sessionId: candidate.sessionId,
       explicitReset: candidate.resetTriggered,
       signal: params.signal,
-      shouldPreempt: () => preparedOutcome === undefined,
+      shouldPreempt: () => {
+        assertOperatorAccessProgramAllowed(params.operatorAuthority, candidate.cyberAccessProgram);
+        return preparedOutcome === undefined;
+      },
       stopChildren: async (applyParentStop) => await stopResetSubagents(applyParentStop),
       prepare: async () => {
         // Cancellation affects live work; do not drain a replacement session
@@ -291,7 +261,13 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
                 sessionKey: candidate.sessionKey,
                 agentId: attemptContext.agentId,
                 assertCurrent: cleanup.assertCurrent,
-                beforeKill: applyParentStop,
+                beforeKill: async () => {
+                  assertOperatorAccessProgramAllowed(
+                    params.operatorAuthority,
+                    current.cyberAccessProgram,
+                  );
+                  return await applyParentStop();
+                },
               });
             } finally {
               cleanup.release();
@@ -557,12 +533,17 @@ async function initSessionStateAttemptLocked(
     lifecycleMutationIdentity.lifecycleRevision === previousSessionEntry.lifecycleRevision,
   );
   if (previousSessionEntry && !lifecycleMutationMatches) {
+    assertOperatorAccessProgramAllowed(
+      params.operatorAuthority,
+      previousSessionEntry.cyberAccessProgram,
+    );
     return {
       kind: "lifecycle-mutation",
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
       lifecycleRevision: previousSessionEntry.lifecycleRevision,
       resetTriggered,
+      cyberAccessProgram: previousSessionEntry.cyberAccessProgram,
     };
   }
   const recoveredTerminalEntry =
@@ -795,12 +776,16 @@ async function initSessionStateAttemptLocked(
       bindCreation: params.bindSessionCreation,
       onCreated: params.onSessionCreated,
       ...sessionTarget,
-      commitGuard: !entry
-        ? () => {
-            params.signal?.throwIfAborted();
-            assertPreparedSkillLibrarySelection(ctx.SessionCreation?.skillLibrarySelections);
-          }
-        : undefined,
+      commitGuard: () => {
+        params.signal?.throwIfAborted();
+        assertOperatorAccessProgramAllowed(
+          params.operatorAuthority,
+          sessionEntry.cyberAccessProgram,
+        );
+        if (!entry) {
+          assertPreparedSkillLibrarySelection(ctx.SessionCreation?.skillLibrarySelections);
+        }
+      },
       activeSessionKey: sessionKey,
       expectedRevision: initializationSnapshot.revision,
       relatedSessionKeys,

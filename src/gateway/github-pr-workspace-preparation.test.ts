@@ -5,7 +5,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isNodeError } from "@openclaw/fs-safe/path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as sandboxBackend from "../agents/sandbox/backend.js";
+import { resolveSandboxContext } from "../agents/sandbox/context.js";
+import { acquireSandboxGatewayOwner } from "../agents/sandbox/registry.test-support.js";
 import { ensureEmptyWorktreeSource } from "../agents/worktrees/empty-source.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
@@ -179,6 +182,70 @@ describe("existing PR preparation through the registered agent action", () => {
       );
       expect(f.writes).toEqual([]);
       expect(f.externalWrites).toEqual([]);
+    },
+  );
+
+  it.each(["clean", "authored directory", "cache-only directory"] as const)(
+    "admits only pristine source after native managed sandbox layout (%s)",
+    async (contents) => {
+      const f = await fixture({ empty: true, fork: true });
+      f.config.agents ??= {};
+      f.config.agents.defaults ??= {};
+      f.config.agents.defaults.sandbox = {
+        mode: "all",
+        workspaceAccess: "rw",
+        prune: { idleHours: 0, maxAgeDays: 0 },
+        docker: { user: "1000:1000" },
+      };
+      using gatewayOwner = acquireSandboxGatewayOwner(process.env.OPENCLAW_STATE_DIR!);
+      // Only container transport is synthetic; layout, projection and source import stay real.
+      const create = vi
+        .spyOn(sandboxBackend, "createSandboxBackend")
+        .mockResolvedValue(f.sandbox.backend!);
+      let sandbox: Awaited<ReturnType<typeof resolveSandboxContext>> = null;
+      try {
+        sandbox = await resolveSandboxContext({
+          config: f.config,
+          agentId: "main",
+          sessionKey: f.session.sessionKey,
+          workspaceDir: f.cwd,
+          assertCurrent: () => {
+            gatewayOwner.assertCurrent();
+            f.guest.assertCurrent();
+          },
+        });
+        expect(sandbox?.workspaceSource).toBe("managed-worktree");
+        if (contents === "authored directory") {
+          await fs.mkdir(path.join(f.projection, "saved-empty"));
+          await expect(f.invoke({}, sandbox)).rejects.toThrow(
+            "existing dirty, untracked, or unpublished work",
+          );
+          expect((await fs.stat(path.join(f.projection, "saved-empty"))).isDirectory()).toBe(true);
+          await expect(fs.stat(path.join(f.projection, "pr.txt"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          expect(f.readSession().worktree?.githubPullRequest).toBeUndefined();
+        } else {
+          if (contents === "cache-only directory") {
+            await fs.mkdir(path.join(f.projection, ".cache", "vitest"), { recursive: true });
+          }
+          expect(await f.invoke({}, sandbox)).toMatchObject({
+            status: "prepared",
+            headCommit: f.headCommit,
+          });
+          expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
+            "original PR contents\n",
+          );
+          expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
+          await expect(fs.stat(path.join(f.cwd, ".cache"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
+        expect(f.writes).toEqual([]);
+      } finally {
+        sandbox?.[Symbol.dispose]?.();
+        create.mockRestore();
+      }
     },
   );
 

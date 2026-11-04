@@ -29,6 +29,16 @@ const properties = (names: Record<number, string>): Edges =>
   Object.entries(names).map(([target, name]) => [0, Number(target), name]);
 const internals = (...targets: number[]): Edges => targets.map((target) => [3, target]);
 
+function scriptNode(
+  id: number,
+  name: string,
+  source: number,
+  nameNode: number,
+  additionalEdges: Edges = [],
+): FixtureNode {
+  return [id, name, 10, [[3, source, "source"], [3, nameNode, "name"], ...additionalEdges], "code"];
+}
+
 function fixture(grown: boolean) {
   const growthEdges: Edges = grown ? [[0, 8]] : [];
   const growthNodes: FixtureNode[] = grown
@@ -405,36 +415,9 @@ it("attributes excess string nodes once, preserves unreachable accounting, and e
 it("attributes compiled scripts without exposing unreviewed names or double-counting shared code", () => {
   const data = snapshot([
     [1, "root", 0, refs(1, 2, 3, 4, 5, 6, 20, 22, 23, 24, 25)],
-    [
-      3,
-      "/product/a.mjs?secret=one",
-      10,
-      [
-        [3, 17, "source"],
-        [3, 18, "name"],
-      ],
-      "code",
-    ],
-    [
-      5,
-      "/product/a.mjs#secret-two",
-      10,
-      [
-        [3, 17, "source"],
-        [3, 19, "name"],
-      ],
-      "code",
-    ],
-    [
-      7,
-      "/private/x.mjs?secret=three",
-      10,
-      [
-        [3, 17, "source"],
-        [3, 21, "name"],
-      ],
-      "code",
-    ],
+    scriptNode(3, "/product/a.mjs?secret=one", 17, 18),
+    scriptNode(5, "/product/a.mjs#secret-two", 17, 19),
+    scriptNode(7, "/private/x.mjs?secret=three", 17, 21),
     [
       9,
       "privateFunction",
@@ -511,46 +494,10 @@ it("attributes compiled scripts without exposing unreviewed names or double-coun
     [39, "/product/a.mjs#secret-two", 30, [], "string"],
     [41, "unassociated-code", 16, [], "code"],
     [43, "/private/x.mjs?secret=three", 30, [], "string"],
-    [
-      45,
-      "/private/x.mjs#another",
-      10,
-      [
-        [3, 17, "source"],
-        [3, 21, "name"],
-      ],
-      "code",
-    ],
-    [
-      47,
-      "",
-      10,
-      [
-        [3, 17, "source"],
-        [3, 21, "name"],
-      ],
-      "code",
-    ],
-    [
-      49,
-      "",
-      10,
-      [
-        [3, 17, "source"],
-        [3, 21, "name"],
-      ],
-      "code",
-    ],
-    [
-      51,
-      "/product/a.mjs.evil",
-      10,
-      [
-        [3, 17, "source"],
-        [3, 21, "name"],
-      ],
-      "code",
-    ],
+    scriptNode(45, "/private/x.mjs#another", 17, 21),
+    scriptNode(47, "", 17, 21),
+    scriptNode(49, "", 17, 21),
+    scriptNode(51, "/product/a.mjs.evil", 17, 21),
     [53, "system / TrustedByteArray", 6, [[3, 27, "payload"]], "code"],
     [55, "secret payload", 70, [], "string"],
   ]);
@@ -604,22 +551,12 @@ it("attributes compiled scripts without exposing unreviewed names or double-coun
 });
 
 it("matches decorated V8 Script labels and keeps unnamed scripts separate", () => {
-  const script = (id: number, name: string): FixtureNode => [
-    id,
-    name,
-    10,
-    [
-      [3, 5, "source"],
-      [3, 6, "name"],
-    ],
-    "code",
-  ];
   const data = snapshot([
     [1, "root", 0, refs(1, 2, 3, 4)],
-    script(3, "system / Script / /product/b.mjs?one"),
-    script(5, "system / Script / /product/b.mjs#two"),
-    script(7, "system / Script"),
-    script(9, "system / Script"),
+    scriptNode(3, "system / Script / /product/b.mjs?one", 5, 6),
+    scriptNode(5, "system / Script / /product/b.mjs#two", 5, 6),
+    scriptNode(7, "system / Script", 5, 6),
+    scriptNode(9, "system / Script", 5, 6),
     [11, "secret source contents", 20, [], "string"],
     [13, "script name", 10, [], "string"],
   ]);
@@ -634,23 +571,12 @@ it("matches decorated V8 Script labels and keeps unnamed scripts separate", () =
 });
 
 it("unions flat and shared rope source strings without counting other script data", () => {
-  const script = (id: number, name: string, source: number): FixtureNode => [
-    id,
-    name,
-    10,
-    [
-      [3, source, "source"],
-      [3, 10, "name"],
-      [3, 11, "unrelated"],
-    ],
-    "code",
-  ];
   const data = snapshot([
     [1, "root", 0, refs(1, 2, 3, 4, 11, 12)],
-    script(3, "/product/a.mjs?private", 5),
-    script(5, "/product/a.mjs#private", 6),
-    script(7, "/private/b.mjs", 7),
-    script(9, "/product/flat.mjs", 13),
+    scriptNode(3, "/product/a.mjs?private", 5, 10, [[3, 11, "unrelated"]]),
+    scriptNode(5, "/product/a.mjs#private", 6, 10, [[3, 11, "unrelated"]]),
+    scriptNode(7, "/private/b.mjs", 7, 10, [[3, 11, "unrelated"]]),
+    scriptNode(9, "/product/flat.mjs", 13, 10, [[3, 11, "unrelated"]]),
     [
       11,
       "rope",

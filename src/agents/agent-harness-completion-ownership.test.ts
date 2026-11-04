@@ -1,5 +1,5 @@
 import path from "node:path";
-import { assert, expect, it } from "vitest";
+import { afterEach, assert, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import {
@@ -45,6 +45,9 @@ import { persistAgentSession } from "./command/attempt-execution.shared.js";
 const requesterSessionKey = "agent:main:main";
 const sourceSessionKey = "native-child:one";
 const sourceRunId = "announce:one";
+
+afterEach(() => resetPluginStateStoreForTests({ closeDatabase: false }));
+
 function input() {
   const entry: SessionEntry = {
     sessionId: "requester-one",
@@ -298,7 +301,6 @@ it.each([
         foreign?.close();
         await Promise.allSettled([operation, ...(mutation ? [mutation] : [])]);
         guard.release();
-        resetPluginStateStoreForTests();
       }
     });
   },

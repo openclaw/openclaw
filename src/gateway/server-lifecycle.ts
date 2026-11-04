@@ -18,6 +18,7 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   recordRemoteNodeInfo,
   removeRemoteNodeInfo,
@@ -250,6 +251,10 @@ export async function prepareGatewayLifecycle(params: {
     },
   });
   // Kernel methods are the only writers for readiness and advertised-method state.
+  const startupMethodsReady = createDeferredCore();
+  if (unavailableGatewayMethods.size === 0) {
+    startupMethodsReady.resolve();
+  }
   let readyAnnounced = false;
   const announceReady = () => {
     if (
@@ -264,6 +269,7 @@ export async function prepareGatewayLifecycle(params: {
     }
   };
   const kernel = {
+    startupMethodsReady: startupMethodsReady.promise,
     pluginRuntimeGeneration,
     pluginMetadata: params.pluginMetadata,
     setDispatchReady: (ready: boolean) => {
@@ -278,6 +284,7 @@ export async function prepareGatewayLifecycle(params: {
           unavailableGatewayMethods.delete(method);
         }
       }
+      startupMethodsReady.resolve();
       if (!options?.keepChatSendUnavailable) {
         runtime.inputRecovery.releaseInitial();
       }

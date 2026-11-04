@@ -1,4 +1,3 @@
-/* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -27,6 +26,8 @@ import {
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 const cacheKey = (sessionKey: string) => resolveChatSnapshotKey(snapshotHost, { sessionKey });
 function historySnapshot(message: string, sessionId = `session-${message}`): ChatSessionSnapshot {
@@ -222,7 +223,7 @@ describe("session navigation intent prefetch", () => {
       const sessionKey = "agent:main:main";
       const request = historyRequest();
       if (owner === "fresh snapshot") {
-        store.write(cacheKey(sessionKey), historySnapshot("fresh"));
+        writeSnapshotFixture(store, cacheKey(sessionKey), historySnapshot("fresh"));
         await store.flush();
       }
       updatePrefetch(
@@ -296,7 +297,7 @@ describe("session navigation intent prefetch", () => {
   it("rechecks readiness after the persisted snapshot read before requesting history", async () => {
     const sessionKey = "agent:main:stored";
     const stored = historySnapshot("stored", "session-stored");
-    store.write(cacheKey(sessionKey), stored);
+    writeSnapshotFixture(store, cacheKey(sessionKey), stored);
     await store.flush();
     cache.clear();
     const read = createDeferred<ChatSessionSnapshot | null>();

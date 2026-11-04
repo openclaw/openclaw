@@ -270,41 +270,47 @@ var External = [
   check_56 = (value) => typeof value == "string" && value === "auto",
   check_57 = (value) => typeof value == "string" && value === "ultrafast",
   check_58 = (value) => check_59(value),
-  check_59 = (value) =>
+  check_59 = (value) => check_60(value) || check_21(value),
+  check_60 = (value) => check_61(value) || check_62(value) || check_63(value),
+  check_61 = (value) => typeof value == "string" && value === "standard",
+  check_62 = (value) => typeof value == "string" && value === "daybreak_blue",
+  check_63 = (value) => typeof value == "string" && value === "daybreak_red",
+  check_64 = (value) => check_65(value),
+  check_65 = (value) =>
     typeof value == "string" &&
     (value.length <= 1e3 || (value.length <= 2e3 && CodePointCount(value) <= 1e3)),
-  check_60 = (value) => check_16(value),
-  check_61 = (value) => check_62(value),
-  check_62 = (value) =>
+  check_66 = (value) => check_16(value),
+  check_67 = (value) => check_68(value),
+  check_68 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
       (unique_16, unique_17) => External[8].test(unique_16) || check_2(value[unique_16]),
     ) &&
-    (value.mcpServers === void 0 || !("mcpServers" in value) || check_63(value.mcpServers)) &&
-    (value.mcpToolsDeny === void 0 || !("mcpToolsDeny" in value) || check_64(value.mcpToolsDeny)) &&
-    (value.skills === void 0 || !("skills" in value) || check_63(value.skills)) &&
-    (value.webSearch === void 0 || !("webSearch" in value) || check_66(value.webSearch)),
-  check_63 = (value) =>
+    (value.mcpServers === void 0 || !("mcpServers" in value) || check_69(value.mcpServers)) &&
+    (value.mcpToolsDeny === void 0 || !("mcpToolsDeny" in value) || check_70(value.mcpToolsDeny)) &&
+    (value.skills === void 0 || !("skills" in value) || check_69(value.skills)) &&
+    (value.webSearch === void 0 || !("webSearch" in value) || check_72(value.webSearch)),
+  check_69 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.entries(value).every(
       ([unique_18, unique_19], _) => !External[9].test(unique_18) || check_55(unique_19),
     ),
-  check_64 = (value) =>
+  check_70 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.entries(value).every(
-      ([unique_20, unique_21], _) => !External[10].test(unique_20) || check_65(unique_21),
+      ([unique_20, unique_21], _) => !External[10].test(unique_20) || check_71(unique_21),
     ),
-  check_65 = (value) =>
+  check_71 = (value) =>
     Array.isArray(value) && value.every((unique_22, index) => check_4(unique_22)),
-  check_66 = (value) => typeof value == "boolean",
-  check_67 = (value) => check_68(value),
-  check_68 = (value) =>
+  check_72 = (value) => typeof value == "boolean",
+  check_73 = (value) => check_74(value),
+  check_74 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -320,10 +326,10 @@ var External = [
     check_4(value.voiceSessionId) &&
     check_4(value.sessionKey) &&
     check_4(value.voice) &&
-    check_69(value.phase),
-  check_69 = (value) => check_70(value) || check_71(value),
-  check_70 = (value) => typeof value == "string" && value === "requested",
-  check_71 = (value) => typeof value == "string" && value === "cancelled",
+    check_75(value.phase),
+  check_75 = (value) => check_76(value) || check_77(value),
+  check_76 = (value) => typeof value == "string" && value === "requested",
+  check_77 = (value) => typeof value == "string" && value === "cancelled",
   isAgentRuntimeRestrictionErrorDetails = (value) => check_0(value),
   isSessionsGoalUpdateParams = (value) => check_25(value),
   isSessionsGoalClearParams = (value) => check_42(value),
@@ -331,12 +337,14 @@ var External = [
   isSessionDeviceFolder = (value) => check_46(value),
   isSessionRepository = (value) => check_49(value),
   isSessionFastMode = (value) => check_53(value),
-  isSessionTitleSource = (value) => check_58(value),
-  isSessionPermissionMode = (value) => check_60(value),
-  isSessionToolOverrides = (value) => check_61(value),
-  isTalkVoiceChangeEvent = (value) => check_67(value);
+  isSessionCyberAccessProgram = (value) => check_58(value),
+  isSessionTitleSource = (value) => check_64(value),
+  isSessionPermissionMode = (value) => check_66(value),
+  isSessionToolOverrides = (value) => check_67(value),
+  isTalkVoiceChangeEvent = (value) => check_73(value);
 export {
   isAgentRuntimeRestrictionErrorDetails,
+  isSessionCyberAccessProgram,
   isSessionDeviceFolder,
   isSessionFastMode,
   isSessionPermissionMode,

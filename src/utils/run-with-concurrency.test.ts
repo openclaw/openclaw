@@ -1,7 +1,7 @@
 import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import { runTasksWithConcurrency } from "./run-with-concurrency.js";
 
 const wait = (promise: Promise<unknown>) => withTestTimeout(promise, 1_000, "task did not settle");
@@ -121,42 +121,58 @@ it.each([
   }
 });
 
-it("preserves submitted factories and task order with bounded worker count", async () => {
+it("preserves submitted factories and task order with bounded worker count", async ({ signal }) => {
   const jobs = [heldTask(1), heldTask(2), heldTask(3), heldTask(4)] as const;
   const [first, second, third, fourth] = jobs;
   const tasks = jobs.map((job) => job.run);
   const resultPromise = runTasksWithConcurrency({ tasks, limit: 2 });
-  await wait(Promise.all([first.started, second.started]));
-  expect(jobs.map((job) => job.run.mock.calls.length)).toEqual([1, 1, 0, 0]);
-  tasks[2] = vi.fn(async () => 30);
-  tasks.push(vi.fn(async () => 50));
-  second.release();
-  await wait(third.started);
-  expect(fourth.run).not.toHaveBeenCalled();
-  first.release();
-  await wait(fourth.started);
-  third.release();
-  fourth.release();
-  const { hasError, firstError, results } = await resultPromise;
-  expect([hasError, firstError, results]).toEqual([false, undefined, [1, 2, 3, 4]]);
+  const resultSettled = Promise.allSettled([resultPromise]);
+  try {
+    await withinTest(wait(Promise.all([first.started, second.started])), signal);
+    expect(jobs.map((job) => job.run.mock.calls.length)).toEqual([1, 1, 0, 0]);
+    tasks[2] = vi.fn(async () => 30);
+    tasks.push(vi.fn(async () => 50));
+    second.release();
+    await withinTest(wait(third.started), signal);
+    expect(fourth.run).not.toHaveBeenCalled();
+    first.release();
+    await withinTest(wait(fourth.started), signal);
+    third.release();
+    fourth.release();
+    const { hasError, firstError, results } = await withinTest(resultPromise, signal);
+    expect([hasError, firstError, results]).toEqual([false, undefined, [1, 2, 3, 4]]);
+  } finally {
+    jobs.forEach((job) => job.release());
+    await resultSettled;
+    // An aggregate rejection can precede settlement of already-started tasks.
+    await Promise.allSettled(jobs.flatMap((job) => job.run.mock.results.map(({ value }) => value)));
+  }
 });
 
-it("rejects early and stops scheduling new work in stop mode", async () => {
+it("rejects early and stops scheduling new work in stop mode", async ({ signal }) => {
   const err = new Error("boom");
   const first = heldTask(10);
   const fail = vi.fn(failTask(err));
   const queued = vi.fn(async () => 30);
+  const tasks = [first.run, fail, queued];
   const run = runTasksWithConcurrency({
-    tasks: [first.run, fail, queued],
+    tasks,
     limit: 2,
     errorMode: "stop",
     throwOnError: true,
   });
 
-  await expect(run).rejects.toBe(err);
-  first.release();
-  await first.run.mock.results[0]!.value;
-  await delay(0);
-  expect([first.run, fail, queued].map((task) => task.mock.calls.length)).toEqual([1, 1, 0]);
-  expect(first.run).toHaveBeenCalledBefore(fail);
+  const runSettled = Promise.allSettled([run]);
+  try {
+    await withinTest(expect(run).rejects.toBe(err), signal);
+    first.release();
+    await withinTest(first.run.mock.results[0]!.value, signal);
+    await withinTest(delay(0), signal);
+    expect(tasks.map((task) => task.mock.calls.length)).toEqual([1, 1, 0]);
+    expect(first.run).toHaveBeenCalledBefore(fail);
+  } finally {
+    first.release();
+    await runSettled;
+    await Promise.allSettled(tasks.flatMap((task) => task.mock.results.map(({ value }) => value)));
+  }
 });

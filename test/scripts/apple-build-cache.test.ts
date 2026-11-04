@@ -220,10 +220,7 @@ it("never saves Apple inputs from PRs, dispatches, non-main refs, or frozen targ
   expect(new Set(saves.map((step: WorkflowStep) => step.uses))).toEqual(
     new Set(["actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"]),
   );
-  for (const [file, jobName] of [
-    ["ios-periphery.yml", "scan"],
-    ["macos-periphery.yml", "scan-ios"],
-  ] as const) {
+  for (const [file, jobName] of [["macos-periphery.yml", "ios-index"]] as const) {
     const steps = readWorkflow(`.github/workflows/${file}`).jobs[jobName].steps;
     expect(
       steps.some((step: WorkflowStep) => step.uses?.startsWith("actions/cache/save@")),

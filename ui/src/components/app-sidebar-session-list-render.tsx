@@ -132,7 +132,7 @@ export function renderSessionList(params: {
   const host = createMemo(() => params.host);
   // A create for a rendered custom group is placed by that section instead.
   const unplacedCreate = createMemo(() => {
-    const pending = host().pendingSessionCreate();
+    const pending = host().sessionCreateDisplay();
     const category = pending?.category;
     return category && params.sections.some((section) => section.category === category)
       ? undefined

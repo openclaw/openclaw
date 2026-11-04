@@ -58,11 +58,11 @@ import type { ValidatedCanonicalSessionValidationBatch } from "./session-canonic
 import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
 import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
 
-function settleReclamationDatabase(pathname: string): {
+async function settleReclamationDatabase(pathname: string): Promise<{
   cleanupWarnings: string[];
   settled: boolean;
-} {
-  const outcome = settleOpenClawAgentDatabaseWorkerClose(pathname);
+}> {
+  const outcome = await settleOpenClawAgentDatabaseWorkerClose(pathname);
   return {
     cleanupWarnings: outcome.errors.map((error) => error.message),
     settled: outcome.settled,
@@ -205,10 +205,10 @@ async function runColdMutationWorker(
       },
     );
   } catch (error) {
-    const cleanup = settleReclamationDatabase(data.plan.databaseOptions.path);
+    const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
     throwReclamationFailure(error, cleanup, commitGate);
   }
-  const cleanup = settleReclamationDatabase(data.plan.databaseOptions.path);
+  const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
   const workerResult = {
     result,
     ...(cleanup.cleanupWarnings.length > 0 ? { cleanupWarnings: cleanup.cleanupWarnings } : {}),
@@ -245,9 +245,9 @@ export async function runReclamationWorkerPort(
       } satisfies SqliteReclamationWorkerMessage);
     }
   });
-  const closeDatabase = () => {
+  const closeDatabase = async () => {
     checkpointResultOwnedByRequest = false;
-    const cleanup = settleReclamationDatabase(databaseOptions.path);
+    const cleanup = await settleReclamationDatabase(databaseOptions.path);
     claim?.release();
     claim = undefined;
     return cleanup;
@@ -276,7 +276,7 @@ export async function runReclamationWorkerPort(
         databaseOptions,
         async (options) => {
           if (request.type === "close") {
-            const cleanup = closeDatabase();
+            const cleanup = await closeDatabase();
             if (pooledTask) {
               if (!cleanup.settled) {
                 throw new Error("Canonical validation task could not close its agent database");
@@ -471,7 +471,7 @@ export async function runReclamationWorkerPort(
                 settled: true,
               } satisfies SqliteReclamationWorkerMessage;
             }
-            failureCleanup = closeDatabase();
+            failureCleanup = await closeDatabase();
             return throwReclamationFailure(error, failureCleanup, undefined);
           }
         },

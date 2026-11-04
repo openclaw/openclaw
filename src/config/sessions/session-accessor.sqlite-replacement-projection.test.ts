@@ -14,11 +14,11 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import * as entryReads from "./session-accessor.sqlite-entry-read.js";
 import {
   readSessionEntrySelectionSnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import * as entryStore from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
 import {
@@ -109,7 +109,7 @@ describe("session entry replacement compare-and-swap", () => {
   });
 
   it.each(["ordinary", "self-alias"] as const)(
-    "does not revisit unrelated validated entries during %s replacements",
+    "reads one validation cohort without revisiting unrelated rows during %s replacements",
     (mode) => {
       const options = { agentId: "main", path: storePath };
       const unrelatedKeys = Array.from(
@@ -124,26 +124,34 @@ describe("session entry replacement compare-and-swap", () => {
             updatedAt: 10,
           });
         }
-        const validationKeys = [scope.sessionKey, ...unrelatedKeys];
-        const expectedRows = new Map(
-          validationKeys.map((key) => [key, entryStore.readExactSessionEntryRow(database, key)!]),
-        );
+        const validationKeys = [scope.sessionKey, ...unrelatedKeys, "agent:main:absent"];
+        const { expectedRows } = readSessionEntryReplacementState(database, {
+          sessionKeys: validationKeys,
+        });
         const previous = expectedRows.get(scope.sessionKey)!.entry;
-        const read = entryStore.readExactSessionEntryRow;
+        const reads = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(database.db),
+          ["entries"],
+          (sql) => (/\bfrom\s+"session_nodes"/iu.test(sql) ? "entries" : null),
+        );
+        const prepare = entryReads.prepareExactSessionEntryRowReads;
         const observe = vi
-          .spyOn(entryStore, "readExactSessionEntryRow")
+          .spyOn(entryReads, "prepareExactSessionEntryRowReads")
           .mockImplementation((...args) => {
-            const selected = read(...args);
-            if (selected && unrelatedKeys.includes(args[1])) {
-              const entry = selected.entry;
-              Object.defineProperty(selected, "entry", {
-                get() {
-                  unrelatedReads++;
-                  return entry;
-                },
-              });
-            }
-            return selected;
+            const read = prepare(...args);
+            return (sessionKey) => {
+              const selected = read(sessionKey);
+              if (selected && unrelatedKeys.includes(sessionKey)) {
+                const entry = selected.entry;
+                Object.defineProperty(selected, "entry", {
+                  get() {
+                    unrelatedReads++;
+                    return entry;
+                  },
+                });
+              }
+              return selected;
+            };
           });
         try {
           commitSessionEntryReplacementsInDatabase(
@@ -159,11 +167,16 @@ describe("session entry replacement compare-and-swap", () => {
               })),
             },
             () => {
+              expect(reads.counts.entries).toBe(1);
+              expect(reads.rowCounts.entries).toBe(5);
               unrelatedReads = 0;
             },
           );
+          expect(reads.counts.entries).toBe(1);
+          expect(unrelatedReads).toBe(0);
         } finally {
           observe.mockRestore();
+          reads.restore();
         }
       }, options);
       expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
@@ -176,7 +189,6 @@ describe("session entry replacement compare-and-swap", () => {
           updatedAt: 10,
         });
       }
-      expect(unrelatedReads).toBe(0);
     },
   );
 

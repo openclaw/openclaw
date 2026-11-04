@@ -63,6 +63,7 @@ import { readUpdateTargetCliOptions } from "./update-command-cli-options.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
   consumeUpdateDoctorHistoricalScans,
+  observeUpdateParentDatabaseWrites,
   recordUpdateDatabaseWrites,
 } from "./update-command-database-receipts.js";
 import {
@@ -263,6 +264,13 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     if (doctorConfigWrites && executorFence && runId) {
       const snapshot = await readUpdateConfigSnapshot(resolveConfigPath());
       assertCurrent();
+      if (params.databaseBackup) {
+        await observeUpdateParentDatabaseWrites(params.databaseBackup, {
+          env: run?.env ?? baseEnv,
+          root: params.root,
+          assertCurrent,
+        });
+      }
       child = await withUpdateDoctorChild(
         {
           root: params.root,
@@ -479,6 +487,12 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
           : refusal,
       };
     }
+    // Install the child's postimage before completion callbacks persist parent ledger writes.
+    const databaseReceipt = params.databaseBackup
+      ? recordUpdateDatabaseWrites(params.databaseBackup, doctorResult?.databaseWrites, {
+          name: `${params.phase} doctor`,
+        })
+      : undefined;
     if (processSettlement) {
       params.onDoctorStep?.(processSettlement);
     }
@@ -488,13 +502,8 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       doctorStep.deferredInspectionCheckIds = doctorResult?.deferredInspectionCheckIds ?? null;
       params.onDoctorStep?.(doctorStep);
     }
-    if (params.databaseBackup) {
-      const receipt = recordUpdateDatabaseWrites(
-        params.databaseBackup,
-        doctorResult?.databaseWrites,
-        { name: `${params.phase} doctor` },
-      );
-      params.onDoctorStep?.(receipt);
+    if (databaseReceipt) {
+      params.onDoctorStep?.(databaseReceipt);
     }
     if (doctorResult?.warnings?.length) {
       params.onWarnings?.(doctorResult.warnings);

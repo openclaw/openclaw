@@ -199,6 +199,9 @@ Startup activates only runs with unfinished execution, cleanup, or requester
 obligations. Settled history stays available for listing and result reads without
 reserving completion sources or resuming it. Retention still prunes finished Swarm
 groups, including when no runs need activation.
+When shutdown begins, an active retention sweep finishes its current cleanup
+instead of draining the entire expired backlog. Remaining run records stay saved
+for cleanup after restart, including partially cleaned collector groups.
 Activation waits for source restoration and ordered completion reservations.
 Interrupted child settlement then runs in the background, with at most eight
 recoveries in flight across requester groups. Shutdown waits for accepted recovery

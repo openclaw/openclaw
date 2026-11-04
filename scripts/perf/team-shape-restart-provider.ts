@@ -19,7 +19,13 @@ export async function startRestartStressProvider(options: {
 }) {
   let rejectUntil = 0;
   const counters = { requests: 0, injected429: 0, upstream429: 0, fallbackRequests: 0 };
-  const requests: Array<{ at: number; id?: string; primary: boolean; status?: number }> = [];
+  const requests: Array<{
+    at: number;
+    id?: string;
+    primary: boolean;
+    streaming: boolean;
+    status?: number;
+  }> = [];
   const upstreamLimits: number[] = [];
   const continuations = new Map<string, { id: string; effect?: string }>();
   const controller = new AbortController();
@@ -45,7 +51,12 @@ export async function startRestartStressProvider(options: {
           : undefined;
       const id = [...text.matchAll(/INPUT_([a-z0-9-]+)/g)].at(-1)?.[1] ?? previous?.id;
       const primary = body.model === "stress-primary";
-      const entry: (typeof requests)[number] = { at: Date.now(), id, primary };
+      const entry: (typeof requests)[number] = {
+        at: Date.now(),
+        id,
+        primary,
+        streaming: body.stream !== false,
+      };
       requests.push(entry);
       counters.requests++;
       if (!primary) {
@@ -57,12 +68,15 @@ export async function startRestartStressProvider(options: {
       if (primary && Date.now() < rejectUntil) {
         counters.injected429++;
         entry.status = 429;
-        response.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
+        const retryAfterSeconds = Math.max(1, Math.ceil((rejectUntil - Date.now()) / 1000));
+        response.writeHead(429, {
+          "content-type": "application/json",
+          "retry-after": String(retryAfterSeconds),
+        });
         response.end(
           JSON.stringify({
             error: {
-              message:
-                "Rate limit reached for stress-primary in organization synthetic on tokens per min (TPM): Limit 100, Used 100, Requested 10. Please try again in 1s.",
+              message: `Rate limit reached for stress-primary in organization synthetic on tokens per min (TPM): Limit 100, Used 100, Requested 10. Please try again in ${retryAfterSeconds}s.`,
               type: "tokens",
               code: "rate_limit_exceeded",
             },
@@ -177,6 +191,7 @@ export async function startRestartStressProvider(options: {
     requests,
     rejectFor(ms: number) {
       rejectUntil = Date.now() + ms;
+      return rejectUntil;
     },
     async close() {
       controller.abort();

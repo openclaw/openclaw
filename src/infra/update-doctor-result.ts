@@ -222,6 +222,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
   let admitted = false;
   let unchanged = true;
   let receipt: UpdateDatabaseWriteReceipt | undefined;
+  const openedSqlitePaths = new Set<string>();
   const historicalScans = createUpdateDoctorHistoricalScanCapture(options);
   const read = async () => {
     if (!expectedGenerations) {
@@ -268,12 +269,17 @@ export function createUpdateDoctorDatabaseWriteCapture(
     run<T>(operation: () => T): T {
       return runWithUpdateDoctorMigrationCapture(
         {
+          openedSqlitePaths,
           expected: (pathname) => expectedGenerations?.[pathname],
           assertCurrent: () => options.assertCurrent?.(),
           accept(pathname, before, after) {
             options.assertCurrent?.();
             const expected = expectedGenerations;
-            if (!expected || !Object.hasOwn(expected, pathname) || expected[pathname] !== before) {
+            if (
+              !expected ||
+              !Object.hasOwn(expected, pathname) ||
+              (!openedSqlitePaths.has(pathname) && expected[pathname] !== before)
+            ) {
               unchanged = false;
               return;
             }
@@ -326,8 +332,13 @@ export function createUpdateDoctorDatabaseWriteCapture(
         cleanScans = historicalScans.settle(generations);
       }
       if (generations && expectedGenerations) {
-        // Only native migration publications advance the expected generation.
-        // Unattributed writes, including independent SQLite writers, remain unknown.
+        // Like the native close receipt (#177831), this can absorb raw outside writes
+        // during the update window only for databases this Doctor itself opened.
+        for (const [pathname, generation] of Object.entries(generations)) {
+          if (openedSqlitePaths.has(pathname)) {
+            expectedGenerations[pathname] = generation;
+          }
+        }
         acceptEmptyReaderTransitions(observation!);
         unchanged &&= isDeepStrictEqual(generations, expectedGenerations);
         receipt = {

@@ -368,12 +368,16 @@ describe("loadSessionDiff", () => {
     write("large.txt", "after\n".repeat(100_001));
     write("small.txt", "after\n");
 
-    const result = await readDiff();
+    const lstat = vi.spyOn(fs.promises, "lstat");
+    const result = await collectCheckoutDiff({ cwd: repoRoot });
     expect(result.files).toEqual([
       { ...changedFile("large.txt", "modified", 100_001, 1), truncated: true },
       { ...changedFile("small.txt", "modified", 1, 1), truncated: true },
     ]);
     expect(result).toMatchObject({ additions: 100_002, deletions: 2 });
+    for (const file of ["large.txt", "small.txt"]) {
+      expect(lstat.mock.calls.some(([target]) => target === path.join(repoRoot, file))).toBe(false);
+    }
   });
 
   it.each([

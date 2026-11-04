@@ -98,6 +98,19 @@ export type ProviderPrepareRuntimeAuthContext = ProviderPreferRuntimeResolvedMod
   profileId?: string;
 };
 
+/** Transport identity available to every inference capability, without invented chat limits. */
+export type ProviderRuntimeAuthModel = Pick<ProviderRuntimeModel, "id" | "provider"> &
+  Partial<Pick<ProviderRuntimeModel, "name" | "api" | "baseUrl" | "headers">>;
+
+/** Capability-aware exchange; the legacy hook retains its shipped full chat-model contract. */
+export type ProviderPrepareRuntimeAuthContextV2 = Omit<
+  ProviderPrepareRuntimeAuthContext,
+  "model"
+> & {
+  capability: "chat" | "decision";
+  model: ProviderRuntimeAuthModel;
+};
+
 /**
  * Result of `prepareRuntimeAuth`.
  *

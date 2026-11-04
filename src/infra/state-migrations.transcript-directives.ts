@@ -9,7 +9,7 @@ import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
 import {
   OpenClawAgentDatabaseLeaseActiveError,
-  assertNoOpenClawAgentDatabaseLeases,
+  assertNoOpenClawAgentDatabaseLeasesReadOnly,
 } from "../state/openclaw-agent-db-lease.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
@@ -320,9 +320,9 @@ function createArchiveLineTransform(
   };
 }
 
-function hasActiveAgentDatabaseLease(agentId: string, env: NodeJS.ProcessEnv): boolean {
+function hasActiveAgentDatabaseLease(env: NodeJS.ProcessEnv): boolean {
   try {
-    assertNoOpenClawAgentDatabaseLeases(agentId, { env });
+    assertNoOpenClawAgentDatabaseLeasesReadOnly({ env });
     return false;
   } catch (error) {
     if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {
@@ -565,6 +565,7 @@ function readAgentDatabaseSchemaCurrent(params: { agentId: string; pathname: str
 async function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
   agentId: string;
   env: NodeJS.ProcessEnv;
+  hasActiveWriter: boolean;
   pathname: string;
 }): Promise<boolean> {
   const postgres = agentEngineInput() !== undefined;
@@ -590,8 +591,8 @@ async function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
     const needsRepair =
       cursor.phase === "complete"
         ? transcriptDirectiveArchiveRecoveryPending(database)
-        : // Native migration records a cursor even without changes. PostgreSQL inspects actual work.
-          (!postgres && !hasActiveAgentDatabaseLease(params.agentId, params.env)) ||
+        : // Cursor-only completion can wait while any agent holds the global maintenance boundary.
+          (!postgres && !params.hasActiveWriter) ||
           (cursor.phase === "transcripts" &&
             transcriptSessionsNeedMigration(
               database,
@@ -645,6 +646,10 @@ export async function migrateHistoricalTranscriptDirectives(
           preparedDiscovery: params.preparedDiscovery,
         });
     recoverableWarningCount = discovery.recoverableWarningCount;
+    const hasActiveWriter =
+      discovery.targets.length > 0 &&
+      agentEngineInput() === undefined &&
+      hasActiveAgentDatabaseLease(env);
     const targets: AgentDatabaseMigrationTarget[] = [];
     for (const target of discovery.targets) {
       try {
@@ -653,6 +658,7 @@ export async function migrateHistoricalTranscriptDirectives(
           await agentDatabaseNeedsTranscriptDirectiveMigration({
             agentId: target.agentId,
             env,
+            hasActiveWriter,
             pathname: target.path,
           })
         ) {

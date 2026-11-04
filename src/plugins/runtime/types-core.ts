@@ -364,6 +364,8 @@ export type PluginRuntimeCore = {
       ) => RuntimeSessionStoreEntrySummary[];
       /** Read-only metadata listing; saved prompts and other detached snapshots are omitted. */
       listSessionEntriesAsync: typeof import("../../plugin-sdk/session-store-runtime.js").listSessionEntriesAsync;
+      /** Exact selected entries retained through a synchronous disclosure callback. */
+      withSessionEntriesAsync: typeof import("../../plugin-sdk/session-store-runtime.js").withSessionEntriesAsync;
       createSessionEntryListReader: (params: {
         agentId: string;
         storePath: string;

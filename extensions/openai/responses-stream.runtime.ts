@@ -69,6 +69,10 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
               classifyOpenAIBaseUrl(model.baseUrl) === "chatgpt")
           )
         ) {
+          // Standard is the session default, including routes without Daybreak support.
+          if (cyber === "standard") {
+            return underlying(model, context, options);
+          }
           throw new Error(
             "OpenAI params.accessPrograms requires an official OpenAI Platform or ChatGPT Responses endpoint.",
           );

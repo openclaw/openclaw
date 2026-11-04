@@ -90,7 +90,7 @@
   --rail-header-padding-end: 8px;
   --rail-header-action-size: 28px;
   --rail-header-action-glyph-size: 16px;
-  --rail-header-action-color: var(--icon-interactive);
+  --rail-header-action-color: color-mix(in srgb, var(--text) 65%, transparent);
   --rail-header-action-hover-color: var(--text);
   --rail-header-action-active-color: var(--icon-active);
   --rail-header-action-disabled-opacity: 0.4;
@@ -587,6 +587,9 @@
   --muted: #6e6960;
   --muted-strong: #56524a;
   --muted-foreground: #6e6960;
+  /* Enabled glyphs stay distinct from the lighter decorative tier. */
+  --icon-interactive: color-mix(in srgb, var(--text) 60%, transparent);
+  --rail-header-action-color: color-mix(in srgb, var(--text) 70%, transparent);
   --github-item-bg: color-mix(in srgb, var(--text) 5%, var(--bg));
   --github-item-hover-bg: color-mix(in srgb, var(--text) 9%, var(--bg));
 
