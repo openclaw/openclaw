@@ -6,39 +6,30 @@ import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import { wrapXaiProviderStream } from "./stream.js";
 import { captureXaiRequest, xaiModel } from "./test-helpers.js";
 
-const PNG_B64 = "data:image/png;base64,QUJDRA==";
 const GIF_B64 = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-
-function patchPayload<T extends Record<string, unknown>>(
+const patchPayload = <T extends Record<string, unknown>>(
   payload: T,
   model: Partial<Model<"openai-responses">> = {},
-): T {
+): T => {
   captureXaiRequest(xaiModel(model), { extraParams: { tool_stream: false }, payload });
   return payload;
-}
-
-function project(
+};
+const project = (
   input: Array<Record<string, unknown>>,
   model: Partial<Model<"openai-responses">> = {},
-): Array<Record<string, unknown>> {
-  return patchPayload({ input: structuredClone(input) }, model).input;
-}
-
-async function projectAsync(
+) => patchPayload({ input: structuredClone(input) }, model).input;
+const projectAsync = async (
   input: Array<Record<string, unknown>>,
   model: Partial<Model<"openai-responses">> = {},
-): Promise<Array<Record<string, unknown>>> {
-  const payload = { input: structuredClone(input) };
+) => {
+  const payload = { input: [...input] };
   const captured = captureXaiRequest(xaiModel(model), {
     extraParams: { tool_stream: false },
     payload,
   });
-  if (captured.payloadPromise instanceof Promise) {
-    await captured.payloadPromise;
-  }
+  if (captured.payloadPromise instanceof Promise) await captured.payloadPromise;
   return payload.input;
-}
-
+};
 const toolOutput = (output: unknown, call_id = "call_1") => ({
   type: "function_call_output",
   call_id,
@@ -57,31 +48,30 @@ const toolCall = (call_id: string) => ({
   name: "read",
   arguments: "{}",
 });
-const imagePart = (image_url = PNG_B64) => ({ type: "input_image", image_url });
+const imagePart = (image_url = "data:image/png;base64,QUJDRA==") => ({
+  type: "input_image",
+  image_url,
+});
 
 it.each([
   { modelId: "grok-4-0709", target: "grok-4-fast", supported: true },
   { modelId: "grok-4.3", target: "grok-4.3", supported: false },
 ])("publishes the actual Fast mapping for $modelId", ({ modelId, target, supported }) => {
-  const reqCaps = { endpointClass: "xai-native" as const, allowsAnthropicServiceTier: false };
   expect(
     resolveFastModeSupport({
       modelId,
       provider: "xai",
       api: "openai-responses",
       runtimeId: "openclaw",
-      requestCapabilities: reqCaps,
+      requestCapabilities: { endpointClass: "xai-native", allowsAnthropicServiceTier: false },
     }),
   ).toBe(supported);
-  const cap = (fastMode: boolean | "ultrafast" | (() => "ultrafast")) =>
+  const capture = (fastMode: boolean | "ultrafast" | (() => "ultrafast")) =>
     captureXaiRequest(xaiModel({ id: modelId }), { extraParams: { tool_stream: false, fastMode } })
       .modelId;
-  expect([cap(true), cap("ultrafast"), cap(() => "ultrafast"), cap(false)]).toEqual([
-    target,
-    target,
-    target,
-    modelId,
-  ]);
+  expect([capture(true), capture("ultrafast"), capture(() => "ultrafast"), capture(false)]).toEqual(
+    [target, target, target, modelId],
+  );
 });
 
 async function captureXaiResponsesPayloadWithThinking(
@@ -95,9 +85,7 @@ async function captureXaiResponsesPayloadWithThinking(
     model,
     streamFn: streamSimple,
   });
-  if (!wrapped) {
-    throw new Error("expected the xAI stream wrapper");
-  }
+  if (!wrapped) throw new Error("expected the xAI stream wrapper");
   let captured: Record<string, unknown> | undefined;
   const opts = {
     apiKey: "test-api-key",
@@ -114,9 +102,7 @@ async function captureXaiResponsesPayloadWithThinking(
     opts,
   );
   await stream.result();
-  if (!captured) {
-    throw new Error("provider payload callback was not invoked");
-  }
+  if (!captured) throw new Error("provider payload callback was not invoked");
   return captured;
 }
 
@@ -275,7 +261,8 @@ describe("xai stream wrappers", () => {
       source: { type: "base64", media_type: "image/gif", data: GIF_B64 },
     };
     const result = toolOutput([inputText("Read GIF"), gifImage], "call_gif");
-    const history = [message("user", "Inspect the gif"), toolCall("call_gif"), result];
+    const userMsg = message("user", "Inspect the gif");
+    const history = [userMsg, toolCall("call_gif"), result];
 
     const projected = await projectAsync(history);
     const carrier = projected.find(
@@ -287,13 +274,14 @@ describe("xai stream wrappers", () => {
     expect(normalizedImagePart).toBeDefined();
     expect((normalizedImagePart?.source as Record<string, unknown>)?.media_type).toBe("image/jpeg");
 
-    const nextTurn = [
-      ...projected,
-      message("assistant", "I see a 1x1 GIF."),
-      message("user", "What was in it?"),
-    ];
-    const secondProjected = await projectAsync(nextTurn);
-    expect(secondProjected).toHaveLength(nextTurn.length);
+    const assistantFollowup = message("assistant", "I see a 1x1 GIF.");
+    const userFollowup = message("user", "What was in it?");
+    const replayHistory = [userMsg, toolCall("call_gif"), result, assistantFollowup, userFollowup];
+    const secondProjected = await projectAsync(replayHistory);
+    expect(secondProjected[0]).toBe(userMsg);
+    expect(secondProjected[1]).toBe(replayHistory[1]);
+    expect(secondProjected[4]).toBe(assistantFollowup);
+    expect(secondProjected[5]).toBe(userFollowup);
 
     const nativeProjected = await projectAsync([result], {
       provider: "x-ai",

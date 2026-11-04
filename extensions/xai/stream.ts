@@ -248,16 +248,30 @@ async function transformPayloadInput(
     const itemObj = asOptionalRecord(item);
 
     if (itemObj?.type === "message" && Array.isArray(itemObj.content)) {
-      const normalizedParts: unknown[] = [];
-      for (const rawPart of itemObj.content) {
-        const part = asOptionalRecord(rawPart);
-        if (part && isAsync && isGifImagePart(part)) {
-          normalizedParts.push(await normalizeXaiImagePart(part));
-        } else {
-          normalizedParts.push(rawPart);
+      if (isAsync) {
+        let hasGifInMessage = false;
+        for (const rawPart of itemObj.content) {
+          const part = asOptionalRecord(rawPart);
+          if (part && isGifImagePart(part)) {
+            hasGifInMessage = true;
+            break;
+          }
+        }
+        if (hasGifInMessage) {
+          const normalizedParts: unknown[] = [];
+          for (const rawPart of itemObj.content) {
+            const part = asOptionalRecord(rawPart);
+            if (part && isGifImagePart(part)) {
+              normalizedParts.push(await normalizeXaiImagePart(part));
+            } else {
+              normalizedParts.push(rawPart);
+            }
+          }
+          normalizedInput.push({ ...itemObj, content: normalizedParts });
+          continue;
         }
       }
-      normalizedInput.push({ ...itemObj, content: normalizedParts });
+      normalizedInput.push(item);
       continue;
     }
 
@@ -328,7 +342,12 @@ async function transformPayloadInput(
     normalizedInput.push(normalizedItem, carrier);
   }
 
-  payloadObj.input = normalizedInput;
+  if (
+    normalizedInput.length !== inputList.length ||
+    normalizedInput.some((val, i) => val !== inputList[i])
+  ) {
+    payloadObj.input = normalizedInput;
+  }
 }
 
 function normalizeXaiResponsesToolResultPayload(

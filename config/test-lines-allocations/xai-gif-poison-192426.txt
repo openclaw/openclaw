@@ -1,2 +1,0 @@
-# Real behavior proof for xAI GIF normalization and session poisoning avoidance (#192426)
-47
