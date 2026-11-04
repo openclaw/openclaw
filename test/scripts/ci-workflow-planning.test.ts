@@ -5529,6 +5529,7 @@ describe("ci workflow guards", () => {
       runner_profile: scenario.admitted ? "hybrid" : "github",
       node_runner_backend: scenario.admitted ? "boat" : "github",
       effective_runner_backend: scenario.admitted ? "boat" : "github",
+      placement_runner_backend: scenario.admitted ? "hybrid" : "github",
     });
   });
 
@@ -5548,6 +5549,20 @@ describe("ci workflow guards", () => {
       runnerEnvironment: "self-hosted" as const,
       preflightOutputs: admitted.outputs,
     };
+    for (const [name, runner] of [
+      ["checks-fast-core", "ubuntu-24.04"],
+      ["check-lint-hosted-core-shard", "boat-large"],
+      ["check-test-types-hosted-core-shard", "boat-large"],
+    ] as const) {
+      for (const stripe of [1, 2]) {
+        const row = { ...context, matrix: { stripe } };
+        expect(evaluateWorkflowExpression(workflow.jobs[name]["runs-on"], row), name).toBe(runner);
+        expect(
+          evaluateWorkflowExpression(workflow.jobs[name]["runs-on"], { ...row, runAttempt: 2 }),
+          name,
+        ).toBe("ubuntu-24.04");
+      }
+    }
     const nodeJob = workflow.jobs["checks-node-core-test-nondist-shard"];
     expect(evaluateWorkflowExpression(nodeJob.strategy["max-parallel"], context)).toBe(130);
     expect(
@@ -5600,6 +5615,26 @@ describe("ci workflow guards", () => {
         expected,
       );
     }
+  });
+
+  it("keeps the Boat failure reporter hosted when preflight emits no backend outputs", () => {
+    const reporter = readCiWorkflow().jobs["pr-failure-report"];
+    const context = {
+      eventName: "pull_request" as const,
+      repository: "openclaw/openclaw",
+      headRepository: "openclaw/openclaw",
+      runnerBackend: "boat" as const,
+      preflightResult: "failure",
+      preflightOutputs: {
+        effective_runner_backend: "",
+        placement_runner_backend: "",
+        qualification_runner_backend: "",
+        node_runner_backend: "",
+        runner_profile: "",
+      },
+    };
+    expect(evaluateWorkflowExpression(reporter.if, context)).toBe(true);
+    expect(evaluateWorkflowExpression(reporter["runs-on"], context)).toBe("ubuntu-24.04");
   });
 
   it.each([2, 4, 8])("applies the %s CPU budget through self-hosted worker scheduling", (budget) => {

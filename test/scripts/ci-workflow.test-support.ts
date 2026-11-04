@@ -287,6 +287,10 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
           hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
           run_check: String(context.runCheck ?? true),
           effective_runner_backend: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
+          placement_runner_backend:
+            context.runnerBackend === "boat"
+              ? "hybrid"
+              : (context.runnerProfile ?? context.runnerBackend ?? "blacksmith"),
           runner_profile: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
           // Preflight defaults the Node planner backend to the logical profile.
           node_runner_backend: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
