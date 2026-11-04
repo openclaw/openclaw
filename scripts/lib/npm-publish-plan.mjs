@@ -9,7 +9,6 @@ import {
   compareReleaseVersions,
   parseReleaseVersion,
 } from "./release-version.mjs";
-import { isTransientNetworkError } from "./transient-network-error.mjs";
 
 export function parsePublicationCliValues(command, argv) {
   const values = {};
@@ -199,7 +198,21 @@ async function fetchNpmRegistryWithRetry(params, reader) {
       }
       // An owning collection's cancellation is not a transient attempt timeout.
       params.signal?.throwIfAborted();
-      if (!(error instanceof RetryableNpmRegistryError) && !isTransientNetworkError(error)) {
+      if (
+        !(error instanceof RetryableNpmRegistryError) &&
+        !["AbortError", "TimeoutError"].includes(error?.name) &&
+        ![
+          "ECONNRESET",
+          "ECONNREFUSED",
+          "EPIPE",
+          "ETIMEDOUT",
+          "EAI_AGAIN",
+          "UND_ERR_SOCKET",
+          "UND_ERR_CONNECT_TIMEOUT",
+          "UND_ERR_HEADERS_TIMEOUT",
+          "UND_ERR_BODY_TIMEOUT",
+        ].some((code) => code === error?.code || code === error?.cause?.code)
+      ) {
         throw error;
       }
       lastError = error;
