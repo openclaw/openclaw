@@ -27,6 +27,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 // Canonical SQLite row helpers for exec approval policy state.
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { EngineConnection } from "./sql-connection.js";
 
 const EXEC_APPROVALS_CONFIG_KEY = "current";
@@ -63,15 +64,7 @@ export function assertExecApprovalsMutationAllowed(params: {
   }
   // Node-scoped approvals persist in agent databases that predate the journal
   // table; the deletion fence only exists where the journal itself lives.
-  const journalTable = executeSqliteQueryTakeFirstSync(
-    params.db,
-    getNodeSqliteKysely<{ name: string }>(params.db)
-      .selectFrom("sqlite_master")
-      .select("name")
-      .where("name", "=", "agent_deletion_journal")
-      .limit(1),
-  );
-  if (!journalTable) {
+  if (!tableExists(params.db, "agent_deletion_journal")) {
     return;
   }
   const journal = executeSqliteQueryTakeFirstSync(
