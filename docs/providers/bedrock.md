@@ -141,28 +141,23 @@ Choose your preferred auth method and follow the setup steps.
 
 ## Account for scheduled runs
 
-Scheduled automations record the account each run uses. Bedrock keeps no stored
-credential, so its account is declared in config instead:
+Scheduled automations record which account each run used, so Bedrock keeps an
+account in the auth store even though it stores no credential:
 
-```json5
-{
-  auth: {
-    profiles: {
-      "amazon-bedrock:aws-sdk": { provider: "amazon-bedrock", mode: "aws-sdk" },
-    },
-  },
-  models: { providers: { "amazon-bedrock": { auth: "aws-sdk" } } },
-}
+```bash
+openclaw models auth login --provider amazon-bedrock
 ```
 
-`openclaw models auth login --provider amazon-bedrock` (choice **Amazon Bedrock
-(AWS credentials)**) writes both entries, and `openclaw doctor --fix` adds the
-profile to a config that already sets `auth: "aws-sdk"`. No AWS credentials are
-stored: every request still resolves through the default chain.
+The **Amazon Bedrock (AWS credentials)** choice saves `amazon-bedrock:aws-sdk`
+and sets `models.providers.amazon-bedrock.auth: "aws-sdk"`. The saved account
+holds only a non-secret marker — no AWS access keys, session tokens, or profile
+secrets — and every request still resolves through the AWS SDK default
+credential chain. `openclaw doctor --fix` creates the account for an install
+that already sets `auth: "aws-sdk"`; if that id is taken by a different
+account, Doctor leaves it alone and reports the conflict.
 
-With the account declared, `openclaw doctor --fix` records
-`amazon-bedrock:aws-sdk` on existing automations that have none, and new
-automations can select it explicitly:
+With the account saved, `openclaw doctor --fix` records it on existing
+automations that have none, and automations can also select it explicitly:
 
 ```bash
 openclaw automations edit <jobId> \
@@ -170,8 +165,10 @@ openclaw automations edit <jobId> \
 ```
 
 Until an automation records an account, its runs are refused with `Automation
-has no recorded inference account`. Interactive turns are unaffected and keep
-using `auth: "aws-sdk"` on its own.
+has no recorded inference account`. Signing the account out revokes the
+automations bound to it; signing back in creates a new account lifetime, so
+rerun `openclaw doctor --fix` (or reselect the model) to rebind them.
+Interactive turns are unaffected and keep using `auth: "aws-sdk"` on its own.
 
 ## Automatic model discovery
 

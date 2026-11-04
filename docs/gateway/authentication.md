@@ -86,7 +86,7 @@ OpenClaw reads auth profiles from each agent's `openclaw-agent.sqlite`. Endpoint
 
 If an older install still has `auth-profiles.json`, `auth-state.json`, or a flat shape like `{ "openrouter": { "apiKey": "..." } }`, run `openclaw doctor --fix` to import it into SQLite; doctor keeps timestamped backups beside the original JSON files.
 
-External auth routes such as Bedrock `auth: "aws-sdk"` aren't credentials. For a named Bedrock route, set `auth.profiles.<id>.mode: "aws-sdk"` in `openclaw.json` — don't write `type: "aws-sdk"` into the auth profile store. `openclaw models auth login --provider amazon-bedrock` declares `amazon-bedrock:aws-sdk` for you, which is also the account scheduled automations record. `openclaw doctor --fix` migrates legacy AWS SDK markers from the credential store into config metadata and declares that profile for configs that only set `auth: "aws-sdk"`.
+External auth routes such as Bedrock `auth: "aws-sdk"` aren't credentials. For a named Bedrock route, set `auth.profiles.<id>.mode: "aws-sdk"` in `openclaw.json` — don't write `type: "aws-sdk"` into the auth profile store. `openclaw models auth login --provider amazon-bedrock` saves the `amazon-bedrock:aws-sdk` account for you; it holds a non-secret marker rather than AWS keys, and it is the account scheduled automations record and bind. `openclaw doctor --fix` migrates legacy AWS SDK markers from the credential store into config metadata and creates that account for configs that only set `auth: "aws-sdk"`.
 
 ### SecretRef-backed credentials
 
