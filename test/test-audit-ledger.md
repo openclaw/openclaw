@@ -193,11 +193,19 @@ existing `using` pattern. Its explicit restoration ran only after all awaits
 and assertions succeeded. All25 declarations/37 cases, inputs and assertions
 remain; one fewer test line, with no production or helper change.
 
-The managed checkout is code-only. Frozen-dependency qualification, the normal
-suite and an early-exit logger-restoration control are pending in the native
-PR checkout. These controls concern fixture cleanup, not native Codex or
-provider execution. The separate binding-gate and custom-client custody
-nominations remain outside this repair.
+The managed checkout is code-only; the native PR checkout owns its physical
+frozen installation. Installed Vitest5.0.5 maps the spy disposer to restoration.
+Original and repaired normal suites pass all37 cases. Identical early-return
+instrumentation after spy creation makes the original fail the logger identity
+check before hook cleanup; the repaired control passes. Both select one case
+and skip36. Targeted restoration in finally preserves cleanup on either result.
+All temporary bytes are removed and the repaired normal37 pass again.
+
+These controls concern fixture cleanup, not native Codex or provider execution.
+Scoped types, typed lint, format, MDX and the line budget pass; fresh review and
+publication are tracked in the
+[qualification PR](https://github.com/openclaw/openclaw/pull/192526). The separate
+binding-gate and custom-client custody nominations remain outside this repair.
 
 ## Completed source review
 
