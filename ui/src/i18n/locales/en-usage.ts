@@ -234,7 +234,7 @@ const enUsage = {
       filterByRole: "Filter by role",
       filterByTool: "Filter by tool",
       you: "You",
-      noMessagesMatch: "No messages match your search.",
+      noMessagesMatch: "No messages match these filters.",
     },
     mosaic: {
       title: "Activity by time",
